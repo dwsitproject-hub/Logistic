@@ -5,7 +5,8 @@
 export type ShippingPerfLabelMode = 'estimated' | 'actual'
 
 export type PerfDashMode = 'eta' | 'ata'
-export type ShippingPerfCardFilter = 'all' | 'ongoingWithEta' | 'ongoingNoEta' | 'close'
+/** Section 1 cards: On Going (all pre-COMPLETED) + Close. */
+export type ShippingPerfCardFilter = 'all' | 'ongoing' | 'close'
 export type TableStatusFilter = 'All' | 'Open' | 'Closed'
 
 export function perfDataModeFromCard(card: ShippingPerfCardFilter): PerfDashMode {
@@ -15,20 +16,17 @@ export function perfDataModeFromCard(card: ShippingPerfCardFilter): PerfDashMode
 
 export const SHIPPING_PERF_CARD_TITLES: Record<ShippingPerfCardFilter, string> = {
   all: 'All',
-  ongoingWithEta: 'On Going (with ETA)',
-  ongoingNoEta: 'On Going (no ETA)',
+  ongoing: 'On Going',
   close: 'Close',
 }
 
-/** Section 1 summary cards — two-line title for On Going cards. */
+/** Section 1 summary cards — title lines. */
 export function shippingPerfCardTitleLines(
   card: ShippingPerfCardFilter,
 ): { main: string; sub?: string } {
   switch (card) {
-    case 'ongoingWithEta':
-      return { main: 'On Going', sub: 'with ETA' }
-    case 'ongoingNoEta':
-      return { main: 'On Going', sub: 'no ETA' }
+    case 'ongoing':
+      return { main: 'On Going' }
     case 'close':
       return { main: 'Close' }
     case 'all':

@@ -1,7 +1,7 @@
 /**
  * Shipping Performance Section 1 — card membership (On Going / Close).
  * Close = shipment status COMPLETED.
- * On Going = planned through pre-completed (ETA presence splits with/no ETA cards).
+ * On Going = planned through pre-completed (ETA presence is not split).
  */
 
 import type { ShippingPerfCardFilter } from '@/lib/shippingPerformanceLabels'
@@ -87,7 +87,7 @@ export function shippingPerfRowIsOngoingStatus(status: string | null | undefined
 /**
  * Row-level card membership.
  * - Close: status === COMPLETED
- * - On Going (with/no ETA): ongoing status + ETA presence rule
+ * - On Going: any ongoing status (with or without ETA)
  */
 export function shippingPerfRowMatchesCard(
   row: ShippingPerfCardRow,
@@ -100,10 +100,11 @@ export function shippingPerfRowMatchesCard(
     return shippingPerfRowIsCompletedStatus(row.status)
   }
 
-  if (!shippingPerfRowIsOngoingStatus(row.status)) return false
+  if (card === 'ongoing') {
+    return shippingPerfRowIsOngoingStatus(row.status)
+  }
 
-  if (card === 'ongoingWithEta') return shippingPerfRowHasEta(row)
-  return !shippingPerfRowHasEta(row)
+  return false
 }
 
 export function applyShippingPerfCardFilter<T extends ShippingPerfCardRow>(

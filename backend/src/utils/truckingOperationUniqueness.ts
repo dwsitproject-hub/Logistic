@@ -359,3 +359,66 @@ export const SQL_TRUCKING_KEEPER_PRIORITY_ORDER = `
   t.created_at DESC,
   t.id DESC
 `.trim();
+
+/**
+ * Prefer the op with more complete WB daily actuals, then fall back to status/planning priority.
+ * Alias `t` must be trucking_operations.
+ */
+export const SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE = `
+  (
+    SELECT COUNT(DISTINCT da.progress_date)
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = t.id
+  ) DESC,
+  (
+    SELECT COALESCE(SUM(
+      COALESCE(da.quantity_delivery_kg, da.quantity_kg, 0)
+      + COALESCE(da.quantity_receive_kg, 0)
+    ), 0)
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = t.id
+  ) DESC,
+  ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}
+`.trim();
+
+export interface TruckingWbKeeperScore {
+  wbDistinctDates: number;
+  wbQtySumKg: number;
+  statusRank: number;
+  dailyDeliverablesLen: number;
+  updatedAtMs: number;
+  id: string;
+}
+
+const STATUS_RANK: Record<string, number> = {
+  COMPLETED: 1,
+  IN_PROGRESS: 2,
+  IN_TRANSIT: 3,
+  LOADING: 4,
+  UNLOADING: 5,
+  PLANNED: 6,
+};
+
+export function truckingStatusKeeperRank(status: unknown): number {
+  const key = String(status ?? '').trim().toUpperCase();
+  return STATUS_RANK[key] ?? 7;
+}
+
+/** Pure comparator: return <0 if a should rank before b (a is better keeper). */
+export function compareTruckingWbCompleteKeepers(
+  a: TruckingWbKeeperScore,
+  b: TruckingWbKeeperScore,
+): number {
+  if (b.wbDistinctDates !== a.wbDistinctDates) return b.wbDistinctDates - a.wbDistinctDates;
+  if (b.wbQtySumKg !== a.wbQtySumKg) return b.wbQtySumKg - a.wbQtySumKg;
+  if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+  if (b.dailyDeliverablesLen !== a.dailyDeliverablesLen) {
+    return b.dailyDeliverablesLen - a.dailyDeliverablesLen;
+  }
+  if (b.updatedAtMs !== a.updatedAtMs) return b.updatedAtMs - a.updatedAtMs;
+  return b.id.localeCompare(a.id);
+}
+
+export function pickTruckingWbCompleteKeeper<T extends TruckingWbKeeperScore>(rows: T[]): T {
+  return [...rows].sort(compareTruckingWbCompleteKeepers)[0];
+}

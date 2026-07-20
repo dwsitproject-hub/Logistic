@@ -215,9 +215,11 @@ CREATE TABLE contracts (
 );
 
 -- Shipments table
+-- shipment_id uniqueness is scoped per contract (PO) so the same STO can exist on different POs.
+-- Migration 119: UNIQUE(contract_id, shipment_id) via shipments_contract_id_shipment_id_uidx.
 CREATE TABLE shipments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    shipment_id VARCHAR(100) UNIQUE NOT NULL,
+    shipment_id VARCHAR(100) NOT NULL,
     contract_id UUID REFERENCES contracts(id) ON DELETE CASCADE,
     vessel_name VARCHAR(255),
     shipment_date DATE,

@@ -11,6 +11,7 @@ import {
 } from '../utils/sapMasterV2UatFormat';
 import { SapDataDistributionService } from './sapDataDistribution.service';
 import { invalidateShipmentsListCache } from './shipmentList.service';
+import { normalizePoNumber } from '../utils/contractPoIdentity';
 
 export interface MasterV2Config {
   filePath: string;
@@ -281,24 +282,28 @@ export class SapMasterV2ImportService {
           // Parse row into structured data
           const parsedData = this.parseDataRow(row, fieldMetadata);
 
-          // Check if processed data already exists for SAME Contract + PO + STO tri-key
+          // Match processed SAP rows by PO + STO (contract_no may be null or change over time).
           const contractNumber = parsedData.contract?.contract_no || null;
-          const poNumber = parsedData.contract?.po_no || null;
-          const stoNumber = parsedData.shipment?.sto_no || parsedData.contract?.sto_no || null;
+          const poNumber = normalizePoNumber(parsedData.contract?.po_no);
+          const stoNumber =
+            parsedData.shipment?.sto_no || parsedData.contract?.sto_no || null;
+          const stoKey = String(stoNumber ?? '').trim();
 
-          if (contractNumber || poNumber || stoNumber) {
-            const existingProcessed = await client.query(
-              `SELECT id FROM sap_processed_data 
-               WHERE COALESCE(contract_number,'') = COALESCE($1,'')
-                 AND COALESCE(po_number,'')       = COALESCE($2,'')
-                 AND COALESCE(sto_number,'')      = COALESCE($3,'')
-               LIMIT 1`,
-              [contractNumber, poNumber, stoNumber]
-            );
+          if (!poNumber) {
+            throw new Error('Row skipped: PO number is required');
+          }
 
-            if (existingProcessed.rows.length > 0) {
+          const existingProcessed = await client.query(
+            `SELECT id FROM sap_processed_data
+             WHERE TRIM(COALESCE(po_number::text, '')) = TRIM($1::text)
+               AND COALESCE(NULLIF(TRIM(COALESCE(sto_number::text, '')), ''), '') = COALESCE(NULLIF(TRIM($2::text), ''), '')
+             LIMIT 1`,
+            [poNumber, stoKey],
+          );
+
+          if (existingProcessed.rows.length > 0) {
               const existingId = existingProcessed.rows[0].id;
-              logger.info(`Updating existing processed data for tri-key (contract=${contractNumber}, po=${poNumber}, sto=${stoNumber})`);
+              logger.info(`Updating existing processed data for PO+STO (po=${poNumber}, sto=${stoKey || '(empty)'})`);
 
               // Update the processed record with latest parsed data and key attributes
               const supplierName = parsedData.contract?.supplier || null;
@@ -306,22 +311,32 @@ export class SapMasterV2ImportService {
               const vesselName = parsedData.vessel?.vessel_name || parsedData.shipment?.vessel || null;
               const incoterm = parsedData.contract?.incoterm || null;
               const transportMode = parsedData.contract?.sea_land || parsedData.contract?.transport_mode || null;
+              const shipmentId =
+                parsedData.shipment?.shipment_id || parsedData.shipment?.id || stoKey || null;
 
               await client.query(
                 `UPDATE sap_processed_data
                    SET data = $1,
                        import_id = $2,
                        raw_data_id = $3,
-                       supplier_name = $4,
-                       product = $5,
-                       vessel_name = $6,
-                       incoterm = $7,
-                       transport_mode = $8
-                 WHERE id = $9`,
+                       contract_number = $4,
+                       shipment_id = $5,
+                       po_number = $6,
+                       sto_number = $7,
+                       supplier_name = $8,
+                       product = $9,
+                       vessel_name = $10,
+                       incoterm = $11,
+                       transport_mode = $12
+                 WHERE id = $13`,
                 [
                   JSON.stringify(parsedData),
                   importId,
                   rawDataId,
+                  contractNumber,
+                  shipmentId,
+                  poNumber,
+                  stoKey || null,
                   supplierName,
                   product,
                   vesselName,
@@ -350,7 +365,6 @@ export class SapMasterV2ImportService {
               processedRecords++;
               await maybeRefreshImportProgress();
               continue;
-            }
           }
 
           // Store in sap_processed_data
@@ -1114,6 +1128,9 @@ export class SapMasterV2ImportService {
     const contractNumber = contract.contract_no || null;
     const poNumber = contract.po_no || null;
     const stoNumber = shipment.sto_no || contract.sto_no || null; // STO is in shipment, fallback to contract
+    if (!normalizePoNumber(poNumber)) {
+      throw new Error('PO number is required for sap_processed_data');
+    }
     const shipmentId = shipment.shipment_id || shipment.id || stoNumber || null;
     const supplierName = contract.supplier || null;
     const product = contract.product || null;

@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, Suspense } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -423,11 +423,19 @@ function resolveStaffContractPerfProductTab(): (typeof CONTRACT_PERF_PRODUCT_TAB
   return match ?? 'All'
 }
 
-/** Contracts list (/contracts) — table defaults to all statuses; Section 1 cards always count Open only. */
-function resolveContractsListInitialStatusFilter(): string {
-  if (typeof window === 'undefined') return 'All Status'
-  if (isContractPerformancePathname(window.location.pathname)) return 'All Status'
-  return 'All Status'
+/** Contract Performance first load — Open selected so Section 1, drilldown, and table stay in sync.
+ * Must use Next `pathname` (not `window`) so SSR + hydration agree; otherwise hard refresh
+ * often leaves Open unselected while client navigations look correct.
+ */
+function resolveContractPerfInitialSummaryCardStatus(
+  pathname: string | null | undefined,
+): 'All' | 'Open' | 'Close' {
+  return isContractPerformancePathname(pathname) ? 'Open' : 'All'
+}
+
+/** Contracts list — All Status; Contract Performance — Open (matches Section 1 default). */
+function resolveContractsListInitialStatusFilter(pathname: string | null | undefined): string {
+  return isContractPerformancePathname(pathname) ? 'Open' : 'All Status'
 }
 
 type ContractPerfDrilldownRow = {
@@ -1099,7 +1107,9 @@ function ContractsPageContent() {
   const bottomScrollRef = useRef<HTMLDivElement | null>(null)
   const [tableScrollWidth, setTableScrollWidth] = useState<number>(0)
   const isSyncingScroll = useRef(false)
-  const [statusFilter, setStatusFilter] = useState<string>(() => resolveContractsListInitialStatusFilter())
+  const [statusFilter, setStatusFilter] = useState<string>(() =>
+    resolveContractsListInitialStatusFilter(pathname),
+  )
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
   const [dateFrom, setDateFrom] = useState(() => defaultContractPerfYtdDateRange().dateFrom)
@@ -1127,7 +1137,27 @@ function ContractsPageContent() {
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
-  const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>('All')
+  const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>(() =>
+    resolveContractPerfInitialSummaryCardStatus(pathname),
+  )
+
+  /**
+   * One-shot Open default when on Contract Performance.
+   * Pathname-based useState already covers SSR; this catches hydration/soft-nav edge cases.
+   * Does not re-apply after the user toggles Open off (click again → All) on the same visit.
+   */
+  const cpOpenDefaultAppliedRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!isContractPerformance) {
+      cpOpenDefaultAppliedRef.current = false
+      return
+    }
+    if (cpOpenDefaultAppliedRef.current) return
+    cpOpenDefaultAppliedRef.current = true
+    setSummaryCardStatus('Open')
+    setStatusFilter('Open')
+  }, [isContractPerformance])
+
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
@@ -1563,7 +1593,9 @@ function ContractsPageContent() {
     applyDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
   }, [applyDrilldownSelection, isContractPerformance])
 
-  /** Section 1 reset — clears all Contract Performance filters (Sections 1–3). */
+  /** Section 1 reset — clears all Contract Performance filters (Sections 1–3).
+   * Returns to All scope (Open/Close cards unselected); page-load default Open is only for first visit.
+   */
   const resetContractPerformancePage = useCallback(() => {
     if (!isContractPerformance) return
     markUserScopeFiltersCleared('contracts')

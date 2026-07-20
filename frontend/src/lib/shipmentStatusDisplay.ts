@@ -60,6 +60,7 @@ export function shipmentStatusBadgeClass(status: string | null | undefined): str
     case 'PLANNED':
       return 'bg-blue-100 text-blue-800'
     case 'ARRIVED_LP':
+    case 'IN_PROGRESS': // legacy → Arrived LP
       return 'bg-yellow-100 text-yellow-800'
     case 'BERTHED_LP':
       return 'bg-amber-100 text-amber-800'
@@ -68,8 +69,10 @@ export function shipmentStatusBadgeClass(status: string | null | undefined): str
     case 'COMPLETED_LOADING':
       return 'bg-orange-200 text-orange-900'
     case 'SAILED':
+    case 'IN_TRANSIT': // legacy → Sailed (same purple chip)
       return 'bg-purple-100 text-purple-800'
     case 'ARRIVED_DP':
+    case 'ARRIVED': // legacy → Arrived DP
       return 'bg-indigo-100 text-indigo-800'
     case 'BERTHED_DP':
       return 'bg-cyan-100 text-cyan-800'

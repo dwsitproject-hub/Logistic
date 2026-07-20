@@ -61,7 +61,7 @@ describe('truckingEffectiveStatus', () => {
     ).toBe('COMPLETED');
   });
 
-  it('returns COMPLETED when GR is Open and OS within tolerance', () => {
+  it('returns COMPLETED when GR is Open and OS within tolerance or over-delivered', () => {
     expect(
       deriveTruckingEffectiveStatus('PLANNED', null, null, {
         stoNumber: 'STO-1',
@@ -76,9 +76,16 @@ describe('truckingEffectiveStatus', () => {
         outstandingQtyKg: TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
       }),
     ).toBe('COMPLETED');
+    expect(
+      deriveTruckingEffectiveStatus('IN_PROGRESS', '2026-06-01', '2026-06-02', {
+        stoNumber: 'STO-1',
+        contractImportStatus: 'Open',
+        outstandingQtyKg: -3000, // UI +3 MT overdelivered
+      }),
+    ).toBe('COMPLETED');
   });
 
-  it('does not complete when GR is Open and OS exceeds tolerance', () => {
+  it('does not complete when GR is Open and residual OS exceeds tolerance', () => {
     expect(
       deriveTruckingEffectiveStatus('PLANNED', null, null, {
         stoNumber: 'STO-1',
@@ -95,13 +102,14 @@ describe('truckingEffectiveStatus', () => {
     ).toBe('IN_PROGRESS');
   });
 
-  it('isTruckingPipelineCompleted accepts GR Close or OS within 0 MT display band', () => {
+  it('isTruckingPipelineCompleted accepts GR Close, OS within 0 MT band, or over-delivery', () => {
     expect(isTruckingPipelineCompleted('Close', 100)).toBe(true);
     expect(isTruckingPipelineCompleted('Close', null)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', 0)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', 286)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG + 1)).toBe(false);
+    expect(isTruckingPipelineCompleted('Open', -3000)).toBe(true);
     expect(isTruckingCompletedByGrAndOs('Close', 100)).toBe(true);
   });
 

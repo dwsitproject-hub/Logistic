@@ -22,7 +22,7 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
 /** v7: COMPLETED when |OS Qty| displays as 0 MT (≤499 kg) even if GR PO/STO still Open. */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 8;
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 9;
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
 export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 2;
 

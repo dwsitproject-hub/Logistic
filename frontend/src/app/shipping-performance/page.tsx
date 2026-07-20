@@ -525,7 +525,7 @@ const EMPTY_DRILLDOWN_FILTERS: DrilldownFilters = {
 
 /**
  * Row/STO-level scope for Sections 1–3.
- * Close = shipment status COMPLETED; On Going = PLANNED through pre-COMPLETED.
+ * Close = shipment status COMPLETED; On Going = PLANNED through pre-COMPLETED (ETA not split).
  */
 function applyPerfCardFilter(
   rows: ShippingPerformanceRow[],
@@ -1194,7 +1194,7 @@ function ShippingPerformancePageContent() {
     const day = String(d.getDate()).padStart(2, '0')
     return `${d.getFullYear()}-${m}-${day}`
   })
-  const [perfCardFilter, setPerfCardFilter] = useState<ShippingPerfCardFilter>('all')
+  const [perfCardFilter, setPerfCardFilter] = useState<ShippingPerfCardFilter>('ongoing')
   /** Client-only scope toggles — do not change fetch URL / cache key. */
   const [sourceFilter, setSourceFilter] = useState<ContractPerfSourceFilter>('All')
   const [productTab, setProductTab] = useState<ContractPerfProductTab>('All')
@@ -1391,13 +1391,8 @@ function ShippingPerformancePageContent() {
     searchTerm,
   ])
 
-  const ongoingWithEtaFilteredData = useMemo(
-    () => applyPerfCardFilter(globallyFilteredRows, 'ongoingWithEta'),
-    [globallyFilteredRows],
-  )
-
-  const ongoingNoEtaFilteredData = useMemo(
-    () => applyPerfCardFilter(globallyFilteredRows, 'ongoingNoEta'),
+  const ongoingFilteredData = useMemo(
+    () => applyPerfCardFilter(globallyFilteredRows, 'ongoing'),
     [globallyFilteredRows],
   )
 
@@ -1417,14 +1412,9 @@ function ShippingPerformancePageContent() {
     [perfModeFilteredRows, drilldownFilters],
   )
 
-  const ongoingWithEtaDatasetBundle = useMemo(
-    () => buildPerfDatasetBundle(ongoingWithEtaFilteredData, 'ongoingWithEta', globallyFilteredRows),
-    [ongoingWithEtaFilteredData, globallyFilteredRows],
-  )
-
-  const ongoingNoEtaDatasetBundle = useMemo(
-    () => buildPerfDatasetBundle(ongoingNoEtaFilteredData, 'ongoingNoEta', globallyFilteredRows),
-    [ongoingNoEtaFilteredData, globallyFilteredRows],
+  const ongoingDatasetBundle = useMemo(
+    () => buildPerfDatasetBundle(ongoingFilteredData, 'ongoing', globallyFilteredRows),
+    [ongoingFilteredData, globallyFilteredRows],
   )
 
   const closeDatasetBundle = useMemo(
@@ -1439,27 +1429,18 @@ function ShippingPerformancePageContent() {
 
   const activeDatasetBundle = useMemo(() => {
     switch (perfCardFilter) {
-      case 'ongoingNoEta':
-        return ongoingNoEtaDatasetBundle
+      case 'ongoing':
+        return ongoingDatasetBundle
       case 'close':
         return closeDatasetBundle
-      case 'ongoingWithEta':
-        return ongoingWithEtaDatasetBundle
       default:
         return allDatasetBundle
     }
-  }, [
-    perfCardFilter,
-    ongoingWithEtaDatasetBundle,
-    ongoingNoEtaDatasetBundle,
-    closeDatasetBundle,
-    allDatasetBundle,
-  ])
+  }, [perfCardFilter, ongoingDatasetBundle, closeDatasetBundle, allDatasetBundle])
 
   const perfTree = activeDatasetBundle.tree
 
-  const ongoingWithEtaPerformanceSummary = ongoingWithEtaDatasetBundle.summary
-  const ongoingNoEtaPerformanceSummary = ongoingNoEtaDatasetBundle.summary
+  const ongoingPerformanceSummary = ongoingDatasetBundle.summary
   const closePerformanceSummary = closeDatasetBundle.summary
 
   /** Unique contracts in the current card + drilldown scope (Section 2 header & Section 3 subtitle). */
@@ -1630,17 +1611,11 @@ function ShippingPerformancePageContent() {
     (card: Exclude<ShippingPerfCardFilter, 'all'>) => {
       const selected = perfCardFilter === card
       const ringByCard: Record<Exclude<ShippingPerfCardFilter, 'all'>, string> = {
-        ongoingWithEta: 'ring-blue-500',
-        ongoingNoEta: 'ring-amber-500',
+        ongoing: 'ring-blue-500',
         close: 'ring-indigo-500',
       }
-      const widthClass =
-        card === 'ongoingNoEta'
-          ? 'w-full xl:w-1/4 xl:shrink-0'
-          : 'w-full xl:min-w-0 xl:flex-1'
       return cn(
-        'flex min-h-full flex-col self-stretch rounded-xl border bg-white p-3 shadow-sm text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300',
-        widthClass,
+        'flex min-h-full w-full min-w-0 flex-1 flex-col self-stretch rounded-xl border bg-white p-3 shadow-sm text-left transition-all hover:shadow-md cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-300',
         selected && `ring-2 ${ringByCard[card]}`,
       )
     },
@@ -1649,26 +1624,6 @@ function ShippingPerformancePageContent() {
 
   const renderSummaryCardTitle = (card: ShippingPerfCardFilter) => {
     const { main: titleMain } = shippingPerfCardTitleLines(card)
-    if (card === 'ongoingWithEta') {
-      return (
-        <div className="mb-2.5 flex items-center gap-2">
-          <h2 className="text-lg font-bold text-gray-900">{titleMain}</h2>
-          <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-            with ETA
-          </span>
-        </div>
-      )
-    }
-    if (card === 'ongoingNoEta') {
-      return (
-        <div className="mb-2.5 flex items-center gap-2">
-          <h2 className="text-lg font-bold text-gray-900">{titleMain}</h2>
-          <span className="rounded-full border border-amber-100 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-            no ETA
-          </span>
-        </div>
-      )
-    }
     return (
       <div className="mb-2.5">
         <h2 className="text-lg font-bold text-gray-900">{titleMain}</h2>
@@ -1748,19 +1703,11 @@ function ShippingPerformancePageContent() {
     )
   }
 
-  /** Section 1 — asymmetrical layout: compact no-ETA card; expanded cards with inline averages. */
+  /** Section 1 — On Going / Close cards with vessel totals + gap averages. */
   const renderShippingSummaryCardBody = (
     card: ShippingPerfCardFilter,
     summary: PerVesselPerfSummary,
   ) => {
-    if (card === 'ongoingNoEta') {
-      return (
-        <div className="flex h-full min-h-full w-full flex-1 flex-col justify-center text-left">
-          {renderSummaryPrimaryTotals(card, summary)}
-        </div>
-      )
-    }
-
     return (
       <div className="flex h-full min-h-full w-full min-w-0 flex-col gap-4 text-left sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1 sm:border-r sm:border-gray-200 sm:pr-4">
@@ -2046,18 +1993,10 @@ function ShippingPerformancePageContent() {
               <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
                 <button
                   type="button"
-                  onClick={() => togglePerfCardFilter('ongoingNoEta')}
-                  className={summaryCardClass('ongoingNoEta')}
+                  onClick={() => togglePerfCardFilter('ongoing')}
+                  className={summaryCardClass('ongoing')}
                 >
-                  {renderShippingSummaryCardBody('ongoingNoEta', ongoingNoEtaPerformanceSummary)}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => togglePerfCardFilter('ongoingWithEta')}
-                  className={summaryCardClass('ongoingWithEta')}
-                >
-                  {renderShippingSummaryCardBody('ongoingWithEta', ongoingWithEtaPerformanceSummary)}
+                  {renderShippingSummaryCardBody('ongoing', ongoingPerformanceSummary)}
                 </button>
 
                 <button

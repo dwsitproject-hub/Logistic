@@ -45,15 +45,8 @@ describe('getShippingSummaryMetricLabel', () => {
 })
 
 describe('shippingPerfCardTitleLines', () => {
-  it('splits On Going cards into main line and smaller sub line', () => {
-    expect(shippingPerfCardTitleLines('ongoingNoEta')).toEqual({
-      main: 'On Going',
-      sub: 'no ETA',
-    })
-    expect(shippingPerfCardTitleLines('ongoingWithEta')).toEqual({
-      main: 'On Going',
-      sub: 'with ETA',
-    })
+  it('uses single-line On Going title', () => {
+    expect(shippingPerfCardTitleLines('ongoing')).toEqual({ main: 'On Going' })
     expect(shippingPerfCardTitleLines('close')).toEqual({ main: 'Close' })
     expect(shippingPerfCardTitleLines('all')).toEqual({ main: 'All' })
   })
@@ -61,14 +54,13 @@ describe('shippingPerfCardTitleLines', () => {
 
 describe('resolveShippingPerfLabelMode', () => {
   it('uses status filter when set', () => {
-    expect(resolveShippingPerfLabelMode('ongoingWithEta', 'Closed')).toBe('actual')
+    expect(resolveShippingPerfLabelMode('ongoing', 'Closed')).toBe('actual')
     expect(resolveShippingPerfLabelMode('close', 'Open')).toBe('estimated')
   })
 
   it('falls back to dashboard card when All', () => {
     expect(resolveShippingPerfLabelMode('close', 'All')).toBe('actual')
-    expect(resolveShippingPerfLabelMode('ongoingWithEta', 'All')).toBe('estimated')
-    expect(resolveShippingPerfLabelMode('ongoingNoEta', 'All')).toBe('estimated')
+    expect(resolveShippingPerfLabelMode('ongoing', 'All')).toBe('estimated')
     expect(resolveShippingPerfLabelMode('all', 'All')).toBe('estimated')
   })
 })

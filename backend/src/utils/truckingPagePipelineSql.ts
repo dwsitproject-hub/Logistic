@@ -70,7 +70,7 @@ export function sqlTruckingPageUnplannedPredicate(
   )`;
 }
 
-/** COMPLETED = GR PO/STO Close (incoterm) OR |OS Qty| within 0 MT display band (≤499 kg). */
+/** COMPLETED = GR PO/STO Close (incoterm) OR OS ≤ 499 kg (0 MT residual or over-delivery). */
 export function sqlTruckingPageIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,

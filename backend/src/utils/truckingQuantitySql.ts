@@ -100,9 +100,11 @@ export function sqlTruckingPoLevelSapReceiveQty(
 }
 
 /**
- * OS Qty within this band (kg) counts as fulfilled for trucking COMPLETED when GR is still Open.
- * Aligned with whole-MT table display (`maxFractionDigits: 0`): |OS| ≤ 499 kg → "0 MT".
+ * OS Qty at or below this band (kg) counts as fulfilled for trucking COMPLETED when GR is still Open.
+ * Aligned with whole-MT table display (`maxFractionDigits: 0`): residual OS ≤ 499 kg → "0 MT".
+ * Also treats over-delivery (negative OS / UI "+N MT") as fulfilled — any OS ≤ 499 kg qualifies.
  * Example: contract 225,000 kg − receive 224,714 kg = 286 kg OS → Completed despite GR Open.
+ * Example: OS = −3,000 kg (UI +3 MT overdelivered) → Completed.
  */
 export const TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG = 499;
 
@@ -324,12 +326,13 @@ export function isTruckingOutstandingWithinToleranceKg(
   if (outstandingKg === null || outstandingKg === undefined || !Number.isFinite(outstandingKg)) {
     return false;
   }
-  return Math.abs(outstandingKg) <= toleranceKg;
+  // Residual under-delivery within 0 MT band, or any over-delivery (negative OS).
+  return outstandingKg <= toleranceKg;
 }
 
 /**
- * COMPLETED when GR PO/STO Close (incoterm), OR |OS Qty| within 0 MT display band (≤499 kg)
- * even while GR is still Open.
+ * COMPLETED when GR PO/STO Close (incoterm), OR OS Qty ≤ 499 kg
+ * (0 MT residual band or over-delivery) even while GR is still Open.
  */
 export function isTruckingPipelineCompleted(
   contractImportStatus: unknown,
@@ -344,18 +347,18 @@ export function isTruckingPipelineCompleted(
 /** @deprecated Use isTruckingPipelineCompleted */
 export const isTruckingCompletedByGrAndOs = isTruckingPipelineCompleted;
 
-/** True when |outstanding qty| is within tolerance (kg); NULL outstanding does not qualify. */
+/** True when outstanding qty ≤ tolerance (kg), including over-delivery; NULL does not qualify. */
 export function sqlTruckingOutstandingWithinToleranceExpr(
   outstandingExpr: string,
   toleranceKg = TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 ): string {
   return `(
     ${outstandingExpr} IS NOT NULL
-    AND ABS((${outstandingExpr})::numeric) <= ${toleranceKg}
+    AND (${outstandingExpr})::numeric <= ${toleranceKg}
   )`;
 }
 
-/** Pipeline COMPLETED: GR PO/STO Close (incoterm) OR |OS Qty| within 0 MT display band. */
+/** Pipeline COMPLETED: GR PO/STO Close (incoterm) OR OS ≤ 499 kg (incl. over-delivery). */
 export function sqlTruckingPipelineIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,

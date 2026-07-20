@@ -38,6 +38,8 @@ import {
 } from '../utils/klipSapFieldMerge';
 import { sqlHasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
 import { SQL_TRUCKING_KEEPER_PRIORITY_ORDER } from '../utils/truckingOperationUniqueness';
+import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
+import { normalizePoNumber } from '../utils/contractPoIdentity';
 
 export interface DistributionResult {
   contractId?: string;
@@ -129,10 +131,20 @@ export class SapDataDistributionService {
     // Try direct upsert path keys
     const contractNumber: string | undefined = parsedData?.contract?.contract_no || undefined;
     const poNumber: string | undefined = parsedData?.contract?.po_no || undefined;
-    if (contractNumber || poNumber) {
+    const poNorm = normalizePoNumber(poNumber);
+    if (poNorm) {
       const existing = await client.query(
-        `SELECT id FROM contracts WHERE contract_id = $1 OR po_number = $2 LIMIT 1`,
-        [contractNumber || null, poNumber || null]
+        `SELECT id FROM contracts WHERE TRIM(COALESCE(po_number::text, '')) = TRIM($1::text) LIMIT 1`,
+        [poNorm],
+      );
+      if (existing.rows.length > 0) {
+        return existing.rows[0].id as string;
+      }
+    }
+    if (contractNumber) {
+      const existing = await client.query(
+        `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+        [contractNumber],
       );
       if (existing.rows.length > 0) {
         return existing.rows[0].id as string;
@@ -449,41 +461,7 @@ export class SapDataDistributionService {
     fromContractUuid: string,
     toContractUuid: string
   ): Promise<void> {
-    if (fromContractUuid === toContractUuid) return;
-
-    await client.query(
-      `UPDATE shipments SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `UPDATE payments SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `UPDATE documents SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `INSERT INTO contract_stos (
-         contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
-       )
-       SELECT $1, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
-       FROM contract_stos
-       WHERE contract_id = $2
-       ON CONFLICT (contract_id, sto_number) DO UPDATE SET
-         sto_quantity = COALESCE(EXCLUDED.sto_quantity, contract_stos.sto_quantity),
-         sto_type = COALESCE(EXCLUDED.sto_type, contract_stos.sto_type),
-         sto_item = COALESCE(EXCLUDED.sto_item, contract_stos.sto_item),
-         sto_classification = COALESCE(EXCLUDED.sto_classification, contract_stos.sto_classification),
-         plant_code = COALESCE(EXCLUDED.plant_code, contract_stos.plant_code),
-         updated_at = CURRENT_TIMESTAMP`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(`DELETE FROM contracts WHERE id = $1`, [fromContractUuid]);
+    await mergeContractRecords(client, fromContractUuid, toContractUuid);
   }
 
   /**
@@ -534,39 +512,38 @@ export class SapDataDistributionService {
     userId?: string
   ): Promise<string> {
     const contractNumber = contractData.contract_no != null ? String(contractData.contract_no).trim() || null : null;
-    const poNumber = contractData.po_no != null ? String(contractData.po_no).trim() || null : null;
+    const poNumber = normalizePoNumber(contractData.po_no);
 
-    // Prefer an existing real contract for this PO when SAP row has no contract_number.
-    // Otherwise imports recreate PO-{po} placeholders that show Delivery/Receive = 0.
-    let effectiveContractId = contractNumber || (poNumber ? `PO-${poNumber}` : null);
-    if (!contractNumber && poNumber) {
-      const existingReal = await client.query(
-        `SELECT contract_id
-         FROM contracts
-         WHERE TRIM(po_number::text) = $1
-           AND contract_id !~ '^PO-'
-         ORDER BY created_at ASC NULLS LAST
-         LIMIT 1`,
-        [poNumber],
-      );
-      if (existingReal.rows.length > 0) {
-        effectiveContractId = String(existingReal.rows[0].contract_id);
-      }
+    if (!poNumber) {
+      throw new Error('PO number is required');
     }
 
-    if (!effectiveContractId) {
-      throw new Error('Contract number or PO number is required');
-    }
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [`po:${poNumber}`]);
+    await mergeDuplicateContractsByPo(client, poNumber);
 
-    // Serialize upserts for the same business contract_id within this transaction (batch + concurrent imports).
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [effectiveContractId]);
+    const existingByPo = await client.query<{ id: string; contract_id: string }>(
+      `SELECT id, contract_id
+       FROM contracts
+       WHERE TRIM(COALESCE(po_number::text, '')) = TRIM($1::text)
+       LIMIT 1`,
+      [poNumber],
+    );
 
-    // When we have a proper contract_no, reconcile PO-prefixed placeholder rows for the same PO.
+    let effectiveContractId =
+      contractNumber ||
+      (existingByPo.rows[0]?.contract_id && !String(existingByPo.rows[0].contract_id).startsWith('PO-')
+        ? existingByPo.rows[0].contract_id
+        : null) ||
+      `PO-${poNumber}`;
+
     if (contractNumber && poNumber) {
       await this.reconcilePoPlaceholder(client, contractNumber, poNumber);
-    } else if (!contractNumber && poNumber && effectiveContractId !== `PO-${poNumber}`) {
-      // Also fold leftover placeholders if we resolved to a real contract by PO.
-      await this.reconcilePoPlaceholder(client, effectiveContractId, poNumber);
+      effectiveContractId = contractNumber;
+    } else if (!contractNumber && poNumber && existingByPo.rows[0]?.contract_id) {
+      const existingCid = String(existingByPo.rows[0].contract_id);
+      if (!existingCid.startsWith('PO-')) {
+        effectiveContractId = existingCid;
+      }
     }
 
     const quantity = this.parseNumber(contractData.contract_quantity);
@@ -575,69 +552,129 @@ export class SapDataDistributionService {
     const statusNorm = this.normalizeContractStatus(contractData.status) || 'Open';
     const statusForDb = this.statusForDb(statusNorm);
 
-    // Upsert: insert or update on conflict (contract_id unique) so re-upload of same contract updates instead of failing
-    const result = await client.query(
-      `INSERT INTO contracts (
-        contract_id, group_name, supplier, buyer, contract_date, product, po_number,
-        incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
-        delivery_start_date, delivery_end_date, source_type, contract_type,
-        status, sto_number, sto_quantity, logistics_classification, po_classification,
-        plant_code, created_by
-      ) VALUES (
-        $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
-        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, $23
-      )
-      ON CONFLICT (contract_id) DO UPDATE SET
-        group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
-        supplier = COALESCE(EXCLUDED.supplier, contracts.supplier),
-        buyer = COALESCE(EXCLUDED.buyer, contracts.buyer),
-        contract_date = COALESCE(EXCLUDED.contract_date, contracts.contract_date),
-        product = COALESCE(EXCLUDED.product, contracts.product),
-        po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
-        incoterm = COALESCE(EXCLUDED.incoterm, contracts.incoterm),
-        transport_mode = COALESCE(EXCLUDED.transport_mode, contracts.transport_mode),
-        quantity_ordered = COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered),
-        unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
-        contract_value = COALESCE(EXCLUDED.contract_value, contracts.contract_value),
-        delivery_start_date = COALESCE(EXCLUDED.delivery_start_date, contracts.delivery_start_date),
-        delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
-        source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
-        contract_type = COALESCE(EXCLUDED.contract_type, contracts.contract_type),
-        status = COALESCE(EXCLUDED.status, contracts.status),
-        sto_number = COALESCE(EXCLUDED.sto_number, contracts.sto_number),
-        sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
-        logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
-        po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
-        plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
-        updated_at = CURRENT_TIMESTAMP
-      RETURNING id`,
-      [
-        effectiveContractId,
-        contractData.group,
-        contractData.supplier,
-        contractData.buyer || contractData.group || 'Unknown',
-        this.parseDate(contractData.contract_date),
-        contractData.product,
-        poNumber,
-        contractData.incoterm,
-        contractData.sea_land || contractData.transport_mode,
-        quantity,
-        unitPrice,
-        contractValue,
-        this.parseDate(contractData.due_date_delivery_start),
-        this.parseDate(contractData.due_date_delivery_end),
-        contractData.source,
-        contractData.contract_type || contractData.ltc_spot,
-        statusForDb,
-        contractData.sto_no,
-        this.parseNumber(contractData.sto_quantity),
-        contractData.logistics_area_classification,
-        contractData.sto_classification || contractData.po_classification,
-        contractData.plant_code || null,
-        userId
-      ]
-    );
-    const contractUuid = result.rows[0].id as string;
+    const params = [
+      effectiveContractId,
+      contractData.group,
+      contractData.supplier,
+      contractData.buyer || contractData.group || 'Unknown',
+      this.parseDate(contractData.contract_date),
+      contractData.product,
+      poNumber,
+      contractData.incoterm,
+      contractData.sea_land || contractData.transport_mode,
+      quantity,
+      unitPrice,
+      contractValue,
+      this.parseDate(contractData.due_date_delivery_start),
+      this.parseDate(contractData.due_date_delivery_end),
+      contractData.source,
+      contractData.contract_type || contractData.ltc_spot,
+      statusForDb,
+      contractData.sto_no,
+      this.parseNumber(contractData.sto_quantity),
+      contractData.logistics_area_classification,
+      contractData.sto_classification || contractData.po_classification,
+      contractData.plant_code || null,
+      userId,
+    ];
+
+    let contractUuid: string;
+
+    if (existingByPo.rows.length > 0) {
+      const existingId = existingByPo.rows[0].id;
+      const renameContractId =
+        contractNumber &&
+        String(existingByPo.rows[0].contract_id).startsWith('PO-') &&
+        contractNumber !== existingByPo.rows[0].contract_id;
+
+      if (renameContractId) {
+        const conflict = await client.query(
+          `SELECT id FROM contracts WHERE contract_id = $1 AND id <> $2::uuid LIMIT 1`,
+          [contractNumber, existingId],
+        );
+        if (conflict.rows.length > 0) {
+          await this.mergeContractRecords(client, conflict.rows[0].id, existingId);
+        } else {
+          await client.query(
+            `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+            [contractNumber, existingId],
+          );
+        }
+      }
+
+      const updated = await client.query(
+        `UPDATE contracts SET
+          contract_id = CASE
+            WHEN $1::text IS NOT NULL AND $1::text !~ '^PO-' THEN $1::text
+            ELSE contract_id
+          END,
+          group_name = COALESCE($2, group_name),
+          supplier = COALESCE($3, supplier),
+          buyer = COALESCE($4, buyer),
+          contract_date = COALESCE($5::date, contract_date),
+          product = COALESCE($6, product),
+          po_number = COALESCE($7, po_number),
+          incoterm = COALESCE($8, incoterm),
+          transport_mode = COALESCE($9, transport_mode),
+          quantity_ordered = COALESCE($10::numeric, quantity_ordered),
+          unit_price = COALESCE($11::numeric, unit_price),
+          contract_value = COALESCE($12::numeric, contract_value),
+          delivery_start_date = COALESCE($13::date, delivery_start_date),
+          delivery_end_date = COALESCE($14::date, delivery_end_date),
+          source_type = COALESCE($15, source_type),
+          contract_type = COALESCE($16, contract_type),
+          status = COALESCE($17, status),
+          sto_number = COALESCE($18, sto_number),
+          sto_quantity = COALESCE($19::numeric, sto_quantity),
+          logistics_classification = COALESCE($20, logistics_classification),
+          po_classification = COALESCE($21, po_classification),
+          plant_code = COALESCE($22, plant_code),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = $23::uuid
+         RETURNING id`,
+        [...params.slice(0, 22), existingId],
+      );
+      contractUuid = updated.rows[0].id as string;
+    } else {
+      const inserted = await client.query(
+        `INSERT INTO contracts (
+          contract_id, group_name, supplier, buyer, contract_date, product, po_number,
+          incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
+          delivery_start_date, delivery_end_date, source_type, contract_type,
+          status, sto_number, sto_quantity, logistics_classification, po_classification,
+          plant_code, created_by
+        ) VALUES (
+          $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
+          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, $23
+        )
+        ON CONFLICT (contract_id) DO UPDATE SET
+          po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
+          group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
+          supplier = COALESCE(EXCLUDED.supplier, contracts.supplier),
+          buyer = COALESCE(EXCLUDED.buyer, contracts.buyer),
+          contract_date = COALESCE(EXCLUDED.contract_date, contracts.contract_date),
+          product = COALESCE(EXCLUDED.product, contracts.product),
+          incoterm = COALESCE(EXCLUDED.incoterm, contracts.incoterm),
+          transport_mode = COALESCE(EXCLUDED.transport_mode, contracts.transport_mode),
+          quantity_ordered = COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered),
+          unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
+          contract_value = COALESCE(EXCLUDED.contract_value, contracts.contract_value),
+          delivery_start_date = COALESCE(EXCLUDED.delivery_start_date, contracts.delivery_start_date),
+          delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
+          source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
+          contract_type = COALESCE(EXCLUDED.contract_type, contracts.contract_type),
+          status = COALESCE(EXCLUDED.status, contracts.status),
+          sto_number = COALESCE(EXCLUDED.sto_number, contracts.sto_number),
+          sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
+          logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
+          po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
+          plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING id`,
+        params,
+      );
+      contractUuid = inserted.rows[0].id as string;
+    }
 
     // Persist each STO as a separate row in contract_stos to support multiple STOs per contract.
     const stoNo = contractData.sto_no != null ? String(contractData.sto_no).trim() || null : null;
@@ -810,10 +847,20 @@ export class SapDataDistributionService {
 
     let targetShipmentId: string | null = null;
 
-    if (shipmentIdFromSap) {
+    if (shipmentIdFromSap && contractUuid) {
+      const existingByShipment = await client.query(
+        `SELECT id FROM shipments
+         WHERE contract_id = $1::uuid AND shipment_id = $2
+         LIMIT 1`,
+        [contractUuid, shipmentIdFromSap],
+      );
+      if (existingByShipment.rows.length > 0) {
+        targetShipmentId = existingByShipment.rows[0].id;
+      }
+    } else if (shipmentIdFromSap) {
       const existingByShipment = await client.query(
         `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
-        [shipmentIdFromSap]
+        [shipmentIdFromSap],
       );
       if (existingByShipment.rows.length > 0) {
         targetShipmentId = existingByShipment.rows[0].id;
@@ -846,19 +893,8 @@ export class SapDataDistributionService {
         poRes.rows[0]?.po_number,
         String(shipmentIdFromSap).trim(),
       );
-      if (poMatch) {
+      if (poMatch && poMatch.contractUuid === contractUuid) {
         targetShipmentId = poMatch.id;
-        if (poMatch.contractUuid !== contractUuid) {
-          await client.query(
-            `UPDATE shipments SET contract_id = $1::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
-            [contractUuid, poMatch.id],
-          );
-          logger.info('upsertShipment: reusing PO+STO shipment from sibling contract', {
-            contractId,
-            shipmentUuid: poMatch.id,
-            sapShipmentId: shipmentIdFromSap,
-          });
-        }
       }
     }
 
@@ -1058,11 +1094,13 @@ export class SapDataDistributionService {
         }
       }
       return id;
-    } else if (shipmentIdFromSap) {
+    } else if (shipmentIdFromSap && contractUuid) {
       let klipProtectShipmentFields = false;
       const existingForConflict = await client.query(
-        `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
-        [shipmentIdFromSap],
+        `SELECT id FROM shipments
+         WHERE contract_id = $1::uuid AND shipment_id = $2
+         LIMIT 1`,
+        [contractUuid, shipmentIdFromSap],
       );
       if (existingForConflict.rows.length > 0) {
         klipProtectShipmentFields = await hasKlipShipmentActivity(
@@ -1096,8 +1134,7 @@ export class SapDataDistributionService {
           $38::date, $39::date, $40::date, $41::date, $42::date, $43::date, $44::numeric, $45::numeric,
           $46::int, $47::int, $48::int, $49::numeric, $50::numeric
         )
-        ON CONFLICT (shipment_id) DO UPDATE SET
-          contract_id   = COALESCE(EXCLUDED.contract_id, shipments.contract_id),
+        ON CONFLICT (contract_id, shipment_id) DO UPDATE SET
           voyage_no     = COALESCE(EXCLUDED.voyage_no, shipments.voyage_no),
           ${shipmentConflictProtectedSql},
           vessel_owner  = COALESCE(EXCLUDED.vessel_owner, shipments.vessel_owner),
@@ -1654,15 +1691,9 @@ export class SapDataDistributionService {
   /**
    * Helper: Check if has contract data
    */
-  private static hasContractData(contractData: any, parsedData?: any): boolean {
+  private static hasContractData(contractData: any, _parsedData?: any): boolean {
     if (!contractData) return false;
-    // Accept if we have either a contract number or a PO number (common cases)
-    if (contractData.contract_no || contractData.po_no) return true;
-    // Relax condition: allow when STO exists and we have key attributes to update
-    const hasSto = parsedData?.shipment?.sto_no || contractData?.sto_no;
-    const hasBasicAttrs =
-      !!(contractData.group || contractData.supplier || contractData.product || contractData.contract_quantity);
-    return !!(hasSto && hasBasicAttrs);
+    return !!normalizePoNumber(contractData.po_no);
   }
   
   /**

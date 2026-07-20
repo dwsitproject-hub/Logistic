@@ -121,10 +121,11 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('DISTINCT ON');
   });
 
-  it('sqlTruckingOutstandingWithinToleranceExpr allows band around zero', () => {
+  it('sqlTruckingOutstandingWithinToleranceExpr allows residual band and over-delivery', () => {
     const sql = sqlTruckingOutstandingWithinToleranceExpr('os.outstanding');
     expect(sql).toContain('os.outstanding');
-    expect(sql).toContain('ABS');
+    expect(sql).toContain(`<= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG}`);
+    expect(sql).not.toContain('ABS');
   });
 
   it('sqlTruckingPipelineIsCompletedExpr uses OR between GR Close and OS tolerance', () => {
@@ -132,12 +133,15 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain(' OR ');
   });
 
-  it('isTruckingPipelineCompleted accepts GR Close or OS within 0 MT display band', () => {
+  it('isTruckingPipelineCompleted accepts GR Close, OS within 0 MT band, or over-delivery', () => {
     expect(isTruckingPipelineCompleted('Close', 5000)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', 0)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', 286)).toBe(true); // displays as 0 MT
     expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG + 1)).toBe(false);
     expect(isTruckingPipelineCompleted('Open', 5000)).toBe(false);
+    // Over-delivery (negative OS / UI "+N MT") → Completed
+    expect(isTruckingPipelineCompleted('Open', -3000)).toBe(true);
+    expect(isTruckingPipelineCompleted('Open', -1)).toBe(true);
   });
 });
