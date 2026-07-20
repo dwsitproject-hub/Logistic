@@ -17,7 +17,7 @@ export function perfDataModeFromCard(card: ShippingPerfCardFilter): PerfDashMode
 export const SHIPPING_PERF_CARD_TITLES: Record<ShippingPerfCardFilter, string> = {
   all: 'All',
   ongoing: 'On Going',
-  close: 'Close',
+  close: 'Completed',
 }
 
 /** Section 1 summary cards — title lines. */
@@ -28,7 +28,7 @@ export function shippingPerfCardTitleLines(
     case 'ongoing':
       return { main: 'On Going' }
     case 'close':
-      return { main: 'Close' }
+      return { main: 'Completed' }
     case 'all':
       return { main: 'All' }
   }

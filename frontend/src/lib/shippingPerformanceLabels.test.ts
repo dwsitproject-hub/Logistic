@@ -47,7 +47,7 @@ describe('getShippingSummaryMetricLabel', () => {
 describe('shippingPerfCardTitleLines', () => {
   it('uses single-line On Going title', () => {
     expect(shippingPerfCardTitleLines('ongoing')).toEqual({ main: 'On Going' })
-    expect(shippingPerfCardTitleLines('close')).toEqual({ main: 'Close' })
+    expect(shippingPerfCardTitleLines('close')).toEqual({ main: 'Completed' })
     expect(shippingPerfCardTitleLines('all')).toEqual({ main: 'All' })
   })
 })

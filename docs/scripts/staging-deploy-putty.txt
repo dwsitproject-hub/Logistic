@@ -126,35 +126,167 @@ Di server yang bermasalah:
   docker compose -f docker-compose.frontend.yml up -d --build  # di .56
 
 ================================================================================
-Cleanup trucking duplicate + CANCELLED (database staging)
+Cleanup trucking duplicate + CANCELLED (database staging) — LEGACY DELETE
 ================================================================================
+PERINGATAN: script di bawah MENGHAPUS baris CANCELLED dari DB (bukan hanya
+set status). Jangan pakai untuk kasus "In Progress → Cancelled" yang harus
+tetap terlihat di kartu Cancelled.
+
 Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
 
-Membersihkan:
-  1. Duplikat operation_id lintas PO (Unplanned upload lama)
-  2. Semua baris status CANCELLED
-  3. Duplikat per contract (sisakan 1 keeper terbaik)
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  bash docs/scripts/run-cleanup-trucking-staging.sh          # preview
+  bash docs/scripts/run-cleanup-trucking-staging.sh --apply  # execute
 
-Audit trail: cleanup_audit_duplicate_trucking_op_id,
-             cleanup_audit_cancelled_trucking,
-             cleanup_audit_duplicate_trucking_per_contract
+================================================================================
+PO-primary + Trucking PO dedupe (OP-LAND-300620260835 / PO 1001031094)
+================================================================================
+Kasus: Trucking View Table SIT masih menampilkan
+  OP-LAND-300620260835 = IN_PROGRESS
+padahal local sudah CANCELLED (duplikat PO; keeper = OP-LAND-160720260073).
+
+Penyebab: code/script sudah di-push (commit 5f9d3aa+), tapi one-shot data
+cleanup belum dijalankan di DB SIT. Migration 119 TIDAK membatalkan op ini.
+
+Target akhir (sama local):
+  OP-LAND-160720260073 | COMPLETED | kept (WB lengkap)
+  OP-LAND-300620260835 | CANCELLED | loser
+
+----- A) PuTTY → Backend 172.28.92.57 — pastikan code + migrate -----
+
+  cd /opt/klip
+  git fetch origin
+  git checkout SIT
+  git pull origin SIT
+  git log -1 --oneline
+  # Harus mengandung commit po-identity (mis. 5f9d3aa) atau lebih baru
+
+  docker compose -f docker-compose.backend.yml up -d --build
+  docker compose -f docker-compose.backend.yml ps
+  curl -s http://127.0.0.1:5001/health
+
+  # Cek migrate 119 sudah masuk schema_migrations
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c \
+    "SELECT filename, applied_at FROM schema_migrations
+     WHERE filename = '119_po_primary_identity.sql';"
+
+  # Jika 0 baris → jalankan migrate manual, lalu ulangi SELECT di atas
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/database/migrate.js
+
+  # Pastikan script compiled ada di image
+  docker compose -f docker-compose.backend.yml exec backend \
+    ls -la dist/scripts/cleanupDuplicateTruckingByPo.js \
+           dist/scripts/refreshTruckingPipelineSummary.js
+
+----- B) BEFORE — bukti 1 baris masih aktif (In Progress) -----
+
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c "
+  SELECT t.operation_id, t.status,
+         (SELECT COUNT(DISTINCT da.progress_date)
+            FROM trucking_daily_actuals da
+           WHERE da.trucking_operation_id = t.id) AS wb_dates
+  FROM trucking_operations t
+  JOIN contracts c ON c.id = t.contract_id
+  WHERE TRIM(c.po_number::text) = '1001031094'
+  ORDER BY t.operation_id;
+  "
+
+  # Harapan BEFORE: dua baris aktif ATAU satu IN_PROGRESS untuk 300620260835
+  # (status DB bisa IN_PROGRESS / PLANNED; UI menampilkan In Progress)
+
+----- C–E) Satu perintah (disarankan) -----
 
   cd /opt/klip
   git fetch origin && git checkout SIT && git pull origin SIT
 
-  # Preview (read-only):
-  bash docs/scripts/run-cleanup-trucking-staging.sh
+  # Dry-run dulu:
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh
 
-  # Execute:
-  bash docs/scripts/run-cleanup-trucking-staging.sh --apply
+  # Apply cancel + refresh pipeline:
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --apply
 
-Jika script belum ada di server (belum push/pull), salin 4 file SQL dari repo:
-  backend/src/scripts/sql/previewTruckingCleanupStaging.sql
-  backend/src/scripts/sql/cleanupDuplicateTruckingByOperationId.sql
-  backend/src/scripts/sql/deleteCancelledTruckingOperations.sql
-  backend/src/scripts/sql/cleanupDuplicateTruckingPerContract.sql
+  # PO lain / semua:
+  # bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --po <PO> --apply
+  # bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --all --apply
 
-Verifikasi UI: http://8.215.6.189/trucking (hard refresh Ctrl+Shift+R)
+Script di atas memakai DB credential dari container backend (tidak perlu
+psql -U postgres), mengecek migrate 119, dry-run/apply dedupe, lalu refresh
+pipeline. TIDAK menghapus baris CANCELLED.
+
+----- C) Manual dry-run (jika script belum di-pull) -----
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --po 1001031094
+
+  # Harapan dry-run JSON:
+  #   rowsToCancel >= 1
+  #   cancel[].operation_id berisi OP-LAND-300620260835
+  #   keepers[].operation_id = OP-LAND-160720260073 (WB lebih lengkap)
+
+----- D) Manual APPLY cancel loser -----
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --po 1001031094 --apply
+
+----- E) Manual refresh pipeline -----
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/refreshTruckingPipelineSummary.js
+
+----- F) AFTER — verifikasi DB -----
+
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c "
+  SELECT t.operation_id, t.status,
+         (SELECT COUNT(DISTINCT da.progress_date)
+            FROM trucking_daily_actuals da
+           WHERE da.trucking_operation_id = t.id) AS wb_dates
+  FROM trucking_operations t
+  JOIN contracts c ON c.id = t.contract_id
+  WHERE TRIM(c.po_number::text) = '1001031094'
+  ORDER BY CASE WHEN UPPER(t.status)='CANCELLED' THEN 1 ELSE 0 END, t.operation_id;
+  "
+
+  # Harapan AFTER:
+  #   OP-LAND-160720260073 | COMPLETED | wb_dates > 0
+  #   OP-LAND-300620260835 | CANCELLED | wb_dates = 0
+
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c "
+  SELECT stage FROM trucking_list_stage_snapshot sn
+  JOIN trucking_operations t ON t.id = sn.operation_id
+  WHERE t.operation_id = 'OP-LAND-300620260835';
+  "
+
+  # Harapan snapshot stage = CANCELLED
+
+----- G) Browser -----
+
+  http://8.215.6.189/trucking
+  Hard refresh: Ctrl+Shift+R
+  - Default / In Progress: OP-LAND-300620260835 HILANG (1 baris keluar)
+  - Kartu Cancelled: OP-LAND-300620260835 MUNCUL
+  - PO 1001031094 aktif: hanya OP-LAND-160720260073
+
+Opsional semua PO dobel (setelah dry-run --all terlihat aman):
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --all
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --all --apply
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/refreshTruckingPipelineSummary.js
+
+Catatan DB user:
+  Jika psql gagal role postgres: ganti -U sesuai backend/.env (DB_USER),
+  contoh: -U klip_user -d klip_db
+  Atau exec lewat backend yang sudah punya env:
+    docker compose -f docker-compose.backend.yml exec backend \
+      node -e "const{Pool}=require('pg');const p=new Pool({host:process.env.DB_HOST,port:+process.env.DB_PORT||5432,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD});p.query(\"SELECT filename,applied_at FROM schema_migrations WHERE filename='119_po_primary_identity.sql'\").then(r=>{console.log(r.rows);return p.end();})"
 
 ================================================================================
 Referensi

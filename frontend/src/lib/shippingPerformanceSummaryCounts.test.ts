@@ -37,6 +37,22 @@ describe('shippingPerformanceSummaryCounts', () => {
     expect(isCountableShippingPerfVessel('MV ONE')).toBe(true)
   })
 
+  it('By Vessel grouping should only keep countable vessel names (Section 1 parity)', () => {
+    const rows = [
+      { vessel_name: 'MV ONE' },
+      { vessel_name: null },
+      { vessel_name: 'Unknown' },
+      { vessel_name: 'MV TWO' },
+      { vessel_name: '' },
+    ]
+    const keys = new Set<string>()
+    for (const row of rows) {
+      if (!isCountableShippingPerfVessel(row.vessel_name)) continue
+      keys.add(normalizeVesselKey(row.vessel_name))
+    }
+    expect([...keys].sort()).toEqual(['MV ONE', 'MV TWO'])
+  })
+
   it('addDistinct helpers match set-based totals', () => {
     const contracts = new Set<string>()
     addDistinctContractIds(contracts, '1001, 1002')

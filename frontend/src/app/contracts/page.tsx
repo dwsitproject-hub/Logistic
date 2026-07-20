@@ -98,6 +98,7 @@ import {
   ContractPerfUnifiedNodeCard,
   type PerfSegmentFilter,
 } from '@/components/contract-performance/ContractPerfUnifiedNodeCard'
+import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import {
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION,
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY,
@@ -3879,20 +3880,18 @@ function ContractsPageContent() {
           return (
             <div className={`transition-opacity duration-200 ${latePerfSummaryLoading ? 'opacity-65' : 'opacity-100'}`}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <button
-                  type="button"
+                <PerformanceSection1CardShell
+                  variant="open"
+                  title="Open"
+                  selected={openSelected}
                   onClick={() => applySummaryStatusCard('Open')}
-                  className={`rounded-xl border bg-white p-5 shadow-sm text-left transition-colors ${
-                    openSelected ? 'border-green-500 ring-2 ring-green-200' : 'hover:border-green-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <span className="text-base font-semibold text-gray-800">Open</span>
+                  headerEnd={
                     <ContractPerfStatusPctBadges
                       onTimeCount={statusCardSummary.openOnTimeCount ?? 0}
                       lateCount={statusCardSummary.openLateCount ?? 0}
                     />
-                  </div>
+                  }
+                >
                   <div className="text-sm text-gray-500 mb-1">Outstanding Qty (MT)</div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
@@ -3926,22 +3925,20 @@ function ContractsPageContent() {
                       </span>
                     </span>
                   </div>
-                </button>
+                </PerformanceSection1CardShell>
 
-                <button
-                  type="button"
+                <PerformanceSection1CardShell
+                  variant="close"
+                  title="Close"
+                  selected={closeSelected}
                   onClick={() => applySummaryStatusCard('Close')}
-                  className={`rounded-xl border bg-white p-5 shadow-sm text-left transition-colors ${
-                    closeSelected ? 'border-slate-500 ring-2 ring-slate-200' : 'hover:border-slate-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <span className="text-base font-semibold text-gray-800">Close</span>
+                  headerEnd={
                     <ContractPerfStatusPctBadges
                       onTimeCount={statusCardSummary.closeOnTimeCount ?? 0}
                       lateCount={statusCardSummary.closeLateCount ?? 0}
                     />
-                  </div>
+                  }
+                >
                   <div className="text-sm text-gray-500 mb-1">Contract Qty (MT)</div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {formatContractPerfOutstandingMt(statusCardSummary.closeContractQty)}
@@ -3975,7 +3972,7 @@ function ContractsPageContent() {
                       </span>
                     </span>
                   </div>
-                </button>
+                </PerformanceSection1CardShell>
               </div>
             </div>
           )
