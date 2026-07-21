@@ -92,11 +92,13 @@ export class ContractQtyMoveSnapshotService {
   }
 }
 
-/** Pick snapshot join or live qty_move CTE (same output shape). */
+/**
+ * Live qty_move CTE for Contracts / Contract Performance / dashboard reads.
+ * Always live (scoped via contract_scope join) so Delivery/Received match Trucking WB
+ * and never lag behind a stale contract_qty_move_snapshot.
+ * Snapshot refresh remains available for tooling/regression only.
+ */
 export async function resolveContractsQtyMoveCte(scopeCteName = 'contract_scope'): Promise<string> {
-  if (await isContractQtyMoveSnapshotFresh()) {
-    return buildQtyMoveFromSnapshotCte(scopeCteName);
-  }
   return buildQtyMoveCte({ kind: 'join_scope', scopeCteName });
 }
 

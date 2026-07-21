@@ -90,11 +90,17 @@ function stoScopedOutstandingActualSql(opts: {
 
 /** SQL for GET /shipments/contracts/details — one row per PO line on the STO. */
 export function buildContractDetailsForStoSql(): string {
-  const stoMatch = (alias: string) => sqlStoLookupKeyMatchExpr('$1::text', alias);
+  /** Discovery only — never blank-STO fallback (would pull all empty-STO POs). */
+  const stoMatchDiscover = (alias: string) => sqlStoLookupKeyMatchExpr('$1::text', alias);
+  /** Qty / lock — blank STO allowed only for the row's contract. */
+  const stoMatchForContract = (alias: string, contractNumberExpr: string) =>
+    sqlStoLookupKeyMatchExpr('$1::text', alias, { contractNumberExpr });
   const poMatch = (alias: string) => `(
               pl.po_number IS NULL
               OR ${spdPoNumber(alias)} = pl.po_number
             )`;
+
+  const plStoMatch = (alias: string) => stoMatchForContract(alias, 'pl.contract_number');
 
   const plSapStoQty = sqlPoStoSapQtyKg({
     contractNumberExpr: 'pl.contract_number',
@@ -107,21 +113,21 @@ export function buildContractDetailsForStoSql(): string {
     contractQtyExpr: 'pl.contract_qty',
     incotermExpr: 'pl.incoterm',
     contractNumberExpr: 'pl.contract_number',
-    stoMatch,
+    stoMatch: plStoMatch,
     poMatch,
   });
 
   const plDeliveredKg = stoScopedDeliveredKgSql(
     'pl.contract_number',
     'pl.contract_qty',
-    stoMatch,
+    plStoMatch,
     poMatch,
   );
 
   const plReceiveKg = stoScopedReceiveKgSql(
     'pl.contract_number',
     'pl.contract_qty',
-    stoMatch,
+    plStoMatch,
     poMatch,
   );
 
@@ -134,7 +140,7 @@ export function buildContractDetailsForStoSql(): string {
   const socPoNumberExpr = `(SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${stoMatchForContract('spd', 'soc.contract_number')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`;
 
@@ -150,25 +156,27 @@ export function buildContractDetailsForStoSql(): string {
     stoKeyExpr: '$1::text',
   });
 
+  const socStoMatch = (alias: string) => stoMatchForContract(alias, 'soc.contract_number');
+
   const socOutstandingActual = stoScopedOutstandingActualSql({
     contractQtyExpr: socContractQtyExpr,
     incotermExpr: `(SELECT c.incoterm FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1)`,
     contractNumberExpr: 'soc.contract_number',
-    stoMatch,
+    stoMatch: socStoMatch,
     poMatch: sapOnlyPoMatch,
   });
 
   const socDeliveredKg = stoScopedDeliveredKgSql(
     'soc.contract_number',
     socContractQtyExpr,
-    stoMatch,
+    socStoMatch,
     sapOnlyPoMatch,
   );
 
   const socReceiveKg = stoScopedReceiveKgSql(
     'soc.contract_number',
     socContractQtyExpr,
-    stoMatch,
+    socStoMatch,
     sapOnlyPoMatch,
   );
 
@@ -209,7 +217,7 @@ export function buildContractDetailsForStoSql(): string {
           FROM sap_processed_data spd
           WHERE spd.contract_number IS NOT NULL
             AND TRIM(spd.contract_number) != ''
-            AND ${stoMatch('spd')}
+            AND ${stoMatchDiscover('spd')}
         ) u
         WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
       ),
@@ -280,7 +288,7 @@ export function buildContractDetailsForStoSql(): string {
           SELECT 1
           FROM sap_processed_data spd_lock
           WHERE spd_lock.contract_number = pl.contract_number
-            AND ${stoMatch('spd_lock')}
+            AND ${plStoMatch('spd_lock')}
             AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
             AND (
               pl.po_number IS NULL
@@ -299,7 +307,7 @@ export function buildContractDetailsForStoSql(): string {
         (SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${socStoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1) AS po_number,
         (SELECT c.supplier FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1) AS supplier,
@@ -317,7 +325,7 @@ export function buildContractDetailsForStoSql(): string {
           poNumberExpr: `(SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${socStoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`,
         })} AS outstanding_qty_planning,
@@ -331,7 +339,7 @@ export function buildContractDetailsForStoSql(): string {
           poNumberExpr: `(SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${socStoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`,
           stoKeyExpr: '$1::text',
@@ -343,7 +351,7 @@ export function buildContractDetailsForStoSql(): string {
           poNumberExpr: `(SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${socStoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`,
           contractQtyExpr: `COALESCE((
@@ -358,7 +366,7 @@ export function buildContractDetailsForStoSql(): string {
           poNumberExpr: `(SELECT ${spdPoNumber('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${socStoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`,
           contractQtyExpr: `COALESCE((
@@ -377,7 +385,7 @@ export function buildContractDetailsForStoSql(): string {
         EXISTS (
           SELECT 1 FROM sap_processed_data spd_lock
           WHERE spd_lock.contract_number = soc.contract_number
-            AND ${stoMatch('spd_lock')}
+            AND ${socStoMatch('spd_lock')}
             AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
         ) AS locked_from_sap,
         NULL::date AS delivery_start_date,

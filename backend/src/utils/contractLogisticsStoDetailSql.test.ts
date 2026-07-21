@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CONTRACT_SAP_ONLY_STOS_SQL,
-  SHIPMENT_SAP_STO_DETAIL_SQL,
-  TRUCKING_SAP_STO_DETAIL_SQL,
   sqlSapQtyDeliveredAnyFromSpd,
   sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
   sqlSapQtyReceiveForStoKeyExpr,
   sqlSapStoKeyMatchExpr,
   sqlSapStoQtyForContractPoExpr,
+  sqlStoLookupKeyMatchExpr,
 } from './contractLogisticsStoDetailSql';
 
 describe('contractLogisticsStoDetailSql', () => {
@@ -51,6 +49,22 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(match).toContain('po_number');
     expect(match).toContain('Operation ID');
     expect(match).toContain('IS NULL');
+  });
+
+  it('sqlStoLookupKeyMatchExpr does not blank-match OP keys without contract scope', () => {
+    const discover = sqlStoLookupKeyMatchExpr('$1::text', 'spd');
+    expect(discover).toContain('Operation ID');
+    expect(discover).toContain("~ '^(OP-|MNL-|MSEA-)'");
+    // Global discover must not treat every empty-STO SAP row as a hit.
+    expect(discover).not.toMatch(/OP-\|MNL-\|MSEA-'[\s\S]*IS NULL/);
+  });
+
+  it('sqlStoLookupKeyMatchExpr allows blank STO only when scoped to a contract', () => {
+    const scoped = sqlStoLookupKeyMatchExpr('$1::text', 'spd', {
+      contractNumberExpr: 'pl.contract_number',
+    });
+    expect(scoped).toContain('spd.contract_number = pl.contract_number');
+    expect(scoped).toContain('IS NULL');
   });
 
   it('builds SAP delivery/receive qty for Operation ID fallback by PO', () => {

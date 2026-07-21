@@ -13,9 +13,17 @@ export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
 
 /**
  * Match a sap_processed_data row to the KLIP lookup key used in shipment edit/details
- * (numeric SAP STO, or OP-/MNL-/MSEA- when SAP has no STO / matching Operation ID).
+ * (numeric SAP STO, or OP-/MNL-/MSEA- when SAP has matching Operation ID).
+ *
+ * Blank SAP STO must NOT match synthetic keys globally — that pulled every empty-STO
+ * contract into Edit Shipment. Pass contractNumberExpr to allow blank-STO fallback
+ * only for that contract (qty / lock subqueries already scoped by contract).
  */
-export function sqlStoLookupKeyMatchExpr(stoKeyExpr: string, spdAlias = 'spd'): string {
+export function sqlStoLookupKeyMatchExpr(
+  stoKeyExpr: string,
+  spdAlias = 'spd',
+  opts?: { contractNumberExpr?: string },
+): string {
   const effectiveSto = `NULLIF(TRIM(COALESCE(
     ${spdAlias}.sto_number::text,
     ${spdAlias}.data->'raw'->>'STO No.',
@@ -23,21 +31,28 @@ export function sqlStoLookupKeyMatchExpr(stoKeyExpr: string, spdAlias = 'spd'): 
     ${spdAlias}.data->'shipment'->>'sto_no',
     ${spdAlias}.data->'contract'->>'sto_no'
   )), '')`;
+  const operationId = `NULLIF(TRIM(COALESCE(
+    ${spdAlias}.data->'raw'->>'Operation ID',
+    ${spdAlias}.data->'shipment'->>'operation_id',
+    ${spdAlias}.data->'trucking'->0->'data'->>'operation_id',
+    ''
+  )), '')`;
+  const contractScopedBlankSto =
+    opts?.contractNumberExpr != null && String(opts.contractNumberExpr).trim() !== ''
+      ? `OR (
+          TRIM(${stoKeyExpr}::text) ~ '^(OP-|MNL-|MSEA-)'
+          AND ${spdAlias}.contract_number = ${opts.contractNumberExpr}
+          AND ${effectiveSto} IS NULL
+        )`
+      : '';
   return `(
     TRIM(COALESCE(${spdAlias}.sto_number::text, '')) = TRIM(${stoKeyExpr}::text)
     OR ${effectiveSto} = TRIM(${stoKeyExpr}::text)
     OR (
       TRIM(${stoKeyExpr}::text) ~ '^(OP-|MNL-|MSEA-)'
-      AND (
-        NULLIF(TRIM(COALESCE(
-          ${spdAlias}.data->'raw'->>'Operation ID',
-          ${spdAlias}.data->'shipment'->>'operation_id',
-          ${spdAlias}.data->'trucking'->0->'data'->>'operation_id',
-          ''
-        )), '') = TRIM(${stoKeyExpr}::text)
-        OR ${effectiveSto} IS NULL
-      )
+      AND ${operationId} = TRIM(${stoKeyExpr}::text)
     )
+    ${contractScopedBlankSto}
   )`;
 }
 

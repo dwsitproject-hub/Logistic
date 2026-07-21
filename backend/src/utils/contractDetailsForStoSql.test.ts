@@ -19,5 +19,7 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('po_number::text');
     expect(sql).toContain('UNION ALL');
     expect(sql).toContain("IN ('SEA', 'MIXED', 'MIX')");
+    // Blank-STO fallback must be contract-scoped (Edit Shipment PO list), not global discover.
+    expect(sql).toContain('spd.contract_number = pl.contract_number');
   });
 });
