@@ -595,6 +595,19 @@ export async function processWbRekapWorkbookUpload(args: {
     ],
   );
 
+  // Keep Contracts / Contract Performance Delivery & Received Qty in sync with WB
+  // (list uses contract_qty_move_snapshot when fresh).
+  if (touchedOpIds.size > 0) {
+    const opIds = [...touchedOpIds];
+    setImmediate(() => {
+      import('./contractQtyMoveSnapshot.service')
+        .then(({ ContractQtyMoveSnapshotService }) =>
+          ContractQtyMoveSnapshotService.refreshForTruckingOperationIds(opIds),
+        )
+        .catch(() => {});
+    });
+  }
+
   return {
     importId,
     status,

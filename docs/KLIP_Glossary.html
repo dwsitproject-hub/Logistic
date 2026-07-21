@@ -422,12 +422,12 @@
             <tr>
               <td><strong>Log Cycle</strong></td>
               <td><code>cargo_readiness_date</code></td>
-              <td><code>diff(cargo_readiness, last_trucking_completion)</code></td>
-              <td><code>diff(cargo_readiness, last_ata_discharge)</code></td>
+              <td><code>diff(last_trucking_completion, cargo_readiness)</code> (= Cargo Readiness − Completion)</td>
+              <td><code>diff(last_ata_discharge, cargo_readiness)</code> (= Cargo Readiness − Completion)</td>
             </tr>
           </tbody>
         </table>
-        <p><strong>Open</strong> DP / Cash / Log: <span class="formula">diff(anchor_date, effectiveCompletionEnd)</span></p>
+        <p><strong>Open</strong> DP / Cash: <span class="formula">diff(anchor_date, effectiveCompletionEnd)</span>. <strong>Open Log</strong>: <span class="formula">diff(effectiveCompletionEnd, cargo_readiness)</span> (= Cargo Readiness − Completion).</p>
         <ul>
           <li>Standard ETA <strong>kosong</strong> → completion end = <strong>hari ini</strong></li>
           <li>Standard ETA <strong>ada</strong> → LAND: daily deliverable terakhir; SEA: ETA complete discharge (wajib ada, tanpa substitusi today)</li>

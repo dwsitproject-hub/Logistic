@@ -27,13 +27,17 @@ export function logCycleDaysClass(
     return tradeCycleDays > 0 ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
   }
   if (logDays == null || !Number.isFinite(logDays)) return CYCLE_DAYS_NEUTRAL_CLASS
-  return logDays >= LOG_CYCLE_LATE_THRESHOLD_DAYS ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
+  return Math.abs(logDays) >= LOG_CYCLE_LATE_THRESHOLD_DAYS
+    ? CYCLE_DAYS_LATE_CLASS
+    : CYCLE_DAYS_ON_TIME_CLASS
 }
 
 /** Unsigned duration metrics (e.g. weighted avg log cycle on dashboard). */
 export function durationCycleDaysClass(days: number | null | undefined): string {
   if (days == null || !Number.isFinite(days)) return CYCLE_DAYS_NEUTRAL_CLASS
-  return days >= LOG_CYCLE_LATE_THRESHOLD_DAYS ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
+  return Math.abs(days) >= LOG_CYCLE_LATE_THRESHOLD_DAYS
+    ? CYCLE_DAYS_LATE_CLASS
+    : CYCLE_DAYS_ON_TIME_CLASS
 }
 
 /** Magnitude for display — late/ahead is shown via color, not a "-" prefix. */

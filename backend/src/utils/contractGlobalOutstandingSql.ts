@@ -1,9 +1,8 @@
 /**
  * Global contract outstanding qty — same rules as Contracts list (`qty_move` CTE).
- * LAND FRC/LCO: when trucking WB daily actuals exist, delivery/receive qty prefer
- * SUM(trucking_operations.quantity_delivered) synced from WB upload (aligns with Trucking list).
- * SEA FOB/CIF Open: when KLIP shipment actuals exist, prefer those over SAP
- * (mirrors trucking Open+actual → KLIP, Close → SAP).
+ * LAND FRC/LCO Open: when trucking WB daily actuals exist, delivery/receive prefer
+ * Netto PKS / Netto EUP sums from trucking_daily_actuals (aligns with Trucking list).
+ * Close → SAP (no WB overlay). SEA FOB/CIF Open: KLIP shipment actuals over SAP.
  */
 
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
@@ -66,8 +65,10 @@ function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): s
 }
 
 /**
- * LAND FRC/LCO contracts with WB daily actuals — aggregate trucking_operations.quantity_delivered
- * (synced from trucking_daily_actuals on upload). Mirrors trucking list WB preference at contract level.
+ * LAND FRC/LCO Open contracts with WB daily actuals — separate delivery (Netto PKS)
+ * and receive (Netto EUP) sums across trucking ops. Close contracts omitted so SAP wins.
+ * Expressions mirror sqlWbActualDeliverySumKg / sqlWbActualReceiveSumKg (truckingQuantitySql)
+ * without importing that module (avoids circular dependency via contractPoGlobalMetricsSql).
  */
 function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
   const joinScope =
@@ -76,17 +77,30 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
       : '';
   const contractFilter =
     filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
+  const grClosed = sqlIsContractSapClosedExpr('c');
+  const wbDeliveryPerOp = `(
+    SELECT COALESCE(SUM(COALESCE(da.quantity_delivery_kg, da.quantity_kg)), 0)::numeric
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = t.id
+  )`;
+  const wbReceivePerOp = `(
+    SELECT COALESCE(SUM(COALESCE(da.quantity_receive_kg, 0)), 0)::numeric
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = t.id
+  )`;
 
   return `
         trucking_wb_overlay AS (
           SELECT
             c.contract_id AS contract_number,
-            COALESCE(SUM(COALESCE(t.quantity_delivered, 0)), 0)::numeric AS wb_resolved_qty_kg
+            COALESCE(SUM(${wbDeliveryPerOp}), 0)::numeric AS wb_delivery_qty_kg,
+            COALESCE(SUM(${wbReceivePerOp}), 0)::numeric AS wb_receive_qty_kg
           FROM contracts c
           ${joinScope}
           INNER JOIN trucking_operations t ON t.contract_id = c.id
           WHERE UPPER(TRIM(COALESCE(c.transport_mode, ''))) LIKE 'LAND%'
             AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'LCO')
+            AND NOT (${grClosed})
             ${contractFilter}
           GROUP BY c.contract_id
           HAVING BOOL_OR(
@@ -262,7 +276,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
         SELECT
           COALESCE(s.contract_number, w.contract_number, sk.contract_number) AS contract_number,
           CASE
-            WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
+            WHEN w.contract_number IS NOT NULL THEN w.wb_delivery_qty_kg
             ELSE s.quantity_delivery_trucking
           END AS quantity_delivery_trucking,
           CASE
@@ -271,7 +285,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           END AS quantity_delivery_vessel,
           CASE
             WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
-            WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
+            WHEN w.contract_number IS NOT NULL THEN w.wb_receive_qty_kg
             ELSE s.quantity_receive
           END AS quantity_receive,
           COALESCE(
@@ -284,7 +298,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
             ),
             NULLIF(
               CASE
-                WHEN w.contract_number IS NOT NULL THEN w.wb_resolved_qty_kg
+                WHEN w.contract_number IS NOT NULL THEN w.wb_delivery_qty_kg
                 ELSE s.quantity_delivery_trucking
               END,
               0

@@ -15,30 +15,30 @@ export const FIELD_HELP = {
 
   overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
-  logCycle: `Cargo Readiness Date vs Completion Date`,
+  logCycle: `Cargo Readiness Date − Completion Date. LAND Completion: when OS ≈ 0 MT use Last Receive/WB, else Last Planning Delivery Date / ETA.`,
 
-  tradeCycle: `Completion Date vs Due Date Delivery End`,
+  tradeCycle: `Completion Date vs Due Date Delivery End. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
 
   statusCardAvgDp: `Average DP Cycle (days) for Open or Close contracts in scope. Only contracts with a valid SAP DP Date and computable cycle are included; if none qualify, the card shows "- days" (not 0 days).`,
 
   statusCardAvgLog: `Average Log Cycle (days) for Open or Close contracts in scope. Only contracts with cargo readiness and a valid completion end are included; if none qualify, the card shows "- days" (not 0 days).`,
 
-  cashCycle: `Completion Date vs Payoff Date`,
+  cashCycle: `Completion Date vs Payoff Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
 
-  dpCycle: `Completion Date vs DP Date`,
+  dpCycle: `Completion Date vs DP Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
 
   /** Contract Performance — concise header tooltips (view table + contract detail modal). */
   contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining outstanding: MT (black).`,
-  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End`,
-  contractPerfDpCycle: `Completion Date vs DP Date`,
-  contractPerfCashCycle: `Completion Date vs Payoff Date`,
-  contractPerfLogCycle: `Cargo Readiness Date vs Completion Date`,
+  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
+  contractPerfDpCycle: `Completion Date vs DP Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
+  contractPerfCashCycle: `Completion Date vs Payoff Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
+  contractPerfLogCycle: `Cargo Readiness Date − Completion Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
 
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 
-  deliveryQty: `Actual quantity delivered based on SAP (quantity_delivery). Uses trucking or vessel delivery by incoterm / transport mode.`,
+  deliveryQty: `LAND FRC/LCO Open with WB Actuals: Netto PKS (same as Trucking Delivery Qty). SEA Open with KLIP actuals: shipment delivered qty. Otherwise SAP quantity_delivery (trucking or vessel by incoterm / transport). GR Close always uses SAP.`,
 
-  receivedQty: `Actual quantity received based on contract data (quantity_receive). For sea shipments: received at destination. For land shipments: quantity delivered to plant/site.`,
+  receivedQty: `LAND FRC/LCO Open with WB Actuals: Netto EUP (same as Trucking Received Qty). SEA Open with KLIP receive: actual vessel receive. Otherwise SAP Quantity Receive. GR Close always uses SAP.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
   shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,

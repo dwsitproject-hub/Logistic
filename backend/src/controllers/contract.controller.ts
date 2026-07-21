@@ -29,6 +29,7 @@ import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHO
 import { ttlMemo } from '../utils/ttlMemo';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from '../utils/truckingQuantitySql';
 import {
   computeClosedCashCycleDays,
   computeClosedDpCycleDays,
@@ -364,7 +365,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`;
     const _transportExpr = `UPPER(TRIM(COALESCE(transport_mode, '')))`;
     // Schedulable = due-end present + known status + cycle Completion Date
-    // (LAND: Last Receive → WB → planning; SEA: ATC → ETA at LP). No Today.
+    // (LAND: OS≈0 → Last Receive/WB else planning/ETA; SEA: ATC → ETA at LP). No Today.
     const schedulableCondition = `
       ${sqlEffectiveDeliveryEndPresent()}
       AND ${_statusExpr} IN ('OPEN','ACTIVE','CLOSE','CLOSED','COMPLETED')
@@ -377,19 +378,23 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const useSqlLateFilter = false;
 
     // Approximate SQL trade_cycle (JS resolveCycleCompletionDate is source of truth; SQL late filter off).
+    // LAND: Last Receive / WB only when OS ≤ tolerance; else planning / ETA.
     //   positive  = delivered / projected AFTER delivery_end_date  → LATE
     //   negative  = on / ahead of schedule                         → ON TRACK
+    const landOsFulfilled = `(outstanding_quantity IS NOT NULL AND outstanding_quantity::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
     const tradeCycleSqlExpr = `
       CASE
         WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'OPEN', 'ACTIVE')
              AND delivery_end_date IS NOT NULL
           THEN CASE
-            WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL
+            WHEN ${_transportExpr} LIKE 'LAND%' AND ${landOsFulfilled} AND last_trucking_completion_date IS NOT NULL
               THEN (last_trucking_completion_date::date - delivery_end_date::date)
-            WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_wb_actuals_date IS NOT NULL
+            WHEN ${_transportExpr} LIKE 'LAND%' AND ${landOsFulfilled} AND last_trucking_wb_actuals_date IS NOT NULL
               THEN (last_trucking_wb_actuals_date::date - delivery_end_date::date)
             WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
               THEN (last_trucking_daily_deliverable_date::date - delivery_end_date::date)
+            WHEN ${_transportExpr} LIKE 'LAND%' AND open_standard_eta_trucking IS NOT NULL
+              THEN (open_standard_eta_trucking::date - delivery_end_date::date)
             WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
               THEN (last_ata_vessel_complete_discharge::date - delivery_end_date::date)
             WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
@@ -588,7 +593,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
       (row as any).over_under_delivery_status = overUnder;
 
-      // Compute Log / Trade / Cash / DP — shared completion: Last Receive → WB → ETA / ATC → ETA at LP
+      // Compute Log / Trade / Cash / DP — shared completion (LAND OS≈0 gate for Last Receive/WB)
       const transport = String(row.transport_mode || '').toUpperCase();
       let logCycle: number | null = null;
       const today = new Date();

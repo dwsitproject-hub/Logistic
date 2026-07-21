@@ -2988,14 +2988,14 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => {
         const isUnusual =
-          (c.log_cycle_days != null && c.log_cycle_days >= 35) ||
+          (c.log_cycle_days != null && Math.abs(c.log_cycle_days) >= 35) ||
           (c.trade_cycle_days != null && c.trade_cycle_days >= 35) ||
           (c.cash_cycle_days != null && c.cash_cycle_days >= 35)
         return isUnusual ? 1 : 0
       },
       render: (c) => {
         const isUnusual =
-          (c.log_cycle_days != null && c.log_cycle_days >= 35) ||
+          (c.log_cycle_days != null && Math.abs(c.log_cycle_days) >= 35) ||
           (c.trade_cycle_days != null && c.trade_cycle_days >= 35) ||
           (c.cash_cycle_days != null && c.cash_cycle_days >= 35)
         return isUnusual ? (

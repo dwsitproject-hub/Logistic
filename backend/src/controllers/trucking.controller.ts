@@ -633,23 +633,8 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         c.transport_mode,
         c.incoterm,
         c.status AS contract_status,
-        (
-          SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-          ORDER BY spd.created_at DESC NULLS LAST
-          LIMIT 1
-        ) AS sap_import_status,
-        COALESCE(
-          (
-            SELECT COALESCE(spd.data->'contract'->>'status', spd.data->>'status')
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-            ORDER BY spd.created_at DESC NULLS LAST
-            LIMIT 1
-          ),
-          c.status
-        ) AS import_status,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS sap_import_status,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS import_status,
         c.plant_code,
         mp.plant_name,
         mp.company_name AS plant_company_name,

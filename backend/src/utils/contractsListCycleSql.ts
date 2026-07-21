@@ -3,6 +3,7 @@ import {
   sqlMaxTruckingWbActualsDateForContract,
   sqlMinTruckingRealizationStartForContract,
 } from './truckingSapDates';
+import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from './truckingQuantitySql';
 
 /**
  * Cycle / milestone fields for contracts list.
@@ -102,19 +103,31 @@ export function buildContractsListCycleFieldSelectSql(
 
 /**
  * SQL: contract has a cycle Completion Date (same chain as resolveCycleCompletionDate).
- * Expects list-cycle aliases: last_trucking_completion_date, last_trucking_wb_actuals_date,
- * last_trucking_daily_deliverable_date, last_ata_vessel_complete_discharge,
- * open_standard_eta_vessel_loading.
+ * LAND: Last Receive / WB only when OS ≤ tolerance; else planning / ETA.
+ * Expects list-cycle aliases + outstanding_quantity (signed kg from qty_move).
  */
-export function sqlHasCycleCompletionDate(transportModeExpr: string = 'transport_mode'): string {
+export function sqlHasCycleCompletionDate(
+  transportModeExpr: string = 'transport_mode',
+  outstandingExpr: string = 'outstanding_quantity',
+): string {
   const t = `UPPER(TRIM(COALESCE(${transportModeExpr}, '')))`;
+  const osFulfilled = `(
+    ${outstandingExpr} IS NOT NULL
+    AND (${outstandingExpr})::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG}
+  )`;
   return `(
     (
       ${t} LIKE 'LAND%'
       AND (
-        last_trucking_completion_date IS NOT NULL
-        OR last_trucking_wb_actuals_date IS NOT NULL
+        (
+          ${osFulfilled}
+          AND (
+            last_trucking_completion_date IS NOT NULL
+            OR last_trucking_wb_actuals_date IS NOT NULL
+          )
+        )
         OR last_trucking_daily_deliverable_date IS NOT NULL
+        OR open_standard_eta_trucking IS NOT NULL
       )
     )
     OR (

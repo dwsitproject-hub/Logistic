@@ -5,6 +5,7 @@ import {
   normalizeDailyActualRows,
   normalizePlanningDeliverableRows,
   normalizeStoActuals,
+  resolveWbActualsDisplayMode,
   sumActualDeliveryKg,
   sumActualReceiveKg,
   sumPlanningDeliveryKg,
@@ -83,5 +84,37 @@ describe('truckingModalDailyTables', () => {
     expect(formatSapQtyMtOrDash(null)).toBe('-')
     expect(formatSapQtyMtOrDash(undefined)).toBe('-')
     expect(formatSapQtyMtOrDash(250000)).toBe('250.00')
+  })
+
+  it('resolveWbActualsDisplayMode uses singleSto for one STO', () => {
+    const sto = normalizeStoActuals([{ sto_number: '1006018926' }])
+    const rows = normalizeDailyActualRows([{ date: '2026-06-01', quantity_delivery_kg: 1000 }])
+    expect(resolveWbActualsDisplayMode(rows, sto)).toBe('singleSto')
+  })
+
+  it('resolveWbActualsDisplayMode uses poLevelMultiSto for legacy WB without sto_number', () => {
+    const sto = normalizeStoActuals([
+      { sto_number: '1006018926' },
+      { sto_number: '1006018927' },
+    ])
+    const rows = normalizeDailyActualRows([
+      { date: '2026-06-01', quantity_delivery_kg: 100000 },
+      { date: '2026-06-02', quantity_delivery_kg: 200000 },
+    ])
+    expect(resolveWbActualsDisplayMode(rows, sto)).toBe('poLevelMultiSto')
+  })
+
+  it('resolveWbActualsDisplayMode uses perSto when WB rows are sto-tagged', () => {
+    const sto = normalizeStoActuals([
+      { sto_number: '1006018926' },
+      { sto_number: '1006018927' },
+    ])
+    const rows = normalizeDailyActualRows([
+      { date: '2026-06-01', quantity_delivery_kg: 100, sto_number: '1006018926' },
+      { date: '2026-06-01', quantity_delivery_kg: 200, sto_number: '1006018927' },
+    ])
+    expect(resolveWbActualsDisplayMode(rows, sto)).toBe('perSto')
+    expect(filterActualRowsForSto(rows, '1006018926')).toHaveLength(1)
+    expect(filterActualRowsForSto(rows, '1006018927')).toHaveLength(1)
   })
 })
