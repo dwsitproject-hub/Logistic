@@ -418,6 +418,10 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   return { queryText, queryParams };
 }
 
+/** Concurrent identical requests (e.g. summary + tree fired together by the page)
+ *  share a single query execution instead of each running the full SQL. */
+const LOAD_IN_FLIGHT = new Map<string, Promise<any[]>>();
+
 export async function loadLatePerformanceRows(filters: LatePerformanceFilters): Promise<any[]> {
   const cached = ROW_CACHE.get(filters.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
@@ -427,11 +431,22 @@ export async function loadLatePerformanceRows(filters: LatePerformanceFilters): 
     ROW_CACHE.delete(filters.cacheKey);
   }
 
-  const { queryText, queryParams } = await buildLatePerformanceQuery(filters);
-  const result = await query(queryText, queryParams);
-  const rows = result.rows as any[];
-  ROW_CACHE.set(filters.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
-  return rows;
+  const inFlight = LOAD_IN_FLIGHT.get(filters.cacheKey);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const { queryText, queryParams } = await buildLatePerformanceQuery(filters);
+      const result = await query(queryText, queryParams);
+      const rows = result.rows as any[];
+      ROW_CACHE.set(filters.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
+      return rows;
+    } finally {
+      LOAD_IN_FLIGHT.delete(filters.cacheKey);
+    }
+  })();
+  LOAD_IN_FLIGHT.set(filters.cacheKey, promise);
+  return promise;
 }
 
 const due = (v: unknown): Date | null => {

@@ -5,6 +5,7 @@ import logger from '../utils/logger';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { diffCalendarDays } from '../utils/calendarDays';
+import { ttlMemo } from '../utils/ttlMemo';
 import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 
@@ -3479,17 +3480,22 @@ export const getFilterPlants = async (_req: AuthRequest, res: Response) => {
 // Get filter options for suppliers
 export const getFilterSuppliers = async (_req: AuthRequest, res: Response) => {
   try {
-    const result = await query(`
+    // Rarely-changing dropdown list whose B2B-child exclusion scans SPD JSONB —
+    // memoized for 5 minutes (identical query, just not re-run per page load).
+    const data = await ttlMemo('filter-options:dashboard-suppliers', 5 * 60 * 1000, async () => {
+      const result = await query(`
       SELECT DISTINCT supplier
       FROM contracts c
       WHERE supplier IS NOT NULL AND supplier != ''
       ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY supplier
     `);
+      return result.rows.map(row => row.supplier);
+    });
 
     return res.json({
       success: true,
-      data: result.rows.map(row => row.supplier),
+      data,
     });
   } catch (error) {
     logger.error('Get filter suppliers error:', error);
@@ -3503,17 +3509,20 @@ export const getFilterSuppliers = async (_req: AuthRequest, res: Response) => {
 // Get filter options for products
 export const getFilterProducts = async (_req: AuthRequest, res: Response) => {
   try {
-    const result = await query(`
+    const data = await ttlMemo('filter-options:dashboard-products', 5 * 60 * 1000, async () => {
+      const result = await query(`
       SELECT DISTINCT product
       FROM contracts c
       WHERE product IS NOT NULL AND product != ''
       ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY product
     `);
+      return result.rows.map(row => row.product);
+    });
 
     return res.json({
       success: true,
-      data: result.rows.map(row => row.product),
+      data,
     });
   } catch (error) {
     logger.error('Get filter products error:', error);
@@ -3527,17 +3536,20 @@ export const getFilterProducts = async (_req: AuthRequest, res: Response) => {
 // Get filter options for group names
 export const getFilterGroups = async (_req: AuthRequest, res: Response) => {
   try {
-    const result = await query(`
+    const data = await ttlMemo('filter-options:dashboard-groups', 5 * 60 * 1000, async () => {
+      const result = await query(`
       SELECT DISTINCT group_name
       FROM contracts c
       WHERE group_name IS NOT NULL AND group_name != ''
       ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY group_name
     `);
+      return result.rows.map(row => row.group_name);
+    });
 
     return res.json({
       success: true,
-      data: result.rows.map(row => row.group_name),
+      data,
     });
   } catch (error) {
     logger.error('Get filter groups error:', error);

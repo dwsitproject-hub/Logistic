@@ -1234,6 +1234,7 @@ function ContractsPageContent() {
   const [statusCardSummary, setStatusCardSummary] = useState<StatusCardSummary>(EMPTY_STATUS_CARD_SUMMARY)
   const statusCardSummaryRef = useRef<StatusCardSummary>(EMPTY_STATUS_CARD_SUMMARY)
   const cardSummaryFetchGenRef = useRef(0)
+  const treeFetchGenRef = useRef(0)
   /** Force next Section 1 summary fetch after Staff scope defaults / toolbar scope changes. */
   const cardSummaryForceNextFetchRef = useRef(true)
   const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
@@ -2083,7 +2084,10 @@ function ContractsPageContent() {
       return
     }
     const gen = ++cardSummaryFetchGenRef.current
-    const summaryUrl = `/contracts/late-performance/summary?${query}`
+    // Combined data endpoint (summary + tree from one SQL execution) — when the tree
+    // refreshes with the same scope, the client in-flight dedupe collapses both fetches
+    // into a single request. Payload is a superset; extraction below is unchanged.
+    const summaryUrl = `/contracts/late-performance/data?${query}`
     const summaryCacheKey = buildCacheKey('GET', summaryUrl)
     const forceSummaryFetch = cardSummaryForceNextFetchRef.current
     cardSummaryForceNextFetchRef.current = false
@@ -2119,26 +2123,49 @@ function ContractsPageContent() {
     }
   }, [authReady, userScopeReady, isContractPerformance, cardSummaryRequestKey, contractPerfToolbarGlobal])
 
-  /** Section 2 drilldown tree — global scope only; node clicks do not refetch or collapse card counts. */
+  /** Section 2 drilldown tree — global scope only; node clicks do not refetch or collapse card counts.
+   *  Uses the combined late-performance/data endpoint (same aggregation, single SQL run) so that
+   *  when the card summary refreshes with the same scope, the client cache's in-flight dedupe
+   *  collapses both into ONE request; repeat filter combos are served stale-while-revalidate. */
   const fetchLatePerformanceTree = useCallback(async () => {
     if (!authReady || !userScopeReady || !isContractPerformance) return
+    const gen = ++treeFetchGenRef.current
+    const treeUrl = `/contracts/late-performance/data?${contractPerfPipeline.treeApiParams.toString()}`
+    const treeCacheKey = buildCacheKey('GET', treeUrl)
+    const applyTreePayload = (payload: { data?: unknown }) => {
+      const treeData = payload?.data as
+        | { tree?: unknown; onTrackTree?: unknown; unscheduledTree?: unknown }
+        | undefined
+      setLatePerformanceTree(Array.isArray(treeData?.tree) ? (treeData.tree as any[]) : [])
+      setOnTrackPerformanceTree(
+        Array.isArray(treeData?.onTrackTree) ? (treeData.onTrackTree as any[]) : [],
+      )
+      setUnscheduledPerformanceTree(
+        Array.isArray(treeData?.unscheduledTree) ? (treeData.unscheduledTree as any[]) : [],
+      )
+    }
     try {
       setLatePerfTreeLoading(true)
-      const treeResp = await api.get(
-        `/contracts/late-performance/tree?${contractPerfPipeline.treeApiParams.toString()}`,
+      const { data, revalidating } = await cachedGet(
+        treeCacheKey,
+        () => api.get(treeUrl).then((r) => r.data),
+        {
+          onRevalidate: (fresh) => {
+            if (gen !== treeFetchGenRef.current) return
+            applyTreePayload(fresh as { data?: unknown })
+            setLatePerfTreeLoading(false)
+          },
+        },
       )
-      const treeData = treeResp.data?.data
-      setLatePerformanceTree(Array.isArray(treeData?.tree) ? treeData.tree : [])
-      setOnTrackPerformanceTree(Array.isArray(treeData?.onTrackTree) ? treeData.onTrackTree : [])
-      setUnscheduledPerformanceTree(
-        Array.isArray(treeData?.unscheduledTree) ? treeData.unscheduledTree : [],
-      )
+      if (gen !== treeFetchGenRef.current) return
+      applyTreePayload(data as { data?: unknown })
+      if (!revalidating) setLatePerfTreeLoading(false)
     } catch (e) {
+      if (gen !== treeFetchGenRef.current) return
       console.error('Failed to load late performance tree:', e)
       setLatePerformanceTree([])
       setOnTrackPerformanceTree([])
       setUnscheduledPerformanceTree([])
-    } finally {
       setLatePerfTreeLoading(false)
     }
   }, [authReady, userScopeReady, isContractPerformance, contractPerfPipeline.treeApiParams])

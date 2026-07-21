@@ -26,6 +26,7 @@ import {
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
+import { ttlMemo } from '../utils/ttlMemo';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
@@ -449,15 +450,20 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       ]);
       totalCount = Number(countResult.rows[0]?.count ?? 0);
       result = listResult;
+    } else if (useSqlLateFilter) {
+      // Late/On-Time drilldown: the page query does not depend on the count — run both
+      // concurrently (same two queries as before, just not back-to-back).
+      const [countResult, listResult] = await Promise.all([
+        query(countQuery, countParams),
+        query(listQuery, listParams),
+      ]);
+      totalCount = Number(countResult.rows[0]?.count ?? 0);
+      result = listResult;
     } else {
       const countResult = await query(countQuery, countParams);
       totalCount = Number(countResult.rows[0]?.count ?? 0);
-      if (useSqlLateFilter) {
-        result = await query(listQuery, listParams);
-      } else {
-        const cap = Math.min(totalCount, 10000);
-        result = await query(listQuery, [...queryParams, cap, 0]);
-      }
+      const cap = Math.min(totalCount, 10000);
+      result = await query(listQuery, [...queryParams, cap, 0]);
     }
 
     const due = (d: unknown): Date | null => {
@@ -778,19 +784,24 @@ export const getContractFilterGroupPlants = async (_req: AuthRequest, res: Respo
 
 export const getContractFilterB2bFlags = async (_req: AuthRequest, res: Response) => {
   try {
-    const r = await query(
-      `SELECT DISTINCT COALESCE(
-         NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
-         NULLIF(TRIM(spd.data->>'B2B Flag'), '')
-       ) AS b2b_flag
-       FROM sap_processed_data spd
-       WHERE COALESCE(
-         NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
-         NULLIF(TRIM(spd.data->>'B2B Flag'), '')
-       ) IS NOT NULL
-       ORDER BY b2b_flag`,
-    );
-    return res.json({ success: true, data: { b2bFlags: r.rows.map((x: any) => String(x.b2b_flag)) } });
+    // Full sap_processed_data JSONB scan for a rarely-changing dropdown list —
+    // memoized for 5 minutes (identical query, just not re-run per page load).
+    const b2bFlags = await ttlMemo('filter-options:b2b-flags', 5 * 60 * 1000, async () => {
+      const r = await query(
+        `SELECT DISTINCT COALESCE(
+           NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
+           NULLIF(TRIM(spd.data->>'B2B Flag'), '')
+         ) AS b2b_flag
+         FROM sap_processed_data spd
+         WHERE COALESCE(
+           NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
+           NULLIF(TRIM(spd.data->>'B2B Flag'), '')
+         ) IS NOT NULL
+         ORDER BY b2b_flag`,
+      );
+      return r.rows.map((x: any) => String(x.b2b_flag));
+    });
+    return res.json({ success: true, data: { b2bFlags } });
   } catch (error) {
     logger.error('Get contract b2b flag filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch b2b flag filter options' } });
