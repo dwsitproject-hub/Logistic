@@ -24,6 +24,7 @@ import {
   stopShippingPerformanceCacheWarmer,
 } from './services/shippingPerformance.service';
 import { startOilLossCacheWarmer } from './services/oilLoss.service';
+import { startTruckingListCacheWarmer } from './services/truckingList.service';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -214,6 +215,14 @@ if (process.env.NODE_ENV !== 'test') {
       logger.info('🔥 Oil Loss cache warmer started');
     } catch (error) {
       logger.warn('Failed to start Oil Loss cache warmer', { error });
+    }
+
+    // Warm the Trucking default-scope summary (status circles + Outstanding Qty).
+    try {
+      startTruckingListCacheWarmer();
+      logger.info('🔥 Trucking summary cache warmer started');
+    } catch (error) {
+      logger.warn('Failed to start Trucking summary cache warmer', { error });
     }
   });
 }

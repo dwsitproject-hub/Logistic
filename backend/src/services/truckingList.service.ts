@@ -126,6 +126,10 @@ const MAX_CACHE_ENTRIES = 80;
 // so users are served from the cache instead of paying the full query cost. Does not
 // change responses — it only re-runs the identical loader off the request path.
 const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
+// Status circles + Outstanding Qty strip: the merged summary's outstanding-qty pair is
+// the heaviest cold cost on the page. Same registry pattern as PAGE_KEEP_WARM — it only
+// re-runs the identical loader off the request path (refresh-ahead + after invalidation).
+const SUMMARY_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS, maxEntries: 4 });
 
 const SORT_FIELD_BY_KEY: Record<string, string> = {
   created_at: 'created_at',
@@ -288,6 +292,34 @@ async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest)
   return count;
 }
 
+/**
+ * Warm the default-scope merged summary (status circles + Outstanding Qty) at startup
+ * so the first visitor after a deploy/restart is served from memory. Uses the exact
+ * query params the Trucking page sends on first load (YTD in Asia/Jakarta — the user
+ * base's timezone, so the cache key matches the browser's default date scope).
+ * Best-effort: a failed warm just means the next request runs cold, as today.
+ */
+export function startTruckingListCacheWarmer(): void {
+  const jakartaNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const dateTo = jakartaNow.toISOString().slice(0, 10);
+  const dateFrom = `${dateTo.slice(0, 4)}-01-01`;
+  const req = {
+    query: {
+      skipSapJoin: 'true',
+      limit: '1',
+      page: '1',
+      sortKey: 'supplier',
+      sortDir: 'asc',
+      dateFrom,
+      dateTo,
+      summaryOnly: 'true',
+    },
+  } as unknown as AuthRequest;
+  // Running the live loader also registers the key with SUMMARY_KEEP_WARM, so it stays
+  // fresh via refresh-ahead while the page is in use.
+  void resolveTruckingListForRequest(req).catch(() => {});
+}
+
 export function invalidateTruckingListCache(): void {
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
@@ -298,6 +330,7 @@ export function invalidateTruckingListCache(): void {
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
   PAGE_KEEP_WARM.rewarmRecentlyUsed();
+  SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
 }
 
 function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
@@ -999,9 +1032,24 @@ export async function loadTruckingListSummaryWithBacklog(
   const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey);
   const cachedMerged = MERGED_SUMMARY_CACHE.get(mergedCacheKey);
   if (cachedMerged && Date.now() < cachedMerged.expiresAt) {
+    SUMMARY_KEEP_WARM.touch(mergedCacheKey);
     return cachedMerged.summary;
   }
   if (cachedMerged) MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
+
+  const liveLoadStartedAt = Date.now();
+  // Registered after a live load so refresh-ahead / invalidation re-runs the identical
+  // loader (same req.query scope, same built query) off the request path.
+  const registerKeepWarm = () => {
+    SUMMARY_KEEP_WARM.register(
+      mergedCacheKey,
+      async () => {
+        MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
+        await loadTruckingListSummaryWithBacklog(req, built);
+      },
+      Date.now() - liveLoadStartedAt,
+    );
+  };
 
   const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built);
 
@@ -1019,6 +1067,7 @@ export async function loadTruckingListSummaryWithBacklog(
         expiresAt: Date.now() + CACHE_TTL_MS,
       });
       evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+      registerKeepWarm();
       return merged;
     }
   }
@@ -1046,6 +1095,7 @@ export async function loadTruckingListSummaryWithBacklog(
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
   evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  registerKeepWarm();
   return withOs;
 }
 
