@@ -26,6 +26,10 @@ import {
   sqlMaxTruckingLastReceiveDateForContract,
   sqlMaxTruckingWbActualsDateForContract,
 } from '../utils/truckingSapDates';
+import {
+  isTruckingOutstandingWithinToleranceKg,
+  TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+} from '../utils/truckingQuantitySql';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -629,23 +633,53 @@ export function resolveSapDpCalendarDate(row: any): Date | null {
 }
 
 /**
+ * Signed outstanding kg for LAND completion gating (qty_move / list field preferred).
+ * Falls back to contract qty − incoterm fulfilled (receive/delivery from qty_move).
+ */
+export function resolveLandOutstandingKgForCycleCompletion(row: any): number | null {
+  if (row?.outstanding_quantity != null && row.outstanding_quantity !== '') {
+    const n = Number(row.outstanding_quantity);
+    if (Number.isFinite(n)) return n;
+  }
+  const ordered = Number(row?.quantity_ordered);
+  if (!Number.isFinite(ordered)) return null;
+  const subtracted = resolveContractActualQtySubtractedTs(
+    row?.incoterm,
+    row?.quantity_receive,
+    row?.quantity_delivery_sap ?? row?.quantity_delivery,
+  );
+  if (!Number.isFinite(subtracted)) return null;
+  return ordered - subtracted;
+}
+
+/**
  * Shared completion date for Log / Trade / Cash / DP (Open and Close).
- * LAND: Trucking Last Receive → WB Actuals → ETA Trucking Completion (planning) → null
- * SEA:  ATC at Discharge Port → ETA at LP → null
+ * LAND:
+ *   - OS ≤ 499 kg (≈ 0 MT / over-delivery): Last Receive → WB Actuals → Last Planning → ETA
+ *   - OS still open: skip Last Receive & WB → Last Planning Delivery Date → ETA trucking
+ * SEA: ATC at Discharge Port → ETA at LP → null
  * No Today fallback.
  */
 export function resolveCycleCompletionDate(row: any, transport: string): Date | null {
   const t = String(transport || '').trim().toUpperCase();
 
   if (t.startsWith('LAND')) {
-    if (hasCalendarDate(row.last_trucking_completion_date)) {
-      return due(row.last_trucking_completion_date);
-    }
-    if (hasCalendarDate(row.last_trucking_wb_actuals_date)) {
-      return due(row.last_trucking_wb_actuals_date);
+    const osFulfilled = isTruckingOutstandingWithinToleranceKg(
+      resolveLandOutstandingKgForCycleCompletion(row),
+    );
+    if (osFulfilled) {
+      if (hasCalendarDate(row.last_trucking_completion_date)) {
+        return due(row.last_trucking_completion_date);
+      }
+      if (hasCalendarDate(row.last_trucking_wb_actuals_date)) {
+        return due(row.last_trucking_wb_actuals_date);
+      }
     }
     if (hasCalendarDate(row.last_trucking_daily_deliverable_date)) {
       return due(row.last_trucking_daily_deliverable_date);
+    }
+    if (hasCalendarDate(row.open_standard_eta_trucking)) {
+      return due(row.open_standard_eta_trucking);
     }
     return null;
   }
@@ -662,6 +696,9 @@ export function resolveCycleCompletionDate(row: any, transport: string): Date | 
 
   return null;
 }
+
+/** Tolerance used by LAND completion gating (exported for SQL helpers / tests). */
+export { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG };
 
 /** @deprecated Use resolveCycleCompletionDate — alias kept for callers/tests. */
 export function resolveOpenEffectiveCompletionEnd(
@@ -681,17 +718,18 @@ export function resolveOpenCycleCompletionEnd(
   return resolveCycleCompletionDate(row, transport);
 }
 
-/** Open Log Cycle: Cargo Readiness → completion date (Last Receive → WB → ETA / ATC → ETA at LP). */
+/** Open Log Cycle: Cargo Readiness − Completion (Last Receive → WB → ETA / ATC → ETA at LP). */
 export function computeOpenLogCycleDays(
   row: any,
   transport: string,
   _todayMid: Date,
   cargoReady: unknown,
 ): number | null {
-  if (!hasCalendarDate(cargoReady)) return null;
+  const ready = due(cargoReady);
+  if (!ready) return null;
   const end = resolveCycleCompletionDate(row, transport);
   if (!end) return null;
-  return diffCalendarDays(cargoReady, end);
+  return diffCalendarDays(end, ready);
 }
 
 /** Open Cash Cycle: requires SAP Payoff Date; completion via resolveCycleCompletionDate. */
@@ -728,10 +766,11 @@ export function computeClosedLogCycleDays(
   transport: string,
   cargoReady: unknown,
 ): number | null {
-  if (!hasCalendarDate(cargoReady)) return null;
+  const ready = due(cargoReady);
+  if (!ready) return null;
   const end = resolveCycleCompletionDate(row, transport);
   if (!end) return null;
-  return diffCalendarDays(cargoReady, end);
+  return diffCalendarDays(end, ready);
 }
 
 export function computeClosedCashCycleDays(

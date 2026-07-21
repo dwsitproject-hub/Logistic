@@ -778,7 +778,7 @@ export function ContractDetailModal({
                     <div className="mt-1">
                       {(() => {
                         const isUnusual =
-                          (contract.log_cycle_days != null && contract.log_cycle_days >= 35) ||
+                          (contract.log_cycle_days != null && Math.abs(contract.log_cycle_days) >= 35) ||
                           (contract.trade_cycle_days != null && contract.trade_cycle_days >= 35) ||
                           (contract.cash_cycle_days != null && contract.cash_cycle_days >= 35)
                         return isUnusual ? (

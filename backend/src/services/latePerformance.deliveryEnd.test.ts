@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  computeClosedLogCycleDays,
   computeOpenCashCycleDays,
   computeOpenDpCycleDays,
   computeOpenLogCycleDays,
@@ -66,10 +67,11 @@ describe('isContractPerfOnTimeTradeCycle', () => {
 describe('resolveCycleCompletionDate (no Today)', () => {
   const todayMid = new Date(2026, 5, 10)
 
-  it('LAND: Last Receive → WB → planning ETA', () => {
+  it('LAND OS≈0: Last Receive → WB → planning ETA', () => {
     expect(
       resolveCycleCompletionDate(
         {
+          outstanding_quantity: 0,
           last_trucking_completion_date: '2026-06-01',
           last_trucking_wb_actuals_date: '2026-06-08',
           last_trucking_daily_deliverable_date: '2026-06-15',
@@ -81,6 +83,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
     expect(
       resolveCycleCompletionDate(
         {
+          outstanding_quantity: 0,
           last_trucking_completion_date: null,
           last_trucking_wb_actuals_date: '2026-06-08',
           last_trucking_daily_deliverable_date: '2026-06-15',
@@ -92,6 +95,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
     expect(
       resolveCycleCompletionDate(
         {
+          outstanding_quantity: 0,
           last_trucking_completion_date: null,
           last_trucking_wb_actuals_date: null,
           last_trucking_daily_deliverable_date: '2026-06-15',
@@ -99,6 +103,47 @@ describe('resolveCycleCompletionDate (no Today)', () => {
         'LAND',
       )?.getDate(),
     ).toBe(15)
+  })
+
+  it('LAND OS still open: skips Last Receive/WB and uses planning then ETA', () => {
+    expect(
+      resolveCycleCompletionDate(
+        {
+          outstanding_quantity: 5000,
+          last_trucking_completion_date: '2026-06-01',
+          last_trucking_wb_actuals_date: '2026-06-08',
+          last_trucking_daily_deliverable_date: '2026-06-15',
+          open_standard_eta_trucking: '2026-06-20',
+        },
+        'LAND',
+      )?.getDate(),
+    ).toBe(15)
+
+    expect(
+      resolveCycleCompletionDate(
+        {
+          outstanding_quantity: 5000,
+          last_trucking_completion_date: '2026-06-01',
+          last_trucking_wb_actuals_date: '2026-06-08',
+          last_trucking_daily_deliverable_date: null,
+          open_standard_eta_trucking: '2026-06-20',
+        },
+        'LAND',
+      )?.getDate(),
+    ).toBe(20)
+  })
+
+  it('LAND OS within 0 MT band (≤499 kg) still allows WB Last Receive', () => {
+    expect(
+      resolveCycleCompletionDate(
+        {
+          outstanding_quantity: 286,
+          last_trucking_wb_actuals_date: '2026-06-08',
+          last_trucking_daily_deliverable_date: '2026-06-15',
+        },
+        'LAND',
+      )?.getDate(),
+    ).toBe(8)
   })
 
   it('SEA: ATC → ETA at LP', () => {
@@ -175,10 +220,11 @@ describe('resolveCycleCompletionDate (no Today)', () => {
     expect(computeOpenCashCycleDays(missing, 'SEA', todayMid)).toBeNull()
   })
 
-  it('LAND prefers Last Receive over WB and planning for Log/DP', () => {
+  it('LAND prefers Last Receive over WB and planning for Log/DP when OS≈0', () => {
     const row = {
       import_status: 'OPEN',
       transport_mode: 'LAND',
+      outstanding_quantity: 0,
       last_trucking_completion_date: '2026-06-08',
       last_trucking_wb_actuals_date: '2026-06-09',
       last_trucking_daily_deliverable_date: '2026-06-15',
@@ -189,7 +235,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
     expect(end!.getMonth()).toBe(5)
     expect(end!.getDate()).toBe(8)
 
-    expect(computeOpenLogCycleDays(row, 'LAND', todayMid, '2026-06-01')).not.toBeNull()
+    expect(computeOpenLogCycleDays(row, 'LAND', todayMid, '2026-06-01')).toBe(-7)
 
     const wbOnlyEnd = resolveCycleCompletionDate(
       { ...row, last_trucking_completion_date: null },
@@ -204,6 +250,25 @@ describe('resolveCycleCompletionDate (no Today)', () => {
         todayMid,
       ),
     ).not.toBeNull()
+  })
+
+  it('Log Cycle = Cargo Readiness − Completion (ready 1 Jun, completion 10 Jun → −9)', () => {
+    const landRow = {
+      import_status: 'CLOSE',
+      transport_mode: 'LAND',
+      outstanding_quantity: 0,
+      last_trucking_completion_date: '2026-06-10',
+    }
+    expect(computeClosedLogCycleDays(landRow, 'LAND', '2026-06-01')).toBe(-9)
+    expect(computeOpenLogCycleDays(landRow, 'LAND', todayMid, '2026-06-01')).toBe(-9)
+
+    const seaRow = {
+      import_status: 'OPEN',
+      transport_mode: 'SEA',
+      last_ata_vessel_complete_discharge: '2026-06-10',
+    }
+    expect(computeClosedLogCycleDays(seaRow, 'SEA', '2026-06-01')).toBe(-9)
+    expect(computeOpenLogCycleDays(seaRow, 'SEA', todayMid, '2026-06-01')).toBe(-9)
   })
 
   it('returns null Cash Cycle when SAP Payoff Date is missing', () => {

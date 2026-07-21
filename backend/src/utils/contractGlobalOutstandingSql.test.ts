@@ -50,9 +50,14 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('trucking_wb_overlay');
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('qty_move_sap');
-    expect(sql).toContain('wb_resolved_qty_kg');
+    expect(sql).toContain('wb_delivery_qty_kg');
+    expect(sql).toContain('wb_receive_qty_kg');
+    expect(sql).toContain('quantity_delivery_kg');
+    expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain("IN ('FRC', 'LCO')");
     expect(sql).toContain("LIKE 'LAND%'");
+    // Close → SAP (no WB overlay), same as Trucking list
+    expect(sql).toMatch(/trucking_wb_overlay[\s\S]*AND NOT \(/);
   });
 
   it('buildQtyMoveCte overlays SEA FOB/CIF qty from Open KLIP shipment actuals', () => {

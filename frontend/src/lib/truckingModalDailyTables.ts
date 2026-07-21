@@ -21,6 +21,28 @@ export interface TruckingModalStoActual {
   qty_receive: number | null
 }
 
+/** How Section 4 renders WB daily actuals when multiple STOs exist on one PO. */
+export type WbActualsDisplayMode = 'singleSto' | 'perSto' | 'poLevelMultiSto'
+
+/**
+ * Resolve WB table layout for Truck Actual (Section 4).
+ * - singleSto: one or zero STO rows → PO-level SAP + WB block
+ * - perSto: multi-STO with sto-tagged WB rows → split per STO
+ * - poLevelMultiSto: multi-STO but WB rows have no sto_number (legacy PO upload)
+ */
+export function resolveWbActualsDisplayMode(
+  actualRows: TruckingModalActualRow[],
+  stoActuals: TruckingModalStoActual[],
+): WbActualsDisplayMode {
+  if (stoActuals.length <= 1) return 'singleSto'
+  const stoSet = new Set(stoActuals.map((s) => s.sto_number))
+  const hasTagged = actualRows.some((r) => {
+    const sto = String(r.sto_number ?? '').trim()
+    return sto !== '' && stoSet.has(sto)
+  })
+  return hasTagged ? 'perSto' : 'poLevelMultiSto'
+}
+
 export function parseDailyDeliverablesRaw(
   raw: unknown,
 ): Array<{ date?: string; quantity_delivered?: number }> {

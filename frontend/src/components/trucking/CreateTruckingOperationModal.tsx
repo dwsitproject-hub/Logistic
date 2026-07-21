@@ -46,6 +46,7 @@ import {
   normalizeDailyActualRows,
   normalizePlanningDeliverableRows,
   normalizeStoActuals,
+  resolveWbActualsDisplayMode,
   sumActualDeliveryKg,
   sumActualReceiveKg,
   sumPlanningDeliveryKg,
@@ -686,7 +687,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const dueEndDisplay =
     contractDueDates.delivery_end_date || sliceIsoDate(cd?.delivery_end_date) || ''
   const planningTotalKg = sumPlanningDeliveryKg(planningRows)
-  const showPerStoActuals = stoActuals.length > 1
+  const wbDisplayMode = resolveWbActualsDisplayMode(actualRows, stoActuals)
   const singleStoFallback =
     stoActuals.length === 1
       ? stoActuals[0]
@@ -1249,7 +1250,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 {step4Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
-                {showPerStoActuals ? (
+                {wbDisplayMode === 'perSto' ? (
                   stoActuals.map((sto) => {
                     const stoRows = filterActualRowsForSto(actualRows, sto.sto_number, {
                       includeLegacyEmpty: false,
@@ -1267,6 +1268,26 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       </div>
                     )
                   })
+                ) : wbDisplayMode === 'poLevelMultiSto' ? (
+                  <>
+                    {stoActuals.map((sto) => (
+                      <div
+                        key={sto.sto_number}
+                        className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3 space-y-3"
+                      >
+                        <p className="text-xs font-semibold text-emerald-900">
+                          STO {sto.sto_number}
+                        </p>
+                        {renderSapActualFields(sto)}
+                      </div>
+                    ))}
+                    <div className="space-y-2">
+                      <p className="text-[10px] text-gray-500 italic">
+                        WB uploaded at PO level — not split by STO
+                      </p>
+                      {renderDailyActualsTable(actualRows)}
+                    </div>
+                  </>
                 ) : (
                   <>
                     {renderSapActualFields(
