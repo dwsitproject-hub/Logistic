@@ -437,7 +437,10 @@ const SHIPPING_PERFORMANCE_SQL = `
           AND COALESCE(l.b2b_flag, '') = 'B2B'
           AND l.contract_reference_po IS NOT NULL
         )
-      ORDER BY s.created_at DESC`;
+      -- id tiebreaker: bulk-imported shipments share created_at, so without it row order
+      -- among ties is plan-dependent, and the STO-group merge picks fields from the last
+      -- tied row it sees. Ties keep a stable order now.
+      ORDER BY s.created_at DESC, s.id DESC`;
 
 function parseStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {

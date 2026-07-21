@@ -162,20 +162,6 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           AND ${stoExpr} IS NOT NULL
         ORDER BY ${stoExpr}, spd.contract_number, spd.created_at DESC NULLS LAST
       ),
-      /*
-       * Fallback when shipment list key is Operation ID / synthetic and SAP has no STO:
-       * match movement qty by contract_number (latest row). Prefer sto-key match above.
-       */
-      latest_spd_by_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          ${SPD_RECEIVE_KG} AS receive_kg,
-          ${SPD_DELIVER_KG} AS delivery_kg,
-          ${SPD_STO_QTY_KG} AS sto_qty_kg
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
       contract_sto_planning AS (
         SELECT
           TRIM(u.sto_number::text) AS sto_key,
@@ -210,8 +196,25 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
         LEFT JOIN latest_spd_by_sto_contract lspd
           ON lspd.sto_key = asp.sto_key
           AND TRIM(lspd.contract_number) = TRIM(asp.contract_id)
-        LEFT JOIN latest_spd_by_contract lspd_c
-          ON TRIM(lspd_c.contract_number) = TRIM(asp.contract_id)
+        /*
+         * Fallback when shipment list key is Operation ID / synthetic and SAP has no STO:
+         * match movement qty by contract_number (latest row). Prefer sto-key match above.
+         * LATERAL (idx_spd_contract_number_trim_created) instead of joining a DISTINCT ON
+         * over all contracts: the planner previously nested-loop-scanned that whole set per
+         * outer row (~4.5M join-filter evaluations, ~2s). Same row pick — latest created_at
+         * per trimmed contract_number (no trim-variant duplicates exist in SAP data).
+         */
+        LEFT JOIN LATERAL (
+          SELECT
+            ${SPD_RECEIVE_KG} AS receive_kg,
+            ${SPD_DELIVER_KG} AS delivery_kg,
+            ${SPD_STO_QTY_KG} AS sto_qty_kg
+          FROM sap_processed_data spd
+          WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+            AND TRIM(spd.contract_number) = TRIM(asp.contract_id)
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+        ) lspd_c ON TRUE
         LEFT JOIN contract_sto_planning csp
           ON csp.sto_key = asp.sto_key
           AND TRIM(csp.contract_id) = TRIM(asp.contract_id)

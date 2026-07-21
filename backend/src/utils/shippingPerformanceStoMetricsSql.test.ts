@@ -16,9 +16,10 @@ describe('shippingPerformanceStoMetricsSql', () => {
   it('falls back to latest SAP by contract when sto_key match is missing (null STO)', () => {
     const sql = buildShipmentListStoMetricsCte();
 
-    expect(sql).toContain('latest_spd_by_contract');
     expect(sql).toContain('COALESCE(lspd.receive_kg, lspd_c.receive_kg)');
     expect(sql).toContain('COALESCE(lspd.delivery_kg, lspd_c.delivery_kg)');
-    expect(sql).toContain('LEFT JOIN latest_spd_by_contract lspd_c');
+    // Contract-level fallback is a LATERAL latest-SAP-row lookup (was a DISTINCT ON CTE).
+    expect(sql).toContain(') lspd_c ON TRUE');
+    expect(sql).toContain("TRIM(spd.contract_number) = TRIM(asp.contract_id)");
   });
 });
