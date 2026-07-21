@@ -221,6 +221,7 @@ export function buildContractDetailsForStoSql(): string {
           c.incoterm,
           c.supplier,
           c.product,
+          c.transport_mode,
           c.delivery_start_date,
           c.delivery_end_date
         FROM contracts c
@@ -287,7 +288,8 @@ export function buildContractDetailsForStoSql(): string {
             )
         ) AS locked_from_sap,
         pl.delivery_start_date,
-        pl.delivery_end_date
+        pl.delivery_end_date,
+        pl.transport_mode
       FROM po_lines pl
 
       UNION ALL
@@ -379,7 +381,10 @@ export function buildContractDetailsForStoSql(): string {
             AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
         ) AS locked_from_sap,
         NULL::date AS delivery_start_date,
-        NULL::date AS delivery_end_date
+        NULL::date AS delivery_end_date,
+        (
+          SELECT c.transport_mode FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1
+        ) AS transport_mode
       FROM sap_only_contracts soc
       ORDER BY contract_number, po_number NULLS LAST`;
 }

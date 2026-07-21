@@ -19,7 +19,17 @@ import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
-import { canViewPermission, usePermissions } from '@/components/PermissionsContext'
+import {
+  canCreatePermission,
+  canEditPermission,
+  canViewPermission,
+  usePermissions,
+} from '@/components/PermissionsContext'
+import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
+import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
+import { resolveShipmentTablePrimaryAction } from '@/lib/shipmentViewTableActions'
+import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
 
@@ -385,6 +395,10 @@ export function ContractDetailModal({
 
   const perms = usePermissions()
   const canViewContractPaymentInfo = canViewPermission(perms, CONTRACT_PAYMENT_INFO_PERMISSION)
+  const canAddShipment = canCreatePermission(perms, 'data.shipments')
+  const canEditShipment = canEditPermission(perms, 'data.shipments')
+  const canAddTrucking = canCreatePermission(perms, 'data.trucking')
+  const canEditTrucking = canEditPermission(perms, 'data.trucking')
 
   const [docsLoading, setDocsLoading] = useState(false)
   const [selectedContractDocs, setSelectedContractDocs] = useState<DocumentItem[]>([])
@@ -398,6 +412,8 @@ export function ContractDetailModal({
   const [stoDetailData, setStoDetailData] = useState<Record<string, unknown> | null>(null)
   const [stoDetailLoading, setStoDetailLoading] = useState(false)
   const [stoLogisticsViewLoading, setStoLogisticsViewLoading] = useState(false)
+  const [stoLogisticsOpLoading, setStoLogisticsOpLoading] = useState(false)
+  /** STO No column → read-only view modal */
   const [viewShipmentModal, setViewShipmentModal] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -410,6 +426,26 @@ export function ContractDetailModal({
     contractExtNo: string | null
     poNumber: string | null
   } | null>(null)
+  /** Operation ID column → Add / Edit / View / Plot Trucking or Shipment */
+  const [logisticsOpModal, setLogisticsOpModal] = useState<
+    | {
+        kind: 'shipment'
+        mode: 'add' | 'edit' | 'view' | 'plot'
+        shipmentId: string | null
+        stoNumber: string | null
+        contractNumbers: string | null
+        prefilledPOs: ShipmentPoOption[] | null
+      }
+    | {
+        kind: 'trucking'
+        mode: 'add' | 'edit' | 'view' | 'plot'
+        operationId: string | null
+        contractId: string | null
+        contractExtNo: string | null
+        poNumber: string | null
+      }
+    | null
+  >(null)
   const [contractPayments, setContractPayments] = useState<Array<{ payment_status: string }>>([])
   const [contractPaymentsLoading, setContractPaymentsLoading] = useState(false)
   const [activityLog, setActivityLog] = useState<
@@ -713,6 +749,137 @@ export function ContractDetailModal({
     [contract, fetchStoDetailData, openStoDetail],
   )
 
+  /** Operation ID → Add New / Edit / View / Plot Trucking or Shipment (same actions as list pages). */
+  const openStoLogisticsOperation = useCallback(
+    async (row: StoInfoRow) => {
+      if (!contract?.id) return
+      setStoLogisticsOpLoading(true)
+      try {
+        const data = await fetchStoDetailData(row)
+        const entityId = String(data?.id ?? '').trim() || null
+        const status = String(data?.status ?? row.status ?? '').trim()
+        const primary = resolveShipmentTablePrimaryAction(status)
+
+        const contractId = String(contract.contract_id || '').trim()
+        const contractExtNo =
+          String(contract.contract_ext_no || contractId || '').trim() || null
+        const poNumber =
+          String(contract.po_number || '').trim() ||
+          String(contract.po_numbers || '')
+            .split(',')
+            .map((part) => part.trim())
+            .filter(Boolean)[0] ||
+          null
+        const stoNumber =
+          String(row.sto_number ?? '').trim() ||
+          String(row.operation_id ?? '').trim() ||
+          null
+
+        if (row.type === 'shipment') {
+          const canMutate = canAddShipment || canEditShipment
+          let mode: 'add' | 'edit' | 'view' | 'plot' = 'view'
+          if (primary === 'view' || !canMutate) {
+            mode = entityId ? 'view' : 'add'
+            if (mode === 'add' && !canAddShipment) {
+              await openStoDetail(row)
+              return
+            }
+          } else if (primary === 'add') {
+            mode = entityId ? 'plot' : 'add'
+            if (!canAddShipment && !canEditShipment) {
+              await openStoDetail(row)
+              return
+            }
+          } else {
+            mode = entityId ? (canEditShipment ? 'edit' : 'view') : 'add'
+          }
+
+          if ((mode === 'edit' || mode === 'view' || mode === 'plot') && !entityId) {
+            mode = 'add'
+          }
+
+          const prefilledPOs: ShipmentPoOption[] | null =
+            mode === 'add' && (poNumber || contractId)
+              ? [
+                  {
+                    key: contractId || poNumber || 'po',
+                    contractId: contractId || poNumber || '',
+                    poNumber,
+                    label: poNumber || contractId,
+                    contractData: {
+                      contract_id: contractId,
+                      po_number: poNumber,
+                      transport_mode: contract.transport_mode,
+                      incoterm: contract.incoterm,
+                      quantity_ordered: contract.quantity_ordered,
+                      outstanding_quantity: contract.outstanding_quantity,
+                      delivery_start_date: contract.delivery_start_date,
+                      delivery_end_date: contract.delivery_end_date,
+                      supplier: contract.supplier,
+                      buyer: contract.buyer,
+                      product: contract.product,
+                      contract_ext_no: contract.contract_ext_no,
+                    },
+                  },
+                ]
+              : null
+
+          setLogisticsOpModal({
+            kind: 'shipment',
+            mode,
+            shipmentId: entityId,
+            stoNumber,
+            contractNumbers: contractId || null,
+            prefilledPOs,
+          })
+          return
+        }
+
+        // Trucking — mirror list: Unplanned → Add/Plot, Cancelled → View, else Edit
+        const truckStatus = status.toUpperCase()
+        const canMutateTruck = canAddTrucking || canEditTrucking
+        let truckMode: 'add' | 'edit' | 'view' | 'plot' = 'view'
+        if (truckStatus === 'CANCELLED' || !canMutateTruck) {
+          truckMode = entityId ? 'view' : 'add'
+          if (truckMode === 'add' && !canAddTrucking) {
+            await openStoDetail(row)
+            return
+          }
+        } else if (truckStatus === 'UNPLANNED' || !entityId) {
+          truckMode = entityId ? 'plot' : 'add'
+          if (!canAddTrucking && !canEditTrucking) {
+            await openStoDetail(row)
+            return
+          }
+        } else {
+          truckMode = entityId ? (canEditTrucking ? 'edit' : 'view') : 'add'
+        }
+
+        setLogisticsOpModal({
+          kind: 'trucking',
+          mode: truckMode,
+          operationId: entityId,
+          contractId: contractId || null,
+          contractExtNo,
+          poNumber,
+        })
+      } catch {
+        await openStoDetail(row)
+      } finally {
+        setStoLogisticsOpLoading(false)
+      }
+    },
+    [
+      contract,
+      fetchStoDetailData,
+      openStoDetail,
+      canAddShipment,
+      canEditShipment,
+      canAddTrucking,
+      canEditTrucking,
+    ],
+  )
+
   const closeStoDetail = useCallback(() => {
     setStoDetailRow(null)
     setStoDetailData(null)
@@ -965,10 +1132,16 @@ export function ContractDetailModal({
                             <td className="p-2">
                               <button
                                 type="button"
-                                onClick={() => openStoDetail(row)}
-                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer"
+                                onClick={() => void openStoLogisticsOperation(row)}
+                                disabled={stoLogisticsOpLoading}
+                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer disabled:opacity-50"
+                                title={
+                                  row.type === 'shipment'
+                                    ? 'Open Add / Edit / View Shipment'
+                                    : 'Open Add / Edit / View Trucking'
+                                }
                               >
-                                {row.operation_id ?? '-'}
+                                {row.operation_id?.trim() ? row.operation_id : '—'}
                               </button>
                             </td>
                             <td className="p-2">
@@ -1601,6 +1774,128 @@ export function ContractDetailModal({
         initialContractId={viewTruckingModal?.contractId ?? null}
         initialContractExtNo={viewTruckingModal?.contractExtNo ?? null}
         initialPoNumber={viewTruckingModal?.poNumber ?? null}
+      />
+
+      <AddNewShipmentModal
+        open={logisticsOpModal?.kind === 'shipment'}
+        stacked
+        mode={
+          logisticsOpModal?.kind === 'shipment' &&
+          (logisticsOpModal.mode === 'edit' || logisticsOpModal.mode === 'view')
+            ? 'edit'
+            : 'add'
+        }
+        readOnly={logisticsOpModal?.kind === 'shipment' && logisticsOpModal.mode === 'view'}
+        plotShipmentId={
+          logisticsOpModal?.kind === 'shipment' && logisticsOpModal.mode === 'plot'
+            ? logisticsOpModal.shipmentId
+            : null
+        }
+        editShipmentId={
+          logisticsOpModal?.kind === 'shipment' &&
+          (logisticsOpModal.mode === 'edit' || logisticsOpModal.mode === 'view')
+            ? logisticsOpModal.shipmentId
+            : null
+        }
+        editContractId={
+          logisticsOpModal?.kind === 'shipment'
+            ? String(contract?.contract_id || '').trim() || null
+            : null
+        }
+        editStoNumber={
+          logisticsOpModal?.kind === 'shipment' ? logisticsOpModal.stoNumber : null
+        }
+        editContractNumbers={
+          logisticsOpModal?.kind === 'shipment' ? logisticsOpModal.contractNumbers : null
+        }
+        prefilledStoNumber={
+          logisticsOpModal?.kind === 'shipment' &&
+          (logisticsOpModal.mode === 'add' || logisticsOpModal.mode === 'plot')
+            ? logisticsOpModal.stoNumber
+            : null
+        }
+        prefilledContractNumbers={
+          logisticsOpModal?.kind === 'shipment' && logisticsOpModal.contractNumbers
+            ? [logisticsOpModal.contractNumbers]
+            : null
+        }
+        prefilledPOs={
+          logisticsOpModal?.kind === 'shipment' ? logisticsOpModal.prefilledPOs : null
+        }
+        onClose={() => setLogisticsOpModal(null)}
+        onSubmit={async (payload) => {
+          if (logisticsOpModal?.kind === 'shipment' && logisticsOpModal.mode === 'view') return
+          await submitAddNewShipmentPayload(payload)
+          setLogisticsOpModal(null)
+          if (contract?.id) {
+            try {
+              const res = await api.get(`/contracts/${contract.id}/sto-information`)
+              if (res.data?.success && Array.isArray(res.data.data?.stos)) {
+                setStoInfo(res.data.data.stos)
+                if (res.data.data.summary) {
+                  setStoQtySummary({
+                    sto_count: Number(res.data.data.summary.sto_count ?? 0),
+                    total_sto_quantity: Number(res.data.data.summary.total_sto_quantity ?? 0),
+                  })
+                }
+              }
+            } catch {
+              /* keep existing rows */
+            }
+          }
+        }}
+      />
+
+      <CreateTruckingOperationModal
+        open={logisticsOpModal?.kind === 'trucking'}
+        stacked
+        mode={
+          logisticsOpModal?.kind === 'trucking' &&
+          (logisticsOpModal.mode === 'edit' || logisticsOpModal.mode === 'view')
+            ? 'edit'
+            : 'add'
+        }
+        readOnly={logisticsOpModal?.kind === 'trucking' && logisticsOpModal.mode === 'view'}
+        plotOperationId={
+          logisticsOpModal?.kind === 'trucking' && logisticsOpModal.mode === 'plot'
+            ? logisticsOpModal.operationId
+            : null
+        }
+        editTruckingOperationId={
+          logisticsOpModal?.kind === 'trucking' &&
+          (logisticsOpModal.mode === 'edit' || logisticsOpModal.mode === 'view')
+            ? logisticsOpModal.operationId
+            : null
+        }
+        initialContractId={
+          logisticsOpModal?.kind === 'trucking' ? logisticsOpModal.contractId : null
+        }
+        initialContractExtNo={
+          logisticsOpModal?.kind === 'trucking' ? logisticsOpModal.contractExtNo : null
+        }
+        initialPoNumber={
+          logisticsOpModal?.kind === 'trucking' ? logisticsOpModal.poNumber : null
+        }
+        onClose={() => setLogisticsOpModal(null)}
+        onCreated={() => {
+          setLogisticsOpModal(null)
+          if (contract?.id) {
+            void api
+              .get(`/contracts/${contract.id}/sto-information`)
+              .then((res) => {
+                if (res.data?.success && Array.isArray(res.data.data?.stos)) {
+                  setStoInfo(res.data.data.stos)
+                  if (res.data.data.summary) {
+                    setStoQtySummary({
+                      sto_count: Number(res.data.data.summary.sto_count ?? 0),
+                      total_sto_quantity: Number(res.data.data.summary.total_sto_quantity ?? 0),
+                    })
+                  }
+                }
+              })
+              .catch(() => {})
+          }
+        }}
       />
     </>
   )

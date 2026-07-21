@@ -44,6 +44,8 @@ export function sqlSapQtyTruckingFromSpd(spdAlias = 'spd'): string {
   return sqlParseSapNumeric(`
     ${spdAlias}.data->'raw'->>'Quantity Delivery Trucking',
     ${spdAlias}.data->'raw'->>'Quantity Delivered Trucking',
+    ${spdAlias}.data->'raw'->>'Quantity Delivered via Trucking',
+    ${spdAlias}.data->>'quantity_delivered_via_trucking',
     ${spdAlias}.data->'shipment'->>'quantity_delivery_trucking',
     ${spdAlias}.data->'contract'->>'quantity_delivery_trucking'
   `);

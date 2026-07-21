@@ -604,7 +604,10 @@ export async function processWbRekapWorkbookUpload(args: {
         .then(({ ContractQtyMoveSnapshotService }) =>
           ContractQtyMoveSnapshotService.refreshForTruckingOperationIds(opIds),
         )
-        .catch(() => {});
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.error('[WB import] contract_qty_move_snapshot refresh failed', err);
+        });
     });
   }
 

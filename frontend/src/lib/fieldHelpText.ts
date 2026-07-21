@@ -36,9 +36,9 @@ export const FIELD_HELP = {
 
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 
-  deliveryQty: `LAND FRC/LCO Open with WB Actuals: Netto PKS (same as Trucking Delivery Qty). SEA Open with KLIP actuals: shipment delivered qty. Otherwise SAP quantity_delivery (trucking or vessel by incoterm / transport). GR Close always uses SAP.`,
+  deliveryQty: `FRC/LCO Open with WB Actuals: Netto PKS (same as Trucking Delivery Qty). SEA Open with KLIP actuals: shipment delivered qty. Otherwise SAP quantity_delivery (trucking or vessel by incoterm / transport). GR Close always uses SAP.`,
 
-  receivedQty: `LAND FRC/LCO Open with WB Actuals: Netto EUP (same as Trucking Received Qty). SEA Open with KLIP receive: actual vessel receive. Otherwise SAP Quantity Receive. GR Close always uses SAP.`,
+  receivedQty: `FRC/LCO Open with WB Actuals: Netto EUP (same as Trucking Received Qty). SEA Open with KLIP receive: actual vessel receive. Otherwise SAP Quantity Receive. GR Close always uses SAP.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
   shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,

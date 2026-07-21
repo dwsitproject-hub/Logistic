@@ -1,6 +1,6 @@
 /**
  * Global contract outstanding qty — same rules as Contracts list (`qty_move` CTE).
- * LAND FRC/LCO Open: when trucking WB daily actuals exist, delivery/receive prefer
+ * FRC/LCO Open: when trucking WB daily actuals exist, delivery/receive prefer
  * Netto PKS / Netto EUP sums from trucking_daily_actuals (aligns with Trucking list).
  * Close → SAP (no WB overlay). SEA FOB/CIF Open: KLIP shipment actuals over SAP.
  */
@@ -13,6 +13,7 @@ import {
   sqlSapQtyTruckingFromSpd,
   sqlSapQtyVesselFromSpd,
 } from './sapIncotermMetrics';
+import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 
 export type QtyMoveContractFilter =
   | { kind: 'join_scope'; scopeCteName: string }
@@ -65,8 +66,13 @@ function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): s
 }
 
 /**
- * LAND FRC/LCO Open contracts with WB daily actuals — separate delivery (Netto PKS)
+ * FRC/LCO Open contracts with WB daily actuals — separate delivery (Netto PKS)
  * and receive (Netto EUP) sums across trucking ops. Close contracts omitted so SAP wins.
+ *
+ * Gates align with Trucking list resolved qty (Open + has daily actuals):
+ * - Incoterm via contractEffectiveIncotermExpr (DB || SAP), same as Trucking page scope
+ * - No LAND% filter — Trucking page is FRC/LCO-scoped and resolves WB without transport_mode
+ *
  * Expressions mirror sqlWbActualDeliverySumKg / sqlWbActualReceiveSumKg (truckingQuantitySql)
  * without importing that module (avoids circular dependency via contractPoGlobalMetricsSql).
  */
@@ -78,6 +84,7 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
   const contractFilter =
     filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
   const grClosed = sqlIsContractSapClosedExpr('c');
+  const effectiveIncoterm = contractEffectiveIncotermExpr('c');
   const wbDeliveryPerOp = `(
     SELECT COALESCE(SUM(COALESCE(da.quantity_delivery_kg, da.quantity_kg)), 0)::numeric
     FROM trucking_daily_actuals da
@@ -98,8 +105,7 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
           FROM contracts c
           ${joinScope}
           INNER JOIN trucking_operations t ON t.contract_id = c.id
-          WHERE UPPER(TRIM(COALESCE(c.transport_mode, ''))) LIKE 'LAND%'
-            AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'LCO')
+          WHERE ${effectiveIncoterm} IN ('FRC', 'LCO')
             AND NOT (${grClosed})
             ${contractFilter}
           GROUP BY c.contract_id

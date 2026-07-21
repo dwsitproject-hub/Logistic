@@ -131,6 +131,10 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
       sap_sto_qty: detail.sap_sto_qty,
       shipment_plan_qty: detail.shipment_plan_qty,
       locked_from_sap: detail.locked_from_sap,
+      transport_mode: detail.transport_mode ?? detail.sea_land ?? null,
+      incoterm: detail.incoterm,
+      supplier: detail.supplier,
+      product: detail.product,
     },
   }
 }
@@ -146,6 +150,9 @@ function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOptio
     contractData: {
       ...enriched.contractData,
       ...base.contractData,
+      // Prefer a real transport_mode when STO prefill omitted it
+      transport_mode:
+        base.contractData?.transport_mode ?? enriched.contractData?.transport_mode ?? null,
     },
   }
 }

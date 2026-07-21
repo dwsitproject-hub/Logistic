@@ -45,7 +45,7 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('quantity_delivery_trucking');
   });
 
-  it('buildQtyMoveCte overlays LAND FRC/LCO qty from trucking WB daily actuals', () => {
+  it('buildQtyMoveCte overlays FRC/LCO Open qty from trucking WB daily actuals (Trucking-aligned)', () => {
     const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
     expect(sql).toContain('trucking_wb_overlay');
     expect(sql).toContain('trucking_daily_actuals');
@@ -55,7 +55,9 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('quantity_delivery_kg');
     expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain("IN ('FRC', 'LCO')");
-    expect(sql).toContain("LIKE 'LAND%'");
+    // Align with Trucking: effective incoterm (DB||SAP), no LAND% gate
+    expect(sql).toContain("spd.data->'raw'->>'Incoterm'");
+    expect(sql).not.toContain("LIKE 'LAND%'");
     // Close → SAP (no WB overlay), same as Trucking list
     expect(sql).toMatch(/trucking_wb_overlay[\s\S]*AND NOT \(/);
   });

@@ -59,6 +59,7 @@ import {
   suggestShipmentEta,
   suggestShipmentVessel,
 } from '@/lib/shipmentAiPlanner'
+import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -335,6 +336,8 @@ export type AddNewShipmentModalProps = {
   plotShipmentId?: string | null
   /** Read-only edit/view (Shipments table — Cancelled rows). */
   readOnly?: boolean
+  /** Raise z-index when opened above Contract Detail (z-50 / z-70). */
+  stacked?: boolean
   /** Refresh Shipments list after Edit modal attaches a PO (without closing modal). */
   onShipmentChanged?: () => void
 }
@@ -354,6 +357,7 @@ export function AddNewShipmentModal({
   mode = 'add',
   plotShipmentId = null,
   readOnly = false,
+  stacked = false,
   onShipmentChanged,
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
@@ -935,18 +939,6 @@ export function AddNewShipmentModal({
     [contractValidations]
   )
 
-  const selectedTransportMode = useMemo(() => {
-    const modes = newShipment.contractNumbers
-      .map((id) => contractValidations[id]?.contractData?.transport_mode?.toLowerCase())
-      .filter(Boolean) as string[]
-    if (modes.length === 0) return null
-    const isLand = modes.every((m) => m.includes('land') || m.includes('truck'))
-    const isSea = modes.every((m) => m.includes('sea') || m.includes('vessel') || m.includes('ship'))
-    if (isLand) return 'land'
-    if (isSea) return 'sea'
-    return 'mixed'
-  }, [newShipment.contractNumbers, contractValidations])
-
   const resolveContractDataForSelectionKey = useCallback(
     (selectionKey: string) => {
       const direct = contractValidations[selectionKey]?.contractData
@@ -968,6 +960,28 @@ export function AddNewShipmentModal({
     },
     [availablePoByKey, contractValidations],
   )
+
+  /**
+   * SEA / MIX → show Estimation (ETA) fields.
+   * LAND → hide (trucking module).
+   * Missing transport_mode with PO(s) already selected → default SEA (same as shipment SQL COALESCE).
+   */
+  const selectedTransportMode = useMemo(() => {
+    const modes = newShipment.contractNumbers
+      .map((id) =>
+        classifyShipmentTransportMode(
+          resolveContractDataForSelectionKey(id)?.transport_mode as string | null | undefined,
+        ),
+      )
+      .filter((m): m is 'land' | 'sea' | 'mixed' => m != null)
+    if (modes.length === 0) {
+      // Backend shipment eligibility defaults blank transport_mode to SEA.
+      return newShipment.contractNumbers.length > 0 ? 'sea' : null
+    }
+    if (modes.every((m) => m === 'land')) return 'land'
+    if (modes.every((m) => m === 'sea')) return 'sea'
+    return 'mixed'
+  }, [newShipment.contractNumbers, resolveContractDataForSelectionKey])
 
   const getPoContractExtNo = useCallback(
     (selectionKey: string) => {
@@ -2250,6 +2264,7 @@ export function AddNewShipmentModal({
           resetForm()
           onClose()
         }}
+        stacked={stacked}
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
@@ -2267,6 +2282,7 @@ export function AddNewShipmentModal({
           onClose()
         }}
         onSubmit={onSubmit}
+        stacked={stacked}
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
@@ -2278,7 +2294,7 @@ export function AddNewShipmentModal({
 
   return (
     <>
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
+    <div className={`fixed inset-0 ${stacked ? 'z-[80]' : 'z-[60]'} flex items-center justify-center bg-black/40 p-4`}>
       <div className="flex max-h-[90vh] w-full max-w-6xl flex-col rounded-lg bg-white shadow-xl">
         {/* Header */}
         <div className="sticky top-0 z-10 shrink-0 rounded-t-lg border-b border-gray-200 bg-white">
@@ -2318,7 +2334,7 @@ export function AddNewShipmentModal({
             {[
               { num: 1, label: 'Contract & PO', done: step1Done, icon: <FileText className="h-3.5 w-3.5" /> },
               { num: 2, label: 'Vessel Detail', done: step2Done, icon: <Anchor className="h-3.5 w-3.5" /> },
-              { num: 3, label: 'Estimation Schedule + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
+              { num: 3, label: 'ETA / Estimation + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
             ].map((s, i) => (
               <div key={s.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
@@ -2984,7 +3000,7 @@ export function AddNewShipmentModal({
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
                 <Clock className="h-3.5 w-3.5 text-violet-600" />
               </div>
-              <h4 className="text-sm font-semibold text-gray-800">3. Estimation Schedule + Loading Port</h4>
+              <h4 className="text-sm font-semibold text-gray-800">3. ETA / Estimation Schedule + Loading Port</h4>
               {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
             </div>
             <div className="p-4 space-y-3">
@@ -3036,13 +3052,21 @@ export function AddNewShipmentModal({
               </div>
 
               {selectedTransportMode === null && (
-                <p className="text-xs text-gray-400 italic">Add a contract in Section 1 to see Estimation fields.</p>
+                <p className="text-xs text-gray-400 italic">Add a contract in Section 1 to see ETA / Estimation fields.</p>
+              )}
+
+              {selectedTransportMode === 'land' && newShipment.contractNumbers.length > 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+                  This PO is LAND transport — vessel ETA fields are not used here. Create planning in Trucking instead.
+                </p>
               )}
 
               {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                 <>
                   {selectedTransportMode === 'mixed' && (
-                    <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Sea</p>
+                    <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+                      Sea leg ETA (MIX contract)
+                    </p>
                   )}
 
                   {newShipment.contractNumbers.length === 0 && (
