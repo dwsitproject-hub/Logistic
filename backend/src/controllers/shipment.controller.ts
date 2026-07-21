@@ -90,6 +90,7 @@ import {
 } from '../utils/shipmentOutstandingQtySql';
 import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import { ttlMemo } from '../utils/ttlMemo';
 import {
   allocateNextSyntheticSequenceDefault,
   buildSyntheticOperationId,
@@ -3926,12 +3927,23 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
 
     await ensureUserStoContractAssignmentsTable();
 
-    const queryText = buildContractDetailsForStoSql();
-    const result = await query(queryText, [stoTrim, contractList]);
+    // Single-flight (ttl 0 = no result caching, no staleness): expanding several rows
+    // fires this per STO, and the staging DB CPU findings caught the identical
+    // contract_candidates query running 4x concurrently. Identical concurrent
+    // requests now share one execution; results are always freshly computed.
+    const rows = await ttlMemo(
+      `contract-details-for-sto:${stoTrim}|${contractList.join(',')}`,
+      0,
+      async () => {
+        const queryText = buildContractDetailsForStoSql();
+        const result = await query(queryText, [stoTrim, contractList]);
+        return result.rows;
+      },
+    );
 
     return res.json({
       success: true,
-      data: result.rows,
+      data: rows,
     });
   } catch (error) {
     logger.error('Get contract details for STO error:', error);

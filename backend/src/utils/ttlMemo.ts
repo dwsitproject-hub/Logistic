@@ -18,7 +18,13 @@ export async function ttlMemo<T>(key: string, ttlMs: number, compute: () => Prom
   const promise = (async () => {
     try {
       const value = await compute();
-      STORE.set(key, { value, expiresAt: Date.now() + ttlMs });
+      // ttlMs <= 0 means pure single-flight (concurrent callers share one run,
+      // nothing is retained) — don't accumulate dead entries in the store.
+      if (ttlMs > 0) {
+        STORE.set(key, { value, expiresAt: Date.now() + ttlMs });
+      } else {
+        STORE.delete(key);
+      }
       return value;
     } finally {
       IN_FLIGHT.delete(key);

@@ -1025,6 +1025,9 @@ async function loadTruckingOutstandingQtyForRequest(
   return mergeTruckingOutstandingQtySummaries(execution, backlog);
 }
 
+/** Concurrent identical summary loads share one execution (single-flight). */
+const MERGED_SUMMARY_IN_FLIGHT = new Map<string, Promise<TruckingListResponseData['summary']>>();
+
 export async function loadTruckingListSummaryWithBacklog(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
@@ -1037,6 +1040,20 @@ export async function loadTruckingListSummaryWithBacklog(
   }
   if (cachedMerged) MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
 
+  const inFlight = MERGED_SUMMARY_IN_FLIGHT.get(mergedCacheKey);
+  if (inFlight) return inFlight;
+  const run = runTruckingListSummaryWithBacklog(req, built, mergedCacheKey).finally(() =>
+    MERGED_SUMMARY_IN_FLIGHT.delete(mergedCacheKey),
+  );
+  MERGED_SUMMARY_IN_FLIGHT.set(mergedCacheKey, run);
+  return run;
+}
+
+async function runTruckingListSummaryWithBacklog(
+  req: AuthRequest,
+  built: TruckingListBuiltQuery,
+  mergedCacheKey: string,
+): Promise<TruckingListResponseData['summary']> {
   const liveLoadStartedAt = Date.now();
   // Registered after a live load so refresh-ahead / invalidation re-runs the identical
   // loader (same req.query scope, same built query) off the request path.
@@ -1099,6 +1116,10 @@ export async function loadTruckingListSummaryWithBacklog(
   return withOs;
 }
 
+/** Concurrent identical page loads share one query run (single-flight) — the staging
+ *  DB CPU findings showed the same heavy report fired several times at once. */
+const PAGE_IN_FLIGHT = new Map<string, Promise<{ rows: TruckingListRow[]; total: number }>>();
+
 async function loadTruckingListPage(
   built: TruckingListBuiltQuery,
   sortKey: string,
@@ -1113,6 +1134,23 @@ async function loadTruckingListPage(
   }
   if (cached) PAGE_CACHE.delete(built.cacheKey);
 
+  const inFlight = PAGE_IN_FLIGHT.get(built.cacheKey);
+  if (inFlight) return inFlight;
+  const run = runTruckingListPageQuery(built, sortKey, sortDir, page, limit, stageFilter).finally(
+    () => PAGE_IN_FLIGHT.delete(built.cacheKey),
+  );
+  PAGE_IN_FLIGHT.set(built.cacheKey, run);
+  return run;
+}
+
+async function runTruckingListPageQuery(
+  built: TruckingListBuiltQuery,
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  page: number,
+  limit: number,
+  stageFilter?: string | null,
+): Promise<{ rows: TruckingListRow[]; total: number }> {
   const offset = (page - 1) * limit;
   const cachedTotal = getCachedFilteredTotal(built.filterCacheKey);
   const { text, params } =
