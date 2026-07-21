@@ -9,7 +9,7 @@
  *   AC2  Global Filter Propagation
  *   AC3  Drilldown "Apply" — Section 3 count matches active node count
  *   AC4  Blank / null value handling in drilldown
- *   AC5  "Open" status fallback — null trade_cycle_days not dropped
+ *   AC5  null trade_cycle_days = unscheduled (excluded from Late/On Time)
  */
 
 import { describe, it, expect } from 'vitest'
@@ -643,11 +643,11 @@ describe('AC4 — Blank / null value drilldown', () => {
 })
 
 // ---------------------------------------------------------------------------
-// AC5 — "Open" status fallback — null trade_cycle_days must not be dropped
+// AC5 — null trade_cycle_days = unscheduled (no Completion Date); exclude from late/on-time
 // ---------------------------------------------------------------------------
 
 describe('Section 3 — performance tree inclusion guard', () => {
-  it('excludes contracts without delivery end and closed unscheduled rows', () => {
+  it('excludes contracts without delivery end and unscheduled (null trade cycle) rows', () => {
     expect(
       contractMeetsPerformanceTreeInclusion(
         tableContract({ delivery_end_date: null, import_status: 'OPEN' }),
@@ -683,7 +683,7 @@ describe('Section 3 — performance tree inclusion guard', () => {
         }),
         'ON_TIME',
       ),
-    ).toBe(true)
+    ).toBe(false)
     expect(
       contractMeetsPerformanceTreeInclusion(
         tableContract({
@@ -757,20 +757,15 @@ describe('Section 3 — performance tree inclusion guard', () => {
   })
 })
 
-describe('AC5 — Open status fallback / null trade_cycle_days handling', () => {
-  it('ALL filter includes contracts with null trade_cycle_days', () => {
+describe('AC5 — null trade_cycle_days = unscheduled (no Completion Date)', () => {
+  it('ALL filter includes contracts with null trade_cycle_days (segment filter only)', () => {
     expect(contractMatchesLateOnTimeFilter(null, 'ALL')).toBe(true)
     expect(contractMatchesLateOnTimeFilter(undefined, 'ALL')).toBe(true)
   })
 
-  it('LATE filter includes contracts with null trade_cycle_days (treated as late)', () => {
-    // Section 2 counts open contracts with no ETA in the late bucket.
-    // Section 3 must do the same — not silently drop them.
-    expect(contractMatchesLateOnTimeFilter(null, 'LATE')).toBe(true)
-    expect(contractMatchesLateOnTimeFilter(undefined, 'LATE')).toBe(true)
-  })
-
-  it('ON_TIME filter excludes contracts with null trade_cycle_days (no ETA = not on time)', () => {
+  it('LATE and ON_TIME filters exclude null trade_cycle_days (unscheduled)', () => {
+    expect(contractMatchesLateOnTimeFilter(null, 'LATE')).toBe(false)
+    expect(contractMatchesLateOnTimeFilter(undefined, 'LATE')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(null, 'ON_TIME')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(undefined, 'ON_TIME')).toBe(false)
   })
@@ -787,7 +782,7 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', true)).toBe(true)
   })
 
-  it('Section 3 does NOT drop Open contracts with null trade_cycle_days when filter is LATE', () => {
+  it('Section 3 drops Open contracts with null trade_cycle_days when filter is LATE', () => {
     const openContractNoEta = tableContract({
       contract_id: 'OPEN-NO-ETA',
       trade_cycle_days: null,
@@ -811,14 +806,13 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
       s3Scope,
       'LATE',
     )
-    // null ETA contract must be included (treated as late), plus the actual late one
-    expect(filtered.some((c) => c.contract_id === 'OPEN-NO-ETA')).toBe(true)
+    expect(filtered.some((c) => c.contract_id === 'OPEN-NO-ETA')).toBe(false)
     expect(filtered.some((c) => c.contract_id === 'OPEN-LATE')).toBe(true)
     expect(filtered.some((c) => c.contract_id === 'OPEN-ON-TIME')).toBe(false)
-    expect(filtered.length).toBe(2)
+    expect(filtered.length).toBe(1)
   })
 
-  it('Section 3 does NOT include null-ETA contracts when filter is ON_TIME', () => {
+  it('Section 3 does NOT include null-completion contracts when filter is ON_TIME', () => {
     const openContractNoEta = tableContract({ contract_id: 'OPEN-NO-ETA', trade_cycle_days: null })
     const openContractOnTime = tableContract({ contract_id: 'OPEN-ON-TIME', trade_cycle_days: -2 })
     const { scope: s3Scope } = resolveSection3Scope(BASE_GLOBAL, EMPTY_CONTRACT_PERF_DRILLDOWN)
@@ -831,8 +825,8 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
     expect(filtered.some((c) => c.contract_id === 'OPEN-ON-TIME')).toBe(true)
   })
 
-  it('NaN trade_cycle_days is treated as null (fallback to LATE)', () => {
-    expect(contractMatchesLateOnTimeFilter(NaN, 'LATE')).toBe(true)
+  it('NaN trade_cycle_days is treated as null (unscheduled)', () => {
+    expect(contractMatchesLateOnTimeFilter(NaN, 'LATE')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(NaN, 'ON_TIME')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(NaN, 'ALL')).toBe(true)
   })

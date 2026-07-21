@@ -142,6 +142,61 @@ export function sqlSapTruckingLastReceiveDateForStoKey(
   )`;
 }
 
+/**
+ * Contract Detail STO table / logistics detail — Trucking Last Receive Date:
+ * realization_end → SAP AW (STO-scoped) → WB Actuals MAX(progress_date).
+ * Works even when trucking_operation_id is null (SAP-only STO rows).
+ */
+export function sqlStoTruckingLastReceiveDate(
+  contractNumberExpr: string,
+  stoKeyExpr: string,
+  truckingOpIdExpr: string,
+): string {
+  return `COALESCE(
+    (
+      SELECT tr.realization_end_date
+      FROM trucking_realizations tr
+      WHERE tr.trucking_operation_id = ${truckingOpIdExpr}
+      LIMIT 1
+    ),
+    ${sqlSapTruckingLastReceiveDateForStoKey(contractNumberExpr, stoKeyExpr)},
+    (
+      SELECT MAX(da.progress_date)
+      FROM trucking_daily_actuals da
+      WHERE da.trucking_operation_id = ${truckingOpIdExpr}
+        AND (
+          NULLIF(TRIM(COALESCE(da.sto_number::text, '')), '') IS NULL
+          OR TRIM(da.sto_number::text) = TRIM(${stoKeyExpr}::text)
+        )
+    )
+  )`;
+}
+
+/**
+ * Same chain as {@link sqlStoTruckingLastReceiveDate} for logistics-sto-detail lookup keys.
+ * Prefer joined `realization_end_date` when present.
+ */
+export function sqlStoTruckingLastReceiveDateForLookupKeys(
+  contractNumberExpr: string,
+  lookupKeysParam: string,
+  truckingOpIdExpr: string,
+  realizationEndExpr: string = 'tr.realization_end_date',
+): string {
+  return `COALESCE(
+    ${realizationEndExpr},
+    ${sqlSapTruckingLastReceiveDateForLookupKeys(contractNumberExpr, lookupKeysParam)},
+    (
+      SELECT MAX(da.progress_date)
+      FROM trucking_daily_actuals da
+      WHERE da.trucking_operation_id = ${truckingOpIdExpr}
+        AND (
+          NULLIF(TRIM(COALESCE(da.sto_number::text, '')), '') IS NULL
+          OR TRIM(da.sto_number::text) = ANY(${lookupKeysParam})
+        )
+    )
+  )`;
+}
+
 /** SAP Trucking Last Receive Date for logistics-sto-detail lookup keys ($2::text[]). */
 export function sqlSapTruckingLastReceiveDateForLookupKeys(
   contractNumberExpr: string,
@@ -191,6 +246,36 @@ export function sqlSapTruckingStartReceiveDateForLookupKeys(
       LIMIT 1
     ) v
     WHERE v.val IS NOT NULL AND length(trim(v.val)) >= 6
+  )`;
+}
+
+/**
+ * Max Trucking Last Receive across ops — extension realization_end_date, then SAP AW.
+ * Does **not** include WB actuals or planning dates (cycle step 1).
+ */
+export function sqlMaxTruckingLastReceiveDateForContract(
+  contractIdExpr: string,
+  contractNumberExpr: string,
+): string {
+  const sap = sqlSapTruckingLastReceiveDateByContractNumber(contractNumberExpr);
+  return `(
+    SELECT MAX(COALESCE(
+      tr.realization_end_date,
+      (${sap})
+    ))
+    FROM trucking_operations t
+    LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
+    WHERE t.contract_id = ${contractIdExpr}
+  )`;
+}
+
+/** Max WB Actuals daily progress_date across trucking ops for a contract (cycle step 2). */
+export function sqlMaxTruckingWbActualsDateForContract(contractIdExpr: string): string {
+  return `(
+    SELECT MAX(da.progress_date)
+    FROM trucking_operations t
+    INNER JOIN trucking_daily_actuals da ON da.trucking_operation_id = t.id
+    WHERE t.contract_id = ${contractIdExpr}
   )`;
 }
 

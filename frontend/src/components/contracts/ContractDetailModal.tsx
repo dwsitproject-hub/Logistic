@@ -879,16 +879,32 @@ export function ContractDetailModal({
                     <div className="text-gray-500">Due Date Delivery End</div>
                     <div className="font-medium mt-1">{formatDate(contract.delivery_end_date)}</div>
                   </div>
+                  {canViewContractPaymentInfo && (
+                    <>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Due Date Payment</div>
+                        <div className="font-medium mt-1">{formatDate(contract.due_date_payment)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">DP Date</div>
+                        <div className="font-medium mt-1">{formatDate(contract.dp_date)}</div>
+                      </div>
+                      <div className="p-3 bg-gray-50 rounded">
+                        <div className="text-gray-500">Payoff Date</div>
+                        <div className="font-medium mt-1">{formatDate(contract.payoff_date)}</div>
+                      </div>
+                    </>
+                  )}
+                  <div className="p-3 bg-gray-50 rounded">
+                    <div className="text-gray-500">Cargo Readiness Date</div>
+                    <div className="font-medium mt-1">{formatDate(contract.cargo_readiness_date)}</div>
+                  </div>
                   {showMonthDeliveryEnd && (
                     <div className="p-3 bg-gray-50 rounded">
                       <div className="text-gray-500">Month Delivery End</div>
                       <div className="font-medium mt-1">{formatMonthDeliveryEnd(contract.delivery_end_date)}</div>
                     </div>
                   )}
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Cargo Readiness Date</div>
-                    <div className="font-medium mt-1">{formatDate(contract.cargo_readiness_date)}</div>
-                  </div>
                 </div>
               </div>
 
@@ -1169,18 +1185,6 @@ export function ContractDetailModal({
                     <div className="p-3 bg-gray-50 rounded">
                       <div className="text-gray-500">Contract Value</div>
                       <div className="font-medium mt-1">{formatCurrency(contract.contract_value, contract.currency)}</div>
-                    </div>
-                    <div className="p-3 bg-gray-50 rounded">
-                      <div className="text-gray-500">Due Date Payment</div>
-                      <div className="font-medium mt-1">{formatDate(contract.due_date_payment)}</div>
-                    </div>
-                    <div className="p-3 bg-gray-50 rounded">
-                      <div className="text-gray-500">DP Date</div>
-                      <div className="font-medium mt-1">{formatDate(contract.dp_date)}</div>
-                    </div>
-                    <div className="p-3 bg-gray-50 rounded">
-                      <div className="text-gray-500">Payoff Date</div>
-                      <div className="font-medium mt-1">{formatDate(contract.payoff_date)}</div>
                     </div>
                     <div className="p-3 bg-gray-50 rounded">
                       <div className="text-gray-500">DP Date Deviation (Days)</div>

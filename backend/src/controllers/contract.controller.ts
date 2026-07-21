@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
 import {
-  diffCalendarDays,
   computeLateIndicatorText,
 } from '../utils/calendarDays';
 import { AuthRequest } from '../middleware/auth';
@@ -12,7 +11,10 @@ import {
   parseColumnFiltersQuery,
 } from '../utils/contractListFilters';
 import { buildContractsListOuterSql } from './contractsListOuterSql';
-import { buildContractsListBaseCycleFieldSelectSql } from '../utils/contractsListCycleSql';
+import {
+  buildContractsListBaseCycleFieldSelectSql,
+  sqlHasCycleCompletionDate,
+} from '../utils/contractsListCycleSql';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
@@ -27,9 +29,14 @@ import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHO
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
+  computeClosedCashCycleDays,
+  computeClosedDpCycleDays,
+  computeClosedLogCycleDays,
+  computeClosedTradeCycleDays,
   computeOpenCashCycleDays,
   computeOpenDpCycleDays,
   computeOpenLogCycleDays,
+  resolveCycleCompletionDate,
   resolveSapDpCalendarDate,
   resolveSapPayoffCalendarDate,
   computePerfTradeCycleDaysForRow,
@@ -60,9 +67,12 @@ import {
 } from '../utils/contractLogisticsStoDisplay';
 import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
-  sqlMaxTruckingRealizationEndForContract,
+  sqlMaxTruckingLastReceiveDateForContract,
+  sqlMaxTruckingWbActualsDateForContract,
   sqlSapTruckingStartReceiveDateForStoKey,
   sqlSapTruckingStartReceiveDateForLookupKeys,
+  sqlStoTruckingLastReceiveDate,
+  sqlStoTruckingLastReceiveDateForLookupKeys,
 } from '../utils/truckingSapDates';
 import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
 
@@ -352,23 +362,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     // Use incoterm-aware import_status (UAT) — same as Open/Close filters and tree aggregation.
     const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`;
     const _transportExpr = `UPPER(TRIM(COALESCE(transport_mode, '')))`;
-    // A contract is "schedulable" (counted in late/ontrack tree) when:
-    //   - delivery_end_date exists, AND
-    //   - status is known, AND
-    //   - if Closed: has a completion date (LAND→last_trucking_completion_date, SEA→last_ata_vessel_complete_discharge)
-    //   - if Open/Active: always schedulable (service applies today-vs-deliveryEnd fallback)
+    // Schedulable = due-end present + known status + cycle Completion Date
+    // (LAND: Last Receive → WB → planning; SEA: ATC → ETA at LP). No Today.
     const schedulableCondition = `
       ${sqlEffectiveDeliveryEndPresent()}
       AND ${_statusExpr} IN ('OPEN','ACTIVE','CLOSE','CLOSED','COMPLETED')
-      AND (
-        ${_statusExpr} IN ('OPEN','ACTIVE')
-        OR (
-          ${_statusExpr} IN ('CLOSE','CLOSED','COMPLETED') AND (
-            (${_transportExpr} LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL)
-            OR (${_transportExpr} NOT LIKE 'LAND%' AND last_ata_vessel_complete_discharge IS NOT NULL)
-          )
-        )
-      )`;
+      AND ${sqlHasCycleCompletionDate('transport_mode')}`;
 
     // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
     // This avoids fetching up to 10 000 rows just to filter them in Node.js.
@@ -376,27 +375,25 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     // (effective due-date fallback + Open Condition B when standard ETA is empty).
     const useSqlLateFilter = false;
 
-    // SQL expression that mirrors the JS trade_cycle_days computation:
+    // Approximate SQL trade_cycle (JS resolveCycleCompletionDate is source of truth; SQL late filter off).
     //   positive  = delivered / projected AFTER delivery_end_date  → LATE
     //   negative  = on / ahead of schedule                         → ON TRACK
     const tradeCycleSqlExpr = `
       CASE
-        WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED')
+        WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'OPEN', 'ACTIVE')
              AND delivery_end_date IS NOT NULL
           THEN CASE
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL
+            WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL
               THEN (last_trucking_completion_date::date - delivery_end_date::date)
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
-              THEN (last_ata_vessel_complete_discharge::date - delivery_end_date::date)
-            ELSE NULL END
-        WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
-             AND delivery_end_date IS NOT NULL
-          THEN CASE
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
+            WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_wb_actuals_date IS NOT NULL
+              THEN (last_trucking_wb_actuals_date::date - delivery_end_date::date)
+            WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
               THEN (last_trucking_daily_deliverable_date::date - delivery_end_date::date)
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'SEA%' AND last_eta_vessel_complete_discharge IS NOT NULL
-              THEN (last_eta_vessel_complete_discharge::date - delivery_end_date::date)
-            ELSE -1 END
+            WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
+              THEN (last_ata_vessel_complete_discharge::date - delivery_end_date::date)
+            WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
+              THEN (open_standard_eta_vessel_loading::date - delivery_end_date::date)
+            ELSE NULL END
         ELSE NULL
       END`;
 
@@ -503,7 +500,6 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
       return null;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
     // Apply B2B origin company name override (in-memory) so UI sees correct company_name even before backfill runs.
     const b2bOriginPoNumbers: string[] = [];
@@ -586,24 +582,16 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
       (row as any).over_under_delivery_status = overUnder;
 
-      // Compute Log Cycle (days) based on transport mode and status
+      // Compute Log / Trade / Cash / DP — shared completion: Last Receive → WB → ETA / ATC → ETA at LP
       const transport = String(row.transport_mode || '').toUpperCase();
       let logCycle: number | null = null;
       const today = new Date();
       const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-      const lastTruck = row.last_trucking_completion_date;
-      const lastAtaDischarge = row.last_ata_vessel_complete_discharge;
       const cargoReady = row.cargo_readiness_date;
 
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-        if (transport.startsWith('LAND')) {
-          const d = diffInDays(cargoReady, lastTruck);
-          if (d != null) logCycle = d;
-        } else if (transport.startsWith('SEA')) {
-          const d = diffInDays(cargoReady, lastAtaDischarge);
-          if (d != null) logCycle = d;
-        }
+        logCycle = computeClosedLogCycleDays(row, transport, cargoReady);
       } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
         logCycle = computeOpenLogCycleDays(row, transport, todayMid, cargoReady);
       }
@@ -614,14 +602,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       const dpDate = resolveSapDpCalendarDate(row);
 
       // Trade Cycle — same rules as late-performance tree (Section 2).
-      let tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
-      if (
-        tradeCycle == null &&
-        (statusText === 'OPEN' || statusText === 'ACTIVE')
-      ) {
-        // Open + due end present but trade cycle still null → On Time (mirrors aggregateLatePerformanceRows).
-        tradeCycle = -1;
-      }
+      const tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
       (row as any).trade_cycle_days = tradeCycle;
       if (typeof tradeCycle === 'number' && !Number.isNaN(tradeCycle)) {
         (row as any).contract_perf_on_time = isContractPerfOnTimeTradeCycle(row, tradeCycle);
@@ -632,35 +613,17 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         lateOnTimeFilter: perfLateFilter,
       });
 
-      // Compute Cash Cycle (days)
-      // - Closed: keep legacy behavior (as-is)
-      // - Open: per request
-      //   LAND -> latest date from daily_deliverables - Payoff Date
-      //   SEA  -> ETA Vessel Complete Discharge - Payoff Date
       let cashCycle: number | null = null;
       if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && payoffDate) {
-        if (transport.startsWith('LAND')) {
-          const d = diffInDays(lastTruck, payoffDate);
-          if (d != null) cashCycle = d;
-        } else if (transport.startsWith('SEA')) {
-          const d = diffInDays(lastAtaDischarge, payoffDate);
-          if (d != null) cashCycle = d;
-        }
+        cashCycle = computeClosedCashCycleDays(row, transport, payoffDate);
       } else if ((statusText === 'OPEN' || statusText === 'ACTIVE') && payoffDate) {
         cashCycle = computeOpenCashCycleDays(row, transport, todayMid, payoffDate);
       }
       (row as any).cash_cycle_days = cashCycle;
 
-      // Compute DP Cycle (days) — same structure as Cash Cycle, using DP Date instead of Payoff Date
       let dpCycle: number | null = null;
       if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && dpDate) {
-        if (transport.startsWith('LAND')) {
-          const d = diffInDays(lastTruck, dpDate);
-          if (d != null) dpCycle = d;
-        } else if (transport.startsWith('SEA')) {
-          const d = diffInDays(lastAtaDischarge, dpDate);
-          if (d != null) dpCycle = d;
-        }
+        dpCycle = computeClosedDpCycleDays(row, transport, dpDate);
       } else if ((statusText === 'OPEN' || statusText === 'ACTIVE') && dpDate) {
         dpCycle = computeOpenDpCycleDays(row, transport, todayMid, dpDate);
       }
@@ -733,8 +696,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     }
 
     for (const row of result.rows) {
+      // Expose for Contract Performance / Contracts table (last date from trucking daily planning).
+      ;(row as any).last_planning_delivery_date =
+        (row as any).last_trucking_daily_deliverable_date ?? null
       delete (row as any).first_trucking_start_date;
       delete (row as any).last_trucking_completion_date;
+      delete (row as any).last_trucking_wb_actuals_date;
       delete (row as any).last_trucking_daily_deliverable_date;
       delete (row as any).first_ata_vessel_completed_loading;
       delete (row as any).last_ata_vessel_complete_discharge;
@@ -927,32 +894,49 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
-          -- For Trade Cycle (LAND open): latest date in daily_deliverables JSONB
-          (
-            SELECT MAX((dd->>'date')::date)
-            FROM trucking_operations tdd
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
-            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-          ) AS last_trucking_daily_deliverable_date,
-          -- For Log/Trade Cycle calculation (LAND): latest trucking realization (SAP AW — not planning columns)
-          ${sqlMaxTruckingRealizationEndForContract(
-            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
-            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
-          )} AS last_trucking_completion_date,
-          -- For Trade Cycle (SEA closed): latest ATA discharge complete
+          -- ETA Trucking Completion = last Daily Planning date
           (
             SELECT MAX(
               COALESCE(
-                s2.ata_discharge_complete::date,
-                s2.arrival_date::date,
-                s2.eta_discharge_complete::date
+                tdd.last_daily_deliverable_date::date,
+                (
+                  SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+                  FROM jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+                  WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                )
+              )
+            )
+            FROM trucking_operations tdd
+            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS last_trucking_daily_deliverable_date,
+          ${sqlMaxTruckingLastReceiveDateForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
+          )} AS last_trucking_completion_date,
+          ${sqlMaxTruckingWbActualsDateForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+          )} AS last_trucking_wb_actuals_date,
+          (
+            SELECT MAX(s2.ata_discharge_complete::date)
+            FROM shipments s2
+            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+              AND s2.ata_discharge_complete IS NOT NULL
+          ) AS last_ata_vessel_complete_discharge,
+          (
+            SELECT MAX(
+              (
+                SELECT vlp.eta_vessel_arrival::date
+                FROM vessel_loading_ports vlp
+                WHERE vlp.shipment_id = s2.id
+                  AND COALESCE(vlp.is_discharge_port, false) = false
+                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+                LIMIT 1
               )
             )
             FROM shipments s2
             WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_ata_vessel_complete_discharge,
-          -- For Trade Cycle (SEA open): latest ETA vessel complete discharge
+          ) AS open_standard_eta_vessel_loading,
+          -- For Trade Cycle (SEA open legacy): latest ETA vessel complete discharge
           (
             SELECT MAX(
               COALESCE(
@@ -1114,7 +1098,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 
     const result = await query(queryText, queryParams);
 
-    // Use the same due()/diffInDays() helpers as GET /contracts.
+    // Use the same due() helpers as GET /contracts.
     // Important: SAP-derived strings can be DD/MM/YYYY, MM/DD/YY, etc.
     const due = (v: unknown): Date | null => {
       if (v == null) return null;
@@ -1164,7 +1148,6 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       const dt = new Date(s);
       return Number.isNaN(dt.getTime()) ? null : dt;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
     const todayMid = new Date();
     todayMid.setHours(0, 0, 0, 0);
 
@@ -1278,42 +1261,33 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 
       let tradeCycle: number | null = null;
       if (isClosed) {
-        if (transport.startsWith('LAND')) {
-          debugCounts.branchClosedLand += 1;
-          if (row.last_trucking_completion_date) debugCounts.haveLastTruckCompletion += 1;
-          if (!row.last_trucking_completion_date) {
-            debugCounts.missingCompletionDate += 1;
-            pushSample('missingCompletionDate', String(row.contract_id || ''));
-          }
-          // positive = delivered AFTER due date (LATE), negative = on / ahead of schedule
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_completion_date);
+        if (transport.startsWith('LAND')) debugCounts.branchClosedLand += 1;
+        else debugCounts.branchClosedSea += 1;
+        if (resolveCycleCompletionDate(row, transport)) {
+          if (transport.startsWith('LAND')) debugCounts.haveLastTruckCompletion += 1;
+          else debugCounts.haveLastAtaDischarge += 1;
         } else {
-          debugCounts.branchClosedSea += 1;
-          if (row.last_ata_vessel_complete_discharge) debugCounts.haveLastAtaDischarge += 1;
-          if (!row.last_ata_vessel_complete_discharge) {
-            debugCounts.missingCompletionDate += 1;
-            pushSample('missingCompletionDate', String(row.contract_id || ''));
-          }
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_ata_vessel_complete_discharge);
+          debugCounts.missingCompletionDate += 1;
+          pushSample('missingCompletionDate', String(row.contract_id || ''));
         }
+        tradeCycle = computeClosedTradeCycleDays(row, transport, row.delivery_end_date);
       } else if (isOpen) {
         if (transport.startsWith('LAND')) {
           debugCounts.branchOpenLand += 1;
-          if (row.last_trucking_daily_deliverable_date) debugCounts.haveLastTruckDeliverable += 1;
-          if (!row.last_trucking_daily_deliverable_date) {
+          if (resolveCycleCompletionDate(row, transport)) debugCounts.haveLastTruckDeliverable += 1;
+          else {
             debugCounts.missingCompletionDate += 1;
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_daily_deliverable_date);
         } else {
           debugCounts.branchOpenSea += 1;
-          if (row.last_eta_vessel_complete_discharge) debugCounts.haveLastEtaDischarge += 1;
-          if (!row.last_eta_vessel_complete_discharge) {
+          if (resolveCycleCompletionDate(row, transport)) debugCounts.haveLastEtaDischarge += 1;
+          else {
             debugCounts.missingCompletionDate += 1;
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_eta_vessel_complete_discharge);
         }
+        tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
       }
 
       const _qtyOrdered = Number(row.quantity_ordered || 0);
@@ -1324,14 +1298,11 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       );
       const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
 
-      // Log Cycle: Cargo Readiness → completion (closed) or open A/B end (today when ETA empty)
       const cargoReady = row.cargo_readiness_date;
       let logCycle: number | null = null;
       if (cargoReady) {
         if (isClosed) {
-          logCycle = transport.startsWith('LAND')
-            ? diffInDays(cargoReady, row.last_trucking_completion_date)
-            : diffInDays(cargoReady, row.last_ata_vessel_complete_discharge);
+          logCycle = computeClosedLogCycleDays(row, transport, cargoReady);
         } else if (isOpen) {
           logCycle = computeOpenLogCycleDays(row, transport, todayMid, cargoReady);
         }
@@ -1341,9 +1312,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       let cashCycle: number | null = null;
       if (payoffDate) {
         if (isClosed) {
-          cashCycle = transport.startsWith('LAND')
-            ? diffInDays(row.last_trucking_completion_date, payoffDate)
-            : diffInDays(row.last_ata_vessel_complete_discharge, payoffDate);
+          cashCycle = computeClosedCashCycleDays(row, transport, payoffDate);
         } else if (isOpen) {
           cashCycle = computeOpenCashCycleDays(row, transport, todayMid);
         }
@@ -2048,12 +2017,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
           )
         ) AS eta_trucking_completion_date,
-        -- Trucking Last Receive = last date on WB Actuals daily (upload)
-        (
-          SELECT MAX(da.progress_date)
-          FROM trucking_daily_actuals da
-          WHERE da.trucking_operation_id = tp.id
-        ) AS trucking_completion_date,
+        -- Trucking Last Receive: realization_end → SAP AW → WB Actuals
+        ${sqlStoTruckingLastReceiveDate('c.contract_id', 'sk.sto_key', 'tp.id')} AS trucking_completion_date,
         COALESCE(
           (SELECT tr.realization_start_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
           ${sqlSapTruckingStartReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
@@ -2500,12 +2465,12 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           tr.realization_start_date,
           ${sqlSapTruckingStartReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
         ) AS trucking_start_date,
-        -- Trucking Last Receive = last date on WB Actuals daily (upload)
-        (
-          SELECT MAX(da.progress_date)
-          FROM trucking_daily_actuals da
-          WHERE da.trucking_operation_id = t.id
-        ) AS trucking_completion_date,
+        -- Trucking Last Receive: realization_end → SAP AW → WB Actuals
+        ${sqlStoTruckingLastReceiveDateForLookupKeys(
+          'c.contract_id',
+          '$2::text[]',
+          't.id',
+        )} AS trucking_completion_date,
         t.eta_trucking_start_date,
         -- ETA Trucking Completion = last date on Daily Planning Deliverables (upload)
         COALESCE(

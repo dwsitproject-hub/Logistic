@@ -4,6 +4,7 @@
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
+import { TRUCKING_LIST_CONTRACT_EXT_NO_FULL } from './truckingListSelectSql'
 import {
   sqlTruckingListBaseOutstandingQtyExpr,
   sqlTruckingListResolvedDeliveryQtyExpr,
@@ -48,7 +49,7 @@ const TRUCK_COL: Record<string, string> = {
   incoterm: 'c.incoterm',
   buyer: 'c.buyer',
   group_name: 'c.group_name',
-  contract_ext_no: `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`,
+  contract_ext_no: TRUCKING_LIST_CONTRACT_EXT_NO_FULL,
   contract_qty: 'c.quantity_ordered',
   sto_quantity: 'c.quantity_ordered',
   quantity_sent: 't.quantity_sent',
@@ -79,7 +80,7 @@ export function appendTruckingGlobalSearch(
   }
   const p = startIndex
   const likeExpr = `$${p}::text`
-  const contractExtExpr = `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`
+  const contractExtExpr = TRUCKING_LIST_CONTRACT_EXT_NO_FULL
   const sql = `
     AND (
       COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}

@@ -34,50 +34,31 @@ export const TRUCKING_LIST_CONTRACT_NUMBER_CASE = `
           ELSE c.contract_id
         END`;
 
-const TRUCKING_LIST_CONTRACT_EXT_NO_FULL = `
-        CASE
-          WHEN NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc.contract_id
-                  FROM contracts cc
-                  WHERE UPPER(COALESCE(NULLIF(TRIM(cc.transport_mode), ''), 'LAND')) = 'LAND'
-                    AND NULLIF(TRIM(cc.sto_number::text), '') = NULLIF(TRIM(c.sto_number::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
+/** Contract Ext No: latest SAP by PO (primary identity); fallback contract_id. */
+export const TRUCKING_LIST_CONTRACT_EXT_NO_FULL = `
+        COALESCE(
+          (
+            SELECT COALESCE(
+              spd.data->'raw'->>'Contract Ext No',
+              spd.data->>'Contract Ext No'
             )
-          WHEN NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc2.contract_id
-                  FROM trucking_operations t2
-                  INNER JOIN contracts cc2 ON t2.contract_id = cc2.id
-                  WHERE NULLIF(TRIM(t2.operation_id::text), '') = NULLIF(TRIM(t.operation_id::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
+            FROM sap_processed_data spd
+            WHERE NULLIF(TRIM(COALESCE(c.po_number::text, '')), '') IS NOT NULL
+              AND TRIM(COALESCE(spd.po_number::text, '')) = TRIM(c.po_number::text)
+            ORDER BY spd.updated_at DESC NULLS LAST, spd.created_at DESC NULLS LAST
+            LIMIT 1
+          ),
+          (
+            SELECT COALESCE(
+              spd.data->'raw'->>'Contract Ext No',
+              spd.data->>'Contract Ext No'
             )
-          ELSE
-            (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Contract Ext No',
-                spd.data->>'Contract Ext No'
-              )
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            )
-        END`;
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.updated_at DESC NULLS LAST, spd.created_at DESC NULLS LAST
+            LIMIT 1
+          )
+        )`;
 
 export const TRUCKING_LIST_B2B_LATERAL = `
       LEFT JOIN LATERAL (

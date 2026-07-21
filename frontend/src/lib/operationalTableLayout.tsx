@@ -73,6 +73,7 @@ const CONTRACT_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> 
   delivery_end: 'short',
   month_delivery_end: 'short',
   cargo_readiness_date: 'short',
+  last_planning_delivery_date: 'short',
   vessel_name: 'truncate',
   eta_vessel_completed_loading: 'short',
   eta_vessel_complete_discharge: 'short',

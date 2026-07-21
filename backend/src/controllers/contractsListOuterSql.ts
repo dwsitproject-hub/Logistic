@@ -78,6 +78,7 @@ const CONTRACTS_LIST_ROW_PROJECTION = `
         (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,
         base.first_trucking_start_date,
         base.last_trucking_completion_date,
+        base.last_trucking_wb_actuals_date,
         base.last_trucking_daily_deliverable_date,
         base.first_ata_vessel_completed_loading,
         base.last_ata_vessel_complete_discharge,

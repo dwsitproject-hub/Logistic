@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildTruckingUnplannedBacklogCountQuery,
+  buildTruckingUnplannedBacklogIdsWithOsQuery,
   buildTruckingUnplannedBacklogPageQuery,
   buildTruckingUnplannedContractToolbarScope,
   truckingUnplannedContractBacklogBaseWhereSql,
@@ -40,5 +41,13 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain('c.contract_date <= $2');
     expect(sql).not.toMatch(/AND\s*\)/);
     expect(sql).not.toMatch(/AND\s*$/);
+  });
+
+  it('ids+OS query selects contract UUID with outstanding qty > 0', () => {
+    const sql = buildTruckingUnplannedBacklogIdsWithOsQuery(' AND c.contract_date >= $1', '');
+    expect(sql).toContain('SELECT c.id');
+    expect(sql).toContain('> 0');
+    expect(sql).toContain('c.contract_date >= $1');
+    expect(sql).toContain('trucking_operations t_ns');
   });
 });

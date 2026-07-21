@@ -1740,6 +1740,27 @@ function TruckingPageContent() {
 
     setTemplateDownloading(true)
     try {
+      // Materialize UNPLANNED ops (OP-LAND-…) for open-PO backlog so they appear in the export.
+      const ensureParams = buildTruckingListSearchParams({
+        page: 1,
+        limit: 1,
+        includeSummary: false,
+        omitStatus: true,
+      })
+      ensureParams.delete('page')
+      ensureParams.delete('limit')
+      ensureParams.delete('skipSapJoin')
+      ensureParams.delete('includeSummary')
+      ensureParams.delete('sortKey')
+      ensureParams.delete('sortDir')
+      try {
+        await api.post(`/trucking/ensure-unplanned-ops?${ensureParams.toString()}`)
+      } catch (ensureErr) {
+        console.error('Failed to ensure unplanned trucking ops:', ensureErr)
+        alert('Failed to generate Operation IDs for unplanned POs. Template download aborted.')
+        return
+      }
+
       const collected: TruckingOperation[] = []
       let exportPage = 1
       let exportTotalPages = 1
@@ -1805,6 +1826,9 @@ function TruckingPageContent() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+
+      // Soft-refresh so View Table shows newly allocated Operation IDs.
+      void fetchTruckingOperations(undefined, undefined, { force: true })
     } catch (error) {
       console.error('Failed to download trucking template:', error)
       alert('Failed to download template. Please try again.')

@@ -34,6 +34,7 @@ import {
 import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
 import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
 import { listTruckingDailyActuals } from '../services/truckingRealization.service';
+import { ensureUnplannedTruckingOpsForRequest } from '../services/truckingEnsureUnplannedOps.service';
 import {
   sqlSapTruckingLastReceiveDate,
   sqlSapTruckingStartReceiveDate,
@@ -258,6 +259,19 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
       success: false,
       error: { message },
     });
+  }
+};
+
+/** Create UNPLANNED ops + OP-LAND ids for open-PO backlog (template download prep). */
+export const ensureUnplannedTruckingOps = async (req: AuthRequest, res: Response) => {
+  try {
+    const data = await ensureUnplannedTruckingOpsForRequest(req);
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Ensure unplanned trucking ops error:', error);
+    const message =
+      error instanceof Error ? error.message : 'Failed to ensure unplanned trucking operations';
+    return res.status(500).json({ success: false, error: { message } });
   }
 };
 

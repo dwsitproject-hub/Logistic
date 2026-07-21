@@ -1,5 +1,6 @@
 import {
-  sqlMaxTruckingRealizationEndForContract,
+  sqlMaxTruckingLastReceiveDateForContract,
+  sqlMaxTruckingWbActualsDateForContract,
   sqlMinTruckingRealizationStartForContract,
 } from './truckingSapDates';
 
@@ -13,13 +14,21 @@ export function buildContractsListCycleFieldSelectSql(
 ): string {
   return `
           ${sqlMinTruckingRealizationStartForContract(contractIdExpr, contractNumberExpr)} AS first_trucking_start_date,
-          ${sqlMaxTruckingRealizationEndForContract(contractIdExpr, contractNumberExpr)} AS last_trucking_completion_date,
+          ${sqlMaxTruckingLastReceiveDateForContract(contractIdExpr, contractNumberExpr)} AS last_trucking_completion_date,
+          ${sqlMaxTruckingWbActualsDateForContract(contractIdExpr)} AS last_trucking_wb_actuals_date,
           (
-            SELECT MAX((dd->>'date')::date)
+            SELECT MAX(
+              COALESCE(
+                tdd.last_daily_deliverable_date::date,
+                (
+                  SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+                  FROM jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+                  WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                )
+              )
+            )
             FROM trucking_operations tdd
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
             WHERE tdd.contract_id = ${contractIdExpr}
-              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
           ) AS last_trucking_daily_deliverable_date,
           (
             SELECT MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date))
@@ -28,15 +37,10 @@ export function buildContractsListCycleFieldSelectSql(
           ) AS open_standard_eta_trucking,
           (SELECT MIN(s2.ata_loading_complete::date) FROM shipments s2 WHERE s2.contract_id = ${contractIdExpr} AND s2.ata_loading_complete IS NOT NULL) AS first_ata_vessel_completed_loading,
           (
-            SELECT MAX(
-              COALESCE(
-                s2.ata_discharge_complete::date,
-                s2.arrival_date::date,
-                s2.eta_discharge_complete::date
-              )
-            )
+            SELECT MAX(s2.ata_discharge_complete::date)
             FROM shipments s2
             WHERE s2.contract_id = ${contractIdExpr}
+              AND s2.ata_discharge_complete IS NOT NULL
           ) AS last_ata_vessel_complete_discharge,
           (
             SELECT s2.vessel_name
@@ -94,6 +98,33 @@ export function buildContractsListCycleFieldSelectSql(
             FROM shipments s2
             WHERE s2.contract_id = ${contractIdExpr}
           ) AS last_eta_vessel_complete_discharge`;
+}
+
+/**
+ * SQL: contract has a cycle Completion Date (same chain as resolveCycleCompletionDate).
+ * Expects list-cycle aliases: last_trucking_completion_date, last_trucking_wb_actuals_date,
+ * last_trucking_daily_deliverable_date, last_ata_vessel_complete_discharge,
+ * open_standard_eta_vessel_loading.
+ */
+export function sqlHasCycleCompletionDate(transportModeExpr: string = 'transport_mode'): string {
+  const t = `UPPER(TRIM(COALESCE(${transportModeExpr}, '')))`;
+  return `(
+    (
+      ${t} LIKE 'LAND%'
+      AND (
+        last_trucking_completion_date IS NOT NULL
+        OR last_trucking_wb_actuals_date IS NOT NULL
+        OR last_trucking_daily_deliverable_date IS NOT NULL
+      )
+    )
+    OR (
+      ${t} LIKE 'SEA%'
+      AND (
+        last_ata_vessel_complete_discharge IS NOT NULL
+        OR open_standard_eta_vessel_loading IS NOT NULL
+      )
+    )
+  )`;
 }
 
 /** Base CTE inside GROUP BY — uses aggregated contract id expressions. */

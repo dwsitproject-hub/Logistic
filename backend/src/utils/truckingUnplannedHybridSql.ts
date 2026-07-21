@@ -298,6 +298,38 @@ export function buildTruckingUnplannedBacklogPageQuery(
     SELECT * FROM unplanned_trucking_backlog`;
 }
 
+/**
+ * Backlog contract UUIDs eligible for ensure-unplanned-ops (OS qty > 0).
+ * Same filters as Unplanned hybrid backlog list.
+ */
+export function buildTruckingUnplannedBacklogIdsWithOsQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    ${qtyMoveCte}
+    SELECT c.id
+    FROM contracts c
+    LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+    WHERE ${backlogWhere}
+      AND (${outstandingExpr}) > 0
+    ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC`;
+}
+
 export function buildTruckingUnplannedBacklogSummaryCountQuery(
   contractScopeSql: string,
   toolbarSql: string,

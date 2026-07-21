@@ -388,11 +388,9 @@ export function contractMatchesLateOnTimeFilter(
   contractPerfOnTime?: boolean | null,
 ): boolean {
   if (lateOnTimeFilter === 'ALL') return true
-  // null trade_cycle_days means ETA is absent — the Open-status fallback could not resolve a
-  // due date. Treat as LATE so Section 3 stays consistent with Section 2's tree count, which
-  // includes these contracts in the late bucket rather than silently dropping them.
+  // null trade_cycle_days = no Completion Date (unscheduled). Never late/on-time.
   if (tradeCycleDays == null || Number.isNaN(tradeCycleDays)) {
-    return lateOnTimeFilter === 'LATE'
+    return false
   }
   if (typeof contractPerfOnTime === 'boolean') {
     return lateOnTimeFilter === 'ON_TIME' ? contractPerfOnTime : !contractPerfOnTime
@@ -407,7 +405,11 @@ export function isContractPerfUnscheduledRow(c: PerformanceTableContract): boole
   if (!String(c.delivery_end_date || '').trim()) return true
   const status = String(c.import_status || c.status || '').trim().toUpperCase()
   const isClosed = status === 'CLOSE' || status === 'CLOSED' || status === 'COMPLETED'
-  if (isClosed && (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))) {
+  const isOpen = status === 'OPEN' || status === 'ACTIVE'
+  if (
+    (isClosed || isOpen) &&
+    (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))
+  ) {
     return true
   }
   return false
@@ -426,21 +428,13 @@ export function contractMeetsPerformanceTreeInclusion(
   const isOpen = status === 'OPEN' || status === 'ACTIVE'
   if (!isClosed && !isOpen) return false
 
-  // Closed without completion / trade cycle → unscheduled in Section 2, exclude from table.
-  if (isClosed && (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))) {
+  // No Completion Date → unscheduled in Section 2; exclude from late/on-time table.
+  if (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days))) {
     return false
   }
 
-  let tradeCycle = c.trade_cycle_days
-  if (
-    isOpen &&
-    (tradeCycle == null || Number.isNaN(Number(tradeCycle)))
-  ) {
-    tradeCycle = -1
-  }
-
   return contractMatchesLateOnTimeFilter(
-    tradeCycle,
+    c.trade_cycle_days,
     lateOnTimeFilter,
     c.contract_perf_on_time,
   )

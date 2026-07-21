@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
-import { formatContractDeliveryStatusLabel, isContractRecordClosed } from '@/lib/contractDeliveryStatus'
+import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
@@ -183,6 +183,7 @@ const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'vessel_name',
   'eta_vessel_completed_loading',
   'eta_vessel_complete_discharge',
+  'last_planning_delivery_date',
   'po_number',
   'contract_ext_no',
   'source_type',
@@ -214,6 +215,7 @@ const DATE_SORT_COLUMN_IDS = new Set([
   'cargo_readiness_date',
   'eta_vessel_completed_loading',
   'eta_vessel_complete_discharge',
+  'last_planning_delivery_date',
 ])
 
 function resolveApiSortKey(columnId: string): string | null {
@@ -306,6 +308,8 @@ interface Contract {
   vessel_name?: string | null
   eta_vessel_completed_loading?: string | null
   eta_vessel_complete_discharge?: string | null
+  /** Last date from trucking daily planning deliverables (LAND). */
+  last_planning_delivery_date?: string | null
 }
 
 type ContractsUnassignedCardFilter = 'sea' | 'land' | 'mix'
@@ -1640,7 +1644,7 @@ function ContractsPageContent() {
 
   type ContractLogisticsUi =
     | { kind: 'truck-create'; contract: Contract }
-    | { kind: 'truck-edit'; contract: Contract }
+    | { kind: 'truck-view'; contract: Contract }
     | { kind: 'ship-create'; contract: Contract }
     | { kind: 'ship-edit'; contractId: string }
     | null
@@ -2400,11 +2404,7 @@ function ContractsPageContent() {
       setContractLogisticsUi({ kind: 'truck-create', contract })
       return
     }
-    if (isContractRecordClosed(contract)) {
-      alert('Cannot edit trucking: contract status is Close.')
-      return
-    }
-    setContractLogisticsUi({ kind: 'truck-edit', contract })
+    setContractLogisticsUi({ kind: 'truck-view', contract })
   }
 
   const handleShipIconClick = (contract: Contract) => {
@@ -2611,7 +2611,7 @@ function ContractsPageContent() {
 
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
     if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging' || colId === 'delivery_qty' || colId === 'received_qty' || colId === 'outstanding_qty_mt') return 'number'
-    if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at') return 'date'
+    if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at' || colId === 'last_planning_delivery_date') return 'date'
     if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot' || colId === 'group_name' || colId === 'supplier') return 'multi'
     if (colId === 'month_delivery_end') return 'text'
     return 'text'
@@ -2661,6 +2661,8 @@ function ContractsPageContent() {
         return c.delivery_end_date || ''
       case 'month_delivery_end':
         return formatMonthDeliveryEnd(c.delivery_end_date) || ''
+      case 'last_planning_delivery_date':
+        return c.last_planning_delivery_date || ''
       case 'created_at':
         return c.created_at || ''
       default:
@@ -3222,6 +3224,19 @@ function ContractsPageContent() {
     },
     ...(isContractPerformance
       ? ([
+          {
+            id: 'last_planning_delivery_date',
+            label: 'Last Planning Delivery Date',
+            defaultVisible: false,
+            sortable: true,
+            getSortValue: (c: Contract) => c.last_planning_delivery_date || '',
+            render: (c: Contract) => (
+              <span className="text-sm whitespace-nowrap">
+                {c.last_planning_delivery_date ? formatShortDate(c.last_planning_delivery_date) : '-'}
+              </span>
+            ),
+            className: 'whitespace-nowrap',
+          },
           {
             id: 'month_delivery_end',
             label: 'Month Delivery End',
@@ -4673,7 +4688,9 @@ function ContractsPageContent() {
                           }
                           const visibleIds = new Set(visibleColumnIds)
                           const visibleInMenu = menuCols.filter((c) => visibleIds.has(c.id))
-                          const hiddenCols = menuCols.filter((c) => !visibleIds.has(c.id))
+                          const hiddenCols = menuCols
+                            .filter((c) => !visibleIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label))
                           return [...visibleInMenu, ...hiddenCols]
                         })().map(col => (
                             <div
@@ -5290,9 +5307,9 @@ function ContractsPageContent() {
                                     const hasData = countGt0(contract.trucking_count)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleTruckIconClick(contract)}
-                                        title={hasData ? 'Edit trucking' : 'Add trucking'}
+                                        title={hasData ? 'View trucking' : 'Add trucking'}
                                         className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100">
-                                        {hasData ? <Pencil className="h-4 w-4" /> : <Truck className="h-4 w-4" />}
+                                        <Truck className="h-4 w-4" />
                                       </Button>
                                     )
                                   })()}
@@ -5434,7 +5451,7 @@ function ContractsPageContent() {
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleTruckIconClick(contract)}
                                 className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100">
-                                {hasData ? <><Pencil className="h-4 w-4 mr-2" />Edit</> : <><Truck className="h-4 w-4 mr-2" />Add</>}
+                                {hasData ? <><Truck className="h-4 w-4 mr-2" />View</> : <><Truck className="h-4 w-4 mr-2" />Add</>}
                               </Button>
                             )
                           })()}
@@ -5671,9 +5688,10 @@ function ContractsPageContent() {
 
         <CreateTruckingOperationModal
           open={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
+            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-view'
           }
-          mode={contractLogisticsUi?.kind === 'truck-edit' ? 'edit' : 'add'}
+          mode={contractLogisticsUi?.kind === 'truck-view' ? 'edit' : 'add'}
+          readOnly={contractLogisticsUi?.kind === 'truck-view'}
           onClose={() => setContractLogisticsUi(null)}
           onCreated={() => {
             const ui = contractLogisticsUi
@@ -5695,12 +5713,12 @@ function ContractsPageContent() {
             }
           }}
           initialContractId={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
+            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-view'
               ? contractLogisticsUi.contract.contract_id
               : null
           }
           initialPoNumber={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-edit'
+            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-view'
               ? (() => {
                   const raw =
                     contractLogisticsUi.contract.po_numbers || contractLogisticsUi.contract.po_number

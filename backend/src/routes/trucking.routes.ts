@@ -15,6 +15,7 @@ import {
   getTruckingOperations,
   getTruckingOperationById,
   createTruckingOperation,
+  ensureUnplannedTruckingOps,
   validateContractNumber,
   updateTruckingOperation,
   getLandOpenContractSuggestions,
@@ -67,6 +68,13 @@ router.get('/validate/contract', validateContractNumber);
 
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
+
+// Materialize UNPLANNED ops for open-PO backlog (Download Template prep)
+router.post(
+  '/ensure-unplanned-ops',
+  auditLog('CREATE', 'TRUCKING_OPERATION'),
+  ensureUnplannedTruckingOps,
+);
 
 // Bulk create trucking operations from CSV
 router.get('/bulk-create/template', downloadBulkCreateTruckingTemplate);

@@ -184,6 +184,7 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   delivery_start: 108,
   delivery_end: 108,
   cargo_readiness_date: 120,
+  last_planning_delivery_date: 140,
   vessel_name: 120,
   eta_vessel_completed_loading: 108,
   eta_vessel_complete_discharge: 108,
