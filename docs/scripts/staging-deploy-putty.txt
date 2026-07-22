@@ -134,9 +134,11 @@ Hapus CANCELLED yang:
 CANCELLED yang punya WB tanpa keeper TIDAK dihapus.
 
 Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
-Script memakai klip-postgres via docker exec (DB_HOST=postgres di .env
-hanya valid di dalam Docker network). Fallback: psql 127.0.0.1:POSTGRES_PORT.
-Prasyarat: stack backend+postgres running di .57.
+Script memakai DB yang sama dengan backend container (printenv DB_HOST/DB_PORT),
+mis. 172.28.92.60:5442 — BUKAN leftover klip-postgres lokal kecuali backend
+masih mengarah ke situ. Prasyarat: postgresql-client di host .57
+(apt-get install -y postgresql-client).
+
 
 
   cd /opt/klip
