@@ -364,12 +364,23 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     // Use incoterm-aware import_status (UAT) — same as Open/Close filters and tree aggregation.
     const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`;
     const _transportExpr = `UPPER(TRIM(COALESCE(transport_mode, '')))`;
+    // Signed outstanding kg over filtered/base columns — the same expression the outer
+    // projection later exposes AS outstanding_quantity. These conditions run against the
+    // `filtered` CTE, where that column does not exist yet (referencing it bare made
+    // every excludeUnscheduled / drilldown-Late request fail with 42703).
+    const filteredOutstandingSql = `(${sqlContractOutstandingSignedExpr({
+      contractQtyExpr: 'quantity_ordered',
+      incotermExpr: 'incoterm',
+      receiveExpr: 'quantity_receive',
+      deliveryExpr: 'quantity_delivery_sap',
+    })})`;
+
     // Schedulable = due-end present + known status + cycle Completion Date
     // (LAND: OS≈0 → Last Receive/WB else planning/ETA; SEA: ATC → ETA at LP). No Today.
     const schedulableCondition = `
       ${sqlEffectiveDeliveryEndPresent()}
       AND ${_statusExpr} IN ('OPEN','ACTIVE','CLOSE','CLOSED','COMPLETED')
-      AND ${sqlHasCycleCompletionDate('transport_mode')}`;
+      AND ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}`;
 
     // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
     // This avoids fetching up to 10 000 rows just to filter them in Node.js.
@@ -381,7 +392,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     // LAND: Last Receive / WB only when OS ≤ tolerance; else planning / ETA.
     //   positive  = delivered / projected AFTER delivery_end_date  → LATE
     //   negative  = on / ahead of schedule                         → ON TRACK
-    const landOsFulfilled = `(outstanding_quantity IS NOT NULL AND outstanding_quantity::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
+    const landOsFulfilled = `(${filteredOutstandingSql} IS NOT NULL AND ${filteredOutstandingSql}::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
     const tradeCycleSqlExpr = `
       CASE
         WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'OPEN', 'ACTIVE')
