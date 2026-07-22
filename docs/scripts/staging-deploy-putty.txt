@@ -126,11 +126,33 @@ Di server yang bermasalah:
   docker compose -f docker-compose.frontend.yml up -d --build  # di .56
 
 ================================================================================
-Cleanup trucking duplicate + CANCELLED (database staging) — LEGACY DELETE
+Cleanup Trucking CANCELLED dedupe losers (preferred) — TARGETED HARD-DELETE
 ================================================================================
-PERINGATAN: script di bawah MENGHAPUS baris CANCELLED dari DB (bukan hanya
-set status). Jangan pakai untuk kasus "In Progress → Cancelled" yang harus
-tetap terlihat di kartu Cancelled.
+Hapus HANYA baris CANCELLED yang masih punya keeper aktif di PO yang sama
+(hasil dedupe PO). Cancel manual tanpa sibling aktif TIDAK dihapus.
+
+Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+Script memakai DB remote dari backend/.env (DB_HOST=172.28.92.60, DB_PORT=5442).
+Prasyarat: psql client di host backend (postgresql-client).
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh          # preview
+  # Review: cancelled_all vs dedupe_loser_rows + sample (keeper_operation_id)
+  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply  # execute
+
+Audit table: cleanup_audit_cancelled_trucking_dedupe_losers
+Setelah apply: hard refresh Trucking (Ctrl+Shift+R); kartu Cancelled turun,
+keeper PO tetap.
+
+================================================================================
+Cleanup trucking duplicate + CANCELLED (database staging) — LEGACY DELETE ALL
+================================================================================
+PERINGATAN: script di bawah MENGHAPUS SEMUA baris CANCELLED dari DB (bukan
+hanya loser dedupe). Jangan pakai untuk membersihkan sisa dedupe — pakai
+run-cleanup-trucking-dedupe-losers-staging.sh di atas.
+Juga usang jika postgres container sudah tidak ada di backend (.57); DB
+sekarang di 172.28.92.60:5442.
 
 Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
 
