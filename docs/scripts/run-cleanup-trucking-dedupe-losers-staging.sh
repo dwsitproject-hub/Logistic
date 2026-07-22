@@ -41,11 +41,26 @@ for f in "$SQL_PREVIEW" "$SQL_DELETE" "$ENV_FILE"; do
   fi
 done
 
-# Load DB_* from backend/.env without printing secrets
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+# Load only DB_* KEY=VALUE lines (ignore malformed/other secrets in .env)
+load_db_env_from_file() {
+  local env_file="$1"
+  local line key val
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^(DB_HOST|DB_PORT|DB_NAME|DB_USER|DB_PASSWORD)=(.*)$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="${BASH_REMATCH[2]}"
+      # strip surrounding single/double quotes
+      if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"; fi
+      if [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
+      printf -v "$key" '%s' "$val"
+      export "$key"
+    fi
+  done < "$env_file"
+}
+
+load_db_env_from_file "$ENV_FILE"
 
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5432}"
@@ -53,7 +68,8 @@ DB_NAME="${DB_NAME:-klip_db}"
 DB_USER="${DB_USER:-postgres}"
 
 if [[ -z "${DB_PASSWORD:-}" ]]; then
-  echo "ERROR: DB_PASSWORD empty in $ENV_FILE" >&2
+  echo "ERROR: DB_PASSWORD empty or missing as DB_PASSWORD=... in $ENV_FILE" >&2
+  echo "  (script only reads DB_* lines; fix GEMINI/other keys separately if malformed)" >&2
   exit 1
 fi
 
