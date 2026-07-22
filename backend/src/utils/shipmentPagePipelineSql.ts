@@ -11,7 +11,6 @@ import {
   SHIPMENT_SAILED_STATUSES,
 } from './shipmentStatus';
 import { buildShipmentPageSeaIncotermColumnSql, buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
-import { buildShipmentSeaMixTransportSql } from './shipmentStoTypeSql';
 
 /** Pipeline stage keys used by GET /shipments?status=… (Shipments page only). */
 export const SHIPMENT_PAGE_PIPELINE_STAGES = [
@@ -187,7 +186,7 @@ export function shipmentPageExcludeB2bChildCond(lAlias = 'l'): string {
 }
 
 /**
- * CTE: count distinct open SEA/MIX contracts (CIF/FOB/CFR) with no registered ETA (Unplanned card).
+ * CTE: count distinct open CIF/FOB/CFR contracts with no registered ETA (Unplanned card).
  * `contractScopeSql` — additional AND clauses on `c` (date/plant/contract toolbar scope).
  */
 export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''): string {
@@ -196,8 +195,7 @@ export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''
         SELECT COUNT(DISTINCT c.contract_id)::bigint AS unplanned_contract_count
         FROM contracts c
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        WHERE ${buildShipmentSeaMixTransportSql('c')}
-          AND ${buildShipmentPageSeaIncotermScopeSql('c')}
+        WHERE ${buildShipmentPageSeaIncotermScopeSql('c')}
           AND NOT (${sqlIsContractSapClosedExpr('c')})
           AND ${shipmentPageExcludeB2bChildCond('l')}
           AND ${sqlContractHasNoRegisteredEtaExpr('c')}

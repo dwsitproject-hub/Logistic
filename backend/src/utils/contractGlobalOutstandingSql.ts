@@ -67,7 +67,8 @@ function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): s
 
 /**
  * FRC/LCO Open contracts with WB daily actuals — separate delivery (Netto PKS)
- * and receive (Netto EUP) sums across trucking ops. Close contracts omitted so SAP wins.
+ * and receive (Netto EUP) sums across non-cancelled trucking ops. Close contracts
+ * omitted so SAP wins. CANCELLED ops excluded so Contracts qty matches Trucking list.
  *
  * Gates align with Trucking list resolved qty (Open + has daily actuals):
  * - Incoterm via contractEffectiveIncotermExpr (DB || SAP), same as Trucking page scope
@@ -107,6 +108,7 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
           INNER JOIN trucking_operations t ON t.contract_id = c.id
           WHERE ${effectiveIncoterm} IN ('FRC', 'LCO')
             AND NOT (${grClosed})
+            AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
             ${contractFilter}
           GROUP BY c.contract_id
           HAVING BOOL_OR(

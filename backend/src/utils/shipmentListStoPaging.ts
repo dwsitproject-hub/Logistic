@@ -69,7 +69,6 @@ const STO_LINK_AGG_CTE_SQL = `
 export function buildRankedStoCtes(
   stoKeyExpr: string,
   coreWhereSql: string,
-  excludeStoTypeTCond: string,
 ): string {
   return `
       ranked_sto AS (
@@ -80,7 +79,6 @@ export function buildRankedStoCtes(
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE 1=1
           AND (${coreWhereSql})
-          AND (${excludeStoTypeTCond})
           AND NOT (
             l.contract_number IS NOT NULL
             AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'

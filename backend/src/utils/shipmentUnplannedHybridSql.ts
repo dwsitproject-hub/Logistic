@@ -17,7 +17,6 @@ import {
   buildShipmentPageSeaIncotermColumnSql,
   buildShipmentPageSeaIncotermScopeSql,
 } from './shipmentIncotermScope';
-import { buildShipmentSeaMixTransportSql } from './shipmentStoTypeSql';
 
 export { buildShipmentPageUnplannedOpenContractsCte };
 
@@ -155,11 +154,10 @@ export function appendContractScopeToolbarFilters(
   };
 }
 
-/** Shared WHERE for open SEA/MIX contracts (CIF/FOB/CFR) without shipment and without registered ETA. */
+/** Shared WHERE for open CIF/FOB/CFR contracts without shipment and without registered ETA. */
 export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
   return `
-    ${buildShipmentSeaMixTransportSql(contractAlias)}
-    AND ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
+    ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
     AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
     AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
     AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}

@@ -105,9 +105,8 @@ import {
 } from '../utils/portDisplaySql';
 import { sqlUserStoQtyAssignedToKgSql, stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
 import { resolveShipmentPlanQtyAssignmentTargets } from '../utils/shipmentPlanQtyAssignmentKey';
+import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import {
-  buildShipmentExcludeStoTypeTSql,
-  buildShipmentSeaMixTransportSql,
   shipmentListStoKeyExpr,
   shipmentListDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
@@ -558,13 +557,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
-    const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
+    /** Shipments page scope: CIF/FOB/CFR only (ignore STO Type T/V and Sea/Land). */
+    const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
     /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
 
-    const coreWhereParts: string[] = [seaMixTransportCond];
+    const coreWhereParts: string[] = [seaIncotermScopeCond];
     /** Contract-only scope (date/plant/contract) reused by Unplanned open-contract count. */
     const contractScopeParts: string[] = [];
     const coreParams: any[] = [];
@@ -777,7 +776,6 @@ ${contractMetaSelectCore}
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
           AND (${coreWhereSql})
-          AND (${excludeStoTypeTCond})
           -- Match dashboard baseline: exclude B2B "child" contracts
           -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
           AND NOT (
@@ -888,7 +886,7 @@ ${contractMetaSelectCore}
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
-    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql, excludeStoTypeTCond)
+    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql)
       .replace('__STO_PAGE_LIMIT__', String(listLimit))
       .replace('__STO_PAGE_OFFSET__', String(listOffset));
 
@@ -3200,7 +3198,7 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LEFT JOIN vlp_disc_first vd ON vd.shipment_id = s.id
       WHERE
-        UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        ${buildShipmentPageSeaIncotermScopeSql('c')}
         AND COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
         AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
       ORDER BY COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) ASC NULLS LAST, COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
