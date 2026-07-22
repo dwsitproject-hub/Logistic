@@ -128,8 +128,10 @@ Di server yang bermasalah:
 ================================================================================
 Cleanup Trucking CANCELLED dedupe losers (preferred) — TARGETED HARD-DELETE
 ================================================================================
-Hapus HANYA baris CANCELLED yang masih punya keeper aktif di PO yang sama
-(hasil dedupe PO). Cancel manual tanpa sibling aktif TIDAK dihapus.
+Hapus CANCELLED yang:
+  Rule A — masih punya keeper aktif di PO yang sama, ATAU
+  Rule B — orphan shell (tidak ada keeper aktif DAN tidak ada WB actuals).
+CANCELLED yang punya WB tanpa keeper TIDAK dihapus.
 
 Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
 Script memakai klip-postgres via docker exec (DB_HOST=postgres di .env
@@ -140,10 +142,10 @@ Prasyarat: stack backend+postgres running di .57.
   cd /opt/klip
   git fetch origin && git checkout SIT && git pull origin SIT
   bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh          # preview
-  # Review: cancelled_all vs dedupe_loser_rows + sample (keeper_operation_id)
+  # Review: would_delete, sample delete_reason, debug OP-LAND-150720260079
   bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply  # execute
 
-Audit table: cleanup_audit_cancelled_trucking_dedupe_losers
+Audit table: cleanup_audit_cancelled_trucking_dedupe_losers (kolom delete_reason)
 Setelah apply: hard refresh Trucking (Ctrl+Shift+R); kartu Cancelled turun,
 keeper PO tetap.
 

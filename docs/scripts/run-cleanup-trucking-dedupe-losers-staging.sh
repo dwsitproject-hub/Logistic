@@ -187,8 +187,10 @@ run_psql_file "$SQL_PREVIEW"
 
 if ! $APPLY; then
   echo ""
-  echo "Review counts above. Manual CANCELLED (no active keeper) are NOT deleted."
-  echo "To hard-delete dedupe losers only:"
+  echo "Review counts above (rule_a_active_keeper + rule_b_orphan_no_wb = would_delete)."
+  echo "CANCELLED with WB but no keeper are kept (cancelled_kept_has_wb_no_keeper)."
+  echo "Check debug block for OP-LAND-150720260079 if present."
+  echo "To hard-delete eligible rows:"
   echo "  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply"
   exit 0
 fi
