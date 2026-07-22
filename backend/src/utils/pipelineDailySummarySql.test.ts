@@ -10,6 +10,7 @@ describe('pipelineDailySummarySql', () => {
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain("FILTER (WHERE status = 'IN_PROGRESS')");
     expect(sql).toContain('sap_processed_data');
+    expect(sql).toContain('ON CONFLICT (group_plant, contract_date, product, incoterm)');
     expect(sql).not.toContain('buildTruckingListSelectClause(true)');
   });
 

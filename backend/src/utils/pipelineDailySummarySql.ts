@@ -79,7 +79,17 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
       COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint,
       COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint
     FROM execution_rows
-    GROUP BY group_plant, contract_date, product, incoterm`;
+    GROUP BY group_plant, contract_date, product, incoterm
+    ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
+      total_count = EXCLUDED.total_count,
+      unplanned_execution_count = EXCLUDED.unplanned_execution_count,
+      planned_count = EXCLUDED.planned_count,
+      in_progress_count = EXCLUDED.in_progress_count,
+      loading_count = EXCLUDED.loading_count,
+      in_transit_count = EXCLUDED.in_transit_count,
+      unloading_count = EXCLUDED.unloading_count,
+      completed_count = EXCLUDED.completed_count,
+      cancelled_count = EXCLUDED.cancelled_count`;
 }
 
 export function buildTruckingBacklogDailySummaryUpsertSql(): string {

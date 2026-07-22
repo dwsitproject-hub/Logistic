@@ -234,7 +234,26 @@ echo ""
 echo "==> Refresh trucking pipeline summary (best-effort)"
 if curl -sf http://127.0.0.1:5001/health >/dev/null 2>&1; then
   if "${COMPOSE[@]}" exec -T backend test -f dist/scripts/refreshTruckingPipelineSummary.js 2>/dev/null; then
-    "${COMPOSE[@]}" exec -T backend node dist/scripts/refreshTruckingPipelineSummary.js || true
+    if ! "${COMPOSE[@]}" exec -T backend node dist/scripts/refreshTruckingPipelineSummary.js; then
+      echo "    WARN: pipeline summary refresh failed — marking stale so UI uses live counts"
+      case "$PSQL_MODE" in
+        docker_exec)
+          docker exec -i -e PGPASSWORD="$DB_PASSWORD" klip-postgres \
+            psql -U "$DB_USER" -d "$DB_NAME" -c \
+            "UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = 'trucking';" || true
+          ;;
+        compose_exec)
+          "${COMPOSE[@]}" exec -T -e PGPASSWORD="$DB_PASSWORD" postgres \
+            psql -U "$DB_USER" -d "$DB_NAME" -c \
+            "UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = 'trucking';" || true
+          ;;
+        host_psql)
+          PGPASSWORD="$DB_PASSWORD" psql \
+            -h "$PSQL_HOST" -p "$PSQL_PORT" -U "$DB_USER" -d "$DB_NAME" -c \
+            "UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = 'trucking';" || true
+          ;;
+      esac
+    fi
   else
     echo "    refresh script missing — restarting backend instead"
     "${COMPOSE[@]}" restart backend || true

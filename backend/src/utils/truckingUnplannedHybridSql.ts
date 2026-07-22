@@ -355,7 +355,10 @@ export function buildTruckingUnplannedBacklogDailySummarySql(): string {
       WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
       GROUP BY 1, 2, 3, 4
     )
-    SELECT group_plant, contract_date, product, incoterm, unplanned_contract_backlog FROM backlog
+    SELECT group_plant, contract_date, product, incoterm,
+           SUM(unplanned_contract_backlog)::bigint AS unplanned_contract_backlog
+    FROM backlog
+    GROUP BY group_plant, contract_date, product, incoterm
     ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
       unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
 }
