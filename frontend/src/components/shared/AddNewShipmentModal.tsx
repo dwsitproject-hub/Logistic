@@ -60,6 +60,13 @@ import {
   suggestShipmentVessel,
 } from '@/lib/shipmentAiPlanner'
 import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
+import {
+  VESSEL_MODAL_BODY_CLASS,
+  VESSEL_MODAL_FOOTER_CARD_CLASS,
+  VESSEL_MODAL_HEADER_CLASS,
+  VESSEL_MODAL_PANEL_CLASS,
+  VESSEL_MODAL_STEP_STRIP_CLASS,
+} from '@/lib/vesselModalUi'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -2155,18 +2162,21 @@ export function AddNewShipmentModal({
       const selectionKeys = newShipment.contractNumbers
       const contractNumbers = [...new Set(selectionKeys.map((k) => resolveContractIdForKey(k)))]
 
-      const poQtyAssigned: Record<string, string> = {}
+      // Always send plan qty as contractNumber[::poNumber] so createShipment can persist
+      // without relying on UUID-only poQtyAssigned lookup.
       const contractQtyAssignedPayload: Record<string, string> = {}
-      if (isContractScoped) {
-        for (const key of selectionKeys) {
-          const qty = contractQtyAssigned[key]
-          if (qty && parseFloat(String(qty)) > 0) poQtyAssigned[key] = String(qty)
-        }
-      } else {
-        for (const key of selectionKeys) {
-          const qty = contractQtyAssigned[key]
-          if (qty !== undefined && qty !== '') contractQtyAssignedPayload[key] = String(qty)
-        }
+      for (const key of selectionKeys) {
+        const qty = contractQtyAssigned[key]
+        if (!qty || parseFloat(String(qty)) <= 0) continue
+        const cn = resolveContractIdForKey(key)
+        if (!cn) continue
+        const po =
+          availablePoByKey.get(key)?.poNumber ??
+          (contractValidations[key]?.contractData?.po_number != null
+            ? String(contractValidations[key].contractData.po_number).trim()
+            : null)
+        const assignmentKey = po ? `${cn}::${po}` : cn
+        contractQtyAssignedPayload[assignmentKey] = String(qty)
       }
 
       await onSubmit({
@@ -2175,7 +2185,7 @@ export function AddNewShipmentModal({
         stoNumber: newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim(),
         contractNumbers,
         contractQtyAssigned: contractQtyAssignedPayload,
-        poQtyAssigned: Object.keys(poQtyAssigned).length > 0 ? poQtyAssigned : undefined,
+        poQtyAssigned: undefined,
         vesselName: newShipment.vesselName,
         vesselCode: newShipment.vesselCode,
         vesselOwner: newShipment.vesselOwner,
@@ -2295,9 +2305,9 @@ export function AddNewShipmentModal({
   return (
     <>
     <div className={`fixed inset-0 ${stacked ? 'z-[80]' : 'z-[60]'} flex items-center justify-center bg-black/40 p-4`}>
-      <div className="flex max-h-[90vh] w-full max-w-6xl flex-col rounded-lg bg-white shadow-xl">
+      <div className={VESSEL_MODAL_PANEL_CLASS}>
         {/* Header */}
-        <div className="sticky top-0 z-10 shrink-0 rounded-t-lg border-b border-gray-200 bg-white">
+        <div className={VESSEL_MODAL_HEADER_CLASS}>
           <div className="flex items-center justify-between px-6 py-4">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white">
@@ -2330,7 +2340,7 @@ export function AddNewShipmentModal({
             </Button>
           </div>
           {/* Step progress */}
-          <div className="flex items-center gap-0 border-t border-gray-100 px-6 py-2 bg-gray-50/80">
+          <div className={VESSEL_MODAL_STEP_STRIP_CLASS}>
             {[
               { num: 1, label: 'Contract & PO', done: step1Done, icon: <FileText className="h-3.5 w-3.5" /> },
               { num: 2, label: 'Vessel Detail', done: step2Done, icon: <Anchor className="h-3.5 w-3.5" /> },
@@ -2357,9 +2367,9 @@ export function AddNewShipmentModal({
           </div>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-y-auto px-6 py-4" {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
+        <div className={`relative ${VESSEL_MODAL_BODY_CLASS}`} {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
         {((loadingInitialData && !isPlotMode) || (isPlotMode && loadingEdit)) && (
-          <div className="absolute inset-0 z-[70] flex items-center justify-center rounded-b-lg bg-white/75 backdrop-blur-[1px]">
+          <div className="absolute inset-0 z-[70] flex items-center justify-center rounded-b-xl bg-white/75 backdrop-blur-[1px]">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-gray-200 bg-white px-6 py-4 shadow-sm">
               <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
               <p className="text-sm font-medium text-gray-700">Loading shipment data…</p>
@@ -3244,7 +3254,7 @@ export function AddNewShipmentModal({
           </div>
 
           {/* Footer action bar */}
-          <div className="rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+          <div className={VESSEL_MODAL_FOOTER_CARD_CLASS}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               {/* Summary */}
               <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">

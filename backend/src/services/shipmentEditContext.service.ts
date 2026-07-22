@@ -124,7 +124,8 @@ export function resolveAddPoGate(args: {
 
 /**
  * Lightweight sibling resolution for Edit Shipment modal only.
- * Resolves operational STO key and linked contracts via contract_stos + shipment_id.
+ * lookup_key must match createShipment assignmentKey (STO / operation_id), not an
+ * unrelated contract_stos row on the same contract (that made plan qty look like 0).
  */
 export async function resolveShipmentEditContext(
   shipmentUuid: string,
@@ -141,6 +142,7 @@ export async function resolveShipmentEditContext(
             THEN NULLIF(TRIM(s.shipment_id::text), '')
             ELSE NULL
           END,
+          NULLIF(TRIM(s.operation_id::text), ''),
           (
             SELECT TRIM(cs.sto_number::text)
             FROM contract_stos cs
@@ -148,7 +150,6 @@ export async function resolveShipmentEditContext(
             ORDER BY cs.updated_at DESC NULLS LAST
             LIMIT 1
           ),
-          NULLIF(TRIM(s.operation_id::text), ''),
           s.id::text
         ) AS lookup_key
       FROM shipments s

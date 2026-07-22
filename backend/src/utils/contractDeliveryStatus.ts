@@ -34,36 +34,42 @@ export function isContractDeliveryClosed(status: unknown): boolean {
   );
 }
 
-/** SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped row pick. */
+/**
+ * SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped rows.
+ *
+ * Important: do NOT take LIMIT 1 with per-row fallback to contracts.status.
+ * A blank GR STO/PO on the newest row used to become COMPLETED/Close via that
+ * fallback while sibling STO rows still had GR Open — Trucking then used Σ SAP
+ * instead of WB. Aggregate: any Open wins; else any Close; else contract.status.
+ */
 export function sqlContractImportStatusExpr(
   contractAlias = 'c',
   poNumberRef = `${contractAlias}.po_number`,
 ): string {
-  const sapPick = sqlNormalizeContractDeliveryStatusExpr(
-    sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, `${contractAlias}.status::text`),
+  // NULL when the GR field is blank — never inject contracts.status per SPD row.
+  const sapStatusNorm = sqlNormalizeContractDeliveryStatusExpr(
+    sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, 'NULL'),
   );
   return `
     COALESCE(
       (
-        SELECT ${sapPick}
-        FROM sap_processed_data spd
-        WHERE spd.contract_number = ${contractAlias}.contract_id
-          AND (
-            NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
-            OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
-            OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-          )
-        ORDER BY
-          CASE
-            WHEN NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NOT NULL
-              AND NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-              THEN 0
-            WHEN NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
-              THEN 1
-            ELSE 2
-          END,
-          spd.created_at DESC NULLS LAST
-        LIMIT 1
+        SELECT CASE
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')) THEN 'Close'
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+          ELSE NULL
+        END
+        FROM (
+          SELECT ${sapStatusNorm} AS st
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = ${contractAlias}.contract_id
+            AND (
+              NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+            )
+        ) s
+        WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
       ),
       ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
     )`.trim();

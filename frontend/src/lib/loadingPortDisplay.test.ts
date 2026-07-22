@@ -47,6 +47,36 @@ describe('loadingPortDisplay', () => {
     ).toBe('—')
   })
 
+  it('falls back to shipment-level KLIP port_of_loading when VLP/SAP empty', () => {
+    expect(
+      resolveLoadingPortDisplayFromRow(null, { vessel_loading_port_1: 'Dumai' }, 1),
+    ).toBe('Dumai')
+
+    expect(
+      resolveLoadingPortDisplayFromRow(
+        { port_name: '67.30', sap_port_name: null },
+        { vessel_loading_port_1: 'Ketapang' },
+        1,
+      ),
+    ).toBe('Ketapang')
+
+    expect(
+      resolveLoadingPortDisplayFromRow(
+        { port_name: '', is_discharge_port: true },
+        { vessel_discharge_port_1: 'Tanjung Priok' },
+      ),
+    ).toBe('Tanjung Priok')
+
+    // Port 2 must not inherit vessel_loading_port_1
+    expect(
+      resolveLoadingPortDisplayFromRow(
+        { port_name: '67.30' },
+        { vessel_loading_port_1: 'Ketapang' },
+        2,
+      ),
+    ).toBe('—')
+  })
+
   it('extracts KLIP input only when human-readable', () => {
     expect(isValidHumanPortName('67.30')).toBe(false)
     expect(resolveKlipPortInputValue('67.30')).toBe('')

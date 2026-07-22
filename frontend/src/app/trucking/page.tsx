@@ -2802,6 +2802,20 @@ function TruckingPageContent() {
     statusFilter,
   ])
 
+  /** Section 2 Contract Qty (kg) — Planned card = Planned + In Progress (mirrors counts). */
+  const truckingStatusCardContractQtys = useMemo(() => {
+    const q = truckingSection1Summary?.statusContractQty
+    const plannedOnly = Number(q?.planned ?? 0)
+    const inProgressOnly = Number(q?.inProgress ?? 0)
+    return {
+      UNPLANNED: Number(q?.unplanned ?? 0),
+      PLANNED: plannedOnly + inProgressOnly,
+      IN_PROGRESS: inProgressOnly,
+      COMPLETED: Number(q?.completed ?? 0),
+      CANCELLED: Number(q?.cancelled ?? 0),
+    }
+  }, [truckingSection1Summary?.statusContractQty])
+
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
       const rowTotal =
@@ -3718,6 +3732,7 @@ function TruckingPageContent() {
           loading={summaryFetching}
           statusFilter={statusFilter}
           counts={truckingStatusCardCounts}
+          contractQtys={truckingStatusCardContractQtys}
           onStageClick={handleStatusCardClick}
         />
 

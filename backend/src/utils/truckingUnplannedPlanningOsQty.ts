@@ -33,9 +33,10 @@ export function formatPlanningQtyMtLabel(kg: number): string {
   return mt.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: false });
 }
 
-export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number }>): number {
+export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number | null | undefined }>): number {
   let sum = 0;
   for (const entry of entries) {
+    if (entry.qtyMt == null || !Number.isFinite(entry.qtyMt)) continue;
     sum += Math.round(entry.qtyMt * 100) / 100;
   }
   return sum;
@@ -44,6 +45,7 @@ export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number }>): number 
 export function validatePlanningTotalAgainstOutstandingKg(
   totalPlanningKg: number,
   outstandingKg: number | null | undefined,
+  options?: { allowLess?: boolean },
 ): UnplannedPlanningOsQtyValidation {
   if (outstandingKg === null || outstandingKg === undefined || !Number.isFinite(outstandingKg)) {
     return {
@@ -61,6 +63,9 @@ export function validatePlanningTotalAgainstOutstandingKg(
   }
 
   if (diff < 0) {
+    if (options?.allowLess) {
+      return { ok: true };
+    }
     return {
       ok: false,
       reason: `Total daily planning qty (${formatPlanningQtyMtLabel(totalPlanningKg)} MT) is less than Outstanding Qty (${formatPlanningQtyMtLabel(outstandingKg)} MT)`,

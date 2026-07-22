@@ -5,11 +5,18 @@ import {
 import { toIsoDate10FromCell } from './planningSheetDate';
 import { isDateWithinUnplannedPlanningWindow } from './truckingUnplannedPlanningWindow';
 
+/** qtyMt is kg; null means blank cell → clear existing planning for that date (if any). */
+export type ParsedUnplannedPlanningEntry = {
+  dateIso: string;
+  qtyMt: number | null;
+  lineNumber: number;
+};
+
 export type ParsedUnplannedPlanningRow = {
   rowNumber: number;
   contract_ext_no: string;
   po_number: string;
-  entries: Array<{ dateIso: string; qtyMt: number; lineNumber: number }>;
+  entries: ParsedUnplannedPlanningEntry[];
   /** Original spreadsheet cells for failed-row re-template export. */
   rawCells: unknown[];
 };
@@ -180,12 +187,18 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
       continue;
     }
 
-    const entries: ParsedUnplannedPlanningRow['entries'] = [];
+    const entries: ParsedUnplannedPlanningEntry[] = [];
+    let hasInvalidQty = false;
     for (const { colIndex, dateIso } of dateColumns) {
       const qtyRaw = cells[colIndex];
-      if (qtyRaw === undefined || qtyRaw === null || cellToString(qtyRaw) === '') continue;
+      if (qtyRaw === undefined || qtyRaw === null || cellToString(qtyRaw) === '') {
+        // Blank date cell: clear existing planning for this date on upload (no-op if none).
+        entries.push({ dateIso, qtyMt: null, lineNumber: rowNumber });
+        continue;
+      }
       const qtyKg = parseTemplateQtyKg(qtyRaw, qtyUnit);
       if (qtyKg === null) {
+        hasInvalidQty = true;
         rowParseFailures.push({
           rowNumber,
           contract_ext_no: contractExtNo || poNumber || '-',
@@ -196,7 +209,8 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
       entries.push({ dateIso, qtyMt: qtyKg, lineNumber: rowNumber });
     }
 
-    if (entries.length === 0 && hasAnyQty) {
+    const setCount = entries.filter((e) => e.qtyMt != null).length;
+    if (setCount === 0 && hasAnyQty && hasInvalidQty) {
       rowParseFailures.push({
         rowNumber,
         contract_ext_no: contractExtNo || poNumber || '-',
@@ -204,6 +218,7 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
       });
       continue;
     }
+    // PO/contract row with only blank date cells is still processed (clear existing days).
     if (entries.length === 0) continue;
 
     rows.push({
@@ -219,10 +234,11 @@ export function parseUnplannedWidePlanningMatrix(matrix: unknown[][]): {
 }
 
 export function buildDailyDeliverablesFromKgEntries(
-  entries: Array<{ dateIso: string; qtyMt: number }>,
+  entries: Array<{ dateIso: string; qtyMt: number | null | undefined }>,
 ): NormalizedDailyDeliverableRow[] {
   const byDate = new Map<string, number>();
   for (const entry of entries) {
+    if (entry.qtyMt == null || !Number.isFinite(entry.qtyMt)) continue;
     const kg = Math.round(entry.qtyMt * 100) / 100;
     byDate.set(entry.dateIso, kg);
   }
@@ -231,9 +247,39 @@ export function buildDailyDeliverablesFromKgEntries(
     .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
 }
 
+/**
+ * Blank upload cells clear a date only when that date already exists in daily_deliverables.
+ * Empty template columns for never-planned days are no-ops (avoids accidental mass wipe semantics noise).
+ */
+export function collectEffectivePlanningClearDates(
+  entries: Array<{ dateIso: string; qtyMt: number | null | undefined }>,
+  existingDaily: unknown,
+): string[] {
+  const existingDates = new Set<string>();
+  if (Array.isArray(existingDaily)) {
+    for (const row of existingDaily) {
+      const date = String(
+        (row as { date?: string })?.date ?? '',
+      )
+        .trim()
+        .slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) existingDates.add(date);
+    }
+  }
+  const clears: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (entry.qtyMt != null) continue;
+    if (!existingDates.has(entry.dateIso) || seen.has(entry.dateIso)) continue;
+    seen.add(entry.dateIso);
+    clears.push(entry.dateIso);
+  }
+  return clears;
+}
+
 /** @deprecated Values are already kg — use buildDailyDeliverablesFromKgEntries */
 export function buildDailyDeliverablesKgFromMtEntries(
-  entries: Array<{ dateIso: string; qtyMt: number }>,
+  entries: Array<{ dateIso: string; qtyMt: number | null | undefined }>,
 ): NormalizedDailyDeliverableRow[] {
   return buildDailyDeliverablesFromKgEntries(entries);
 }
@@ -274,7 +320,9 @@ export function isWidePlanningTemplateMatrix(matrix: unknown[][]): boolean {
   return isUnplannedWidePlanningTemplateMatrix(matrix);
 }
 
-export function filterEntriesWithinUnplannedWindow<T extends { dateIso: string; lineNumber: number }>(
+export function filterEntriesWithinUnplannedWindow<
+  T extends { dateIso: string; lineNumber: number; qtyMt?: number | null },
+>(
   entries: T[],
   _deliveryEndRaw: unknown,
   contractExtNo: string,
@@ -283,6 +331,8 @@ export function filterEntriesWithinUnplannedWindow<T extends { dateIso: string; 
   return entries.filter((entry) => {
     const ok = isDateWithinUnplannedPlanningWindow(entry.dateIso);
     if (!ok) {
+      // Blank (clear) cells outside the window are silent no-ops — template always has ~60 days.
+      if (entry.qtyMt == null) return false;
       rowParseFailures.push({
         rowNumber: entry.lineNumber,
         contract_ext_no: contractExtNo,

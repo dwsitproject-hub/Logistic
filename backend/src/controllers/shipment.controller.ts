@@ -104,6 +104,7 @@ import {
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
 import { sqlUserStoQtyAssignedToKgSql, stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
+import { resolveShipmentPlanQtyAssignmentTargets } from '../utils/shipmentPlanQtyAssignmentKey';
 import {
   buildShipmentExcludeStoTypeTSql,
   buildShipmentSeaMixTransportSql,
@@ -4323,52 +4324,44 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
 
     // Planning only (user_sto_contract_assignments). Delivery Qty KLIP is set only via
     // updateShipment when the user explicitly edits quantity_delivered (SLD/SDD path).
-    const hasPoAssignments =
-      poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0;
-    const hasContractAssignments =
-      contractQtyAssigned && typeof contractQtyAssigned === 'object' && Object.keys(contractQtyAssigned as object).length > 0;
+    // Merge poQtyAssigned + contractQtyAssigned: UI may send UUID row ids, contract::po, or
+    // bare contract numbers depending on Contracts vs Shipments entry points.
+    const mergedPlanQtyEntries: Record<string, unknown> = {
+      ...(contractQtyAssigned && typeof contractQtyAssigned === 'object'
+        ? (contractQtyAssigned as Record<string, unknown>)
+        : {}),
+      ...(poQtyAssigned && typeof poQtyAssigned === 'object'
+        ? (poQtyAssigned as Record<string, unknown>)
+        : {}),
+    };
 
-    if (hasPoAssignments || hasContractAssignments) {
+    if (Object.keys(mergedPlanQtyEntries).length > 0) {
       await ensureUserStoContractAssignmentsTable();
-
-      if (hasPoAssignments) {
-        const rowIds = Object.keys(poQtyAssigned as Record<string, any>).filter(Boolean);
-        const rowsResult = await query(
-          `SELECT id, contract_id, po_number FROM contracts WHERE id = ANY($1::uuid[])`,
-          [rowIds],
-        );
-        const rowById = new Map(
-          rowsResult.rows.map((r: { id: string; contract_id: string; po_number: string | null }) => [String(r.id), r]),
-        );
-
-        for (const [rowId, qty] of Object.entries(poQtyAssigned as Record<string, any>)) {
-          const row = rowById.get(String(rowId));
-          if (!row) continue;
-          const n = parseFloat(String(qty));
-          if (Number.isNaN(n) || n <= 0) continue;
-          await upsertPoQtyAssignment(
-            assignmentKey,
-            String(row.contract_id).trim(),
-            row.po_number ? String(row.po_number).trim() : null,
-            n,
+      const targets = await resolveShipmentPlanQtyAssignmentTargets(
+        mergedPlanQtyEntries,
+        async (ids) => {
+          const rowsResult = await query(
+            `SELECT id, contract_id, po_number FROM contracts WHERE id = ANY($1::uuid[])`,
+            [ids],
           );
-        }
-      } else if (hasContractAssignments) {
-        for (const [rawKey, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
-          if (!rawKey) continue;
-          const n = parseFloat(String(qty));
-          if (Number.isNaN(n) || n <= 0) continue;
-          const key = String(rawKey).trim();
-          let contractNumber = key;
-          let poNumber: string | null = null;
-          if (key.includes('::')) {
-            const [cn, po] = key.split('::');
-            contractNumber = String(cn ?? '').trim();
-            poNumber = String(po ?? '').trim() || null;
-          }
-          if (!contractNumber) continue;
-          await upsertPoQtyAssignment(assignmentKey, contractNumber, poNumber, n);
-        }
+          return new Map(
+            rowsResult.rows.map((r: { id: string; contract_id: string; po_number: string | null }) => [
+              String(r.id),
+              {
+                contractNumber: String(r.contract_id).trim(),
+                poNumber: r.po_number ? String(r.po_number).trim() : null,
+              },
+            ]),
+          );
+        },
+      );
+      for (const target of targets) {
+        await upsertPoQtyAssignment(
+          assignmentKey,
+          target.contractNumber,
+          target.poNumber,
+          target.qtyMt,
+        );
       }
     }
 

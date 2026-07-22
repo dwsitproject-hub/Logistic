@@ -265,6 +265,25 @@ export function buildTruckingUnplannedBacklogCountQuery(
     SELECT COUNT(*)::bigint AS c FROM unplanned_trucking_backlog`;
 }
 
+/** Sum contract quantity_ordered for unplanned backlog (one row per contract). */
+export function buildTruckingUnplannedBacklogContractQtyQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  return `
+    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    unplanned_trucking_backlog AS (
+      SELECT c.quantity_ordered
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
+        ${contractScopeSql}
+        ${toolbarSql}
+    )
+    SELECT COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+    FROM unplanned_trucking_backlog`;
+}
+
 export function buildTruckingUnplannedBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,

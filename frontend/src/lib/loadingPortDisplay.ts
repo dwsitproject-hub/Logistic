@@ -30,21 +30,34 @@ export function resolveKlipPortInputValue(value: unknown): string {
 }
 
 export function resolveLoadingPortDisplayFromRow(
-  portRow: { port_name?: unknown; sap_port_name?: unknown } | null | undefined,
+  portRow: { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown } | null | undefined,
   shipmentInfo?: Record<string, unknown> | null,
   sequence?: number,
 ): string {
+  const isDischarge = Boolean(portRow?.is_discharge_port)
+  const seq = sequence ?? (portRow?.is_discharge_port ? undefined : 1)
   const sapFromInfo =
-    sequence != null && shipmentInfo
-      ? shipmentInfo[`sap_vessel_loading_port_${sequence}`]
+    !isDischarge && seq != null && shipmentInfo
+      ? shipmentInfo[`sap_vessel_loading_port_${seq}`]
       : undefined
-  const sapDischarge =
-    portRow && Boolean((portRow as { is_discharge_port?: boolean }).is_discharge_port)
-      ? shipmentInfo?.sap_vessel_discharge_port_1
-      : undefined
+  const sapDischarge = isDischarge ? shipmentInfo?.sap_vessel_discharge_port_1 : undefined
+
+  // Align with Shipments list: after SAP / VLP.port_name, fall back to shipment-level KLIP ports
+  // (shipments.port_of_loading / port_of_discharge) so Edit is not blank when the table shows a port.
+  let klipShipmentFallback: unknown
+  if (isDischarge) {
+    klipShipmentFallback = shipmentInfo?.vessel_discharge_port_1
+  } else if (seq == null || seq === 1) {
+    klipShipmentFallback = shipmentInfo?.vessel_loading_port_1
+  }
+
+  const klipFromRow = isValidHumanPortName(portRow?.port_name) ? portRow?.port_name : undefined
+  const klipFromShipment = isValidHumanPortName(klipShipmentFallback)
+    ? klipShipmentFallback
+    : undefined
 
   return resolveLoadingPortDisplayLabel({
     sapPortName: portRow?.sap_port_name ?? sapFromInfo ?? sapDischarge,
-    klipPortName: portRow?.port_name,
+    klipPortName: klipFromRow ?? klipFromShipment,
   })
 }

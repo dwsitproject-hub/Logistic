@@ -101,10 +101,11 @@ export function normalizeAndValidateDailyDeliverables(args: {
   return { ok: true, rows };
 }
 
-/** Upsert by date — incoming rows override existing dates; other dates are preserved. */
+/** Upsert by date — incoming rows override existing dates; clearDates remove dates; others preserved. */
 export function mergeDailyDeliverablesRows(
   existing: unknown,
   incoming: NormalizedDailyDeliverableRow[],
+  options?: { clearDates?: string[] },
 ): NormalizedDailyDeliverableRow[] {
   const byDate = new Map<string, number>();
   if (Array.isArray(existing)) {
@@ -116,11 +117,24 @@ export function mergeDailyDeliverablesRows(
       }
     }
   }
+  for (const date of options?.clearDates ?? []) {
+    const d = String(date ?? '').trim().slice(0, 10);
+    if (d) byDate.delete(d);
+  }
   for (const row of incoming) {
     byDate.set(row.date, row.quantity_delivered);
   }
   return Array.from(byDate.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
+}
+
+/** Sum of quantity_delivered across normalized daily rows (kg). */
+export function sumDailyDeliverablesKg(rows: NormalizedDailyDeliverableRow[]): number {
+  let sum = 0;
+  for (const row of rows) {
+    sum += Math.round(Number(row.quantity_delivered) * 100) / 100;
+  }
+  return sum;
 }
 

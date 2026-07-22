@@ -4,7 +4,12 @@ import { assertTruckingOperationContractOpen, isContractDeliveryClosed, SQL_CONT
 import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
-import { mergeDailyDeliverablesRows, normalizeAndValidateDailyDeliverables, parseDailyDeliverableQuantity } from '../utils/truckingDailyDeliverables';
+import {
+  mergeDailyDeliverablesRows,
+  normalizeAndValidateDailyDeliverables,
+  parseDailyDeliverableQuantity,
+  sumDailyDeliverablesKg,
+} from '../utils/truckingDailyDeliverables';
 import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
@@ -62,6 +67,7 @@ import {
 } from '../utils/truckingOperationUniqueness';
 import {
   buildDailyDeliverablesFromKgEntries,
+  collectEffectivePlanningClearDates,
   filterEntriesLockedByActuals,
   filterEntriesWithinUnplannedWindow,
   isUnplannedWidePlanningTemplateMatrix,
@@ -73,7 +79,6 @@ import {
   fetchContractOutstandingQtyKg,
   fetchTruckingOperationOutstandingQtyKg,
   resolveTruckingPlanningMaxQtyKg,
-  sumPlanningEntriesKg,
   validatePlanningTotalAgainstOutstandingKg,
 } from '../utils/truckingUnplannedPlanningOsQty';
 import {
@@ -2163,11 +2168,32 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           continue;
         }
 
-        const totalPlanningKgPlanned = sumPlanningEntriesKg(editableEntries);
+        const clearDatesPlanned = collectEffectivePlanningClearDates(
+          editableEntries,
+          plannedOp.daily_deliverables,
+        );
+        const incomingDailyPlanned = buildDailyDeliverablesFromKgEntries(editableEntries);
+        const mergedDailyPlanned = mergeDailyDeliverablesRows(
+          plannedOp.daily_deliverables,
+          incomingDailyPlanned,
+          { clearDates: clearDatesPlanned },
+        );
+        const hasSetQtyPlanned = editableEntries.some((e) => e.qtyMt != null);
+        if (!hasSetQtyPlanned && clearDatesPlanned.length === 0) {
+          operationFailures.push({
+            contract_ext_no: label,
+            rowNumbers: [parsed.rowNumber],
+            reason: 'No planning quantity changes to apply',
+            operation_ids: [String(plannedOp.operation_id)],
+          });
+          continue;
+        }
+
         const outstandingKgPlanned = await fetchTruckingOperationOutstandingQtyKg(plannedOp.id);
         const osValidationPlanned = validatePlanningTotalAgainstOutstandingKg(
-          totalPlanningKgPlanned,
+          sumDailyDeliverablesKg(mergedDailyPlanned),
           outstandingKgPlanned,
+          { allowLess: clearDatesPlanned.length > 0 },
         );
         if (!osValidationPlanned.ok) {
           operationFailures.push({
@@ -2186,13 +2212,9 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           continue;
         }
 
-        const incomingDailyPlanned = buildDailyDeliverablesFromKgEntries(editableEntries);
-        const mergedDailyPlanned = mergeDailyDeliverablesRows(
-          plannedOp.daily_deliverables,
-          incomingDailyPlanned,
-        );
         const planningDatesPlanned = resolvePlanningStartEndFromDeliverables(mergedDailyPlanned);
-        if (!planningDatesPlanned) {
+        // Allow clearing all editable days (empty deliverables) on an existing Planned op.
+        if (!planningDatesPlanned && (hasSetQtyPlanned || clearDatesPlanned.length === 0)) {
           operationFailures.push({
             contract_ext_no: label,
             rowNumbers: [parsed.rowNumber],
@@ -2227,27 +2249,38 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
               )
             : null;
 
-        await query(
-          `UPDATE trucking_operations
-           SET daily_deliverables = $2::jsonb,
-               last_daily_deliverable_date = $3::date,
-               trucking_start_date = COALESCE(trucking_start_date, $4::date),
-               trucking_completion_date = GREATEST(
-                 COALESCE(trucking_completion_date, $5::date),
-                 $5::date
-               ),
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1::uuid`,
-          [
-            plannedOp.id,
-            JSON.stringify(ddPlanned.rows),
-            lastDdDatePlanned,
-            planningDatesPlanned.startIso,
-            planningDatesPlanned.endIso,
-          ],
-        );
+        if (planningDatesPlanned) {
+          await query(
+            `UPDATE trucking_operations
+             SET daily_deliverables = $2::jsonb,
+                 last_daily_deliverable_date = $3::date,
+                 trucking_start_date = COALESCE(trucking_start_date, $4::date),
+                 trucking_completion_date = GREATEST(
+                   COALESCE(trucking_completion_date, $5::date),
+                   $5::date
+                 ),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1::uuid`,
+            [
+              plannedOp.id,
+              JSON.stringify(ddPlanned.rows),
+              lastDdDatePlanned,
+              planningDatesPlanned.startIso,
+              planningDatesPlanned.endIso,
+            ],
+          );
+        } else {
+          await query(
+            `UPDATE trucking_operations
+             SET daily_deliverables = $2::jsonb,
+                 last_daily_deliverable_date = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1::uuid`,
+            [plannedOp.id, JSON.stringify(ddPlanned.rows)],
+          );
+        }
         operationsUpdated += 1;
-        succeededRows += editableEntries.length;
+        succeededRows += editableEntries.filter((e) => e.qtyMt != null).length + clearDatesPlanned.length;
 
         const siblingCountPlanned = Number(plannedOp.duplicate_sibling_count ?? 1);
         if (siblingCountPlanned > 1) {
@@ -2370,9 +2403,31 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         )?.id ??
         null;
 
-      const totalPlanningKg = sumPlanningEntriesKg(inWindowEntries);
+      const existingDailyForMerge =
+        op && Array.isArray(op.daily_deliverables) ? op.daily_deliverables : [];
+      const clearDates = collectEffectivePlanningClearDates(inWindowEntries, existingDailyForMerge);
+      const incomingDaily = buildDailyDeliverablesFromKgEntries(inWindowEntries);
+      const mergedDaily =
+        op != null
+          ? mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily, { clearDates })
+          : incomingDaily;
+      const hasSetQty = inWindowEntries.some((e) => e.qtyMt != null);
+      if (!hasSetQty && clearDates.length === 0) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'No planning quantity changes to apply',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
+        continue;
+      }
+
       const outstandingKg = contractUuid ? await fetchContractOutstandingQtyKg(contractUuid) : null;
-      const osValidation = validatePlanningTotalAgainstOutstandingKg(totalPlanningKg, outstandingKg);
+      const osValidation = validatePlanningTotalAgainstOutstandingKg(
+        sumDailyDeliverablesKg(mergedDaily),
+        outstandingKg,
+        { allowLess: clearDates.length > 0 },
+      );
       if (!osValidation.ok) {
         operationFailures.push({
           contract_ext_no: label,
@@ -2390,13 +2445,10 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         continue;
       }
 
-      const incomingDaily = buildDailyDeliverablesFromKgEntries(inWindowEntries);
-      const mergedDaily =
-        op && truckingOperationIdIsAssigned(op.operation_id)
-          ? mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily)
-          : incomingDaily;
       const planningDates = resolvePlanningStartEndFromDeliverables(mergedDaily);
-      if (!planningDates) {
+      const canClearAllExisting =
+        op != null && !hasSetQty && clearDates.length > 0 && planningDates == null;
+      if (!planningDates && !canClearAllExisting) {
         operationFailures.push({
           contract_ext_no: label,
           rowNumbers: [parsed.rowNumber],
@@ -2431,21 +2483,32 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           : null;
 
       if (op && truckingOperationIdIsAssigned(op.operation_id)) {
-        await query(
-          `UPDATE trucking_operations
-           SET daily_deliverables = $2::jsonb,
-               last_daily_deliverable_date = $3::date,
-               trucking_start_date = COALESCE(trucking_start_date, $4::date),
-               trucking_completion_date = GREATEST(
-                 COALESCE(trucking_completion_date, $5::date),
-                 $5::date
-               ),
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1::uuid`,
-          [op.id, JSON.stringify(dd.rows), lastDdDate, planningDates.startIso, planningDates.endIso],
-        );
+        if (planningDates) {
+          await query(
+            `UPDATE trucking_operations
+             SET daily_deliverables = $2::jsonb,
+                 last_daily_deliverable_date = $3::date,
+                 trucking_start_date = COALESCE(trucking_start_date, $4::date),
+                 trucking_completion_date = GREATEST(
+                   COALESCE(trucking_completion_date, $5::date),
+                   $5::date
+                 ),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1::uuid`,
+            [op.id, JSON.stringify(dd.rows), lastDdDate, planningDates.startIso, planningDates.endIso],
+          );
+        } else {
+          await query(
+            `UPDATE trucking_operations
+             SET daily_deliverables = $2::jsonb,
+                 last_daily_deliverable_date = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1::uuid`,
+            [op.id, JSON.stringify(dd.rows)],
+          );
+        }
         operationsUpdated += 1;
-        succeededRows += inWindowEntries.length;
+        succeededRows += inWindowEntries.filter((e) => e.qtyMt != null).length + clearDates.length;
 
         const siblingCount = Number(op.duplicate_sibling_count ?? 1);
         if (siblingCount > 1) {
@@ -2456,6 +2519,17 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
             operation_ids: [String(op.operation_id)],
           });
         }
+        continue;
+      }
+
+      // Creating / promoting to Planned requires at least one planning qty.
+      if (!planningDates) {
+        operationFailures.push({
+          contract_ext_no: label,
+          rowNumbers: [parsed.rowNumber],
+          reason: 'No valid planning quantities after parsing',
+          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
+        });
         continue;
       }
 
@@ -2494,7 +2568,7 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           ],
         );
         operationsCreated += 1;
-        succeededRows += inWindowEntries.length;
+        succeededRows += inWindowEntries.filter((e) => e.qtyMt != null).length;
         continue;
       }
 
@@ -2531,7 +2605,7 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         ],
       );
       operationsCreated += 1;
-      succeededRows += inWindowEntries.length;
+      succeededRows += inWindowEntries.filter((e) => e.qtyMt != null).length;
     }
 
     if (operationsCreated > 0 || operationsUpdated > 0) invalidateTruckingListCache();

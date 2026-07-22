@@ -98,19 +98,31 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('AND NOT (');
   });
 
-  it('sqlTruckingPoLevelSapDeliveryQty sums delivery across PO STOs', () => {
+  it('sqlTruckingPoLevelSapDeliveryQty sums latest delivery per STO with MT→kg normalize', () => {
     const sql = sqlTruckingPoLevelSapDeliveryQty();
     expect(sql).toContain('Quantity Delivery Trucking');
     expect(sql).toContain("data->'raw'->>'PO No'");
     expect(sql).toContain('e.po_number');
     expect(sql).toContain('contract_sto_lines');
+    expect(sql).toContain('DISTINCT ON');
+    expect(sql).toContain('* 1000');
   });
 
-  it('sqlTruckingPoLevelSapReceiveQty sums receive across PO STOs', () => {
+  it('sqlTruckingPoLevelSapReceiveQty sums latest receive per STO with MT→kg normalize', () => {
     const sql = sqlTruckingPoLevelSapReceiveQty();
     expect(sql).toContain('Quantity Receive');
     expect(sql).toContain('Qty Receive');
     expect(sql).toContain('e.po_number');
+    expect(sql).toContain('DISTINCT ON');
+    expect(sql).toContain('* 1000');
+  });
+
+  it('sqlTruckingResolvedDeliveryQty keeps Open+WB before Close→SAP', () => {
+    const sql = sqlTruckingResolvedDeliveryQty('e.quantity_delivered', 'sap_po', 'e.id', 'c');
+    expect(sql).toContain('AND NOT (');
+    expect(sql).toContain('trucking_daily_actuals');
+    expect(sql).toContain('sap_po');
+    expect(sql).toContain('BOOL_OR');
   });
 
   it('sqlTruckingExpandedStoLineQtyKgExpr sums SAP STO qty across the PO', () => {

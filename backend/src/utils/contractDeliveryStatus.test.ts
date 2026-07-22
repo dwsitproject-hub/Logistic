@@ -42,20 +42,25 @@ describe('isContractDeliveryClosed', () => {
 });
 
 describe('sqlContractImportStatusExpr', () => {
-  it('prefers PO-scoped SAP status over contract-level rows', () => {
+  it('aggregates PO-scoped SAP status with any-Open wins (no LIMIT 1 fallback to COMPLETED)', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
     expect(sql).toContain('spd.po_number');
     expect(sql).toContain('GR PO Status');
     expect(sql).toContain('GR STO Status');
-    expect(sql).toContain('ORDER BY');
-    expect(sql).toContain('THEN 0');
+    expect(sql).toContain('BOOL_OR');
+    expect(sql).toContain("'OPEN'");
     expect(sql).toContain("'ACTIVE'");
+    expect(sql).not.toContain('LIMIT 1');
+    // Per-row SAP pick uses NULL fallback (blank GR ignored); outer COALESCE may use c.status.
+    expect(sql).toContain(', NULL)');
+    expect(sql).toContain('BOOL_OR(UPPER(TRIM(COALESCE(s.st');
   });
 
   it('builds SAP closed predicate from PO-aware import status', () => {
     const sql = sqlIsContractSapClosedExpr('c');
     expect(sql).toContain("'CLOSE'");
     expect(sql).toContain('c.po_number');
+    expect(sql).toContain('BOOL_OR');
   });
 });
 
