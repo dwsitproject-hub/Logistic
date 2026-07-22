@@ -132,8 +132,10 @@ Hapus HANYA baris CANCELLED yang masih punya keeper aktif di PO yang sama
 (hasil dedupe PO). Cancel manual tanpa sibling aktif TIDAK dihapus.
 
 Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
-Script memakai DB remote dari backend/.env (DB_HOST=172.28.92.60, DB_PORT=5442).
-Prasyarat: psql client di host backend (postgresql-client).
+Script memakai klip-postgres via docker exec (DB_HOST=postgres di .env
+hanya valid di dalam Docker network). Fallback: psql 127.0.0.1:POSTGRES_PORT.
+Prasyarat: stack backend+postgres running di .57.
+
 
   cd /opt/klip
   git fetch origin && git checkout SIT && git pull origin SIT

@@ -3,8 +3,11 @@
 # (still have an active keeper on the same PO). Manual CANCELLED without
 # an active sibling are kept.
 #
-# Uses remote SIT DB from /opt/klip/backend/.env (DB_HOST=172.28.92.60, DB_PORT=5442)
-# — does NOT require a postgres container on the backend host.
+# DB access (host → SIT backend 172.28.92.57):
+#   1) Prefer docker exec into klip-postgres (compose network name "postgres"
+#      in backend/.env is NOT resolvable on the host)
+#   2) Else host psql to 127.0.0.1:${POSTGRES_PORT:-5433}
+#   3) Else host psql to DB_HOST/DB_PORT when they are already host-reachable
 #
 # Usage (PuTTY → backend 172.28.92.57, from /opt/klip):
 #   bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh          # preview
@@ -22,7 +25,7 @@ elif [[ -n "${1:-}" && "${1:-}" != "-h" && "${1:-}" != "--help" ]]; then
 fi
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,16p' "$0"
+  sed -n '2,18p' "$0"
   exit 0
 fi
 
@@ -32,6 +35,7 @@ cd "$ROOT"
 SQL_PREVIEW="backend/src/scripts/sql/previewCancelledTruckingDedupeLosers.sql"
 SQL_DELETE="backend/src/scripts/sql/deleteCancelledTruckingDedupeLosers.sql"
 ENV_FILE="backend/.env"
+ROOT_ENV_FILE=".env"
 COMPOSE=(docker compose -f docker-compose.backend.yml)
 
 for f in "$SQL_PREVIEW" "$SQL_DELETE" "$ENV_FILE"; do
@@ -41,17 +45,20 @@ for f in "$SQL_PREVIEW" "$SQL_DELETE" "$ENV_FILE"; do
   fi
 done
 
-# Load only DB_* KEY=VALUE lines (ignore malformed/other secrets in .env)
-load_db_env_from_file() {
+# Load KEY=VALUE for selected keys only (ignore malformed/other secrets)
+load_keys_from_file() {
   local env_file="$1"
+  shift
+  local allow=" $* "
   local line key val
+  [[ -f "$env_file" ]] || return 0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line="${line%$'\r'}"
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    if [[ "$line" =~ ^(DB_HOST|DB_PORT|DB_NAME|DB_USER|DB_PASSWORD)=(.*)$ ]]; then
+    if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
       key="${BASH_REMATCH[1]}"
       val="${BASH_REMATCH[2]}"
-      # strip surrounding single/double quotes
+      [[ "$allow" == *" $key "* ]] || continue
       if [[ "$val" =~ ^\"(.*)\"$ ]]; then val="${BASH_REMATCH[1]}"; fi
       if [[ "$val" =~ ^\'(.*)\'$ ]]; then val="${BASH_REMATCH[1]}"; fi
       printf -v "$key" '%s' "$val"
@@ -60,47 +67,116 @@ load_db_env_from_file() {
   done < "$env_file"
 }
 
-load_db_env_from_file "$ENV_FILE"
+load_keys_from_file "$ENV_FILE" DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD POSTGRES_PORT
+load_keys_from_file "$ROOT_ENV_FILE" DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD POSTGRES_PORT
 
-DB_HOST="${DB_HOST:-127.0.0.1}"
-DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-klip_db}"
 DB_USER="${DB_USER:-postgres}"
+POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 
 if [[ -z "${DB_PASSWORD:-}" ]]; then
   echo "ERROR: DB_PASSWORD empty or missing as DB_PASSWORD=... in $ENV_FILE" >&2
-  echo "  (script only reads DB_* lines; fix GEMINI/other keys separately if malformed)" >&2
   exit 1
 fi
+
+PSQL_MODE="" # docker_exec | host_psql
+PSQL_HOST=""
+PSQL_PORT=""
+
+resolve_psql_target() {
+  if command -v docker >/dev/null 2>&1; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'klip-postgres'; then
+      PSQL_MODE="docker_exec"
+      PSQL_HOST="klip-postgres (docker exec)"
+      PSQL_PORT="5432"
+      return 0
+    fi
+    if "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -qx 'postgres'; then
+      PSQL_MODE="compose_exec"
+      PSQL_HOST="compose service postgres"
+      PSQL_PORT="5432"
+      return 0
+    fi
+  fi
+
+  if ! command -v psql >/dev/null 2>&1; then
+    echo "ERROR: psql not on PATH and klip-postgres container not running." >&2
+    echo "  Start stack: docker compose -f docker-compose.backend.yml up -d" >&2
+    exit 1
+  fi
+
+  PSQL_MODE="host_psql"
+  case "${DB_HOST:-}" in
+    postgres|klip-postgres|"")
+      # Docker DNS names only work inside the compose network — use published host port
+      PSQL_HOST="127.0.0.1"
+      PSQL_PORT="$POSTGRES_PORT"
+      ;;
+    *)
+      PSQL_HOST="$DB_HOST"
+      PSQL_PORT="${DB_PORT:-5432}"
+      ;;
+  esac
+}
 
 run_psql_file() {
   local host_path="$1"
-  PGPASSWORD="$DB_PASSWORD" psql \
-    -h "$DB_HOST" \
-    -p "$DB_PORT" \
-    -U "$DB_USER" \
-    -d "$DB_NAME" \
-    -v ON_ERROR_STOP=1 \
-    -f "$host_path"
+  case "$PSQL_MODE" in
+    docker_exec)
+      docker exec -i -e PGPASSWORD="$DB_PASSWORD" klip-postgres \
+        psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$host_path"
+      ;;
+    compose_exec)
+      "${COMPOSE[@]}" exec -T -e PGPASSWORD="$DB_PASSWORD" postgres \
+        psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 < "$host_path"
+      ;;
+    host_psql)
+      PGPASSWORD="$DB_PASSWORD" psql \
+        -h "$PSQL_HOST" \
+        -p "$PSQL_PORT" \
+        -U "$DB_USER" \
+        -d "$DB_NAME" \
+        -v ON_ERROR_STOP=1 \
+        -f "$host_path"
+      ;;
+    *)
+      echo "ERROR: unknown PSQL_MODE=$PSQL_MODE" >&2
+      exit 1
+      ;;
+  esac
 }
+
+probe_psql() {
+  case "$PSQL_MODE" in
+    docker_exec)
+      docker exec -e PGPASSWORD="$DB_PASSWORD" klip-postgres \
+        psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1" >/dev/null
+      ;;
+    compose_exec)
+      "${COMPOSE[@]}" exec -T -e PGPASSWORD="$DB_PASSWORD" postgres \
+        psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1" >/dev/null
+      ;;
+    host_psql)
+      PGPASSWORD="$DB_PASSWORD" psql \
+        -h "$PSQL_HOST" -p "$PSQL_PORT" -U "$DB_USER" -d "$DB_NAME" \
+        -c "SELECT 1" >/dev/null
+      ;;
+  esac
+}
+
+resolve_psql_target
 
 echo "=== KLIP trucking CANCELLED dedupe-loser cleanup ==="
 echo "    dir:  $ROOT"
-echo "    db:   $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+echo "    db:   $DB_USER@$PSQL_HOST:$PSQL_PORT/$DB_NAME  [$PSQL_MODE]"
 echo "    mode: $([[ "$APPLY" == true ]] && echo APPLY || echo PREVIEW)"
 echo ""
 
-if ! command -v psql >/dev/null 2>&1; then
-  echo "ERROR: psql not found on PATH." >&2
-  echo "  Install postgresql-client, or run from a host that has psql." >&2
-  echo "  Fallback: PuTTY → DB host 172.28.92.60:" >&2
-  echo "    docker exec -i klip-postgres psql -U postgres -d klip_db -v ON_ERROR_STOP=1 -f - < $SQL_PREVIEW" >&2
-  exit 1
-fi
-
 echo "==> Connectivity"
-if ! PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1" >/dev/null; then
-  echo "ERROR: cannot connect to DB at $DB_HOST:$DB_PORT" >&2
+if ! probe_psql; then
+  echo "ERROR: cannot connect via $PSQL_MODE ($PSQL_HOST:$PSQL_PORT)" >&2
+  echo "  Check: docker compose -f docker-compose.backend.yml ps" >&2
+  echo "  Or host: psql -h 127.0.0.1 -p ${POSTGRES_PORT} -U $DB_USER -d $DB_NAME" >&2
   exit 1
 fi
 echo "    OK"
