@@ -9,6 +9,7 @@ import {
   sumActualDeliveryKg,
   sumActualReceiveKg,
   sumPlanningDeliveryKg,
+  wbGrandTotalsFromActualRows,
 } from './truckingModalDailyTables'
 
 describe('truckingModalDailyTables', () => {
@@ -116,5 +117,26 @@ describe('truckingModalDailyTables', () => {
     expect(resolveWbActualsDisplayMode(rows, sto)).toBe('perSto')
     expect(filterActualRowsForSto(rows, '1006018926')).toHaveLength(1)
     expect(filterActualRowsForSto(rows, '1006018927')).toHaveLength(1)
+  })
+
+  it('wbGrandTotalsFromActualRows sums all STO rows like list Open+WB', () => {
+    const rows = normalizeDailyActualRows([
+      {
+        date: '2026-07-07',
+        quantity_delivery_kg: 1949560,
+        quantity_receive_kg: 1942280,
+        sto_number: '1006019037',
+      },
+      {
+        date: '2026-07-08',
+        quantity_delivery_kg: 1932440,
+        quantity_receive_kg: 1924720,
+        sto_number: '1006019038',
+      },
+    ])
+    const grand = wbGrandTotalsFromActualRows(rows)
+    expect(grand.deliveryKg).toBe(3882000)
+    expect(grand.receiveKg).toBe(3867000)
+    expect(sumActualDeliveryKg(filterActualRowsForSto(rows, '1006019037'))).toBe(1949560)
   })
 })

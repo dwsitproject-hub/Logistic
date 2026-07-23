@@ -163,6 +163,17 @@ export function sumActualReceiveKg(rows: TruckingModalActualRow[]): number {
   }, 0)
 }
 
+/** PO/OP-level WB totals — same scope as Trucking list Open+WB SUM(trucking_daily_actuals). */
+export function wbGrandTotalsFromActualRows(rows: TruckingModalActualRow[]): {
+  deliveryKg: number
+  receiveKg: number
+} {
+  return {
+    deliveryKg: sumActualDeliveryKg(rows),
+    receiveKg: sumActualReceiveKg(rows),
+  }
+}
+
 /** Format kg as MT with 2 decimals; null/undefined/NaN → "-". */
 export function formatSapQtyMtOrDash(valueKg: unknown): string {
   if (valueKg == null || valueKg === '') return '-'
