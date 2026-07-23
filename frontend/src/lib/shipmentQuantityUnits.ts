@@ -179,21 +179,30 @@ export function resolveShipmentListDeliveredKg(shipment: {
   return legacy
 }
 
+/**
+ * Shipments list Receive Qty — kg for display.
+ * Same Open/Close rules as Delivery (not "vessel only if higher than SAP"):
+ * Close → SAP Quantity Receive
+ * Open + meaningful actual_vessel_qty_receive (KLIP) → vessel receive
+ * Open without KLIP → SAP; last resort vessel/manual
+ */
 export function resolveShipmentListReceiveKg(shipment: {
   actual_vessel_qty_receive?: number | string | null
   quantity_receive?: number | string | null
+  is_contract_sap_closed?: boolean | null
 }): number | null {
-  const manual = shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
+  const closed = Boolean(shipment.is_contract_sap_closed)
+  const klip = shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
-  if (
-    isMeaningfulManualShipmentQtyKg(manual)
-    && sap !== null
-    && manual! > sap + 0.5
-  ) {
-    return manual
+
+  if (closed) {
+    return sap ?? null
+  }
+  if (isMeaningfulManualShipmentQtyKg(klip)) {
+    return klip
   }
   if (sap !== null) return sap
-  return manual
+  return klip
 }
 
 export function resolveShipmentListStoKg(shipment: {

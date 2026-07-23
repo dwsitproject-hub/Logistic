@@ -89,29 +89,42 @@ describe('resolveShipmentListDeliveredKg', () => {
 })
 
 describe('resolveShipmentListReceiveKg', () => {
-  it('prefers actual_vessel_qty_receive when raised above SAP', () => {
+  it('Open + KLIP vessel receive uses actual_vessel_qty_receive even if below SAP', () => {
     expect(
       resolveShipmentListReceiveKg({
-        actual_vessel_qty_receive: 1_010_000,
+        actual_vessel_qty_receive: 500_000,
         quantity_receive: 1_000_000,
+        is_contract_sap_closed: false,
       }),
-    ).toBe(1_010_000)
+    ).toBe(500_000)
   })
 
-  it('uses SAP when vessel receive is a partial multi-PO total', () => {
+  it('Open without KLIP falls back to SAP', () => {
     expect(
       resolveShipmentListReceiveKg({
-        actual_vessel_qty_receive: 208_360,
+        actual_vessel_qty_receive: 0,
         quantity_receive: 4_000_000,
+        is_contract_sap_closed: false,
       }),
     ).toBe(4_000_000)
   })
 
-  it('uses SAP receive when manual row is 0', () => {
+  it('Close always prefers SAP over KLIP vessel receive', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 5_000_000,
+        quantity_receive: 4_002_486,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(4_002_486)
+  })
+
+  it('uses SAP receive when manual row is 0 and Open', () => {
     expect(
       resolveShipmentListReceiveKg({
         actual_vessel_qty_receive: 0,
         quantity_receive: 497_115,
+        is_contract_sap_closed: false,
       }),
     ).toBe(497_115)
   })
