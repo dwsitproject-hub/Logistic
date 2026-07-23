@@ -50,10 +50,11 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain('BOOL_OR');
     expect(sql).toContain("'OPEN'");
     expect(sql).toContain("'ACTIVE'");
+    expect(sql).toContain('row_open');
     expect(sql).not.toContain('LIMIT 1');
     // Per-row SAP pick uses NULL fallback (blank GR ignored); outer COALESCE may use c.status.
     expect(sql).toContain(', NULL)');
-    expect(sql).toContain('BOOL_OR(UPPER(TRIM(COALESCE(s.st');
+    expect(sql).toContain('BOOL_OR(s.row_open)');
   });
 
   it('builds SAP closed predicate from PO-aware import status', () => {

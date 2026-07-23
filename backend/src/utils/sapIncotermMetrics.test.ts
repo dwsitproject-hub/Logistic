@@ -114,5 +114,11 @@ describe('sapIncotermMetrics', () => {
     const sql = sqlIncotermImportStatusFromJson('spd.data', 'c.incoterm', 'c.status');
     expect(sql).toContain('GR PO Status');
     expect(sql).toContain('GR STO Status');
+    // Raw GR columns preferred over stale contract.* JSON
+    const stoIdx = sql.indexOf("->'raw'->>'GR STO Status'");
+    const stoContractIdx = sql.indexOf("->'contract'->>'gr_sto_status'");
+    expect(stoIdx).toBeGreaterThan(-1);
+    expect(stoContractIdx).toBeGreaterThan(-1);
+    expect(stoIdx).toBeLessThan(stoContractIdx);
   });
 });
