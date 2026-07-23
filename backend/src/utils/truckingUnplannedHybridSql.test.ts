@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildTruckingUnplannedBacklogContractQtyQuery,
   buildTruckingUnplannedBacklogCountQuery,
   buildTruckingUnplannedBacklogIdsWithOsQuery,
   buildTruckingUnplannedBacklogPageQuery,
@@ -29,6 +30,13 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain('unplanned_trucking_backlog');
     expect(sql).toContain('COUNT(*)::bigint');
     expect(sql).toContain('c.contract_date >= $1');
+  });
+
+  it('contract qty query sums quantity_ordered for backlog contracts', () => {
+    const sql = buildTruckingUnplannedBacklogContractQtyQuery(' AND c.contract_date >= $1', '');
+    expect(sql).toContain('unplanned_trucking_backlog');
+    expect(sql).toContain('quantity_ordered');
+    expect(sql).toContain('contract_qty_kg');
   });
 
   it('toolbar scope omits trailing AND when plant filter is empty', () => {

@@ -15,6 +15,27 @@ describe('mergeDailyDeliverablesRows', () => {
       { date: '2026-06-02', quantity_delivered: 2500 },
     ]);
   });
+
+  it('removes existing dates listed in clearDates', () => {
+    const merged = mergeDailyDeliverablesRows(
+      [
+        { date: '2026-07-22', quantity_delivered: 125000 },
+        { date: '2026-07-23', quantity_delivered: 50000 },
+      ],
+      [],
+      { clearDates: ['2026-07-22'] },
+    );
+    expect(merged).toEqual([{ date: '2026-07-23', quantity_delivered: 50000 }]);
+  });
+
+  it('applies clear then set for the same date (set wins)', () => {
+    const merged = mergeDailyDeliverablesRows(
+      [{ date: '2026-07-22', quantity_delivered: 125000 }],
+      [{ date: '2026-07-22', quantity_delivered: 10000 }],
+      { clearDates: ['2026-07-22'] },
+    );
+    expect(merged).toEqual([{ date: '2026-07-22', quantity_delivered: 10000 }]);
+  });
 });
 
 describe('normalizeAndValidateDailyDeliverables planning upload cap', () => {

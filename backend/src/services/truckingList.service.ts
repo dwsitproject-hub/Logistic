@@ -10,6 +10,7 @@ import {
 import {
   appendTruckingUnplannedBacklogColumnFilters,
   appendTruckingUnplannedBacklogGlobalSearch,
+  buildTruckingUnplannedBacklogContractQtyQuery,
   buildTruckingUnplannedBacklogCountQuery,
   buildTruckingUnplannedContractToolbarScope,
 } from '../utils/truckingUnplannedHybridSql';
@@ -73,6 +74,14 @@ export interface TruckingListBuiltQuery {
   useStageSnapshot?: boolean;
 }
 
+export interface TruckingStatusContractQtyKg {
+  unplanned: number;
+  planned: number;
+  inProgress: number;
+  completed: number;
+  cancelled: number;
+}
+
 export interface TruckingListResponseData {
   truckingOperations: TruckingListRow[];
   summary?: {
@@ -87,6 +96,8 @@ export interface TruckingListResponseData {
       completed: number;
       cancelled: number;
     };
+    /** Sum of contract quantity_ordered (kg), one contract once per status bucket. */
+    statusContractQty?: TruckingStatusContractQtyKg;
     unplannedTable?: {
       contractRows: number;
       executionRows: number;
@@ -117,9 +128,12 @@ const MERGED_SUMMARY_CACHE = new Map<
   string,
   { summary: TruckingListResponseData['summary']; expiresAt: number }
 >();
-const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
+const UNPLANNED_BACKLOG_CACHE = new Map<
+  string,
+  { count: number; contractQtyKg: number; expiresAt: number }
+>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v35';
+const CACHE_VERSION = 'trucking-list-v36';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -261,11 +275,13 @@ function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
   })}`;
 }
 
-async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest): Promise<number> {
+async function loadTruckingUnplannedContractBacklogForRequest(
+  req: AuthRequest,
+): Promise<{ count: number; contractQtyKg: number }> {
   const cacheKey = buildTruckingUnplannedBacklogCacheKey(req);
   const cached = UNPLANNED_BACKLOG_CACHE.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
-    return cached.count;
+    return { count: cached.count, contractQtyKg: cached.contractQtyKg };
   }
   if (cached) UNPLANNED_BACKLOG_CACHE.delete(cacheKey);
 
@@ -282,14 +298,43 @@ async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest)
   const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
   idx = g.nextIndex;
   const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
-  const res = await query(
-    buildTruckingUnplannedBacklogCountQuery(scope.sql, `${g.sql}${c.sql}`),
-    [...scope.params, ...g.params, ...c.params],
-  );
-  const count = parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;
-  UNPLANNED_BACKLOG_CACHE.set(cacheKey, { count, expiresAt: Date.now() + CACHE_TTL_MS });
+  const params = [...scope.params, ...g.params, ...c.params];
+  const toolbarSql = `${g.sql}${c.sql}`;
+  const [countRes, qtyRes] = await Promise.all([
+    query(buildTruckingUnplannedBacklogCountQuery(scope.sql, toolbarSql), params),
+    query(buildTruckingUnplannedBacklogContractQtyQuery(scope.sql, toolbarSql), params),
+  ]);
+  const count = parseInt(String(countRes.rows[0]?.c ?? '0'), 10) || 0;
+  const contractQtyKg = Number(qtyRes.rows[0]?.contract_qty_kg || 0) || 0;
+  UNPLANNED_BACKLOG_CACHE.set(cacheKey, {
+    count,
+    contractQtyKg,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
   evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
-  return count;
+  return { count, contractQtyKg };
+}
+
+async function loadTruckingStatusContractQtyForRequest(
+  req: AuthRequest,
+  built: TruckingListBuiltQuery,
+): Promise<TruckingStatusContractQtyKg> {
+  const qtyBuilt: TruckingListBuiltQuery = {
+    ...built,
+    skipSapJoin: false,
+  };
+  const q = buildTruckingStatusContractQtyQuery(qtyBuilt);
+  const [qtyRes, backlog] = await Promise.all([
+    query(q.text, q.params),
+    loadTruckingUnplannedContractBacklogForRequest(req),
+  ]);
+  const execution = parseTruckingStatusContractQtyFromSqlRow(
+    (qtyRes.rows[0] || {}) as Record<string, unknown>,
+  );
+  return {
+    ...execution,
+    unplanned: execution.unplanned + backlog.contractQtyKg,
+  };
 }
 
 /**
@@ -505,6 +550,7 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
 
 export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
   const total = parseInt(String(row.total_count ?? '0'), 10) || 0;
+  const statusContractQty = parseTruckingStatusContractQtyFromSqlRow(row);
   return {
     total,
     status: {
@@ -517,25 +563,50 @@ export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
       completed: Number(row.completed_count || 0),
       cancelled: Number(row.cancelled_count || 0),
     },
+    statusContractQty,
   };
 }
 
-/** Align Section 2 Unplanned card with hybrid table row total. */
+export function parseTruckingStatusContractQtyFromSqlRow(
+  row: Record<string, unknown>,
+): TruckingStatusContractQtyKg {
+  return {
+    unplanned: Number(row.unplanned_contract_qty || 0) || 0,
+    planned: Number(row.planned_contract_qty || 0) || 0,
+    inProgress: Number(row.in_progress_contract_qty || 0) || 0,
+    completed: Number(row.completed_contract_qty || 0) || 0,
+    cancelled: Number(row.cancelled_contract_qty || 0) || 0,
+  };
+}
+
+/** Align Section 2 Unplanned card with hybrid table row total (+ optional contract qty). */
 export function mergeTruckingUnplannedBreakdownIntoSummary(
   summary: TruckingListResponseData['summary'],
   breakdown: {
     contractRows: number;
     executionRows: number;
     totalTableRows: number;
+    /** When set, added to existing statusContractQty.unplanned (execution-only). */
+    backlogContractQtyKg?: number;
   },
 ): TruckingListResponseData['summary'] {
   if (!summary) return summary;
+  let statusContractQty = summary.statusContractQty;
+  if (statusContractQty && breakdown.backlogContractQtyKg != null) {
+    statusContractQty = {
+      ...statusContractQty,
+      unplanned:
+        (Number(statusContractQty.unplanned) || 0) +
+        (Number(breakdown.backlogContractQtyKg) || 0),
+    };
+  }
   return {
     ...summary,
     status: {
       ...summary.status,
       unplanned: breakdown.totalTableRows,
     },
+    ...(statusContractQty ? { statusContractQty } : {}),
     unplannedTable: {
       contractRows: breakdown.contractRows,
       executionRows: breakdown.executionRows,
@@ -742,11 +813,21 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
           status,
           status_db,
           contract_number,
+          contract_qty,
           trucking_start_date,
           trucking_completion_date
         FROM (
           ${expanded}
         ) trucking_source
+      ),
+      per_contract AS (
+        SELECT
+          status,
+          contract_number,
+          MAX(COALESCE(contract_qty, 0))::numeric AS contract_qty
+        FROM filtered
+        WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+        GROUP BY status, contract_number
       )
       SELECT
         COUNT(*)::bigint AS total_count,
@@ -757,8 +838,48 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
         COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
         COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint AS in_transit_count,
-        COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count
+        COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric FROM per_contract) AS unplanned_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'PLANNED'), 0)::numeric FROM per_contract) AS planned_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric FROM per_contract) AS in_progress_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'COMPLETED'), 0)::numeric FROM per_contract) AS completed_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'CANCELLED'), 0)::numeric FROM per_contract) AS cancelled_contract_qty
       FROM filtered`;
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
+
+/** Live contract-qty-only aggregate (used when status counts come from daily summary). */
+export function buildTruckingStatusContractQtyQuery(
+  built: TruckingListBuiltQuery,
+): { text: string; params: unknown[] } {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
+    selectOutstanding: true,
+    skipSapJoin: built.skipSapJoin,
+  });
+  const text = `
+      WITH filtered AS (
+        SELECT status, contract_number, contract_qty
+        FROM (
+          ${expanded}
+        ) trucking_source
+      ),
+      per_contract AS (
+        SELECT
+          status,
+          contract_number,
+          MAX(COALESCE(contract_qty, 0))::numeric AS contract_qty
+        FROM filtered
+        WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+        GROUP BY status, contract_number
+      )
+      SELECT
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric AS unplanned_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty
+      FROM per_contract`;
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
 
@@ -1069,15 +1190,20 @@ async function runTruckingListSummaryWithBacklog(
   };
 
   const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built);
+  const statusContractQtyPromise = loadTruckingStatusContractQtyForRequest(req, built);
 
   const filters = buildPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
     const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
     if (fromDaily) {
-      const outstandingQty = await outstandingQtyPromise;
+      const [outstandingQty, statusContractQty] = await Promise.all([
+        outstandingQtyPromise,
+        statusContractQtyPromise,
+      ]);
       const merged: NonNullable<TruckingListResponseData['summary']> = {
         ...fromDaily,
         outstandingQty,
+        statusContractQty,
       };
       MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
         summary: merged,
@@ -1089,22 +1215,27 @@ async function runTruckingListSummaryWithBacklog(
     }
   }
 
-  const [base, contractRows, outstandingQty] = await Promise.all([
+  const [base, backlog, outstandingQty, statusContractQty] = await Promise.all([
     loadTruckingListSummary(built, req),
-    countTruckingUnplannedContractBacklogForRequest(req),
+    loadTruckingUnplannedContractBacklogForRequest(req),
     outstandingQtyPromise,
+    statusContractQtyPromise,
   ]);
   if (!base) return base;
 
   const executionRows = base.status?.unplanned ?? 0;
-  const merged = mergeTruckingUnplannedBreakdownIntoSummary(base, {
-    contractRows,
-    executionRows,
-    totalTableRows: contractRows + executionRows,
-  });
+  const merged = mergeTruckingUnplannedBreakdownIntoSummary(
+    { ...base, statusContractQty },
+    {
+      contractRows: backlog.count,
+      executionRows,
+      totalTableRows: backlog.count + executionRows,
+    },
+  );
   if (!merged) return base;
   const withOs: NonNullable<TruckingListResponseData['summary']> = {
     ...merged,
+    statusContractQty,
     outstandingQty,
   };
   MERGED_SUMMARY_CACHE.set(mergedCacheKey, {

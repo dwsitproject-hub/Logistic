@@ -3,8 +3,11 @@ import {
   buildTruckingListQuery,
   buildTruckingListSummaryFromRows,
   buildPaginatedListQuery,
+  buildTruckingStatusContractQtyQuery,
   getCachedFilteredTotal,
   invalidateTruckingListCache,
+  mergeTruckingUnplannedBreakdownIntoSummary,
+  parseTruckingStatusContractQtyFromSqlRow,
   sortTruckingListRows,
   type TruckingListRow,
 } from './truckingList.service';
@@ -29,7 +32,7 @@ describe('truckingList.service', () => {
     expect(deferred.preOuterQuery).not.toContain(innerStage);
   });
 
-  it('buildTruckingListSummaryFromRows mirrors SQL status partition counts', () => {
+  it('buildTruckingSummaryFromRows mirrors SQL status partition counts', () => {
     const rows: TruckingListRow[] = [
       { status: 'PLANNED', status_db: 'PLANNED', trucking_start_date: null, trucking_completion_date: null },
       {
@@ -52,6 +55,69 @@ describe('truckingList.service', () => {
     expect(summary.status.inTransit).toBe(1);
     expect(summary.status.completed).toBe(2);
     expect(summary.status.cancelled).toBe(1);
+  });
+
+  it('parseTruckingStatusContractQtyFromSqlRow maps kg fields', () => {
+    const qty = parseTruckingStatusContractQtyFromSqlRow({
+      unplanned_contract_qty: '1000',
+      planned_contract_qty: 2000,
+      in_progress_contract_qty: '0',
+      completed_contract_qty: 500,
+      cancelled_contract_qty: null,
+    });
+    expect(qty).toEqual({
+      unplanned: 1000,
+      planned: 2000,
+      inProgress: 0,
+      completed: 500,
+      cancelled: 0,
+    });
+  });
+
+  it('mergeTruckingUnplannedBreakdownIntoSummary adds backlog contract qty when provided', () => {
+    const merged = mergeTruckingUnplannedBreakdownIntoSummary(
+      {
+        total: 10,
+        status: {
+          unplanned: 3,
+          planned: 2,
+          inProgress: 1,
+          loading: 0,
+          inTransit: 0,
+          unloading: 0,
+          completed: 3,
+          cancelled: 1,
+        },
+        statusContractQty: {
+          unplanned: 1000,
+          planned: 2000,
+          inProgress: 500,
+          completed: 3000,
+          cancelled: 0,
+        },
+      },
+      {
+        contractRows: 4,
+        executionRows: 3,
+        totalTableRows: 7,
+        backlogContractQtyKg: 9000,
+      },
+    );
+    expect(merged?.status.unplanned).toBe(7);
+    expect(merged?.statusContractQty?.unplanned).toBe(10000);
+    expect(merged?.unplannedTable?.totalTableRows).toBe(7);
+  });
+
+  it('buildTruckingStatusContractQtyQuery dedupes by contract_number per status', () => {
+    const req = {
+      query: { page: '1', limit: '20', skipSapJoin: 'true' },
+    } as Parameters<typeof buildTruckingListQuery>[0];
+    const built = buildTruckingListQuery(req, { omitStatusFilter: true });
+    const { text } = buildTruckingStatusContractQtyQuery(built);
+    expect(text).toContain('per_contract');
+    expect(text).toContain('GROUP BY status, contract_number');
+    expect(text).toContain('unplanned_contract_qty');
+    expect(text).toContain('MAX(COALESCE(contract_qty, 0))');
   });
 
   it('sortTruckingListRows paginates consistently (sort + slice)', () => {

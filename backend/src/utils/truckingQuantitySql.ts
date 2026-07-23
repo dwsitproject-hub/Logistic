@@ -41,61 +41,72 @@ export function sqlTruckingPoLevelSapRowMatch(
   )`;
 }
 
-/**
- * SAP Delivery Qty (kg) summed across all STO rows for the PO (or contract STOs when PO blank).
- * Used for trucking PO-grain list OS: Contract Qty − Σ Delivery.
- */
-export function sqlTruckingPoLevelSapDeliveryQty(
-  contractNumberExpr = 'e.contract_number',
-  contractUuidExpr = 'e.contract_id',
-  poNumberExpr = 'e.po_number',
-): string {
-  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
-  return `(
-    SELECT SUM(NULLIF(regexp_replace(COALESCE(
+const SAP_DELIVERY_RAW_COALESCE = `COALESCE(
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered Trucking'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered via Trucking'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
       ''
-    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = ${contractNumberExpr}
-      AND ${match}
-      AND NULLIF(TRIM(COALESCE(
-        spd.data->'raw'->>'Quantity Delivery Trucking',
-        spd.data->'raw'->>'Quantity Delivered Trucking',
-        spd.data->'raw'->>'Quantity Delivered via Trucking',
-        spd.data->'raw'->>'Quantity Delivered',
-        spd.data->'raw'->>'Quantity Delivery'
-      )), '') IS NOT NULL
+    )`;
+
+const SAP_RECEIVE_RAW_COALESCE = `COALESCE(
+      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
+      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
+      ''
+    )`;
+
+/**
+ * SAP Delivery Qty (kg) summed across STO rows for the PO (latest row per STO only).
+ * Used for trucking PO-grain list when GR is Close: Contract Qty − Σ Delivery.
+ */
+export function sqlTruckingPoLevelSapDeliveryQty(
+  contractNumberExpr = 'e.contract_number',
+  contractUuidExpr = 'e.contract_id',
+  poNumberExpr = 'e.po_number',
+  contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
+): string {
+  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
+  const stoKey = `TRIM(COALESCE(${SPD_EFFECTIVE_STO}, spd.sto_number::text, ''))`;
+  const rawQty = `NULLIF(regexp_replace(${SAP_DELIVERY_RAW_COALESCE}, '[^0-9\\.-]', '', 'g'), '')::numeric`;
+  return `(
+    SELECT SUM(${sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr)})
+    FROM (
+      SELECT DISTINCT ON (spd.contract_number, ${stoKey})
+        ${rawQty} AS qty
+      FROM sap_processed_data spd
+      WHERE spd.contract_number = ${contractNumberExpr}
+        AND ${match}
+        AND NULLIF(TRIM(${SAP_DELIVERY_RAW_COALESCE}), '') IS NOT NULL
+      ORDER BY spd.contract_number, ${stoKey}, spd.created_at DESC NULLS LAST
+    ) x
   )`;
 }
 
 /**
- * SAP Receive Qty (kg) summed across all STO rows for the PO (or contract STOs when PO blank).
- * Used for trucking PO-grain list OS: Contract Qty − Σ Receive.
+ * SAP Receive Qty (kg) summed across STO rows for the PO (latest row per STO only).
+ * Used for trucking PO-grain list when GR is Close: Contract Qty − Σ Receive.
  */
 export function sqlTruckingPoLevelSapReceiveQty(
   contractNumberExpr = 'e.contract_number',
   contractUuidExpr = 'e.contract_id',
   poNumberExpr = 'e.po_number',
+  contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
 ): string {
   const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
+  const stoKey = `TRIM(COALESCE(${SPD_EFFECTIVE_STO}, spd.sto_number::text, ''))`;
+  const rawQty = `NULLIF(regexp_replace(${SAP_RECEIVE_RAW_COALESCE}, '[^0-9\\.-]', '', 'g'), '')::numeric`;
   return `(
-    SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-      ''
-    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = ${contractNumberExpr}
-      AND ${match}
-      AND NULLIF(TRIM(COALESCE(
-        spd.data->'raw'->>'Quantity Receive',
-        spd.data->'raw'->>'Qty Receive'
-      )), '') IS NOT NULL
+    SELECT SUM(${sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr)})
+    FROM (
+      SELECT DISTINCT ON (spd.contract_number, ${stoKey})
+        ${rawQty} AS qty
+      FROM sap_processed_data spd
+      WHERE spd.contract_number = ${contractNumberExpr}
+        AND ${match}
+        AND NULLIF(TRIM(${SAP_RECEIVE_RAW_COALESCE}), '') IS NOT NULL
+      ORDER BY spd.contract_number, ${stoKey}, spd.created_at DESC NULLS LAST
+    ) x
   )`;
 }
 
@@ -241,8 +252,8 @@ export function sqlWbActualReceiveSumKg(operationIdExpr = 't.id'): string {
 
 /**
  * Delivery Qty for list/STO expand:
- * - Open + WB actuals → WB delivery sum (op-level; repeated on every STO child)
- * - Close → SAP (per-STO or contract-level expr)
+ * - GR Open (LCO: GR STO / FRC: GR PO) + WB actuals → WB delivery sum
+ * - GR Close → SAP (PO-level sum, latest row per STO)
  * - else → COALESCE(SAP, op/KLIP qty)
  */
 export function sqlTruckingResolvedDeliveryQty(

@@ -28,6 +28,24 @@ describe('truckingUnplannedPlanningOsQty', () => {
     }
   });
 
+  it('allows total planning less than outstanding when allowLess is set (clear upload)', () => {
+    expect(
+      validatePlanningTotalAgainstOutstandingKg(100000, 125000, { allowLess: true }),
+    ).toEqual({ ok: true });
+  });
+
+  it('still rejects over-planning when allowLess is set', () => {
+    const result = validatePlanningTotalAgainstOutstandingKg(130000, 125000, { allowLess: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failureKind).toBe('greater');
+    }
+  });
+
+  it('ignores null qty entries when summing (clear candidates)', () => {
+    expect(sumPlanningEntriesKg([{ qtyMt: 10000 }, { qtyMt: null }, { qtyMt: 2500 }])).toBe(12500);
+  });
+
   it('rejects total planning greater than outstanding qty', () => {
     const result = validatePlanningTotalAgainstOutstandingKg(130000, 125000);
     expect(result.ok).toBe(false);

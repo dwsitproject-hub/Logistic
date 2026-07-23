@@ -11,7 +11,6 @@ import {
   sqlEffectiveAtaStartDischarge,
   sqlEffectiveAtaStartLoading,
 } from './shipmentAtaOverrideSql';
-import { buildShipmentExcludeStoTypeTSql } from './shipmentStoTypeSql';
 
 const ATA_UI_KEYS = [
   'ata_vessel_arrival_at_loading_port',
@@ -80,7 +79,6 @@ async function mergeStoSiblingAta(
 
   const activeLoadingJoinFilter = ' AND COALESCE(vlp1.is_cancelled, false) = false';
   const activeDischargeJoinFilter = ' AND COALESCE(vlpd.is_cancelled, false) = false';
-  const excludeStoTypeT = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
 
   const result = await query(
     `WITH target AS (
@@ -121,8 +119,7 @@ async function mergeStoSiblingAta(
     LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
     LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
     ${SHIPMENT_ATA_OVERRIDES_JOIN}
-    WHERE t.sto IS NOT NULL
-      AND (${excludeStoTypeT})`,
+    WHERE t.sto IS NOT NULL`,
     [shipmentId],
   );
 

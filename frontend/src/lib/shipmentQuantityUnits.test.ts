@@ -5,6 +5,7 @@ import {
   resolveShipmentListReceiveKg,
   sapContractDetailQtyToKg,
   sapDeliveredOrReceiveMtToKg,
+  seedKlipQtyFromShipmentHeader,
 } from './shipmentQuantityUnits'
 
 describe('sapDeliveredOrReceiveMtToKg', () => {
@@ -150,5 +151,31 @@ describe('mergeShipmentQtyOverridesOnContractRows', () => {
     const merged = mergeShipmentQtyOverridesOnContractRows(rows, 1_010_000, null)
     expect(merged[0].quantity_delivered).toBe(610_000)
     expect(merged[1].quantity_delivered).toBe(400_000)
+  })
+})
+
+describe('seedKlipQtyFromShipmentHeader', () => {
+  it('returns null KLIP when no prior KLIP input', () => {
+    const seeded = seedKlipQtyFromShipmentHeader(
+      [{ quantity_delivered: 500_000, quantity_receive: 480_000 }],
+      {
+        shipmentDeliveredKlipKg: null,
+        shipmentDeliveredKg: 500_000,
+        shipmentReceiveKg: null,
+      },
+    )
+    expect(seeded).toEqual([{ quantity_delivered: null, quantity_receive: null }])
+  })
+
+  it('seeds single-PO from quantity_delivered_klip and actual_vessel receive', () => {
+    const seeded = seedKlipQtyFromShipmentHeader(
+      [{ quantity_delivered: 500_000, quantity_receive: 480_000 }],
+      {
+        shipmentDeliveredKlipKg: 510_000,
+        shipmentDeliveredKg: 500_000,
+        shipmentReceiveKg: 505_000,
+      },
+    )
+    expect(seeded).toEqual([{ quantity_delivered: 510_000, quantity_receive: 505_000 }])
   })
 })

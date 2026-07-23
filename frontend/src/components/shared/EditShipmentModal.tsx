@@ -19,6 +19,7 @@ import {
   Anchor,
   Check,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Edit2,
   FileText,
@@ -44,7 +45,7 @@ import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveLoadingPortDisplayFromRow, resolveKlipPortInputValue } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
-  mergeShipmentQtyOverridesOnContractRows,
+  seedKlipQtyFromShipmentHeader,
   sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
@@ -65,12 +66,14 @@ import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_COMPACT_TD,
   VESSEL_MODAL_COMPACT_TH,
+  VESSEL_MODAL_FOOTER_BAR_CLASS,
   VESSEL_MODAL_HEADER_CLASS,
   VESSEL_MODAL_OVERLAY_CLASS,
   VESSEL_MODAL_PANEL_CLASS,
   VESSEL_MODAL_SECTION_CLASS,
-  VESSEL_MODAL_SECTION_HEADER_CLASS,
+  VESSEL_MODAL_STEP_STRIP_CLASS,
   VESSEL_MODAL_TABLE_FOOTER_CLASS,
+  vesselModalSectionHeaderClass,
 } from '@/lib/vesselModalUi'
 import {
   saveEditShipmentChanges,
@@ -431,8 +434,14 @@ type ShipmentDetailRow = {
   sto_qty_assigned: number
   /** @deprecated alias for outstanding_qty_actual */
   outstanding_qty: number
-  quantity_delivered: number | null
-  quantity_receive: number | null
+  /** SAP STO-scoped delivered (read-only in PO table). */
+  quantity_delivered_sap: number | null
+  /** SAP STO-scoped receive (read-only in PO table). */
+  quantity_receive_sap: number | null
+  /** KLIP delivered seed (editable after SLD/SDD). */
+  quantity_delivered_klip: number | null
+  /** KLIP receive seed (editable after SLD/SDD). */
+  quantity_receive_klip: number | null
 }
 
 async function fetchContractValidateEnrichment(contractNumber: string): Promise<{
@@ -490,8 +499,10 @@ function contractDetailRowFromApi(
     shipment_plan_qty: shipmentPlanQty,
     sto_qty_assigned: shipmentPlanQty,
     outstanding_qty: osActual,
-    quantity_delivered: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
-    quantity_receive: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
+    quantity_delivered_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
+    quantity_receive_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
+    quantity_delivered_klip: null,
+    quantity_receive_klip: null,
   }
 }
 
@@ -499,7 +510,6 @@ async function buildContractDetailRows(
   detailsData: Array<Record<string, unknown>>,
   shipmentId: string,
   contractNumbers: string[],
-  info: Record<string, unknown>,
 ): Promise<ShipmentDetailRow[]> {
   let contractDetails = detailsData.map((d) => contractDetailRowFromApi(d, shipmentId))
 
@@ -543,8 +553,10 @@ async function buildContractDetailRows(
         shipment_plan_qty: 0,
         sto_qty_assigned: 0,
         outstanding_qty: enriched.outstanding_qty,
-        quantity_delivered: shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered)),
-        quantity_receive: shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive)),
+        quantity_delivered_sap: null,
+        quantity_receive_sap: null,
+        quantity_delivered_klip: null,
+        quantity_receive_klip: null,
       }
     })
   }
@@ -718,8 +730,8 @@ export function EditShipmentModal({
         po_number: d.po_number,
         contract_qty: d.contract_qty,
         sto_qty: d.sto_qty_assigned,
-        quantity_delivered: d.quantity_delivered,
-        quantity_receive: d.quantity_receive,
+        quantity_delivered: d.quantity_delivered_klip,
+        quantity_receive: d.quantity_receive_klip,
       })),
     [detailRows],
   )
@@ -736,16 +748,16 @@ export function EditShipmentModal({
 
   const poTableQtyTotals = useMemo(() => {
     let contractQty = 0
-    let stoQty = 0
+    let sapDelivered = 0
+    let sapReceive = 0
     let osQty = 0
-    let osPlanQty = 0
     for (const row of detailRows) {
       contractQty += row.contract_qty ?? 0
-      stoQty += row.sap_sto_qty ?? 0
+      sapDelivered += row.quantity_delivered_sap ?? 0
+      sapReceive += row.quantity_receive_sap ?? 0
       osQty += row.outstanding_qty_actual ?? 0
-      osPlanQty += row.outstanding_qty_planning ?? 0
     }
-    return { contractQty, stoQty, osQty, osPlanQty }
+    return { contractQty, sapDelivered, sapReceive, osQty }
   }, [detailRows])
 
   const qtyTotals = useMemo(
@@ -977,16 +989,27 @@ export function EditShipmentModal({
           detailsData,
           sid,
           contractNumbers,
-          info,
         )
 
+        const shipmentDeliveredKlipKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered_klip))
         const shipmentDeliveredKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered))
         const shipmentReceiveKg = shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive))
-        contractDetails = mergeShipmentQtyOverridesOnContractRows(
-          contractDetails,
-          shipmentDeliveredKg,
-          shipmentReceiveKg,
+        const klipSeeded = seedKlipQtyFromShipmentHeader(
+          contractDetails.map((r) => ({
+            quantity_delivered: r.quantity_delivered_sap,
+            quantity_receive: r.quantity_receive_sap,
+          })),
+          {
+            shipmentDeliveredKlipKg,
+            shipmentDeliveredKg,
+            shipmentReceiveKg,
+          },
         )
+        contractDetails = contractDetails.map((row, i) => ({
+          ...row,
+          quantity_delivered_klip: klipSeeded[i]?.quantity_delivered ?? null,
+          quantity_receive_klip: klipSeeded[i]?.quantity_receive ?? null,
+        }))
 
         setDetailRows(contractDetails)
         setPlanQtyEdits(
@@ -994,6 +1017,7 @@ export function EditShipmentModal({
             contractDetails.map((detailRow) => [detailRow.rowKey, detailRow.shipment_plan_qty ?? 0]),
           ),
         )
+        setQtyEdits({})
 
         const vn = String(row.vessel_name ?? '')
         setVesselName(vn)
@@ -1033,11 +1057,12 @@ export function EditShipmentModal({
         setOriginalSfbdQty(sfbd)
 
         const deliveredKg =
-          contractDetails.reduce((s, r) => s + (r.quantity_delivered ?? 0), 0) ||
-          shipmentDeliveredKg
+          contractDetails.reduce((s, r) => s + (r.quantity_delivered_klip ?? 0), 0)
+          || shipmentDeliveredKlipKg
+          || shipmentDeliveredKg
         const receiveKg =
-          contractDetails.reduce((s, r) => s + (r.quantity_receive ?? 0), 0) ||
-          shipmentReceiveKg
+          contractDetails.reduce((s, r) => s + (r.quantity_receive_klip ?? 0), 0)
+          || shipmentReceiveKg
         setOriginalDeliveredKg(deliveredKg)
         setOriginalReceiveKg(receiveKg)
 
@@ -1275,7 +1300,7 @@ export function EditShipmentModal({
     if (requiresEditRemark && !editRemark.trim()) {
       setNotification({
         type: 'error',
-        message: 'Remark is required when editing Estimation, Quantity Delivered, or Quantity Receive.',
+        message: 'Remark is required when editing Estimation, Quantity Delivered (Klip), or Quantity Receive (Klip).',
       })
       return
     }
@@ -1456,6 +1481,15 @@ export function EditShipmentModal({
   const activeEtaBlock = etaBlocks.find((b) => b.status === 'active')
   const historicalEtaBlocks = etaBlocks.filter((b) => b.status === 'historical')
 
+  const step1Done = Boolean(vesselName.trim())
+  const step2Done = detailRows.length > 0 || Boolean(stoNumber.trim())
+  const step3Done = Boolean(
+    activeEtaBlock &&
+      Object.values(activeEtaBlock.fields).some((v) => String(v ?? '').trim() !== ''),
+  )
+  const step4Done = Object.values(ataFields).some((v) => String(v ?? '').trim() !== '')
+  const step5Done = loadingPortRows.length > 0
+
   return (
     <>
     <div
@@ -1498,6 +1532,33 @@ export function EditShipmentModal({
               <X className="h-5 w-5" />
             </Button>
           </div>
+          <div className={VESSEL_MODAL_STEP_STRIP_CLASS}>
+            {[
+              { num: 1, label: 'Vessel', done: step1Done },
+              { num: 2, label: 'Shipment Detail', done: step2Done },
+              { num: 3, label: 'Estimation', done: step3Done },
+              { num: 4, label: 'ATA', done: step4Done },
+              { num: 5, label: 'Quality', done: step5Done },
+            ].map((step, i, arr) => (
+              <div key={step.num} className="flex items-center">
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
+                      step.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+                    }`}
+                  >
+                    {step.done ? <Check className="h-3.5 w-3.5" /> : step.num}
+                  </div>
+                  <span className={`text-xs font-medium ${step.done ? 'text-green-700' : 'text-gray-500'}`}>
+                    {step.label}
+                  </span>
+                </div>
+                {i < arr.length - 1 && (
+                  <ChevronRight className="mx-3 h-3.5 w-3.5 shrink-0 text-gray-300" />
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className={VESSEL_MODAL_BODY_CLASS}>
@@ -1528,11 +1589,12 @@ export function EditShipmentModal({
           <div className="space-y-5">
             {/* Section 1: Vessel Detail */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
-                  <Anchor className="h-3.5 w-3.5 text-blue-600" />
+              <div className={vesselModalSectionHeaderClass('cyan')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-100">
+                  <Anchor className="h-3.5 w-3.5 text-cyan-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">1. Vessel Detail</h4>
+                {step1Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
                 <ReadOnlyInfoField
@@ -1557,11 +1619,12 @@ export function EditShipmentModal({
 
             {/* Section 2: Shipment Detail */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
+              <div className={vesselModalSectionHeaderClass('blue')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100">
                   <FileText className="h-3.5 w-3.5 text-blue-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">2. Shipment Detail</h4>
+                {step2Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="space-y-4 p-4">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1639,7 +1702,7 @@ export function EditShipmentModal({
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SLD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Receive qty.</p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Received Qty (Klip).</p>
                     <input
                       id="edit-shipment-sld"
                       type="file"
@@ -1671,7 +1734,7 @@ export function EditShipmentModal({
                   </div>
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SDD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Receive qty.</p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Received Qty (Klip).</p>
                     <input
                       id="edit-shipment-sdd"
                       type="file"
@@ -1705,7 +1768,7 @@ export function EditShipmentModal({
                 )}
                 {!readOnly && !isQuantityUnlocked && (
                   <p className="text-[11px] text-amber-800/80">
-                    Delivered / Receive quantities stay locked until at least one of SLD or SDD is uploaded.
+                    Delivered Qty (Klip) / Received Qty (Klip) stay locked until at least one of SLD or SDD is uploaded.
                   </p>
                 )}
 
@@ -1765,29 +1828,35 @@ export function EditShipmentModal({
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>Supplier</TableHead>
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>Product</TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Metric tons (1 MT = 1,000 kg)">Contract Qty (MT)</span>
+                          <span title="Metric tons (1 MT = 1,000 kg)">Contract Qty</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="SAP STO quantity">STO Qty (MT)</span>
+                          <span title="SAP STO-scoped delivered quantity">Delivered Qty (SAP)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">OS Qty (MT)</span>
+                          <span title="SAP STO-scoped receive quantity">Receive Qty (SAP)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Global per PO — contract − KLIP plans − SAP STO without a KLIP plan">OS Qty (Plan) (MT)</span>
+                          <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">
+                            OS Qty
+                          </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="KLIP plan on this STO">Shipment Plan Qty (MT)</span>
+                          <span title="KLIP plan on this STO">Shipment Plan Qty</span>
                         </TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Delivered Qty (MT)</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Receive Qty (MT)</TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          Delivered Qty (Klip)
+                        </TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          Received Qty (Klip)
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {detailRows.map((row) => {
                         const qtyRow = qtyTableRows.find((r) => r.rowKey === row.rowKey)!
-                        const deliveredKg = resolveRowQty(qtyRow, 'quantity_delivered')
-                        const receiveKg = resolveRowQty(qtyRow, 'quantity_receive')
+                        const deliveredKlipKg = resolveRowQty(qtyRow, 'quantity_delivered')
+                        const receiveKlipKg = resolveRowQty(qtyRow, 'quantity_receive')
                         const planKg = planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
                         return (
                           <TableRow key={row.rowKey}>
@@ -1816,13 +1885,13 @@ export function EditShipmentModal({
                               <MtQtyReadOnly valueKg={row.contract_qty} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <MtQtyReadOnly valueKg={row.sap_sto_qty} />
+                              <MtQtyReadOnly valueKg={row.quantity_delivered_sap} />
+                            </TableCell>
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.quantity_receive_sap} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
-                            </TableCell>
-                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <MtQtyReadOnly valueKg={row.outstanding_qty_planning} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
@@ -1839,10 +1908,10 @@ export function EditShipmentModal({
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
-                                <MtQtyReadOnly valueKg={deliveredKg} />
+                                <MtQtyReadOnly valueKg={deliveredKlipKg} />
                               ) : (
                                 <MtQtyInput
-                                  valueKg={deliveredKg}
+                                  valueKg={deliveredKlipKg}
                                   disabled={!canModifyShipment || !isQuantityUnlocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
@@ -1855,10 +1924,10 @@ export function EditShipmentModal({
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
-                                <MtQtyReadOnly valueKg={receiveKg} />
+                                <MtQtyReadOnly valueKg={receiveKlipKg} />
                               ) : (
                                 <MtQtyInput
-                                  valueKg={receiveKg}
+                                  valueKg={receiveKlipKg}
                                   disabled={!canModifyShipment || !isQuantityUnlocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
@@ -1882,13 +1951,13 @@ export function EditShipmentModal({
                           <MtQtyReadOnly valueKg={poTableQtyTotals.contractQty} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={poTableQtyTotals.stoQty} />
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.sapDelivered} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.sapReceive} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={poTableQtyTotals.osQty} />
-                        </TableCell>
-                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={poTableQtyTotals.osPlanQty} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={totalShipmentPlanKg} />
@@ -1951,12 +2020,13 @@ export function EditShipmentModal({
 
             {/* Section 3: ETA + Loading Port */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={`${VESSEL_MODAL_SECTION_HEADER_CLASS} justify-between gap-2`}>
+              <div className={vesselModalSectionHeaderClass('violet', 'justify-between gap-2')}>
                 <div className="flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
-                    <Clock className="h-3.5 w-3.5 text-blue-600" />
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100">
+                    <Clock className="h-3.5 w-3.5 text-violet-600" />
                   </div>
                   <h4 className="text-sm font-semibold text-gray-800">3. Estimation + Loading Port</h4>
+                  {step3Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
                 {isMultiPortLoading && canModifyShipment && (
                   <Button
@@ -2180,12 +2250,13 @@ export function EditShipmentModal({
 
             {/* Section 4: ATA */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={`${VESSEL_MODAL_SECTION_HEADER_CLASS} justify-between gap-2`}>
+              <div className={vesselModalSectionHeaderClass('emerald', 'justify-between gap-2')}>
                 <div className="flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100">
                     <MapPin className="h-3.5 w-3.5 text-emerald-600" />
                   </div>
                   <h4 className="text-sm font-semibold text-gray-800">4. ATA Vessel Information</h4>
+                  {step4Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
                 {canModifyShipment && (
                   <Button
@@ -2326,11 +2397,12 @@ export function EditShipmentModal({
 
             {/* Section 5: Quality */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
+              <div className={vesselModalSectionHeaderClass('violet')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100">
                   <FlaskConical className="h-3.5 w-3.5 text-violet-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">5. Quality Vessel Information</h4>
+                {step5Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="space-y-4 p-4">
                 {loadingPortRows.map((portRow) => (
@@ -2399,9 +2471,9 @@ export function EditShipmentModal({
 
             {/* Section 6: Remarks */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100">
-                  <MessageSquare className="h-3.5 w-3.5 text-amber-700" />
+              <div className={vesselModalSectionHeaderClass('orange')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-100">
+                  <MessageSquare className="h-3.5 w-3.5 text-orange-700" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">6. Remarks</h4>
               </div>
@@ -2415,7 +2487,7 @@ export function EditShipmentModal({
                   <p className="text-sm text-gray-500">
                     {readOnly
                       ? 'No remarks recorded for this shipment yet.'
-                      : 'No remarks yet. A remark is required when you change Estimation, Quantity Delivered, or Quantity Receive.'}
+                      : 'No remarks yet. A remark is required when you change Estimation, Quantity Delivered (Klip), or Received Qty (Klip).'}
                   </p>
                 ) : (
                   <ul className="space-y-3">
@@ -2451,8 +2523,8 @@ export function EditShipmentModal({
 
             {/* Section 7: Activity History */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100">
+              <div className={vesselModalSectionHeaderClass('slate')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
                   <History className="h-3.5 w-3.5 text-slate-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">7. Activity History</h4>
@@ -2485,7 +2557,7 @@ export function EditShipmentModal({
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex flex-col gap-3 rounded-b-lg">
+        <div className={VESSEL_MODAL_FOOTER_BAR_CLASS}>
           {requiresEditRemark && canModifyShipment ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
               <label htmlFor="edit-shipment-remark" className="mb-1 block text-xs font-semibold text-amber-900">
@@ -2500,7 +2572,7 @@ export function EditShipmentModal({
                 className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-300"
               />
               <p className="mt-1 text-[11px] text-amber-800">
-                Required when changing Estimation, Quantity Delivered, or Quantity Receive.
+                Required when changing Estimation, Quantity Delivered (Klip), or Received Qty (Klip).
               </p>
             </div>
           ) : null}
@@ -2510,7 +2582,7 @@ export function EditShipmentModal({
           </Button>
           {!readOnly ? (
             <Button
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="h-9 bg-blue-600 text-white hover:bg-blue-700"
               onClick={() => void handleSave()}
               disabled={saving || loading || !shipmentId || !canModifyShipment || editRemarkMissing}
               title={

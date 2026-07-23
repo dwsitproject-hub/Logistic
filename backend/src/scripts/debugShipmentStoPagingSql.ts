@@ -6,14 +6,13 @@ import {
   injectShipmentStoKeyPaging,
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
 } from '../utils/shipmentListStoPaging';
+import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
-import { buildShipmentSeaMixTransportSql, buildShipmentExcludeStoTypeTSql } from '../utils/shipmentStoTypeSql';
 
 async function main(): Promise<void> {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
   const coreWhereSql = `c.contract_date >= $1 AND c.contract_date <= $2`;
-  const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
-  const seaMix = buildShipmentSeaMixTransportSql('c');
+  const seaIncoterm = buildShipmentPageSeaIncotermScopeSql('c');
 
   const prelude = `WITH vlp_load_first AS (SELECT NULL::uuid AS shipment_id WHERE false),
       vlp_disc_first AS (SELECT NULL::uuid AS shipment_id WHERE false),
@@ -21,7 +20,7 @@ async function main(): Promise<void> {
         SELECT DISTINCT c.contract_id
         FROM shipments s
         INNER JOIN contracts c ON s.contract_id = c.id
-        WHERE ${seaMix} AND ${coreWhereSql}
+        WHERE ${seaIncoterm} AND ${coreWhereSql}
       ),
       latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
@@ -47,13 +46,13 @@ async function main(): Promise<void> {
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        WHERE 1=1 AND (${coreWhereSql}) AND (${excludeStoTypeTCond})
+        WHERE 1=1 AND (${seaIncoterm}) AND (${coreWhereSql})
         ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER} GROUP BY ${listStoKeySql}
       )`;
 
   const shellEnrich = buildShipmentShellEnrichWithStoLinkAgg();
   const pagingBase = `${prelude}${shellEnrich}`;
-  const ranked = buildRankedStoCtes(listStoKeySql, `${seaMix} AND ${coreWhereSql}`, excludeStoTypeTCond)
+  const ranked = buildRankedStoCtes(listStoKeySql, `${seaIncoterm} AND ${coreWhereSql}`)
     .replace('__STO_PAGE_LIMIT__', '20')
     .replace('__STO_PAGE_OFFSET__', '0');
   const injected = injectShipmentStoKeyPaging(pagingBase, listStoKeySql, ranked);
@@ -69,26 +68,17 @@ async function main(): Promise<void> {
     outerParams: [] as unknown[],
     skipSapJoin: true,
     cacheKey: 'debug',
-    filterCacheKey: 'debug-filter',
+    filterCacheKey: 'debug',
     usesStoKeyPaging: true,
   };
 
-  const { text, params } = buildShipmentListPageQuery(ctx, 20, 0);
-  try {
-    await query(text, params);
-    console.log('SQL OK');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('SQL FAILED:', message);
-    const idx = text.indexOf('[');
-    if (idx >= 0) {
-      console.error('Context around [:', text.slice(Math.max(0, idx - 120), idx + 120));
-    }
-    process.exit(1);
-  }
+  const page = buildShipmentListPageQuery(ctx, 20, 0);
+  console.log('SQL length', page.text.length);
+  const res = await query(page.text, page.params);
+  console.log('rows', res.rowCount);
 }
 
-main().catch((error) => {
-  console.error(error);
+main().catch((e) => {
+  console.error(e);
   process.exit(1);
 });

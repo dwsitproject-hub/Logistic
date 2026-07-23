@@ -4,6 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2 } from 'lucide-react'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { formatQtyMtFromKg } from '@/lib/utils'
 
 export type TruckingStatusCardKey =
   | 'UNPLANNED'
@@ -60,28 +61,33 @@ export interface TruckingStatusDistributionProps {
   loading: boolean
   statusFilter: string
   counts: Partial<Record<TruckingStatusCardKey, number>>
+  /** Contract quantity_ordered sums in kg, one contract once per status. */
+  contractQtys?: Partial<Record<TruckingStatusCardKey, number>>
   onStageClick: (status: TruckingStatusCardKey) => void
 }
 
 /**
  * Rectangle status cards aligned with Shipments Summary Status styling.
- * Trucking shows totals only (no vessel name list under the count).
+ * Count = row/status total; Contract Qty = sum of contract qty under that card.
  */
 export function TruckingStatusDistribution({
   loading,
   statusFilter,
   counts,
+  contractQtys,
   onStageClick,
 }: TruckingStatusDistributionProps) {
   const renderCard = (card: (typeof TRUCKING_STATUS_CARDS)[number]) => {
     const isActive = statusFilter === card.status
     const count = Number(counts[card.status] ?? 0)
+    const qtyKg = Number(contractQtys?.[card.status] ?? 0)
+    const qtyLabel = formatQtyMtFromKg(qtyKg)
 
     const button = (
       <button
         type="button"
         onClick={() => onStageClick(card.status)}
-        className={`relative flex min-h-[5.5rem] w-36 flex-col justify-center md:w-40 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
+        className={`relative flex min-h-[6.75rem] w-36 flex-col justify-center md:w-40 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
           isActive ? 'ring-2 ring-blue-500 ring-offset-2 shadow-md' : ''
         }`}
       >
@@ -94,6 +100,12 @@ export function TruckingStatusDistribution({
         </div>
         <div className={`mt-1 text-2xl font-bold tabular-nums ${card.textColor}`}>
           {count.toLocaleString('en-US')}
+        </div>
+        <div
+          className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] leading-snug ${card.textColor} opacity-80`}
+        >
+          <div className="font-medium">Contract Qty</div>
+          <div className="mt-0.5 tabular-nums font-semibold opacity-90">{qtyLabel}</div>
         </div>
       </button>
     )

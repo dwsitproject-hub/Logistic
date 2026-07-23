@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   buildVesselLoadingPortsFromSapParsedData,
   extractLoadingPortNamesFromSapData,
@@ -97,5 +99,11 @@ describe('vesselLoadingPortsFromSap.service', () => {
     });
     const loading2 = ports.find((p) => p.port_sequence === 2 && !p.is_discharge_port);
     expect(loading2?.port_name).toBe('Loading Port 2');
+  });
+
+  it('matches SAP STO embedded in OP-{sto}-* operation_id for edit port labels', () => {
+    const src = readFileSync(resolve(__dirname, 'vesselLoadingPortsFromSap.service.ts'), 'utf8');
+    expect(src).toContain('op_embedded_sto');
+    expect(src).toContain('^OP-([0-9]+)');
   });
 });

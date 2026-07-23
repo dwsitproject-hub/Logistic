@@ -98,6 +98,57 @@ export function mergeShipmentQtyOverridesOnContractRows<
 }
 
 /**
+ * Seed per-PO KLIP delivered/receive for Edit Shipment PO table without overwriting SAP display.
+ * Prefers quantity_delivered_klip; falls back to legacy quantity_delivered only when it differs
+ * from the SAP row sum. Receive uses actual_vessel_qty_receive when meaningful.
+ */
+export function seedKlipQtyFromShipmentHeader(
+  sapRows: Array<{ quantity_delivered?: number | null; quantity_receive?: number | null }>,
+  opts: {
+    shipmentDeliveredKlipKg: number | null
+    shipmentDeliveredKg: number | null
+    shipmentReceiveKg: number | null
+  },
+): Array<{ quantity_delivered: number | null; quantity_receive: number | null }> {
+  if (sapRows.length === 0) return []
+
+  const sumDelivered = sapRows.reduce((s, r) => s + (r.quantity_delivered ?? 0), 0)
+
+  const deliveredKg = isMeaningfulManualShipmentQtyKg(opts.shipmentDeliveredKlipKg)
+    ? opts.shipmentDeliveredKlipKg
+    : (
+        isMeaningfulManualShipmentQtyKg(opts.shipmentDeliveredKg)
+        && Math.abs(sumDelivered - opts.shipmentDeliveredKg!) > 0.5
+      )
+      ? opts.shipmentDeliveredKg
+      : null
+  const receiveKg = isMeaningfulManualShipmentQtyKg(opts.shipmentReceiveKg)
+    ? opts.shipmentReceiveKg
+    : null
+
+  if (deliveredKg == null && receiveKg == null) {
+    return sapRows.map(() => ({ quantity_delivered: null, quantity_receive: null }))
+  }
+
+  if (sapRows.length === 1) {
+    return [{ quantity_delivered: deliveredKg, quantity_receive: receiveKg }]
+  }
+
+  const baseline = sapRows.map((r) => ({
+    quantity_delivered: r.quantity_delivered ?? null,
+    quantity_receive: r.quantity_receive ?? null,
+  }))
+  const merged = mergeShipmentQtyOverridesOnContractRows(baseline, deliveredKg, receiveKg)
+
+  return merged.map((m, i) => ({
+    quantity_delivered:
+      deliveredKg != null ? (m.quantity_delivered ?? baseline[i]?.quantity_delivered ?? null) : null,
+    quantity_receive:
+      receiveKg != null ? (m.quantity_receive ?? baseline[i]?.quantity_receive ?? null) : null,
+  }))
+}
+
+/**
  * Shipments list table — kg for display.
  * Open + KLIP qty present → quantity_delivered_klip
  * Open without KLIP → SAP fallback

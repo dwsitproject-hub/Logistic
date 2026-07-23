@@ -21,18 +21,14 @@ import {
   buildUnplannedContractBacklogLatestSpdCte,
   unplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
-import {
-  buildShipmentExcludeStoTypeTSql,
-  buildShipmentSeaMixTransportSql,
-  shipmentListStoKeyExpr,
-} from './shipmentStoTypeSql';
+import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
+import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 
 function buildShipmentDailyBaseCteSql(): string {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
-  const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
-  const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
+  const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
   const ataSelect = buildShipmentListAtaSelectSql();
   const plantSite = groupPlantExpr('c.plant_code', 'c.company_name');
 
@@ -131,8 +127,7 @@ function buildShipmentDailyBaseCteSql(): string {
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
-        WHERE ${seaMixTransportCond}
-          AND (${excludeStoTypeTCond})
+        WHERE ${seaIncotermScopeCond}
           AND ${shipmentPageExcludeB2bChildCond('l')}
         GROUP BY ${listStoKeySql}
       ),

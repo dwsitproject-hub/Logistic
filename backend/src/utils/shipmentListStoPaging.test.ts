@@ -42,7 +42,7 @@ describe('shipmentListStoPaging', () => {
         WHERE 1=1
         ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER} GROUP BY 1
       )`;
-    const ranked = buildRankedStoCtes(stoKey, '1=1', '1=1').replace(
+    const ranked = buildRankedStoCtes(stoKey, '1=1').replace(
       '__STO_PAGE_LIMIT__',
       '20',
     ).replace('__STO_PAGE_OFFSET__', '0');

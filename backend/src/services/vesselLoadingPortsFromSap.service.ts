@@ -417,7 +417,14 @@ async function resolveAllSapParsedDataForSto(
 ): Promise<Array<{ data: Record<string, unknown> }>> {
   const result = await query(
     `WITH ship AS (
-       SELECT s.id, s.shipment_id, s.operation_id, c.contract_id, c.sto_number
+       SELECT
+         s.id,
+         s.shipment_id,
+         s.operation_id,
+         c.contract_id,
+         c.sto_number,
+         -- Manual planning keys like OP-1004030966-10390582 embed the SAP STO after OP-
+         NULLIF((regexp_match(TRIM(COALESCE(s.operation_id::text, '')), '^OP-([0-9]+)'))[1], '') AS op_embedded_sto
        FROM shipments s
        LEFT JOIN contracts c ON c.id = s.contract_id
        WHERE s.id = $1::uuid
@@ -430,6 +437,7 @@ async function resolveAllSapParsedDataForSto(
          TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
          OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
          OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
+         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.op_embedded_sto::text), '')
        )
      )
      ORDER BY spd.contract_number ASC NULLS LAST, spd.updated_at DESC NULLS LAST`,

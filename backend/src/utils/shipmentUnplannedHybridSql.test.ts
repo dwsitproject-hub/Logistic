@@ -15,9 +15,11 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).toContain('s_ns.contract_id = c.id');
   });
 
-  it('limits contract backlog to CIF/FOB/CFR incoterms', () => {
+  it('limits contract backlog to CIF/FOB/CFR incoterms (not SEA/MIX or STO Type T)', () => {
     const sql = unplannedContractBacklogBaseWhereSql('c', 'l');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
+    expect(sql).not.toContain("IN ('SEA', 'MIX')");
+    expect(sql).not.toMatch(/=\s*'T'/);
   });
 
   it('builds contract backlog count query', () => {

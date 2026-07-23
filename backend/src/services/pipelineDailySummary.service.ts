@@ -1,4 +1,5 @@
-import { query } from '../database/connection';
+import { PoolClient } from 'pg';
+import { getClient, query } from '../database/connection';
 import { appendGroupPlantFilter } from '../utils/groupPlantSql';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 import {
@@ -22,9 +23,10 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
 /** v7: COMPLETED when |OS Qty| displays as 0 MT (≤499 kg) even if GR PO/STO still Open. */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 9;
+/** v10: import status any-Open wins (blank GR no longer falls back to contracts.status per row). */
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 10;
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
-export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 2;
+export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 3;
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;
@@ -229,56 +231,92 @@ async function upsertRefreshMeta(
   module: PipelineSummaryModule,
   rowCount: number,
   durationMs: number,
+  client?: PoolClient,
 ): Promise<void> {
   const logicVersion =
     module === 'trucking'
       ? TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION
       : SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION;
-  await query(
-    `INSERT INTO pipeline_summary_refresh_meta (module, refreshed_at, is_stale, row_count, duration_ms, logic_version)
+  const sql = `INSERT INTO pipeline_summary_refresh_meta (module, refreshed_at, is_stale, row_count, duration_ms, logic_version)
      VALUES ($1, NOW(), FALSE, $2, $3, $4)
      ON CONFLICT (module) DO UPDATE SET
        refreshed_at = EXCLUDED.refreshed_at,
        is_stale = FALSE,
        row_count = EXCLUDED.row_count,
        duration_ms = EXCLUDED.duration_ms,
-       logic_version = EXCLUDED.logic_version`,
-    [module, rowCount, durationMs, logicVersion],
-  );
+       logic_version = EXCLUDED.logic_version`;
+  const params = [module, rowCount, durationMs, logicVersion];
+  if (client) {
+    await client.query(sql, params);
+  } else {
+    await query(sql, params);
+  }
+}
+
+/** Serialize TRUNCATE+INSERT so concurrent refresh (UI stale kick + cleanup script) cannot race. */
+async function withPipelineRefreshLock<T>(
+  lockKey: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [lockKey]);
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      /* ignore rollback errors */
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export class PipelineDailySummaryService {
   static async refreshTruckingPipelineDailySummary(): Promise<number> {
     const start = Date.now();
-    await query('TRUNCATE trucking_pipeline_daily_summary');
-    await query('TRUNCATE trucking_list_stage_snapshot');
-    const execRes = await query(buildTruckingExecutionDailySummaryInsertSql());
-    const backlogRes = await query(buildTruckingBacklogDailySummaryUpsertSql());
-    const stageSnapshotRes = await query(buildTruckingStageSnapshotInsertSql());
-    const rowCount =
-      (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0) + (stageSnapshotRes.rowCount ?? 0);
+    const rowCount = await withPipelineRefreshLock('pipeline_daily_summary:trucking', async (client) => {
+      await client.query('TRUNCATE trucking_pipeline_daily_summary');
+      await client.query('TRUNCATE trucking_list_stage_snapshot');
+      const execRes = await client.query(buildTruckingExecutionDailySummaryInsertSql());
+      const backlogRes = await client.query(buildTruckingBacklogDailySummaryUpsertSql());
+      const stageSnapshotRes = await client.query(buildTruckingStageSnapshotInsertSql());
+      const n =
+        (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0) + (stageSnapshotRes.rowCount ?? 0);
+      const durationMs = Date.now() - start;
+      await upsertRefreshMeta('trucking', n, durationMs, client);
+      return n;
+    });
     const durationMs = Date.now() - start;
-    await upsertRefreshMeta('trucking', rowCount, durationMs);
     logger.info('Pipeline daily summary refreshed: trucking', { rowCount, durationMs });
     return rowCount;
   }
 
   static async refreshShipmentPipelineDailySummary(): Promise<number> {
     const start = Date.now();
-    await query('TRUNCATE shipment_pipeline_daily_summary');
-    await query('TRUNCATE shipment_pipeline_vessel_stage_daily');
-    await query('TRUNCATE shipment_list_stage_snapshot');
-    const execRes = await query(buildShipmentExecutionDailySummaryInsertSql());
-    const backlogRes = await query(buildShipmentBacklogDailySummaryUpsertSql());
-    const vesselRes = await query(buildShipmentVesselStageDailyInsertSql());
-    const stageSnapshotRes = await query(buildShipmentStageSnapshotInsertSql());
-    const rowCount =
-      (execRes.rowCount ?? 0) +
-      (backlogRes.rowCount ?? 0) +
-      (vesselRes.rowCount ?? 0) +
-      (stageSnapshotRes.rowCount ?? 0);
+    const rowCount = await withPipelineRefreshLock('pipeline_daily_summary:shipment', async (client) => {
+      await client.query('TRUNCATE shipment_pipeline_daily_summary');
+      await client.query('TRUNCATE shipment_pipeline_vessel_stage_daily');
+      await client.query('TRUNCATE shipment_list_stage_snapshot');
+      const execRes = await client.query(buildShipmentExecutionDailySummaryInsertSql());
+      const backlogRes = await client.query(buildShipmentBacklogDailySummaryUpsertSql());
+      const vesselRes = await client.query(buildShipmentVesselStageDailyInsertSql());
+      const stageSnapshotRes = await client.query(buildShipmentStageSnapshotInsertSql());
+      const n =
+        (execRes.rowCount ?? 0) +
+        (backlogRes.rowCount ?? 0) +
+        (vesselRes.rowCount ?? 0) +
+        (stageSnapshotRes.rowCount ?? 0);
+      const durationMs = Date.now() - start;
+      await upsertRefreshMeta('shipment', n, durationMs, client);
+      return n;
+    });
     const durationMs = Date.now() - start;
-    await upsertRefreshMeta('shipment', rowCount, durationMs);
     logger.info('Pipeline daily summary refreshed: shipment', { rowCount, durationMs });
     return rowCount;
   }

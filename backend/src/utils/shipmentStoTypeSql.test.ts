@@ -51,7 +51,7 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('sb.sto_key');
   });
 
-  it('scopes shipments to SEA/MIX transport', () => {
+  it('scopes shipments to SEA/MIX transport (legacy helper; list uses incoterm)', () => {
     expect(buildShipmentSeaMixTransportSql('c')).toContain("IN ('SEA', 'MIX')");
   });
 
@@ -62,7 +62,7 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain("spd_sto_type.data->'raw'->>'STO Type'");
   });
 
-  it('excludes SEA/MIX STO Type T from shipments list', () => {
+  it('buildShipmentExcludeStoTypeTSql remains available but deprecated for list', () => {
     const sql = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
     expect(sql).toContain("= 'T')");
     expect(sql).toContain('NOT (');

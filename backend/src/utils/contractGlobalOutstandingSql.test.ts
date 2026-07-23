@@ -60,6 +60,8 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).not.toContain("LIKE 'LAND%'");
     // Close → SAP (no WB overlay), same as Trucking list
     expect(sql).toMatch(/trucking_wb_overlay[\s\S]*AND NOT \(/);
+    // Do not inflate Contracts qty with CANCELLED trucking ops' WB
+    expect(sql).toContain("NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')");
   });
 
   it('buildQtyMoveCte overlays SEA FOB/CIF qty from Open KLIP shipment actuals', () => {

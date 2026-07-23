@@ -259,7 +259,7 @@ export function buildTruckingExpansionKeysCountSql(
 
 /**
  * Trucking list rows — one row per operation / PO (multi-STO aggregated).
- * Delivery/receive: Open + WB upload → op-level WB; Close → SAP sum across all STOs on the PO.
+ * Delivery/receive: GR Open + WB upload → op-level WB; GR Close → SAP sum (latest per STO on the PO).
  * Outstanding = Contract Qty − Σ delivered/receive by incoterm (not per-STO).
  */
 export function buildTruckingListExpansionSql(

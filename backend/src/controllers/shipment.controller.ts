@@ -104,9 +104,9 @@ import {
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
 import { sqlUserStoQtyAssignedToKgSql, stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
+import { resolveShipmentPlanQtyAssignmentTargets } from '../utils/shipmentPlanQtyAssignmentKey';
+import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import {
-  buildShipmentExcludeStoTypeTSql,
-  buildShipmentSeaMixTransportSql,
   shipmentListStoKeyExpr,
   shipmentListDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
@@ -557,13 +557,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
-    const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
+    /** Shipments page scope: CIF/FOB/CFR only (ignore STO Type T/V and Sea/Land). */
+    const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
     /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
 
-    const coreWhereParts: string[] = [seaMixTransportCond];
+    const coreWhereParts: string[] = [seaIncotermScopeCond];
     /** Contract-only scope (date/plant/contract) reused by Unplanned open-contract count. */
     const contractScopeParts: string[] = [];
     const coreParams: any[] = [];
@@ -776,7 +776,6 @@ ${contractMetaSelectCore}
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
           AND (${coreWhereSql})
-          AND (${excludeStoTypeTCond})
           -- Match dashboard baseline: exclude B2B "child" contracts
           -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
           AND NOT (
@@ -887,7 +886,7 @@ ${contractMetaSelectCore}
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
-    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql, excludeStoTypeTCond)
+    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql)
       .replace('__STO_PAGE_LIMIT__', String(listLimit))
       .replace('__STO_PAGE_OFFSET__', String(listOffset));
 
@@ -3199,7 +3198,7 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LEFT JOIN vlp_disc_first vd ON vd.shipment_id = s.id
       WHERE
-        UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        ${buildShipmentPageSeaIncotermScopeSql('c')}
         AND COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
         AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
       ORDER BY COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) ASC NULLS LAST, COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
@@ -4323,52 +4322,44 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
 
     // Planning only (user_sto_contract_assignments). Delivery Qty KLIP is set only via
     // updateShipment when the user explicitly edits quantity_delivered (SLD/SDD path).
-    const hasPoAssignments =
-      poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0;
-    const hasContractAssignments =
-      contractQtyAssigned && typeof contractQtyAssigned === 'object' && Object.keys(contractQtyAssigned as object).length > 0;
+    // Merge poQtyAssigned + contractQtyAssigned: UI may send UUID row ids, contract::po, or
+    // bare contract numbers depending on Contracts vs Shipments entry points.
+    const mergedPlanQtyEntries: Record<string, unknown> = {
+      ...(contractQtyAssigned && typeof contractQtyAssigned === 'object'
+        ? (contractQtyAssigned as Record<string, unknown>)
+        : {}),
+      ...(poQtyAssigned && typeof poQtyAssigned === 'object'
+        ? (poQtyAssigned as Record<string, unknown>)
+        : {}),
+    };
 
-    if (hasPoAssignments || hasContractAssignments) {
+    if (Object.keys(mergedPlanQtyEntries).length > 0) {
       await ensureUserStoContractAssignmentsTable();
-
-      if (hasPoAssignments) {
-        const rowIds = Object.keys(poQtyAssigned as Record<string, any>).filter(Boolean);
-        const rowsResult = await query(
-          `SELECT id, contract_id, po_number FROM contracts WHERE id = ANY($1::uuid[])`,
-          [rowIds],
-        );
-        const rowById = new Map(
-          rowsResult.rows.map((r: { id: string; contract_id: string; po_number: string | null }) => [String(r.id), r]),
-        );
-
-        for (const [rowId, qty] of Object.entries(poQtyAssigned as Record<string, any>)) {
-          const row = rowById.get(String(rowId));
-          if (!row) continue;
-          const n = parseFloat(String(qty));
-          if (Number.isNaN(n) || n <= 0) continue;
-          await upsertPoQtyAssignment(
-            assignmentKey,
-            String(row.contract_id).trim(),
-            row.po_number ? String(row.po_number).trim() : null,
-            n,
+      const targets = await resolveShipmentPlanQtyAssignmentTargets(
+        mergedPlanQtyEntries,
+        async (ids) => {
+          const rowsResult = await query(
+            `SELECT id, contract_id, po_number FROM contracts WHERE id = ANY($1::uuid[])`,
+            [ids],
           );
-        }
-      } else if (hasContractAssignments) {
-        for (const [rawKey, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
-          if (!rawKey) continue;
-          const n = parseFloat(String(qty));
-          if (Number.isNaN(n) || n <= 0) continue;
-          const key = String(rawKey).trim();
-          let contractNumber = key;
-          let poNumber: string | null = null;
-          if (key.includes('::')) {
-            const [cn, po] = key.split('::');
-            contractNumber = String(cn ?? '').trim();
-            poNumber = String(po ?? '').trim() || null;
-          }
-          if (!contractNumber) continue;
-          await upsertPoQtyAssignment(assignmentKey, contractNumber, poNumber, n);
-        }
+          return new Map(
+            rowsResult.rows.map((r: { id: string; contract_id: string; po_number: string | null }) => [
+              String(r.id),
+              {
+                contractNumber: String(r.contract_id).trim(),
+                poNumber: r.po_number ? String(r.po_number).trim() : null,
+              },
+            ]),
+          );
+        },
+      );
+      for (const target of targets) {
+        await upsertPoQtyAssignment(
+          assignmentKey,
+          target.contractNumber,
+          target.poNumber,
+          target.qtyMt,
+        );
       }
     }
 

@@ -6,17 +6,13 @@ import {
   injectShipmentStoKeyPaging,
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
 } from './shipmentListStoPaging';
-import {
-  buildShipmentExcludeStoTypeTSql,
-  buildShipmentSeaMixTransportSql,
-  shipmentListStoKeyExpr,
-} from './shipmentStoTypeSql';
+import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
+import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 function buildStoPagingListSql(): string {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
-  const seaMix = buildShipmentSeaMixTransportSql('c');
-  const coreWhereSql = `${seaMix} AND c.contract_date >= $1 AND c.contract_date <= $2`;
-  const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
+  const seaIncoterm = buildShipmentPageSeaIncotermScopeSql('c');
+  const coreWhereSql = `${seaIncoterm} AND c.contract_date >= $1 AND c.contract_date <= $2`;
 
   const prelude = `WITH latest_spd_contract AS (SELECT NULL::text AS contract_number WHERE false),
       shipment_base_core AS (
@@ -24,11 +20,11 @@ function buildStoPagingListSql(): string {
         FROM shipments s
         LEFT JOIN contracts c ON s.contract_id = c.id
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        WHERE 1=1 AND (${coreWhereSql}) AND (${excludeStoTypeTCond})
+        WHERE 1=1 AND (${coreWhereSql})
         ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER} GROUP BY ${listStoKeySql}
       )`;
 
-  const ranked = buildRankedStoCtes(listStoKeySql, coreWhereSql, excludeStoTypeTCond)
+  const ranked = buildRankedStoCtes(listStoKeySql, coreWhereSql)
     .replace('__STO_PAGE_LIMIT__', '20')
     .replace('__STO_PAGE_OFFSET__', '0');
   const injected = injectShipmentStoKeyPaging(
@@ -66,5 +62,7 @@ describe('shipmentListStoPaging SQL shape', () => {
     expect(sql).toContain('sto_link_agg AS');
     expect(sql).toContain('LEFT JOIN sto_link_agg sla');
     expect(sql).toContain('FROM ranked_sto) AS __filter_total');
+    expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
+    expect(sql).not.toMatch(/NOT\s*\([^)]*= 'T'\)/);
   });
 });

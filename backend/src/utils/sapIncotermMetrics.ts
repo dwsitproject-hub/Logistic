@@ -62,20 +62,24 @@ export function sqlSapQtyVesselFromSpd(spdAlias = 'spd'): string {
   `);
 }
 
-/** GR PO / GR STO status fields from SAP JSON. */
+/**
+ * GR PO / GR STO status fields from SAP JSON.
+ * Prefer raw Excel columns over normalized `contract.*` — stale Close in contract JSON
+ * used to win over Open in raw and force Trucking list onto Σ SAP instead of WB.
+ */
 export function sqlSapGrPoStatusFromJson(spdDataExpr: string): string {
   return `NULLIF(TRIM(COALESCE(
-    ${spdDataExpr}->'contract'->>'status',
     ${spdDataExpr}->'raw'->>'GR PO Status',
     ${spdDataExpr}->'raw'->>'Status',
+    ${spdDataExpr}->'contract'->>'status',
     ${spdDataExpr}->>'status'
   )), '')`;
 }
 
 export function sqlSapGrStoStatusFromJson(spdDataExpr: string): string {
   return `NULLIF(TRIM(COALESCE(
-    ${spdDataExpr}->'contract'->>'gr_sto_status',
     ${spdDataExpr}->'raw'->>'GR STO Status',
+    ${spdDataExpr}->'contract'->>'gr_sto_status',
     ${spdDataExpr}->>'gr_sto_status'
   )), '')`;
 }

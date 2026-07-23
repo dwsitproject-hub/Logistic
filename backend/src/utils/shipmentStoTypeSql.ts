@@ -1,8 +1,9 @@
 /**
  * SAP STO Type / STO number helpers — shared JSON field expressions.
  *
- * Shipments page: contract transport mode SEA/MIX, excluding STO Type T (trucking leg on sea/mix STO).
- * Trucking page: transport mode LAND only — see truckingStoTypeSql.ts.
+ * Shipments page list scope is by incoterm (CIF/FOB/CFR) — see shipmentIncotermScope.ts.
+ * STO Type T exclusion is deprecated for Shipments list visibility (kept for Oil Loss / legacy callers).
+ * Trucking page: FRC/LCO — see truckingIncotermScope.ts.
  * Oil Loss vessel segment: MIX + STO Type 'V' — see oilLossEligibility.ts.
  */
 
@@ -142,8 +143,8 @@ export function shipmentResolvedStoTypeExpr(
 }
 
 /**
- * Exclude trucking-type STO rows from the shipments list (SEA/MIX + STO Type T).
- * Apply where `latest_spd_contract l` is joined on the contract.
+ * @deprecated Shipments list no longer filters STO Type T — scope is CIF/FOB/CFR incoterm only.
+ * Kept for Oil Loss / ad-hoc scripts that still need Type T predicates.
  */
 export function buildShipmentExcludeStoTypeTSql(
   contractAlias = 'c',
