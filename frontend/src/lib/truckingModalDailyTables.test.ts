@@ -119,7 +119,7 @@ describe('truckingModalDailyTables', () => {
     expect(filterActualRowsForSto(rows, '1006018927')).toHaveLength(1)
   })
 
-  it('wbGrandTotalsFromActualRows sums all STO rows like list Open+WB', () => {
+  it('wbGrandTotalsFromActualRows sums catalog STOs only (drops empty + junk)', () => {
     const rows = normalizeDailyActualRows([
       {
         date: '2026-07-07',
@@ -129,14 +129,21 @@ describe('truckingModalDailyTables', () => {
       },
       {
         date: '2026-07-08',
-        quantity_delivery_kg: 1932440,
-        quantity_receive_kg: 1924720,
-        sto_number: '1006019038',
+        quantity_delivery_kg: 1781480,
+        quantity_receive_kg: 1773980,
+        sto_number: '',
+      },
+      {
+        date: '2026-07-09',
+        quantity_delivery_kg: 151380,
+        quantity_receive_kg: 150720,
+        sto_number: '123',
       },
     ])
-    const grand = wbGrandTotalsFromActualRows(rows)
-    expect(grand.deliveryKg).toBe(3882000)
-    expect(grand.receiveKg).toBe(3867000)
+    const catalog = ['1006019037', '1006019038', '1006019039', '1006019040']
+    const grand = wbGrandTotalsFromActualRows(rows, catalog)
+    expect(grand.deliveryKg).toBe(1949560)
+    expect(grand.receiveKg).toBe(1942280)
     expect(sumActualDeliveryKg(filterActualRowsForSto(rows, '1006019037'))).toBe(1949560)
   })
 })

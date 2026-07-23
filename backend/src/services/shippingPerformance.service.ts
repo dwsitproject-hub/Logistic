@@ -19,7 +19,11 @@ import {
   sqlSapVesselNameFromSpdJsonb,
   sqlShipmentDisplayVesselName,
 } from '../utils/sapVesselFields';
-import { SQL_CONTRACT_IMPORT_STATUS } from '../utils/contractDeliveryStatus';
+import { SQL_CONTRACT_IMPORT_STATUS, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import {
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from '../utils/shipmentManualQtyResolveSql';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -421,8 +425,21 @@ const SHIPPING_PERFORMANCE_SQL = `
         END AS ata_total_delta_days,
         sa.remark,
         COALESCE(sm.sto_qty, 0)::numeric AS sto_qty,
-        COALESCE(sm.received_qty, 0)::numeric AS received_qty,
-        COALESCE(sm.delivered_qty, 0)::numeric AS delivered_qty,
+        COALESCE((
+          ${sqlShipmentResolvedReceiveKg(
+            sqlIsContractSapClosedExpr('c'),
+            's.actual_vessel_qty_receive',
+            'COALESCE(sm.received_qty, 0)',
+          )}
+        ), 0)::numeric AS received_qty,
+        COALESCE((
+          ${sqlShipmentResolvedDeliveryKg(
+            sqlIsContractSapClosedExpr('c'),
+            's.quantity_delivered_klip',
+            'COALESCE(sm.delivered_qty, 0)',
+            's.quantity_delivered',
+          )}
+        ), 0)::numeric AS delivered_qty,
         COALESCE(sm.planning_qty, 0)::numeric AS planning_qty,
         COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty_actual,
         COALESCE(sm.outstanding_qty_planning, 0)::numeric AS outstanding_qty_planning,

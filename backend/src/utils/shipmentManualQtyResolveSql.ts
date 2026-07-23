@@ -1,8 +1,59 @@
 /**
- * SQL qty resolution aligned with frontend resolveShipmentListDeliveredKg / resolveShipmentListReceiveKg.
- * Values are kg. Prefer KLIP manual shipment row when it differs from SAP (> 0.5 kg).
+ * SQL qty resolution aligned with frontend
+ * resolveShipmentListDeliveredKg / resolveShipmentListReceiveKg.
+ *
+ * Close → SAP; Open + meaningful KLIP → KLIP; else SAP (legacy last resort for delivery).
  */
 
+/** Meaningful KLIP/manual qty: non-null and > 0. */
+function sqlMeaningfulQtyKg(expr: string): string {
+  return `(NULLIF(${expr}::numeric, 0) IS NOT NULL AND (${expr})::numeric > 0)`;
+}
+
+/**
+ * Shipments Delivery Qty (kg): Close→SAP; Open→KLIP then SAP then optional legacy.
+ */
+export function sqlShipmentResolvedDeliveryKg(
+  closedExpr: string,
+  klipExpr: string,
+  sapExpr: string,
+  legacyExpr?: string,
+): string {
+  const sap = `NULLIF(${sapExpr}::numeric, 0)`;
+  const klip = `NULLIF(${klipExpr}::numeric, 0)`;
+  const legacy = legacyExpr
+    ? `NULLIF(${legacyExpr}::numeric, 0)`
+    : 'NULL::numeric';
+  return `CASE
+    WHEN COALESCE((${closedExpr}), FALSE) IS TRUE THEN ${sap}
+    WHEN ${sqlMeaningfulQtyKg(klipExpr)} THEN ${klip}
+    WHEN ${sap} IS NOT NULL THEN ${sap}
+    ELSE ${legacy}
+  END`;
+}
+
+/**
+ * Shipments Receive Qty (kg): Close→SAP; Open→KLIP vessel receive then SAP.
+ */
+export function sqlShipmentResolvedReceiveKg(
+  closedExpr: string,
+  klipReceiveExpr: string,
+  sapExpr: string,
+): string {
+  const sap = `NULLIF(${sapExpr}::numeric, 0)`;
+  const klip = `NULLIF(${klipReceiveExpr}::numeric, 0)`;
+  return `CASE
+    WHEN COALESCE((${closedExpr}), FALSE) IS TRUE THEN ${sap}
+    WHEN ${sqlMeaningfulQtyKg(klipReceiveExpr)} THEN ${klip}
+    WHEN ${sap} IS NOT NULL THEN ${sap}
+    ELSE ${klip}
+  END`;
+}
+
+/**
+ * @deprecated Prefer sqlShipmentResolvedDeliveryKg / sqlShipmentResolvedReceiveKg (Open/Close).
+ * Legacy: prefer manual when it differs from SAP by > 0.5 kg (Oil Loss / older OS paths).
+ */
 export function shipmentManualQtyResolveSql(manualExpr: string, sapExpr: string): string {
   const manual = `NULLIF(${manualExpr}::numeric, 0)`;
   const sap = `NULLIF(${sapExpr}::numeric, 0)`;
@@ -29,11 +80,11 @@ export function shippingPerfSapFulfilledQtySql(
   END`;
 }
 
-/** Manual fulfilled qty for shipping performance (receive kg vs delivery kg by incoterm). */
+/** Manual/KLIP fulfilled qty for shipping performance (receive kg vs delivery kg by incoterm). */
 export function shippingPerfManualFulfilledQtySql(incotermExpr: string): string {
   const inc = `UPPER(TRIM(COALESCE(${incotermExpr}, '')))`;
   return `CASE
-    WHEN ${inc} IN ('LCO', 'FOB') THEN s.quantity_delivered
+    WHEN ${inc} IN ('LCO', 'FOB') THEN COALESCE(NULLIF(s.quantity_delivered_klip::numeric, 0), s.quantity_delivered)
     ELSE s.actual_vessel_qty_receive
   END`;
 }
@@ -42,15 +93,29 @@ export function shippingPerfResolvedFulfilledQtySql(
   incotermExpr: string,
   quantityReceiveExpr: string,
   quantityDeliveredSapExpr: string,
+  closedExpr = 'FALSE',
 ): string {
-  const sap = shippingPerfSapFulfilledQtySql(
-    incotermExpr,
+  const resolvedReceive = sqlShipmentResolvedReceiveKg(
+    closedExpr,
+    's.actual_vessel_qty_receive',
     quantityReceiveExpr,
-    quantityDeliveredSapExpr,
   );
-  const manual = shippingPerfManualFulfilledQtySql(incotermExpr);
+  const resolvedDelivery = sqlShipmentResolvedDeliveryKg(
+    closedExpr,
+    'COALESCE(NULLIF(s.quantity_delivered_klip::numeric, 0), s.quantity_delivered)',
+    quantityDeliveredSapExpr,
+    's.quantity_delivered',
+  );
+  const inc = `UPPER(TRIM(COALESCE(${incotermExpr}, '')))`;
   return `COALESCE(
-    NULLIF(${shipmentManualQtyResolveSql(manual, sap)}, 0),
+    NULLIF(
+      CASE
+        WHEN ${inc} IN ('FRC', 'CIF', 'CFR') THEN (${resolvedReceive})
+        WHEN ${inc} IN ('LCO', 'FOB') THEN (${resolvedDelivery})
+        ELSE COALESCE(NULLIF((${resolvedReceive})::numeric, 0), (${resolvedDelivery}))
+      END,
+      0
+    ),
     NULLIF(s.actual_vessel_qty_receive::numeric, 0),
     NULLIF(s.bl_quantity::numeric, 0),
     0::numeric
@@ -60,6 +125,13 @@ export function shippingPerfResolvedFulfilledQtySql(
 export function shippingPerfResolvedDeliveredQtySql(
   quantityDeliveredExpr: string,
   quantityDeliveredSapExpr: string,
+  closedExpr = 'FALSE',
+  klipExpr = 's.quantity_delivered_klip',
 ): string {
-  return `${shipmentManualQtyResolveSql(quantityDeliveredExpr, quantityDeliveredSapExpr)}::numeric`;
+  return `(${sqlShipmentResolvedDeliveryKg(
+    closedExpr,
+    klipExpr,
+    quantityDeliveredSapExpr,
+    quantityDeliveredExpr,
+  )})::numeric`;
 }

@@ -1,4 +1,7 @@
-import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
+import {
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from './shipmentManualQtyResolveSql';
 import {
   buildQtyMoveCte,
   sqlContractGlobalOutstandingExpr,
@@ -37,15 +40,19 @@ export function shipmentListOutstandingQtySql(
   saAlias = 'sa',
   slAlias = 'sl',
 ): string {
+  const closed = `COALESCE(${spAlias}.is_contract_sap_closed, FALSE)`;
   return shipmentOutstandingQtyExpr({
     stoQtyExpr: `NULLIF(${saAlias}.sto_quantity, 0)`,
-    receiveExpr: shipmentManualQtyResolveSql(
+    receiveExpr: sqlShipmentResolvedReceiveKg(
+      closed,
       `${spAlias}.actual_vessel_qty_receive`,
       `${saAlias}.quantity_receive`,
     ),
-    deliveryExpr: shipmentManualQtyResolveSql(
-      `${spAlias}.quantity_delivered`,
+    deliveryExpr: sqlShipmentResolvedDeliveryKg(
+      closed,
+      `${spAlias}.quantity_delivered_klip`,
       `${saAlias}.quantity_delivered_sap`,
+      `${spAlias}.quantity_delivered`,
     ),
     incotermExpr: `COALESCE(${slAlias}.incoterm, ${spAlias}.incoterm)`,
   });

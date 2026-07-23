@@ -19,14 +19,15 @@ describe('shipmentOutstandingQtySql', () => {
     expect(sql).toContain('GREATEST');
   });
 
-  it('builds list projection with SAP and shipment manual resolve', () => {
+  it('builds list projection with Open/Close SAP and KLIP resolve', () => {
     const sql = shipmentListOutstandingQtySql();
     expect(sql).toContain('sa.sto_quantity');
     expect(sql).toContain('sa.quantity_receive');
     expect(sql).toContain('sa.quantity_delivered_sap');
     expect(sql).toContain('sp.actual_vessel_qty_receive');
-    expect(sql).toContain('sp.quantity_delivered');
-    expect(sql).toContain('ABS');
+    expect(sql).toContain('sp.quantity_delivered_klip');
+    expect(sql).toContain('sp.is_contract_sap_closed');
+    expect(sql).not.toContain('ABS');
     expect(sql).toContain('sl.incoterm');
   });
 

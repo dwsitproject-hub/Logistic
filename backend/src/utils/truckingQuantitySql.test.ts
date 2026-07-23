@@ -54,17 +54,20 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('qty_del');
   });
 
-  it('sqlWbActualDeliverySumKg falls back to quantity_kg', () => {
+  it('sqlWbActualDeliverySumKg falls back to quantity_kg and scopes by STO catalog', () => {
     const sql = sqlWbActualDeliverySumKg('e.id');
     expect(sql).toContain('quantity_delivery_kg');
     expect(sql).toContain('quantity_kg');
     expect(sql).toContain('e.id');
+    expect(sql).toContain('contract_stos');
+    expect(sql).toContain('sap_processed_data');
   });
 
-  it('sqlWbActualReceiveSumKg sums quantity_receive_kg', () => {
+  it('sqlWbActualReceiveSumKg sums quantity_receive_kg with same STO scope', () => {
     const sql = sqlWbActualReceiveSumKg('e.id');
     expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain('e.id');
+    expect(sql).toContain('contract_stos');
   });
 
   it('sqlTruckingResolvedDeliveryQty uses WB delivery sum when Open+WB', () => {

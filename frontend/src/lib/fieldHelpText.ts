@@ -41,7 +41,7 @@ export const FIELD_HELP = {
   receivedQty: `FRC: GR PO Open + WB → Netto EUP; LCO: GR STO Open + WB → Netto EUP (same as Trucking Received Qty). SEA Open with KLIP receive: actual vessel receive. GR Close uses SAP Quantity Receive. Otherwise SAP Quantity Receive.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
-  shipmentOutstandingQtyMt: `STO Qty minus fulfilled SAP quantity by incoterm (same rules as Contract page): CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery; others use receive or delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
+  shipmentOutstandingQtyMt: `STO Qty minus fulfilled Delivery/Receive by Open/Close rules (same as Shipments View Table): GR Close → SAP; Open → KLIP vessel/delivery then SAP. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 

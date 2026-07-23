@@ -1,6 +1,12 @@
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import {
+  sqlWbActualDeliverySumKg,
+  sqlWbActualReceiveSumKg,
+} from './truckingWbActualSumSql';
+
+export { sqlWbActualDeliverySumKg, sqlWbActualReceiveSumKg } from './truckingWbActualSumSql';
 
 const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
 
@@ -274,30 +280,6 @@ export function sqlSapQtyReceiveOnly(): string {
 export function sqlTruckingHasDailyActualsExpr(operationIdExpr = 't.id'): string {
   return `EXISTS (
     SELECT 1 FROM trucking_daily_actuals da
-    WHERE da.trucking_operation_id = ${operationIdExpr}
-  )`;
-}
-
-/**
- * Sum of WB Qty Delivery for an operation (Netto PKS).
- * Legacy rows without quantity_delivery_kg fall back to quantity_kg.
- */
-export function sqlWbActualDeliverySumKg(operationIdExpr = 't.id'): string {
-  return `(
-    SELECT COALESCE(SUM(COALESCE(da.quantity_delivery_kg, da.quantity_kg)), 0)::numeric
-    FROM trucking_daily_actuals da
-    WHERE da.trucking_operation_id = ${operationIdExpr}
-  )`;
-}
-
-/**
- * Sum of WB Qty Receive for an operation (Netto EUP).
- * Null receive columns count as 0.
- */
-export function sqlWbActualReceiveSumKg(operationIdExpr = 't.id'): string {
-  return `(
-    SELECT COALESCE(SUM(COALESCE(da.quantity_receive_kg, 0)), 0)::numeric
-    FROM trucking_daily_actuals da
     WHERE da.trucking_operation_id = ${operationIdExpr}
   )`;
 }

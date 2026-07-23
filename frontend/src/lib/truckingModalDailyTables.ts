@@ -163,14 +163,46 @@ export function sumActualReceiveKg(rows: TruckingModalActualRow[]): number {
   }, 0)
 }
 
-/** PO/OP-level WB totals — same scope as Trucking list Open+WB SUM(trucking_daily_actuals). */
-export function wbGrandTotalsFromActualRows(rows: TruckingModalActualRow[]): {
+/**
+ * Scope WB rows for OP/list totals — mirrors backend sqlWbActualRowIncludedPredicate:
+ * catalog STOs win; else non-empty only; else all (legacy).
+ */
+export function filterWbRowsForOpTotal(
+  rows: TruckingModalActualRow[],
+  catalogStoNumbers: string[],
+): TruckingModalActualRow[] {
+  const catalog = new Set(
+    catalogStoNumbers.map((s) => String(s || '').trim()).filter(Boolean),
+  )
+  const hasCatalogHit = rows.some((r) => {
+    const sto = String(r.sto_number || '').trim()
+    return sto !== '' && catalog.has(sto)
+  })
+  if (hasCatalogHit) {
+    return rows.filter((r) => {
+      const sto = String(r.sto_number || '').trim()
+      return sto !== '' && catalog.has(sto)
+    })
+  }
+  const hasTagged = rows.some((r) => String(r.sto_number || '').trim() !== '')
+  if (hasTagged) {
+    return rows.filter((r) => String(r.sto_number || '').trim() !== '')
+  }
+  return rows
+}
+
+/** PO/OP-level WB totals — same scope as Trucking list Open+WB (catalog-scoped). */
+export function wbGrandTotalsFromActualRows(
+  rows: TruckingModalActualRow[],
+  catalogStoNumbers: string[] = [],
+): {
   deliveryKg: number
   receiveKg: number
 } {
+  const scoped = filterWbRowsForOpTotal(rows, catalogStoNumbers)
   return {
-    deliveryKg: sumActualDeliveryKg(rows),
-    receiveKg: sumActualReceiveKg(rows),
+    deliveryKg: sumActualDeliveryKg(scoped),
+    receiveKg: sumActualReceiveKg(scoped),
   }
 }
 
