@@ -86,8 +86,17 @@ export function TruckingStatusDistribution({
     const button = (
       <button
         type="button"
-        onClick={() => onStageClick(card.status)}
-        className={`relative flex min-h-[6.75rem] w-36 flex-col justify-center md:w-40 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
+        // Clicking a stage while the summary/table is still loading fires a scope
+        // refresh against half-loaded state (reported as "planning tab shows daily
+        // actuals / cannot edit" on slow loads) — ignore clicks until settled.
+        disabled={loading}
+        aria-busy={loading || undefined}
+        onClick={() => {
+          if (!loading) onStageClick(card.status)
+        }}
+        className={`relative flex min-h-[6.75rem] w-36 flex-col justify-center md:w-40 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all ${
+          loading ? 'cursor-wait opacity-70' : 'cursor-pointer hover:shadow-md hover:-translate-y-0.5'
+        } ${card.color} ${
           isActive ? 'ring-2 ring-blue-500 ring-offset-2 shadow-md' : ''
         }`}
       >
