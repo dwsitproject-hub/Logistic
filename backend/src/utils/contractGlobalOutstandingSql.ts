@@ -14,6 +14,10 @@ import {
   sqlSapQtyVesselFromSpd,
 } from './sapIncotermMetrics';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
+import {
+  sqlWbActualDeliverySumKg,
+  sqlWbActualReceiveSumKg,
+} from './truckingWbActualSumSql';
 
 export type QtyMoveContractFilter =
   | { kind: 'join_scope'; scopeCteName: string }
@@ -74,8 +78,7 @@ function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): s
  * - Incoterm via contractEffectiveIncotermExpr (DB || SAP), same as Trucking page scope
  * - No LAND% filter — Trucking page is FRC/LCO-scoped and resolves WB without transport_mode
  *
- * Expressions mirror sqlWbActualDeliverySumKg / sqlWbActualReceiveSumKg (truckingQuantitySql)
- * without importing that module (avoids circular dependency via contractPoGlobalMetricsSql).
+ * Expressions use sqlWbActualDeliverySumKg / sqlWbActualReceiveSumKg (catalog-scoped).
  */
 function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
   const joinScope =
@@ -86,16 +89,8 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
     filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
   const grClosed = sqlIsContractSapClosedExpr('c');
   const effectiveIncoterm = contractEffectiveIncotermExpr('c');
-  const wbDeliveryPerOp = `(
-    SELECT COALESCE(SUM(COALESCE(da.quantity_delivery_kg, da.quantity_kg)), 0)::numeric
-    FROM trucking_daily_actuals da
-    WHERE da.trucking_operation_id = t.id
-  )`;
-  const wbReceivePerOp = `(
-    SELECT COALESCE(SUM(COALESCE(da.quantity_receive_kg, 0)), 0)::numeric
-    FROM trucking_daily_actuals da
-    WHERE da.trucking_operation_id = t.id
-  )`;
+  const wbDeliveryPerOp = sqlWbActualDeliverySumKg('t.id');
+  const wbReceivePerOp = sqlWbActualReceiveSumKg('t.id');
 
   return `
         trucking_wb_overlay AS (

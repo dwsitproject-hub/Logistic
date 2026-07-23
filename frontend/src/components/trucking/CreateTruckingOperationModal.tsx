@@ -765,7 +765,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
 
   const renderWbGrandTotalBanner = () => {
     if (actualRows.length === 0) return null
-    const { deliveryKg, receiveKg } = wbGrandTotalsFromActualRows(actualRows)
+    const catalog = stoActuals.map((s) => s.sto_number)
+    const { deliveryKg, receiveKg } = wbGrandTotalsFromActualRows(actualRows, catalog)
     return (
       <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3">
         <p className="text-xs font-semibold text-emerald-900">
