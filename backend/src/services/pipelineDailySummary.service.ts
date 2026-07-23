@@ -26,7 +26,7 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 /** v10: import status any-Open wins (blank GR no longer falls back to contracts.status per row). */
 export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 10;
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
-export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 3;
+export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 4; // N-01(b): multi-contract STO status floor
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;

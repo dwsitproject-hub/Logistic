@@ -1,6 +1,6 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
-import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { deriveShipmentStatus, SHIPMENT_STATUS_RANK } from '../utils/shipmentStatus';
 import {
   isPipelineDailySummaryEligible,
   loadShipmentSummaryFromDaily,
@@ -480,6 +480,23 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       quantity_delivered_klip: row.quantity_delivered_klip,
       quantity_delivered_sap: row.quantity_delivered_sap,
     });
+
+    // Multi-contract STO status floor (decision N-01 option b): milestone dates are
+    // MAX-merged across the group, so the derive above reflects the MOST advanced
+    // member. When members sit in different active stages, cap at the least-advanced
+    // one — an STO is not Completed until every contract under it is done.
+    // Mirrors the SQL floor in shipmentEffectiveStatusExpr (summary/filters).
+    const floor = String(row.group_status_floor ?? '').trim().toUpperCase();
+    const mixedStatuses = Number(row.group_active_status_count ?? 0) > 1;
+    if (mixedStatuses && floor) {
+      const floorRank = SHIPMENT_STATUS_RANK[floor];
+      const derivedRank = SHIPMENT_STATUS_RANK[String(row.status ?? '').trim().toUpperCase()];
+      if (floorRank !== undefined && derivedRank !== undefined && floorRank >= 0 && floorRank < derivedRank) {
+        row.status = floor;
+      }
+    }
+    delete (row as { group_status_floor?: unknown }).group_status_floor;
+    delete (row as { group_active_status_count?: unknown }).group_active_status_count;
   }
   return rows;
 }

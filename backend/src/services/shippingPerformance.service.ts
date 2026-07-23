@@ -1,5 +1,6 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
+import { SHIPMENT_STATUS_RANK } from '../utils/shipmentStatus';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
   sapSpdDischargePortTextExpr,
@@ -108,10 +109,30 @@ function joinDistinctValues(rows: Record<string, unknown>[], field: string): str
   return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
 }
 
+/** Multi-contract STO status (decision N-01 option b): the group is only as advanced
+ *  as its LEAST-advanced active member; all-cancelled groups stay CANCELLED. Mirrors
+ *  the Shipments list floor (shipmentEffectiveStatusExpr) so both pages agree. */
+function leastAdvancedGroupStatus(rows: Record<string, unknown>[]): string | null {
+  let best: string | null = null;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const row of rows) {
+    const status = String(row.status ?? '').trim().toUpperCase();
+    if (!status) continue;
+    const rank = SHIPMENT_STATUS_RANK[status];
+    if (rank === undefined || rank < 0) continue; // skip cancelled/unknown
+    if (rank < bestRank) {
+      bestRank = rank;
+      best = status;
+    }
+  }
+  return best;
+}
+
 function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
   const pick = rows.reduce((best, row) =>
     shippingPerfRowPriority(row) >= shippingPerfRowPriority(best) ? row : best,
   );
+  const groupStatus = leastAdvancedGroupStatus(rows) ?? pick.status;
 
   const fromStoMetrics = pick.po_numbers != null || pick.contract_numbers != null;
   const metrics = fromStoMetrics
@@ -128,6 +149,7 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
 
   return {
     ...pick,
+    status: groupStatus,
     sto_key: pick.sto_key ?? shippingPerfStoGroupKey(pick).replace(/^(sto:|ship:|op:|id:)/, ''),
     po_number:
       (pick.po_numbers as string | undefined) ??

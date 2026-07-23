@@ -9,7 +9,7 @@ import {
   sqlPipelineProductKey,
 } from './pipelineDailySummaryToolbarScope';
 import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './shipmentAtaOverrideSql';
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
+import { shipmentEffectiveStatusExpr, sqlShipmentGroupStatusFloorAgg } from './shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
 import {
   shipmentPagePipelineSummarySelectSql,
@@ -95,6 +95,9 @@ function buildShipmentDailyBaseCteSql(): string {
           ${listStoKeySql} AS sto_key,
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} AS id,
           MAX(s.status) AS status,
+          -- Multi-contract STO status floor (decision N-01 option b) — must mirror the
+          -- shipments list base so circle counts match the table.
+          ${sqlShipmentGroupStatusFloorAgg('s')},
           MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
           MAX(s.created_at) AS created_at,
           MAX(${plantSite}) AS plant_site,

@@ -57,6 +57,7 @@ import {
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
   shipmentEffectiveStatusExpr,
+  sqlShipmentGroupStatusFloorAgg,
 } from '../utils/shipmentListFilters';
 import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
@@ -737,6 +738,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.difference_final_qty_vs_bl_qty) as difference_final_qty_vs_bl_qty,
           MAX(s.average_vessel_speed) as average_vessel_speed,
           MAX(s.status) as status,
+          -- Multi-contract STO status floor (decision N-01 option b): least-advanced
+          -- active member; shipmentEffectiveStatusExpr caps the derived status with it.
+          ${sqlShipmentGroupStatusFloorAgg('s')},
           MAX(s.sla_days) as sla_days,
           BOOL_OR(s.is_delayed) as is_delayed,
           MAX(s.sap_delivery_id) as sap_delivery_id,

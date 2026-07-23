@@ -8,6 +8,7 @@ import {
   SHIPMENT_AUTO_STATUSES,
   SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
   SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+  sqlShipmentStatusRank,
   type ShipmentAutoStatus,
 } from './shipmentStatus'
 
@@ -378,10 +379,16 @@ export function shipmentHasDeliveryQtyExpr(alias: string): string {
 /**
  * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
  * Mirrors deriveShipmentStatus — granular ATA tiers for Shipments module.
+ *
+ * Multi-contract STO rule (decision N-01, option b — 2026-07-23): when the group's
+ * member shipments sit in DIFFERENT active stages, the group is only as advanced as
+ * its LEAST-advanced member — an STO is not "Completed" until every contract under it
+ * is done. Milestone dates are MAX-merged across the group, so without this floor the
+ * most-advanced member's dates silently promote the whole STO.
  */
 export function shipmentEffectiveStatusExpr(alias: string): string {
   const f = alias
-  return `(
+  const inner = `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
@@ -399,6 +406,27 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
       ELSE 'UNPLANNED'
     END
   )`
+  return `(
+    CASE
+      WHEN COALESCE(${f}.group_active_status_count, 0) > 1
+       AND ${f}.group_status_floor IS NOT NULL
+       AND ${sqlShipmentStatusRank(`${f}.group_status_floor`)} < ${sqlShipmentStatusRank(inner)}
+      THEN ${f}.group_status_floor
+      ELSE ${inner}
+    END
+  )`
+}
+
+/** Aggregates for the multi-contract STO status floor — add to every GROUP BY base
+ *  that shipmentEffectiveStatusExpr later reads (shipments list + pipeline snapshot). */
+export function sqlShipmentGroupStatusFloorAgg(shipmentAlias = 's'): string {
+  const s = shipmentAlias
+  const active = `${s}.id IS NOT NULL
+      AND NULLIF(TRIM(COALESCE(${s}.status, '')), '') IS NOT NULL
+      AND UPPER(TRIM(${s}.status)) NOT IN ('CANCELLED', 'CANCELED')`
+  return `(array_agg(UPPER(TRIM(${s}.status)) ORDER BY ${sqlShipmentStatusRank(`${s}.status`)} ASC)
+      FILTER (WHERE ${active}))[1] AS group_status_floor,
+    COUNT(DISTINCT UPPER(TRIM(${s}.status))) FILTER (WHERE ${active}) AS group_active_status_count`
 }
 
 /** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */
