@@ -258,6 +258,28 @@ async function upsertDailyActualWithWbImport(
   quantityReceiveKg: number,
   stoNumber = '',
 ): Promise<void> {
+  // A given (operation, progress_date) holds EITHER one PO-level row (blank sto_number)
+  // OR per-STO rows — never both, or every sum counts the same weighbridge day twice
+  // (migration 124 cleaned historical duplicates). An STO-stamped upload supersedes the
+  // legacy PO-level row; a PO-level upload replaces per-STO detail for that date.
+  const stoTrimmed = String(stoNumber ?? '').trim();
+  if (stoTrimmed) {
+    await runQuery(
+      db,
+      `DELETE FROM trucking_daily_actuals
+       WHERE trucking_operation_id = $1 AND progress_date = $2::date
+         AND NULLIF(TRIM(COALESCE(sto_number::text, '')), '') IS NULL`,
+      [truckingOperationId, progressDate],
+    );
+  } else {
+    await runQuery(
+      db,
+      `DELETE FROM trucking_daily_actuals
+       WHERE trucking_operation_id = $1 AND progress_date = $2::date
+         AND NULLIF(TRIM(COALESCE(sto_number::text, '')), '') IS NOT NULL`,
+      [truckingOperationId, progressDate],
+    );
+  }
   await runQuery(
     db,
     `INSERT INTO trucking_daily_actuals (
