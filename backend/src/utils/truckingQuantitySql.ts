@@ -57,8 +57,71 @@ const SAP_RECEIVE_RAW_COALESCE = `COALESCE(
     )`;
 
 /**
+ * Latest-per-STO SAP qty (kg) with Contracts-style multi-STO PO-level dedup:
+ * 1) Drop rows that look like full-PO qty repeated on each STO when Σ > 1.2× contract.
+ * 2) If adjusted Σ still > 1.2× contract, use MAX (e.g. 2× ~1941 MT → ~1941, not 3882).
+ */
+function sqlTruckingPoLevelSapQtyWithDedup(
+  rawQtyExpr: string,
+  rawPresentCheck: string,
+  contractNumberExpr: string,
+  contractUuidExpr: string,
+  poNumberExpr: string,
+  contractQtyKgExpr: string,
+): string {
+  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
+  const stoKey = `TRIM(COALESCE(${SPD_EFFECTIVE_STO}, spd.sto_number::text, ''))`;
+  const qtyKg = sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr);
+  const cq = `(${contractQtyKgExpr})`;
+  return `(
+    WITH latest_per_sto AS (
+      SELECT DISTINCT ON (spd.contract_number, ${stoKey})
+        ${rawQtyExpr} AS qty
+      FROM sap_processed_data spd
+      WHERE spd.contract_number = ${contractNumberExpr}
+        AND ${match}
+        AND ${rawPresentCheck}
+      ORDER BY spd.contract_number, ${stoKey}, spd.created_at DESC NULLS LAST
+    ),
+    normalized AS (
+      SELECT ${qtyKg} AS qty_kg
+      FROM latest_per_sto x
+      WHERE x.qty IS NOT NULL
+    ),
+    metrics AS (
+      SELECT
+        COUNT(*)::int AS sto_count,
+        COALESCE(SUM(qty_kg), 0)::numeric AS sum_raw,
+        COALESCE(MAX(qty_kg), 0)::numeric AS max_qty
+      FROM normalized
+    ),
+    adj AS (
+      SELECT
+        m.sto_count,
+        m.max_qty,
+        COALESCE(SUM(n.qty_kg) FILTER (
+          WHERE NOT (
+            m.sto_count > 1
+            AND m.sum_raw > ${cq} * 1.2
+            AND n.qty_kg >= ${cq} * 0.95
+          )
+        ), 0)::numeric AS sum_adj
+      FROM metrics m
+      CROSS JOIN normalized n
+      GROUP BY m.sto_count, m.max_qty, m.sum_raw
+    )
+    SELECT CASE
+      WHEN a.sto_count > 1 AND a.sum_adj > ${cq} * 1.2 THEN a.max_qty
+      ELSE a.sum_adj
+    END
+    FROM adj a
+  )`;
+}
+
+/**
  * SAP Delivery Qty (kg) summed across STO rows for the PO (latest row per STO only).
  * Used for trucking PO-grain list when GR is Close: Contract Qty − Σ Delivery.
+ * Applies Contracts multi-STO PO-level duplicate dedup when Σ is inflated.
  */
 export function sqlTruckingPoLevelSapDeliveryQty(
   contractNumberExpr = 'e.contract_number',
@@ -66,26 +129,21 @@ export function sqlTruckingPoLevelSapDeliveryQty(
   poNumberExpr = 'e.po_number',
   contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
 ): string {
-  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
-  const stoKey = `TRIM(COALESCE(${SPD_EFFECTIVE_STO}, spd.sto_number::text, ''))`;
   const rawQty = `NULLIF(regexp_replace(${SAP_DELIVERY_RAW_COALESCE}, '[^0-9\\.-]', '', 'g'), '')::numeric`;
-  return `(
-    SELECT SUM(${sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr)})
-    FROM (
-      SELECT DISTINCT ON (spd.contract_number, ${stoKey})
-        ${rawQty} AS qty
-      FROM sap_processed_data spd
-      WHERE spd.contract_number = ${contractNumberExpr}
-        AND ${match}
-        AND NULLIF(TRIM(${SAP_DELIVERY_RAW_COALESCE}), '') IS NOT NULL
-      ORDER BY spd.contract_number, ${stoKey}, spd.created_at DESC NULLS LAST
-    ) x
-  )`;
+  return sqlTruckingPoLevelSapQtyWithDedup(
+    rawQty,
+    `NULLIF(TRIM(${SAP_DELIVERY_RAW_COALESCE}), '') IS NOT NULL`,
+    contractNumberExpr,
+    contractUuidExpr,
+    poNumberExpr,
+    contractQtyKgExpr,
+  );
 }
 
 /**
  * SAP Receive Qty (kg) summed across STO rows for the PO (latest row per STO only).
  * Used for trucking PO-grain list when GR is Close: Contract Qty − Σ Receive.
+ * Applies Contracts multi-STO PO-level duplicate dedup when Σ is inflated.
  */
 export function sqlTruckingPoLevelSapReceiveQty(
   contractNumberExpr = 'e.contract_number',
@@ -93,21 +151,15 @@ export function sqlTruckingPoLevelSapReceiveQty(
   poNumberExpr = 'e.po_number',
   contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
 ): string {
-  const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
-  const stoKey = `TRIM(COALESCE(${SPD_EFFECTIVE_STO}, spd.sto_number::text, ''))`;
   const rawQty = `NULLIF(regexp_replace(${SAP_RECEIVE_RAW_COALESCE}, '[^0-9\\.-]', '', 'g'), '')::numeric`;
-  return `(
-    SELECT SUM(${sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr)})
-    FROM (
-      SELECT DISTINCT ON (spd.contract_number, ${stoKey})
-        ${rawQty} AS qty
-      FROM sap_processed_data spd
-      WHERE spd.contract_number = ${contractNumberExpr}
-        AND ${match}
-        AND NULLIF(TRIM(${SAP_RECEIVE_RAW_COALESCE}), '') IS NOT NULL
-      ORDER BY spd.contract_number, ${stoKey}, spd.created_at DESC NULLS LAST
-    ) x
-  )`;
+  return sqlTruckingPoLevelSapQtyWithDedup(
+    rawQty,
+    `NULLIF(TRIM(${SAP_RECEIVE_RAW_COALESCE}), '') IS NOT NULL`,
+    contractNumberExpr,
+    contractUuidExpr,
+    poNumberExpr,
+    contractQtyKgExpr,
+  );
 }
 
 /**

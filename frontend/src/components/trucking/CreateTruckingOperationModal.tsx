@@ -50,6 +50,7 @@ import {
   sumActualDeliveryKg,
   sumActualReceiveKg,
   sumPlanningDeliveryKg,
+  wbGrandTotalsFromActualRows,
   type TruckingModalActualRow,
   type TruckingModalPlanningRow,
   type TruckingModalStoActual,
@@ -693,9 +694,13 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       ? stoActuals[0]
       : null
 
-  const renderDailyActualsTable = (rows: TruckingModalActualRow[]) => {
+  const renderDailyActualsTable = (
+    rows: TruckingModalActualRow[],
+    options?: { totalLabel?: string },
+  ) => {
     const deliveryTotal = sumActualDeliveryKg(rows)
     const receiveTotal = sumActualReceiveKg(rows)
+    const totalLabel = options?.totalLabel ?? 'Total'
     return (
       <div className="rounded-lg border border-gray-200 overflow-hidden">
         <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
@@ -742,7 +747,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             {rows.length > 0 && (
               <tfoot>
                 <tr className="border-t border-gray-200 bg-gray-50">
-                  <td className="px-3 py-2 text-xs font-semibold text-gray-700">Total</td>
+                  <td className="px-3 py-2 text-xs font-semibold text-gray-700">{totalLabel}</td>
                   <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
                     {formatQtyKgAsMt(deliveryTotal)}
                   </td>
@@ -753,6 +758,28 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               </tfoot>
             )}
           </table>
+        </div>
+      </div>
+    )
+  }
+
+  const renderWbGrandTotalBanner = () => {
+    if (actualRows.length === 0) return null
+    const { deliveryKg, receiveKg } = wbGrandTotalsFromActualRows(actualRows)
+    return (
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3">
+        <p className="text-xs font-semibold text-emerald-900">
+          Grand total (all STOs) — matches Trucking list when GR is Open
+        </p>
+        <div className="mt-1.5 flex flex-wrap gap-x-6 gap-y-1 text-sm tabular-nums text-emerald-950">
+          <span>
+            Delivery:{' '}
+            <span className="font-semibold">{formatQtyKgAsMt(deliveryKg)}</span> MT
+          </span>
+          <span>
+            Receive:{' '}
+            <span className="font-semibold">{formatQtyKgAsMt(receiveKg)}</span> MT
+          </span>
         </div>
       </div>
     )
@@ -1251,23 +1278,26 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               </div>
               <div className="p-4 space-y-4">
                 {wbDisplayMode === 'perSto' ? (
-                  stoActuals.map((sto) => {
-                    const stoRows = filterActualRowsForSto(actualRows, sto.sto_number, {
-                      includeLegacyEmpty: false,
-                    })
-                    return (
-                      <div
-                        key={sto.sto_number}
-                        className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3 space-y-3"
-                      >
-                        <p className="text-xs font-semibold text-emerald-900">
-                          STO {sto.sto_number}
-                        </p>
-                        {renderSapActualFields(sto)}
-                        {renderDailyActualsTable(stoRows)}
-                      </div>
-                    )
-                  })
+                  <>
+                    {stoActuals.map((sto) => {
+                      const stoRows = filterActualRowsForSto(actualRows, sto.sto_number, {
+                        includeLegacyEmpty: false,
+                      })
+                      return (
+                        <div
+                          key={sto.sto_number}
+                          className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3 space-y-3"
+                        >
+                          <p className="text-xs font-semibold text-emerald-900">
+                            STO {sto.sto_number}
+                          </p>
+                          {renderSapActualFields(sto)}
+                          {renderDailyActualsTable(stoRows, { totalLabel: 'Total (this STO)' })}
+                        </div>
+                      )
+                    })}
+                    {renderWbGrandTotalBanner()}
+                  </>
                 ) : wbDisplayMode === 'poLevelMultiSto' ? (
                   <>
                     {stoActuals.map((sto) => (
