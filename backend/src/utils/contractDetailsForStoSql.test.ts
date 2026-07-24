@@ -39,4 +39,21 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('AS quantity_delivered_klip');
     expect(sql).toContain('AS quantity_receive_klip');
   });
+
+  it('uses shared STO+PO scoped delivery/receive SQL per PO line', () => {
+    const sql = buildContractDetailsForStoSql();
+    expect(sql).toContain('pl.po_number');
+    expect(sql).toContain('$1::text');
+    expect(sql).toContain('Quantity Delivery Vessel');
+    expect(sql).toContain('Quantity Receive');
+    expect(sql).toContain('SUM(');
+  });
+
+  it('excludes B2B child PO lines (Contract Reff PO set)', () => {
+    const sql = buildContractDetailsForStoSql();
+    expect(sql).toContain('latest_spd_b2b');
+    expect(sql).toContain("= 'B2B'");
+    expect(sql).toContain('contract_reference_po');
+    expect(sql).toContain('LEFT JOIN latest_spd_b2b b2b ON b2b.contract_number = pl.contract_number');
+  });
 });

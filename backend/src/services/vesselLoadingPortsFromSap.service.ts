@@ -24,6 +24,8 @@ export function extractLoadingPortNamesFromSapData(parsedData: Record<string, un
   const add = (value: unknown) => {
     const text = trimText(value);
     if (!text) return;
+    // Reject Vessel LOA / numeric junk that leaked into vessel_loading_port_* fields.
+    if (!isValidHumanPortName(text)) return;
     if (names.some((existing) => normalizePortToken(existing) === normalizePortToken(text))) return;
     names.push(text);
   };
@@ -668,6 +670,10 @@ async function upsertVesselLoadingPortRow(
          eta_vessel_berthed_at_discharge_port = $25::timestamp,
          eta_vessel_start_discharging = $26::timestamp,
          eta_vessel_complete_discharge = $27::timestamp,
+         is_cancelled = false,
+         cancel_remark = NULL,
+         cancelled_at = NULL,
+         cancelled_by_user_id = NULL,
          updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
       [existing.rows[0].id, ...values],
@@ -725,6 +731,49 @@ async function upsertVesselLoadingPortsFromPlan(
   return upserted;
 }
 
+/** Soft-cancel loading ports that are numeric junk (Vessel LOA leak) or extras when SAP has one port. */
+async function cancelBogusExtraLoadingPorts(
+  shipmentId: string,
+  plannedLoading: SapPortRow[],
+  existingLoading: Array<{ port_sequence: unknown; port_name: unknown; is_discharge_port?: unknown }>,
+): Promise<number> {
+  const plannedTokens = new Set(
+    plannedLoading
+      .map((p) => normalizePortToken(String(p.port_name ?? '')))
+      .filter((t) => t.length > 0),
+  );
+  const sequencesToCancel = existingLoading
+    .filter((row) => {
+      const name = String(row.port_name ?? '');
+      // Always drop Vessel LOA / pure-numeric names.
+      if (!isValidHumanPortName(name)) return true;
+      // When SAP has exactly one loading port, cancel any extra non-matching rows.
+      if (plannedLoading.length !== 1 || existingLoading.length <= 1) return false;
+      return !plannedTokens.has(normalizePortToken(name));
+    })
+    .map((row) => Number(row.port_sequence))
+    .filter((seq) => Number.isFinite(seq));
+
+  if (sequencesToCancel.length === 0) return 0;
+
+  const result = await query(
+    `UPDATE vessel_loading_ports
+     SET is_cancelled = true,
+         cancel_remark = COALESCE(NULLIF(TRIM(cancel_remark), ''), $2),
+         cancelled_at = COALESCE(cancelled_at, NOW())
+     WHERE shipment_id = $1::uuid
+       AND COALESCE(is_discharge_port, false) = false
+       AND COALESCE(is_cancelled, false) = false
+       AND port_sequence = ANY($3::int[])`,
+    [
+      shipmentId,
+      'Auto-cancelled: invalid/numeric port name (e.g. Vessel LOA mis-map)',
+      sequencesToCancel,
+    ],
+  );
+  return result.rowCount ?? sequencesToCancel.length;
+}
+
 /** Sync missing multi-port rows (and ETAs) from latest SAP processed data. */
 export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): Promise<boolean> {
   const plannedPorts = await buildVesselLoadingPortsPlanForShipment(shipmentId);
@@ -733,7 +782,8 @@ export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): P
   const existing = await query(
     `SELECT port_sequence, port_name, is_discharge_port
      FROM vessel_loading_ports
-     WHERE shipment_id = $1::uuid`,
+     WHERE shipment_id = $1::uuid
+       AND COALESCE(is_cancelled, false) = false`,
     [shipmentId],
   );
   const existingLoading = existing.rows
@@ -744,12 +794,41 @@ export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): P
     .filter((p) => p.is_discharge_port !== true)
     .slice()
     .sort((a, b) => Number(a.port_sequence ?? 0) - Number(b.port_sequence ?? 0));
-  const hasInvalidNames = existingLoading.some((row) => !trimText(row.port_name));
+
+  const cancelledCount = await cancelBogusExtraLoadingPorts(
+    shipmentId,
+    plannedLoading,
+    existingLoading,
+  );
+
+  const activeAfterCancel = existingLoading.filter((row) => {
+    const name = String(row.port_name ?? '');
+    if (!isValidHumanPortName(name)) return false;
+    const plannedTokens = new Set(
+      plannedLoading.map((p) => normalizePortToken(String(p.port_name ?? ''))).filter(Boolean),
+    );
+    if (
+      plannedLoading.length === 1 &&
+      existingLoading.length > 1 &&
+      plannedTokens.size > 0 &&
+      !plannedTokens.has(normalizePortToken(name))
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const hasInvalidNames = activeAfterCancel.some((row) => !trimText(row.port_name));
   const plannedNames = plannedLoading.map((row) => normalizePortToken(String(row.port_name ?? '')));
-  const existingNames = existingLoading.map((row) => normalizePortToken(String(row.port_name ?? '')));
+  const existingNames = activeAfterCancel.map((row) => normalizePortToken(String(row.port_name ?? '')));
   const namesMismatch = plannedNames.some((name, index) => existingNames[index] !== name);
 
-  if (plannedLoading.length <= existingLoading.length && !hasInvalidNames && !namesMismatch) {
+  if (
+    cancelledCount === 0 &&
+    plannedLoading.length <= activeAfterCancel.length &&
+    !hasInvalidNames &&
+    !namesMismatch
+  ) {
     return false;
   }
 
@@ -760,6 +839,7 @@ export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): P
       shipmentId,
       sapLoading: plannedLoading.length,
       existingLoading: existingLoading.length,
+      cancelledBogus: cancelledCount,
       hasInvalidNames,
     });
     return true;

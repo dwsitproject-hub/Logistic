@@ -14,61 +14,77 @@ import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
 } from './shipmentManualQtyResolveSql';
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
-import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
-import { sqlSapQtyDeliveredKgFromSpd } from './contractLogisticsStoDetailSql';
-
-const SPD_STO_EXPR = (spdAlias = 'spd') => `NULLIF(TRIM(COALESCE(
-  ${spdAlias}.sto_number::text,
-  ${spdAlias}.data->'raw'->>'STO No.',
-  ${spdAlias}.data->'raw'->>'STO Number',
-  ${spdAlias}.data->'shipment'->>'sto_no',
-  ${spdAlias}.data->'contract'->>'sto_no'
-)), '')`;
-
-const SPD_CONTRACT_QTY = `(SELECT cc.quantity_ordered::numeric FROM contracts cc WHERE TRIM(cc.contract_id) = TRIM(spd.contract_number) LIMIT 1)`;
-
-const SPD_RECEIVE_KG = sqlNormalizeSapStoQtyToKgSql(`NULLIF(regexp_replace(COALESCE(
-  NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-  NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-  ''
-), '[^0-9\\.-]', '', 'g'), '')::numeric`, SPD_CONTRACT_QTY);
-
-const SPD_DELIVER_KG = sqlSapQtyDeliveredKgFromSpd('spd', SPD_CONTRACT_QTY);
-
-const SPD_STO_QTY_KG = `NULLIF(regexp_replace(COALESCE(
-  NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
-  NULLIF(TRIM(spd.data->'shipment'->>'sto_quantity'), ''),
-  NULLIF(TRIM(spd.data->'raw'->>'STO Quantity'), ''),
-  NULLIF(TRIM(spd.data->'raw'->>'sto quantity'), ''),
-  ''
-), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
+import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
+import {
+  sqlStoScopedDeliveredKgSql,
+  sqlStoScopedReceiveKgSql,
+} from './contractLogisticsStoDetailSql';
 
 const B2B_CHILD_WHERE = (b2bAlias: string) => `NOT (
   UPPER(TRIM(COALESCE(${b2bAlias}.b2b_flag, ''))) = 'B2B'
   AND NULLIF(TRIM(COALESCE(${b2bAlias}.contract_reference_po, '')), '') IS NOT NULL
 )`;
 
-const SHIPPING_PERF_PERF_STO_KEYS_CTE = `
-      perf_sto_keys AS (
-        SELECT DISTINCT TRIM(sto_key::text) AS sto_key
-        FROM ship_keys
-        WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != ''
-      )`;
+export function sqlB2bChildExcludeWhere(b2bAlias = 'b2b'): string {
+  return B2B_CHILD_WHERE(b2bAlias);
+}
 
-/** Page-scoped STO keys for Shipments list (after shipment_page CTE). */
-export const SHIPMENT_LIST_PERF_STO_KEYS_CTE = `
-      perf_sto_keys AS (
-        SELECT DISTINCT TRIM(sto_key::text) AS sto_key
-        FROM shipment_page
-        WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != ''
-      )`;
+/** Exclude B2B child contracts when aggregating STO-linked PO/contract lists (no b2b join). */
+export function sqlB2bChildContractRowExcludeWhere(contractAlias = 'cc'): string {
+  return `NOT (
+    UPPER(TRIM(COALESCE(
+      (
+        SELECT UPPER(TRIM(COALESCE(
+          spd.data->'contract'->>'contract_type',
+          spd.data->>'B2B Flag',
+          ${contractAlias}.contract_type::text,
+          ''
+        )))
+        FROM sap_processed_data spd
+        WHERE TRIM(spd.contract_number) = TRIM(${contractAlias}.contract_id)
+        ORDER BY spd.created_at DESC NULLS LAST
+        LIMIT 1
+      ),
+      UPPER(TRIM(COALESCE(${contractAlias}.contract_type::text, ''))),
+      ''
+    ))) = 'B2B'
+    AND NULLIF(TRIM(COALESCE(
+      (
+        SELECT NULLIF(TRIM(COALESCE(
+          spd.data->'contract'->>'contract_reference_po',
+          spd.data->>'CONTRACT REFF PO',
+          spd.data->'raw'->>'Contract Reff PO Ini',
+          spd.data->'raw'->>'CONTRACT REFF PO'
+        )), '')
+        FROM sap_processed_data spd
+        WHERE TRIM(spd.contract_number) = TRIM(${contractAlias}.contract_id)
+        ORDER BY spd.created_at DESC NULLS LAST
+        LIMIT 1
+      ),
+      ''
+    )), '') IS NOT NULL
+  )`;
+}
 
-/** CTEs: perf_sto_keys → sto_po_lines → sto_metrics. Join on sto_key. */
-export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
-  const stoExpr = SPD_STO_EXPR('spd');
-  return `
-      ${perfStoKeysCteSql},
+/** Exclude B2B child rows from spd_keyed JSON aggregates (PO column hydrate). */
+export function sqlB2bChildSpdDataExcludeWhere(spdDataExpr = 'sk.data'): string {
+  return `NOT (
+    UPPER(TRIM(COALESCE(
+      ${spdDataExpr}->'contract'->>'contract_type',
+      ${spdDataExpr}->>'B2B Flag',
+      ''
+    ))) = 'B2B'
+    AND NULLIF(TRIM(COALESCE(
+      ${spdDataExpr}->'contract'->>'contract_reference_po',
+      ${spdDataExpr}->>'CONTRACT REFF PO',
+      ${spdDataExpr}->'raw'->>'Contract Reff PO Ini',
+      ${spdDataExpr}->'raw'->>'CONTRACT REFF PO'
+    )), '') IS NOT NULL
+  )`;
+}
+
+export const LATEST_SPD_B2B_CTE = `
       latest_spd_b2b AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
@@ -87,7 +103,28 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
+      )`;
+
+const SHIPPING_PERF_PERF_STO_KEYS_CTE = `
+      perf_sto_keys AS (
+        SELECT DISTINCT TRIM(sto_key::text) AS sto_key
+        FROM ship_keys
+        WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != ''
+      )`;
+
+/** Page-scoped STO keys for Shipments list (after shipment_page CTE). */
+export const SHIPMENT_LIST_PERF_STO_KEYS_CTE = `
+      perf_sto_keys AS (
+        SELECT DISTINCT TRIM(sto_key::text) AS sto_key
+        FROM shipment_page
+        WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != ''
+      )`;
+
+/** CTEs: perf_sto_keys → sto_po_lines → sto_metrics. Join on sto_key. */
+export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
+  return `
+      ${perfStoKeysCteSql},
+      ${LATEST_SPD_B2B_CTE},
       all_sto_contract_links AS (
         SELECT DISTINCT ON (sto_key, contract_id)
           sto_key,
@@ -126,20 +163,6 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           UNION ALL
 
           SELECT
-            ${stoExpr},
-            cc.id,
-            cc.contract_id,
-            cc.po_number,
-            cc.quantity_ordered::numeric,
-            cc.incoterm,
-            NULLIF(cc.sto_quantity, 0)::numeric
-          FROM sap_processed_data spd
-          INNER JOIN contracts cc ON TRIM(cc.contract_id) = TRIM(spd.contract_number)
-          WHERE ${stoExpr} IS NOT NULL
-
-          UNION ALL
-
-          SELECT
             ${shippingPerfStoMetricsKeyExpr('cc', 'sh')} AS sto_key,
             cc.id,
             cc.contract_id,
@@ -154,18 +177,6 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
         ) raw_links
         WHERE sto_key IS NOT NULL AND TRIM(sto_key) != ''
         ORDER BY sto_key, contract_id, contract_uuid
-      ),
-      latest_spd_by_sto_contract AS (
-        SELECT DISTINCT ON (${stoExpr}, spd.contract_number)
-          ${stoExpr} AS sto_key,
-          spd.contract_number,
-          ${SPD_RECEIVE_KG} AS receive_kg,
-          ${SPD_DELIVER_KG} AS delivery_kg,
-          ${SPD_STO_QTY_KG} AS sto_qty_kg
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-          AND ${stoExpr} IS NOT NULL
-        ORDER BY ${stoExpr}, spd.contract_number, spd.created_at DESC NULLS LAST
       ),
       contract_sto_planning AS (
         SELECT
@@ -187,39 +198,31 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           asp.po_number,
           asp.contract_qty,
           asp.incoterm,
-          COALESCE(lspd.receive_kg, lspd_c.receive_kg) AS receive_kg,
-          COALESCE(lspd.delivery_kg, lspd_c.delivery_kg) AS delivery_kg,
+          ${sqlStoScopedReceiveKgSql({
+            contractNumberExpr: 'asp.contract_id',
+            contractQtyExpr: 'asp.contract_qty',
+            stoKeyExpr: 'asp.sto_key',
+            poNumberExpr: 'asp.po_number',
+          })} AS receive_kg,
+          ${sqlStoScopedDeliveredKgSql({
+            contractNumberExpr: 'asp.contract_id',
+            contractQtyExpr: 'asp.contract_qty',
+            stoKeyExpr: 'asp.sto_key',
+            poNumberExpr: 'asp.po_number',
+          })} AS delivery_kg,
           COALESCE(
-            NULLIF(lspd.sto_qty_kg, 0),
-            NULLIF(lspd_c.sto_qty_kg, 0),
+            NULLIF((${sqlPoStoSapQtyKg({
+              contractNumberExpr: 'asp.contract_id',
+              poNumberExpr: `COALESCE(NULLIF(TRIM(asp.po_number::text), ''), '')`,
+              contractQtyExpr: 'asp.contract_qty',
+              stoKeyExpr: 'asp.sto_key',
+            })}), 0),
             asp.contract_sto_qty
           ) AS sto_qty_kg,
           csp.shipment_planning_kg
         FROM all_sto_contract_links asp
         INNER JOIN perf_sto_keys psk ON psk.sto_key = asp.sto_key
         LEFT JOIN latest_spd_b2b b2b ON b2b.contract_number = asp.contract_id
-        LEFT JOIN latest_spd_by_sto_contract lspd
-          ON lspd.sto_key = asp.sto_key
-          AND TRIM(lspd.contract_number) = TRIM(asp.contract_id)
-        /*
-         * Fallback when shipment list key is Operation ID / synthetic and SAP has no STO:
-         * match movement qty by contract_number (latest row). Prefer sto-key match above.
-         * LATERAL (idx_spd_contract_number_trim_created) instead of joining a DISTINCT ON
-         * over all contracts: the planner previously nested-loop-scanned that whole set per
-         * outer row (~4.5M join-filter evaluations, ~2s). Same row pick — latest created_at
-         * per trimmed contract_number (no trim-variant duplicates exist in SAP data).
-         */
-        LEFT JOIN LATERAL (
-          SELECT
-            ${SPD_RECEIVE_KG} AS receive_kg,
-            ${SPD_DELIVER_KG} AS delivery_kg,
-            ${SPD_STO_QTY_KG} AS sto_qty_kg
-          FROM sap_processed_data spd
-          WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-            AND TRIM(spd.contract_number) = TRIM(asp.contract_id)
-          ORDER BY spd.created_at DESC NULLS LAST
-          LIMIT 1
-        ) lspd_c ON TRUE
         LEFT JOIN contract_sto_planning csp
           ON csp.sto_key = asp.sto_key
           AND TRIM(csp.contract_id) = TRIM(asp.contract_id)
@@ -228,25 +231,35 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
       ),
       sto_shipment_klip AS (
         SELECT
-          x.sto_key,
-          SUM(x.klip_del)::numeric AS klip_delivery_kg,
-          SUM(x.klip_recv)::numeric AS klip_receive_kg,
-          -- any Open wins (closed only when every linked contract is Close)
-          BOOL_AND(x.is_closed) AS all_closed
+          per_contract.sto_key,
+          SUM(per_contract.klip_del)::numeric AS klip_delivery_kg,
+          SUM(per_contract.klip_recv)::numeric AS klip_receive_kg,
+          BOOL_AND(per_contract.is_closed) AS all_closed
         FROM (
-          SELECT DISTINCT ON (s.id)
-            ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key,
-            COALESCE(s.quantity_delivered_klip, 0)::numeric AS klip_del,
-            COALESCE(s.actual_vessel_qty_receive, 0)::numeric AS klip_recv,
-            (${sqlIsContractSapClosedExpr('c')}) AS is_closed
-          FROM shipments s
-          INNER JOIN contracts c ON c.id = s.contract_id
-          WHERE COALESCE(s.status, '') <> 'CANCELLED'
-            AND ${shippingPerfStoMetricsKeyExpr('c', 's')} IS NOT NULL
-          ORDER BY s.id
-        ) x
-        INNER JOIN perf_sto_keys psk ON psk.sto_key = x.sto_key
-        GROUP BY x.sto_key
+          SELECT DISTINCT ON (raw.sto_key, raw.contract_id)
+            raw.sto_key,
+            raw.contract_id,
+            raw.klip_del,
+            raw.klip_recv,
+            raw.is_closed
+          FROM (
+            SELECT
+              ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key,
+              TRIM(c.contract_id) AS contract_id,
+              COALESCE(s.quantity_delivered_klip, 0)::numeric AS klip_del,
+              COALESCE(s.actual_vessel_qty_receive, 0)::numeric AS klip_recv,
+              (${sqlIsContractSapClosedForStoExpr('c', shippingPerfStoMetricsKeyExpr('c', 's'))}) AS is_closed,
+              s.updated_at,
+              s.created_at
+            FROM shipments s
+            INNER JOIN contracts c ON c.id = s.contract_id
+            WHERE COALESCE(s.status, '') <> 'CANCELLED'
+              AND ${shippingPerfStoMetricsKeyExpr('c', 's')} IS NOT NULL
+          ) raw
+          INNER JOIN perf_sto_keys psk ON psk.sto_key = raw.sto_key
+          ORDER BY raw.sto_key, raw.contract_id, raw.updated_at DESC NULLS LAST, raw.created_at DESC NULLS LAST
+        ) per_contract
+        GROUP BY per_contract.sto_key
       ),
       sto_metrics AS (
         SELECT

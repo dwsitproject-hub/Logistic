@@ -17,7 +17,7 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   formatShipmentStatusLabel,
-  normalizeShipmentStatusKey,
+  shipmentStatusBadgeClass,
   shipmentStatusLabelLines,
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
@@ -1431,11 +1431,6 @@ function ShipmentsPageContent() {
     }
   }, [])
 
-  const applySearch = useCallback(() => {
-    setPage(1)
-    setSearchTerm(searchDraft)
-  }, [searchDraft])
-
   const applyViewFilter = useCallback(() => {
     setPage(1)
   }, [])
@@ -1448,6 +1443,12 @@ function ShipmentsPageContent() {
     setTotalCount(0)
     setTotalPages(1)
   }, [])
+
+  const applySearch = useCallback(() => {
+    beginTableScopeRefresh()
+    setPage(1)
+    setSearchTerm(searchDraft)
+  }, [searchDraft, beginTableScopeRefresh])
 
   const handlePipelineStageChange = useCallback((stage: ShipmentsPipelineStageFilter) => {
     beginTableScopeRefresh()
@@ -1516,6 +1517,7 @@ function ShipmentsPageContent() {
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
       const searchTrim = (searchOverride ?? searchTerm).trim()
+      const forceListRefresh = Boolean(options?.force || searchTrim.length >= 2)
       if (searchTrim.length >= 2) {
         params.append('search', searchTrim)
       }
@@ -1557,7 +1559,7 @@ function ShipmentsPageContent() {
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
 
-      /** Section 1 cards — toolbar scope only; parallel with table shell query. */
+      /** Section 1 cards — toolbar scope only; table search does not reshape Section 1. */
       const summaryParams = new URLSearchParams(params.toString())
       summaryParams.delete('status')
       summaryParams.delete('etaLoading')
@@ -1568,6 +1570,9 @@ function ShipmentsPageContent() {
       summaryParams.set('limit', '1')
       // OS strip is static (active stages only) — do not scope by status card.
       summaryParams.delete('osStatus')
+      if (searchTrim.length >= 2) {
+        summaryParams.delete('search')
+      }
       const summaryUrl = `/shipments?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -1712,11 +1717,13 @@ function ShipmentsPageContent() {
         setOutstandingQtyFetching(false)
       }
 
-      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+      const LIST_SHELL_TIMEOUT_MS = 45_000
+
+      const { data: listEnvelope } = await cachedGet(
         listCacheKey,
-        () => api.get(listUrl).then((r) => r.data),
+        () => api.get(listUrl, { timeout: LIST_SHELL_TIMEOUT_MS }).then((r) => r.data),
         {
-          force: options?.force,
+          force: forceListRefresh,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             applyListEnvelope(fresh)
@@ -1726,8 +1733,10 @@ function ShipmentsPageContent() {
       )
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
-      if (!listRevalidating) {
-        setListFetching(false)
+      // Show shell immediately; background revalidation may still refresh rows.
+      setListFetching(false)
+      if (searchTrim.length >= 2) {
+        setQtyFieldsReady(true)
       }
 
       // Section 2 ETA scoped summary (only when a pipeline stage is selected).
@@ -1781,8 +1790,12 @@ function ShipmentsPageContent() {
         hydrateParams.delete('summaryOnly')
         const hydrateUrl = `/shipments?${hydrateParams.toString()}`
         const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
+        const hydrateFallbackMs = searchTrim.length >= 2 ? 15000 : 45000
+        const hydrateFallbackTimer = window.setTimeout(() => {
+          if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
+        }, hydrateFallbackMs)
         void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
-          force: options?.force,
+          force: forceListRefresh,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             const hydrated = fresh?.data?.shipments || []
@@ -1793,6 +1806,7 @@ function ShipmentsPageContent() {
           },
         })
           .then(({ data }) => {
+            window.clearTimeout(hydrateFallbackTimer)
             if (listGen !== listFetchGenRef.current) return
             const hydrated = data?.data?.shipments || []
             if (hydrated.length) {
@@ -1801,6 +1815,7 @@ function ShipmentsPageContent() {
             setQtyFieldsReady(true)
           })
           .catch((err) => {
+            window.clearTimeout(hydrateFallbackTimer)
             console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
             if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
@@ -1837,8 +1852,11 @@ function ShipmentsPageContent() {
       setTableScopeLoading(false)
       setQtyFieldsReady(true)
     } finally {
-      setLoading(false)
-      setTableScopeLoading(false)
+      if (listGen === listFetchGenRef.current) {
+        setLoading(false)
+        setTableScopeLoading(false)
+        setListFetching(false)
+      }
     }
   }
 
@@ -2545,23 +2563,7 @@ function ShipmentsPageContent() {
     }
   }
 
-  const getStatusColor = (status: string) => {
-    switch (normalizeShipmentStatusKey(status)) {
-      case 'UNPLANNED': return 'bg-slate-100 text-slate-800'
-      case 'PLANNED': return 'bg-blue-100 text-blue-800'
-      case 'ARRIVED_LP': return 'bg-yellow-100 text-yellow-800'
-      case 'BERTHED_LP': return 'bg-amber-100 text-amber-800'
-      case 'LOADING': return 'bg-orange-100 text-orange-800'
-      case 'COMPLETED_LOADING': return 'bg-orange-200 text-orange-900'
-      case 'SAILED': return 'bg-purple-100 text-purple-800'
-      case 'ARRIVED_DP': return 'bg-indigo-100 text-indigo-800'
-      case 'BERTHED_DP': return 'bg-cyan-100 text-cyan-800'
-      case 'UNLOADING': return 'bg-teal-100 text-teal-800'
-      case 'COMPLETED': return 'bg-green-100 text-green-800'
-      case 'CANCELLED': return 'bg-red-100 text-red-800'
-      default: return 'bg-gray-100 text-gray-800'
-    }
-  }
+  const getStatusColor = (status: string) => shipmentStatusBadgeClass(status)
 
   const parseNumberLoose = (v: unknown) => {
     if (v === null || v === undefined) return null

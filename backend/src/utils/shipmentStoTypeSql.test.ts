@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildShipmentExcludeStoTypeTSql,
+  buildShipmentPageSeaRowScopeSql,
   buildShipmentSeaMixTransportSql,
   isSyntheticShipmentOperationKeySql,
   sapStoNumberKeyExpr,
@@ -62,9 +63,16 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain("spd_sto_type.data->'raw'->>'STO Type'");
   });
 
-  it('buildShipmentExcludeStoTypeTSql remains available but deprecated for list', () => {
+  it('buildShipmentExcludeStoTypeTSql excludes STO Type T', () => {
     const sql = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
     expect(sql).toContain("= 'T')");
     expect(sql).toContain('NOT (');
+  });
+
+  it('buildShipmentPageSeaRowScopeSql combines CIF/FOB/CFR incoterm and exclude Type T', () => {
+    const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
+    expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
+    expect(sql).toContain("= 'T')");
+    expect(sql).toContain(' AND ');
   });
 });

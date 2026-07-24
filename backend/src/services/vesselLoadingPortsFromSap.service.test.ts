@@ -101,9 +101,25 @@ describe('vesselLoadingPortsFromSap.service', () => {
     expect(loading2?.port_name).toBe('Loading Port 2');
   });
 
+  it('ignores Vessel LOA numeric leak in vessel_loading_port_1 when extracting names', () => {
+    expect(
+      extractLoadingPortNamesFromSapData({
+        raw: { 'Vessel Loading Port': 'PORT TALANG DUKU', 'Vessel LOA': '79.01' },
+        shipment: { vessel_loading_port_1: '79.01' },
+      }),
+    ).toEqual(['PORT TALANG DUKU']);
+  });
+
   it('matches SAP STO embedded in OP-{sto}-* operation_id for edit port labels', () => {
     const src = readFileSync(resolve(__dirname, 'vesselLoadingPortsFromSap.service.ts'), 'utf8');
     expect(src).toContain('op_embedded_sto');
     expect(src).toContain('^OP-([0-9]+)');
+  });
+
+  it('sync cancels numeric junk ports (source asserts cancel helper exists)', () => {
+    const src = readFileSync(resolve(__dirname, 'vesselLoadingPortsFromSap.service.ts'), 'utf8');
+    expect(src).toContain('cancelBogusExtraLoadingPorts');
+    expect(src).toContain('isValidHumanPortName');
+    expect(src).toContain('Auto-cancelled: invalid/numeric port name');
   });
 });

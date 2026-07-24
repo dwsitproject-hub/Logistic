@@ -486,9 +486,10 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
     // member. When members sit in different active stages, cap at the least-advanced
     // one — an STO is not Completed until every contract under it is done.
     // Mirrors the SQL floor in shipmentEffectiveStatusExpr (summary/filters).
+    // GR Close (STO-scoped) is authoritative — stale sibling DB statuses must not floor down.
     const floor = String(row.group_status_floor ?? '').trim().toUpperCase();
     const mixedStatuses = Number(row.group_active_status_count ?? 0) > 1;
-    if (mixedStatuses && floor) {
+    if (mixedStatuses && floor && !row.is_contract_sap_closed) {
       const floorRank = SHIPMENT_STATUS_RANK[floor];
       const derivedRank = SHIPMENT_STATUS_RANK[String(row.status ?? '').trim().toUpperCase()];
       if (floorRank !== undefined && derivedRank !== undefined && floorRank >= 0 && floorRank < derivedRank) {

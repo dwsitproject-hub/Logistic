@@ -3,6 +3,8 @@
  * Uses contract_stos (multi-STO per contract) with legacy contracts.sto_number fallback.
  */
 
+import { sqlB2bChildContractRowExcludeWhere } from './shippingPerformanceStoMetricsSql';
+
 /** Operational STO key on a grouped shipment list row (matches shipmentListStoKeyExpr). */
 export function buildGroupedStoTrimExpr(stoKeySql: string): string {
   return `NULLIF(TRIM((${stoKeySql})::text), '')`;
@@ -15,6 +17,7 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
     FROM contracts cc
     WHERE cc.contract_id IS NOT NULL
       AND TRIM(cc.contract_id) != ''
+      AND ${sqlB2bChildContractRowExcludeWhere('cc')}
       AND (
         EXISTS (
           SELECT 1 FROM contract_stos cs

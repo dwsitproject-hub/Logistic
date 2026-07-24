@@ -119,6 +119,16 @@ describe('resolveShipmentListReceiveKg', () => {
     ).toBe(4_002_486)
   })
 
+  it('GR Close STO 1016010610 pattern: hydrated SAP receive beats duplicate MNL KLIP row', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 500_000,
+        quantity_receive: 241_610,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(241_610)
+  })
+
   it('uses SAP receive when manual row is 0 and Open', () => {
     expect(
       resolveShipmentListReceiveKg({

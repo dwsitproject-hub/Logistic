@@ -2,7 +2,7 @@
  * SQL builders for shipment pipeline daily summary refresh.
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import { groupPlantExpr } from './groupPlantSql';
 import {
   sqlPipelineIncotermKey,
@@ -21,14 +21,13 @@ import {
   buildUnplannedContractBacklogLatestSpdCte,
   unplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
-import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
-import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
+import { buildShipmentPageSeaRowScopeSql, shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 
 function buildShipmentDailyBaseCteSql(): string {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
-  const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
+  const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
   const ataSelect = buildShipmentListAtaSelectSql();
   const plantSite = groupPlantExpr('c.plant_code', 'c.company_name');
 
@@ -115,7 +114,7 @@ function buildShipmentDailyBaseCteSql(): string {
           MAX(c.contract_date) AS contract_date,
           MAX(c.product) AS product,
           MAX(c.incoterm) AS incoterm,
-          BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
+          BOOL_AND(${sqlIsContractSapClosedForStoExpr('c', listStoKeySql)}) AS is_contract_sap_closed,
           ${ataSelect}
           ''::text AS contract_numbers_from_join,
           ''::text AS po_numbers_from_join,
@@ -130,7 +129,7 @@ function buildShipmentDailyBaseCteSql(): string {
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
-        WHERE ${seaIncotermScopeCond}
+        WHERE ${seaRowScopeCond}
           AND ${shipmentPageExcludeB2bChildCond('l')}
         GROUP BY ${listStoKeySql}
       ),

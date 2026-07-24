@@ -53,6 +53,8 @@ import {
   appendShipmentColumnFilters,
   appendShipmentEtaBucketFilters,
   appendShipmentGlobalSearch,
+  buildExactNumericGlobalSearchInnerSql,
+  isExactStoGlobalSearch,
   appendShipmentLateIndicatorFilter,
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
@@ -109,6 +111,7 @@ import { sqlUserStoQtyAssignedToKgSql, stoQtyAssignedMtToKg } from '../utils/use
 import { resolveShipmentPlanQtyAssignmentTargets } from '../utils/shipmentPlanQtyAssignmentKey';
 import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import {
+  buildShipmentPageSeaRowScopeSql,
   shipmentListStoKeyExpr,
   shipmentListDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
@@ -136,7 +139,11 @@ import {
 } from '../utils/shipmentAtaOverrideSql';
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
-import { SQL_CONTRACT_IMPORT_STATUS, getContractImportStatusForShipment, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import {
+  SQL_CONTRACT_IMPORT_STATUS,
+  getContractImportStatusForShipment,
+  sqlIsContractSapClosedForStoExpr,
+} from '../utils/contractDeliveryStatus';
 import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
@@ -559,45 +566,55 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    /** Shipments page scope: CIF/FOB/CFR only (ignore STO Type T/V and Sea/Land). */
+    /** Shipments page scope: CIF/FOB/CFR + exclude STO Type T (trucking legs). */
     const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
+    const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
     /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
 
-    const coreWhereParts: string[] = [seaIncotermScopeCond];
+    /** Pre-filter for relevant_contract_numbers — no `l` join yet (incoterm only). */
+    const relevantContractWhereParts: string[] = [seaIncotermScopeCond];
+    /** shipment_base_core / ranked_sto — `l` is joined; full sea row scope. */
+    const shipmentBaseWhereParts: string[] = [seaRowScopeCond];
     /** Contract-only scope (date/plant/contract) reused by Unplanned open-contract count. */
     const contractScopeParts: string[] = [];
     const coreParams: any[] = [];
     let cp = 1;
 
     if (vessel) {
-      coreWhereParts.push(`s.vessel_name ILIKE $${cp}`);
+      relevantContractWhereParts.push(`s.vessel_name ILIKE $${cp}`);
+      shipmentBaseWhereParts.push(`s.vessel_name ILIKE $${cp}`);
       coreParams.push(`%${vessel}%`);
       cp += 1;
     }
     if (port) {
-      coreWhereParts.push(`(s.port_of_loading ILIKE $${cp} OR s.port_of_discharge ILIKE $${cp + 1})`);
+      relevantContractWhereParts.push(`(s.port_of_loading ILIKE $${cp} OR s.port_of_discharge ILIKE $${cp + 1})`);
+      shipmentBaseWhereParts.push(`(s.port_of_loading ILIKE $${cp} OR s.port_of_discharge ILIKE $${cp + 1})`);
       coreParams.push(`%${port}%`, `%${port}%`);
       cp += 2;
     }
     if (dateFrom) {
-      coreWhereParts.push(`c.contract_date >= $${cp}`);
+      relevantContractWhereParts.push(`c.contract_date >= $${cp}`);
+      shipmentBaseWhereParts.push(`c.contract_date >= $${cp}`);
       contractScopeParts.push(`c.contract_date >= $${cp}`);
       coreParams.push(dateFrom);
       cp += 1;
     }
     if (dateTo) {
-      coreWhereParts.push(`c.contract_date <= $${cp}`);
+      relevantContractWhereParts.push(`c.contract_date <= $${cp}`);
+      shipmentBaseWhereParts.push(`c.contract_date <= $${cp}`);
       contractScopeParts.push(`c.contract_date <= $${cp}`);
       coreParams.push(dateTo);
       cp += 1;
     }
     if (delayed === 'true') {
-      coreWhereParts.push(`s.is_delayed = true`);
+      relevantContractWhereParts.push(`s.is_delayed = true`);
+      shipmentBaseWhereParts.push(`s.is_delayed = true`);
     }
     if (contract) {
-      coreWhereParts.push(`c.contract_id = $${cp}`);
+      relevantContractWhereParts.push(`c.contract_id = $${cp}`);
+      shipmentBaseWhereParts.push(`c.contract_id = $${cp}`);
       contractScopeParts.push(`c.contract_id = $${cp}`);
       coreParams.push(contract);
       cp += 1;
@@ -612,7 +629,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     );
     if (groupPlantFilter.sql) {
       const plantSql = groupPlantFilter.sql.replace(/^ AND /, '');
-      coreWhereParts.push(plantSql);
+      relevantContractWhereParts.push(plantSql);
+      shipmentBaseWhereParts.push(plantSql);
       contractScopeParts.push(plantSql);
       coreParams.push(...groupPlantFilter.params);
       cp = groupPlantFilter.nextIndex;
@@ -621,13 +639,26 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const contractToolbarFilter = appendContractScopeToolbarFilters(colFilters, cp);
     if (contractToolbarFilter.sql) {
       const toolbarSql = contractToolbarFilter.sql.replace(/^ AND /, '');
-      coreWhereParts.push(toolbarSql);
+      relevantContractWhereParts.push(toolbarSql);
+      shipmentBaseWhereParts.push(toolbarSql);
       contractScopeParts.push(toolbarSql);
       coreParams.push(...contractToolbarFilter.params);
       cp = contractToolbarFilter.nextIndex;
     }
 
-    const coreWhereSql = coreWhereParts.join(' AND ');
+    const exactStoKey = stoIsSet
+      ? String(sto).trim()
+      : isExactStoGlobalSearch(globalSearch)
+        ? globalSearch.trim()
+        : null;
+    if (exactStoKey) {
+      shipmentBaseWhereParts.push(buildExactNumericGlobalSearchInnerSql(listStoKeySql, cp));
+      coreParams.push(exactStoKey);
+      cp += 1;
+    }
+
+    const relevantContractWhereSql = relevantContractWhereParts.join(' AND ');
+    const shipmentBaseWhereSql = shipmentBaseWhereParts.join(' AND ');
     const contractScopeSql =
       contractScopeParts.length > 0 ? `AND ${contractScopeParts.join(' AND ')}` : '';
 
@@ -666,7 +697,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         SELECT DISTINCT c.contract_id
         FROM shipments s
         INNER JOIN contracts c ON s.contract_id = c.id
-        WHERE ${coreWhereSql}
+        WHERE ${relevantContractWhereSql}
       ),
       latest_spd_contract AS (
         ${latestSpdSelectList}
@@ -760,7 +791,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.contract_date) as contract_date,
           MAX(c.delivery_start_date) as delivery_start_date,
           MAX(c.delivery_end_date) as delivery_end_date,
-          BOOL_AND(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
+          BOOL_AND(${sqlIsContractSapClosedForStoExpr('c', listStoKeySql)}) AS is_contract_sap_closed,
           ${sqlShipmentListLoadingPortsKlipAgg()},
           ${sqlShipmentListDischargePortsKlipAgg()},
 ${ataSelect}
@@ -780,7 +811,7 @@ ${contractMetaSelectCore}
           AND COALESCE(vlp_disc.is_discharge_port, false) = true
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
-          AND (${coreWhereSql})
+          AND (${shipmentBaseWhereSql})
           -- Match dashboard baseline: exclude B2B "child" contracts
           -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
           AND NOT (
@@ -789,21 +820,8 @@ ${contractMetaSelectCore}
             AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
           )
     `;
-    const queryParams: any[] = [...coreParams];
-    let paramIndex = coreParams.length + 1;
-
-    if (stoIsSet) {
-      queryText += ` AND (
-        TRIM(${listStoKeySql}) = TRIM($${paramIndex}::text)
-        OR s.shipment_id = $${paramIndex}
-        OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($${paramIndex}::text)
-      )`;
-      queryParams.push(sto);
-      paramIndex++;
-    }
-
-    const innerParams = [...queryParams];
-    const outerFilterStartIndex = paramIndex;
+    const innerParams = [...coreParams];
+    const outerFilterStartIndex = coreParams.length + 1;
 
     // NOTE: We intentionally avoid per-row correlated subqueries into sap_processed_data here.
     // Those are extremely slow when sap_processed_data is large, causing the shipments page to hang.
@@ -891,7 +909,7 @@ ${contractMetaSelectCore}
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
-    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql)
+    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, shipmentBaseWhereSql)
       .replace('__STO_PAGE_LIMIT__', String(listLimit))
       .replace('__STO_PAGE_OFFSET__', String(listOffset));
 
@@ -3261,7 +3279,7 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LEFT JOIN vlp_disc_first vd ON vd.shipment_id = s.id
       WHERE
-        ${buildShipmentPageSeaIncotermScopeSql('c')}
+        ${buildShipmentPageSeaRowScopeSql('c', 'l', 's')}
         AND COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
         AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
       ORDER BY COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) ASC NULLS LAST, COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC

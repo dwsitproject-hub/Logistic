@@ -5,7 +5,7 @@ import {
   SAP_VESSEL_NAME_FROM_SK_SQL,
   SAP_VESSEL_OWNER_FROM_SK_SQL,
 } from './sapVesselFields';
-import { buildShipmentListStoMetricsCte } from './shippingPerformanceStoMetricsSql';
+import { buildShipmentListStoMetricsCte, sqlB2bChildSpdDataExcludeWhere } from './shippingPerformanceStoMetricsSql';
 import {
   SHIPMENT_LIST_SAP_PORTS_AGG_CTES,
   SHIPMENT_LIST_SAP_PORTS_AGG_STUB,
@@ -124,6 +124,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
               sk.data->>'PO No'
             )), '') AS v
           FROM spd_keyed sk
+          WHERE ${sqlB2bChildSpdDataExcludeWhere('sk.data')}
         ) q
         WHERE q.v IS NOT NULL AND q.v != ''
         GROUP BY q.sto_key

@@ -1,6 +1,7 @@
 import { query } from '../database/connection';
-import { sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import { sqlIsContractSapClosedForStoExpr } from '../utils/contractDeliveryStatus';
 import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
+import { shippingPerfStoMetricsKeyExpr } from '../utils/shippingPerformanceStoSql';
 
 /** ETA milestones on raw `shipments` rows (not grouped `shipment_base` aliases). */
 function shipmentTableHasAnyEtaExpr(alias: string): string {
@@ -33,10 +34,11 @@ function sqlVesselMasterShipmentMatch(vAlias: string, sAlias = 's'): string {
 
 function sqlShipmentRowEffectiveStatusExpr(alias: string, contractAlias = 'c'): string {
   const s = alias;
+  const stoKey = shippingPerfStoMetricsKeyExpr(contractAlias, s);
   return `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${s}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
-      WHEN ${sqlIsContractSapClosedExpr(contractAlias)} THEN 'COMPLETED'
+      WHEN ${sqlIsContractSapClosedForStoExpr(contractAlias, stoKey)} THEN 'COMPLETED'
       WHEN ${s}.ata_discharge_complete IS NOT NULL THEN 'COMPLETED'
       WHEN ${s}.ata_discharge_start IS NOT NULL THEN 'UNLOADING'
       WHEN ${s}.ata_discharge_berthed IS NOT NULL THEN 'BERTHED_DP'
@@ -66,9 +68,10 @@ function sqlShipmentRowPlannedExpr(alias: string, contractAlias = 'c'): string {
 
 function sqlShipmentRowActiveEngagementExpr(alias: string, contractAlias = 'c'): string {
   const s = alias;
+  const stoKey = shippingPerfStoMetricsKeyExpr(contractAlias, s);
   return `(
     UPPER(TRIM(COALESCE(${s}.status, ''))) NOT IN ('COMPLETED', 'CANCELLED', 'CANCELED')
-    AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
+    AND NOT (${sqlIsContractSapClosedForStoExpr(contractAlias, stoKey)})
     AND ${s}.ata_discharge_complete IS NULL
   )`;
 }

@@ -31,6 +31,109 @@ describe('shipmentListStoPaging', () => {
     ).toBe(false);
   });
 
+  it('canUseShipmentStoKeyPaging allows exact numeric STO global search', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '1016010973',
+        colFilters: {},
+      }),
+    ).toBe(true);
+  });
+
+  it('canUseShipmentStoKeyPaging allows exact 10-digit PO global search', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '1011003113',
+        colFilters: {},
+      }),
+    ).toBe(true);
+  });
+
+  it('canUseShipmentStoKeyPaging allows product multi column filter (pre-group safe)', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: { product: { type: 'multi', values: ['CPO'] } },
+      }),
+    ).toBe(true);
+  });
+
+  it('canUseShipmentStoKeyPaging allows product + incoterm + supplier multi filters together', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: {
+          product: { type: 'multi', values: ['CPO'] },
+          incoterm: { type: 'multi', values: ['FOB'] },
+          supplier: { type: 'multi', values: ['SOME SUPPLIER'] },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('canUseShipmentStoKeyPaging blocks product filter when type is not multi', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: { product: { type: 'text', value: 'CPO' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('canUseShipmentStoKeyPaging blocks non-whitelisted column filters', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: { vessel_name: { type: 'text', value: 'MV Pacific' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('canUseShipmentStoKeyPaging blocks mix of safe and unsafe column filters', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: {
+          product: { type: 'multi', values: ['CPO'] },
+          port_of_loading: { type: 'text', value: 'Marunda' },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it('canUseShipmentStoKeyPaging blocks fuzzy global search', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '101601',
+        colFilters: {},
+      }),
+    ).toBe(false);
+  });
+
   it('injectShipmentStoKeyPaging inserts ranked_sto and paged filter', () => {
     const stoKey = `COALESCE(
       CASE WHEN NULLIF(TRIM(s.shipment_id::text), '') ~ '^[0-9]+$' THEN NULLIF(TRIM(s.shipment_id::text), '') ELSE NULL END,

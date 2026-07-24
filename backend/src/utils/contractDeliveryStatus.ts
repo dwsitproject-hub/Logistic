@@ -4,6 +4,8 @@ import {
   INCOTERM_GR_STO_STATUS,
   sqlIncotermImportStatusFromJson,
 } from './sapIncotermMetrics';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+import { shippingPerfStoMetricsKeyExpr } from './shippingPerformanceStoSql';
 
 function sqlIncotermList(values: readonly string[]): string {
   return values.map((v) => `'${v}'`).join(', ');
@@ -52,10 +54,15 @@ export function isContractDeliveryClosed(status: unknown): boolean {
  *
  * Per SPD row, Open if the incoterm GR field is Open (stale Close in
  * `contract.gr_*` must not hide Open in raw). Do not use commercial Status.
+ *
+ * Optional `stoKeyExpr`: for LCO/FOB (GR STO), restrict SPD rows to that STO so a
+ * Close STO is not held Open by a sibling STO under the same PO. CIF/CFR/FRC
+ * (GR PO) ignore stoKey and stay PO-wide. Omit stoKey for Contracts list / Trucking.
  */
 export function sqlContractImportStatusExpr(
   contractAlias = 'c',
   poNumberRef = `${contractAlias}.po_number`,
+  stoKeyExpr?: string | null,
 ): string {
   // NULL when the GR field is blank — never inject contracts.status per SPD row.
   const sapStatusNorm = sqlNormalizeContractDeliveryStatusExpr(
@@ -80,6 +87,19 @@ export function sqlContractImportStatusExpr(
       ELSE (${stoOpen} OR ${poOpen})
     END
   )`;
+
+  const stoScope =
+    stoKeyExpr && String(stoKeyExpr).trim()
+      ? `
+            AND (
+              NULLIF(TRIM((${stoKeyExpr})::text), '') IS NULL
+              OR TRIM((${stoKeyExpr})::text) ~ '^OP-'
+              OR TRIM((${stoKeyExpr})::text) ~ '^(MNL-|MSEA-)'
+              OR ${inc} IN (${sqlIncotermList(INCOTERM_GR_PO_STATUS)})
+              OR ${sapStoNumberKeyExpr('spd')} = TRIM((${stoKeyExpr})::text)
+            )`
+      : '';
+
   return `
     COALESCE(
       (
@@ -99,7 +119,7 @@ export function sqlContractImportStatusExpr(
               NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
               OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
               OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-            )
+            )${stoScope}
         ) s
         WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
           OR s.row_open
@@ -141,6 +161,28 @@ export function sqlIsContractSapClosedExpr(contractAlias = 'c'): string {
   return sqlContractImportStatusIsClosedExpr(sqlContractImportStatusExpr(contractAlias));
 }
 
+/**
+ * SEA shipment / Shipping Performance: GR Close scoped to sto_key for LCO/FOB.
+ * Use for is_contract_sap_closed and Perf import_status so sibling STOs do not block Completed.
+ */
+export function sqlIsContractSapClosedForStoExpr(
+  contractAlias = 'c',
+  stoKeyExpr: string,
+): string {
+  return sqlContractImportStatusIsClosedExpr(
+    sqlContractImportStatusExpr(contractAlias, `${contractAlias}.po_number`, stoKeyExpr),
+  );
+}
+
+/** STO-scoped import status expression (Shipments / Perf / Contract Detail STO rows). */
+export function sqlContractImportStatusForStoExpr(
+  contractAlias = 'c',
+  stoKeyExpr: string,
+  poNumberRef = `${contractAlias}.po_number`,
+): string {
+  return sqlContractImportStatusExpr(contractAlias, poNumberRef, stoKeyExpr);
+}
+
 export async function getContractImportStatusForTruckingOperation(
   truckingOperationId: string,
 ): Promise<string | null> {
@@ -171,8 +213,9 @@ export async function assertTruckingOperationContractOpen(
 export async function getContractImportStatusForShipment(
   shipmentId: string,
 ): Promise<string | null> {
+  const stoKey = shippingPerfStoMetricsKeyExpr('c', 's');
   const result = await query(
-    `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status
+    `SELECT ${sqlContractImportStatusForStoExpr('c', stoKey)} AS import_status
      FROM shipments s
      LEFT JOIN contracts c ON s.contract_id = c.id
      WHERE s.id = $1::uuid

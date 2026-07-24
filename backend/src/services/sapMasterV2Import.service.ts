@@ -615,6 +615,10 @@ export class SapMasterV2ImportService {
           parsed.contract[normalizedFieldName] = value;
         } else if (isTruckingQuantityField(fieldName)) {
           this.addTruckingData(parsed.trucking, fieldName, value);
+        } else if (this.isVesselDimensionField(fieldName)) {
+          // Before isShipmentField: "Vessel LOA" contains "vessel" and would otherwise
+          // land in shipment.vessel_loading_port_1 via partial map match.
+          parsed.vessel[normalizedFieldName] = value;
         } else if (this.isShipmentField(fieldName)) {
           parsed.shipment[normalizedFieldName] = value;
         } else if (this.isQualityField(fieldName)) {
@@ -651,9 +655,33 @@ export class SapMasterV2ImportService {
     return contractFields.some(cf => lower.includes(cf));
   }
   
+  /** LOA / draft / hull — not loading-port fields (see Vessel LOA → vessel_loa). */
+  private static isVesselDimensionField(fieldName: string): boolean {
+    const lower = fieldName
+      .toLowerCase()
+      .replace(/\r\n/g, ' ')
+      .replace(/\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (lower.includes('loading') || lower.includes('discharge') || lower.includes('port')) {
+      return false;
+    }
+    return (
+      lower === 'loa' ||
+      lower === 'vessel loa' ||
+      lower === 'draft' ||
+      lower === 'vessel draft' ||
+      lower === 'hull' ||
+      lower === 'vessel hull' ||
+      lower === 'vessel hull type' ||
+      /(?:^|\s)(loa|draft|hull)(?:\s|$)/.test(lower)
+    );
+  }
+
   private static isShipmentField(fieldName: string): boolean {
     const lower = fieldName.toLowerCase();
     if (isTruckingQuantityField(fieldName)) return false;
+    if (this.isVesselDimensionField(fieldName)) return false;
     const shipmentFields = [
       'vessel', 'voyage', 'loading port', 'discharge port', 'eta', 'ata',
       'berthed', 'sailed', 'arrival', 'quantity at', 'sto', 'shipment',
@@ -910,6 +938,7 @@ export class SapMasterV2ImportService {
       // Vessel physical properties moved later (BT-BX)
       'vessel draft': 'vessel_draft',
       'loa': 'vessel_loa',
+      'vessel loa': 'vessel_loa',
       'vessel capacity': 'vessel_capacity',
       'vessel cappacity': 'vessel_capacity', // Typo handling
       'vessel hull type': 'vessel_hull_type',
@@ -1059,9 +1088,16 @@ export class SapMasterV2ImportService {
       }
     }
     
-    // Check for general partial matches
+    // Check for general partial matches.
+    // Guard: "vessel loa" is a substring of "vessel loading port" — do not map LOA → loading port.
     for (const [key, value] of Object.entries(mergedMapping)) {
       if (cleanFieldName.includes(key) || key.includes(cleanFieldName)) {
+        if (
+          this.isVesselDimensionField(cleanFieldName) &&
+          String(value).includes('loading_port')
+        ) {
+          continue;
+        }
         return value;
       }
     }
@@ -1191,6 +1227,11 @@ export class SapMasterV2ImportService {
   /** Parse one SAP MASTER v2 row (for tests and diagnostics). */
   static parseDataRowForTest(row: unknown[], fieldMetadata: FieldMetadata[]): Record<string, unknown> {
     return this.parseDataRow(row as any[], fieldMetadata);
+  }
+
+  /** Normalize Excel header → DB key (for tests). */
+  static normalizeFieldNameForTest(fieldName: string): string {
+    return this.normalizeFieldName(fieldName);
   }
 }
 

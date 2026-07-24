@@ -19,13 +19,18 @@ import {
   sqlSapVesselNameFromSpdJsonb,
   sqlShipmentDisplayVesselName,
 } from '../utils/sapVesselFields';
-import { SQL_CONTRACT_IMPORT_STATUS, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import {
+  isContractDeliveryClosed,
+  sqlContractImportStatusForStoExpr,
+  sqlIsContractSapClosedForStoExpr,
+} from '../utils/contractDeliveryStatus';
 import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
 } from '../utils/shipmentManualQtyResolveSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
+import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -78,8 +83,8 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-/** Bumped when ATA override join / STO status merge parity with Shipments changes. */
-const ROW_CACHE_KEY = 'shipping-performance-rows-v31';
+/** Bumped when GR Close bypasses multi-contract status floor. */
+const ROW_CACHE_KEY = 'shipping-performance-rows-v34';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -246,7 +251,8 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
   const derived = deriveShippingPerfRowStatus(merged);
   const mixedDb = countDistinctActivePersistedStatuses(rows) > 1;
   const floor = leastAdvancedPersistedStatus(rows);
-  if (mixedDb && floor) {
+  const sapClosed = isContractDeliveryClosed(String(merged.import_status ?? ''));
+  if (mixedDb && floor && !sapClosed) {
     const floorRank = SHIPMENT_STATUS_RANK[floor];
     const derivedRank = SHIPMENT_STATUS_RANK[String(derived).trim().toUpperCase()];
     if (
@@ -336,6 +342,8 @@ export function invalidateShippingPerformanceRowCache(): void {
   }
 }
 
+const SHIPPING_PERF_SEA_ROW_SCOPE = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
+
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
@@ -364,7 +372,8 @@ const SHIPPING_PERFORMANCE_SQL = `
           ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key
         FROM shipments s
         INNER JOIN contracts c ON s.contract_id = c.id
-        WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        WHERE ${SHIPPING_PERF_SEA_ROW_SCOPE}
       ),
       spd_keyed AS (
         SELECT
@@ -472,7 +481,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.product,
         c.source_type,
         c.supplier,
-        ${SQL_CONTRACT_IMPORT_STATUS} AS import_status,
+        ${sqlContractImportStatusForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR)} AS import_status,
         COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
         ${sqlShipmentDisplayVesselName('sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
@@ -568,14 +577,14 @@ const SHIPPING_PERFORMANCE_SQL = `
         COALESCE(sm.sto_qty, 0)::numeric AS sto_qty,
         COALESCE((
           ${sqlShipmentResolvedReceiveKg(
-            sqlIsContractSapClosedExpr('c'),
+            sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR),
             's.actual_vessel_qty_receive',
             'COALESCE(sm.received_qty, 0)',
           )}
         ), 0)::numeric AS received_qty,
         COALESCE((
           ${sqlShipmentResolvedDeliveryKg(
-            sqlIsContractSapClosedExpr('c'),
+            sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR),
             's.quantity_delivered_klip',
             'COALESCE(sm.delivered_qty, 0)',
             's.quantity_delivered',
@@ -611,7 +620,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         ORDER BY mp.updated_at DESC NULLS LAST
         LIMIT 1
       ) pna ON TRUE
-      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+      WHERE ${SHIPPING_PERF_SEA_ROW_SCOPE}
         AND COALESCE(s.status, '') <> 'CANCELLED'
         AND NOT (
           l.contract_number IS NOT NULL

@@ -1,0 +1,66 @@
+import { describe, expect, it } from 'vitest';
+import {
+  appendShipmentGlobalSearch,
+  buildExactNumericGlobalSearchInnerSql,
+  isExactStoGlobalSearch,
+  shipmentEffectiveStatusExpr,
+} from './shipmentListFilters';
+
+describe('isExactStoGlobalSearch', () => {
+  it('matches 10-digit SAP STO keys', () => {
+    expect(isExactStoGlobalSearch('1016010973')).toBe(true);
+  });
+
+  it('matches 10-digit SAP PO numbers', () => {
+    expect(isExactStoGlobalSearch('1011003113')).toBe(true);
+  });
+
+  it('rejects partial or non-numeric search', () => {
+    expect(isExactStoGlobalSearch('101601097')).toBe(false);
+    expect(isExactStoGlobalSearch('10160109731')).toBe(false);
+    expect(isExactStoGlobalSearch('MV PACIFIC')).toBe(false);
+    expect(isExactStoGlobalSearch('')).toBe(false);
+  });
+});
+
+describe('buildExactNumericGlobalSearchInnerSql', () => {
+  it('matches STO key, shipment_id, operation_id, and PO number', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
+    expect(sql).toContain('COALESCE(c.sto_number)');
+    expect(sql).toContain('s.shipment_id = $3');
+    expect(sql).toContain('s.operation_id');
+    expect(sql).toContain('c.po_number');
+  });
+});
+
+describe('appendShipmentGlobalSearch', () => {
+  it('returns empty SQL for exact STO search (handled by inner fast path)', () => {
+    const result = appendShipmentGlobalSearch('1016010973', 3);
+    expect(result.sql).toBe('');
+    expect(result.params).toEqual([]);
+    expect(result.nextIndex).toBe(3);
+  });
+
+  it('returns empty SQL for exact 10-digit PO search (handled by inner fast path)', () => {
+    const result = appendShipmentGlobalSearch('1011003113', 3);
+    expect(result.sql).toBe('');
+    expect(result.params).toEqual([]);
+    expect(result.nextIndex).toBe(3);
+  });
+
+  it('returns ILIKE filter for non-exact search', () => {
+    const result = appendShipmentGlobalSearch('vessel', 2);
+    expect(result.sql).toContain('ILIKE');
+    expect(result.params).toEqual(['%vessel%']);
+    expect(result.nextIndex).toBe(3);
+  });
+});
+
+describe('shipmentEffectiveStatusExpr', () => {
+  it('skips group status floor when is_contract_sap_closed is TRUE', () => {
+    const sql = shipmentEffectiveStatusExpr('f');
+    expect(sql).toContain('is_contract_sap_closed');
+    expect(sql).toContain('IS NOT TRUE');
+    expect(sql).toContain('group_status_floor');
+  });
+});

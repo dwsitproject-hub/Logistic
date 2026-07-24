@@ -1,9 +1,13 @@
 /**
- * Deduplicate active shipment rows for a STO + PO pair (SAP is source of truth).
+ * Deduplicate / rename active shipment rows for a STO + PO pair (SAP is source of truth).
  *
- *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po>           # dry-run
- *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> --apply   # cancel duplicate
+ *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po>                      # dry-run
+ *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> --apply              # rename/cancel
  *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> --apply --force
+ *   npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> --apply --force-sto-change
+ *
+ * `--force-sto-change` bypasses isStoReplacedInLatestSap when renaming a planned keeper
+ * whose shipment_id differs from <sto> (operator-confirmed SAP STO replacement).
  */
 import { getClient } from '../database/connection';
 import {
@@ -11,6 +15,7 @@ import {
   canAutoConsolidateShipmentForSap,
   finalizeSapShipmentAfterUpsert,
   isSapSourcedShipmentId,
+  isStoReplacedInLatestSap,
 } from '../utils/klipLogisticsActivity';
 import { invalidateShipmentsListCache } from '../services/shipmentList.service';
 import { invalidateShippingPerformanceRowCache } from '../services/shippingPerformance.service';
@@ -19,15 +24,20 @@ const stoFilter = process.argv[2]?.trim() || '';
 const poFilter = process.argv[3]?.trim() || '';
 const apply = process.argv.includes('--apply');
 const force = process.argv.includes('--force');
+const forceStoChange = process.argv.includes('--force-sto-change');
 
 async function main() {
   if (!stoFilter || !poFilter) {
-    console.error('Usage: npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> [--apply] [--force]');
+    console.error(
+      'Usage: npx ts-node src/scripts/dedupeShipmentStoPo.ts <sto> <po> [--apply] [--force] [--force-sto-change]',
+    );
     process.exit(1);
   }
 
   const client = await getClient();
   try {
+    // Include planned numeric SAP rows on this PO even when shipment_id is still the old STO,
+    // so STO-change rename (976 → 973) can find the keeper with operation_id.
     const rows = await client.query<{
       shipment_uuid: string;
       shipment_id: string | null;
@@ -58,6 +68,15 @@ async function main() {
         AND (
           TRIM(COALESCE(c.sto_number::text, '')) = TRIM($2::text)
           OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+          OR (
+            NULLIF(TRIM(COALESCE(s.operation_id, '')), '') IS NOT NULL
+            AND TRIM(COALESCE(s.shipment_id::text, '')) ~ '^[0-9]+$'
+          )
+          OR TRIM(COALESCE(s.shipment_id::text, '')) IN (
+            SELECT TRIM(COALESCE(cs.sto_number::text, ''))
+            FROM contract_stos cs
+            WHERE cs.contract_id = c.id
+          )
         )
       ORDER BY s.created_at DESC`,
       [poFilter, stoFilter],
@@ -81,17 +100,31 @@ async function main() {
       })),
     );
 
-    if (rows.rows.length === 1) {
-      console.log('Only one active row — nothing to dedupe.');
-      return;
-    }
-
     const keeper =
+      rows.rows.find((row) => row.operation_id && String(row.operation_id).trim()) ??
       rows.rows.find((row) => trimText(row.shipment_id) === stoFilter && isSapSourcedShipmentId(row.shipment_id)) ??
       rows.rows.find((row) => isSapSourcedShipmentId(row.shipment_id)) ??
       rows.rows[0];
 
-    console.log(`\nKeeper: ${keeper.shipment_id ?? keeper.shipment_uuid} (${keeper.shipment_uuid})`);
+    const currentSto = trimText(keeper.shipment_id);
+    if (currentSto !== stoFilter) {
+      const replaced =
+        forceStoChange || (await isStoReplacedInLatestSap(client, poFilter, currentSto, stoFilter));
+      if (!replaced) {
+        console.log(
+          `Keeper shipment_id=${currentSto}; latest SEA SAP does not show STO change to ${stoFilter} — no rename.`,
+        );
+        console.log('Re-run with --force-sto-change if business confirms the replacement.');
+        return;
+      }
+      console.log(
+        `Keeper ${currentSto} (${keeper.shipment_uuid}) will rename to ${stoFilter}` +
+          (forceStoChange ? ' [--force-sto-change]' : ' [SEA SAP replacement confirmed]') +
+          '.',
+      );
+    } else {
+      console.log(`\nKeeper already on ${stoFilter}: ${keeper.shipment_uuid}`);
+    }
 
     const duplicates = rows.rows.filter((row) => row.shipment_uuid !== keeper.shipment_uuid);
     for (const dup of duplicates) {
@@ -103,8 +136,11 @@ async function main() {
     }
 
     if (!apply) {
-      console.log('\nDry-run only. Re-run with --apply to cancel consolidatable duplicates.');
+      console.log('\nDry-run only. Re-run with --apply to rename / cancel.');
       if (!force) console.log('Add --force to cancel rows even when KLIP activity is detected.');
+      if (!forceStoChange) {
+        console.log('Add --force-sto-change to rename even when SEA SAP guard is inconclusive.');
+      }
       return;
     }
 
@@ -123,6 +159,7 @@ async function main() {
         keeper.contract_uuid,
         keeper.shipment_uuid,
         stoFilter,
+        poFilter,
       );
 
       await client.query('COMMIT');

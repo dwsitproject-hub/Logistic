@@ -67,7 +67,7 @@ import {
   resolveContractLogisticsStoStatus,
   summarizeContractLogisticsStoQty,
 } from '../utils/contractLogisticsStoDisplay';
-import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
+import { sqlContractImportStatusExpr, sqlContractImportStatusForStoExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
   sqlMaxTruckingLastReceiveDateForContract,
   sqlMaxTruckingWbActualsDateForContract,
@@ -1911,7 +1911,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sb.vessel_name,
         sb.eta_loading_port AS eta_vessel_arrival_loading_port,
         sb.ata_discharge_complete,
-        sb.eta_discharge_complete
+        sb.eta_discharge_complete,
+        (${sqlContractImportStatusForStoExpr('c_po', 'sb.sto_key')}) AS sto_import_status
       FROM shipment_base sb
       CROSS JOIN contracts c_po
       WHERE c_po.id = $1
@@ -2084,7 +2085,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         operation_id: resolveContractLogisticsOperationId(r.operation_id, r.sto_key),
         late_indicator: lateIndicator,
         status: resolveContractLogisticsStoStatus({
-          contractImportStatus,
+          contractImportStatus: r.sto_import_status ?? contractImportStatus,
           dbStatus: r.status,
           logisticsType: 'shipment',
           shipmentMilestones: {
@@ -2248,6 +2249,19 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
     }
 
     const contractImportStatus = contractResult.rows[0].import_status ?? null;
+    const stoKeyForImport = sto || operationId;
+    let shipmentStoImportStatus = contractImportStatus;
+    if (type === 'shipment' && stoKeyForImport) {
+      const stoImport = await query(
+        `SELECT ${sqlContractImportStatusForStoExpr('c', 'q.sto_key')} AS import_status
+         FROM contracts c
+         CROSS JOIN (SELECT $2::text AS sto_key) q
+         WHERE c.id = $1::uuid
+         LIMIT 1`,
+        [id, stoKeyForImport],
+      );
+      shipmentStoImportStatus = stoImport.rows[0]?.import_status ?? contractImportStatus;
+    }
 
     if (type === 'shipment') {
       const shipmentResult = await query(
@@ -2334,7 +2348,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         if (sapShipmentResult.rows.length > 0) {
           const row = sapShipmentResult.rows[0] as Record<string, unknown>;
           row.status = resolveContractLogisticsStoStatus({
-            contractImportStatus,
+            contractImportStatus: shipmentStoImportStatus,
             dbStatus: row.status,
             logisticsType: 'shipment',
             shipmentMilestones: {
@@ -2369,7 +2383,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
 
       const shipmentRow = shipmentResult.rows[0] as Record<string, unknown>;
       shipmentRow.status = resolveContractLogisticsStoStatus({
-        contractImportStatus,
+        contractImportStatus: shipmentStoImportStatus,
         dbStatus: shipmentRow.status,
         logisticsType: 'shipment',
         shipmentMilestones: {
@@ -2550,7 +2564,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
       if (sapShipmentCrossResult.rows.length > 0) {
         const row = sapShipmentCrossResult.rows[0] as Record<string, unknown>;
         row.status = resolveContractLogisticsStoStatus({
-          contractImportStatus,
+          contractImportStatus: shipmentStoImportStatus,
           dbStatus: row.status,
           logisticsType: 'shipment',
           shipmentMilestones: {

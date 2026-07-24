@@ -78,6 +78,27 @@ describe('cachedGet', () => {
     expect(forced.fromCache).toBe(false)
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+
+  it('force bypasses hung inFlight promise', async () => {
+    let resolveFirst: ((value: { v: number }) => void) | undefined
+    const first = new Promise<{ v: number }>((resolve) => {
+      resolveFirst = resolve
+    })
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => first)
+      .mockResolvedValueOnce({ v: 2 })
+    const key = buildCacheKey('GET', '/shipments?search=1016010973')
+
+    const pending = cachedGet(key, fetcher)
+    const forced = await cachedGet(key, fetcher, { force: true })
+
+    expect(forced.data).toEqual({ v: 2 })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+
+    resolveFirst?.({ v: 1 })
+    await pending
+  })
 })
 
 describe('prefetchGet', () => {

@@ -1,4 +1,5 @@
 import type { ColumnFilterPayload } from './contractListFilters';
+import { isExactStoGlobalSearch } from './shipmentListFilters';
 
 export const SHIPMENT_BASE_CORE_GROUP_BY_MARKER = '/* SHIPMENT_BASE_CORE_GROUP_BY */';
 
@@ -16,9 +17,21 @@ export type ShipmentStoPagingFilterInput = {
   unplannedHybrid?: boolean;
 };
 
-function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
+/**
+ * Toolbar multi-selects already pushed into the pre-group WHERE (shared with `ranked_sto`)
+ * via `appendContractScopeToolbarFilters` — safe to keep STO-key paging on for these.
+ * Only the `multi` filter type is whitelisted; any other filter type on these same
+ * columns (text/number/date/emptyOnly) is NOT reflected in that pre-group WHERE and
+ * must still fall back to the full-scan path.
+ */
+const PRE_GROUP_SAFE_COLUMN_FILTER_KEYS = new Set(['product', 'incoterm', 'supplier']);
+
+function hasBlockingColumnFilters(colFilters?: ColumnFilterPayload): boolean {
   if (!colFilters) return false;
-  return Object.keys(colFilters).length > 0;
+  return Object.entries(colFilters).some(([key, filter]) => {
+    if (!PRE_GROUP_SAFE_COLUMN_FILTER_KEYS.has(key)) return true;
+    return !filter || typeof filter !== 'object' || filter.type !== 'multi';
+  });
 }
 
 /**
@@ -27,8 +40,9 @@ function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
  */
 export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput): boolean {
   if (input.summaryOnly || input.unplannedHybrid || input.stoIsSet) return false;
-  if (String(input.globalSearch ?? '').trim().length >= 2) return false;
-  if (hasColumnFilters(input.colFilters)) return false;
+  const globalSearchTrim = String(input.globalSearch ?? '').trim();
+  if (globalSearchTrim.length >= 2 && !isExactStoGlobalSearch(globalSearchTrim)) return false;
+  if (hasBlockingColumnFilters(input.colFilters)) return false;
   if (input.lateIndicator && String(input.lateIndicator).toUpperCase() !== 'ALL') return false;
   const viewOpt = String(input.viewOption ?? 'all').toLowerCase();
   if (viewOpt !== 'all' && String(input.viewQuery ?? '').trim().length > 0) return false;

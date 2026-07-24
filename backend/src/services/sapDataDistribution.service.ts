@@ -10,6 +10,7 @@ import { deriveShipmentStatus, sqlShipmentStatusRank } from '../utils/shipmentSt
 import {
   SQL_CONTRACT_IMPORT_STATUS,
   isContractDeliveryClosed,
+  sqlContractImportStatusForStoExpr,
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
 import { resolveSapTruckingQuantityDelivered } from '../utils/sapMasterV2UatFormat';
@@ -25,6 +26,7 @@ import {
 } from './truckingRealization.service';
 import {
   finalizeSapShipmentAfterUpsert,
+  findKlipPlannedStoSupersedeCandidate,
   findSapShipmentSupersedeCandidate,
   findShipmentByPoAndSto,
   hasKlipShipmentActivity,
@@ -835,7 +837,11 @@ export class SapDataDistributionService {
       ata_berthed_at_discharge_port: ataDischargeBerthed,
       ata_start_discharging: ataDischargeStart,
       ata_complete_discharge: ataDischargeComplete,
-      contract_import_status: (await this.isContractSapClosedForUuid(client, contractUuid))
+      contract_import_status: (await this.isContractSapClosedForUuid(
+        client,
+        contractUuid,
+        shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+      ))
         ? 'Close'
         : null,
     });
@@ -846,6 +852,14 @@ export class SapDataDistributionService {
     //    whose vessel_name is at least 80% similar. If found, update that shipment instead of inserting.
 
     let targetShipmentId: string | null = null;
+    let contractPoNumber: string | null = null;
+    if (contractUuid) {
+      const poRes = await client.query<{ po_number: string | null }>(
+        `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
+        [contractUuid],
+      );
+      contractPoNumber = poRes.rows[0]?.po_number ?? null;
+    }
 
     if (shipmentIdFromSap && contractUuid) {
       const existingByShipment = await client.query(
@@ -868,6 +882,24 @@ export class SapDataDistributionService {
     }
 
     if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
+      const klipSupersedeId = await findKlipPlannedStoSupersedeCandidate(
+        client,
+        contractUuid,
+        String(shipmentIdFromSap).trim(),
+        contractPoNumber,
+      );
+      if (klipSupersedeId) {
+        targetShipmentId = klipSupersedeId;
+        logger.info('upsertShipment: reusing KLIP-planned shipment for SAP STO change', {
+          contractId,
+          supersededShipmentUuid: klipSupersedeId,
+          sapShipmentId: shipmentIdFromSap,
+          poNumber: contractPoNumber,
+        });
+      }
+    }
+
+    if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
       const supersedeId = await findSapShipmentSupersedeCandidate(
         client,
         contractUuid,
@@ -884,13 +916,9 @@ export class SapDataDistributionService {
     }
 
     if (!targetShipmentId && contractUuid && isSapSourcedShipmentId(shipmentIdFromSap)) {
-      const poRes = await client.query<{ po_number: string | null }>(
-        `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
-        [contractUuid],
-      );
       const poMatch = await findShipmentByPoAndSto(
         client,
-        poRes.rows[0]?.po_number,
+        contractPoNumber,
         String(shipmentIdFromSap).trim(),
       );
       if (poMatch && poMatch.contractUuid === contractUuid) {
@@ -1084,6 +1112,7 @@ export class SapDataDistributionService {
           contractUuid,
           id,
           shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+          contractPoNumber,
         );
         if (reconcile.cancelledShipmentIds.length > 0) {
           logger.info('upsertShipment: cancelled superseded SAP shipment rows', {
@@ -1248,6 +1277,7 @@ export class SapDataDistributionService {
           contractUuid,
           newId,
           shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+          contractPoNumber,
         );
         if (reconcile.cancelledShipmentIds.length > 0) {
           logger.info('upsertShipment: cancelled superseded SAP shipment rows after insert', {
@@ -1364,8 +1394,21 @@ export class SapDataDistributionService {
   private static async isContractSapClosedForUuid(
     client: PoolClient,
     contractUuid: string | null,
+    stoKey?: string | null,
   ): Promise<boolean> {
     if (!contractUuid) return false;
+    const sto = stoKey != null ? String(stoKey).trim() : '';
+    if (sto) {
+      const result = await client.query(
+        `SELECT ${sqlContractImportStatusForStoExpr('c', 'q.sto_key')} AS import_status
+         FROM contracts c
+         CROSS JOIN (SELECT $2::text AS sto_key) q
+         WHERE c.id = $1::uuid
+         LIMIT 1`,
+        [contractUuid, sto],
+      );
+      return isContractDeliveryClosed(result.rows[0]?.import_status);
+    }
     const result = await client.query(
       `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status FROM contracts c WHERE c.id = $1 LIMIT 1`,
       [contractUuid],

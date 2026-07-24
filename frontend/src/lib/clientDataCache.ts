@@ -49,9 +49,14 @@ function evictExpiredAndOverflow(): void {
   for (let i = 0; i < excess; i++) store.delete(oldest[i][0])
 }
 
-async function fetchAndStore<T>(cacheKey: string, fetcher: () => Promise<T>): Promise<T> {
+async function fetchAndStore<T>(
+  cacheKey: string,
+  fetcher: () => Promise<T>,
+  options?: { replaceInFlight?: boolean },
+): Promise<T> {
   const existing = inFlight.get(cacheKey)
-  if (existing) return existing as Promise<T>
+  if (existing && !options?.replaceInFlight) return existing as Promise<T>
+  if (options?.replaceInFlight) inFlight.delete(cacheKey)
 
   const promise = fetcher()
     .then((data) => {
@@ -110,7 +115,7 @@ export async function cachedGet<T>(
     return { data: entry!.data as T, fromCache: true, revalidating: true }
   }
 
-  const data = await fetchAndStore(cacheKey, fetcher)
+  const data = await fetchAndStore(cacheKey, fetcher, { replaceInFlight: options?.force })
   return { data, fromCache: false, revalidating: false }
 }
 
@@ -131,6 +136,7 @@ const hrefPrefetchAt = new Map<string, number>()
 /** Clear all cached API responses and prefetch cooldowns (e.g. on logout). */
 export function clearClientDataCache(): void {
   store.clear()
+  inFlight.clear()
   prefetchCooldown.clear()
   hrefPrefetchAt.clear()
 }

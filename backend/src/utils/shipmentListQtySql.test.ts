@@ -39,4 +39,12 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('AS outstanding_quantity');
   });
+
+  it('maps hydrated SAP qty from sto_metrics delivered/received totals', () => {
+    const sql = shipmentListPageQtySelectSql('sp');
+    expect(sql).toContain('sm.delivered_qty');
+    expect(sql).toContain('sm.received_qty');
+    expect(sql).toContain('quantity_delivered_sap');
+    expect(sql).toContain('quantity_receive');
+  });
 });

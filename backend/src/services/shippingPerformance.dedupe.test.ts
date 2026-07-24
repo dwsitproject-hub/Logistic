@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   aggregateShippingPerformanceRowsBySto,
   deriveShippingPerfRowStatus,
+  mergeShippingPerfStoGroup,
   shippingPerfStoGroupKey,
 } from '../services/shippingPerformance.service';
 
@@ -242,6 +243,43 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     expect(rows).toHaveLength(1);
     // Derived would be SAILED; mixed PLANNED+UNPLANNED floors to UNPLANNED.
     expect(rows[0]?.status).toBe('UNPLANNED');
+  });
+
+  it('does not floor when GR Close even with mixed persisted DB statuses (STO 1016010610 pattern)', () => {
+    const members = [
+      {
+        id: 'a',
+        shipment_id: '1016010610',
+        sto_number: '1016010610',
+        sto_key: '1016010610',
+        status: 'COMPLETED',
+        import_status: 'Close',
+        loading_ata_sailed: '2026-05-15',
+        contract_qty: 100,
+      },
+      {
+        id: 'b',
+        shipment_id: '1016010610',
+        sto_number: '1016010610',
+        sto_key: '1016010610',
+        status: 'SAILED',
+        import_status: 'Close',
+        loading_ata_sailed: '2026-05-15',
+        contract_qty: 50,
+      },
+      {
+        id: 'c',
+        shipment_id: 'MNL-79626063-1014002977',
+        sto_number: '1016010610',
+        sto_key: '1016010610',
+        status: 'IN_TRANSIT',
+        import_status: 'Close',
+        loading_ata_sailed: '2026-05-15',
+        contract_qty: 50,
+      },
+    ];
+    const merged = mergeShippingPerfStoGroup(members);
+    expect(merged.status).toBe('COMPLETED');
   });
 
   it('override-only loading_ata_sailed on a single row → SAILED', () => {

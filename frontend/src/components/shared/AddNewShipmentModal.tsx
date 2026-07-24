@@ -29,6 +29,13 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
+import {
+  areAllSelectionKeysCif,
+  blockSelectionKeysAllCif,
+  etaDetailHasAllRequiredDates as etaBlockHasAllRequiredDates,
+  etaDetailHasAnyDate as etaBlockHasAnyDate,
+  isEtaScheduleCompleteForCreate as isCreateEtaScheduleComplete,
+} from '@/lib/addNewShipmentEtaRules'
 import { formatDateDMY, toApiDateOnly, isIsoOutsideAllowedRange, OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE } from '@/lib/dateFormat'
 import { FAST_ENTRY_ROOT_ATTR, SHIPMENT_ETA_FAST_ENTRY_GROUP } from '@/lib/fastEntryFocus'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -165,28 +172,27 @@ const ETA_FIELD_ROWS: {
   { key: 'etaVesselCompleteDischarge', label: 'Estimation Vessel Complete Discharge', shortLabel: 'Done Disch', errorSuffix: 'completeDischarge' },
 ]
 
+const ETA_FIELD_KEYS = ETA_FIELD_ROWS.map(({ key }) => key)
+
 function etaDetailHasAnyDate(d: EtaDetailFields): boolean {
-  return ETA_FIELD_ROWS.some(({ key }) => Boolean(String(d[key] ?? '').trim()))
+  return etaBlockHasAnyDate(d, ETA_FIELD_KEYS)
 }
 
 function etaDetailHasAllRequiredDates(d: EtaDetailFields): boolean {
-  return ETA_FIELD_ROWS.every(({ key }) => Boolean(String(d[key] ?? '').trim()))
+  return etaBlockHasAllRequiredDates(d, ETA_FIELD_KEYS)
 }
 
 function isEtaScheduleCompleteForCreate(
   contractIds: string[],
   etaBlocks: ShipmentEtaDetail[],
+  getIncoterm: (selectionKey: string) => string,
 ): boolean {
-  if (contractIds.length === 0) return false
-  const covered = new Set<string>()
-  for (const block of etaBlocks) {
-    const selectedIds = block.contractIds.filter(Boolean)
-    if (selectedIds.length === 0) continue
-    if (!block.loadingPort.trim()) return false
-    if (!etaDetailHasAllRequiredDates(block)) return false
-    for (const cid of selectedIds) covered.add(cid)
-  }
-  return contractIds.every((cid) => covered.has(cid))
+  return isCreateEtaScheduleComplete({
+    contractIds,
+    etaBlocks,
+    etaFieldKeys: ETA_FIELD_KEYS,
+    getIncoterm,
+  })
 }
 
 const COMPACT_TH = 'h-8 px-2 py-1 text-[11px] font-semibold text-gray-600 whitespace-nowrap'
@@ -966,6 +972,17 @@ export function AddNewShipmentModal({
       return null
     },
     [availablePoByKey, contractValidations],
+  )
+
+  const resolveSelectionIncoterm = useCallback(
+    (selectionKey: string) =>
+      String(resolveContractDataForSelectionKey(selectionKey)?.incoterm ?? '').trim().toUpperCase(),
+    [resolveContractDataForSelectionKey],
+  )
+
+  const allSelectedPoCif = useMemo(
+    () => areAllSelectionKeysCif(newShipment.contractNumbers, resolveSelectionIncoterm),
+    [newShipment.contractNumbers, resolveSelectionIncoterm],
   )
 
   /**
@@ -1984,7 +2001,9 @@ export function AddNewShipmentModal({
     }
 
     const requiresCompleteEta =
-      (transportMode === 'sea' || transportMode === 'mixed') && newShipment.contractNumbers.length > 0
+      (transportMode === 'sea' || transportMode === 'mixed') &&
+      newShipment.contractNumbers.length > 0 &&
+      !allSelectedPoCif
 
     const usedContractIds = new Set<string>()
     const coveredContractIds = new Set<string>()
@@ -1992,14 +2011,15 @@ export function AddNewShipmentModal({
       const prefix = `eta_${block.id}`
       const hasDates = etaDetailHasAnyDate(block)
       const selectedIds = block.contractIds.filter(Boolean)
+      const blockAllCif = blockSelectionKeysAllCif(selectedIds, resolveSelectionIncoterm)
 
       if ((transportMode === 'sea' || transportMode === 'mixed') && newShipment.contractNumbers.length > 0) {
-        if (!block.loadingPort.trim()) {
+        if (!blockAllCif && !block.loadingPort.trim()) {
           errors[`${prefix}_loadingPort`] = 'Loading Port is required'
         }
       }
 
-      if (requiresCompleteEta && selectedIds.length > 0) {
+      if (requiresCompleteEta && selectedIds.length > 0 && !blockAllCif) {
         for (const { key, errorSuffix, shortLabel } of ETA_FIELD_ROWS) {
           if (!String(block[key] ?? '').trim()) {
             errors[`${prefix}_${errorSuffix}`] = `${shortLabel} is required`
@@ -2152,7 +2172,9 @@ export function AddNewShipmentModal({
 
       const etaByContract: Record<string, ReturnType<typeof etaDetailToApiPayload>> = {}
       for (const block of etaDetails) {
-        if (block.contractIds.length === 0 || !etaDetailHasAllRequiredDates(block)) continue
+        if (block.contractIds.length === 0) continue
+        const blockAllCif = blockSelectionKeysAllCif(block.contractIds, resolveSelectionIncoterm)
+        if (!blockAllCif && !etaDetailHasAllRequiredDates(block)) continue
         const etaPayload = etaDetailToApiPayload(block)
         for (const selectionKey of block.contractIds) {
           etaByContract[resolveContractIdForKey(selectionKey)] = etaPayload
@@ -2223,7 +2245,7 @@ export function AddNewShipmentModal({
     (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
     newShipment.contractNumbers.length > 0
   const step3Done = step3RequiresEta
-    ? isEtaScheduleCompleteForCreate(newShipment.contractNumbers, etaDetails)
+    ? isEtaScheduleCompleteForCreate(newShipment.contractNumbers, etaDetails, resolveSelectionIncoterm)
     : true
 
   const contractDeliveryReferences = useMemo(
@@ -3049,7 +3071,13 @@ export function AddNewShipmentModal({
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium text-gray-500">
-                  All Estimation milestones are required <span className="text-red-500">*</span> to create a shipment
+                  {allSelectedPoCif ? (
+                    <>Estimation and Loading Port are optional for <span className="font-semibold">CIF</span> incoterm.</>
+                  ) : (
+                    <>
+                      All Estimation milestones are required <span className="text-red-500">*</span> to create a shipment
+                    </>
+                  )}
                 </p>
                 {!isEditMode &&
                   (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
@@ -3088,6 +3116,8 @@ export function AddNewShipmentModal({
                       const prefix = `eta_${block.id}`
                       const range =
                         block.contractIds.length > 0 ? getEtaDateRangeForContractIds(block.contractIds) : null
+                      const blockAllCif = blockSelectionKeysAllCif(block.contractIds, resolveSelectionIncoterm)
+                      const etaFieldsRequired = !blockAllCif && !allSelectedPoCif
                       return (
                         <div key={block.id} className="rounded-md border border-gray-200 overflow-hidden text-xs">
                           <div className="flex items-center justify-between bg-gray-50 px-2 py-1 border-b">
@@ -3107,7 +3137,7 @@ export function AddNewShipmentModal({
                           <div className="px-2 py-1.5 border-b bg-white space-y-2">
                             <div className="relative overflow-visible z-0">
                               <label className="block text-[11px] font-medium text-gray-600 mb-1">
-                                Loading Port <span className="text-red-500">*</span>
+                                Loading Port{etaFieldsRequired ? <span className="text-red-500"> *</span> : null}
                               </label>
                               <MasterLoadingPortCombobox
                                 value={block.loadingPort}
@@ -3201,7 +3231,7 @@ export function AddNewShipmentModal({
                                       title={label}
                                     >
                                       {shortLabel}
-                                      <span className="text-red-500"> *</span>
+                                      {etaFieldsRequired ? <span className="text-red-500"> *</span> : null}
                                     </th>
                                   ))}
                                 </tr>

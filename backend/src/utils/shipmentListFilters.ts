@@ -139,10 +139,33 @@ const SB_COL: Record<string, string> = {
   created_at: 'sb.created_at',
 }
 
+/** 10-digit numeric SAP keys (STO or PO) — exact match enables inner WHERE fast path in list SQL. */
+export function isExactStoGlobalSearch(search: string): boolean {
+  const trimmed = String(search ?? '').trim();
+  return /^\d{10}$/.test(trimmed);
+}
+
+/** Inner shipment_base_core WHERE for exact 10-digit global search or ?sto= filter. */
+export function buildExactNumericGlobalSearchInnerSql(
+  stoKeySql: string,
+  paramIndex: number,
+): string {
+  const p = `$${paramIndex}`;
+  return `(
+        TRIM(${stoKeySql}) = TRIM(${p}::text)
+        OR s.shipment_id = ${p}
+        OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${p}::text)
+        OR TRIM(COALESCE(c.po_number::text, '')) = TRIM(${p}::text)
+      )`;
+}
+
 export function appendShipmentGlobalSearch(
   searchTrim: string,
   startIndex: number
 ): { sql: string; params: any[]; nextIndex: number } {
+  if (isExactStoGlobalSearch(searchTrim)) {
+    return { sql: '', params: [], nextIndex: startIndex };
+  }
   if (!searchTrim || searchTrim.length < 2) {
     return { sql: '', params: [], nextIndex: startIndex }
   }
@@ -154,6 +177,8 @@ export function appendShipmentGlobalSearch(
       OR COALESCE(sb.contract_numbers::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.po_numbers::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.shipment_id::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.operation_id::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.vessel_name::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
@@ -408,7 +433,8 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
   )`
   return `(
     CASE
-      WHEN COALESCE(${f}.group_active_status_count, 0) > 1
+      WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS NOT TRUE
+       AND COALESCE(${f}.group_active_status_count, 0) > 1
        AND ${f}.group_status_floor IS NOT NULL
        AND ${sqlShipmentStatusRank(`${f}.group_status_floor`)} < ${sqlShipmentStatusRank(inner)}
       THEN ${f}.group_status_floor

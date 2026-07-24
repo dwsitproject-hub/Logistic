@@ -7,6 +7,8 @@ import {
   sqlSapStoKeyMatchExpr,
   sqlSapStoQtyForContractPoExpr,
   sqlStoLookupKeyMatchExpr,
+  sqlStoScopedDeliveredKgSql,
+  sqlStoScopedReceiveKgSql,
 } from './contractLogisticsStoDetailSql';
 
 describe('contractLogisticsStoDetailSql', () => {
@@ -81,5 +83,33 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(delivered).toContain('OP-|MNL-|MSEA-');
     expect(receive).toContain('Quantity Receive');
     expect(receive).toContain('po_number');
+  });
+
+  it('sqlStoScopedDeliveredKgSql filters by STO key, contract, and PO', () => {
+    const sql = sqlStoScopedDeliveredKgSql({
+      contractNumberExpr: 'asp.contract_id',
+      contractQtyExpr: 'asp.contract_qty',
+      stoKeyExpr: 'asp.sto_key',
+      poNumberExpr: 'asp.po_number',
+    });
+    expect(sql).toContain('asp.sto_key');
+    expect(sql).toContain('asp.contract_id');
+    expect(sql).toContain('asp.po_number');
+    expect(sql).toContain('Quantity Delivery Vessel');
+    expect(sql).toContain('SUM(');
+  });
+
+  it('sqlStoScopedReceiveKgSql filters by STO key, contract, and PO', () => {
+    const sql = sqlStoScopedReceiveKgSql({
+      contractNumberExpr: 'pl.contract_number',
+      contractQtyExpr: 'pl.contract_qty',
+      stoKeyExpr: '$1::text',
+      poNumberExpr: 'pl.po_number',
+    });
+    expect(sql).toContain('$1::text');
+    expect(sql).toContain('pl.contract_number');
+    expect(sql).toContain('pl.po_number');
+    expect(sql).toContain('Quantity Receive');
+    expect(sql).toContain('SUM(');
   });
 });

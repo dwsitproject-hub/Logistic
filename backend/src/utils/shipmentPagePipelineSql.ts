@@ -187,6 +187,8 @@ export function shipmentPageExcludeB2bChildCond(lAlias = 'l'): string {
 
 /**
  * CTE: count distinct open CIF/FOB/CFR contracts with no registered ETA (Unplanned card).
+ * Contract-level scope (incoterm only) — STO Type T exclusion applies to execution rows
+ * via shipmentPipelineDailySummarySql / buildShipmentPageSeaRowScopeSql.
  * `contractScopeSql` — additional AND clauses on `c` (date/plant/contract toolbar scope).
  */
 export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''): string {

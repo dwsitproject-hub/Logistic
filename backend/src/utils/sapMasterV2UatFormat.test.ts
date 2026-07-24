@@ -105,3 +105,33 @@ describe('sapMasterV2UatFormat', () => {
     expect(parsed.shipment.discharge_destination).toBeDefined();
   });
 });
+
+describe('Vessel LOA must not map to loading port', () => {
+  it('normalizeFieldName maps Vessel LOA → vessel_loa', () => {
+    expect(SapMasterV2ImportService.normalizeFieldNameForTest('Vessel LOA')).toBe('vessel_loa');
+    expect(SapMasterV2ImportService.normalizeFieldNameForTest('Vessel LOA')).not.toBe(
+      'vessel_loading_port_1',
+    );
+    expect(SapMasterV2ImportService.normalizeFieldNameForTest('loa')).toBe('vessel_loa');
+    expect(SapMasterV2ImportService.normalizeFieldNameForTest('Vessel Loading Port')).toBe(
+      'vessel_loading_port_1',
+    );
+  });
+
+  it('parseDataRow puts Vessel LOA under vessel, not shipment.vessel_loading_port_1', () => {
+    const meta = headersToMetadata(['Vessel Loading Port', 'Vessel LOA']);
+    const parsed = SapMasterV2ImportService.parseDataRowForTest(
+      ['PORT TALANG DUKU', 79.01],
+      meta,
+    ) as {
+      shipment: Record<string, unknown>;
+      vessel: Record<string, unknown>;
+      raw: Record<string, unknown>;
+    };
+    expect(parsed.raw['Vessel Loading Port']).toBe('PORT TALANG DUKU');
+    expect(parsed.raw['Vessel LOA']).toBe(79.01);
+    expect(parsed.shipment.vessel_loading_port_1).toBe('PORT TALANG DUKU');
+    expect(parsed.shipment.vessel_loading_port_1).not.toBe(79.01);
+    expect(parsed.vessel.vessel_loa).toBe(79.01);
+  });
+});

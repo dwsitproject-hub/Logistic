@@ -6,6 +6,7 @@ import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractImportStatusIsOpenExpr,
   sqlIsContractSapClosedExpr,
+  sqlIsContractSapClosedForStoExpr,
   sqlNormalizeContractDeliveryStatusExpr,
 } from './contractDeliveryStatus';
 
@@ -58,6 +59,19 @@ describe('sqlContractImportStatusExpr', () => {
     // Open signal is GR PO/STO only — not commercial Status (blocks false Open → Planned)
     expect(sql).not.toMatch(/row_open[\s\S]*->>'Status'/);
     expect(sql).toContain("'CFR'");
+    // PO-wide (no stoKey) must not force SPD STO equality
+    expect(sql).not.toContain("= TRIM((sp.sto_key)::text)");
+  });
+
+  it('scopes LCO/FOB GR Close to sto_key while CIF/CFR stay PO-wide', () => {
+    const scoped = sqlContractImportStatusExpr('c', 'c.po_number', 'sp.sto_key');
+    expect(scoped).toContain('sp.sto_key');
+    expect(scoped).toContain('sto_number');
+    expect(scoped).toContain("'FOB'");
+    expect(scoped).toContain("'CIF'");
+    // Synthetic OP-/MNL keys skip STO equality filter
+    expect(scoped).toContain("'^OP-'");
+    expect(scoped).toContain("'^(MNL-|MSEA-)'");
   });
 
   it('builds SAP closed predicate from PO-aware import status', () => {
@@ -67,6 +81,13 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain('BOOL_OR');
     expect(sql).toContain('GR PO Status');
     expect(sql).not.toContain("->'raw'->>'Status'");
+  });
+
+  it('builds STO-scoped closed predicate for SEA list / Perf parity', () => {
+    const sql = sqlIsContractSapClosedForStoExpr('c', 'sp.sto_key');
+    expect(sql).toContain('sp.sto_key');
+    expect(sql).toContain("'CLOSE'");
+    expect(sql).toContain('BOOL_OR');
   });
 });
 

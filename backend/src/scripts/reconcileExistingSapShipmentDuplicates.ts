@@ -10,8 +10,31 @@ import {
   hasKlipShipmentActivity,
   isSapSourcedShipmentId,
 } from '../utils/klipLogisticsActivity';
+import { sqlSpdPoNumberExpr } from '../utils/contractLogisticsStoDetailSql';
+import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
 
 const apply = process.argv.includes('--apply');
+
+async function resolveLatestSapStoForPo(
+  client: Awaited<ReturnType<typeof getClient>>,
+  poNumber: string | null,
+): Promise<string | null> {
+  const po = String(poNumber ?? '').trim();
+  if (!po) return null;
+
+  const poExpr = sqlSpdPoNumberExpr('spd');
+  const stoExpr = sapStoNumberKeyExpr('spd');
+  const res = await client.query<{ sto_key: string }>(
+    `SELECT TRIM((${stoExpr})::text) AS sto_key
+     FROM sap_processed_data spd
+     WHERE ${poExpr} = TRIM($1::text)
+       AND NULLIF(TRIM((${stoExpr})::text), '') IS NOT NULL
+     ORDER BY spd.created_at DESC NULLS LAST
+     LIMIT 1`,
+    [po],
+  );
+  return res.rows[0]?.sto_key?.trim() || null;
+}
 
 async function main() {
   const client = await getClient();
@@ -41,22 +64,31 @@ async function main() {
       const shipments = await client.query<{
         id: string;
         shipment_id: string | null;
+        operation_id: string | null;
         status: string;
         created_at: string;
       }>(
-        `SELECT id, shipment_id, status, created_at
+        `SELECT id, shipment_id, operation_id, status, created_at
          FROM shipments
          WHERE contract_id = $1::uuid AND COALESCE(status, '') <> 'CANCELLED'
          ORDER BY created_at DESC`,
         [group.contract_id],
       );
 
+      const latestSapSto = await resolveLatestSapStoForPo(client, group.po_number);
+
       const keeper =
-        shipments.rows.find((r) => isSapSourcedShipmentId(r.shipment_id)) ?? shipments.rows[0];
-      const keeperSto = keeper.shipment_id?.trim() || null;
+        shipments.rows.find((r) => r.operation_id && String(r.operation_id).trim()) ??
+        shipments.rows.find(
+          (r) => latestSapSto && trimText(r.shipment_id) === latestSapSto && isSapSourcedShipmentId(r.shipment_id),
+        ) ??
+        shipments.rows.find((r) => isSapSourcedShipmentId(r.shipment_id)) ??
+        shipments.rows[0];
+
+      const keeperSto = latestSapSto ?? keeper.shipment_id?.trim() ?? null;
 
       console.log(
-        `\nPO ${group.po_number ?? '—'} / contract ${group.contract_number}: keeper ${keeper.shipment_id ?? keeper.id} (${shipments.rows.length} rows)`,
+        `\nPO ${group.po_number ?? '—'} / contract ${group.contract_number}: keeper ${keeper.shipment_id ?? keeper.id} → STO ${keeperSto ?? '—'} (${shipments.rows.length} rows)`,
       );
 
       if (!apply) {
@@ -75,6 +107,7 @@ async function main() {
         group.contract_id,
         keeper.id,
         keeperSto,
+        group.po_number,
       );
       totalCancelled += result.cancelledShipmentIds.length;
       totalSkipped += result.skippedShipmentIds.length;
@@ -94,6 +127,10 @@ async function main() {
   } finally {
     client.release();
   }
+}
+
+function trimText(value: string | null | undefined): string {
+  return String(value ?? '').trim();
 }
 
 main().catch((err) => {

@@ -16,13 +16,36 @@ describe('shippingPerformanceStoMetricsSql', () => {
     expect(sql).toMatch(/outstanding_qty_actual[\s\S]*?SUM\(po\.contract_qty\)|SUM\(po\.contract_qty\)[\s\S]*?outstanding_qty_actual/);
   });
 
-  it('falls back to latest SAP by contract when sto_key match is missing (null STO)', () => {
+  it('uses STO+PO scoped SAP qty in sto_po_lines (matches Edit Shipment modal)', () => {
     const sql = buildShipmentListStoMetricsCte();
 
-    expect(sql).toContain('COALESCE(lspd.receive_kg, lspd_c.receive_kg)');
-    expect(sql).toContain('COALESCE(lspd.delivery_kg, lspd_c.delivery_kg)');
-    // Contract-level fallback is a LATERAL latest-SAP-row lookup (was a DISTINCT ON CTE).
-    expect(sql).toContain(') lspd_c ON TRUE');
-    expect(sql).toContain("TRIM(spd.contract_number) = TRIM(asp.contract_id)");
+    expect(sql).toContain('sto_po_lines');
+    expect(sql).toContain('asp.sto_key');
+    expect(sql).toContain('asp.po_number');
+    expect(sql).toContain('asp.contract_id');
+    expect(sql).toContain('Quantity Delivery Vessel');
+    expect(sql).toContain('Quantity Receive');
+    expect(sql).not.toContain('latest_spd_by_sto_contract');
+    expect(sql).not.toContain('lspd_c ON TRUE');
+  });
+
+  it('dedupes KLIP qty per contract before summing at STO level (no MNL double-count)', () => {
+    const sql = buildShipmentListStoMetricsCte();
+
+    expect(sql).toContain('DISTINCT ON (raw.sto_key, raw.contract_id)');
+    expect(sql).toContain('updated_at DESC NULLS LAST');
+    expect(sql).toContain('actual_vessel_qty_receive');
+  });
+
+  it('STO 1016010610 pattern: excludes B2B child PO and SAP-only phantom contract', () => {
+    const sql = buildShipmentListStoMetricsCte();
+    const linksSection = sql.slice(
+      sql.indexOf('all_sto_contract_links'),
+      sql.indexOf('contract_sto_planning'),
+    );
+
+    expect(sql).toContain("= 'B2B'");
+    expect(sql).toContain('contract_reference_po');
+    expect(linksSection).not.toContain('sap_processed_data');
   });
 });
