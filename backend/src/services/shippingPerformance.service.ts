@@ -20,6 +20,7 @@ import {
   sqlShipmentDisplayVesselName,
 } from '../utils/sapVesselFields';
 import {
+  aggregateImportStatusForStoGroup,
   isContractDeliveryClosed,
   sqlContractImportStatusForStoExpr,
   sqlIsContractSapClosedForStoExpr,
@@ -246,6 +247,9 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
     outstanding_qty_actual: metrics.outstandingQtyActual,
     outstanding_qty_planning: metrics.outstandingQtyPlanning,
     outstanding_qty: metrics.outstandingQtyActual,
+    import_status:
+      aggregateImportStatusForStoGroup(rows.map((row) => row.import_status)) ??
+      pick.import_status,
   };
 
   const derived = deriveShippingPerfRowStatus(merged);
@@ -348,6 +352,13 @@ const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
+          NULLIF(TRIM(COALESCE(
+            spd.sto_number::text,
+            spd.data->'raw'->>'STO No.',
+            spd.data->'raw'->>'STO Number',
+            spd.data->'shipment'->>'sto_no',
+            spd.data->'contract'->>'sto_no'
+          )), '') AS effective_sto,
           COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
           UPPER(TRIM(COALESCE(
             spd.data->'contract'->>'contract_type',

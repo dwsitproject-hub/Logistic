@@ -4,6 +4,7 @@
  */
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import {
   appendShipmentPipelineStageFilter,
@@ -233,6 +234,7 @@ export function buildShipmentOutstandingQtyExecutionAggregateQuery(
         AND TRIM(sp.contract_numbers) <> ''
         AND TRIM(cn) <> ''
         AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF')
+        AND NOT (${sqlIsContractSapClosedForStoExpr('c', 'sp.sto_key')})
     )
     SELECT
       ${sqlShipmentOutstandingQtyAggregateSelect(

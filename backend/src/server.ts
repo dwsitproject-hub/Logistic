@@ -56,6 +56,7 @@ import oilLossRoutes from './routes/oilLoss.routes';
 import commercialDocumentsRoutes from './routes/commercialDocuments.routes';
 import aiKlipAgentActivityRoutes from './routes/aiKlipAgentActivity.routes';
 import userActivityLogRoutes from './routes/userActivityLog.routes';
+import { ssoHubHandler } from './controllers/sso.controller';
 
 dotenv.config();
 
@@ -114,6 +115,9 @@ app.get('/health', (_req, res) => {
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'OK', message: 'KLIP Backend is running' });
 });
+
+// Downstream Hub SSO handoff — unauthenticated, outside /api (Hub posts here directly).
+app.post('/auth/hub', ssoHubHandler);
 
 // Routes
 app.use('/api/auth', authRoutes);

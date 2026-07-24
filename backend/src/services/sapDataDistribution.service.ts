@@ -827,6 +827,12 @@ export class SapDataDistributionService {
     const ataSailedLoading = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port ?? shipmentData.ata_sailed);
     const ataDischargeBerthed = this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port ?? shipmentData.ata_discharge_berthed);
 
+    const contractSapClosed = await this.isContractSapClosedForUuid(
+      client,
+      contractUuid,
+      shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+    );
+
     const statusForInsert = deriveShipmentStatus({
       ata_arrival_at_loading_port: ataArrivalLoading,
       ata_berthed_at_loading_port: ataBerthedLoading,
@@ -837,13 +843,7 @@ export class SapDataDistributionService {
       ata_berthed_at_discharge_port: ataDischargeBerthed,
       ata_start_discharging: ataDischargeStart,
       ata_complete_discharge: ataDischargeComplete,
-      contract_import_status: (await this.isContractSapClosedForUuid(
-        client,
-        contractUuid,
-        shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
-      ))
-        ? 'Close'
-        : null,
+      contract_import_status: contractSapClosed ? 'Close' : null,
     });
 
     // Strategy:
@@ -1043,12 +1043,15 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE($47::numeric, sfal_qty),
           sfbd_qty = COALESCE($48::numeric, sfbd_qty),
           status = CASE
+            WHEN $51::boolean IS TRUE
+              AND UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+              THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('$49::text')} > ${sqlShipmentStatusRank('status')}
             THEN $49
             ELSE status
           END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $50`,
+         WHERE id = $52`,
         [
           contractUuid,
           voyageNo,
@@ -1099,6 +1102,7 @@ export class SapDataDistributionService {
           sfalQty,
           sfbdQty,
           statusForInsert,
+          contractSapClosed,
           id
         ]
       );
@@ -1207,6 +1211,9 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
           sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
           status = CASE
+            WHEN $51::boolean IS TRUE
+              AND UPPER(TRIM(COALESCE(shipments.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+              THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('EXCLUDED.status')} > ${sqlShipmentStatusRank('shipments.status')}
             THEN EXCLUDED.status
             ELSE shipments.status
@@ -1263,7 +1270,8 @@ export class SapDataDistributionService {
           dischargeDurationDays,
           totalLeadTimeDays,
           sfalQty,
-          sfbdQty
+          sfbdQty,
+          contractSapClosed,
         ]
       );
       await ensureMasterVesselFromSap(

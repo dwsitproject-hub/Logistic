@@ -79,3 +79,35 @@ export async function resolvePostAuthRedirect(userRole?: string, userId?: string
   const perms: NavAccessContext = { byKey, loaded: true, userRole }
   return getFirstAccessibleRoute(userRole, perms)
 }
+
+export type StoredAuthUser = {
+  id?: string
+  role?: string
+  is_first_login?: boolean
+}
+
+/**
+ * Shared post-login/post-SSO redirect: resolves the user's first accessible page
+ * and navigates there, clearing the stored session on failure. Used by both the
+ * username/password login page and the Downstream Hub SSO callback page.
+ */
+export async function redirectAfterAuth(
+  user: StoredAuthUser,
+  router: { push: (route: string) => void },
+  setError: (msg: string) => void,
+): Promise<void> {
+  try {
+    const route = await resolvePostAuthRedirect(user.role, user.id)
+    if (!route) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      setError('Your account has no accessible pages. Contact your administrator.')
+      return
+    }
+    router.push(route)
+  } catch {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    setError('Failed to load your permissions. Please try again.')
+  }
+}

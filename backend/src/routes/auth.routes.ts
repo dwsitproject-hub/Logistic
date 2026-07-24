@@ -1,5 +1,6 @@
 import express from 'express';
 import { register, login, getProfile, updateProfile } from '../controllers/auth.controller';
+import { ssoExchangeHandler } from '../controllers/sso.controller';
 import { authenticateToken } from '../middleware/auth';
 import { body } from 'express-validator';
 
@@ -123,6 +124,31 @@ router.get('/profile', authenticateToken, getProfile);
  *         description: Unauthorized
  */
 router.put('/profile', authenticateToken, updateProfile);
+
+/**
+ * @swagger
+ * /api/auth/sso/exchange:
+ *   post:
+ *     summary: Exchange a one-time Downstream Hub SSO code for a KLIP session
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - code
+ *             properties:
+ *               code:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Exchange successful
+ *       400:
+ *         description: Invalid or expired code
+ */
+router.post('/sso/exchange', ssoExchangeHandler);
 
 export default router;
 

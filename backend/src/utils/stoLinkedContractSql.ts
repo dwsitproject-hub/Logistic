@@ -3,7 +3,7 @@
  * Uses contract_stos (multi-STO per contract) with legacy contracts.sto_number fallback.
  */
 
-import { sqlB2bChildContractRowExcludeWhere } from './shippingPerformanceStoMetricsSql';
+import { sqlB2bChildContractRowExcludeWhere } from './b2bChildSql';
 
 /** Operational STO key on a grouped shipment list row (matches shipmentListStoKeyExpr). */
 export function buildGroupedStoTrimExpr(stoKeySql: string): string {

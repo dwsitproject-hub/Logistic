@@ -11,6 +11,7 @@ import {
 } from '../utils/sapMasterV2UatFormat';
 import { SapDataDistributionService } from './sapDataDistribution.service';
 import { invalidateShipmentsListCache } from './shipmentList.service';
+import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 import { normalizePoNumber } from '../utils/contractPoIdentity';
 
 export interface MasterV2Config {
@@ -440,6 +441,7 @@ export class SapMasterV2ImportService {
 
       if (processedRecords > 0) {
         invalidateShipmentsListCache();
+        invalidateShippingPerformanceRowCache();
         setImmediate(() => {
           import('./contractQtyMoveSnapshot.service')
             .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())

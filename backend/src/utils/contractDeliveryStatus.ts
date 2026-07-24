@@ -44,6 +44,35 @@ export function isContractDeliveryClosed(status: unknown): boolean {
   );
 }
 
+function isContractDeliveryOpen(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toUpperCase();
+  return normalized === 'OPEN' || normalized === 'ACTIVE';
+}
+
+function isContractDeliveryCancelled(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toUpperCase();
+  return normalized === 'CANCELLED' || normalized === 'CANCELED' || normalized === 'CANCEL';
+}
+
+/**
+ * STO group import status — mirrors SQL BOOL_AND(isContractSapClosedForSto):
+ * any Open wins; else Close only when every member is Close.
+ */
+export function aggregateImportStatusForStoGroup(statuses: unknown[]): string | null {
+  if (!statuses.length) return null;
+  const normalized = statuses.map((s) => normalizeContractDeliveryStatusForDisplay(s)).filter(Boolean);
+  if (!normalized.length) return null;
+  if (normalized.some(isContractDeliveryOpen)) return 'Open';
+  if (normalized.every(isContractDeliveryClosed)) return 'Close';
+  if (normalized.some(isContractDeliveryCancelled)) return 'Cancelled';
+  return normalized[0] ?? null;
+}
+
+/** True when every STO group member is GR Close (matches shipment list BOOL_AND). */
+export function isStoGroupSapClosed(statuses: unknown[]): boolean {
+  return aggregateImportStatusForStoGroup(statuses) === 'Close';
+}
+
 /**
  * SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped rows.
  *

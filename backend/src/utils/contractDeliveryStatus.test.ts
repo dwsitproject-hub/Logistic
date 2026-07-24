@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  aggregateImportStatusForStoGroup,
   isContractDeliveryClosed,
+  isStoGroupSapClosed,
   normalizeContractDeliveryStatusForDisplay,
   sqlContractImportStatusExpr,
   sqlContractImportStatusIsClosedExpr,
@@ -22,6 +24,29 @@ describe('sqlNormalizeContractDeliveryStatusExpr', () => {
   it('normalizes ACTIVE to Open in SQL', () => {
     expect(sqlNormalizeContractDeliveryStatusExpr('c.status')).toContain("'ACTIVE'");
     expect(sqlNormalizeContractDeliveryStatusExpr('c.status')).toContain("'Open'");
+  });
+});
+
+describe('aggregateImportStatusForStoGroup / isStoGroupSapClosed', () => {
+  it('returns Open when any member is Open', () => {
+    expect(aggregateImportStatusForStoGroup(['Close', 'Open'])).toBe('Open');
+    expect(aggregateImportStatusForStoGroup(['Close', 'ACTIVE'])).toBe('Open');
+    expect(isStoGroupSapClosed(['Close', 'Open'])).toBe(false);
+  });
+
+  it('returns Close only when every member is Close', () => {
+    expect(aggregateImportStatusForStoGroup(['Close', 'COMPLETED'])).toBe('Close');
+    expect(isStoGroupSapClosed(['Close', 'COMPLETED'])).toBe(true);
+  });
+
+  it('returns null for empty or blank member list', () => {
+    expect(aggregateImportStatusForStoGroup([])).toBeNull();
+    expect(aggregateImportStatusForStoGroup(['', null])).toBeNull();
+    expect(isStoGroupSapClosed([])).toBe(false);
+  });
+
+  it('returns Cancelled when no Open and not all Close', () => {
+    expect(aggregateImportStatusForStoGroup(['Cancelled', 'Close'])).toBe('Cancelled');
   });
 });
 

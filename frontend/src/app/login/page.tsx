@@ -8,34 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
-import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
-
-type StoredAuthUser = {
-  id?: string
-  role?: string
-  is_first_login?: boolean
-}
-
-async function redirectAfterAuth(
-  user: StoredAuthUser,
-  router: ReturnType<typeof useRouter>,
-  setError: (msg: string) => void,
-) {
-  try {
-    const route = await resolvePostAuthRedirect(user.role, user.id)
-    if (!route) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      setError('Your account has no accessible pages. Contact your administrator.')
-      return
-    }
-    router.push(route)
-  } catch {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    setError('Failed to load your permissions. Please try again.')
-  }
-}
+import { redirectAfterAuth, type StoredAuthUser } from '@/lib/navigationAccess'
 
 function LoginPageContent() {
   const router = useRouter()
@@ -48,8 +21,13 @@ function LoginPageContent() {
   const [isFirstLogin, setIsFirstLogin] = useState(false)
 
   useEffect(() => {
-    if (searchParams.get('error') === 'no_access') {
+    const errorCode = searchParams.get('error')
+    if (errorCode === 'no_access') {
       setError('Your account has no accessible pages. Contact your administrator.')
+    } else if (errorCode === 'sso_no_access') {
+      setError('Your account is not registered for SSO access. Contact your administrator.')
+    } else if (errorCode === 'sso_failed' || errorCode === 'sso_not_configured') {
+      setError('SSO login failed. Please try again or use your KLIP username/password.')
     }
   }, [searchParams])
 

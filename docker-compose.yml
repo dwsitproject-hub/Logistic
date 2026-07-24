@@ -41,6 +41,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres123}
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
       JWT_EXPIRES_IN: 7d
+      SSO_TOKEN_SECRET: ${SSO_TOKEN_SECRET:-}
+      APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-http://localhost:3001}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

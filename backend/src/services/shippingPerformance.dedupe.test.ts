@@ -282,6 +282,56 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     expect(merged.status).toBe('COMPLETED');
   });
 
+  it('aggregates import_status from all members: all Close → COMPLETED even when pick row is PLANNED', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        id: 'a',
+        shipment_id: '1646000083',
+        sto_number: '1646000083',
+        status: 'PLANNED',
+        import_status: 'Close',
+        loading_eta_arrival: '2026-07-14',
+        contract_qty: 100,
+      },
+      {
+        id: 'b',
+        shipment_id: '1646000083',
+        sto_number: '1646000083',
+        status: 'SAILED',
+        import_status: 'Close',
+        loading_ata_sailed: '2026-07-18',
+        contract_qty: 50,
+      },
+    ]);
+    expect(merged.import_status).toBe('Close');
+    expect(merged.status).toBe('COMPLETED');
+  });
+
+  it('aggregates import_status: any Open member keeps group On Going', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        id: 'a',
+        shipment_id: '1646000099',
+        sto_number: '1646000099',
+        status: 'PLANNED',
+        import_status: 'Open',
+        loading_eta_arrival: '2026-07-14',
+        contract_qty: 100,
+      },
+      {
+        id: 'b',
+        shipment_id: '1646000099',
+        sto_number: '1646000099',
+        status: 'SAILED',
+        import_status: 'Close',
+        loading_ata_sailed: '2026-07-18',
+        contract_qty: 50,
+      },
+    ]);
+    expect(merged.import_status).toBe('Open');
+    expect(merged.status).toBe('PLANNED');
+  });
+
   it('override-only loading_ata_sailed on a single row → SAILED', () => {
     const rows = aggregateShippingPerformanceRowsBySto([
       {

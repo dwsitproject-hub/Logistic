@@ -43,6 +43,9 @@ describe('shipmentOutstandingQtySummarySql', () => {
     )
     expect(q.text).toContain('PLANNED')
     expect(q.text).toContain('SAILED')
+    expect(q.text).toContain('sp.sto_key')
+    expect(q.text).toContain('NOT (')
+    expect(q.text).toContain("'CLOSE'")
     // No bound stage param when osStatus is null
     expect(q.params).toEqual([])
   })
