@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { buildContractDetailsForStoSql } from './contractDetailsForStoSql';
+import {
+  buildContractDetailsForStoSql,
+  sqlSiblingShipmentKlipQtyExpr,
+} from './contractDetailsForStoSql';
+
+describe('sqlSiblingShipmentKlipQtyExpr', () => {
+  it('reads KLIP delivered/receive from sibling shipment under lookup key', () => {
+    const delivered = sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'delivered');
+    expect(delivered).toContain('quantity_delivered_klip');
+    expect(delivered).toContain('operation_id');
+    expect(delivered).toContain('shipment_id');
+    expect(delivered).toContain('pl.contract_number');
+    const receive = sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'receive');
+    expect(receive).toContain('actual_vessel_qty_receive');
+  });
+});
 
 describe('buildContractDetailsForStoSql', () => {
   it('discovers contracts by sto_number and returns one row per PO line', () => {
@@ -21,5 +36,7 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain("IN ('SEA', 'MIXED', 'MIX')");
     // Blank-STO fallback must be contract-scoped (Edit Shipment PO list), not global discover.
     expect(sql).toContain('spd.contract_number = pl.contract_number');
+    expect(sql).toContain('AS quantity_delivered_klip');
+    expect(sql).toContain('AS quantity_receive_klip');
   });
 });

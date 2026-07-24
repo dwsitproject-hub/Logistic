@@ -50,8 +50,8 @@ export function isContractDeliveryClosed(status: unknown): boolean {
  * fallback while sibling STO rows still had GR Open — Trucking then used Σ SAP
  * instead of WB. Aggregate: any Open wins; else any Close; else contract.status.
  *
- * Per SPD row, Open if either raw or contract GR field is Open (stale Close in
- * `contract.gr_sto_status` must not hide Open in `raw.GR STO Status`).
+ * Per SPD row, Open if the incoterm GR field is Open (stale Close in
+ * `contract.gr_*` must not hide Open in raw). Do not use commercial Status.
  */
 export function sqlContractImportStatusExpr(
   contractAlias = 'c',
@@ -70,8 +70,7 @@ export function sqlContractImportStatusExpr(
   )`;
   const poOpen = `(
     ${openNorm("spd.data->'raw'->>'GR PO Status'")}
-    OR ${openNorm("spd.data->'raw'->>'Status'")}
-    OR ${openNorm("spd.data->'contract'->>'status'")}
+    OR ${openNorm("spd.data->'contract'->>'gr_po_status'")}
   )`;
   // Incoterm-scoped: do not let commercial contract.status Open override Close GR STO on LCO.
   const rowOpenSignal = `(

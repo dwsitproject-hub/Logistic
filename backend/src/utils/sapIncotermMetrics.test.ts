@@ -21,8 +21,10 @@ describe('sapIncotermMetrics', () => {
   it('routes status by incoterm', () => {
     expect(usesGrPoStatus('FRC')).toBe(true);
     expect(usesGrPoStatus('CIF')).toBe(true);
+    expect(usesGrPoStatus('CFR')).toBe(true);
     expect(usesGrPoStatus('FOB')).toBe(false);
     expect(resolveIncotermImportStatusTs('FRC', 'Open', 'Close', 'ACTIVE')).toBe('Open');
+    expect(resolveIncotermImportStatusTs('CFR', 'Close', 'Open', 'ACTIVE')).toBe('Close');
     expect(resolveIncotermImportStatusTs('FOB', 'Open', 'Close', 'ACTIVE')).toBe('Close');
   });
 
@@ -114,6 +116,9 @@ describe('sapIncotermMetrics', () => {
     const sql = sqlIncotermImportStatusFromJson('spd.data', 'c.incoterm', 'c.status');
     expect(sql).toContain('GR PO Status');
     expect(sql).toContain('GR STO Status');
+    expect(sql).toContain("'FRC', 'CIF', 'CFR'");
+    // GR PO uses dedicated fields only — not commercial Status
+    expect(sql).not.toContain("->'raw'->>'Status'");
     // Raw GR columns preferred over stale contract.* JSON
     const stoIdx = sql.indexOf("->'raw'->>'GR STO Status'");
     const stoContractIdx = sql.indexOf("->'contract'->>'gr_sto_status'");

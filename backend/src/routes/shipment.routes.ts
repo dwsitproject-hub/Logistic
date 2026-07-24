@@ -10,6 +10,7 @@ import {
   getShipmentAvailablePurchaseOrders,
   attachPurchaseOrderToShipmentHandler,
   batchSaveShipmentPoPlanQtyHandler,
+  batchSaveShipmentPoKlipQtyHandler,
   updateShipment,
   getShipmentDailyDeliverablesCalendar,
   updateShipmentDailyDeliverables,
@@ -114,6 +115,11 @@ router.put(
   '/:id/po-plan-qty',
   auditLog('UPDATE', 'STO_QTY_ASSIGNED'),
   batchSaveShipmentPoPlanQtyHandler,
+);
+router.put(
+  '/:id/po-klip-qty',
+  auditLog('UPDATE', 'SHIPMENT'),
+  batchSaveShipmentPoKlipQtyHandler,
 );
 
 // Get shipment by ID

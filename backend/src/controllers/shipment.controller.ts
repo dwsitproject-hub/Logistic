@@ -42,6 +42,7 @@ import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPo
 import { loadVesselIdleList } from '../services/vesselIdle.service';
 import {
   attachPurchaseOrderToShipment,
+  batchSaveShipmentPoKlipQty,
   batchSaveShipmentPoPlanQty,
   listAvailablePurchaseOrdersForShipmentEdit,
 } from '../services/shipmentPoAssignment.service';
@@ -423,7 +424,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     /** Skip heavy SAP table joins (compact list first paint; hydrate with a second request). */
     const skipSapJoin =
       compact &&
-      String((req.query as any).skipSapJoin || '').toLowerCase() === 'true' &&
+      String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true' &&
       !summaryOnly &&
       !outstandingQtyOnly;
 
@@ -759,7 +760,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.contract_date) as contract_date,
           MAX(c.delivery_start_date) as delivery_start_date,
           MAX(c.delivery_end_date) as delivery_end_date,
-          BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
+          BOOL_AND(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
           ${sqlShipmentListLoadingPortsKlipAgg()},
           ${sqlShipmentListDischargePortsKlipAgg()},
 ${ataSelect}
@@ -1863,6 +1864,64 @@ export const getShipmentEditContext = async (req: AuthRequest, res: Response) =>
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch shipment edit context' },
+    });
+  }
+};
+
+/** Batch save Delivered/Received Qty (KLIP) per PO on Edit Shipment modal. */
+export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const rows = rawRows.map((row: Record<string, unknown>) => {
+      const deliveredRaw = row.quantityDeliveredKlipKg ?? row.quantity_delivered_klip_kg ?? row.quantity_delivered;
+      const receiveRaw = row.quantityReceiveKlipKg ?? row.quantity_receive_klip_kg ?? row.quantity_receive;
+      return {
+        contractNumber: String(row.contractNumber ?? row.contract_number ?? '').trim(),
+        poNumber: row.poNumber ?? row.po_number ?? null,
+        quantityDeliveredKlipKg:
+          deliveredRaw === null || deliveredRaw === undefined || deliveredRaw === ''
+            ? null
+            : Number(deliveredRaw),
+        quantityReceiveKlipKg:
+          receiveRaw === null || receiveRaw === undefined || receiveRaw === ''
+            ? null
+            : Number(receiveRaw),
+      };
+    });
+
+    const result = await batchSaveShipmentPoKlipQty({
+      anchorShipmentUuid: id,
+      rows,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status).json({
+        success: false,
+        error: { message: result.message },
+      });
+    }
+
+    invalidateShipmentsListCache();
+    invalidateShippingPerformanceRowCache();
+
+    return res.json({
+      success: true,
+      message: 'Delivered / Received Qty (KLIP) saved successfully',
+    });
+  } catch (error) {
+    logger.error('Batch save shipment PO KLIP qty error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to save Delivered / Received Qty (KLIP)' },
     });
   }
 };

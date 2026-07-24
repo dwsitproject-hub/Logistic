@@ -23,6 +23,49 @@ export function quantityKgValuesEqual(a: unknown, b: unknown): boolean {
   return Math.abs(pa - pb) < 0.001
 }
 
+function resolveEffectiveQtyKg(
+  row: VesselPortsQuantityRow,
+  edits: VesselPortsQuantityEdits,
+  field: 'quantity_delivered' | 'quantity_receive',
+): number | null {
+  const edited = edits[row.rowKey]?.[field]
+  if (edited !== undefined) {
+    if (edited === null) return null
+    const n = Number(edited)
+    return Number.isFinite(n) ? n : null
+  }
+  const base = row[field]
+  if (base == null) return null
+  const n = Number(base)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Per-PO KLIP qty payload for PUT /shipments/:id/po-klip-qty. */
+export function buildPoKlipQtySaveRows(
+  rows: VesselPortsQuantityRow[],
+  edits: VesselPortsQuantityEdits,
+): Array<{
+  contractNumber: string
+  poNumber: string | null
+  quantityDeliveredKlipKg: number | null
+  quantityReceiveKlipKg: number | null
+}> {
+  return rows
+    .map((row) => {
+      const contractNumber = String(row.contract_ext_no ?? '').trim()
+      if (!contractNumber) return null
+      return {
+        contractNumber,
+        poNumber: row.po_number != null && String(row.po_number).trim() !== ''
+          ? String(row.po_number).trim()
+          : null,
+        quantityDeliveredKlipKg: resolveEffectiveQtyKg(row, edits, 'quantity_delivered'),
+        quantityReceiveKlipKg: resolveEffectiveQtyKg(row, edits, 'quantity_receive'),
+      }
+    })
+    .filter((r): r is NonNullable<typeof r> => r != null)
+}
+
 /** True only when the user changed Delivered / Receive in the qty edit grid (not mere load/sum drift). */
 export function hasVesselPortsQuantityUserEdits(
   rows: VesselPortsQuantityRow[],

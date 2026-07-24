@@ -5,12 +5,15 @@ import {
 } from './shippingPerformanceStoMetricsSql';
 
 describe('shippingPerformanceStoMetricsSql', () => {
-  it('treats missing SAP movement as zero when calculating actual outstanding', () => {
+  it('computes actual outstanding from Contract Qty with Open/Close KLIP overlay', () => {
     const sql = buildShippingPerfStoMetricsCte();
 
-    expect(sql).toContain('COALESCE(po.receive_kg, 0)');
-    expect(sql).toContain('COALESCE(po.delivery_kg, 0)');
+    expect(sql).toContain('sto_shipment_klip');
+    expect(sql).toContain('quantity_delivered_klip');
+    expect(sql).toContain('SUM(po.contract_qty)');
     expect(sql).toContain('AS outstanding_qty_actual');
+    // OS base must be Contract Qty, not STO Qty
+    expect(sql).toMatch(/outstanding_qty_actual[\s\S]*?SUM\(po\.contract_qty\)|SUM\(po\.contract_qty\)[\s\S]*?outstanding_qty_actual/);
   });
 
   it('falls back to latest SAP by contract when sto_key match is missing (null STO)', () => {

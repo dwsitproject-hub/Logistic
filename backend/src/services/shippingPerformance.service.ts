@@ -24,6 +24,8 @@ import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
 } from '../utils/shipmentManualQtyResolveSql';
+import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -76,7 +78,8 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v29';
+/** Bumped when ATA override join / STO status merge parity with Shipments changes. */
+const ROW_CACHE_KEY = 'shipping-performance-rows-v31';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -113,17 +116,68 @@ function joinDistinctValues(rows: Record<string, unknown>[], field: string): str
   return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
 }
 
-/** Multi-contract STO status (decision N-01 option b): the group is only as advanced
- *  as its LEAST-advanced active member; all-cancelled groups stay CANCELLED. Mirrors
- *  the Shipments list floor (shipmentEffectiveStatusExpr) so both pages agree. */
-function leastAdvancedGroupStatus(rows: Record<string, unknown>[]): string | null {
+/** Milestone date fields max-merged across STO members (Shipments list MAX ATA/ETA). */
+const SHIPPING_PERF_MILESTONE_FIELDS = [
+  'loading_eta_arrival',
+  'loading_eta_berthed',
+  'loading_eta_start',
+  'loading_eta_completed',
+  'loading_eta_sailed',
+  'discharge_eta_arrival',
+  'discharge_eta_berthed',
+  'discharge_eta_start',
+  'discharge_eta_completed',
+  'loading_ata_arrival',
+  'loading_ata_berthed',
+  'loading_ata_start',
+  'loading_ata_completed',
+  'loading_ata_sailed',
+  'discharge_ata_arrival',
+  'discharge_ata_berthed',
+  'discharge_ata_start',
+  'discharge_ata_completed',
+] as const;
+
+function toDateMs(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const ms = Date.parse(raw.length <= 10 ? `${raw}T00:00:00Z` : raw);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function maxMergeMilestoneFields(rows: Record<string, unknown>[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of SHIPPING_PERF_MILESTONE_FIELDS) {
+    let bestVal: unknown = null;
+    let bestMs = Number.NEGATIVE_INFINITY;
+    for (const row of rows) {
+      const v = row[field];
+      const ms = toDateMs(v);
+      if (ms == null) continue;
+      if (ms > bestMs) {
+        bestMs = ms;
+        bestVal = v;
+      }
+    }
+    if (bestVal != null) out[field] = bestVal;
+  }
+  return out;
+}
+
+/**
+ * Least-advanced *persisted* DB status among active members (Shipments group_status_floor).
+ * CANCELLED is skipped; returns null when no active status or only one distinct active status
+ * is not required here — callers check distinct count separately.
+ */
+function leastAdvancedPersistedStatus(rows: Record<string, unknown>[]): string | null {
   let best: string | null = null;
   let bestRank = Number.POSITIVE_INFINITY;
   for (const row of rows) {
     const status = String(row.status ?? '').trim().toUpperCase();
     if (!status) continue;
     const rank = SHIPMENT_STATUS_RANK[status];
-    if (rank === undefined || rank < 0) continue; // skip cancelled/unknown
+    if (rank === undefined || rank < 0) continue;
     if (rank < bestRank) {
       bestRank = rank;
       best = status;
@@ -132,11 +186,26 @@ function leastAdvancedGroupStatus(rows: Record<string, unknown>[]): string | nul
   return best;
 }
 
-function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
+function countDistinctActivePersistedStatuses(rows: Record<string, unknown>[]): number {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const status = String(row.status ?? '').trim().toUpperCase();
+    if (!status) continue;
+    const rank = SHIPMENT_STATUS_RANK[status];
+    if (rank === undefined || rank < 0) continue;
+    seen.add(status);
+  }
+  return seen.size;
+}
+
+/**
+ * Merge STO members like Shipments list: MAX milestones → derive once;
+ * floor to least-advanced persisted DB status only when members disagree.
+ */
+export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
   const pick = rows.reduce((best, row) =>
     shippingPerfRowPriority(row) >= shippingPerfRowPriority(best) ? row : best,
   );
-  const groupStatus = leastAdvancedGroupStatus(rows) ?? pick.status;
 
   const fromStoMetrics = pick.po_numbers != null || pick.contract_numbers != null;
   const metrics = fromStoMetrics
@@ -151,9 +220,9 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
       }
     : mergePoMetricsFromRows(rows);
 
-  return {
+  const merged: Record<string, unknown> = {
     ...pick,
-    status: groupStatus,
+    ...maxMergeMilestoneFields(rows),
     sto_key: pick.sto_key ?? shippingPerfStoGroupKey(pick).replace(/^(sto:|ship:|op:|id:)/, ''),
     po_number:
       (pick.po_numbers as string | undefined) ??
@@ -163,7 +232,6 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
       (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
     source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
-    // Multi-PO / multi-contract ops can have several suppliers — keep one row, comma-joined.
     supplier: joinDistinctValues(rows, 'supplier') || pick.supplier,
     contract_qty: metrics.contractQty,
     sto_qty: metrics.stoQty,
@@ -174,12 +242,73 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
     outstanding_qty_planning: metrics.outstandingQtyPlanning,
     outstanding_qty: metrics.outstandingQtyActual,
   };
+
+  const derived = deriveShippingPerfRowStatus(merged);
+  const mixedDb = countDistinctActivePersistedStatuses(rows) > 1;
+  const floor = leastAdvancedPersistedStatus(rows);
+  if (mixedDb && floor) {
+    const floorRank = SHIPMENT_STATUS_RANK[floor];
+    const derivedRank = SHIPMENT_STATUS_RANK[String(derived).trim().toUpperCase()];
+    if (
+      floorRank !== undefined &&
+      derivedRank !== undefined &&
+      floorRank >= 0 &&
+      floorRank < derivedRank
+    ) {
+      merged.status = floor;
+      return merged;
+    }
+  }
+  merged.status = derived;
+  return merged;
+}
+
+/** Align status with Shipments page (ATA ladder + GR Close). Preserves CANCELLED. */
+export function deriveShippingPerfRowStatus(row: Record<string, unknown>): string {
+  if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
+    return 'CANCELLED';
+  }
+  return deriveShipmentStatus({
+    eta_arrival_at_loading_port: row.loading_eta_arrival,
+    eta_berthed_at_loading_port: row.loading_eta_berthed,
+    eta_start_loading: row.loading_eta_start,
+    eta_completed_loading: row.loading_eta_completed,
+    eta_sailed_from_loading_port: row.loading_eta_sailed,
+    eta_arrive_at_discharge_port: row.discharge_eta_arrival,
+    eta_berthed_at_discharge_port: row.discharge_eta_berthed,
+    eta_start_discharging: row.discharge_eta_start,
+    eta_complete_discharge: row.discharge_eta_completed,
+    ata_arrival_at_loading_port: row.loading_ata_arrival,
+    ata_berthed_at_loading_port: row.loading_ata_berthed,
+    ata_start_loading: row.loading_ata_start,
+    ata_completed_loading: row.loading_ata_completed,
+    ata_sailed_from_loading_port: row.loading_ata_sailed,
+    ata_arrive_at_discharge_port: row.discharge_ata_arrival,
+    ata_berthed_at_discharge_port: row.discharge_ata_berthed,
+    ata_start_discharging: row.discharge_ata_start,
+    ata_complete_discharge: row.discharge_ata_completed,
+    contract_import_status: row.import_status,
+    quantity_delivered: row.delivered_qty,
+    quantity_delivered_klip: row.quantity_delivered_klip,
+    quantity_delivered_sap: row.delivered_qty,
+  });
+}
+
+export function applyShippingPerfDerivedStatuses(
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  for (const row of rows) {
+    row.status = deriveShippingPerfRowStatus(row);
+  }
+  return rows;
 }
 
 /** Collapse raw shipment rows to one row per STO with STO-level contract / outstanding qty. */
 export function aggregateShippingPerformanceRowsBySto(
   rows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
+  // Keep persisted DB status until merge (Shipments floors on mixed DB status, then derives
+  // from MAX-merged milestones). Do not derive before grouping.
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const row of rows) {
     const key = shippingPerfStoGroupKey(row);
@@ -299,10 +428,14 @@ const SHIPPING_PERFORMANCE_SQL = `
           vlp.shipment_id,
           vlp.eta_vessel_arrival::date AS load_eta_arrival,
           vlp.eta_vessel_berthed_at_loading_port::date AS load_eta_berthed,
+          vlp.eta_loading_start::date AS load_eta_start,
           vlp.eta_loading_completed::date AS load_eta_completed,
+          vlp.eta_vessel_sailed::date AS load_eta_sailed,
           vlp.ata_vessel_arrival::date AS load_ata_arrival,
           vlp.ata_vessel_berthed::date AS load_ata_berthed,
-          vlp.ata_loading_completed::date AS load_ata_completed
+          vlp.ata_loading_start::date AS load_ata_start,
+          vlp.ata_loading_completed::date AS load_ata_completed,
+          vlp.ata_vessel_sailed::date AS load_ata_sailed
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = false
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
@@ -312,9 +445,11 @@ const SHIPPING_PERFORMANCE_SQL = `
           vlp.shipment_id,
           vlp.eta_vessel_arrive_at_discharge_port::date AS discharge_eta_arrival,
           vlp.eta_vessel_berthed_at_discharge_port::date AS discharge_eta_berthed,
+          vlp.eta_vessel_start_discharging::date AS discharge_eta_start,
           vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed,
           vlp.ata_vessel_arrival::date AS discharge_ata_arrival,
           vlp.ata_vessel_berthed::date AS discharge_ata_berthed,
+          vlp.ata_loading_start::date AS discharge_ata_start,
           vlp.ata_loading_completed::date AS discharge_ata_completed
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = true
@@ -373,16 +508,22 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.cargo_readiness_date::date AS cargo_readiness_date,
         COALESCE(lp.load_eta_arrival, s.eta_arrival::date) AS loading_eta_arrival,
         COALESCE(lp.load_eta_berthed, s.eta_berthed::date) AS loading_eta_berthed,
+        COALESCE(lp.load_eta_start, s.eta_loading_start::date) AS loading_eta_start,
         COALESCE(lp.load_eta_completed, s.eta_loading_complete::date) AS loading_eta_completed,
+        COALESCE(lp.load_eta_sailed, s.eta_sailed::date) AS loading_eta_sailed,
         COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) AS discharge_eta_arrival,
         COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) AS discharge_eta_berthed,
+        COALESCE(dp.discharge_eta_start, s.eta_discharge_start::date) AS discharge_eta_start,
         COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date) AS discharge_eta_completed,
-        COALESCE(lp.load_ata_arrival, s.ata_arrival::date) AS loading_ata_arrival,
-        COALESCE(lp.load_ata_berthed, s.ata_berthed::date) AS loading_ata_berthed,
-        COALESCE(lp.load_ata_completed, s.ata_loading_complete::date) AS loading_ata_completed,
-        COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) AS discharge_ata_arrival,
-        COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) AS discharge_ata_berthed,
-        COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date) AS discharge_ata_completed,
+        COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) AS loading_ata_arrival,
+        COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) AS loading_ata_berthed,
+        COALESCE(sao.ata_loading_start, s.ata_loading_start::date, lp.load_ata_start) AS loading_ata_start,
+        COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed) AS loading_ata_completed,
+        COALESCE(sao.ata_sailed, s.ata_sailed::date, lp.load_ata_sailed) AS loading_ata_sailed,
+        COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) AS discharge_ata_arrival,
+        COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) AS discharge_ata_berthed,
+        COALESCE(sao.ata_discharge_start, s.ata_discharge_start::date, dp.discharge_ata_start) AS discharge_ata_start,
+        COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed) AS discharge_ata_completed,
         (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date)::int AS loading_delta_eta_etr_days,
         (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date))::int AS loading_delta_eta_etb_days,
         (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))::int AS loading_delta_etb_etc_days,
@@ -403,24 +544,24 @@ const SHIPPING_PERFORMANCE_SQL = `
             COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
           )::int
         END AS total_delta_days,
-        (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
-        (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date))::int AS ata_loading_delta_eta_etb_days,
-        (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date))::int AS ata_loading_delta_etb_etc_days,
-        (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date))::int AS ata_discharge_delta_eta_etb_days,
-        (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date))::int AS ata_discharge_delta_etb_etc_days,
+        (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
+        (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed))::int AS ata_loading_delta_eta_etb_days,
+        (COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed))::int AS ata_loading_delta_etb_etc_days,
+        (COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed))::int AS ata_discharge_delta_eta_etb_days,
+        (COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed))::int AS ata_discharge_delta_etb_etc_days,
         CASE
-          WHEN (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date) IS NULL
-            AND (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)) IS NULL
-            AND (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)) IS NULL
-            AND (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)) IS NULL
-            AND (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)) IS NULL
+          WHEN (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date) IS NULL
+            AND (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed)) IS NULL
+            AND (COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed)) IS NULL
+            AND (COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed)) IS NULL
+            AND (COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed)) IS NULL
           THEN NULL
           ELSE (
-            COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date), 0) +
-            COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)), 0) +
-            COALESCE((COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)), 0) +
-            COALESCE((COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)), 0) +
-            COALESCE((COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)), 0)
+            COALESCE((COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date), 0) +
+            COALESCE((COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed)), 0) +
+            COALESCE((COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed)), 0) +
+            COALESCE((COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed)), 0) +
+            COALESCE((COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed)), 0)
           )::int
         END AS ata_total_delta_days,
         sa.remark,
@@ -446,6 +587,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty
       FROM shipments s
       INNER JOIN contracts c ON s.contract_id = c.id
+      ${SHIPMENT_ATA_OVERRIDES_JOIN}
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id

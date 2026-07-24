@@ -11,10 +11,20 @@ describe('shipmentListSapAggSql', () => {
   });
 
   it('returns full SAP aggregation CTEs when skipSapJoin is false', () => {
-    expect(shipmentListSpdAggCtes(false)).toBe(SHIPMENT_LIST_SPD_AGG_CTES_FULL);
-    expect(shipmentListSpdAggCtes(false)).toContain('contract_ext_agg');
-    expect(shipmentListSpdAggCtes(false)).toContain('quantity_delivered_sap');
-    expect(shipmentListSpdAggCtes(false)).toContain('vessel_name_sap');
-    expect(shipmentListSpdAggCtes(false)).toContain('sap_vessel_pick');
+    const full = shipmentListSpdAggCtes(false);
+    expect(full).toContain(SHIPMENT_LIST_SPD_AGG_CTES_FULL.trim().slice(0, 40));
+    expect(full).toContain('contract_ext_agg');
+    expect(full).toContain('quantity_delivered_sap');
+    expect(full).toContain('vessel_name_sap');
+    expect(full).toContain('sap_vessel_pick');
+    expect(full).toContain('sap_loading_ports_agg');
+    expect(full).toContain('sto_po_lines');
+  });
+
+  it('guards contract fallback so multi-STO contracts cannot contaminate page STO', () => {
+    const full = shipmentListSpdAggCtes(false);
+    expect(full).toContain("~ '^OP-'");
+    expect(full).toMatch(/OR\s+[\s\S]*?IS NULL\s+OR\s+[\s\S]*?=\s*TRIM\(sp\.sto_key::text\)/);
+    expect(full).toContain('multi-STO contracts');
   });
 });

@@ -10,6 +10,22 @@ import {
   SHIPMENT_LIST_SAP_PORTS_AGG_CTES,
   SHIPMENT_LIST_SAP_PORTS_AGG_STUB,
 } from './shipmentListPortsSql';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+
+export const SHIPMENT_LIST_STO_METRICS_STUB = `
+      sto_metrics AS (
+        SELECT NULL::text AS sto_key,
+          NULL::numeric AS contract_qty,
+          NULL::numeric AS sto_qty,
+          NULL::numeric AS received_qty,
+          NULL::numeric AS delivered_qty,
+          NULL::numeric AS planning_qty,
+          NULL::numeric AS outstanding_qty_actual,
+          NULL::numeric AS outstanding_qty_planning,
+          NULL::text AS po_numbers,
+          NULL::text AS contract_numbers
+        WHERE false
+      )`;
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       spd_keyed AS (
@@ -39,19 +55,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
           NULL::text AS vessel_owner_sap
         WHERE false
       ),
-      sto_metrics AS (
-        SELECT NULL::text AS sto_key,
-          NULL::numeric AS contract_qty,
-          NULL::numeric AS sto_qty,
-          NULL::numeric AS received_qty,
-          NULL::numeric AS delivered_qty,
-          NULL::numeric AS planning_qty,
-          NULL::numeric AS outstanding_qty_actual,
-          NULL::numeric AS outstanding_qty_planning,
-          NULL::text AS po_numbers,
-          NULL::text AS contract_numbers
-        WHERE false
-      ),
+      ${SHIPMENT_LIST_STO_METRICS_STUB.trim()},
       ${SHIPMENT_LIST_SAP_PORTS_AGG_STUB}`;
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
@@ -59,7 +63,10 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
         /*
          * Key SAP rows to the *page* sto_key.
          * Primary join: STO-based match (fast when STO exists).
-         * Fallback join: contract_number is one of the shipment_page.contract_numbers (needed for synthetic OP-SEA-* rows).
+         * Fallback join: contract_number ∈ shipment_page.contract_numbers (needed for
+         * synthetic OP-SEA-* rows / SPD without STO). Must NOT pull SPD rows whose STO
+         * differs from the page key — multi-STO contracts (contract_stos) otherwise
+         * contaminate ports/qty (e.g. STO A showing loading port from STO B).
          */
         SELECT
           sp.sto_key,
@@ -68,13 +75,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
         FROM shipment_page sp
         INNER JOIN sap_processed_data spd
           ON (
-            NULLIF(TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no',
-              spd.data->'contract'->>'sto_no'
-            )), '') = TRIM(sp.sto_key::text)
+            ${sapStoNumberKeyExpr('spd')} = TRIM(sp.sto_key::text)
             OR (
               spd.contract_number IS NOT NULL
               AND sp.contract_numbers IS NOT NULL
@@ -82,6 +83,11 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
                 SELECT 1
                 FROM unnest(regexp_split_to_array(sp.contract_numbers, ',')) AS cn
                 WHERE TRIM(cn) = TRIM(spd.contract_number::text)
+              )
+              AND (
+                TRIM(sp.sto_key::text) ~ '^OP-'
+                OR ${sapStoNumberKeyExpr('spd')} IS NULL
+                OR ${sapStoNumberKeyExpr('spd')} = TRIM(sp.sto_key::text)
               )
             )
           )

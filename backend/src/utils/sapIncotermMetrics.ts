@@ -5,7 +5,7 @@
  * - Outstanding quantity (contract qty − incoterm delivery)
  */
 
-export const INCOTERM_GR_PO_STATUS = ['FRC', 'CIF'] as const;
+export const INCOTERM_GR_PO_STATUS = ['FRC', 'CIF', 'CFR'] as const;
 export const INCOTERM_GR_STO_STATUS = ['LCO', 'FOB'] as const;
 export const INCOTERM_QTY_TRUCKING = ['FRC', 'LCO'] as const;
 export const INCOTERM_QTY_VESSEL = ['FOB', 'CIF'] as const;
@@ -63,19 +63,23 @@ export function sqlSapQtyVesselFromSpd(spdAlias = 'spd'): string {
 }
 
 /**
- * GR PO / GR STO status fields from SAP JSON.
- * Prefer raw Excel columns over normalized `contract.*` — stale Close in contract JSON
- * used to win over Open in raw and force Trucking list onto Σ SAP instead of WB.
+ * GR PO status fields from SAP JSON — GR PO only (not commercial Status).
+ * Generic Status Open on blank-GR rows used to keep import status Open forever
+ * and block Shipment Completed when GR PO was already Close.
  */
 export function sqlSapGrPoStatusFromJson(spdDataExpr: string): string {
   return `NULLIF(TRIM(COALESCE(
     ${spdDataExpr}->'raw'->>'GR PO Status',
-    ${spdDataExpr}->'raw'->>'Status',
-    ${spdDataExpr}->'contract'->>'status',
-    ${spdDataExpr}->>'status'
+    ${spdDataExpr}->'contract'->>'gr_po_status',
+    ${spdDataExpr}->>'gr_po_status'
   )), '')`;
 }
 
+/**
+ * GR STO status fields from SAP JSON.
+ * Prefer raw Excel columns over normalized `contract.*` — stale Close in contract JSON
+ * used to win over Open in raw and force Trucking list onto Σ SAP instead of WB.
+ */
 export function sqlSapGrStoStatusFromJson(spdDataExpr: string): string {
   return `NULLIF(TRIM(COALESCE(
     ${spdDataExpr}->'raw'->>'GR STO Status',

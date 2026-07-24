@@ -80,6 +80,7 @@ import {
   saveShipmentEditRemark,
   type DischargeEtaFields,
   type EditEtaFields,
+  type LoadingAtaFields,
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
 import {
@@ -145,13 +146,14 @@ const ATA_FIELD_ROWS: { key: ShipmentAtaApiField; label: string }[] = [
   { key: 'ata_vessel_sailed_from_loading_port', label: 'AT Sailed to Discharge Port' },
   { key: 'ata_vessel_arrive_at_discharge_port', label: 'ATA at Discharge Port' },
   { key: 'ata_vessel_berthed_at_discharge_port', label: 'ATB at Discharge Port' },
-  { key: 'ata_vessel_start_discharging', label: 'ATS Discharging' },
+  { key: 'ata_vessel_start_discharging', label: 'ATS Discharge' },
   { key: 'ata_vessel_complete_discharge', label: 'ATC Discharge' },
 ]
 
-const LOADING_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => !row.key.includes('discharge'))
+// Use "discharg" so both "...discharge..." and "...discharging..." count as discharge ATA.
+const LOADING_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => !row.key.includes('discharg'))
 
-const DISCHARGE_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => row.key.includes('discharge'))
+const DISCHARGE_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => row.key.includes('discharg'))
 
 const QUALITY_METRICS: { portKey: string; label: string }[] = [
   { portKey: 'quality_ffa', label: 'FFA' },
@@ -205,14 +207,7 @@ function dischargeEtaFromInfo(
 function loadingAtaFromPortRow(
   portRow: LoadingPortRef | undefined,
   info: Record<string, unknown>,
-): Pick<
-  ShipmentAtaFields,
-  | 'ata_vessel_arrival_at_loading_port'
-  | 'ata_vessel_berthed_at_loading_port'
-  | 'ata_vessel_start_loading'
-  | 'ata_vessel_completed_loading'
-  | 'ata_vessel_sailed_from_loading_port'
-> {
+): LoadingAtaFields {
   return {
     ata_vessel_arrival_at_loading_port:
       sliceIsoDate(portRow?.ata_vessel_arrival as string) ||
@@ -230,6 +225,11 @@ function loadingAtaFromPortRow(
       sliceIsoDate(portRow?.ata_vessel_sailed as string) ||
       sliceIsoDate(info.ata_vessel_sailed_from_loading_port as string),
   }
+}
+
+function loadingPortAtaStateKey(portRow: Pick<LoadingPortRef, 'id' | 'port_sequence'>): string {
+  if (portRow.id && String(portRow.id).trim()) return String(portRow.id).trim()
+  return `seq-${portRow.port_sequence ?? 1}`
 }
 
 function loadingEtaFromPortRow(
@@ -501,8 +501,8 @@ function contractDetailRowFromApi(
     outstanding_qty: osActual,
     quantity_delivered_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
     quantity_receive_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
-    quantity_delivered_klip: null,
-    quantity_receive_klip: null,
+    quantity_delivered_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_delivered_klip)),
+    quantity_receive_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_receive_klip)),
   }
 }
 
@@ -699,6 +699,7 @@ export function EditShipmentModal({
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataIsEditing, setAtaIsEditing] = useState(false)
+  const [loadingPortAtaByKey, setLoadingPortAtaByKey] = useState<Record<string, LoadingAtaFields>>({})
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
   const [shipmentRemarks, setShipmentRemarks] = useState<ShipmentRemarkRow[]>([])
@@ -991,25 +992,31 @@ export function EditShipmentModal({
           contractNumbers,
         )
 
+        const hasPerPoKlip = contractDetails.some(
+          (r) => r.quantity_delivered_klip != null || r.quantity_receive_klip != null,
+        )
         const shipmentDeliveredKlipKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered_klip))
         const shipmentDeliveredKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered))
         const shipmentReceiveKg = shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive))
-        const klipSeeded = seedKlipQtyFromShipmentHeader(
-          contractDetails.map((r) => ({
-            quantity_delivered: r.quantity_delivered_sap,
-            quantity_receive: r.quantity_receive_sap,
-          })),
-          {
-            shipmentDeliveredKlipKg,
-            shipmentDeliveredKg,
-            shipmentReceiveKg,
-          },
-        )
-        contractDetails = contractDetails.map((row, i) => ({
-          ...row,
-          quantity_delivered_klip: klipSeeded[i]?.quantity_delivered ?? null,
-          quantity_receive_klip: klipSeeded[i]?.quantity_receive ?? null,
-        }))
+        if (!hasPerPoKlip) {
+          // Legacy: header-only KLIP sum (pre per-PO persist) — redistribute for display.
+          const klipSeeded = seedKlipQtyFromShipmentHeader(
+            contractDetails.map((r) => ({
+              quantity_delivered: r.quantity_delivered_sap,
+              quantity_receive: r.quantity_receive_sap,
+            })),
+            {
+              shipmentDeliveredKlipKg,
+              shipmentDeliveredKg,
+              shipmentReceiveKg,
+            },
+          )
+          contractDetails = contractDetails.map((row, i) => ({
+            ...row,
+            quantity_delivered_klip: klipSeeded[i]?.quantity_delivered ?? null,
+            quantity_receive_klip: klipSeeded[i]?.quantity_receive ?? null,
+          }))
+        }
 
         setDetailRows(contractDetails)
         setPlanQtyEdits(
@@ -1086,6 +1093,11 @@ export function EditShipmentModal({
             isEditing: false,
           }))
           setEtaBlocks(blocks)
+          const ataByKey: Record<string, LoadingAtaFields> = {}
+          for (const portRow of loadingPortRows) {
+            ataByKey[loadingPortAtaStateKey(portRow)] = loadingAtaFromPortRow(portRow, info)
+          }
+          setLoadingPortAtaByKey(ataByKey)
           setEtaBaseline(
             buildShipmentEtaBaseline({
               isMultiPortLoading: true,
@@ -1094,6 +1106,7 @@ export function EditShipmentModal({
             }),
           )
         } else {
+          setLoadingPortAtaByKey({})
           const loadingPortRow = loadingPortRows[0]
 
           const etaFields: EditEtaFields = {
@@ -1356,6 +1369,17 @@ export function EditShipmentModal({
         loadingPorts,
         ataFields,
         originalAtaFields,
+        loadingPortAtas: isMultiPortLoading
+          ? loadingPortRows.map((portRow) => {
+              const ataKey = loadingPortAtaStateKey(portRow)
+              return {
+                portId: portRow.id,
+                portSequence: portRow.port_sequence ?? 1,
+                fields:
+                  loadingPortAtaByKey[ataKey] ?? loadingAtaFromPortRow(portRow, shipmentInfo),
+              }
+            })
+          : undefined,
       })
 
       if (requiresEditRemark) {
@@ -2275,7 +2299,9 @@ export function EditShipmentModal({
                 {isMultiPortLoading ? (
                   <>
                     {loadingPortRows.map((portRow) => {
-                      const portAta = loadingAtaFromPortRow(portRow, shipmentInfo)
+                      const ataKey = loadingPortAtaStateKey(portRow)
+                      const portAta =
+                        loadingPortAtaByKey[ataKey] ?? loadingAtaFromPortRow(portRow, shipmentInfo)
                       return (
                         <div
                           key={portRow.id || `ata-port-${portRow.port_sequence ?? 1}`}
@@ -2295,14 +2321,34 @@ export function EditShipmentModal({
                           </div>
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                             {LOADING_ATA_FIELD_ROWS.map(({ key, label }) => (
-                              <ReadOnlyInfoField
-                                key={`${portRow.id ?? portRow.port_sequence}-${key}`}
-                                compact
-                                label={label}
-                                value={formatDateDMY(
-                                  portAta[key as keyof ReturnType<typeof loadingAtaFromPortRow>],
+                              <div key={`${portRow.id ?? portRow.port_sequence}-${key}`}>
+                                {ataIsEditing && canModifyShipment ? (
+                                  <>
+                                    <label className="mb-1 block text-[10px] font-medium text-gray-600">
+                                      {label}
+                                    </label>
+                                    <DateInputDdMmYyyy
+                                      valueIso={portAta[key as keyof LoadingAtaFields]}
+                                      onChangeIso={(iso) =>
+                                        setLoadingPortAtaByKey((prev) => ({
+                                          ...prev,
+                                          [ataKey]: {
+                                            ...portAta,
+                                            [key]: iso,
+                                          },
+                                        }))
+                                      }
+                                      className="h-8 text-xs"
+                                    />
+                                  </>
+                                ) : (
+                                  <ReadOnlyInfoField
+                                    compact
+                                    label={label}
+                                    value={formatDateDMY(portAta[key as keyof LoadingAtaFields])}
+                                  />
                                 )}
-                              />
+                              </div>
                             ))}
                           </div>
                         </div>

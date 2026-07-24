@@ -6,6 +6,7 @@ import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/ves
 import {
   hasVesselPortsQuantityUserEdits,
   quantityKgValuesEqual,
+  buildPoKlipQtySaveRows,
 } from '@/lib/vesselPortsQuantityEdits'
 import { sumVesselPortsQuantityEdits } from '@/components/shipments/VesselPortsQuantitiesTable'
 
@@ -80,6 +81,21 @@ export type LoadingPortEtaSave = {
   fields: LoadingEtaFields
 }
 
+/** Per-loading-port ATA dates (multi-port Edit ATA). */
+export type LoadingAtaFields = {
+  ata_vessel_arrival_at_loading_port: string
+  ata_vessel_berthed_at_loading_port: string
+  ata_vessel_start_loading: string
+  ata_vessel_completed_loading: string
+  ata_vessel_sailed_from_loading_port: string
+}
+
+export type LoadingPortAtaSave = {
+  portId?: string
+  portSequence: number
+  fields: LoadingAtaFields
+}
+
 export type LoadingPortRef = {
   id?: string
   sap_port_name?: string | null
@@ -129,6 +145,8 @@ export type SaveEditShipmentInput = {
   loadingPorts: LoadingPortRef[]
   ataFields?: ShipmentAtaFields
   originalAtaFields?: ShipmentAtaFields
+  /** Multi-port: per-loading-port ATA (persisted on vessel_loading_ports). */
+  loadingPortAtas?: LoadingPortAtaSave[]
 }
 
 function quantityValuesEqual(a: unknown, b: unknown): boolean {
@@ -199,10 +217,7 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   if (input.vesselName.trim() && input.vesselName.trim() !== input.originalVesselName.trim()) {
     updateBody.vessel_name = input.vesselName.trim()
   }
-  if (qtyUserEdited) {
-    if (sums.quantity_delivered !== null) updateBody.quantity_delivered = sums.quantity_delivered
-    if (sums.quantity_receive !== null) updateBody.actual_vessel_qty_receive = sums.quantity_receive
-  }
+  // KLIP Delivered/Receive are persisted per PO via /po-klip-qty (not summed onto this row).
   if (!quantityValuesEqual(input.sfalQty, input.originalSfalQty)) updateBody.sfal_qty = input.sfalQty
   if (!quantityValuesEqual(input.sfbdQty, input.originalSfbdQty)) updateBody.sfbd_qty = input.sfbdQty
 
@@ -215,6 +230,14 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
     const res = await api.put(`/shipments/${input.shipmentId}`, updateBody)
     if (!res.data?.success) {
       throw new Error(res.data?.error?.message || 'Failed to update shipment')
+    }
+  }
+
+  if (qtyUserEdited) {
+    const klipRows = buildPoKlipQtySaveRows(input.qtyRows, input.qtyEdits)
+    const klipRes = await api.put(`/shipments/${input.shipmentId}/po-klip-qty`, { rows: klipRows })
+    if (!klipRes.data?.success) {
+      throw new Error(klipRes.data?.error?.message || 'Failed to save Delivered / Received Qty (KLIP)')
     }
   }
 
@@ -259,6 +282,13 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
         ? receiveQty ?? existing?.quantity_at_loading_port ?? 0
         : existing?.quantity_at_loading_port ?? 0
 
+    const ataSave =
+      input.loadingPortAtas?.find(
+        (a) =>
+          (portSave.portId && a.portId && a.portId === portSave.portId) ||
+          a.portSequence === portSave.portSequence,
+      ) ?? null
+
     const portSource = {
       ...(existing as Record<string, unknown> | undefined),
       port_name: portName,
@@ -271,6 +301,15 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
       eta_loading_start: portSave.fields.etaVesselStartLoading,
       eta_loading_completed: portSave.fields.etaVesselCompletedLoading,
       eta_vessel_sailed: portSave.fields.etaVesselSailedFromLoadingPort,
+      ...(ataSave
+        ? {
+            ata_vessel_arrival: ataSave.fields.ata_vessel_arrival_at_loading_port,
+            ata_vessel_berthed: ataSave.fields.ata_vessel_berthed_at_loading_port,
+            ata_loading_start: ataSave.fields.ata_vessel_start_loading,
+            ata_loading_completed: ataSave.fields.ata_vessel_completed_loading,
+            ata_vessel_sailed: ataSave.fields.ata_vessel_sailed_from_loading_port,
+          }
+        : {}),
     }
 
     if (existing?.id) {
@@ -315,12 +354,33 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   }
 
   if (input.ataFields && input.originalAtaFields) {
-    const ataPayload = buildAtaOverridePayload(input.ataFields, input.originalAtaFields)
+    // Multi-port: loading ATA is on vessel_loading_ports; overrides only for discharge.
+    const currentAta = input.isMultiPortLoading
+      ? emptyDischargeOnlyAta(input.ataFields)
+      : input.ataFields
+    const baselineAta = input.isMultiPortLoading
+      ? emptyDischargeOnlyAta(input.originalAtaFields)
+      : input.originalAtaFields
+    const ataPayload = buildAtaOverridePayload(currentAta, baselineAta)
     if (ataPayload) {
       const ataRes = await api.put(`/shipments/${input.shipmentId}/ata-override`, ataPayload)
       if (!ataRes.data?.success) {
         throw new Error(ataRes.data?.error?.message || 'Failed to save ATA override')
       }
     }
+  }
+}
+
+function emptyDischargeOnlyAta(partial: Partial<ShipmentAtaFields>): ShipmentAtaFields {
+  return {
+    ata_vessel_arrival_at_loading_port: '',
+    ata_vessel_berthed_at_loading_port: '',
+    ata_vessel_start_loading: '',
+    ata_vessel_completed_loading: '',
+    ata_vessel_sailed_from_loading_port: '',
+    ata_vessel_arrive_at_discharge_port: partial.ata_vessel_arrive_at_discharge_port ?? '',
+    ata_vessel_berthed_at_discharge_port: partial.ata_vessel_berthed_at_discharge_port ?? '',
+    ata_vessel_start_discharging: partial.ata_vessel_start_discharging ?? '',
+    ata_vessel_complete_discharge: partial.ata_vessel_complete_discharge ?? '',
   }
 }

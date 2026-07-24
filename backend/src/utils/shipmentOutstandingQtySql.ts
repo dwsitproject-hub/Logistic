@@ -8,11 +8,13 @@ import {
 } from './contractGlobalOutstandingSql';
 
 /**
- * STO-level outstanding quantity (kg) using the same incoterm rules as the Contracts list:
+ * Outstanding quantity (kg) using the same incoterm rules as the Contracts list:
  * CIF/CFR/FRC → Quantity Receive; FOB/LCO → Quantity Delivery; others → receive or delivery.
+ * `baseQtyExpr` is typically Contract Qty (not STO Qty).
  */
 
 export function shipmentOutstandingQtyExpr(opts: {
+  /** @deprecated name kept for callers — pass Contract Qty (or other base), not STO Qty */
   stoQtyExpr: string;
   receiveExpr: string;
   deliveryExpr: string;
@@ -42,7 +44,8 @@ export function shipmentListOutstandingQtySql(
 ): string {
   const closed = `COALESCE(${spAlias}.is_contract_sap_closed, FALSE)`;
   return shipmentOutstandingQtyExpr({
-    stoQtyExpr: `NULLIF(${saAlias}.sto_quantity, 0)`,
+    // Contract Qty base (aligned with View Table / Shipping Perf OS Actual)
+    stoQtyExpr: `NULLIF(COALESCE(${saAlias}.contract_qty, ${spAlias}.contract_qty), 0)`,
     receiveExpr: sqlShipmentResolvedReceiveKg(
       closed,
       `${spAlias}.actual_vessel_qty_receive`,

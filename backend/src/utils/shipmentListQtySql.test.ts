@@ -29,10 +29,14 @@ describe('sqlShipmentListOutstandingKgExpr', () => {
 });
 
 describe('shipmentListPageQtySelectSql', () => {
-  it('does not coerce missing SAP qty to zero', () => {
+  it('prefers STO-level OS from sto_metrics (Contract Qty − Open/Close fulfilled)', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).not.toContain('COALESCE(sm.contract_qty, 0)');
     expect(sql).toContain('COALESCE(sm.sto_qty, sa.sto_quantity) AS sto_quantity');
-    expect(sql).toContain('quantity_ordered');
+    expect(sql).toContain('COALESCE(sm.outstanding_qty_actual');
+    expect(sql).toContain('COALESCE(sm.contract_qty');
+    expect(sql).toContain('quantity_delivered_klip');
+    expect(sql).toContain('is_contract_sap_closed');
+    expect(sql).toContain('AS outstanding_quantity');
   });
 });

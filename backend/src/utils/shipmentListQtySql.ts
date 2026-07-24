@@ -3,6 +3,11 @@
  * Missing SAP / contract qty stays NULL (UI shows "-"), not coerced to 0.
  */
 
+import {
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from './shipmentManualQtyResolveSql';
+
 /** Sum contract qty (kg) for contracts linked on a grouped shipment row. */
 export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
   const groupedSto = `NULLIF(TRIM(${spAlias}.sto_key::text), '')`;
@@ -59,7 +64,11 @@ export function sqlShipmentListFulfilledKgCase(
   END`;
 }
 
-/** Outstanding (kg) = contract qty − fulfilled; NULL when either side is unknown. */
+/**
+ * Outstanding (kg) = base qty − fulfilled.
+ * Shipments / Shipping Perf OS uses Contract Qty as base (not STO Qty).
+ * Fulfilled follows Open→KLIP / Close→SAP (same as Delivery/Receive columns).
+ */
 export function sqlShipmentListOutstandingKgExpr(opts: {
   contractQtyExpr: string;
   incotermExpr: string;
@@ -84,6 +93,28 @@ export function sqlShipmentListOutstandingKgExpr(opts: {
 /** SELECT list fragment for shipments page qty columns (null-safe). */
 export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
   const contractQtyFallback = shipmentListRowContractQtySql(spAlias);
+  const contractQtyExpr = `COALESCE(sm.contract_qty, ${contractQtyFallback})`;
+  const closedExpr = `COALESCE(${spAlias}.is_contract_sap_closed, FALSE)`;
+  const incotermExpr = `COALESCE(NULLIF(TRIM(${spAlias}.incoterm::text), ''), NULLIF(TRIM(sl.incoterm::text), ''), '')`;
+  const receiveResolved = sqlShipmentResolvedReceiveKg(
+    closedExpr,
+    `${spAlias}.actual_vessel_qty_receive`,
+    `COALESCE(sm.received_qty, sa.quantity_receive, 0)`,
+  );
+  const deliveryResolved = sqlShipmentResolvedDeliveryKg(
+    closedExpr,
+    `${spAlias}.quantity_delivered_klip`,
+    `COALESCE(sm.delivered_qty, sa.quantity_delivered_sap, 0)`,
+    `${spAlias}.quantity_delivered`,
+  );
+  // Fallback when sto_metrics missing: Contract Qty − Open/Close fulfilled.
+  const listOutstandingFallback = sqlShipmentListOutstandingKgExpr({
+    contractQtyExpr,
+    incotermExpr,
+    receiveExpr: `COALESCE((${receiveResolved}), 0)`,
+    deliveryExpr: `COALESCE((${deliveryResolved}), 0)`,
+    clampAtZero: false,
+  });
   const globalOutstanding = `(SELECT SUM(
     CASE
       WHEN c.quantity_ordered IS NULL THEN NULL
@@ -113,5 +144,5 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
         COALESCE(sm.delivered_qty, sa.quantity_delivered_sap) AS quantity_delivered_sap,
         sm.planning_qty AS planning_qty,
         sm.outstanding_qty_planning AS outstanding_qty_planning,
-        COALESCE(sm.outstanding_qty_actual, ${globalOutstanding}) AS outstanding_quantity`.trim();
+        COALESCE(sm.outstanding_qty_actual, (${listOutstandingFallback}), ${globalOutstanding}) AS outstanding_quantity`.trim();
 }

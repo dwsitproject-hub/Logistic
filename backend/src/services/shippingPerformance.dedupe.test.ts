@@ -1,8 +1,61 @@
 import { describe, expect, it } from 'vitest';
 import {
   aggregateShippingPerformanceRowsBySto,
+  deriveShippingPerfRowStatus,
   shippingPerfStoGroupKey,
 } from '../services/shippingPerformance.service';
+
+describe('deriveShippingPerfRowStatus', () => {
+  it('matches Shipments: GR Close → COMPLETED even when DB status is PLANNED', () => {
+    expect(
+      deriveShippingPerfRowStatus({
+        status: 'PLANNED',
+        import_status: 'Close',
+        loading_eta_arrival: '2026-07-14',
+      }),
+    ).toBe('COMPLETED');
+  });
+
+  it('matches Shipments: ATA discharge complete → COMPLETED', () => {
+    expect(
+      deriveShippingPerfRowStatus({
+        status: 'PLANNED',
+        import_status: 'Open',
+        discharge_ata_completed: '2026-07-20',
+      }),
+    ).toBe('COMPLETED');
+  });
+
+  it('matches Shipments: ATA sailed → SAILED', () => {
+    expect(
+      deriveShippingPerfRowStatus({
+        status: 'PLANNED',
+        import_status: 'Open',
+        loading_ata_sailed: '2026-07-18',
+      }),
+    ).toBe('SAILED');
+  });
+
+  it('preserves CANCELLED', () => {
+    expect(
+      deriveShippingPerfRowStatus({
+        status: 'CANCELLED',
+        import_status: 'Close',
+        discharge_ata_completed: '2026-07-20',
+      }),
+    ).toBe('CANCELLED');
+  });
+
+  it('ETA without ATA → PLANNED', () => {
+    expect(
+      deriveShippingPerfRowStatus({
+        status: 'UNPLANNED',
+        import_status: 'Open',
+        loading_eta_arrival: '2026-07-14',
+      }),
+    ).toBe('PLANNED');
+  });
+});
 
 describe('aggregateShippingPerformanceRowsBySto', () => {
   it('collapses multiple PO rows on the same STO with per-PO outstanding sums', () => {
@@ -137,5 +190,73 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.supplier).toBe('SUPPLIER ALPHA, SUPPLIER BETA');
+  });
+
+  it('MAX-merges ATA sailed across STO members → SAILED (not least-derived PLANNED)', () => {
+    const rows = aggregateShippingPerformanceRowsBySto([
+      {
+        id: 'a',
+        shipment_id: '1011003137',
+        sto_number: '1011003137',
+        status: 'PLANNED',
+        import_status: 'Open',
+        loading_ata_sailed: '2026-07-18',
+        contract_qty: 100,
+      },
+      {
+        id: 'b',
+        shipment_id: '1011003137',
+        sto_number: '1011003137',
+        status: 'PLANNED',
+        import_status: 'Open',
+        loading_eta_arrival: '2026-07-14',
+        contract_qty: 50,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('SAILED');
+    expect(rows[0]?.loading_ata_sailed).toBe('2026-07-18');
+  });
+
+  it('floors to least-advanced persisted DB status when members disagree', () => {
+    const rows = aggregateShippingPerformanceRowsBySto([
+      {
+        id: 'a',
+        shipment_id: 'STO-MIX-1',
+        sto_number: 'STO-MIX-1',
+        status: 'PLANNED',
+        import_status: 'Open',
+        loading_ata_sailed: '2026-07-18',
+        contract_qty: 100,
+      },
+      {
+        id: 'b',
+        shipment_id: 'STO-MIX-1',
+        sto_number: 'STO-MIX-1',
+        status: 'UNPLANNED',
+        import_status: 'Open',
+        loading_ata_sailed: '2026-07-19',
+        contract_qty: 50,
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    // Derived would be SAILED; mixed PLANNED+UNPLANNED floors to UNPLANNED.
+    expect(rows[0]?.status).toBe('UNPLANNED');
+  });
+
+  it('override-only loading_ata_sailed on a single row → SAILED', () => {
+    const rows = aggregateShippingPerformanceRowsBySto([
+      {
+        id: 'a',
+        shipment_id: '1011003137',
+        sto_number: '1011003137',
+        status: 'PLANNED',
+        import_status: 'Open',
+        loading_ata_sailed: '2026-07-18',
+        loading_eta_arrival: '2026-07-14',
+      },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('SAILED');
   });
 });

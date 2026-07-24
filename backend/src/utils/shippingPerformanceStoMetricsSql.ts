@@ -10,6 +10,11 @@ import {
 import {
   sqlShipmentListOutstandingKgExpr,
 } from './shipmentListQtySql';
+import {
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from './shipmentManualQtyResolveSql';
+import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
 import { sqlSapQtyDeliveredKgFromSpd } from './contractLogisticsStoDetailSql';
 
@@ -221,6 +226,28 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           AND csp.po_number = COALESCE(NULLIF(TRIM(asp.po_number::text), ''), '')
         WHERE ${B2B_CHILD_WHERE('b2b')}
       ),
+      sto_shipment_klip AS (
+        SELECT
+          x.sto_key,
+          SUM(x.klip_del)::numeric AS klip_delivery_kg,
+          SUM(x.klip_recv)::numeric AS klip_receive_kg,
+          -- any Open wins (closed only when every linked contract is Close)
+          BOOL_AND(x.is_closed) AS all_closed
+        FROM (
+          SELECT DISTINCT ON (s.id)
+            ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key,
+            COALESCE(s.quantity_delivered_klip, 0)::numeric AS klip_del,
+            COALESCE(s.actual_vessel_qty_receive, 0)::numeric AS klip_recv,
+            (${sqlIsContractSapClosedExpr('c')}) AS is_closed
+          FROM shipments s
+          INNER JOIN contracts c ON c.id = s.contract_id
+          WHERE COALESCE(s.status, '') <> 'CANCELLED'
+            AND ${shippingPerfStoMetricsKeyExpr('c', 's')} IS NOT NULL
+          ORDER BY s.id
+        ) x
+        INNER JOIN perf_sto_keys psk ON psk.sto_key = x.sto_key
+        GROUP BY x.sto_key
+      ),
       sto_metrics AS (
         SELECT
           po.sto_key,
@@ -229,14 +256,24 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           SUM(po.receive_kg)::numeric AS received_qty,
           SUM(po.delivery_kg)::numeric AS delivered_qty,
           SUM(po.shipment_planning_kg)::numeric AS planning_qty,
-          SUM((${sqlShipmentListOutstandingKgExpr({
-            contractQtyExpr: 'po.contract_qty',
-            incotermExpr: 'po.incoterm',
-            // Missing SAP movement means no delivery/receive yet, not unknown OS.
-            receiveExpr: 'COALESCE(po.receive_kg, 0)',
-            deliveryExpr: 'COALESCE(po.delivery_kg, 0)',
-            clampAtZero: true,
-          })})::numeric) AS outstanding_qty_actual,
+          (
+            ${sqlShipmentListOutstandingKgExpr({
+              contractQtyExpr: 'SUM(po.contract_qty)',
+              // Dominant / any incoterm on the STO — FOB/LCO use delivery; FRC/CIF use receive
+              incotermExpr: `(ARRAY_AGG(po.incoterm ORDER BY po.contract_id))[1]`,
+              receiveExpr: `COALESCE((${sqlShipmentResolvedReceiveKg(
+                'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
+                'COALESCE(MAX(sk.klip_receive_kg), 0)',
+                'COALESCE(SUM(po.receive_kg), 0)',
+              )}), 0)`,
+              deliveryExpr: `COALESCE((${sqlShipmentResolvedDeliveryKg(
+                'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
+                'COALESCE(MAX(sk.klip_delivery_kg), 0)',
+                'COALESCE(SUM(po.delivery_kg), 0)',
+              )}), 0)`,
+              clampAtZero: false,
+            })}
+          )::numeric AS outstanding_qty_actual,
           SUM((
             CASE
               WHEN po.contract_qty IS NULL THEN NULL
@@ -252,6 +289,7 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           STRING_AGG(DISTINCT NULLIF(TRIM(po.po_number::text), ''), ', ' ORDER BY NULLIF(TRIM(po.po_number::text), '')) AS po_numbers,
           STRING_AGG(DISTINCT po.contract_id, ', ' ORDER BY po.contract_id) AS contract_numbers
         FROM sto_po_lines po
+        LEFT JOIN sto_shipment_klip sk ON sk.sto_key = po.sto_key
         GROUP BY po.sto_key
       )`;
 }

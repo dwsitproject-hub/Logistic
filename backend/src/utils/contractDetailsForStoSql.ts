@@ -88,6 +88,33 @@ function stoScopedOutstandingActualSql(opts: {
   });
 }
 
+/**
+ * Sibling shipment under the same lookup key (operation_id / shipment_id / STO)
+ * for a contract_number — source of per-PO Delivered/Received Qty (KLIP).
+ */
+export function sqlSiblingShipmentKlipQtyExpr(
+  contractNumberExpr: string,
+  field: 'delivered' | 'receive',
+): string {
+  const valueExpr =
+    field === 'delivered'
+      ? `COALESCE(s.quantity_delivered_klip, s.quantity_delivered)`
+      : `s.actual_vessel_qty_receive`;
+  return `(
+          SELECT ${valueExpr}
+          FROM shipments s
+          INNER JOIN contracts c ON c.id = s.contract_id
+          WHERE COALESCE(s.status, '') <> 'CANCELLED'
+            AND TRIM(c.contract_id) = TRIM(${contractNumberExpr})
+            AND (
+              TRIM(COALESCE(s.operation_id::text, '')) = TRIM($1::text)
+              OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($1::text)
+            )
+          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+          LIMIT 1
+        )`;
+}
+
 /** SQL for GET /shipments/contracts/details — one row per PO line on the STO. */
 export function buildContractDetailsForStoSql(): string {
   /** Discovery only — never blank-STO fallback (would pull all empty-STO POs). */
@@ -279,6 +306,8 @@ export function buildContractDetailsForStoSql(): string {
         })} AS sto_qty_assigned,
         ${plDeliveredKg} AS quantity_delivered,
         ${plReceiveKg} AS quantity_receive,
+        ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'delivered')} AS quantity_delivered_klip,
+        ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'receive')} AS quantity_receive_klip,
         (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
          FROM sap_processed_data spd
          WHERE spd.contract_number = pl.contract_number
@@ -377,6 +406,8 @@ export function buildContractDetailsForStoSql(): string {
         })} AS sto_qty_assigned,
         ${socDeliveredKg} AS quantity_delivered,
         ${socReceiveKg} AS quantity_receive,
+        ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'delivered')} AS quantity_delivered_klip,
+        ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'receive')} AS quantity_receive_klip,
         (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number

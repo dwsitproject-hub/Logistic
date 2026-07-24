@@ -41,7 +41,7 @@ export const FIELD_HELP = {
   receivedQty: `FRC: GR PO Open + WB → Netto EUP; LCO: GR STO Open + WB → Netto EUP (same as Trucking Received Qty). SEA Open with KLIP receive: actual vessel receive. GR Close uses SAP Quantity Receive. Otherwise SAP Quantity Receive.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
-  shipmentOutstandingQtyMt: `STO Qty minus fulfilled Delivery/Receive by Open/Close rules (same as Shipments View Table): GR Close → SAP; Open → KLIP vessel/delivery then SAP. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
+  shipmentOutstandingQtyMt: `Contract Qty minus fulfilled Delivery/Receive by Open/Close rules (same as Shipments View Table): GR Close → SAP; Open → KLIP vessel/delivery then SAP. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 
@@ -83,7 +83,7 @@ export const FIELD_HELP = {
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
   shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
-  shipmentOutstandingQtyActual: `Contract Qty minus STO-scoped Qty Receive/Delivered (per incoterm) for this STO. Same rules as Shipping Performance view table. Uses SAP fulfillment on this STO only — not global contract qty_move.`,
+  shipmentOutstandingQtyActual: `Contract Qty minus fulfilled Delivery/Receive by Open/Close rules for this STO: GR Close → SAP; Open → KLIP then SAP. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. Same as Shipments View Table OS Qty. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentOutstandingQtyPlanning: `Contract Qty minus SAP STO Qty (planning via SAP) minus Shipment Planning Qty (KLIP daily deliverables on shipment + linked trucking for the STO). Net aggregate at STO level — over-planning on one PO can offset another. Displayed in MT.`,
   shipmentPlanningQty: `KLIP shipment planning qty — sum of daily deliverables on the shipment calendar plus linked trucking daily deliverables for the same STO.`,
   /** @deprecated Use shipmentOutstandingQtyActual */

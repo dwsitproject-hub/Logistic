@@ -152,6 +152,7 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
   const shipmentInfoResult = await query(
     `SELECT
       s.quantity_delivered,
+      s.quantity_delivered_klip,
       s.actual_vessel_qty_receive,
       s.sfal_qty,
       s.sfbd_qty,

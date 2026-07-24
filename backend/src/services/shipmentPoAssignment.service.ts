@@ -486,3 +486,128 @@ export async function batchSaveShipmentPoPlanQty(args: {
 
   return { ok: true };
 }
+
+export interface PoKlipQtyRow {
+  contractNumber: string;
+  poNumber?: string | null;
+  quantityDeliveredKlipKg: number | null;
+  quantityReceiveKlipKg: number | null;
+}
+
+export type BatchSavePoKlipResult =
+  | { ok: true }
+  | { ok: false; status: number; message: string };
+
+async function findSiblingShipmentIdForContract(
+  lookupKey: string,
+  contractNumber: string,
+  anchorShipmentUuid: string,
+): Promise<string | null> {
+  const result = await query(
+    `
+    SELECT s.id::text AS shipment_id
+    FROM shipments s
+    INNER JOIN contracts c ON c.id = s.contract_id
+    WHERE COALESCE(s.status, '') <> 'CANCELLED'
+      AND TRIM(c.contract_id) = TRIM($1::text)
+      AND (
+        TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
+        OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+        OR s.id = $3::uuid
+        OR (
+          NULLIF(TRIM(COALESCE(s.operation_id::text, '')), '') IS NOT NULL
+          AND TRIM(s.operation_id::text) = (
+            SELECT NULLIF(TRIM(COALESCE(a.operation_id::text, '')), '')
+            FROM shipments a
+            WHERE a.id = $3::uuid
+          )
+        )
+      )
+    ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+    LIMIT 1
+    `,
+    [contractNumber, lookupKey, anchorShipmentUuid],
+  );
+  const id = result.rows[0]?.shipment_id;
+  return id != null && String(id).trim() !== '' ? String(id).trim() : null;
+}
+
+/** Persist Delivered/Received Qty (KLIP) onto each sibling shipment (one contract/PO row). */
+export async function batchSaveShipmentPoKlipQty(args: {
+  anchorShipmentUuid: string;
+  rows: PoKlipQtyRow[];
+}): Promise<BatchSavePoKlipResult> {
+  const context = await resolveShipmentEditContext(args.anchorShipmentUuid);
+  if (!context?.lookup_key) {
+    return { ok: false, status: 400, message: 'Could not resolve shipment STO / operation group' };
+  }
+
+  for (const row of args.rows) {
+    const contractNumber = String(row.contractNumber ?? '').trim();
+    if (!contractNumber) continue;
+
+    const delivered =
+      row.quantityDeliveredKlipKg == null || row.quantityDeliveredKlipKg === undefined
+        ? null
+        : Number(row.quantityDeliveredKlipKg);
+    const receive =
+      row.quantityReceiveKlipKg == null || row.quantityReceiveKlipKg === undefined
+        ? null
+        : Number(row.quantityReceiveKlipKg);
+
+    if (delivered != null && (!Number.isFinite(delivered) || delivered < 0)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `Invalid Delivered Qty (KLIP) for ${contractNumber}`,
+      };
+    }
+    if (receive != null && (!Number.isFinite(receive) || receive < 0)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `Invalid Received Qty (KLIP) for ${contractNumber}`,
+      };
+    }
+    if (delivered == null && receive == null) continue;
+
+    const siblingId = await findSiblingShipmentIdForContract(
+      context.lookup_key,
+      contractNumber,
+      args.anchorShipmentUuid,
+    );
+    if (!siblingId) {
+      return {
+        ok: false,
+        status: 400,
+        message: `No sibling shipment found for contract ${contractNumber} under this STO / operation`,
+      };
+    }
+
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+    if (delivered != null) {
+      sets.push(`quantity_delivered = $${paramIndex}::numeric`);
+      values.push(delivered);
+      paramIndex++;
+      sets.push(`quantity_delivered_klip = $${paramIndex}::numeric`);
+      values.push(delivered);
+      paramIndex++;
+    }
+    if (receive != null) {
+      sets.push(`actual_vessel_qty_receive = $${paramIndex}::numeric`);
+      values.push(receive);
+      paramIndex++;
+    }
+    sets.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(siblingId);
+
+    await query(
+      `UPDATE shipments SET ${sets.join(', ')} WHERE id = $${paramIndex}::uuid`,
+      values,
+    );
+  }
+
+  return { ok: true };
+}
