@@ -11,7 +11,31 @@ function trimOrNull(value: unknown): string | null {
   return text || null;
 }
 
+/** Queued or running backfill keys — one entry per (shipment, vessel code). */
 const backfillInFlight = new Set<string>();
+const backfillQueue: { dedupeKey: string; run: () => Promise<void> }[] = [];
+let backfillActive = 0;
+
+/*
+ * A shipments page can need a backfill for hundreds of rows at once. Firing them all
+ * immediately took every client in the pg pool (max 20), so the request's own queries
+ * failed with "timeout exceeded when trying to connect". Drain them a few at a time
+ * instead: same work, same order, bounded pressure on the pool and on the DB CPU.
+ */
+const BACKFILL_MAX_CONCURRENT = 4;
+
+function pumpBackfillQueue(): void {
+  while (backfillActive < BACKFILL_MAX_CONCURRENT) {
+    const next = backfillQueue.shift();
+    if (!next) return;
+    backfillActive += 1;
+    void next.run().finally(() => {
+      backfillActive -= 1;
+      backfillInFlight.delete(next.dedupeKey);
+      pumpBackfillQueue();
+    });
+  }
+}
 
 /**
  * When shipment row lacks vessel but SAP has both code + name, expose SAP values on the row.
@@ -57,7 +81,7 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
   if (backfillInFlight.has(dedupeKey)) return;
   backfillInFlight.add(dedupeKey);
 
-  void (async () => {
+  const run = async (): Promise<void> => {
     try {
       await ensureMasterVesselFromSap({
         vessel_code: vesselCode,
@@ -114,8 +138,9 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
       }
     } catch (error) {
       logger.warn('queueShipmentVesselSapBackfill failed', { dedupeKey, error });
-    } finally {
-      backfillInFlight.delete(dedupeKey);
     }
-  })();
+  };
+
+  backfillQueue.push({ dedupeKey, run });
+  pumpBackfillQueue();
 }
