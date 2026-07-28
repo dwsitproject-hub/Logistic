@@ -168,6 +168,9 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
+        -- SAP presence of the owning contract. Carried on every row so summaries can
+        -- exclude cancelled POs from totals while the list still shows them.
+        COALESCE(c.sap_presence, 'PRESENT') AS sap_presence,
         c.po_number,
         COALESCE(NULLIF(TRIM(c.sto_number::text), ''), '') AS sto_number,
         NULL::text AS sto_numbers,
@@ -223,6 +226,9 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
+        -- SAP presence of the owning contract. Carried on every row so summaries can
+        -- exclude cancelled POs from totals while the list still shows them.
+        COALESCE(c.sap_presence, 'PRESENT') AS sap_presence,
         c.po_number,
         COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers) AS sto_number,
         sa.sto_numbers AS sto_numbers,

@@ -63,6 +63,9 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
         src.status_db
       FROM (${expanded}) src
       INNER JOIN contracts c ON c.id = src.contract_id
+      -- Snapshot feeds the status circles only. Operations whose PO SAP cancelled or deleted
+      -- must not count towards them; the trucking list still shows the rows.
+      WHERE COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'
     )
     SELECT
       group_plant,

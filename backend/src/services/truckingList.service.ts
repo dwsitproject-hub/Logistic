@@ -819,6 +819,9 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
         FROM (
           ${expanded}
         ) trucking_source
+        -- Totals only: operations whose contract's PO was cancelled/deleted in SAP are excluded
+        -- from the status circles and quantity strip. The list query keeps showing them.
+        WHERE COALESCE(trucking_source.sap_presence, 'PRESENT') = 'PRESENT'
       ),
       per_contract AS (
         SELECT

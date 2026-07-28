@@ -97,6 +97,9 @@ function buildShipmentDailyBaseCteSql(): string {
           -- Multi-contract STO status floor (decision N-01 option b) — must mirror the
           -- shipments list base so circle counts match the table.
           ${sqlShipmentGroupStatusFloorAgg('s')},
+          -- SAP presence for the STO. MIN keeps the group WITHDRAWN only when every contract
+          -- behind it is withdrawn, so a partially-cancelled STO still counts in the circles.
+          MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence,
           MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
           MAX(s.created_at) AS created_at,
           MAX(${plantSite}) AS plant_site,
@@ -141,6 +144,9 @@ function buildShipmentDailyBaseCteSql(): string {
           g.contract_count_from_join AS contract_count,
           g.contract_ext_no_from_join AS contract_ext_no
         FROM shipment_base_core g
+        -- This snapshot feeds the status circles and quantity strip only, never the list, so
+        -- dropping STOs whose POs SAP cancelled removes them from totals without hiding rows.
+        WHERE COALESCE(g.sap_presence, 'PRESENT') = 'PRESENT'
       )`;
 }
 
