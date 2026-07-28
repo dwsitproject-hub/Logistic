@@ -23,6 +23,7 @@ import {
 import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
 import { authenticateToken, authorize } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
 
 const csvUpload = multer({
   storage: multer.memoryStorage(),
@@ -106,7 +107,7 @@ router.get('/:id/sto-information', getContractStoInformation);
 router.get('/:id/logistics-sto-detail', getContractLogisticsStoDetail);
 router.get('/:id/activity-log', getContractActivityLog);
 router.get('/:id/remarks', getContractRemarks);
-router.post('/:id/remarks', createContractRemark);
+router.post('/:id/remarks', blockWhenWithdrawn('contract'), createContractRemark);
 router.get('/:id/b2b-parties', getB2bPartiesForContract);
 router.get('/:id', getContract);
 
@@ -196,7 +197,7 @@ router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), csvUpload.si
  *       404:
  *         description: Contract not found
  */
-router.put('/:id', authorize('ADMIN', 'TRADING'), auditLog('UPDATE', 'CONTRACT'), updateContract);
+router.put('/:id', authorize('ADMIN', 'TRADING'), blockWhenWithdrawn('contract'), auditLog('UPDATE', 'CONTRACT'), updateContract);
 
 export default router;
 
