@@ -340,6 +340,10 @@ export function buildTruckingListExpansionSql(
         e.created_at,
         e.updated_at,
         e.contract_number,
+        -- Carried through the expansion so the summary can exclude SAP-withdrawn contracts from
+        -- the status circles. This select list is explicit, so an omission here silently drops
+        -- the column and the summary predicate would fail.
+        COALESCE(e.sap_presence, 'PRESENT') AS sap_presence,
         e.po_number,
         ${stoDisplay} AS sto_number,
         COALESCE(NULLIF(TRIM(e.sto_numbers::text), ''), ${stoDisplay}) AS sto_numbers,

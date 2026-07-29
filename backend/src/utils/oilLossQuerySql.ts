@@ -169,6 +169,16 @@ export function buildOilLossMainSql(): string {
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Truck Discharge Location'), ''), '') AS unloading_location_raw
       FROM sap_processed_data spd
       WHERE ${SAP_OIL_LOSS_QTY_WHERE_CLAUSE}
+        -- Oil loss/gain on a PO that SAP cancelled or deleted is not a real loss, so it must not
+        -- reach the table or the gain total. NOT EXISTS (rather than a join) keeps this a semi-join
+        -- on the indexed TRIM(contract_id), leaves the MATERIALIZED plan intact, and treats rows
+        -- with no matching contract as eligible exactly as before.
+        AND NOT EXISTS (
+          SELECT 1
+          FROM contracts wc
+          WHERE TRIM(wc.contract_id) = TRIM(spd.contract_number)
+            AND wc.sap_presence = 'WITHDRAWN'
+        )
     ),
     ${OIL_LOSS_LOOKUP_CTES},
     enriched AS (
@@ -300,6 +310,16 @@ export function buildOilLossGainSql(): string {
         COALESCE(spd.data->'raw'->>'Status', '') AS status
       FROM sap_processed_data spd
       WHERE ${SAP_OIL_LOSS_QTY_WHERE_CLAUSE}
+        -- Oil loss/gain on a PO that SAP cancelled or deleted is not a real loss, so it must not
+        -- reach the table or the gain total. NOT EXISTS (rather than a join) keeps this a semi-join
+        -- on the indexed TRIM(contract_id), leaves the MATERIALIZED plan intact, and treats rows
+        -- with no matching contract as eligible exactly as before.
+        AND NOT EXISTS (
+          SELECT 1
+          FROM contracts wc
+          WHERE TRIM(wc.contract_id) = TRIM(spd.contract_number)
+            AND wc.sap_presence = 'WITHDRAWN'
+        )
     ),
     with_delivery AS (
       SELECT

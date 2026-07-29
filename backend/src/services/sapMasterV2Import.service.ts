@@ -13,6 +13,8 @@ import { SapDataDistributionService } from './sapDataDistribution.service';
 import { invalidateShipmentsListCache } from './shipmentList.service';
 import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 import { normalizePoNumber } from '../utils/contractPoIdentity';
+import { applyAbsenceForImport, evaluateImportTrust } from './sapAbsenceTracking.service';
+import { applyPresenceState } from './sapPresence.service';
 
 export interface MasterV2Config {
   filePath: string;
@@ -266,6 +268,11 @@ export class SapMasterV2ImportService {
         const savepointName = `sp_mv2_${i}`;
         // Track the rawDataId so we can mark failures with specific error messages
         let rawDataId!: string;
+        // Keep the row's identity outside the try: rolling back to the SAVEPOINT also undoes
+        // the sap_raw_data insert, so the only way to report which PO/STO failed is to hold
+        // it here and write it to sap_import_failures after the rollback.
+        let failurePo: string | null = null;
+        let failureSto: string | null = null;
         try {
           const row = validDataRows[i];
 
@@ -289,6 +296,8 @@ export class SapMasterV2ImportService {
           const stoNumber =
             parsedData.shipment?.sto_no || parsedData.contract?.sto_no || null;
           const stoKey = String(stoNumber ?? '').trim();
+          failurePo = poNumber || null;
+          failureSto = stoKey || null;
 
           if (!poNumber) {
             throw new Error('Row skipped: PO number is required');
@@ -408,7 +417,11 @@ export class SapMasterV2ImportService {
           errors.push(errorMsg);
           logger.error('Failed to process row', { rowNumber: i + 1, error });
 
-          // Persist failure status and specific error message for this row
+          // Persist failure status and specific error message for this row.
+          // NOTE: when the row failed after its sap_raw_data insert, that insert was undone by
+          // ROLLBACK TO SAVEPOINT, so this UPDATE matches nothing. sap_import_failures below is
+          // what actually survives - without it a failed row leaves no trace but a counter, and
+          // is then indistinguishable from a PO that SAP cancelled.
           if (rawDataId) {
             try {
               await client.query(
@@ -418,6 +431,19 @@ export class SapMasterV2ImportService {
             } catch (updateErr) {
               logger.error('Failed to record row error to sap_raw_data', { rawDataId, updateErr });
             }
+          }
+
+          try {
+            await client.query(
+              `INSERT INTO sap_import_failures (import_id, row_number, po_number, sto_number, error_message)
+               VALUES ($1::uuid, $2, $3, $4, $5)`,
+              [importId, i + 1, failurePo, failureSto, errorMsg],
+            );
+          } catch (failLogErr) {
+            logger.error('Failed to record row error to sap_import_failures', {
+              rowNumber: i + 1,
+              failLogErr,
+            });
           }
           await maybeRefreshImportProgress();
         }
@@ -436,7 +462,26 @@ export class SapMasterV2ImportService {
           importId
         ]
       );
-      
+
+      // 7b. Snapshot-absence tracking (observe only - changes no total and no list).
+      // The SAP Report is a full snapshot: a PO stays while Open and after Close, and drops
+      // out only when cancelled/deleted. Absence is therefore meaningful - but only from an
+      // import that actually completed. A partly-failed import looks identical to a mass
+      // cancellation (2026-07-27: 1,250 failed rows would have withdrawn 585 live POs).
+      try {
+        const totalRecords = processedRecords + failedRecords;
+        const trusted = await evaluateImportTrust(client, importId, totalRecords, failedRecords);
+        if (trusted) {
+          await applyAbsenceForImport(client, importId);
+          // Phase 2: turn the counters into presence state. Withdraws POs cancelled in SAP,
+          // restores any that came back, supersedes stale STO rows. Nothing is deleted.
+          await applyPresenceState(client, { importId });
+        }
+      } catch (absenceErr) {
+        // Never let bookkeeping fail an import that already succeeded.
+        logger.error('SAP absence tracking failed (import itself is unaffected)', { absenceErr });
+      }
+
       await client.query('COMMIT');
 
       if (processedRecords > 0) {

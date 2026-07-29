@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
 import {
   getShipments,
   getShipmentById,
@@ -91,7 +92,7 @@ router.post(
   bulkUploadShipmentDailyDeliverables,
 );
 router.get('/daily-planning-deliverables', getShipmentDailyDeliverablesCalendar);
-router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'SHIPMENT'), updateShipmentDailyDeliverables);
+router.put('/:id/daily-planning-deliverables', blockWhenWithdrawn('shipment'), auditLog('UPDATE', 'SHIPMENT'), updateShipmentDailyDeliverables);
 
 router.get('/performance/summary', getShippingPerformanceSummary);
 router.get('/performance/tree', getShippingPerformanceTree);
@@ -104,7 +105,7 @@ router.get('/', getShipments);
 router.get('/:id/edit-context', getShipmentEditContext);
 router.get('/:id/edit-payload', getShipmentEditPayload);
 router.get('/:id/remarks', getShipmentRemarks);
-router.post('/:id/remarks', auditLog('CREATE', 'SHIPMENT'), createShipmentRemark);
+router.post('/:id/remarks', blockWhenWithdrawn('shipment'), auditLog('CREATE', 'SHIPMENT'), createShipmentRemark);
 router.get('/:id/available-purchase-orders', getShipmentAvailablePurchaseOrders);
 router.post(
   '/:id/purchase-orders',
@@ -126,16 +127,16 @@ router.put(
 router.get('/:id', getShipmentById);
 
 // Update shipment
-router.put('/:id', auditLog('UPDATE', 'SHIPMENT'), updateShipment);
+router.put('/:id', blockWhenWithdrawn('shipment'), auditLog('UPDATE', 'SHIPMENT'), updateShipment);
 router.get('/:id/ata-override', getShipmentAtaOverride);
-router.put('/:id/ata-override', auditLog('UPDATE', 'SHIPMENT'), updateShipmentAtaOverride);
+router.put('/:id/ata-override', blockWhenWithdrawn('shipment'), auditLog('UPDATE', 'SHIPMENT'), updateShipmentAtaOverride);
 
 // Vessel loading ports routes
 router.get('/:shipmentId/activity-log', getShipmentActivityLog);
 router.get('/:shipmentId/loading-ports', getVesselLoadingPorts);
-router.post('/:shipmentId/loading-ports', auditLog('CREATE', 'LOADING_PORT'), upsertVesselLoadingPort);
-router.put('/:shipmentId/loading-ports/:portId', auditLog('UPDATE', 'LOADING_PORT'), upsertVesselLoadingPort);
-router.delete('/:shipmentId/loading-ports/:portId', auditLog('CANCEL', 'LOADING_PORT'), deleteVesselLoadingPort);
+router.post('/:shipmentId/loading-ports', blockWhenWithdrawn('shipment', 'shipmentId'), auditLog('CREATE', 'LOADING_PORT'), upsertVesselLoadingPort);
+router.put('/:shipmentId/loading-ports/:portId', blockWhenWithdrawn('shipment', 'shipmentId'), auditLog('UPDATE', 'LOADING_PORT'), upsertVesselLoadingPort);
+router.delete('/:shipmentId/loading-ports/:portId', blockWhenWithdrawn('shipment', 'shipmentId'), auditLog('CANCEL', 'LOADING_PORT'), deleteVesselLoadingPort);
 
 export default router;
 

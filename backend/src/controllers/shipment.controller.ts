@@ -518,7 +518,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
             FILTER (WHERE c.contract_id IS NOT NULL) AS contract_numbers_from_join,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number)
             FILTER (WHERE c.po_number IS NOT NULL AND TRIM(c.po_number) != '') AS po_numbers_from_join,
-          COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) AS contract_count_from_join`;
+          COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) AS contract_count_from_join,
+          -- SAP presence of the STO's contracts. MIN keeps a grouped row WITHDRAWN only when
+          -- every contract behind it is withdrawn, so a mixed STO still counts in totals.
+          MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence`;
 
     const contractExtNoEnrichedSql = compact
       ? `CASE
@@ -1071,6 +1074,9 @@ ${contractMetaSelectCore}
         SELECT sb.*
         FROM shipment_base sb
         WHERE 1=1 ${section1SummaryFilterSql}
+          -- Totals only: STOs whose contracts were all cancelled/deleted in SAP are excluded
+          -- here but still returned by the list query, which does not apply this predicate.
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       )${summaryScopeCte}
       , enriched AS (
         SELECT

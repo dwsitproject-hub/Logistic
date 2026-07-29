@@ -16,6 +16,7 @@ import {
   sqlHasCycleCompletionDate,
 } from '../utils/contractsListCycleSql';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import { parsePresenceFilter, sqlPresenceListFilter } from '../utils/sapPresenceSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
@@ -120,6 +121,12 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const queryParams: any[] = [];
     let paramIndex = 1;
     let contractScopeWhere = '';
+    // Withdrawn contracts (PO cancelled/deleted in SAP) stay listed by default so their
+    // history remains reachable; ?presence=present|withdrawn narrows to one or the other.
+    contractScopeWhere += sqlPresenceListFilter(
+      parsePresenceFilter((req.query as any).presence),
+      'c',
+    );
     if (contractIdFilter) {
       contractScopeWhere += ` AND c.contract_id = $${paramIndex}`;
       queryParams.push(contractIdFilter);
@@ -157,6 +164,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         SELECT
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          -- WITHDRAWN when every row of this contract's PO is gone from SAP. Surfaced so the
+          -- UI can badge the row; MIN keeps a group withdrawn only if all members are.
+          MIN(c.sap_presence) AS sap_presence,
+          MAX(c.sap_withdrawn_reason) AS sap_withdrawn_reason,
           MAX(c.buyer) AS buyer,
           MAX(c.supplier) AS supplier,
           MAX(c.group_name) AS group_name,

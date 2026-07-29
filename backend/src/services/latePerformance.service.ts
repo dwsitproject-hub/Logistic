@@ -30,6 +30,7 @@ import {
   isTruckingOutstandingWithinToleranceKg,
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 } from '../utils/truckingQuantitySql';
+import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -58,6 +59,14 @@ export interface LatePerformanceFilters {
 
 const ROW_CACHE = new Map<string, { rows: any[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Drop cached rows. Needed whenever the contract scope changes underneath us - notably when a
+ * SAP import withdraws or restores contracts, which changes who belongs in the denominator.
+ */
+export function invalidateLatePerformanceCache(): void {
+  ROW_CACHE.clear();
+}
 
 function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
   const norm = {
@@ -181,6 +190,11 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     queryParams.push(effectiveDateTo);
     paramIndex++;
   }
+
+  // Contracts whose PO was cancelled/deleted in SAP are out of scope for late/on-time
+  // performance: keeping them would leave permanently-unfulfillable contracts in the
+  // denominator. Plain column predicate - no extra join.
+  contractScopeWhere += sqlExcludeWithdrawnContracts('c');
 
   const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
     resolveContractsQtyMoveCte('contract_scope'),

@@ -247,6 +247,12 @@ function compareContractSortValues(
 interface Contract {
   id: string
   contract_id: string
+  /**
+   * WITHDRAWN when SAP stopped reporting this contract's PO (cancelled or deleted upstream).
+   * Such contracts are excluded from totals but stay listed, read-only, for reference.
+   */
+  sap_presence?: 'PRESENT' | 'WITHDRAWN' | null
+  sap_withdrawn_reason?: string | null
   buyer: string
   supplier: string
   product: string
@@ -1140,6 +1146,9 @@ function ContractsPageContent() {
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
   const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
+  // 'ALL' keeps SAP-withdrawn contracts listed (their history stays reachable); 'present' hides
+  // them; 'withdrawn' shows only them. Totals always exclude withdrawn, server-side.
+  const [presenceFilter, setPresenceFilter] = useState<'ALL' | 'present' | 'withdrawn'>('ALL')
   const [perfTransportMode, setPerfTransportMode] = useState<'ALL' | 'SEA' | 'LAND'>('ALL')
   const [lateOnTimeFilter, setLateOnTimeFilter] = useState<'ALL' | 'LATE' | 'ON_TIME'>('ALL')
   const [summaryCardStatus, setSummaryCardStatus] = useState<'All' | 'Open' | 'Close'>(() =>
@@ -1826,6 +1835,7 @@ function ContractsPageContent() {
     dateFrom,
     dateTo,
     transportModeFilter,
+    presenceFilter,
     perfTransportMode,
     lateOnTimeFilter,
     unassignedFilter,
@@ -1970,6 +1980,9 @@ function ContractsPageContent() {
         }
         if (transportModeFilter && transportModeFilter !== 'ALL') {
           params.append('transportMode', transportModeFilter)
+        }
+        if (presenceFilter !== 'ALL') {
+          params.append('presence', presenceFilter)
         }
         if (selectedGroupPlants.length > 0) {
           selectedGroupPlants.forEach((p) => params.append('plant', p))
@@ -2288,6 +2301,7 @@ function ContractsPageContent() {
         params.append('columnFilters', JSON.stringify(mergedColumnFilters))
       }
       if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
+      if (presenceFilter !== 'ALL') params.append('presence', presenceFilter)
       if (dateFrom) params.append('dateFrom', dateFrom)
       if (dateTo) params.append('dateTo', dateTo)
       if (selectedGroupPlants.length > 0) {
@@ -2318,6 +2332,7 @@ function ContractsPageContent() {
     selectedGroupPlants,
     selectedIncoterms,
     transportModeFilter,
+    presenceFilter,
     dateFrom,
     dateTo,
     columnFilters,
@@ -2354,6 +2369,7 @@ function ContractsPageContent() {
     setSearchDraft('')
     setSearchTerm('')
     setTransportModeFilter('ALL')
+    setPresenceFilter('ALL')
     resetUserScopeFilters()
     setSelectedIncoterms([])
     setSelectedGroups([])
@@ -2370,6 +2386,7 @@ function ContractsPageContent() {
     Boolean(dateTo) ||
     searchTerm.trim().length > 0 ||
     transportModeFilter !== 'ALL' ||
+    presenceFilter !== 'ALL' ||
     selectedProducts.length > 0 ||
     selectedGroups.length > 0 ||
     selectedSuppliers.length > 0 ||
@@ -4349,6 +4366,20 @@ function ContractsPageContent() {
                 )}
                 {!isContractPerformance && (
                   <select
+                    value={presenceFilter}
+                    onChange={(e) =>
+                      setPresenceFilter(e.target.value as 'ALL' | 'present' | 'withdrawn')
+                    }
+                    className="px-4 py-2 text-sm border rounded-lg"
+                    title="Contracts whose PO SAP no longer reports are excluded from totals but stay listed for reference."
+                  >
+                    <option value="ALL">All SAP Status</option>
+                    <option value="present">In SAP only</option>
+                    <option value="withdrawn">Not in SAP only</option>
+                  </select>
+                )}
+                {!isContractPerformance && (
+                  <select
                     value={selectedIncoterms[0] ?? 'ALL'}
                     onChange={(e) => {
                       const value = e.target.value
@@ -4500,6 +4531,7 @@ function ContractsPageContent() {
                     searchDraft ||
                     searchTerm ||
                     transportModeFilter !== 'ALL' ||
+                    presenceFilter !== 'ALL' ||
                     selectedProducts.length > 0 ||
                     selectedGroups.length > 0 ||
                     selectedIncoterms.length > 0 ||
@@ -5440,6 +5472,17 @@ function ContractsPageContent() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="font-semibold truncate">{contract.contract_id}</span>
+                              {contract.sap_presence === 'WITHDRAWN' && (
+                                <Badge
+                                  className="bg-amber-100 text-amber-900 border border-amber-300 whitespace-nowrap"
+                                  title={
+                                    contract.sap_withdrawn_reason ||
+                                    'SAP no longer reports this PO (cancelled or deleted). Excluded from totals; kept read-only for reference.'
+                                  }
+                                >
+                                  Not in SAP
+                                </Badge>
+                              )}
                               <Badge className={contractStatusBadgeClass(contract)}>
                                 {formatContractDeliveryStatusLabel(contract.import_status || contract.status) || '—'}
                               </Badge>

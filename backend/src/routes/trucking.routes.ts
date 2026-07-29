@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
 import {
   getTruckingRealization,
   updateTruckingRealization,
@@ -147,8 +148,8 @@ router.get('/daily-actuals/calendar', getTruckingDailyActualsCalendar);
 // Activity log (before generic :id route)
 router.get('/:truckingId/activity-log', getTruckingActivityLog);
 
-router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
-router.put('/:id/daily-actuals', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyActuals);
+router.put('/:id/daily-planning-deliverables', blockWhenWithdrawn('trucking'), auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
+router.put('/:id/daily-actuals', blockWhenWithdrawn('trucking'), auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyActuals);
 router.get('/:id/realization', getTruckingRealization);
 router.put('/:id/realization', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingRealization);
 
@@ -156,6 +157,6 @@ router.put('/:id/realization', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateT
 router.get('/:id', getTruckingOperationById);
 
 // Update trucking operation
-router.put('/:id', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingOperation);
+router.put('/:id', blockWhenWithdrawn('trucking'), auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingOperation);
 
 export default router;

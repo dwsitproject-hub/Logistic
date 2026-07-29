@@ -50,7 +50,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "audit:security": "npm audit --audit-level=moderate"
+    "audit:security": "npm audit --audit-level=moderate",
+    "sap:absence-report": "ts-node src/scripts/sapAbsenceReport.ts",
+    "sap:absence-report:prod": "node dist/scripts/sapAbsenceReport.js",
+    "sap:presence:apply": "ts-node src/scripts/applySapPresence.ts",
+    "sap:presence:apply:prod": "node dist/scripts/applySapPresence.js"
   },
   "keywords": [
     "logistics",

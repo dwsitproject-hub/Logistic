@@ -85,7 +85,7 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 /** Bumped when GR Close bypasses multi-contract status floor. */
-const ROW_CACHE_KEY = 'shipping-performance-rows-v34';
+const ROW_CACHE_KEY = 'shipping-performance-rows-v35';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -239,6 +239,11 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
     source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
     supplier: joinDistinctValues(rows, 'supplier') || pick.supplier,
+    // One STO can span several contracts. Treat the group as still present if any member is,
+    // so a partially-cancelled STO keeps counting rather than vanishing from the totals.
+    sap_presence: rows.some((row) => String(row.sap_presence ?? 'PRESENT') !== 'WITHDRAWN')
+      ? 'PRESENT'
+      : 'WITHDRAWN',
     contract_qty: metrics.contractQty,
     sto_qty: metrics.stoQty,
     received_qty: metrics.receivedQty,
@@ -482,6 +487,10 @@ const SHIPPING_PERFORMANCE_SQL = `
         NULLIF(TRIM(s.operation_id), '') AS operation_id,
         ${SHIPPING_PERF_STO_GROUP_KEY_EXPR} AS sto_key,
         COALESCE(sm.contract_numbers, c.contract_id::text) AS contract_number,
+        -- SAP presence of the owning contract, carried on the row: the page's cards are
+        -- aggregated in JS from this same row set, so exclusion happens there while the
+        -- table keeps showing the row.
+        COALESCE(c.sap_presence, 'PRESENT') AS sap_presence,
         COALESCE(sm.po_numbers, c.po_number::text) AS po_number,
         sm.po_numbers,
         sm.contract_numbers,
@@ -891,13 +900,21 @@ export async function runShippingPerformance(req: AuthRequest, part: ShippingPer
   const filteredRows = filterGlobalRows(rows, filters);
 
   if (part === 'rows') {
+    // The table keeps showing SAP-withdrawn rows (badged client-side) so their history stays
+    // reachable; only the aggregates below drop them.
     return { rows: filteredRows };
   }
 
+  // Contracts whose PO was cancelled/deleted in SAP must not contribute to the performance
+  // cards or the drilldown tree - they can never complete, so they would skew every average.
+  const countableRows = filteredRows.filter(
+    (row) => String(row.sap_presence ?? 'PRESENT') !== 'WITHDRAWN',
+  );
+
   if (part === 'summary') {
     return {
-      etaSummary: buildPerVesselSummary(filteredRows, 'eta'),
-      ataSummary: buildPerVesselSummary(filteredRows, 'ata'),
+      etaSummary: buildPerVesselSummary(countableRows, 'eta'),
+      ataSummary: buildPerVesselSummary(countableRows, 'ata'),
       meta: {
         incoterms: distinctValues(rows, 'incoterm'),
         plantSites: distinctValues(rows, 'plant_site'),
@@ -906,7 +923,7 @@ export async function runShippingPerformance(req: AuthRequest, part: ShippingPer
   }
 
   return {
-    tree: buildPerfTree(filteredRows),
-    remarks: buildRemarksList(filteredRows),
+    tree: buildPerfTree(countableRows),
+    remarks: buildRemarksList(countableRows),
   };
 }

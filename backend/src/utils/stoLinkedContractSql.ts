@@ -10,42 +10,58 @@ export function buildGroupedStoTrimExpr(stoKeySql: string): string {
   return `NULLIF(TRIM((${stoKeySql})::text), '')`;
 }
 
-/** Contracts linked to a grouped list row key (SAP STO or KLIP operation_id / shipment_id). */
+/**
+ * Contracts linked to a grouped list row key (SAP STO or KLIP operation_id / shipment_id).
+ *
+ * The STO match is applied in an inner scan and the B2B-child exclusion outside it. Both
+ * are ANDed, so the result is identical either way — but the B2B test costs two correlated
+ * sap_processed_data lookups per contract row it touches. Filtering first drops the input
+ * from every contract (~6.3k) to the handful that match this STO, which is the difference
+ * between ~1.2M SAP lookups per query and a few dozen.
+ *
+ * `OFFSET 0` is an optimizer fence, not paging: without it Postgres flattens the subquery,
+ * merges the two WHERE clauses back together and re-evaluates B2B against every contract,
+ * which is exactly the cost this split exists to avoid. Do not remove it.
+ */
 export function contractsOnStoSubquery(groupedStoExpr: string): string {
   return `
     SELECT DISTINCT cc.contract_id
-    FROM contracts cc
-    WHERE cc.contract_id IS NOT NULL
-      AND TRIM(cc.contract_id) != ''
-      AND ${sqlB2bChildContractRowExcludeWhere('cc')}
-      AND (
-        EXISTS (
-          SELECT 1 FROM contract_stos cs
-          WHERE cs.contract_id = cc.id
-            AND TRIM(cs.sto_number::text) = ${groupedStoExpr}
+    FROM (
+      SELECT cc.id, cc.contract_id, cc.contract_type
+      FROM contracts cc
+      WHERE cc.contract_id IS NOT NULL
+        AND TRIM(cc.contract_id) != ''
+        AND (
+          EXISTS (
+            SELECT 1 FROM contract_stos cs
+            WHERE cs.contract_id = cc.id
+              AND TRIM(cs.sto_number::text) = ${groupedStoExpr}
+          )
+          OR TRIM(COALESCE(cc.sto_number::text, '')) = ${groupedStoExpr}
+          OR EXISTS (
+            SELECT 1 FROM sap_processed_data spd
+            WHERE spd.contract_number = cc.contract_id
+              AND TRIM(COALESCE(
+                spd.sto_number::text,
+                spd.data->'raw'->>'STO No.',
+                spd.data->'raw'->>'STO Number',
+                spd.data->'shipment'->>'sto_no',
+                spd.data->'contract'->>'sto_no'
+              )) = ${groupedStoExpr}
+          )
+          OR EXISTS (
+            SELECT 1 FROM shipments sh
+            WHERE sh.contract_id = cc.id
+              AND COALESCE(sh.status, '') <> 'CANCELLED'
+              AND (
+                NULLIF(TRIM(sh.operation_id::text), '') = ${groupedStoExpr}
+                OR NULLIF(TRIM(sh.shipment_id::text), '') = ${groupedStoExpr}
+              )
+          )
         )
-        OR TRIM(COALESCE(cc.sto_number::text, '')) = ${groupedStoExpr}
-        OR EXISTS (
-          SELECT 1 FROM sap_processed_data spd
-          WHERE spd.contract_number = cc.contract_id
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no',
-              spd.data->'contract'->>'sto_no'
-            )) = ${groupedStoExpr}
-        )
-        OR EXISTS (
-          SELECT 1 FROM shipments sh
-          WHERE sh.contract_id = cc.id
-            AND COALESCE(sh.status, '') <> 'CANCELLED'
-            AND (
-              NULLIF(TRIM(sh.operation_id::text), '') = ${groupedStoExpr}
-              OR NULLIF(TRIM(sh.shipment_id::text), '') = ${groupedStoExpr}
-            )
-        )
-      )`;
+      OFFSET 0
+    ) cc
+    WHERE ${sqlB2bChildContractRowExcludeWhere('cc')}`;
 }
 
 export function buildStoLinkedContractNumbersSql(

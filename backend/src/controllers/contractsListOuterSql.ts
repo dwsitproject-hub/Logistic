@@ -63,6 +63,8 @@ const CONTRACTS_LIST_ROW_PROJECTION = `
         ${sqlSapGrPoStatusFromJson('base.latest_spd_data')} AS gr_po_status,
         ${sqlSapGrStoStatusFromJson('base.latest_spd_data')} AS gr_sto_status,
         base.import_status,
+        base.sap_presence,
+        base.sap_withdrawn_reason,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,

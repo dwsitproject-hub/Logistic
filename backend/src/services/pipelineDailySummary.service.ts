@@ -24,9 +24,9 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
 /** v7: COMPLETED when |OS Qty| displays as 0 MT (≤499 kg) even if GR PO/STO still Open. */
 /** v10: import status any-Open wins (blank GR no longer falls back to contracts.status per row). */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 10;
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 11; // exclude SAP-withdrawn contracts from totals
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
-export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 4; // N-01(b): multi-contract STO status floor
+export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 5; // exclude SAP-withdrawn contracts from totals
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;

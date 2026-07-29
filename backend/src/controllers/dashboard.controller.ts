@@ -8,6 +8,7 @@ import { diffCalendarDays } from '../utils/calendarDays';
 import { ttlMemo } from '../utils/ttlMemo';
 import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
+import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -57,8 +58,15 @@ const shouldPerfLog = () => {
 };
 
 /**
- * Exclude B2B "child" contracts from dashboard aggregates:
- * latest SAP row has B2B flag = B2B AND Contract Reff PO Ini (or mapped keys) is not blank.
+ * Exclude from dashboard aggregates (Dashboard and Management Dashboard, which share this
+ * controller):
+ *   1. B2B "child" contracts - latest SAP row has B2B flag = B2B AND Contract Reff PO Ini
+ *      (or mapped keys) is not blank.
+ *   2. SAP-withdrawn contracts - the PO was cancelled/deleted upstream, so it must not count
+ *      towards any total. Still visible in lists behind the presence filter.
+ *
+ * Both live in one constant so every aggregate site picks them up together; several queries
+ * interpolate this directly rather than going through buildDashboardFilters.
  * Requires alias `c` for `contracts` (e.g. `FROM contracts c`). No bind parameters.
  */
 const DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL = `
@@ -84,7 +92,8 @@ const DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL = `
     WHERE x.contract_number = c.contract_id
     ORDER BY x.created_at DESC NULLS LAST
     LIMIT 1
-  ), true)`;
+  ), true)
+  ${sqlExcludeWithdrawnContracts('c')}`;
 
 const perf = (req: AuthRequest, name: string) => {
   const start = Date.now();
@@ -227,6 +236,7 @@ const buildFilterConditions = (req: AuthRequest): { contractFilter: string; ship
     )`;
   }
 
+  // Carries the SAP-withdrawn exclusion too - see the constant's definition.
   contractFilter += DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL;
 
   return { contractFilter, shipmentFilter, truckingFilter, params };
