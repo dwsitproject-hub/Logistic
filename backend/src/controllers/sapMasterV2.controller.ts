@@ -136,24 +136,44 @@ export const getImportStatus = async (req: Request, res: Response): Promise<void
       [importId]
     );
 
-    // Compute processed/failed/skipped counts from raw_data statuses for accuracy
-    const countsResult = await pool.query(
-      `SELECT 
-         COUNT(*) FILTER (WHERE status = 'processed') AS processed,
-         COUNT(*) FILTER (WHERE status = 'failed')    AS failed,
-         COUNT(*) FILTER (WHERE status = 'skipped')   AS skipped
-       FROM sap_raw_data WHERE import_id = $1`,
-      [importId]
-    );
-    
+    // Compute processed/failed/skipped counts from raw_data statuses for accuracy.
+    // NOTE: while status is 'processing'/'pending', these sap_raw_data rows live inside
+    // the still-open import transaction on a different connection and are invisible here
+    // until it commits — so this recount would stubbornly read 0 for the whole import and
+    // make it look hung. Use the live `sap_data_imports.processed_records`/`failed_records`
+    // columns instead in that case (updated every 25 rows via an independent connection —
+    // see maybeRefreshImportProgress in sapMasterV2Import.service.ts). Once the import
+    // reaches a terminal status both sources agree, so the raw-data recount is kept there
+    // as an accuracy check.
+    const importRow = importResult.rows[0];
+    const isInFlight = importRow.status === 'processing' || importRow.status === 'pending';
+
+    let processedRecords = Number(importRow.processed_records) || 0;
+    let failedRecords = Number(importRow.failed_records) || 0;
+    let skippedRecords = 0;
+
+    if (!isInFlight) {
+      const countsResult = await pool.query(
+        `SELECT 
+           COUNT(*) FILTER (WHERE status = 'processed') AS processed,
+           COUNT(*) FILTER (WHERE status = 'failed')    AS failed,
+           COUNT(*) FILTER (WHERE status = 'skipped')   AS skipped
+         FROM sap_raw_data WHERE import_id = $1`,
+        [importId]
+      );
+      processedRecords = Number(countsResult.rows[0].processed) || 0;
+      failedRecords = Number(countsResult.rows[0].failed) || 0;
+      skippedRecords = Number(countsResult.rows[0].skipped) || 0;
+    }
+
     res.json({
       success: true,
       data: {
         import: {
-          ...importResult.rows[0],
-          processed_records: countsResult.rows[0].processed,
-          failed_records: countsResult.rows[0].failed,
-          skipped_records: countsResult.rows[0].skipped
+          ...importRow,
+          processed_records: processedRecords,
+          failed_records: failedRecords,
+          skipped_records: skippedRecords
         },
         records: recordsResult.rows
       }
@@ -186,6 +206,14 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
       [JSON.stringify(['Import interrupted — no rows were processed. Please upload the file again.'])],
     );
 
+    // While an import is still running, its `sap_raw_data` inserts live inside the same
+    // long-lived transaction and are invisible to this (separate) connection until the
+    // final COMMIT — recomputing counts from sap_raw_data here would show 0% the entire
+    // time and make the import look hung. `sap_data_imports.processed_records`/
+    // `failed_records` are instead updated every 25 rows via an independent connection
+    // (see maybeRefreshImportProgress in sapMasterV2Import.service.ts), so they ARE live.
+    // For finished imports both sources agree, so we keep the raw-data recount there for
+    // an extra accuracy check.
     const result = await pool.query(
       `SELECT
          i.id,
@@ -193,8 +221,14 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
          i.import_timestamp,
          i.status,
          i.total_records,
-         COALESCE(rc.processed, 0)::int AS processed_records,
-         COALESCE(rc.failed, 0)::int AS failed_records
+         CASE WHEN i.status IN ('processing', 'pending')
+           THEN COALESCE(i.processed_records, 0)
+           ELSE COALESCE(rc.processed, 0)
+         END::int AS processed_records,
+         CASE WHEN i.status IN ('processing', 'pending')
+           THEN COALESCE(i.failed_records, 0)
+           ELSE COALESCE(rc.failed, 0)
+         END::int AS failed_records
        FROM sap_data_imports i
        LEFT JOIN LATERAL (
          SELECT

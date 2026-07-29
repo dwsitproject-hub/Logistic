@@ -12,6 +12,11 @@ import {
 } from '@/components/BulkUploadStatusModal';
 import api from '../lib/api';
 import { canCreatePermission, usePermissions } from '@/components/PermissionsContext';
+import {
+  computeSapImportProgress,
+  computeSapImportProgressStats,
+  formatSapImportDuration,
+} from '@/lib/sapImportProgress';
 
 /** Parses API error bodies (including HTML fallback) so alerts show the real backend message. */
 function formatImportFailureMessage(error: unknown): string {
@@ -81,15 +86,8 @@ type UploadPhase = 'idle' | 'uploading' | 'processing';
 
 const IMPORT_POLL_MS = 2000;
 
-function computeProcessingProgress(imp: SapImport): number {
-  const total = Number(imp.total_records) || 0;
-  const done = (Number(imp.processed_records) || 0) + (Number(imp.failed_records) || 0);
-  if (total <= 0) {
-    return imp.status === 'processing' || imp.status === 'pending' ? 0 : 100;
-  }
-  if (done <= 0) return 0;
-  return Math.min(100, Math.round((done / total) * 100));
-}
+const computeProcessingProgress = computeSapImportProgress;
+const formatDuration = formatSapImportDuration;
 
 const SapImportDashboard: React.FC = () => {
   const perms = usePermissions();
@@ -103,6 +101,7 @@ const SapImportDashboard: React.FC = () => {
   const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const pendingImportIdRef = useRef<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const activeImport = useMemo(() => {
     if (activeImportId) {
@@ -116,6 +115,22 @@ const SapImportDashboard: React.FC = () => {
     uploadPhase === 'uploading' ||
     uploadPhase === 'processing' ||
     (!!activeImport && (activeImport.status === 'processing' || activeImport.status === 'pending'));
+  const isProcessingLive =
+    (uploadPhase === 'processing' || (uploadPhase === 'idle' && !!activeImport)) &&
+    !!activeImport &&
+    (activeImport.status === 'processing' || activeImport.status === 'pending');
+
+  // Tick every second so the elapsed-time / ETA display visibly moves between polls,
+  // instead of only updating every 2s when a fresh poll response arrives.
+  useEffect(() => {
+    if (!isProcessingLive) return;
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isProcessingLive]);
+
+  const { doneCount, elapsedSeconds, rowsPerSecond, remainingRows, etaSeconds } = activeImport
+    ? computeSapImportProgressStats(activeImport, nowTick)
+    : { doneCount: 0, elapsedSeconds: 0, rowsPerSecond: 0, remainingRows: 0, etaSeconds: null };
 
   const stopImportPolling = () => {
     if (pollTimerRef.current != null) {
@@ -391,28 +406,44 @@ const SapImportDashboard: React.FC = () => {
                   <span className="tabular-nums text-blue-800">{processingProgress}%</span>
                 </div>
                 <Progress value={processingProgress} className="h-2" />
-                <p className="text-xs text-blue-800/80">
-                  {(Number(activeImport.processed_records) || 0).toLocaleString()}
-                  {' / '}
-                  {(Number(activeImport.total_records) || 0).toLocaleString()} records processed
-                  {processingProgress === 0 &&
-                    (activeImport.status === 'processing' || activeImport.status === 'pending') && (
-                    <>
-                      {' · '}
-                      <span className="text-amber-800">
-                        Waiting for server — if this stays at 0% for several minutes, refresh or re-upload.
-                      </span>
-                    </>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-800/80">
+                  <span>
+                    <span className="font-semibold text-blue-900">
+                      {doneCount.toLocaleString()}
+                    </span>
+                    {' / '}
+                    {(Number(activeImport.total_records) || 0).toLocaleString()} rows processed
+                  </span>
+                  <span>Elapsed: {formatDuration(elapsedSeconds)}</span>
+                  {rowsPerSecond > 0 && (
+                    <span>
+                      ~{rowsPerSecond >= 1 ? Math.round(rowsPerSecond) : rowsPerSecond.toFixed(1)} rows/sec
+                    </span>
+                  )}
+                  {etaSeconds != null && remainingRows > 0 && (
+                    <span>Est. remaining: {formatDuration(etaSeconds)}</span>
                   )}
                   {(Number(activeImport.failed_records) || 0) > 0 && (
-                    <>
-                      {' · '}
-                      <span className="text-red-700">
-                        {(Number(activeImport.failed_records) || 0).toLocaleString()} failed
-                      </span>
-                    </>
+                    <span className="text-red-700">
+                      {(Number(activeImport.failed_records) || 0).toLocaleString()} failed
+                    </span>
                   )}
-                </p>
+                </div>
+                {doneCount === 0 && elapsedSeconds < 20 ? (
+                  <p className="text-xs text-blue-800/80">
+                    Reading the file and starting the first rows — this usually takes a few seconds.
+                  </p>
+                ) : doneCount === 0 && elapsedSeconds >= 20 ? (
+                  <p className="text-xs text-amber-800">
+                    Still starting up after {formatDuration(elapsedSeconds)} — large files can take a little
+                    longer. If this doesn&apos;t move for several minutes, refresh the page or re-upload.
+                  </p>
+                ) : (
+                  <p className="text-xs text-blue-800/80">
+                    Large files can take several minutes. You can leave this page — progress is saved on the
+                    server and Import History will update when it&apos;s done.
+                  </p>
+                )}
               </>
             )}
           </CardContent>

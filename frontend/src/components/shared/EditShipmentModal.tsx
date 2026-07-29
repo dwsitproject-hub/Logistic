@@ -1082,20 +1082,44 @@ export function EditShipmentModal({
         setEtaSectionEditing(false)
 
         if (multiPort) {
-          const blocks: EtaBlock[] = loadingPortRows.map((portRow) => ({
-            id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
-            portId: portRow.id,
-            portSequence: portRow.port_sequence ?? 1,
-            status: 'active' as const,
-            loadingPort: resolveKlipPortInputValue(portRow.port_name),
-            contractLabels: poLabels,
-            fields: loadingEtaFromPortRow(portRow, info, row),
-            isEditing: false,
-          }))
+          // Multi-contract STO group: each loading port belongs to one contract's shipment
+          // row — label it with that contract's PO(s) rather than the whole group's list.
+          const labelsByContract = new Map<string, string[]>()
+          for (const d of contractDetails) {
+            const cn = String(d.contract_number ?? '').trim()
+            if (!cn) continue
+            const label = d.po_number || d.contract_number
+            if (!label) continue
+            labelsByContract.set(cn, [...(labelsByContract.get(cn) ?? []), label])
+          }
+          // `info`/`row` are shipment-level fields scoped to the anchor shipment (sid) only —
+          // they must not leak into other ports' blocks, or every port with no data of its
+          // own on `vessel_loading_ports` would incorrectly display the anchor's dates.
+          const portBelongsToAnchor = (p: LoadingPortRef) =>
+            Boolean(p.shipment_id) && String(p.shipment_id) === sid
+          const blocks: EtaBlock[] = loadingPortRows.map((portRow) => {
+            const portContract = String(portRow.contract_number ?? '').trim()
+            const contractLabels =
+              (portContract && labelsByContract.get(portContract)) || poLabels
+            const isAnchorPort = portBelongsToAnchor(portRow)
+            return {
+              id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
+              portId: portRow.id,
+              portSequence: portRow.port_sequence ?? 1,
+              status: 'active' as const,
+              loadingPort: resolveKlipPortInputValue(portRow.port_name),
+              contractLabels,
+              fields: loadingEtaFromPortRow(portRow, isAnchorPort ? info : {}, isAnchorPort ? row : {}),
+              isEditing: false,
+            }
+          })
           setEtaBlocks(blocks)
           const ataByKey: Record<string, LoadingAtaFields> = {}
           for (const portRow of loadingPortRows) {
-            ataByKey[loadingPortAtaStateKey(portRow)] = loadingAtaFromPortRow(portRow, info)
+            ataByKey[loadingPortAtaStateKey(portRow)] = loadingAtaFromPortRow(
+              portRow,
+              portBelongsToAnchor(portRow) ? info : {},
+            )
           }
           setLoadingPortAtaByKey(ataByKey)
           setEtaBaseline(
@@ -1376,7 +1400,11 @@ export function EditShipmentModal({
                 portId: portRow.id,
                 portSequence: portRow.port_sequence ?? 1,
                 fields:
-                  loadingPortAtaByKey[ataKey] ?? loadingAtaFromPortRow(portRow, shipmentInfo),
+                  loadingPortAtaByKey[ataKey] ??
+                  loadingAtaFromPortRow(
+                    portRow,
+                    portRow.shipment_id && String(portRow.shipment_id) === shipmentId ? shipmentInfo : {},
+                  ),
               }
             })
           : undefined,
@@ -2075,11 +2103,17 @@ export function EditShipmentModal({
                             Loading Port {block.portSequence}
                           </Badge>
                           <span className="text-xs text-gray-600">
-                            {resolveLoadingPortDisplayFromRow(
-                              loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
-                              shipmentInfo,
-                              block.portSequence,
-                            )}
+                            {/* Multi-contract STO groups can have several ports sharing the same
+                                port_sequence (each contract's shipment numbers its own ports from 1),
+                                so match the exact row by portId — not by sequence, which would
+                                collide and always resolve to the first port. */}
+                            {resolveKlipPortInputValue(block.loadingPort) ||
+                              resolveLoadingPortDisplayFromRow(
+                                loadingPortRows.find((p) => p.id === block.portId) ??
+                                  loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
+                                shipmentInfo,
+                                block.portSequence,
+                              )}
                           </span>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -2301,7 +2335,13 @@ export function EditShipmentModal({
                     {loadingPortRows.map((portRow) => {
                       const ataKey = loadingPortAtaStateKey(portRow)
                       const portAta =
-                        loadingPortAtaByKey[ataKey] ?? loadingAtaFromPortRow(portRow, shipmentInfo)
+                        loadingPortAtaByKey[ataKey] ??
+                        loadingAtaFromPortRow(
+                          portRow,
+                          portRow.shipment_id && String(portRow.shipment_id) === shipmentId
+                            ? shipmentInfo
+                            : {},
+                        )
                       return (
                         <div
                           key={portRow.id || `ata-port-${portRow.port_sequence ?? 1}`}

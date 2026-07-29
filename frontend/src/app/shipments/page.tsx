@@ -366,6 +366,25 @@ interface VesselLoadingPort {
   updated_at?: string
 }
 
+function formatGroupLoadingPortsDisplay(ports: VesselLoadingPort[]): string {
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const port of ports) {
+    if (port.is_discharge_port) continue
+    const name = String(port.port_name ?? '').trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(name)
+  }
+  return unique.join(', ')
+}
+
+function hasMultipleGroupLoadingPorts(ports: VesselLoadingPort[]): boolean {
+  return ports.filter((p) => !p.is_discharge_port).length > 1
+}
+
 function apiErrorMessage(error: unknown, fallback: string): string {
   const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
   return err?.response?.data?.error?.message || err?.message || fallback
@@ -6700,7 +6719,7 @@ function ShipmentsPageContent() {
                             ),
                             color: 'text-gray-800',
                           },
-                          { label: 'Loading Port', value: shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
+                          { label: 'Loading Port', value: formatGroupLoadingPortsDisplay(loadingPorts) || shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
                           { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
                         ].map((m) => (
                           <div key={m.label} className="px-4 py-3">
@@ -6928,7 +6947,9 @@ function ShipmentsPageContent() {
                           onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, sfbd_qty: next })}
                         />
                         <div>
-                          <div className="text-gray-500">Vessel Loading Port 1</div>
+                          <div className="text-gray-500">
+                            {hasMultipleGroupLoadingPorts(loadingPorts) ? 'Loading Ports' : 'Vessel Loading Port 1'}
+                          </div>
                           {editingShipmentInfo ? (
                             <div className="mt-1">
                               <MasterLoadingPortCombobox
@@ -6938,10 +6959,19 @@ function ShipmentsPageContent() {
                                 }
                                 placeholder="Search Master Port..."
                                 className="h-8 text-sm"
+                                disabled={hasMultipleGroupLoadingPorts(loadingPorts)}
                               />
+                              {hasMultipleGroupLoadingPorts(loadingPorts) && (
+                                <p className="text-[11px] text-gray-500 mt-1">
+                                  Multiple contracts — edit each loading port in the sections below.
+                                </p>
+                              )}
                             </div>
                           ) : (
-                          <div className="font-medium">{formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}</div>
+                          <div className="font-medium">
+                            {formatGroupLoadingPortsDisplay(loadingPorts) ||
+                              formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}
+                          </div>
                           )}
                         </div>
                         <div>
@@ -7364,17 +7394,17 @@ function ShipmentsPageContent() {
                     return null
                   }
 
-                  // Multiple sets: new section for each additional loading or discharge port (first set stays in Shipment Information)
-                  const additionalLoading = loadingPortsList.slice(1)
-                  const additionalDischarge = dischargePortsList.slice(1)
+                  // Multiple sets: section per loading/discharge port (multi-contract STO groups show all loading ports)
+                  const additionalLoading = loadingPortsList.length > 1 ? loadingPortsList : loadingPortsList.slice(1)
+                  const additionalDischarge = dischargePortsList.length > 1 ? dischargePortsList : dischargePortsList.slice(1)
                   const additionalPorts = [...additionalLoading, ...additionalDischarge]
 
                   return (
                     <>
                   {additionalPorts.map((port) => {
                     const sectionTitle = port.is_discharge_port
-                      ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}`
-                      : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}`
+                      ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}${port.contract_number ? ` (Contract ${port.contract_number})` : ''}`
+                      : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}${port.contract_number ? ` (Contract ${port.contract_number})` : ''}`
                     const quantityLabel = port.is_discharge_port ? 'Received Quantity (Kg)' : 'Quantity at Loading Port (Kg)'
                     const rateLabel = port.is_discharge_port ? 'Discharge Rate (Kg/day)' : 'Loading Rate (Kg/day)'
 

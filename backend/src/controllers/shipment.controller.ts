@@ -140,6 +140,10 @@ import {
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 import {
+  resolveStoGroupShipmentIds,
+  sqlShipmentOrStoKeyMatchWhere,
+} from '../utils/shipmentStoGroupMembersSql';
+import {
   SQL_CONTRACT_IMPORT_STATUS,
   getContractImportStatusForShipment,
   sqlIsContractSapClosedForStoExpr,
@@ -2406,7 +2410,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
     let shipmentInfoResult;
     
     if (isUUID) {
-      // Get loading ports for a specific shipment
+      const groupShipmentIds = await resolveStoGroupShipmentIds(shipmentId);
+      // Loading ports for the STO group (all sibling shipments sharing sto_key / operation_id)
       portsResult = await query(
         `SELECT 
           vlp.id,
@@ -2443,10 +2448,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          FROM vessel_loading_ports vlp
          LEFT JOIN shipments s ON vlp.shipment_id = s.id
          LEFT JOIN contracts c ON s.contract_id = c.id
-         WHERE vlp.shipment_id = $1
+         WHERE vlp.shipment_id = ANY($1::uuid[])
          ${activePortFilter}
-         ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-        [shipmentId]
+         ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+        [groupShipmentIds]
       );
       if (hasCancelColumn) {
         cancelledPortsResult = await query(
@@ -2465,15 +2470,18 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
            LEFT JOIN shipments s ON vlp.shipment_id = s.id
            LEFT JOIN contracts c ON s.contract_id = c.id
            ${cancelledByJoin}
-           WHERE vlp.shipment_id = $1
+           WHERE vlp.shipment_id = ANY($1::uuid[])
              AND COALESCE(vlp.is_cancelled, false) = true
            ORDER BY vlp.cancelled_at DESC NULLS LAST, vlp.updated_at DESC NULLS LAST`,
-          [shipmentId]
+          [groupShipmentIds]
         );
       }
 
-      // Backfill: if shipment has port names but no vessel_loading_ports rows, create one loading + one discharge row from shipments
-      if (portsResult.rows.length === 0) {
+      // Backfill: if primary shipment has port names but no vessel_loading_ports rows, create one loading + one discharge row from shipments
+      const primaryPortsCount = portsResult.rows.filter(
+        (row) => String(row.shipment_id) === shipmentId,
+      ).length;
+      if (primaryPortsCount === 0) {
         const shipRow = await query(
           `SELECT id, port_of_loading, port_of_discharge, actual_vessel_qty_receive
            FROM shipments WHERE id = $1`,
@@ -2511,10 +2519,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
                FROM vessel_loading_ports vlp
                LEFT JOIN shipments sh ON vlp.shipment_id = sh.id
                LEFT JOIN contracts c ON sh.contract_id = c.id
-               WHERE vlp.shipment_id = $1
+               WHERE vlp.shipment_id = ANY($1::uuid[])
               ${activePortFilter}
-               ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-              [shipmentId]
+               ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+              [groupShipmentIds]
             );
           }
         }
@@ -2522,8 +2530,12 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
 
       try {
         if (syncSap) {
-          const synced = await syncVesselLoadingPortsFromLatestSap(shipmentId);
-          if (synced) {
+          let syncedAny = false;
+          for (const memberId of groupShipmentIds) {
+            const synced = await syncVesselLoadingPortsFromLatestSap(memberId);
+            if (synced) syncedAny = true;
+          }
+          if (syncedAny) {
           portsResult = await query(
             `SELECT 
               vlp.id,
@@ -2560,10 +2572,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
              FROM vessel_loading_ports vlp
              LEFT JOIN shipments s ON vlp.shipment_id = s.id
              LEFT JOIN contracts c ON s.contract_id = c.id
-             WHERE vlp.shipment_id = $1
+             WHERE vlp.shipment_id = ANY($1::uuid[])
              ${activePortFilter}
-             ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-            [shipmentId],
+             ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+            [groupShipmentIds],
           );
           }
         }
@@ -2695,7 +2707,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          FROM vessel_loading_ports vlp
          LEFT JOIN shipments s ON vlp.shipment_id = s.id
          LEFT JOIN contracts c ON s.contract_id = c.id
-         WHERE (c.sto_number = $1 OR s.shipment_id = $1)
+         WHERE ${sqlShipmentOrStoKeyMatchWhere('$1', 'c', 's')}
          ${activePortFilter}
          ORDER BY c.contract_id, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
         [shipmentId]
@@ -2717,7 +2729,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
            LEFT JOIN shipments s ON vlp.shipment_id = s.id
            LEFT JOIN contracts c ON s.contract_id = c.id
            ${cancelledByJoin}
-           WHERE (c.sto_number = $1 OR s.shipment_id = $1)
+           WHERE ${sqlShipmentOrStoKeyMatchWhere('$1', 'c', 's')}
              AND COALESCE(vlp.is_cancelled, false) = true
            ORDER BY vlp.cancelled_at DESC NULLS LAST, vlp.updated_at DESC NULLS LAST`,
           [shipmentId]
@@ -2788,8 +2800,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
          LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
          ${SHIPMENT_ATA_OVERRIDES_JOIN}
-         WHERE c.sto_number = $1 OR s.shipment_id = $1
-         GROUP BY COALESCE(c.sto_number, s.shipment_id)`,
+         WHERE ${sqlShipmentOrStoKeyMatchWhere('$1', 'c', 's')}
+         GROUP BY COALESCE(c.sto_number, s.shipment_id, s.operation_id)`,
         [shipmentId]
       );
     }

@@ -98,6 +98,8 @@ export type LoadingPortAtaSave = {
 
 export type LoadingPortRef = {
   id?: string
+  shipment_id?: string
+  contract_number?: string
   sap_port_name?: string | null
   port_name?: string
   port_sequence?: number
@@ -314,7 +316,10 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
 
     if (existing?.id) {
       const payload = buildLoadingPortUpdatePayload(portSource, existing.id)
-      await api.put(`/shipments/${input.shipmentId}/loading-ports/${existing.id}`, payload)
+      // Multi-contract STO groups: each loading port row belongs to its own contract's
+      // shipment UUID, which may differ from the primary shipmentId used to open the modal.
+      const ownerShipmentId = existing.shipment_id || input.shipmentId
+      await api.put(`/shipments/${ownerShipmentId}/loading-ports/${existing.id}`, payload)
     } else if (
       portSave.fields.etaVesselArrivalAtLoadingPort ||
       portSave.fields.etaVesselBerthedAtLoadingPort ||
@@ -350,7 +355,8 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
       },
       dischargePort.id,
     )
-    await api.put(`/shipments/${input.shipmentId}/loading-ports/${dischargePort.id}`, dischargePayload)
+    const dischargeOwnerShipmentId = dischargePort.shipment_id || input.shipmentId
+    await api.put(`/shipments/${dischargeOwnerShipmentId}/loading-ports/${dischargePort.id}`, dischargePayload)
   }
 
   if (input.ataFields && input.originalAtaFields) {
