@@ -30,6 +30,7 @@ import { groupPlantExpr } from '../utils/groupPlantSql';
 import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
 import { resolveSapLoadingPortNameMapForShipment } from './vesselLoadingPortsFromSap.service';
+import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 
 const SHIPMENT_BY_ID_SQL = `
   SELECT
@@ -123,16 +124,21 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
   ports: Record<string, unknown>[];
   shipmentInfo: Record<string, unknown> | null;
 }> {
+  // Multi-contract STO groups (e.g. manual OP-* operations) have one shipment row per
+  // contract, each with its own vessel_loading_ports rows. Expand to the whole group so
+  // the Edit Shipment modal shows the same port count as the Shipments list (which
+  // aggregates SAP/KLIP ports across all group members).
+  const groupShipmentIds = await resolveStoGroupShipmentIds(shipmentUuid);
   const [portsResult, sapPortNames] = await Promise.all([
     query(
       `SELECT ${PORTS_SELECT}
        FROM vessel_loading_ports vlp
        LEFT JOIN shipments s ON vlp.shipment_id = s.id
        LEFT JOIN contracts c ON s.contract_id = c.id
-       WHERE vlp.shipment_id = $1::uuid
+       WHERE vlp.shipment_id = ANY($1::uuid[])
        ${ACTIVE_PORT_FILTER}
-       ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-      [shipmentUuid],
+       ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+      [groupShipmentIds],
     ),
     resolveSapLoadingPortNameMapForShipment(shipmentUuid),
   ]);

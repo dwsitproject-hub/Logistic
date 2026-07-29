@@ -1,14 +1,24 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import AppLayout from '@/components/Layout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Loader2 } from 'lucide-react';
 import api from '@/lib/api';
 import { formatDateDMY, formatDateTimeDMY, formatTimeHMS } from '@/lib/dateFormat';
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue';
+import {
+  computeSapImportProgress,
+  computeSapImportProgressStats,
+  formatSapImportDuration,
+  isSapImportInFlight,
+} from '@/lib/sapImportProgress';
+
+const IMPORT_DETAIL_POLL_MS = 2000;
 
 interface ImportDetail {
   id: string;
@@ -62,13 +72,42 @@ export default function ImportDetailPage() {
   const [fieldMappings, setFieldMappings] = useState<FieldMapping[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<ImportRecord | null>(null);
   const [userRole, setUserRole] = useState<string>('ADMIN'); // Get from auth context in production
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const pollTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadImportDetail();
     loadFieldMappings();
+    return () => {
+      if (pollTimerRef.current != null) window.clearInterval(pollTimerRef.current);
+    };
   }, [params.id]);
 
-  const loadImportDetail = async () => {
+  // While the import is still running, keep refreshing so this page shows live progress
+  // instead of a static snapshot that looks stuck.
+  useEffect(() => {
+    if (!isSapImportInFlight(importData?.status)) {
+      if (pollTimerRef.current != null) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      return;
+    }
+    if (pollTimerRef.current == null) {
+      pollTimerRef.current = window.setInterval(() => {
+        void loadImportDetail(true);
+        setNowTick(Date.now());
+      }, IMPORT_DETAIL_POLL_MS);
+    }
+    return () => {
+      if (pollTimerRef.current != null) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [importData?.status]);
+
+  const loadImportDetail = async (fromPoll = false) => {
     try {
       const response = await api.get(`/sap-master-v2/imports/${params.id}`);
       setImportData(response.data.data.import);
@@ -82,12 +121,16 @@ export default function ImportDetailPage() {
         } catch (e) {
           setErrors([response.data.data.import.error_log]);
         }
+      } else {
+        setErrors([]);
       }
     } catch (error: any) {
       console.error('Failed to load import details:', error);
-      alert('Failed to load import details: ' + (error.response?.data?.error?.message || error.message));
+      if (!fromPoll) {
+        alert('Failed to load import details: ' + (error.response?.data?.error?.message || error.message));
+      }
     } finally {
-      setLoading(false);
+      if (!fromPoll) setLoading(false);
     }
   };
 
@@ -295,6 +338,46 @@ export default function ImportDetailPage() {
         </div>
 
       <div className="space-y-6">
+        {isSapImportInFlight(importData.status) && (() => {
+          const progress = computeSapImportProgress(importData);
+          const { doneCount, elapsedSeconds, rowsPerSecond, remainingRows, etaSeconds } =
+            computeSapImportProgressStats(importData, nowTick);
+          return (
+            <Card className="border-blue-200 bg-blue-50/50">
+              <CardContent className="pt-6 space-y-3">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium text-blue-900 flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    Processing SAP data...
+                  </span>
+                  <span className="tabular-nums text-blue-800">{progress}%</span>
+                </div>
+                <Progress value={progress} className="h-2" />
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-blue-800/80">
+                  <span>
+                    <span className="font-semibold text-blue-900">{doneCount.toLocaleString()}</span>
+                    {' / '}
+                    {(Number(importData.total_records) || 0).toLocaleString()} rows processed
+                  </span>
+                  <span>Elapsed: {formatSapImportDuration(elapsedSeconds)}</span>
+                  {rowsPerSecond > 0 && (
+                    <span>
+                      ~{rowsPerSecond >= 1 ? Math.round(rowsPerSecond) : rowsPerSecond.toFixed(1)} rows/sec
+                    </span>
+                  )}
+                  {etaSeconds != null && remainingRows > 0 && (
+                    <span>Est. remaining: {formatSapImportDuration(etaSeconds)}</span>
+                  )}
+                </div>
+                <p className="text-xs text-blue-800/80">
+                  This page refreshes automatically. You can navigate away — processing continues on the
+                  server.
+                </p>
+              </CardContent>
+            </Card>
+          );
+        })()}
+
         {/* Summary Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>

@@ -239,6 +239,7 @@ type VesselLoadingPortRow = {
   port_name?: string
   port_sequence?: number
   is_discharge_port?: boolean
+  contract_number?: string
   eta_vessel_arrival?: string | null
   eta_vessel_berthed_at_loading_port?: string | null
   eta_vessel_berthed?: string | null
@@ -249,6 +250,42 @@ type VesselLoadingPortRow = {
   eta_vessel_berthed_at_discharge_port?: string | null
   eta_vessel_start_discharging?: string | null
   eta_vessel_complete_discharge?: string | null
+}
+
+function buildEtaDetailsFromGroupLoadingPorts(
+  contractIds: string[],
+  shipment: Record<string, unknown>,
+  listRow: Record<string, unknown>,
+  ports: VesselLoadingPortRow[],
+): ShipmentEtaDetail[] {
+  const loadingPorts = ports.filter((p) => p.is_discharge_port !== true)
+  const portsByContract = new Map<string, VesselLoadingPortRow>()
+  for (const port of loadingPorts) {
+    const contractId = String(port.contract_number ?? '').trim()
+    if (contractId) portsByContract.set(contractId, port)
+  }
+
+  if (portsByContract.size > 1 && contractIds.length > 1) {
+    return contractIds.map((contractId) => {
+      const block = createShipmentEtaDetail([contractId])
+      applyShipmentEtaToBlock(
+        block,
+        shipment,
+        listRow,
+        portsByContract.get(contractId) ??
+          loadingPorts.find((p) => !p.contract_number) ??
+          loadingPorts[0] ??
+          null,
+      )
+      return block
+    })
+  }
+
+  const loadingPortRow =
+    loadingPorts.find((p) => p.port_sequence === 1) ?? loadingPorts[0] ?? null
+  const block = createShipmentEtaDetail([...contractIds])
+  applyShipmentEtaToBlock(block, shipment, listRow, loadingPortRow)
+  return [block]
 }
 
 function applyShipmentEtaToBlock(
@@ -1484,14 +1521,10 @@ export function AddNewShipmentModal({
         }
       }
 
-      let loadingPortRow: VesselLoadingPortRow | null = null
+      let loadingPorts: VesselLoadingPortRow[] = []
       try {
         const portsRes = await api.get(`/shipments/${shipmentId}/loading-ports`)
-        const ports: VesselLoadingPortRow[] = portsRes.data?.data?.ports ?? []
-        loadingPortRow =
-          ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-          ports.find((p) => !p.is_discharge_port) ||
-          null
+        loadingPorts = portsRes.data?.data?.ports ?? []
       } catch {
         // Shipment-level ETA fields are used when loading ports are unavailable
       }
@@ -1512,9 +1545,9 @@ export function AddNewShipmentModal({
       })
       setContractQtyAssigned(qtyAssigned)
 
-      const etaBlock = createShipmentEtaDetail([...uniqueContractIds])
-      applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
-      setEtaDetails([etaBlock])
+      setEtaDetails(
+        buildEtaDetailsFromGroupLoadingPorts(uniqueContractIds, shipment, row, loadingPorts),
+      )
       return { qtyAssigned, assignmentKey }
     },
     [validateContractNumber],
@@ -1697,13 +1730,9 @@ export function AddNewShipmentModal({
           }
         }
 
-        let loadingPortRow: VesselLoadingPortRow | null = null
+        let loadingPorts: VesselLoadingPortRow[] = []
         if (portsRes?.data?.data?.ports) {
-          const ports: VesselLoadingPortRow[] = portsRes.data.data.ports ?? []
-          loadingPortRow =
-            ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-            ports.find((p) => !p.is_discharge_port) ||
-            null
+          loadingPorts = portsRes.data.data.ports ?? []
         }
 
         if (allPos.length > 0) {
@@ -1743,10 +1772,10 @@ export function AddNewShipmentModal({
             '',
         }))
 
-        const contractKeys = allPos.map((po) => po.key)
-        const etaBlock = createShipmentEtaDetail([...contractKeys])
-        applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
-        setEtaDetails([etaBlock])
+        const contractIds = allPos.map((po) => po.contractId)
+        setEtaDetails(
+          buildEtaDetailsFromGroupLoadingPorts(contractIds, shipment, row, loadingPorts),
+        )
         setEditShipmentId(null)
       } catch (error) {
         console.error('Failed to load shipment for plot:', error)
@@ -3138,6 +3167,11 @@ export function AddNewShipmentModal({
                             <div className="relative overflow-visible z-0">
                               <label className="block text-[11px] font-medium text-gray-600 mb-1">
                                 Loading Port{etaFieldsRequired ? <span className="text-red-500"> *</span> : null}
+                                {isEditMode && block.contractIds.length === 1 ? (
+                                  <span className="ml-1 font-normal text-gray-500">
+                                    (Contract {block.contractIds[0]})
+                                  </span>
+                                ) : null}
                               </label>
                               <MasterLoadingPortCombobox
                                 value={block.loadingPort}

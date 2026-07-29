@@ -1043,7 +1043,7 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE($47::numeric, sfal_qty),
           sfbd_qty = COALESCE($48::numeric, sfbd_qty),
           status = CASE
-            WHEN $51::boolean IS TRUE
+            WHEN $50::boolean IS TRUE
               AND UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANCELLED', 'CANCELED')
               THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('$49::text')} > ${sqlShipmentStatusRank('status')}
@@ -1051,7 +1051,7 @@ export class SapDataDistributionService {
             ELSE status
           END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $52`,
+         WHERE id = $51`,
         [
           contractUuid,
           voyageNo,
