@@ -29,7 +29,7 @@ export const SHIPMENT_LIST_STO_METRICS_STUB = `
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       spd_keyed AS (
-        SELECT NULL::text AS sto_key, NULL::timestamptz AS created_at, NULL::jsonb AS data
+        SELECT NULL::text AS sto_key, NULL::timestamptz AS created_at, NULL::uuid AS spd_id, NULL::jsonb AS data
         WHERE false
       ),
       contract_ext_agg AS (
@@ -59,39 +59,73 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       ${SHIPMENT_LIST_SAP_PORTS_AGG_STUB}`;
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
+      /*
+       * Page contract numbers, split ONCE per page row.
+       *
+       * shipment_page.contract_numbers is a comma-separated list. The old spd_keyed join
+       * tested it with EXISTS (SELECT 1 FROM unnest(regexp_split_to_array(...))) inside an
+       * OR'd join condition, so Postgres could not hash or index either side and fell back to
+       * a nested loop over the whole of sap_processed_data - re-running the regex split for
+       * every (page row x SAP row) pair. Measured on a copy of staging: 25 page rows x 9,797
+       * SAP rows, 244,832 rows discarded by the join filter and the split executed 244,587
+       * times, for 17.6s of a 27.6s query (64%).
+       *
+       * Splitting first turns that into a plain equality any index can serve. DISTINCT keeps
+       * the EXISTS semantics of the original: at most one row per (sto_key, contract_number),
+       * so a duplicated entry in the CSV cannot duplicate a SAP row downstream.
+       */
+      shipment_page_contracts AS (
+        SELECT DISTINCT
+          sp.sto_key,
+          TRIM(cn) AS contract_number
+        FROM shipment_page sp
+        CROSS JOIN unnest(regexp_split_to_array(sp.contract_numbers, ',')) AS cn
+        WHERE sp.contract_numbers IS NOT NULL
+          AND sp.sto_key IS NOT NULL AND TRIM(sp.sto_key::text) != ''
+          AND TRIM(cn) != ''
+      ),
       spd_keyed AS (
         /*
          * Key SAP rows to the *page* sto_key.
-         * Primary join: STO-based match (fast when STO exists).
-         * Fallback join: contract_number ∈ shipment_page.contract_numbers (needed for
+         * Primary branch: STO-based match (fast when STO exists).
+         * Fallback branch: contract_number ∈ shipment_page.contract_numbers (needed for
          * synthetic OP-SEA-* rows / SPD without STO). Must NOT pull SPD rows whose STO
          * differs from the page key — multi-STO contracts (contract_stos) otherwise
          * contaminate ports/qty (e.g. STO A showing loading port from STO B).
+         *
+         * The two branches were one join with an OR; they are now UNION ALL so each can be
+         * planned independently against an index. The fallback adds
+         * (sto expr = sto_key) IS NOT TRUE, which is exactly "not already matched by the
+         * primary branch" - so every pair appears exactly once, as under the original OR.
+         * IS NOT TRUE (rather than NOT ...) is required because <sto expr> can be NULL, and
+         * the original join filter treated a NULL comparison as no-match.
          */
         SELECT
           sp.sto_key,
           spd.created_at,
+          spd.id AS spd_id,
           spd.data
         FROM shipment_page sp
         INNER JOIN sap_processed_data spd
-          ON (
-            ${sapStoNumberKeyExpr('spd')} = TRIM(sp.sto_key::text)
-            OR (
-              spd.contract_number IS NOT NULL
-              AND sp.contract_numbers IS NOT NULL
-              AND EXISTS (
-                SELECT 1
-                FROM unnest(regexp_split_to_array(sp.contract_numbers, ',')) AS cn
-                WHERE TRIM(cn) = TRIM(spd.contract_number::text)
-              )
-              AND (
-                TRIM(sp.sto_key::text) ~ '^OP-'
-                OR ${sapStoNumberKeyExpr('spd')} IS NULL
-                OR ${sapStoNumberKeyExpr('spd')} = TRIM(sp.sto_key::text)
-              )
-            )
-          )
+          ON ${sapStoNumberKeyExpr('spd')} = TRIM(sp.sto_key::text)
         WHERE sp.sto_key IS NOT NULL AND TRIM(sp.sto_key::text) != ''
+
+        UNION ALL
+
+        SELECT
+          spc.sto_key,
+          spd.created_at,
+          spd.id AS spd_id,
+          spd.data
+        FROM shipment_page_contracts spc
+        INNER JOIN sap_processed_data spd
+          ON TRIM(spd.contract_number::text) = spc.contract_number
+        WHERE spd.contract_number IS NOT NULL
+          AND (${sapStoNumberKeyExpr('spd')} = TRIM(spc.sto_key::text)) IS NOT TRUE
+          AND (
+            TRIM(spc.sto_key::text) ~ '^OP-'
+            OR ${sapStoNumberKeyExpr('spd')} IS NULL
+          )
       ),
       contract_ext_agg AS (
         SELECT
@@ -187,7 +221,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
         FROM spd_keyed sk
         LEFT JOIN sap_vessel_pick vp ON vp.sto_key = sk.sto_key
         WHERE sk.sto_key IS NOT NULL
-        ORDER BY sk.sto_key, sk.created_at DESC NULLS LAST
+        ORDER BY sk.sto_key, sk.created_at DESC NULLS LAST, sk.spd_id DESC
       )`;
 
 export function shipmentListSpdAggCtes(skipSapJoin: boolean): string {
