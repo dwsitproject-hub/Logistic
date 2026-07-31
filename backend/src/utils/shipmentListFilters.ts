@@ -172,6 +172,57 @@ export function buildExactNumericGlobalSearchInnerSql(
           WHERE cs_search.contract_id = c.id
             AND TRIM(cs_search.sto_number::text) = TRIM(${p}::text)
         )
+        /*
+         * PO / contract numbers of the OTHER contracts on the same STO.
+         *
+         * The list groups by STO, and several contracts can share one STO number. The
+         * displayed PO and contract columns already aggregate across every contract on the
+         * STO (buildStoLinkedPoNumbersSql / buildStoLinkedContractNumbersSql), but the search
+         * above only ever compares the shipment's OWN contract. So a row could show
+         * "1011003113, 1011003143" while searching 1011003113 returned nothing - the PO was
+         * visible on the page and unfindable at the same time.
+         *
+         * Measured on a copy of staging: contracts 1011003113 / 1011003130 / 1011003143 all
+         * carry STO 1016010973. Searching 1011003143 found the row (it owns the shipment);
+         * the other two found nothing.
+         *
+         * The lookup starts from the PO/contract number, which identifies at most a handful
+         * of contracts, and only then checks whether one of them shares this row's STO - the
+         * cheap direction. It deliberately covers the two structural linkages (the contract's
+         * own sto_number and its contract_stos lines) rather than reusing the full
+         * contractsOnStoSubquery, whose SAP and shipment branches would add per-row JSONB work
+         * to every search.
+         *
+         * Note on B2B children: contractsOnStoSubquery also applies
+         * sqlB2bChildContractRowExcludeWhere, so a B2B child PO is not listed in the row's PO
+         * column. This branch does NOT replicate that exclusion, which means such a PO can
+         * find the row it participates in without being named on it (1011003130 above is a
+         * B2B child of 1001030778). That is intentional: searching is navigation, and
+         * "where is this PO's vessel activity?" is answered by the STO group row. The B2B
+         * exclusion exists to stop quantities being counted twice in aggregates, and this
+         * branch touches neither the row set nor any figure - only whether an existing row is
+         * reachable by that search term.
+         *
+         * Like the sibling-STO branch, this only widens what a search FINDS - it adds no rows
+         * to the list and changes no figure.
+         */
+        OR EXISTS (
+          SELECT 1
+          FROM contracts c_ident
+          WHERE (
+              TRIM(COALESCE(c_ident.po_number::text, '')) = TRIM(${p}::text)
+              OR TRIM(COALESCE(c_ident.contract_id::text, '')) = TRIM(${p}::text)
+            )
+            AND (
+              TRIM(COALESCE(c_ident.sto_number::text, '')) = TRIM(${stoKeySql})
+              OR EXISTS (
+                SELECT 1
+                FROM contract_stos cs_ident
+                WHERE cs_ident.contract_id = c_ident.id
+                  AND TRIM(cs_ident.sto_number::text) = TRIM(${stoKeySql})
+              )
+            )
+        )
       )`;
 }
 
