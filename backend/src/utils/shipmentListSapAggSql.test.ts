@@ -64,7 +64,32 @@ describe('shipmentListSapAggSql', () => {
    */
   it('breaks created_at ties deterministically so results do not depend on the plan', () => {
     const full = shipmentListSpdAggCtes(false);
-    expect(full).toContain('sk.created_at DESC NULLS LAST, sk.spd_id DESC');
+    expect(full).toContain('sk.created_at DESC NULLS LAST');
+    expect(full).toContain('sk.spd_id DESC');
+  });
+
+  /*
+   * B2B children must rank LAST when choosing the row that represents an STO, so b2b_flag
+   * cannot describe a contract the page excludes from its row set and from po_numbers_agg.
+   *
+   * It must be an ORDER BY preference and not a WHERE filter: 259 of 3,871 STOs have only
+   * child rows, and filtering would leave them with no sap_latest row at all - blanking
+   * b2b_flag and dropping incoterm to a fallback.
+   */
+  it('ranks B2B child rows last without filtering them out', () => {
+    const full = shipmentListSpdAggCtes(false);
+    // Anchor on sap_latest: later CTEs (the ports aggregates) have ORDER BY clauses of
+    // their own, so searching the whole string finds the wrong one.
+    const sapLatest = full.slice(full.indexOf('sap_latest AS ('));
+    const orderBy = sapLatest.slice(sapLatest.indexOf('ORDER BY'));
+
+    expect(orderBy).toContain('THEN 1 ELSE 0 END');
+    // The child test must come BEFORE created_at, or a newer child would still win.
+    expect(orderBy.indexOf('CASE WHEN')).toBeGreaterThan(-1);
+    expect(orderBy.indexOf('CASE WHEN')).toBeLessThan(orderBy.indexOf('sk.created_at'));
+    // Preference, not filter: sap_latest must not gain a child-exclusion WHERE clause.
+    expect(sapLatest).toContain('WHERE sk.sto_key IS NOT NULL');
+    expect(sapLatest.slice(0, sapLatest.indexOf('ORDER BY'))).not.toContain('contract_reference_po');
   });
 
   it('exposes spd_id in both the stub and full CTEs so the shapes stay compatible', () => {

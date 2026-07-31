@@ -6,6 +6,7 @@ import {
   SAP_VESSEL_OWNER_FROM_SK_SQL,
 } from './sapVesselFields';
 import { buildShipmentListStoMetricsCte, sqlB2bChildSpdDataExcludeWhere } from './shippingPerformanceStoMetricsSql';
+import { sqlB2bChildSpdDataIsChild } from './b2bChildSql';
 import {
   SHIPMENT_LIST_SAP_PORTS_AGG_CTES,
   SHIPMENT_LIST_SAP_PORTS_AGG_STUB,
@@ -221,7 +222,35 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
         FROM spd_keyed sk
         LEFT JOIN sap_vessel_pick vp ON vp.sto_key = sk.sto_key
         WHERE sk.sto_key IS NOT NULL
-        ORDER BY sk.sto_key, sk.created_at DESC NULLS LAST, sk.spd_id DESC
+        /*
+         * Which SAP row represents this STO.
+         *
+         * 1. B2B CHILD ROWS RANK LAST. An STO can carry several contracts, and the page
+         *    already excludes B2B children from the row set and from po_numbers_agg. Letting
+         *    one of them supply b2b_flag meant the column could describe a contract the page
+         *    deliberately does not count, while the PO column beside it excluded that same
+         *    contract. Measured on a copy of staging: of 335 STO+timestamp groups tied to the
+         *    microsecond, 45 disagreed on b2b_flag; ranking children last settles 38 of them
+         *    from the data rather than by luck.
+         *
+         *    This is a preference, not a filter, and that is deliberate: 259 of 3,871 STOs
+         *    (6.7%) have ONLY child rows. Filtering them out would leave those STOs with no
+         *    sap_latest row at all, blanking b2b_flag and dropping incoterm to a fallback.
+         *    Ranking keeps the current value for them and changes only STOs that actually
+         *    have a non-child alternative.
+         *
+         * 2. Then newest first, as before.
+         *
+         * 3. Then spd_id DESC as a final tie-break. Without it the winner among rows sharing
+         *    created_at is whatever the plan happens to emit first, so the displayed flag
+         *    changed whenever the plan did. incoterm and source_type never disagree within a
+         *    tied group (measured: 0 conflicts), so this only ever decided b2b_flag.
+         */
+        ORDER BY
+          sk.sto_key,
+          CASE WHEN ${sqlB2bChildSpdDataIsChild('sk.data')} THEN 1 ELSE 0 END,
+          sk.created_at DESC NULLS LAST,
+          sk.spd_id DESC
       )`;
 
 export function shipmentListSpdAggCtes(skipSapJoin: boolean): string {

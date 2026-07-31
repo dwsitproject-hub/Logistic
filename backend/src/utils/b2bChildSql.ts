@@ -46,9 +46,12 @@ export function sqlB2bChildContractRowExcludeWhere(contractAlias = 'cc'): string
   )`;
 }
 
-/** Exclude B2B child rows from spd_keyed JSON aggregates (PO column hydrate). */
-export function sqlB2bChildSpdDataExcludeWhere(spdDataExpr = 'sk.data'): string {
-  return `NOT (
+/**
+ * Is this spd_keyed row a B2B *child* contract (B2B flag set AND a reference PO present)?
+ * Positive form of sqlB2bChildSpdDataExcludeWhere, for ranking rather than filtering.
+ */
+export function sqlB2bChildSpdDataIsChild(spdDataExpr = 'sk.data'): string {
+  return `(
     UPPER(TRIM(COALESCE(
       ${spdDataExpr}->'contract'->>'contract_type',
       ${spdDataExpr}->>'B2B Flag',
@@ -61,4 +64,9 @@ export function sqlB2bChildSpdDataExcludeWhere(spdDataExpr = 'sk.data'): string 
       ${spdDataExpr}->'raw'->>'CONTRACT REFF PO'
     )), '') IS NOT NULL
   )`;
+}
+
+/** Exclude B2B child rows from spd_keyed JSON aggregates (PO column hydrate). */
+export function sqlB2bChildSpdDataExcludeWhere(spdDataExpr = 'sk.data'): string {
+  return `NOT ${sqlB2bChildSpdDataIsChild(spdDataExpr)}`;
 }
