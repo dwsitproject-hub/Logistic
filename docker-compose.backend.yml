@@ -60,6 +60,11 @@ services:
       # Shared upload root inside container (see backend_uploads volume below; Synology optional override)
       UPLOAD_DIR: /app/uploads
       # GEMINI_API_KEY comes from env_file: ./backend/.env (do not override here or it will be empty)
+      # ANTHROPIC_API_KEY does too, and is REQUIRED — it powers KLIP Agent AI (chat) and the AI
+      # Shipment Planner. Without it the agent answers with a clear "not configured" error.
+      # Optional in the same file: ANTHROPIC_AGENT_MODEL (default claude-sonnet-5) and
+      # ANTHROPIC_AGENT_EFFORT (low|medium|high|xhigh|max, default medium).
+      # Add to /opt/klip/backend/.env on the backend host; do not set them here.
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:
