@@ -31,6 +31,7 @@ import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
 import { resolveSapLoadingPortNameMapForShipment } from './vesselLoadingPortsFromSap.service';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
+import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
 
 const SHIPMENT_BY_ID_SQL = `
   SELECT
@@ -143,7 +144,14 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
     resolveSapLoadingPortNameMapForShipment(shipmentUuid),
   ]);
 
-  const ports = (portsResult.rows as Record<string, unknown>[]).map((port) => {
+  // Group expansion above returns the same physical port once per group member; collapse those
+  // before mapping, or sections 3/4/5 render a duplicate "Loading Port 1" (the empty one first).
+  const dedupedPortRows = dedupeStoGroupPorts(
+    portsResult.rows as Record<string, unknown>[],
+    shipmentUuid,
+  );
+
+  const ports = dedupedPortRows.map((port) => {
     const isDischarge = Boolean(port.is_discharge_port);
     const sequence = Number(port.port_sequence ?? 0);
     const sapPortName = isDischarge

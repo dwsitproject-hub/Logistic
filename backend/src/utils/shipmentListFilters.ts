@@ -156,6 +156,22 @@ export function buildExactNumericGlobalSearchInnerSql(
         OR s.shipment_id = ${p}
         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${p}::text)
         OR TRIM(COALESCE(c.po_number::text, '')) = TRIM(${p}::text)
+        /*
+         * Sibling STO numbers.
+         *
+         * A contract can carry several vessel STO lines while KLIP holds one shipment for the
+         * group, keyed to just one of them. Searching any of the other STO numbers therefore
+         * found nothing even though the shipment is on the page under a different number
+         * (measured: 148 STO lines across 141 contracts). Matching the contract's own STO list
+         * makes every STO on a contract a usable search term. This only widens what a search
+         * FINDS - it adds no rows to the list and changes no figure.
+         */
+        OR EXISTS (
+          SELECT 1
+          FROM contract_stos cs_search
+          WHERE cs_search.contract_id = c.id
+            AND TRIM(cs_search.sto_number::text) = TRIM(${p}::text)
+        )
       )`;
 }
 

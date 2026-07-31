@@ -572,7 +572,28 @@ async function resolveLatestSapParsedDataForShipment(
        LEFT JOIN contracts c ON c.id = s.contract_id
        WHERE s.id = $1::uuid
      )
-     SELECT spd.data
+     SELECT
+       spd.data,
+       /*
+        * Rank an exact STO match ahead of the contract-wide fallback.
+        *
+        * A contract can carry many STOs, each with its own SAP row. Ordering purely by
+        * created_at let a NEWER SIBLING STO of the same contract outrank the shipment's own
+        * STO, so the shipment inherited that sibling's vessel and quality values — e.g. STO
+        * 1016010973 showed FFA 0.000 because sibling 1016010976 was imported a day later,
+        * while SAP reported FFA 4.841 for 1016010973 itself.
+        *
+        * The fallback is kept for shipments that carry no usable STO reference at all; it is
+        * just no longer allowed to beat a direct hit.
+        */
+       CASE
+         WHEN NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL AND (
+           TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
+           OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
+           OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
+         ) THEN 0
+         ELSE 1
+       END AS sto_match_rank
      FROM sap_processed_data spd
      CROSS JOIN ship sh
      WHERE (
@@ -583,7 +604,7 @@ async function resolveLatestSapParsedDataForShipment(
        )
        OR (sh.contract_id IS NOT NULL AND spd.contract_number = sh.contract_id)
      )
-     ORDER BY spd.created_at DESC NULLS LAST, spd.updated_at DESC NULLS LAST
+     ORDER BY sto_match_rank ASC, spd.created_at DESC NULLS LAST, spd.updated_at DESC NULLS LAST
      LIMIT 1`,
     [shipmentId],
   );
@@ -608,37 +629,34 @@ async function upsertVesselLoadingPortRow(
     [shipmentId, port.port_sequence, port.is_discharge_port === true],
   );
 
-  const merge = (incoming: unknown, current: unknown) =>
-    incoming !== null && incoming !== undefined ? incoming : current ?? null;
-
   const current = existing.rows[0] as Record<string, unknown> | undefined;
   const values = [
     port.port_name,
     port.port_sequence,
-    merge(port.quantity_at_loading_port, current?.quantity_at_loading_port),
-    merge(port.eta_vessel_arrival, current?.eta_vessel_arrival),
-    merge(port.ata_vessel_arrival, current?.ata_vessel_arrival),
-    merge(port.eta_vessel_berthed, current?.eta_vessel_berthed),
-    merge(port.ata_vessel_berthed, current?.ata_vessel_berthed),
-    merge(port.eta_loading_start, current?.eta_loading_start),
-    merge(port.ata_loading_start, current?.ata_loading_start),
-    merge(port.eta_loading_completed, current?.eta_loading_completed),
-    merge(port.ata_loading_completed, current?.ata_loading_completed),
-    merge(port.eta_vessel_sailed, current?.eta_vessel_sailed),
-    merge(port.ata_vessel_sailed, current?.ata_vessel_sailed),
-    merge(port.loading_rate, current?.loading_rate),
-    merge(port.quality_ffa, current?.quality_ffa),
-    merge(port.quality_mi, current?.quality_mi),
-    merge(port.quality_dobi, current?.quality_dobi),
-    merge(port.quality_red, current?.quality_red),
-    merge(port.quality_ds, current?.quality_ds),
-    merge(port.quality_stone, current?.quality_stone),
+    mergeSapPortValue(port.quantity_at_loading_port, current?.quantity_at_loading_port),
+    mergeSapPortValue(port.eta_vessel_arrival, current?.eta_vessel_arrival),
+    mergeSapPortValue(port.ata_vessel_arrival, current?.ata_vessel_arrival),
+    mergeSapPortValue(port.eta_vessel_berthed, current?.eta_vessel_berthed),
+    mergeSapPortValue(port.ata_vessel_berthed, current?.ata_vessel_berthed),
+    mergeSapPortValue(port.eta_loading_start, current?.eta_loading_start),
+    mergeSapPortValue(port.ata_loading_start, current?.ata_loading_start),
+    mergeSapPortValue(port.eta_loading_completed, current?.eta_loading_completed),
+    mergeSapPortValue(port.ata_loading_completed, current?.ata_loading_completed),
+    mergeSapPortValue(port.eta_vessel_sailed, current?.eta_vessel_sailed),
+    mergeSapPortValue(port.ata_vessel_sailed, current?.ata_vessel_sailed),
+    mergeSapPortValue(port.loading_rate, current?.loading_rate),
+    mergeSapPortQuality(port.quality_ffa, current?.quality_ffa),
+    mergeSapPortQuality(port.quality_mi, current?.quality_mi),
+    mergeSapPortQuality(port.quality_dobi, current?.quality_dobi),
+    mergeSapPortQuality(port.quality_red, current?.quality_red),
+    mergeSapPortQuality(port.quality_ds, current?.quality_ds),
+    mergeSapPortQuality(port.quality_stone, current?.quality_stone),
     port.is_discharge_port === true,
-    merge(port.eta_vessel_berthed_at_loading_port, current?.eta_vessel_berthed_at_loading_port),
-    merge(port.eta_vessel_arrive_at_discharge_port, current?.eta_vessel_arrive_at_discharge_port),
-    merge(port.eta_vessel_berthed_at_discharge_port, current?.eta_vessel_berthed_at_discharge_port),
-    merge(port.eta_vessel_start_discharging, current?.eta_vessel_start_discharging),
-    merge(port.eta_vessel_complete_discharge, current?.eta_vessel_complete_discharge),
+    mergeSapPortValue(port.eta_vessel_berthed_at_loading_port, current?.eta_vessel_berthed_at_loading_port),
+    mergeSapPortValue(port.eta_vessel_arrive_at_discharge_port, current?.eta_vessel_arrive_at_discharge_port),
+    mergeSapPortValue(port.eta_vessel_berthed_at_discharge_port, current?.eta_vessel_berthed_at_discharge_port),
+    mergeSapPortValue(port.eta_vessel_start_discharging, current?.eta_vessel_start_discharging),
+    mergeSapPortValue(port.eta_vessel_complete_discharge, current?.eta_vessel_complete_discharge),
   ];
 
   if (existing.rows.length > 0) {
@@ -774,13 +792,75 @@ async function cancelBogusExtraLoadingPorts(
   return result.rowCount ?? sequencesToCancel.length;
 }
 
+/**
+ * Fill gaps only: keep whatever is already stored and take the SAP value only where nothing
+ * meaningful is stored yet.
+ *
+ * Previously this preferred the incoming SAP value, so a sync could overwrite a figure a user
+ * had typed. Combined with the structural early-return in the caller, that also meant a value
+ * written once from the WRONG sibling STO could never be corrected. Filling gaps fixes the
+ * stale zeros without ever clobbering manual input.
+ */
+export function mergeSapPortValue(incoming: unknown, current: unknown): unknown {
+  const hasCurrent =
+    current !== null && current !== undefined && !(typeof current === 'string' && current.trim() === '');
+  if (hasCurrent) return current;
+  return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+}
+
+/**
+ * Quality-only variant that also treats a stored zero as a gap.
+ *
+ * SAP reports absent quality readings as 0.000, and that is how the wrong-STO zeros got in.
+ * A genuine zero FFA/M&I/DOBI does not occur in practice, so a stored 0 here means "never
+ * populated". Deliberately NOT used for quantities or rates, where 0 can be a real entry a
+ * user made and must not be overwritten.
+ */
+export function mergeSapPortQuality(incoming: unknown, current: unknown): unknown {
+  const isEmptyish =
+    current === null ||
+    current === undefined ||
+    (typeof current === 'string' && current.trim() === '') ||
+    Number(current) === 0;
+  if (!isEmptyish) return current;
+  return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+}
+
+/**
+ * Fields the SAP sync may fill on an existing port row, and whether a stored 0 counts as a gap.
+ *
+ * zeroIsGap is true only for quality readings: SAP writes absent readings as 0.000 and a genuine
+ * zero FFA/M&I/DOBI does not occur, so a stored 0 there means "never populated". Quantities and
+ * rates keep zeroIsGap false, because 0 can be a deliberate entry that must not be overwritten.
+ */
+const SAP_FILLABLE_PORT_FIELDS: Array<{ column: string; zeroIsGap: boolean }> = [
+  { column: 'quality_ffa', zeroIsGap: true },
+  { column: 'quality_mi', zeroIsGap: true },
+  { column: 'quality_dobi', zeroIsGap: true },
+  { column: 'quality_red', zeroIsGap: true },
+  { column: 'quality_ds', zeroIsGap: true },
+  { column: 'quality_stone', zeroIsGap: true },
+  { column: 'quantity_at_loading_port', zeroIsGap: false },
+  { column: 'loading_rate', zeroIsGap: false },
+  { column: 'eta_vessel_arrival', zeroIsGap: false },
+  { column: 'ata_vessel_arrival', zeroIsGap: false },
+  { column: 'eta_vessel_berthed', zeroIsGap: false },
+  { column: 'ata_vessel_berthed', zeroIsGap: false },
+  { column: 'eta_loading_start', zeroIsGap: false },
+  { column: 'ata_loading_start', zeroIsGap: false },
+  { column: 'eta_loading_completed', zeroIsGap: false },
+  { column: 'ata_loading_completed', zeroIsGap: false },
+  { column: 'eta_vessel_sailed', zeroIsGap: false },
+  { column: 'ata_vessel_sailed', zeroIsGap: false },
+];
+
 /** Sync missing multi-port rows (and ETAs) from latest SAP processed data. */
 export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): Promise<boolean> {
   const plannedPorts = await buildVesselLoadingPortsPlanForShipment(shipmentId);
   if (plannedPorts.length === 0) return false;
 
   const existing = await query(
-    `SELECT port_sequence, port_name, is_discharge_port
+    `SELECT *
      FROM vessel_loading_ports
      WHERE shipment_id = $1::uuid
        AND COALESCE(is_cancelled, false) = false`,
@@ -823,11 +903,39 @@ export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): P
   const existingNames = activeAfterCancel.map((row) => normalizePortToken(String(row.port_name ?? '')));
   const namesMismatch = plannedNames.some((name, index) => existingNames[index] !== name);
 
+  /*
+   * The checks above are all STRUCTURAL — port count, names, cancellations. On their own they let
+   * the sync return early whenever the shape already matches, which meant a value stored once from
+   * the wrong sibling STO was never corrected: SAP reported FFA 4.841 for an STO whose row sat at
+   * 0.00 forever. Also look for values SAP can fill, so a shape-identical row still gets repaired.
+   */
+  const hasFillableValueGap = plannedPorts.some((plannedPort) => {
+    const match = existing.rows.find(
+      (row: Record<string, unknown>) =>
+        Number(row.port_sequence ?? 0) === Number(plannedPort.port_sequence ?? 0) &&
+        Boolean(row.is_discharge_port) === (plannedPort.is_discharge_port === true),
+    );
+    if (!match) return false;
+    return SAP_FILLABLE_PORT_FIELDS.some(({ column, zeroIsGap }) => {
+      const incoming = plannedPort[column];
+      if (incoming === null || incoming === undefined) return false;
+      const current = match[column];
+      const empty =
+        current === null ||
+        current === undefined ||
+        (typeof current === 'string' && current.trim() === '') ||
+        (zeroIsGap && Number(current) === 0);
+      // Only a real incoming value can fill a gap; SAP's own 0.000 placeholder must not.
+      return empty && !(zeroIsGap && Number(incoming) === 0);
+    });
+  });
+
   if (
     cancelledCount === 0 &&
     plannedLoading.length <= activeAfterCancel.length &&
     !hasInvalidNames &&
-    !namesMismatch
+    !namesMismatch &&
+    !hasFillableValueGap
   ) {
     return false;
   }
