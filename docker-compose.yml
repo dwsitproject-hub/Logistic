@@ -43,6 +43,14 @@ services:
       JWT_EXPIRES_IN: 7d
       SSO_TOKEN_SECRET: ${SSO_TOKEN_SECRET:-}
       APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-http://localhost:3001}
+      # Claude powers KLIP Agent AI (chat) and the AI Shipment Planner.
+      # Set ANTHROPIC_API_KEY in the root .env; backend/.env is excluded by .dockerignore.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Chat agent model/effort. Defaults: claude-sonnet-5 / medium.
+      ANTHROPIC_AGENT_MODEL: ${ANTHROPIC_AGENT_MODEL:-}
+      ANTHROPIC_AGENT_EFFORT: ${ANTHROPIC_AGENT_EFFORT:-}
+      # Shipment Planner model (defaults to claude-sonnet-4-6).
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

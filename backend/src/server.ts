@@ -213,21 +213,36 @@ if (process.env.NODE_ENV !== 'test') {
       logger.warn('Failed to start Shipping Performance cache warmer', { error });
     }
 
+    /*
+     * Stagger the remaining warmers.
+     *
+     * All three used to fire at once, and each runs a heavy sap_processed_data scan. A visitor
+     * arriving seconds after a restart landed in that contention window and waited 13-18s for
+     * Shipping Performance - far longer than the ~3.5s the query costs on its own. Shipping
+     * Performance starts immediately (above) and the other two follow behind it, so the first
+     * page load competes with nothing. Nothing about what they compute changes.
+     */
+    const WARMER_STAGGER_MS = 20 * 1000;
+
     // Warm the Oil Loss cache (two full sap_processed_data JSONB scans) for the same reason.
-    try {
-      startOilLossCacheWarmer();
-      logger.info('🔥 Oil Loss cache warmer started');
-    } catch (error) {
-      logger.warn('Failed to start Oil Loss cache warmer', { error });
-    }
+    setTimeout(() => {
+      try {
+        startOilLossCacheWarmer();
+        logger.info('🔥 Oil Loss cache warmer started');
+      } catch (error) {
+        logger.warn('Failed to start Oil Loss cache warmer', { error });
+      }
+    }, WARMER_STAGGER_MS).unref?.();
 
     // Warm the Trucking default-scope summary (status circles + Outstanding Qty).
-    try {
-      startTruckingListCacheWarmer();
-      logger.info('🔥 Trucking summary cache warmer started');
-    } catch (error) {
-      logger.warn('Failed to start Trucking summary cache warmer', { error });
-    }
+    setTimeout(() => {
+      try {
+        startTruckingListCacheWarmer();
+        logger.info('🔥 Trucking summary cache warmer started');
+      } catch (error) {
+        logger.warn('Failed to start Trucking summary cache warmer', { error });
+      }
+    }, WARMER_STAGGER_MS * 2).unref?.();
   });
 }
 

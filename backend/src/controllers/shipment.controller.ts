@@ -139,6 +139,8 @@ import {
 } from '../utils/shipmentAtaOverrideSql';
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
+import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
+import { isValidHumanPortName } from '../services/vesselLoadingPortsFromSap.service';
 import {
   resolveStoGroupShipmentIds,
   sqlShipmentOrStoKeyMatchWhere,
@@ -1492,6 +1494,22 @@ ${contractMetaSelectCore}
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
     debugSql = { text: queryText, params: mainParams };
+    /*
+     * Diagnostic: dump the generated list SQL on request (?debugSql=1).
+     * The list query is assembled from many fragments, so when a row is unexpectedly missing the
+     * only practical way to find the responsible predicate is to read the real SQL and bisect it.
+     * Off unless explicitly asked for, so normal requests pay nothing.
+     */
+    if (String((req.query as any).debugSql ?? '') === '1') {
+      try {
+        const fs = require('fs') as typeof import('fs');
+        fs.writeFileSync('/app/logs/shipment_list_debug.sql', queryText);
+        fs.writeFileSync('/app/logs/shipment_list_debug.params.json', JSON.stringify(mainParams, null, 2));
+        logger.info('Dumped shipment list SQL for debugging', { chars: queryText.length });
+      } catch (err) {
+        logger.warn('Failed to dump shipment list SQL', err);
+      }
+    }
     const tMain0 = performance.now();
     const result = await query(queryText, mainParams);
     timingsMs.dbMainList = performance.now() - tMain0;
@@ -2489,8 +2507,25 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
         );
         if (shipRow.rows.length > 0) {
           const s = shipRow.rows[0];
-          const pol = (s.port_of_loading && String(s.port_of_loading).trim()) || null;
-          const pod = (s.port_of_discharge && String(s.port_of_discharge).trim()) || null;
+          const polRaw = (s.port_of_loading && String(s.port_of_loading).trim()) || null;
+          const podRaw = (s.port_of_discharge && String(s.port_of_discharge).trim()) || null;
+          // shipments.port_of_loading can itself hold a numeric ("0.00"), and copying it verbatim
+          // is how numeric port names got into vessel_loading_ports. Fall back to the same generic
+          // label the SAP sync uses rather than persisting a junk name.
+          if (polRaw && !isValidHumanPortName(polRaw)) {
+            logger.warn('Backfill: non-port loading name on shipment; using generic label', {
+              shipmentId,
+              portOfLoading: polRaw,
+            });
+          }
+          if (podRaw && !isValidHumanPortName(podRaw)) {
+            logger.warn('Backfill: non-port discharge name on shipment; using generic label', {
+              shipmentId,
+              portOfDischarge: podRaw,
+            });
+          }
+          const pol = polRaw ? (isValidHumanPortName(polRaw) ? polRaw : 'Loading Port 1') : null;
+          const pod = podRaw ? (isValidHumanPortName(podRaw) ? podRaw : 'Discharge Port') : null;
           if (pol) {
             await query(
               `INSERT INTO vessel_loading_ports (shipment_id, port_name, port_sequence, quantity_at_loading_port, is_discharge_port)
@@ -2823,7 +2858,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
     return res.json({
       success: true,
       data: {
-        ports: portsResult.rows,
+        ports: dedupeStoGroupPorts(portsResult.rows as Record<string, unknown>[], isUUID ? shipmentId : null),
         cancelledPorts: cancelledPortsResult.rows,
         shipmentInfo: shipmentInfo,
       },
@@ -2935,6 +2970,21 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     const eta_vessel_start_discharging_n = toDateOrNull(eta_vessel_start_discharging);
     const eta_vessel_complete_discharge_n = toDateOrNull(eta_vessel_complete_discharge);
 
+    // A port name is never a bare number. Coerce instead of rejecting, so the user's other edits
+    // still save while junk like "0.00" cannot be persisted as a port name.
+    const safePortName = (() => {
+      const raw = port_name == null ? '' : String(port_name).trim();
+      if (isValidHumanPortName(raw)) return raw;
+      if (raw) {
+        logger.warn('Rejected non-port name on loading port save; using generic label', {
+          shipmentId: req.params.shipmentId ?? null,
+          submitted: raw,
+        });
+      }
+      // Sequence 999 is this schema's discharge-port convention.
+      return Number(port_sequence) === 999 ? 'Discharge Port' : `Loading Port ${port_sequence ?? 1}`;
+    })();
+
     const toNumberOrNull = (v: unknown): number | null => {
       if (v == null || v === '') return null;
       const n = typeof v === 'number' ? v : parseFloat(String(v));
@@ -2995,7 +3045,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
          WHERE id = $1 AND shipment_id = $27
          RETURNING *`,
         [
-          id, port_name, port_sequence, quantity_at_loading_port,
+          id, safePortName, port_sequence, quantity_at_loading_port,
           quality_ffa_n,
           quality_mi_n,
           quality_dobi_n,
@@ -3065,7 +3115,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
          RETURNING *`,
         [
-          actualShipmentId, port_name, port_sequence, quantity_at_loading_port,
+          actualShipmentId, safePortName, port_sequence, quantity_at_loading_port,
           quality_ffa_n,
           quality_mi_n,
           quality_dobi_n,

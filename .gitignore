@@ -60,3 +60,12 @@ coverage/
 *.tmp
 .cache/
 
+
+# Local DB dumps / snapshots (hundreds of MB — never commit)
+backups/
+scripts/*.sql
+*.sql.gz
+
+# Throwaway capture + profiling output from debugging sessions
+*.tmp.js
+lateperf*.json

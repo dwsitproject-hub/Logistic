@@ -92,7 +92,15 @@ const ROW_CACHE_KEY = 'shipping-performance-rows-v35';
 // the query returns — it only pre-runs the identical query off the request path.
 const KEEP_WARM_CHECK_MS = 60 * 1000; // how often the warmer wakes up
 const KEEP_WARM_REFRESH_AFTER_MS = 4 * 60 * 1000; // renew cache once it is this old (< TTL)
-const KEEP_WARM_MAX_IDLE_MS = 15 * 60 * 1000; // stop warming when nobody is using the page
+/*
+ * Stop warming when nobody is using the page. Raised from 15 to 90 minutes: the underlying query
+ * costs ~3.5s even with the STO expression index, so the only way a visitor sees the page in well
+ * under 3s is to be served from cache. A 15-minute window expired over any normal gap - a meeting
+ * or lunch - and the next visitor paid the full query. 90 minutes covers those gaps while still
+ * going quiet outside working hours, so this adds at most one 3.5s query every 4 minutes and only
+ * while the page is genuinely in use.
+ */
+const KEEP_WARM_MAX_IDLE_MS = 90 * 60 * 1000;
 let lastAccessedAt = 0;
 let refreshInFlight: Promise<Record<string, unknown>[]> | null = null;
 let keepWarmTimer: NodeJS.Timeout | null = null;

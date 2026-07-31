@@ -38,8 +38,10 @@ services:
       DB_PASSWORD: postgres123
       JWT_SECRET: dev-secret-change-in-production
       JWT_EXPIRES_IN: 7d
-      # GEMINI_API_KEY is loaded from env_file (backend/.env); do not hardcode keys here
-      # ANTHROPIC_API_KEY: optional — AI Shipment Planner (Claude) on Add New Shipment
+      # Keys are loaded from env_file (backend/.env); do not hardcode them here.
+      # ANTHROPIC_API_KEY: required — KLIP Agent AI chat + AI Shipment Planner (Claude)
+      # ANTHROPIC_AGENT_MODEL / ANTHROPIC_AGENT_EFFORT: optional chat-agent tuning
+      # GEMINI_API_KEY: still used by the Dashboard "AI Insight" panel only
     ports:
       - "5002:5002"
     depends_on:
