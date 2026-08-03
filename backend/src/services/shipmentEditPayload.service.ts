@@ -5,6 +5,7 @@
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import { ttlMemo } from '../utils/ttlMemo';
 import {
   SHIPMENT_ATA_OVERRIDES_JOIN,
   sqlEffectiveAtaArrivalDischarge,
@@ -274,7 +275,28 @@ async function loadContractDetailsForEdit(
   return result.rows as Record<string, unknown>[];
 }
 
+/**
+ * Single-flight only - deliberately NOT cached.
+ *
+ * This payload feeds the Edit / View Shipment modal, so a cached copy could show a user
+ * values that another user has already changed. ttlMs = 0 gives pure in-flight sharing:
+ * concurrent opens of the same shipment run the query once and all receive that result,
+ * and nothing is retained afterwards. Every fresh open still hits the database.
+ *
+ * Worth doing because this is one of the heaviest reads in the app - it runs
+ * buildContractDetailsForStoSql(), the `contract_candidates` statement an external DB
+ * review caught running as four concurrent identical copies on a 2-vCPU host
+ * (2026-07-21). Collapsing duplicates removes that multiplier without touching results.
+ */
 export async function resolveShipmentEditPayload(
+  shipmentUuid: string,
+): Promise<ShipmentEditPayload | null> {
+  return ttlMemo(`shipmentEditPayload:${shipmentUuid}`, 0, () =>
+    resolveShipmentEditPayloadUncached(shipmentUuid),
+  );
+}
+
+async function resolveShipmentEditPayloadUncached(
   shipmentUuid: string,
 ): Promise<ShipmentEditPayload | null> {
   const [shipmentRes, editContext, portsBundle] = await Promise.all([

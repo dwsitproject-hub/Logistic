@@ -31,6 +31,43 @@ describe('buildExactNumericGlobalSearchInnerSql', () => {
     expect(sql).toContain('s.operation_id');
     expect(sql).toContain('c.po_number');
   });
+
+  it('matches sibling STO numbers on the same contract', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
+    expect(sql).toContain('contract_stos cs_search');
+    expect(sql).toContain('cs_search.contract_id = c.id');
+  });
+
+  /*
+   * The list groups by STO and several contracts can share one STO, so the row's PO column
+   * aggregates across all of them. Without this branch a PO could be printed on the row and
+   * still return nothing when searched (staging: 1011003113 on STO 1016010973).
+   */
+  it('matches PO / contract numbers of other contracts sharing the row STO', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
+    expect(sql).toContain('contracts c_ident');
+    expect(sql).toContain('c_ident.po_number');
+    expect(sql).toContain('c_ident.contract_id');
+    // Linkage must be checked against the row's STO key, not the searched value.
+    expect(sql).toContain('contract_stos cs_ident');
+    expect(sql).toContain('cs_ident.contract_id = c_ident.id');
+  });
+
+  it('uses the row STO key expression for the linkage and the param for identity', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('MY_STO_KEY_EXPR', 7);
+    // Identity side compares against the search parameter...
+    expect(sql).toContain("TRIM(COALESCE(c_ident.po_number::text, '')) = TRIM($7::text)");
+    // ...while the linkage side compares against this row's STO key. Swapping these would
+    // make every contract with that STO match regardless of the search term.
+    expect(sql).toContain('TRIM(MY_STO_KEY_EXPR)');
+  });
+
+  it('binds every branch to the same single parameter index', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 5);
+    expect(sql).not.toContain('$6');
+    expect(sql).not.toContain('$4');
+    expect(sql.match(/\$5/g)!.length).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe('appendShipmentGlobalSearch', () => {

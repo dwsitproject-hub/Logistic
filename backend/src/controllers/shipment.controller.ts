@@ -85,6 +85,7 @@ import {
   appendContractScopeToolbarFilters,
 } from '../utils/shipmentUnplannedHybridSql';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
+import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
 import {
   sqlShipmentListDischargePortsKlipAgg,
   sqlShipmentListLoadingPortsKlipAgg,
@@ -1483,14 +1484,7 @@ ${contractMetaSelectCore}
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap
-      FROM shipment_page sp
-      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_loading_ports_agg slpa ON TRIM(slpa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_discharge_ports_agg sdpa ON TRIM(sdpa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN po_numbers_agg pna ON TRIM(pna.sto_key::text) = TRIM(sp.sto_key::text)`;
+      ${SHIPMENT_LIST_STO_JOIN_SQL}`;
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
     debugSql = { text: queryText, params: mainParams };
