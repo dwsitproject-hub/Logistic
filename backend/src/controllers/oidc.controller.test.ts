@@ -64,6 +64,7 @@ describe('oidc.controller', () => {
     vi.mocked(verifyIdToken).mockReset();
     vi.mocked(establishSession).mockReset();
     process.env.FRONTEND_URL = 'http://localhost:3001';
+    process.env.JWT_SECRET = 'test-jwt-secret-for-oidc';
   });
 
   afterEach(() => {
@@ -117,7 +118,7 @@ describe('oidc.controller', () => {
     });
     expect(establishSession).toHaveBeenCalledWith(req, 'u1');
     expect(res.statusCode).toBe(303);
-    expect(res.redirectUrl).toBe('http://localhost:3001');
+    expect(String(res.redirectUrl)).toMatch(/^http:\/\/localhost:3001\/sso\/callback\?t=/);
   });
 
   it('redirects to sso_no_access when email is not invite-only registered', async () => {

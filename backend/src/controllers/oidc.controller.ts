@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import jwt from 'jsonwebtoken';
 import logger from '../utils/logger';
 import { AuditService } from '../services/audit.service';
 import {
@@ -146,9 +147,21 @@ export const oidcCallbackHandler = async (req: Request, res: Response): Promise<
     establishSession(req, String(userRow.id));
     await saveSession(req);
 
+    const token = jwt.sign(
+      {
+        id: String(userRow.id),
+        username: String(userRow.username),
+        email: String(userRow.email),
+        role: String(userRow.role),
+      },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '7d' },
+    ) as string;
+
     logger.info(`OIDC SSO login: user ${userRow.username} via Downstream Hub`);
 
-    res.redirect(303, frontendUrl());
+    // Pass JWT to frontend (cookie session may not survive cross-site Hub redirect on HTTP SIT).
+    res.redirect(303, `${frontendUrl()}/sso/callback?t=${encodeURIComponent(token)}`);
   } catch (error) {
     logger.error('OIDC callback failed', { error });
     redirectLoginError(res, 'sso_failed');
