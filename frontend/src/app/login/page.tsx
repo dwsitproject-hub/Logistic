@@ -10,10 +10,7 @@ import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
 import {
   fetchCurrentUser,
-  fetchLoginOptions,
-  startHubOidcLogin,
   storeUserLocally,
-  type LoginOptions,
 } from '@/lib/authSession'
 import { redirectAfterAuth, resolvePostAuthRedirect, type StoredAuthUser } from '@/lib/navigationAccess'
 
@@ -27,14 +24,6 @@ function LoginPageContent() {
   const [checkingSession, setCheckingSession] = useState(true)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [isFirstLogin, setIsFirstLogin] = useState(false)
-  const [loginOptions, setLoginOptions] = useState<LoginOptions>({
-    localLogin: true,
-    hubSso: false,
-  })
-
-  useEffect(() => {
-    void fetchLoginOptions().then(setLoginOptions)
-  }, [])
 
   useEffect(() => {
     const errorCode = searchParams.get('error')
@@ -146,71 +135,34 @@ function LoginPageContent() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4">
-            {loginOptions.localLogin ? (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    placeholder="Enter your username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Enter your password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                </div>
-                {error && (
-                  <div className="text-sm text-red-500 text-center">{error}</div>
-                )}
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? 'Logging in...' : 'Login with KLIP account'}
-                </Button>
-              </>
-            ) : (
-              error && (
-                <div className="text-sm text-red-500 text-center">{error}</div>
-              )
+            <div className="space-y-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                type="text"
+                placeholder="Enter your username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+            {error && (
+              <div className="text-sm text-red-500 text-center">{error}</div>
             )}
-
-            {loginOptions.localLogin && loginOptions.hubSso && (
-              <div className="relative py-2">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-white px-2 text-muted-foreground">Or</span>
-                </div>
-              </div>
-            )}
-
-            {loginOptions.hubSso && (
-              <Button
-                type="button"
-                variant={loginOptions.localLogin ? 'outline' : 'default'}
-                className="w-full"
-                disabled={loading}
-                onClick={() => startHubOidcLogin()}
-              >
-                Sign in with DWS Hub
-              </Button>
-            )}
-
-            {!loginOptions.localLogin && !loginOptions.hubSso && (
-              <p className="text-sm text-center text-red-500">
-                No login method is configured. Contact your administrator.
-              </p>
-            )}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Logging in...' : 'Login'}
+            </Button>
           </form>
         </CardContent>
       </Card>
