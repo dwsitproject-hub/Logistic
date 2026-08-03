@@ -4,10 +4,12 @@ import {
   buildTruckingListSummaryFromRows,
   buildPaginatedListQuery,
   buildTruckingStatusContractQtyQuery,
+  buildTruckingStatusOutstandingQtyQuery,
   getCachedFilteredTotal,
   invalidateTruckingListCache,
   mergeTruckingUnplannedBreakdownIntoSummary,
   parseTruckingStatusContractQtyFromSqlRow,
+  parseTruckingStatusOutstandingQtyFromSqlRow,
   sortTruckingListRows,
   type TruckingListRow,
 } from './truckingList.service';
@@ -118,6 +120,26 @@ describe('truckingList.service', () => {
     expect(text).toContain('GROUP BY status, contract_number');
     expect(text).toContain('unplanned_contract_qty');
     expect(text).toContain('MAX(COALESCE(contract_qty, 0))');
+  });
+
+  it('parseTruckingStatusOutstandingQtyFromSqlRow maps kg fields', () => {
+    const qty = parseTruckingStatusOutstandingQtyFromSqlRow({
+      planned_outstanding_qty: '3000',
+      in_progress_outstanding_qty: 1500,
+    });
+    expect(qty).toEqual({ planned: 3000, inProgress: 1500 });
+  });
+
+  it('buildTruckingStatusOutstandingQtyQuery sums outstanding per status', () => {
+    const req = {
+      query: { page: '1', limit: '20', skipSapJoin: 'true' },
+    } as Parameters<typeof buildTruckingListQuery>[0];
+    const built = buildTruckingListQuery(req, { omitStatusFilter: true });
+    const { text } = buildTruckingStatusOutstandingQtyQuery(built);
+    expect(text).toContain('outstanding_quantity');
+    expect(text).toContain("status IN ('PLANNED', 'IN_PROGRESS')");
+    expect(text).toContain('planned_outstanding_qty');
+    expect(text).toContain('in_progress_outstanding_qty');
   });
 
   it('sortTruckingListRows paginates consistently (sort + slice)', () => {

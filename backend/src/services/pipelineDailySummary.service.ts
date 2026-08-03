@@ -506,6 +506,11 @@ export async function loadShipmentSummaryFromDaily(
     shipmentRows: number;
     totalTableRows: number;
   };
+  preplannedBreakdown: {
+    contractRows: number;
+    groupCount: number;
+    totalTableRows: number;
+  };
 } | null> {
   if (!(await isPipelineDailySummaryFresh('shipment'))) return null;
 
@@ -528,6 +533,7 @@ export async function loadShipmentSummaryFromDaily(
       COALESCE(SUM(discharge_port_unloading_count), 0)::bigint AS discharge_port_unloading_count,
       COALESCE(SUM(unplanned_contract_backlog), 0)::bigint AS unplanned_contract_backlog_count,
       COALESCE(SUM(unplanned_shipment_execution), 0)::bigint AS unplanned_shipment_execution_count,
+      COALESCE(SUM(preplanned_contract_count), 0)::bigint AS preplanned_count,
       COALESCE(SUM(eta_loading_more_than_7d), 0)::bigint AS eta_loading_more_than_7d,
       COALESCE(SUM(eta_loading_d_minus_2), 0)::bigint AS eta_loading_d_minus_2,
       COALESCE(SUM(eta_loading_d), 0)::bigint AS eta_loading_d,
@@ -565,6 +571,7 @@ export async function loadShipmentSummaryFromDaily(
 
   const contractRows = Number(row.unplanned_contract_backlog_count || 0);
   const shipmentRows = Number(row.unplanned_shipment_execution_count || 0);
+  const preplannedRows = Number(row.preplanned_count || 0);
 
   return {
     summaryRow: { ...row, ...vesselRow },
@@ -573,6 +580,11 @@ export async function loadShipmentSummaryFromDaily(
       contractRows,
       shipmentRows,
       totalTableRows: contractRows + shipmentRows,
+    },
+    preplannedBreakdown: {
+      contractRows: preplannedRows,
+      groupCount: preplannedRows,
+      totalTableRows: preplannedRows,
     },
   };
 }

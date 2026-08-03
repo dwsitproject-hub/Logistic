@@ -15,6 +15,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'late_indicator',
   'vessel_name',
   'shipment_id',
+  'pre_planned_group',
   'loading_port',
   'discharge_port',
   'supplier',
@@ -34,7 +35,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 export const SHIPMENT_OBSOLETE_COLUMN_IDS = ['port_of_loading', 'port_of_discharge'] as const
 
 /** Bump when default column order/visibility changes — triggers one-time layout migration. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v7'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v8'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
@@ -59,6 +60,7 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 100,
   contract_ext_no: 120,
   po_numbers: 72,
+  pre_planned_group: 80,
   sto_quantity: 96,
   quantity_delivered: 96,
   quantity_receive: 96,
@@ -174,7 +176,7 @@ export function migrateShipmentColumnLayout(
     visibleColumnIds,
     columnOrderIds,
     obsoleteColumnIds: SHIPMENT_OBSOLETE_COLUMN_IDS,
-    ensureVisibleIds: ['loading_port', 'discharge_port'],
+    ensureVisibleIds: ['loading_port', 'discharge_port', 'pre_planned_group'],
   })
   const allIds =
     allColumnIds && allColumnIds.length > 0

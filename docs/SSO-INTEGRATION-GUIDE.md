@@ -1,5 +1,8 @@
 # Downstream Hub — SSO Integration Guide
 
+> **KLIP operators:** Hub now requires **OIDC (strict)**. Use [`SSO-OIDC-KLIP-SETUP.md`](SSO-OIDC-KLIP-SETUP.md) for the current KLIP setup.  
+> This document describes the **legacy HS256 JWT bridge** (`POST /auth/hub`), retained in KLIP only when `SSO_LEGACY_BRIDGE=true`.
+
 This guide is for any team integrating a **target application** with Downstream Hub.  
 Hand it to an engineer (or paste it into Cursor) and implement in one pass with no back-and-forth.
 

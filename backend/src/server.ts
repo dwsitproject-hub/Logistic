@@ -7,6 +7,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
@@ -56,7 +57,11 @@ import oilLossRoutes from './routes/oilLoss.routes';
 import commercialDocumentsRoutes from './routes/commercialDocuments.routes';
 import aiKlipAgentActivityRoutes from './routes/aiKlipAgentActivity.routes';
 import userActivityLogRoutes from './routes/userActivityLog.routes';
+import prePlannedRoutes from './routes/prePlanned.routes';
 import { ssoHubHandler } from './controllers/sso.controller';
+import { oidcLoginHandler, oidcCallbackHandler, isOidcConfigured } from './controllers/oidc.controller';
+import { configureTrustProxy, createSessionMiddleware } from './middleware/session';
+import { frontendUrl } from './services/sessionAuth.service';
 
 dotenv.config();
 
@@ -64,11 +69,35 @@ const app: Application = express();
 const PORT = process.env.PORT || 5001;
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '50mb';
 
+configureTrustProxy(app);
+
 // Middleware
 app.use(helmet());
-app.use(cors());
+const corsOrigin = frontendUrl();
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      const allowed = new Set(
+        [
+          corsOrigin,
+          process.env.APP_PUBLIC_ORIGIN?.replace(/\/$/, ''),
+          'http://localhost:3001',
+          'http://127.0.0.1:3001',
+        ].filter(Boolean) as string[],
+      );
+      callback(null, allowed.has(origin));
+    },
+    credentials: true,
+  }),
+);
 app.use(compression());
 app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
+app.use(cookieParser());
+app.use(createSessionMiddleware());
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 const swaggerOptions = {
@@ -116,8 +145,23 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'OK', message: 'KLIP Backend is running' });
 });
 
-// Downstream Hub SSO handoff — unauthenticated, outside /api (Hub posts here directly).
-app.post('/auth/hub', ssoHubHandler);
+// Downstream Hub SSO — legacy HS256 bridge (opt-in via SSO_LEGACY_BRIDGE=true).
+if (process.env.SSO_LEGACY_BRIDGE === 'true') {
+  app.post('/auth/hub', ssoHubHandler);
+}
+
+// OIDC SSO (Authorization Code + PKCE) — primary integration path.
+if (isOidcConfigured()) {
+  app.get('/auth/oidc/login', oidcLoginHandler);
+  app.get('/auth/oidc/callback', oidcCallbackHandler);
+} else {
+  app.get('/auth/oidc/login', (_req, res) => {
+    res.status(503).json({ success: false, error: { message: 'OIDC SSO is not configured' } });
+  });
+  app.get('/auth/oidc/callback', (_req, res) => {
+    res.status(503).json({ success: false, error: { message: 'OIDC SSO is not configured' } });
+  });
+}
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -149,6 +193,7 @@ app.use('/api/oil-loss', oilLossRoutes);
 app.use('/api/commercial-documents', commercialDocumentsRoutes);
 app.use('/api/ai-klip-agent-activity', aiKlipAgentActivityRoutes);
 app.use('/api/user-activity', userActivityLogRoutes);
+app.use('/api/pre-planned', prePlannedRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -172,6 +217,10 @@ if (process.env.NODE_ENV !== 'test') {
     } catch (error) {
       logger.error('Failed to initialize scheduler service:', error);
     }
+
+    void import('./services/prePlannedGroup.service')
+      .then(({ schedulePrePlannedRebuildIfEnabled }) => schedulePrePlannedRebuildIfEnabled('startup'))
+      .catch((error) => logger.warn('Pre-planned startup rebuild skipped', { error }));
 
     setImmediate(async () => {
       try {

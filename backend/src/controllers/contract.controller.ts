@@ -26,7 +26,7 @@ import {
   sqlIncotermQuantityDeliveryCase,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
-import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
+import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { ttlMemo } from '../utils/ttlMemo';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
@@ -47,9 +47,10 @@ import {
   isContractPerfOnTimeTradeCycle,
   runLatePerformance,
   sqlEffectiveDeliveryEndPresent,
+  parseCommaSeparatedQuery,
 } from '../services/latePerformance.service';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
-import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
+import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { toSapDisplayNumber } from '../utils/sapDisplayNumber';
 import {
@@ -96,7 +97,21 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     await ensureUserStoContractAssignmentsTable();
     const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
     const productFilter = (req.query as any).product as string | undefined;
+    const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
+    const productFilters =
+      productsQuery.length > 0
+        ? productsQuery
+        : productFilter?.trim()
+          ? [productFilter.trim()]
+          : [];
     const sourceTypeFilter = (req.query as any).sourceType as string | undefined;
+    const sourceTypesQuery = parseCommaSeparatedQuery((req.query as any).sourceTypes);
+    const sourceTypeFilters =
+      sourceTypesQuery.length > 0
+        ? sourceTypesQuery
+        : sourceTypeFilter?.trim()
+          ? [sourceTypeFilter.trim()]
+          : [];
     const transportMode = (req.query as any).transportMode as string | undefined;
     const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' | 'mix'
     const plant = (req.query as any).plant as string | string[] | undefined;
@@ -275,13 +290,33 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    if (productFilter && productFilter.trim().length > 0) {
-      queryText += ` AND COALESCE(base.product, '') ILIKE $${paramIndex}`;
-      queryParams.push(`%${productFilter.trim()}%`);
-      paramIndex++;
+    const multiProductClause = appendContractPerfProductsMultiSql(
+      productFilters.length > 1 ? productFilters : undefined,
+      'base.product',
+      paramIndex,
+    );
+    if (multiProductClause) {
+      queryText += multiProductClause.clause;
+      queryParams.push(...multiProductClause.params);
+      paramIndex = multiProductClause.nextParamIndex;
+    } else {
+      const singleProduct =
+        productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+      const productClause = appendContractPerfProductSubstringSql(singleProduct, 'base.product', paramIndex);
+      if (productClause) {
+        queryText += productClause.clause;
+        queryParams.push(productClause.param);
+        paramIndex = productClause.nextParamIndex;
+      }
     }
 
-    queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
+    if (sourceTypeFilters.length > 1) {
+      queryText += appendContractPerfSourceTypesFilter(sourceTypeFilters, 'base.source_type');
+    } else {
+      const singleSource =
+        sourceTypeFilter?.trim() || (sourceTypeFilters.length === 1 ? sourceTypeFilters[0] : undefined);
+      queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
+    }
 
     if (outstanding === 'true') {
       queryText += ` AND (${sqlContractOutstandingSignedExpr({
@@ -866,6 +901,21 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     const selectedIncoterms = (req.query as any).incoterms as string | undefined; // comma-separated
     const b2bFlag = (req.query as any).b2bFlag as string | undefined;
     const productFilter = (req.query as any).product as string | undefined;
+    const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
+    const productFilters =
+      productsQuery.length > 0
+        ? productsQuery
+        : productFilter?.trim()
+          ? [productFilter.trim()]
+          : [];
+    const sourceTypeFilter = (req.query as any).sourceType as string | undefined;
+    const sourceTypesQuery = parseCommaSeparatedQuery((req.query as any).sourceTypes);
+    const sourceTypeFilters =
+      sourceTypesQuery.length > 0
+        ? sourceTypesQuery
+        : sourceTypeFilter?.trim()
+          ? [sourceTypeFilter.trim()]
+          : [];
 
     const now = new Date();
     const y = now.getFullYear();
@@ -1082,11 +1132,32 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const productClause = appendContractPerfProductSubstringSql(productFilter, 'base.product', paramIndex);
-    if (productClause) {
-      queryText += productClause.clause;
-      queryParams.push(productClause.param);
-      paramIndex = productClause.nextParamIndex;
+    const multiProductClauseLegacy = appendContractPerfProductsMultiSql(
+      productFilters.length > 1 ? productFilters : undefined,
+      'base.product',
+      paramIndex,
+    );
+    if (multiProductClauseLegacy) {
+      queryText += multiProductClauseLegacy.clause;
+      queryParams.push(...multiProductClauseLegacy.params);
+      paramIndex = multiProductClauseLegacy.nextParamIndex;
+    } else {
+      const singleProduct =
+        productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+      const productClause = appendContractPerfProductSubstringSql(singleProduct, 'base.product', paramIndex);
+      if (productClause) {
+        queryText += productClause.clause;
+        queryParams.push(productClause.param);
+        paramIndex = productClause.nextParamIndex;
+      }
+    }
+
+    if (sourceTypeFilters.length > 1) {
+      queryText += appendContractPerfSourceTypesFilter(sourceTypeFilters, 'base.source_type');
+    } else {
+      const singleSource =
+        sourceTypeFilter?.trim() || (sourceTypeFilters.length === 1 ? sourceTypeFilters[0] : undefined);
+      queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
     }
 
     // Plant filter is same as GET /contracts: exists in SEA discharge port or LAND location.
@@ -2799,6 +2870,10 @@ export const createContract = async (req: AuthRequest, res: Response) => {
 
     logger.info(`Contract created: ${contract_id} by ${req.user?.username}`);
 
+    void import('../services/prePlannedGroup.service').then(({ schedulePrePlannedRebuildIfEnabled }) =>
+      schedulePrePlannedRebuildIfEnabled('contract-create'),
+    );
+
     res.status(201).json({
       success: true,
       data: result.rows[0],
@@ -2833,6 +2908,20 @@ export const updateContract = async (req: AuthRequest, res: Response) => {
         success: false,
         error: { message: 'Contract not found' },
       });
+    }
+
+    const triggerFields = [
+      'delivery_start_date',
+      'delivery_end_date',
+      'quantity_ordered',
+      'plant_code',
+      'transport_mode',
+      'company_name',
+    ];
+    if (Object.keys(updates).some((k) => triggerFields.includes(k))) {
+      void import('../services/prePlannedGroup.service').then(({ schedulePrePlannedRebuildIfEnabled }) =>
+        schedulePrePlannedRebuildIfEnabled('contract-update'),
+      );
     }
 
     return res.json({

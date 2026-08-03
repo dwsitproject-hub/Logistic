@@ -31,17 +31,14 @@ import {
   buildOilLossSummaryForDateRange,
   type ROilLossKey,
 } from '@/lib/oilLossSummary'
+import { StyledNativeSelect } from '@/components/shared/StyledNativeSelect'
 import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
-  OIL_LOSS_GLOBAL_PRODUCT_OPTIONS,
-  OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE,
-  OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS,
+  OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
   OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
-  oilLossGlobalToggleButtonClass,
   resolveOilLossPeriodDateRange,
   type OilLossGlobalPeriodKey,
-  type OilLossGlobalProductFilter,
   type OilLossGlobalTransportFilter,
 } from '@/lib/oilLossGlobalFilters'
 import OilLossDrilldownSection from '@/components/oil-loss/OilLossDrilldownSection'
@@ -1168,11 +1165,15 @@ export default function OilLossPage() {
   const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
   const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('MTD')
   const [globalTransport, setGlobalTransport] = useState<OilLossGlobalTransportFilter>('All')
-  const [globalProduct, setGlobalProduct] = useState<OilLossGlobalProductFilter>('All')
   const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
     EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
   )
   const globalPeriodOptions = useMemo(() => buildOilLossPeriodOptions(), [])
+
+  const globalTransportOptions = useMemo(
+    () => OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({ value, label: value })),
+    [],
+  )
   const globalPeriodMeta = useMemo(
     () => resolveOilLossPeriodDateRange(globalPeriod),
     [globalPeriod],
@@ -1501,7 +1502,6 @@ export default function OilLossPage() {
   const hasActiveOilLossFilters =
     globalPeriod !== 'MTD' ||
     globalTransport !== 'All' ||
-    globalProduct !== 'All' ||
     selectedModes.length > 0 ||
     selectedIncoterms.length > 0 ||
     selectedProducts.length > 0 ||
@@ -1510,10 +1510,11 @@ export default function OilLossPage() {
   const resetGlobalBarFilters = useCallback(() => {
     setGlobalPeriod('MTD')
     setGlobalTransport('All')
-    setGlobalProduct('All')
+    handleProductsChange([])
+    handleGroupPlantsChange([])
     setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [])
+  }, [handleGroupPlantsChange, handleProductsChange])
 
   const resetOilLossDrilldown = useCallback(() => {
     setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
@@ -1545,7 +1546,6 @@ export default function OilLossPage() {
   }, [
     globalPeriod,
     globalTransport,
-    globalProduct,
     selectedModes,
     selectedIncoterms,
     selectedProducts,
@@ -1554,16 +1554,15 @@ export default function OilLossPage() {
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [globalPeriod, globalTransport, globalProduct])
+  }, [globalPeriod, globalTransport, selectedProducts])
 
   const globallyFilteredRows = useMemo(() => {
     return applyOilLossGlobalFilters({
       rows,
       period: globalPeriod,
       transport: globalTransport,
-      product: globalProduct,
-      selectedStaffProducts: selectedProducts,
-      selectedStaffGroupPlants: selectedGroupPlants,
+      selectedProducts,
+      selectedGroupPlants,
       selectedModes,
       selectedIncoterms,
     })
@@ -1571,7 +1570,6 @@ export default function OilLossPage() {
     rows,
     globalPeriod,
     globalTransport,
-    globalProduct,
     selectedProducts,
     selectedGroupPlants,
     selectedModes,
@@ -1828,50 +1826,46 @@ export default function OilLossPage() {
           </h1>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-6 flex-wrap">
+              <StyledNativeSelect
+                label="Period:"
+                value={globalPeriod}
+                onChange={setGlobalPeriod}
+                options={globalPeriodOptions}
+                uppercaseLabels
+              />
               <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Period:</span>
-                <select
-                  value={globalPeriod}
-                  onChange={(e) => setGlobalPeriod(e.target.value as OilLossGlobalPeriodKey)}
-                  className="px-4 py-2 border rounded-lg text-sm text-gray-900 bg-white min-w-[140px]"
-                >
-                  {globalPeriodOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Transport:</span>
-                <div className={OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS}>
-                  {OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={() => setGlobalTransport(opt)}
-                      className={`${OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE} ${oilLossGlobalToggleButtonClass(globalTransport === opt)}`}
-                    >
-                      {opt}
-                    </button>
-                  ))}
+                <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label=""
+                    options={availableGroupPlants}
+                    selected={selectedGroupPlants}
+                    onChange={handleGroupPlantsChange}
+                    placeholder="All group plants"
+                    emptyMessage="No group plants"
+                    uppercaseOptionLabels
+                  />
                 </div>
               </div>
-
+              <StyledNativeSelect
+                label="Transport:"
+                value={globalTransport}
+                onChange={setGlobalTransport}
+                options={globalTransportOptions}
+                uppercaseLabels
+              />
               <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
-                <div className={OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS}>
-                  {OIL_LOSS_GLOBAL_PRODUCT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={() => setGlobalProduct(opt)}
-                      className={`${OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE} ${oilLossGlobalToggleButtonClass(globalProduct === opt)}`}
-                    >
-                      {opt}
-                    </button>
-                  ))}
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label=""
+                    options={[...OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS]}
+                    selected={selectedProducts}
+                    onChange={handleProductsChange}
+                    placeholder="All products"
+                    emptyMessage="No products"
+                    uppercaseOptionLabels
+                  />
                 </div>
               </div>
             </div>
@@ -1989,26 +1983,20 @@ export default function OilLossPage() {
               </div>
 
               <PerformanceScopeFilters
-                hideGroupPlantFilter={false}
+                hideGroupPlantFilter
                 incotermOptions={availableIncoterms}
                 selectedIncoterms={selectedIncoterms}
                 onIncotermsChange={setSelectedIncoterms}
-                showProductFilter
-                productOptions={availableProducts}
-                selectedProducts={selectedProducts}
-                onProductsChange={handleProductsChange}
+                showProductFilter={false}
                 groupPlantOptions={availableGroupPlants}
-                selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={handleGroupPlantsChange}
+                selectedGroupPlants={[]}
+                onGroupPlantsChange={() => {}}
                 dateFrom={dateFrom}
                 dateTo={dateTo}
                 onDateFromChange={setDateFrom}
                 onDateToChange={setDateTo}
                 showDateRange={false}
                 incotermEmptyMessage="Loading incoterms..."
-                productEmptyMessage="Loading products..."
-                groupPlantPlaceholder="Select group plant(s)"
-                groupPlantEmptyMessage="No group plants"
               />
 
               <div className="flex flex-wrap items-center gap-4">

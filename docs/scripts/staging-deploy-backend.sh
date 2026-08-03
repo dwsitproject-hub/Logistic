@@ -51,4 +51,9 @@ docker compose "${COMPOSE_ARGS[@]}" logs --tail=40 backend
 echo "==> Health check (local)"
 curl -sf "http://127.0.0.1:5001/health" && echo || echo "WARN: /health failed — check logs"
 
+if [[ -f "${APP_DIR}/docs/scripts/verify-oidc-config.sh" ]]; then
+  echo "==> OIDC env verification (Hub Admin alignment)"
+  bash "${APP_DIR}/docs/scripts/verify-oidc-config.sh" || echo "WARN: OIDC verify failed — set OIDC_* in /opt/klip/.env or backend/.env"
+fi
+
 echo "Done. Tail logs: docker compose ${COMPOSE_ARGS[*]} logs -f backend"

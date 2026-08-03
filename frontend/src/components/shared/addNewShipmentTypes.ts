@@ -40,6 +40,7 @@ export type CreateShipmentFormPayload = {
   portOfLoading: string
   portOfDischarge: string
   etaByContract: Record<string, EtaDetailApiPayload>
+  prePlannedGroupId?: string
 }
 
 export type UpdateShipmentFormPayload = {
@@ -139,7 +140,14 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
   }
 }
 
+function coalescePoField(preferred: unknown, fallback: unknown): unknown {
+  if (preferred != null && preferred !== '') return preferred
+  return fallback
+}
+
 function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOption): ShipmentPoOption {
+  const baseData = base.contractData ?? {}
+  const enrichedData = enriched.contractData ?? {}
   return {
     ...enriched,
     key: base.key,
@@ -148,11 +156,27 @@ function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOptio
     label: enriched.label || base.label,
     plantCode: enriched.plantCode ?? base.plantCode,
     contractData: {
-      ...enriched.contractData,
-      ...base.contractData,
+      ...enrichedData,
+      ...baseData,
+      // Prefer non-empty base stubs, else enriched purchase-order fields.
+      quantity_ordered: coalescePoField(baseData.quantity_ordered, enrichedData.quantity_ordered),
+      outstanding_quantity: coalescePoField(
+        baseData.outstanding_quantity,
+        enrichedData.outstanding_quantity,
+      ),
+      outstanding_quantity_planning: coalescePoField(
+        baseData.outstanding_quantity_planning,
+        enrichedData.outstanding_quantity_planning,
+      ),
+      supplier: coalescePoField(baseData.supplier, enrichedData.supplier),
+      product: coalescePoField(baseData.product, enrichedData.product),
+      delivery_start_date: coalescePoField(
+        baseData.delivery_start_date,
+        enrichedData.delivery_start_date,
+      ),
+      delivery_end_date: coalescePoField(baseData.delivery_end_date, enrichedData.delivery_end_date),
       // Prefer a real transport_mode when STO prefill omitted it
-      transport_mode:
-        base.contractData?.transport_mode ?? enriched.contractData?.transport_mode ?? null,
+      transport_mode: coalescePoField(baseData.transport_mode, enrichedData.transport_mode),
     },
   }
 }
@@ -178,6 +202,13 @@ async function enrichPoOptionsFromPurchaseOrders(options: ShipmentPoOption[]): P
       candidates[0]
     return match ? mergePoOptionMetadata(opt, match) : opt
   })
+}
+
+/** Enrich PO options with contract qty / OS / supplier / delivery dates from purchase-orders API. */
+export async function enrichShipmentPoOptions(
+  options: ShipmentPoOption[],
+): Promise<ShipmentPoOption[]> {
+  return enrichPoOptionsFromPurchaseOrders(options)
 }
 
 export function dedupeShipmentPoOptions(options: ShipmentPoOption[]): ShipmentPoOption[] {

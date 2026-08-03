@@ -568,7 +568,9 @@ export async function getGroupPlantPerformance(groupPlant: string): Promise<Grou
     selectedIncoterms: undefined,
     b2bFlag: undefined,
     productFilter: undefined,
+    productFilters: [],
     sourceTypeFilter: undefined,
+    sourceTypeFilters: [],
     statusNorm: '',
     plants: [groupPlant],
   }

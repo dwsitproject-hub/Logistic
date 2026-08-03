@@ -57,11 +57,11 @@ import {
 const BASE_GLOBAL: ContractPerformanceGlobalFilters = {
   dateFrom: '',
   dateTo: '',
-  sourceFilter: 'All',
+  selectedSources: [],
+  selectedProducts: [],
   selectedIncoterms: [],
   selectedSuppliers: [],
   selectedGroupPlants: [],
-  productTabQuery: undefined,
   summaryCardStatus: 'Open',
   lateOnTimeFilter: 'ALL',
   perfDashMode: 'late',
@@ -234,7 +234,7 @@ describe('AC2 — Global Filter Propagation', () => {
   })
 
   it('filtering by product tab returns only matching rows across all sections', () => {
-    const global = { ...BASE_GLOBAL, productTabQuery: 'CPO' }
+    const global = { ...BASE_GLOBAL, selectedProducts: ['CPO'] }
     const scope  = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
     const result = filterPerformanceHotspots(allHotspots, scope, { applyDrilldown: false })
     expect(result.every((r) => normalizePerfProductGroupKey(r.product) === 'CPO')).toBe(true)
@@ -247,7 +247,7 @@ describe('AC2 — Global Filter Propagation', () => {
       hotspot({ contract_id: 'P-2', product: 'CRUDE POME', totalQtyDelivery: 200 }),
       hotspot({ contract_id: 'P-3', product: 'CPO', totalQtyDelivery: 50 }),
     ]
-    const global = { ...BASE_GLOBAL, productTabQuery: 'POME' }
+    const global = { ...BASE_GLOBAL, selectedProducts: ['POME'] }
     const scope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
     const result = filterPerformanceHotspots(rows, scope, { applyDrilldown: false })
     expect(result.map((r) => r.contract_id).sort()).toEqual(['P-1', 'P-2'])
@@ -261,7 +261,7 @@ describe('AC2 — Global Filter Propagation', () => {
     ]
     const global = {
       ...BASE_GLOBAL,
-      productTabQuery: contractPerfProductQueryValue('Shell Palm'),
+      selectedProducts: ['Shell Palm'],
     }
     const scope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
     expect(scope.resolvedProduct).toBe('SHELL PALM')
@@ -297,24 +297,24 @@ describe('AC2 — Global Filter Propagation', () => {
   it('isContractPerfSection3FilterApplied is true when Open or Close card is selected', () => {
     expect(
       isContractPerfSection3FilterApplied({
-        sourceFilter: 'All',
-        selectedProductTab: 'All',
+        selectedSources: [],
+        selectedProducts: [],
         summaryCardStatus: 'All',
         appliedDrilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
       }),
     ).toBe(false)
     expect(
       isContractPerfSection3FilterApplied({
-        sourceFilter: 'All',
-        selectedProductTab: 'All',
+        selectedSources: [],
+        selectedProducts: [],
         summaryCardStatus: 'Open',
         appliedDrilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
       }),
     ).toBe(true)
     expect(
       isContractPerfSection3FilterApplied({
-        sourceFilter: 'Interco',
-        selectedProductTab: 'CPO',
+        selectedSources: ['Interco'],
+        selectedProducts: ['CPO'],
         summaryCardStatus: 'Close',
         appliedDrilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
       }),
@@ -339,7 +339,7 @@ describe('AC2 — Global Filter Propagation', () => {
   })
 
   it('Section 1 card summary API omits status even when Open tab is active', () => {
-    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, productTabQuery: 'CPO' }
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, selectedProducts: ['CPO'] }
     const cardParams = buildLatePerformanceCardSummaryApiParams(global)
     expect(cardParams.get('status')).toBeNull()
     const treeScope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
@@ -367,7 +367,7 @@ describe('AC2 — Global Filter Propagation', () => {
   })
 
   it('Section 2 tree API omits applied drilldown path (card counts stay global)', () => {
-    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, productTabQuery: 'CPO' }
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, selectedProducts: ['CPO'] }
     const drilldown: ContractPerfDrilldownFilters = {
       product: 'CPO',
       plant: 'PLANT-A',
@@ -392,11 +392,11 @@ describe('AC2 — Global Filter Propagation', () => {
     const toolbar = buildContractPerfToolbarGlobal({
       dateFrom: '2026-01-01',
       dateTo: '2026-06-03',
-      sourceFilter: 'All',
+      selectedSources: [],
       selectedIncoterms: [],
       selectedSuppliers: [],
       selectedGroupPlants: [],
-      productTabQuery: 'CPO',
+      selectedProducts: ['CPO'],
       lateOnTimeFilter: 'ALL',
       perfDashMode: 'late',
       perfTransportMode: 'ALL',
@@ -421,8 +421,8 @@ describe('AC2 — Global Filter Propagation', () => {
     const global: ContractPerformanceGlobalFilters = {
       ...BASE_GLOBAL,
       summaryCardStatus: 'Open',
-      productTabQuery: 'CPO',
-      sourceFilter: '3rd Party',
+      selectedProducts: ['CPO'],
+      selectedSources: ['3rd Party'],
       dateFrom: '2026-01-01',
       dateTo: '2026-06-22',
     }
@@ -443,7 +443,7 @@ describe('AC2 — Global Filter Propagation', () => {
     expect(params.get('status')).toBe('Open')
     expect(params.get('lateOnTimeFilter')).toBe('ALL')
     expect(params.get('excludeUnscheduled')).toBe('false')
-    expect(params.get('sourceType')).toBe('3rd Party')
+    expect(params.get('sourceTypes')).toBe('3rd Party')
     expect(params.get('product')).toBe('CPO')
     expect(params.get('supplier')).toBe('SUPP-1')
     expect(params.getAll('plant')).toEqual(['PLANT-A'])
@@ -478,16 +478,16 @@ describe('Contract Performance — source filter (contracts.source_type)', () =>
 
   it('appendContractPerformanceApiParams sends sourceType when not All', () => {
     const scope = resolveContractPerformanceScope({
-      global: { ...BASE_GLOBAL, sourceFilter: 'Interco' },
+      global: { ...BASE_GLOBAL, selectedSources: ['Interco'] },
       drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
     })
     const params = buildLatePerformanceApiParams(scope, false)
-    expect(params.get('sourceType')).toBe('Interco')
+    expect(params.get('sourceTypes')).toBe('Interco')
   })
 
   it('filterContractsForPerformanceTable applies source as first step', () => {
     const scope = resolveContractPerformanceScope({
-      global: { ...BASE_GLOBAL, sourceFilter: '3rd Party' },
+      global: { ...BASE_GLOBAL, selectedSources: ['3rd Party'] },
       drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
     })
     const rows = filterContractsForPerformanceTable(

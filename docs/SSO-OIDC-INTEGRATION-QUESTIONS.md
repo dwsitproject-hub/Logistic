@@ -1,5 +1,9 @@
 # KLIP ↔ Downstream Hub — OIDC (strict) Integration Questions
 
+> **Answered (2026-07):** KLIP implemented OIDC per [`SSO-TARGET-APP-INTEGRATION.md`](SSO-TARGET-APP-INTEGRATION.md).  
+> Operational setup: [`SSO-OIDC-KLIP-SETUP.md`](SSO-OIDC-KLIP-SETUP.md).  
+> The questions below remain as historical context for the Hub integration discussion.
+
 **Context:** KLIP ("Logistic" app in Downstream Hub Admin) was originally integrated using the
 custom JWT-bridge flow described in `docs/SSO-INTEGRATION-GUIDE.md` (`POST /auth/hub` with a
 Hub-signed HS256 JWT). We've since discovered:

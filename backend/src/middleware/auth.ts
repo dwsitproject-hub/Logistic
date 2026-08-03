@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import logger from '../utils/logger';
 import { query } from '../database/connection';
+import { resolveAuthenticatedUser } from './sessionAuth';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -12,33 +12,28 @@ export interface AuthRequest extends Request {
   };
 }
 
-export const authenticateToken = (
+export const authenticateToken = async (
   req: AuthRequest,
   res: Response,
-  next: NextFunction
-): void => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    res.status(401).json({
-      success: false,
-      error: { message: 'Access token required' },
-    });
-    return;
-  }
-
+  next: NextFunction,
+): Promise<void> => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    req.user = decoded;
+    const user = await resolveAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({
+        success: false,
+        error: { message: 'Access token required' },
+      });
+      return;
+    }
+    req.user = user;
     next();
   } catch (error) {
-    logger.error('Token verification failed:', error);
-    res.status(403).json({
+    logger.error('Authentication failed:', error);
+    res.status(401).json({
       success: false,
-      error: { message: 'Invalid or expired token' },
+      error: { message: 'Authentication failed' },
     });
-    return;
   }
 };
 
@@ -182,4 +177,3 @@ export const authorizeSapImportsUpload = async (
     error: { message: 'Insufficient permissions to upload SAP data' },
   });
 };
-

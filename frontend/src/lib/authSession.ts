@@ -1,0 +1,66 @@
+import api from '@/lib/api';
+
+export type AuthUser = {
+  id?: string;
+  username?: string;
+  email?: string;
+  full_name?: string;
+  role?: string;
+  level?: string | null;
+  is_first_login?: boolean;
+};
+
+export function storeUserLocally(user: AuthUser): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('user', JSON.stringify(user));
+}
+
+export function readUserLocally(): AuthUser | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const userData = localStorage.getItem('user');
+    if (!userData) return null;
+    return JSON.parse(userData) as AuthUser;
+  } catch {
+    return null;
+  }
+}
+
+export function clearLocalAuth(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+}
+
+export function isAuthenticatedLocally(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(localStorage.getItem('user') || localStorage.getItem('token'));
+}
+
+export async function fetchCurrentUser(): Promise<AuthUser | null> {
+  try {
+    const response = await api.get('/auth/me');
+    const user = response.data?.data as AuthUser | undefined;
+    if (user?.id) {
+      storeUserLocally(user);
+      return user;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function logoutSession(): Promise<void> {
+  try {
+    await api.post('/auth/logout');
+  } catch {
+    /* session may already be gone */
+  }
+  clearLocalAuth();
+}
+
+export function startHubOidcLogin(): void {
+  if (typeof window === 'undefined') return;
+  window.location.href = '/auth/oidc/login';
+}

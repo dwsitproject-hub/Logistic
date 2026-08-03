@@ -390,6 +390,8 @@ export type AddNewShipmentModalProps = {
   stacked?: boolean
   /** Refresh Shipments list after Edit modal attaches a PO (without closing modal). */
   onShipmentChanged?: () => void
+  /** When accepting a pre-planned group, link group on shipment create. */
+  prePlannedGroupId?: string | null
 }
 
 export function AddNewShipmentModal({
@@ -409,6 +411,7 @@ export function AddNewShipmentModal({
   readOnly = false,
   stacked = false,
   onShipmentChanged,
+  prePlannedGroupId = null,
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
@@ -2247,6 +2250,7 @@ export function AddNewShipmentModal({
         portOfLoading: newShipment.portOfLoading,
         portOfDischarge: newShipment.portOfDischarge,
         etaByContract,
+        prePlannedGroupId: prePlannedGroupId ?? undefined,
       })
 
       showNotification(
@@ -2330,6 +2334,8 @@ export function AddNewShipmentModal({
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
         editContractNumbers={editContractNumbers}
+        onSubmit={onSubmit}
+        onShipmentChanged={onShipmentChanged}
       />
     )
   }
@@ -2647,8 +2653,8 @@ export function AddNewShipmentModal({
                           <TableRow className="bg-gray-50 hover:bg-gray-50">
                             <TableHead className={COMPACT_TH}>PO</TableHead>
                             <TableHead className={COMPACT_TH}>Supplier / Product</TableHead>
-                            <TableHead className={`${COMPACT_TH} text-right`}>Contract</TableHead>
-                            <TableHead className={`${COMPACT_TH} text-right`}>Outstanding</TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}>Contract Qty</TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}>OS Qty</TableHead>
                             <TableHead className={COMPACT_TH}>Del. Start</TableHead>
                             <TableHead className={COMPACT_TH}>Del. End</TableHead>
                             <TableHead

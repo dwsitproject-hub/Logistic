@@ -42,7 +42,7 @@ function redirectToLoginWithError(res: Response, errorCode: string): void {
   res.redirect(302, `${origin}/login?error=${encodeURIComponent(errorCode)}`);
 }
 
-/** POST /auth/hub — unauthenticated; Hub's JWT is not a KLIP Bearer token. */
+/** POST /auth/hub — unauthenticated; legacy Hub HS256 JWT bridge (SSO_LEGACY_BRIDGE=true only). */
 export const ssoHubHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const tokenString = typeof req.body?.token === 'string' ? req.body.token : '';

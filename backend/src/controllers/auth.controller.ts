@@ -4,7 +4,11 @@ import jwt from 'jsonwebtoken';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuditService } from '../services/audit.service';
-import { fetchUserScopeAssociations } from '../services/userAssociations.service';
+import {
+  buildSessionUserPayload,
+  establishSession,
+  loadActiveUserById,
+} from '../services/sessionAuth.service';
 import { AuthRequest } from '../middleware/auth';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
@@ -94,13 +98,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email, role: user.role },
-      process.env.JWT_SECRET as string,
-      { expiresIn: '7d' }
-    ) as string;
-
     logger.info(`User logged in: ${username}`);
 
     // Log the login action
@@ -113,26 +110,19 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       userAgent: req.get('user-agent')
     });
 
-    const scope = await fetchUserScopeAssociations(user.id, user.plant);
+    const sessionUser = await buildSessionUserPayload(user);
+    establishSession(req, String(user.id));
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email, role: user.role },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '7d' }
+    ) as string;
 
     res.json({
       success: true,
       data: {
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          full_name: user.full_name,
-          role: user.role,
-          level: user.level || null,
-          transport_type: user.transport_type || null,
-          plant: user.plant || null,
-          plants: scope.plants,
-          group_plants: scope.group_plants,
-          products: scope.products,
-          is_active: user.is_active,
-          is_first_login: user.is_first_login || false,
-        },
+        user: sessionUser,
         token,
         requirePasswordChange: user.is_first_login || false,
       },
@@ -148,12 +138,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const getProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const result = await query(
-      'SELECT id, username, email, full_name, role, level, transport_type, plant, is_active, created_at FROM users WHERE id = $1',
-      [req.user?.id]
-    );
-
-    if (result.rows.length === 0) {
+    const userRow = req.user?.id ? await loadActiveUserById(req.user.id) : null;
+    if (!userRow) {
       res.status(404).json({
         success: false,
         error: { message: 'User not found' },
@@ -161,17 +147,11 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    const row = result.rows[0];
-    const scope = await fetchUserScopeAssociations(row.id, row.plant);
+    const sessionUser = await buildSessionUserPayload(userRow);
 
     res.json({
       success: true,
-      data: {
-        ...row,
-        plants: scope.plants,
-        group_plants: scope.group_plants,
-        products: scope.products,
-      },
+      data: sessionUser,
     });
   } catch (error) {
     logger.error('Get profile error:', error);
@@ -180,6 +160,24 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
       error: { message: 'Failed to get profile' },
     });
   }
+};
+
+/** GET /api/auth/me — current session user (cookie or Bearer). */
+export const getMe = getProfile;
+
+export const logout = (req: Request, res: Response): void => {
+  req.session?.destroy((err) => {
+    if (err) {
+      logger.error('Session destroy failed on logout', { err });
+      res.status(500).json({
+        success: false,
+        error: { message: 'Failed to logout' },
+      });
+      return;
+    }
+    res.clearCookie('klip.sid');
+    res.json({ success: true, data: { message: 'Logged out' } });
+  });
 };
 
 export const updateProfile = async (req: AuthRequest, res: Response): Promise<void> => {

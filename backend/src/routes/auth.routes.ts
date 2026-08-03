@@ -1,5 +1,5 @@
 import express from 'express';
-import { register, login, getProfile, updateProfile } from '../controllers/auth.controller';
+import { register, login, getProfile, getMe, logout, updateProfile } from '../controllers/auth.controller';
 import { ssoExchangeHandler } from '../controllers/sso.controller';
 import { authenticateToken } from '../middleware/auth';
 import { body } from 'express-validator';
@@ -97,6 +97,10 @@ router.post('/login', login);
  *         description: Unauthorized
  */
 router.get('/profile', authenticateToken, getProfile);
+
+router.get('/me', authenticateToken, getMe);
+
+router.post('/logout', logout);
 
 /**
  * @swagger

@@ -61,27 +61,36 @@ export interface TruckingStatusDistributionProps {
   loading: boolean
   statusFilter: string
   counts: Partial<Record<TruckingStatusCardKey, number>>
-  /** Contract quantity_ordered sums in kg, one contract once per status. */
+  /** Contract quantity_ordered sums in kg — Unplanned / Completed / Cancelled cards. */
   contractQtys?: Partial<Record<TruckingStatusCardKey, number>>
+  /** Outstanding quantity sums in kg — Planned / In Progress cards. */
+  outstandingQtys?: Partial<Record<TruckingStatusCardKey, number>>
   onStageClick: (status: TruckingStatusCardKey) => void
 }
 
+const OUTSTANDING_QTY_CARDS = new Set<TruckingStatusCardKey>(['PLANNED', 'IN_PROGRESS'])
+
 /**
  * Rectangle status cards aligned with Shipments Summary Status styling.
- * Count = row/status total; Contract Qty = sum of contract qty under that card.
+ * Count = row/status total; qty = Contract Qty or Outstanding Qty (MT) per card rules.
  */
 export function TruckingStatusDistribution({
   loading,
   statusFilter,
   counts,
   contractQtys,
+  outstandingQtys,
   onStageClick,
 }: TruckingStatusDistributionProps) {
   const renderCard = (card: (typeof TRUCKING_STATUS_CARDS)[number]) => {
     const isActive = statusFilter === card.status
     const count = Number(counts[card.status] ?? 0)
-    const qtyKg = Number(contractQtys?.[card.status] ?? 0)
+    const usesOutstanding = OUTSTANDING_QTY_CARDS.has(card.status)
+    const qtyKg = usesOutstanding
+      ? Number(outstandingQtys?.[card.status] ?? 0)
+      : Number(contractQtys?.[card.status] ?? 0)
     const qtyLabel = formatQtyMtFromKg(qtyKg)
+    const qtyHeading = usesOutstanding ? 'Outstanding Qty' : 'Contract Qty'
 
     const button = (
       <button
@@ -113,7 +122,7 @@ export function TruckingStatusDistribution({
         <div
           className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] leading-snug ${card.textColor} opacity-80`}
         >
-          <div className="font-medium">Contract Qty</div>
+          <div className="font-medium">{qtyHeading}</div>
           <div className="mt-0.5 tabular-nums font-semibold opacity-90">{qtyLabel}</div>
         </div>
       </button>

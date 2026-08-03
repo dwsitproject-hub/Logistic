@@ -27,6 +27,9 @@ import {
   type TruckingStatusCardKey,
 } from '@/components/trucking/TruckingStatusDistribution'
 import { TruckingOutstandingQtySummary } from '@/components/trucking/TruckingOutstandingQtySummary'
+import { TruckingAttentionInsightsSection } from '@/components/trucking/TruckingAttentionInsightsSection'
+import { mapTruckingAttentionInsights } from '@/lib/truckingAttentionInsights'
+import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
@@ -2802,19 +2805,26 @@ function TruckingPageContent() {
     statusFilter,
   ])
 
-  /** Section 2 Contract Qty (kg) — Planned card = Planned + In Progress (mirrors counts). */
+  /** Section 2 Contract Qty (kg) — Unplanned / Completed / Cancelled cards only. */
   const truckingStatusCardContractQtys = useMemo(() => {
     const q = truckingSection1Summary?.statusContractQty
-    const plannedOnly = Number(q?.planned ?? 0)
-    const inProgressOnly = Number(q?.inProgress ?? 0)
     return {
       UNPLANNED: Number(q?.unplanned ?? 0),
-      PLANNED: plannedOnly + inProgressOnly,
-      IN_PROGRESS: inProgressOnly,
       COMPLETED: Number(q?.completed ?? 0),
       CANCELLED: Number(q?.cancelled ?? 0),
     }
   }, [truckingSection1Summary?.statusContractQty])
+
+  /** Section 2 Outstanding Qty (kg) — Planned card = Planned + In Progress (mirrors counts). */
+  const truckingStatusCardOutstandingQtys = useMemo(() => {
+    const q = truckingSection1Summary?.statusOutstandingQty
+    const plannedOnly = Number(q?.planned ?? 0)
+    const inProgressOnly = Number(q?.inProgress ?? 0)
+    return {
+      PLANNED: plannedOnly + inProgressOnly,
+      IN_PROGRESS: inProgressOnly,
+    }
+  }, [truckingSection1Summary?.statusOutstandingQty])
 
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
@@ -3727,12 +3737,21 @@ function TruckingPageContent() {
           </CardContent>
         </Card>
 
+        {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
+        <TruckingAttentionInsightsSection
+          variant="trucking"
+          loading={summaryFetching}
+          data={mapTruckingAttentionInsights(truckingSection1Summary?.attentionInsights)}
+        />
+        ) : null}
+
         {/* Section 2: Summary Trucking Status */}
         <TruckingStatusDistribution
           loading={summaryFetching}
           statusFilter={statusFilter}
           counts={truckingStatusCardCounts}
           contractQtys={truckingStatusCardContractQtys}
+          outstandingQtys={truckingStatusCardOutstandingQtys}
           onStageClick={handleStatusCardClick}
         />
 

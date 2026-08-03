@@ -1,14 +1,17 @@
 import axios from 'axios';
 import { clearClientDataCache } from '@/lib/clientDataCache';
+import { clearLocalAuth, isAuthenticatedLocally } from '@/lib/authSession';
 import { mapHttpMethodToEventType, trackApiMutation } from '@/lib/userActivityTracker';
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:5001/api';
+const configuredBase = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE;
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE,
+  baseURL: configuredBase,
+  withCredentials: true,
 });
 
-// Add token to requests
+// Add Bearer token when present (legacy / transitional); cookie sessions use withCredentials.
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('token');
@@ -31,7 +34,7 @@ api.interceptors.response.use(
   (error) => {
     // Enhanced error logging for debugging
     if (typeof window !== 'undefined') {
-      const baseURL = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE;
+      const baseURL = configuredBase;
       
       if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
         console.error('❌ Network Error: Cannot connect to backend API');
@@ -64,10 +67,11 @@ api.interceptors.response.use(
       status === 401 || (status === 403 && (message.includes('token') || message.includes('expired')));
     // Do not hard-redirect on failed login — login page must show the error message.
     if (isAuthFailure && !isLoginAttempt && typeof window !== 'undefined') {
-      clearClientDataCache();
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      if (isAuthenticatedLocally()) {
+        clearClientDataCache();
+        clearLocalAuth();
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -75,4 +79,3 @@ api.interceptors.response.use(
 
 export { api };
 export default api;
-

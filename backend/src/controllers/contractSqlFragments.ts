@@ -20,6 +20,21 @@ export function appendContractPerfSourceTypeFilter(
   return '';
 }
 
+/** OR-combine Interco / 3rd Party source filters (multi-select). */
+export function appendContractPerfSourceTypesFilter(
+  sourceTypes: string[] | undefined,
+  columnExpr = 'base.source_type',
+): string {
+  const types = (sourceTypes ?? []).map((s) => String(s).trim()).filter(Boolean);
+  if (types.length === 0) return '';
+  const parts = types
+    .map((type) => appendContractPerfSourceTypeFilter(type, columnExpr).replace(/^\s*AND\s+/i, ''))
+    .filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return ` AND (${parts[0]})`;
+  return ` AND (${parts.join(' OR ')})`;
+}
+
 export const B2B_CHILD_EXCLUSION_SQL = `
   AND NOT (
     UPPER(TRIM(COALESCE(

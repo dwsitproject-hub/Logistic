@@ -73,6 +73,15 @@ export class SchedulerService {
           type: 'pipeline_daily_summary',
           description: 'Refresh trucking/shipment pipeline daily summary tables'
         }
+      },
+      {
+        name: 'Pre-Planned Groups Nightly Rebuild',
+        schedule: '30 6 * * *', // 6:30 AM JKT — after pipeline snapshots
+        isActive: true,
+        config: {
+          type: 'pre_planned_rebuild',
+          description: 'Recompute suggested vessel groups for Unplanned contracts'
+        }
       }
     ];
     
@@ -178,6 +187,12 @@ export class SchedulerService {
           );
           await import('./contractLatestSpdSnapshot.service').then(({ ContractLatestSpdSnapshotService }) =>
             ContractLatestSpdSnapshotService.refreshAll(),
+          );
+          result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
+          break;
+        case 'pre_planned_rebuild':
+          await import('./prePlannedGroup.service').then(({ rebuildPrePlannedGroups }) =>
+            rebuildPrePlannedGroups('nightly-cron'),
           );
           result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
           break;

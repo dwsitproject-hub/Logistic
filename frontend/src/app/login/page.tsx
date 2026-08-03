@@ -8,7 +8,12 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
-import { redirectAfterAuth, type StoredAuthUser } from '@/lib/navigationAccess'
+import {
+  fetchCurrentUser,
+  startHubOidcLogin,
+  storeUserLocally,
+} from '@/lib/authSession'
+import { redirectAfterAuth, resolvePostAuthRedirect, type StoredAuthUser } from '@/lib/navigationAccess'
 
 function LoginPageContent() {
   const router = useRouter()
@@ -17,6 +22,7 @@ function LoginPageContent() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [checkingSession, setCheckingSession] = useState(true)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [isFirstLogin, setIsFirstLogin] = useState(false)
 
@@ -31,6 +37,23 @@ function LoginPageContent() {
     }
   }, [searchParams])
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const user = await fetchCurrentUser()
+        if (user?.id) {
+          const route = await resolvePostAuthRedirect(user.role, user.id)
+          router.replace(route || '/')
+          return
+        }
+      } catch {
+        /* not logged in */
+      } finally {
+        setCheckingSession(false)
+      }
+    })()
+  }, [router])
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -39,14 +62,16 @@ function LoginPageContent() {
     try {
       const response = await api.post('/auth/login', { username, password })
       const payload = response.data?.data
-      if (!payload?.token || !payload?.user) {
+      if (!payload?.user) {
         setError('Unexpected server response. Please contact support.')
         return
       }
       const { user, token, requirePasswordChange } = payload
 
-      localStorage.setItem('token', token)
-      localStorage.setItem('user', JSON.stringify(user))
+      storeUserLocally(user)
+      if (token) {
+        localStorage.setItem('token', token)
+      }
 
       if (requirePasswordChange) {
         setIsFirstLogin(true)
@@ -72,12 +97,20 @@ function LoginPageContent() {
     if (userStr) {
       user = JSON.parse(userStr) as StoredAuthUser
       user.is_first_login = false
-      localStorage.setItem('user', JSON.stringify(user))
+      storeUserLocally(user)
     }
 
     setLoading(true)
     await redirectAfterAuth(user, router, setError)
     setLoading(false)
+  }
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    )
   }
 
   return (
@@ -128,6 +161,23 @@ function LoginPageContent() {
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? 'Logging in...' : 'Login'}
             </Button>
+            <div className="relative py-2">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-muted-foreground">Or</span>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              disabled={loading}
+              onClick={() => startHubOidcLogin()}
+            >
+              Sign in with DWS Hub
+            </Button>
           </form>
         </CardContent>
       </Card>
@@ -149,4 +199,3 @@ export default function LoginPage() {
     </Suspense>
   )
 }
-

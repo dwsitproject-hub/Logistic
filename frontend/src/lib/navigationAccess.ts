@@ -1,4 +1,5 @@
 import api from '@/lib/api'
+import { clearLocalAuth } from '@/lib/authSession'
 import {
   canViewContractPerformancePage,
   canViewPermission,
@@ -99,15 +100,13 @@ export async function redirectAfterAuth(
   try {
     const route = await resolvePostAuthRedirect(user.role, user.id)
     if (!route) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+      clearLocalAuth()
       setError('Your account has no accessible pages. Contact your administrator.')
       return
     }
     router.push(route)
   } catch {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    clearLocalAuth()
     setError('Failed to load your permissions. Please try again.')
   }
 }

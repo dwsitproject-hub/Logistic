@@ -17,24 +17,13 @@ import {
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
+import { fetchCurrentUser, logoutSession, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 
 type UserLite = {
   id?: string
   full_name?: string
   role?: string
-}
-
-function readStoredUser(): UserLite | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-    if (!token || !userData) return null
-    return JSON.parse(userData) as UserLite
-  } catch {
-    return null
-  }
 }
 
 function LayoutChrome({
@@ -159,11 +148,12 @@ function LayoutWithPermissions({
   const perms = usePermissions()
 
   const handleLogout = () => {
-    clearClientDataCache()
-    clearPermissionsCache()
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    router.push('/login')
+    void (async () => {
+      clearClientDataCache()
+      clearPermissionsCache()
+      await logoutSession()
+      router.push('/login')
+    })()
   }
 
   const handleNavHover = (href: string) => {
@@ -229,14 +219,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserLite | null>(null)
 
   useEffect(() => {
-    const stored = readStoredUser()
-    if (!stored) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+    void (async () => {
+      const sessionUser = await fetchCurrentUser()
+      if (sessionUser) {
+        setUser(sessionUser)
+        return
+      }
+      const stored = readUserLocally()
+      if (stored) {
+        setUser(stored)
+        return
+      }
       router.replace('/login')
-      return
-    }
-    setUser(stored)
+    })()
   }, [router])
 
   if (!user) {

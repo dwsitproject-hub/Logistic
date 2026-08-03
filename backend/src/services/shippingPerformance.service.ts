@@ -32,6 +32,7 @@ import {
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
+import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -84,8 +85,8 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-/** Bumped when GR Close bypasses multi-contract status floor. */
-const ROW_CACHE_KEY = 'shipping-performance-rows-v35';
+/** Bumped when STO merge recomputes cycle deltas from MAX-merged milestones. */
+const ROW_CACHE_KEY = 'shipping-performance-rows-v36';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -132,6 +133,7 @@ function joinDistinctValues(rows: Record<string, unknown>[], field: string): str
 
 /** Milestone date fields max-merged across STO members (Shipments list MAX ATA/ETA). */
 const SHIPPING_PERF_MILESTONE_FIELDS = [
+  'cargo_readiness_date',
   'loading_eta_arrival',
   'loading_eta_berthed',
   'loading_eta_start',
@@ -279,10 +281,12 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
       floorRank < derivedRank
     ) {
       merged.status = floor;
+      Object.assign(merged, computeShippingPerfDeltaFields(merged));
       return merged;
     }
   }
   merged.status = derived;
+  Object.assign(merged, computeShippingPerfDeltaFields(merged));
   return merged;
 }
 

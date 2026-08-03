@@ -66,6 +66,23 @@ Buka: [https://github.com/dwsitproject-hub/Logistic/tree/SIT](https://github.com
 
 Login SSH ke server backend, jalankan:
 
+**OIDC SSO (wajib untuk Hub OIDC strict):** set di `/opt/klip/.env` **atau** `/opt/klip/backend/.env` sebelum rebuild — template: [`backend/.env.example`](../backend/.env.example). Hub Admin values: [`SSO-OIDC-KLIP-SETUP.md`](SSO-OIDC-KLIP-SETUP.md#hub-admin-applications--logistic):
+
+```ini
+OIDC_DISCOVERY_URL=http://test-dwshub.kpndomain.com/api/sso/.well-known/openid-configuration
+OIDC_CLIENT_ID=logistic
+OIDC_REDIRECT_URI=http://test-klip.kpndomain.com/auth/oidc/callback
+OIDC_SCOPES=openid email profile
+SESSION_SECRET=<generated>
+SESSION_COOKIE_SAMESITE=Lax
+SESSION_COOKIE_SECURE=false
+FRONTEND_URL=http://test-klip.kpndomain.com
+TRUST_PROXY=1
+SSO_LEGACY_BRIDGE=false
+```
+
+Verifikasi env vs Hub: `bash docs/scripts/verify-oidc-config.sh`
+
 ```bash
 cd /opt/klip
 git fetch origin
@@ -92,6 +109,16 @@ Tunggu `/health` OK sebelum lanjut ke frontend.
 ## STEP 2B — Deploy frontend (PuTTY → `172.28.92.56`)
 
 Login SSH ke server frontend:
+
+**Same-origin (cookie SSO):** di `/opt/klip/.env` untuk frontend build:
+
+```ini
+NEXT_PUBLIC_API_URL=/api
+# Jika Nginx tidak proxy /api ke backend, set rewrite target:
+# BACKEND_INTERNAL_URL=http://172.28.92.57:5001
+```
+
+Nginx same-origin example: [`nginx/klip-single-origin.conf.example`](nginx/klip-single-origin.conf.example).
 
 ```bash
 curl -s http://172.28.92.57:5001/health
@@ -184,12 +211,14 @@ docker compose -f docker-compose.frontend.yml up -d --build
 | `git pull` conflict di server | `git stash` → pull → `git stash pop`, atau koordinasi dengan tim |
 | `GET /contracts` 500 | `docker compose -f docker-compose.backend.yml logs --tail=100 backend` |
 | UI tidak berubah setelah deploy | Hard refresh; pastikan frontend di-build ulang (`--build`) |
+| SSO login loop / cookie hilang | Pastikan single-origin (`NEXT_PUBLIC_API_URL=/api`) + nginx `Host` header; lihat `SSO-OIDC-KLIP-SETUP.md` |
 | Push ditolak | `git pull --rebase origin SIT` lalu `git push origin SIT` |
 
 ---
 
 ## Referensi
 
+- `docs/SSO-OIDC-KLIP-SETUP.md` — OIDC env, nginx, troubleshooting
 - `docs/scripts/staging-deploy-putty.txt` — ringkas PuTTY
 - `docs/GIT-SETUP-GITHUB.md` — setup Git lokal
 - `docs/scripts/push-to-sit.ps1` — push otomatis

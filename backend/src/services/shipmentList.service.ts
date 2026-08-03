@@ -22,6 +22,7 @@ import {
   queueShipmentVesselSapBackfill,
 } from './shipmentVesselFromSap.service';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
+import { runQueriesInBatches } from '../utils/runQueriesInBatches';
 import {
   buildShipmentOutstandingQtyBacklogAggregateQuery,
   buildShipmentOutstandingQtyExecutionAggregateQuery,
@@ -32,8 +33,29 @@ import {
 import {
   appendUnplannedContractBacklogColumnFilters,
   appendUnplannedContractBacklogGlobalSearch,
+  buildShipmentUnplannedBacklogContractQtyQuery,
+  buildPreplannedContractsCountQuery,
   buildUnplannedContractToolbarScope,
 } from '../utils/shipmentUnplannedHybridSql';
+import {
+  buildShipmentStatusCardQtyExecutionAggregateQuery,
+  mergeShipmentStatusCardQtyParts,
+  parseShipmentStatusContractQtyFromExecutionRow,
+  parseShipmentStatusOutstandingQtyFromSqlRow,
+  type ShipmentStatusCardQtyBundle,
+  type ShipmentStatusContractQtyKg,
+  type ShipmentStatusOutstandingQtyKg,
+} from '../utils/shipmentStatusCardQtySql';
+import {
+  buildShipmentCarryOverInsightsQuery,
+  buildShipmentOverdueBacklogAggregateQuery,
+  buildShipmentOverdueBacklogTopSuppliersQuery,
+  buildShipmentOverdueExecutionAggregateQuery,
+  buildShipmentOverdueExecutionTopSuppliersQuery,
+  buildShipmentOverdueTopVesselsQuery,
+  parseShipmentAttentionInsights,
+  type ShipmentAttentionInsightsRow,
+} from '../utils/shipmentAttentionInsightsSql';
 
 /**
  * Shipments compact list API:
@@ -175,7 +197,7 @@ export function buildShipmentListCountCacheKey(filterCacheKey: string): string {
 }
 
 export function buildShipmentSummaryCacheKey(filterCacheKey: string, scopeStatus?: string): string {
-  return `${filterCacheKey}:summary:${scopeStatus ?? ''}`;
+  return `${filterCacheKey}:summary:${scopeStatus ?? ''}:attention-v1`;
 }
 
 export function buildShipmentOutstandingQtyCacheKey(filterCacheKey: string): string {
@@ -184,6 +206,100 @@ export function buildShipmentOutstandingQtyCacheKey(filterCacheKey: string): str
 }
 
 export type { ShipmentOutstandingQtySummary };
+export type {
+  ShipmentStatusCardQtyBundle,
+  ShipmentStatusContractQtyKg,
+  ShipmentStatusOutstandingQtyKg,
+};
+
+export function buildShipmentStatusCardQtyCacheKey(filterCacheKey: string): string {
+  return `${filterCacheKey}:status-card-qty:v1`;
+}
+
+const STATUS_CARD_QTY_CACHE = new Map<
+  string,
+  { bundle: ShipmentStatusCardQtyBundle; expiresAt: number }
+>();
+
+/**
+ * Per-card Contract Qty / Outstanding Qty for Section 1 status rectangles.
+ * Scoped by Global Filters (toolbar) — same scope as status counts.
+ */
+export async function loadShipmentStatusCardQtyForRequest(
+  req: AuthRequest,
+  opts: {
+    shipmentBaseCteSql: string;
+    toolbarOuterSql: string;
+    innerParams: unknown[];
+    toolbarOuterParams: unknown[];
+    filterCacheKey: string;
+  },
+): Promise<ShipmentStatusCardQtyBundle> {
+  const cacheKey = buildShipmentStatusCardQtyCacheKey(opts.filterCacheKey);
+  const cached = STATUS_CARD_QTY_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.bundle;
+  }
+  if (cached) STATUS_CARD_QTY_CACHE.delete(cacheKey);
+
+  const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
+  const execText = buildShipmentStatusCardQtyExecutionAggregateQuery(
+    opts.shipmentBaseCteSql,
+    opts.toolbarOuterSql,
+  );
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendUnplannedContractBacklogColumnFilters(colFilters, idx);
+  const backlogToolbarSql = `${g.sql}${c.sql}`;
+  const backlogParams = [...scope.params, ...g.params, ...c.params];
+
+  const [execRes, backlogRes, preplannedRes] = await Promise.all([
+    query(execText, baseParams),
+    query(
+      buildShipmentUnplannedBacklogContractQtyQuery(scope.sql, backlogToolbarSql),
+      backlogParams,
+    ),
+    query(
+      buildPreplannedContractsCountQuery(scope.sql, backlogToolbarSql),
+      backlogParams,
+    ),
+  ]);
+
+  const execution = parseShipmentStatusContractQtyFromExecutionRow(
+    (execRes.rows[0] || {}) as Record<string, unknown>,
+  );
+  const outstanding = parseShipmentStatusOutstandingQtyFromSqlRow(
+    (execRes.rows[0] || {}) as Record<string, unknown>,
+  );
+  const unplannedBacklogContractQtyKg =
+    Number(backlogRes.rows[0]?.contract_qty_kg ?? 0) || 0;
+  const preplannedContractQtyKg = Number(preplannedRes.rows[0]?.contract_qty_kg ?? 0) || 0;
+
+  const bundle = mergeShipmentStatusCardQtyParts({
+    execution,
+    unplannedBacklogContractQtyKg,
+    preplannedContractQtyKg,
+    outstanding,
+  });
+
+  STATUS_CARD_QTY_CACHE.set(cacheKey, {
+    bundle,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+  evictMapIfNeeded(STATUS_CARD_QTY_CACHE, MAX_CACHE_ENTRIES);
+  return bundle;
+}
 
 /**
  * Outstanding Qty strip for Section 1 (FOB/CIF × Interco / 3rd Party).
@@ -252,9 +368,98 @@ export async function loadShipmentOutstandingQtyForRequest(
   return merged;
 }
 
+export type { ShipmentAttentionInsightsRow };
+
+/**
+ * Attention Needed + Aging Overdue for Section 1 (toolbar-scoped, live SQL).
+ */
+export async function loadShipmentAttentionInsightsForRequest(
+  req: AuthRequest,
+  opts: {
+    shipmentBaseCteSql: string;
+    toolbarOuterSql: string;
+    innerParams: unknown[];
+    toolbarOuterParams: unknown[];
+    filterCacheKey: string;
+  },
+  totalOutstandingKg?: number | null | Promise<number | null | undefined>,
+): Promise<ShipmentAttentionInsightsRow> {
+  const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendUnplannedContractBacklogColumnFilters(colFilters, idx);
+  const backlogParams = [...scope.params, ...g.params, ...c.params];
+  const backlogToolbarSql = `${g.sql}${c.sql}`;
+
+  const totalOsKgPromise =
+    totalOutstandingKg != null && typeof (totalOutstandingKg as Promise<unknown>).then === 'function'
+      ? (totalOutstandingKg as Promise<number | null | undefined>)
+      : totalOutstandingKg != null
+        ? Promise.resolve(totalOutstandingKg)
+        : loadShipmentOutstandingQtyForRequest(req, opts).then((s) => s.totalKg);
+
+  const [
+    backlogAggRes,
+    execAggRes,
+    backlogTopRes,
+    execTopRes,
+    topVesselsRes,
+    carryRes,
+  ] = await runQueriesInBatches([
+    () => query(
+      buildShipmentOverdueBacklogAggregateQuery(scope.sql, backlogToolbarSql),
+      backlogParams,
+    ),
+    () => query(buildShipmentOverdueExecutionAggregateQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql), baseParams),
+    () => query(
+      buildShipmentOverdueBacklogTopSuppliersQuery(scope.sql, backlogToolbarSql, 3),
+      backlogParams,
+    ),
+    () => query(
+      buildShipmentOverdueExecutionTopSuppliersQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql, 3),
+      baseParams,
+    ),
+    () => query(
+      buildShipmentOverdueTopVesselsQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql, 3),
+      baseParams,
+    ),
+    () => query(buildShipmentCarryOverInsightsQuery(scope.sql, backlogToolbarSql), backlogParams),
+  ]);
+
+  const totalOsKg = await totalOsKgPromise;
+
+  return parseShipmentAttentionInsights({
+    backlogAggregateRow: (backlogAggRes.rows[0] || {}) as Record<string, unknown>,
+    executionAggregateRow: (execAggRes.rows[0] || {}) as Record<string, unknown>,
+    backlogTopSupplierRows: backlogTopRes.rows as Record<string, unknown>[],
+    executionTopSupplierRows: execTopRes.rows as Record<string, unknown>[],
+    topVesselRows: topVesselsRes.rows as Record<string, unknown>[],
+    carryRow: (carryRes.rows[0] || {}) as Record<string, unknown>,
+    lossRows: [],
+    totalOutstandingKg: totalOsKg,
+  });
+}
+
 export type ShipmentSummaryUnplannedBreakdown = {
   contractRows: number;
   shipmentRows: number;
+  totalTableRows: number;
+};
+
+export type ShipmentSummaryPreplannedBreakdown = {
+  contractRows: number;
+  groupCount: number;
   totalTableRows: number;
 };
 
@@ -339,13 +544,22 @@ export async function loadShipmentSummaryBundle(
     params: unknown[];
     cacheKey: string;
     loadUnplannedBreakdown: () => Promise<ShipmentSummaryUnplannedBreakdown>;
+    loadPreplannedBreakdown?: () => Promise<ShipmentSummaryPreplannedBreakdown>;
   },
 ): Promise<{
   summaryRow: Record<string, unknown>;
   totalCount: number;
   unplannedBreakdown: ShipmentSummaryUnplannedBreakdown;
+  preplannedBreakdown: ShipmentSummaryPreplannedBreakdown;
   source: ShipmentSummaryLoadSource;
 }> {
+  const emptyPreplanned: ShipmentSummaryPreplannedBreakdown = {
+    contractRows: 0,
+    groupCount: 0,
+    totalTableRows: 0,
+  };
+  const loadPreplanned = opts.loadPreplannedBreakdown ?? (async () => emptyPreplanned);
+
   const filters = buildShipmentPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
     const fromDaily = await loadShipmentSummaryFromDaily(toPipelineDailySummaryScope(filters));
@@ -356,10 +570,17 @@ export async function loadShipmentSummaryBundle(
         expiresAt: Date.now() + CACHE_TTL_MS,
       });
       evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+      // Live hybrid counts for Unplanned + Preplanned cards — daily SUM can be stale or
+      // diverge from the hybrid table (e.g. preplanned moves, execution rows).
+      const [unplannedBreakdown, preplannedBreakdown] = await Promise.all([
+        opts.loadUnplannedBreakdown(),
+        loadPreplanned(),
+      ]);
       return {
         summaryRow: fromDaily.summaryRow,
         totalCount: fromDaily.totalCount,
-        unplannedBreakdown: fromDaily.unplannedBreakdown,
+        unplannedBreakdown,
+        preplannedBreakdown,
         source: 'daily',
       };
     }
@@ -367,24 +588,30 @@ export async function loadShipmentSummaryBundle(
 
   const cached = SUMMARY_CACHE.get(opts.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
-    const unplannedBreakdown = await opts.loadUnplannedBreakdown();
+    const [unplannedBreakdown, preplannedBreakdown] = await Promise.all([
+      opts.loadUnplannedBreakdown(),
+      loadPreplanned(),
+    ]);
     return {
       summaryRow: cached.summaryRow,
       totalCount: cached.totalCount,
       unplannedBreakdown,
+      preplannedBreakdown,
       source: 'cache',
     };
   }
   if (cached) SUMMARY_CACHE.delete(opts.cacheKey);
 
-  const [loaded, unplannedBreakdown] = await Promise.all([
+  const [loaded, unplannedBreakdown, preplannedBreakdown] = await Promise.all([
     loadShipmentListSummary(opts.summaryCountQuery, opts.params, opts.cacheKey),
     opts.loadUnplannedBreakdown(),
+    loadPreplanned(),
   ]);
   return {
     summaryRow: loaded.summaryRow,
     totalCount: loaded.totalCount,
     unplannedBreakdown,
+    preplannedBreakdown,
     source: 'live',
   };
 }
@@ -407,6 +634,7 @@ export function invalidateShipmentsListCache(): void {
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
   OUTSTANDING_QTY_CACHE.clear();
+  STATUS_CARD_QTY_CACHE.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
   // Oil Loss reads shipment quantities (sfal/sfbd/delivered/receive) — refresh its
   // cache after any shipment mutation so the page reflects the edit immediately.
@@ -421,7 +649,10 @@ export function invalidateShipmentsListCache(): void {
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
   for (const row of rows) {
     if (String(row.row_kind ?? '').trim() === 'contract_backlog') {
-      row.status = 'UNPLANNED';
+      const statusUpper = String(row.status ?? '').trim().toUpperCase();
+      if (statusUpper !== 'PREPLANNED') {
+        row.status = 'UNPLANNED';
+      }
       continue;
     }
     delete (row as { __filter_total?: unknown }).__filter_total;

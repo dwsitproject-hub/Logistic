@@ -20,6 +20,7 @@ import {
 import {
   buildUnplannedContractBacklogLatestSpdCte,
   unplannedContractBacklogBaseWhereSql,
+  preplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
 import { buildShipmentPageSeaRowScopeSql, shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
@@ -389,11 +390,14 @@ export function buildShipmentVesselStageDailyInsertSql(): string {
       ) IS NOT NULL`;
 }
 
-/** UPSERT open contract backlog grouped by group_plant + contract_date. */
+/** UPSERT open contract backlog + preplanned counts grouped by group_plant + contract_date. */
 export function buildShipmentBacklogDailySummaryUpsertSql(): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
-    INSERT INTO shipment_pipeline_daily_summary (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
+    INSERT INTO shipment_pipeline_daily_summary (
+      group_plant, contract_date, product, incoterm,
+      unplanned_contract_backlog, preplanned_contract_count
+    )
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     backlog AS (
       SELECT
@@ -406,8 +410,43 @@ export function buildShipmentBacklogDailySummaryUpsertSql(): string {
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
       GROUP BY 1, 2, 3, 4
+    ),
+    preplanned AS (
+      SELECT
+        ${plant} AS group_plant,
+        COALESCE(c.contract_date, DATE '1970-01-01')::date AS contract_date,
+        ${sqlPipelineProductKey('c.product')} AS product,
+        ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
+        COUNT(*)::bigint AS preplanned_contract_count
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${preplannedContractBacklogBaseWhereSql('c', 'l')}
+      GROUP BY 1, 2, 3, 4
+    ),
+    dims AS (
+      SELECT group_plant, contract_date, product, incoterm FROM backlog
+      UNION
+      SELECT group_plant, contract_date, product, incoterm FROM preplanned
     )
-    SELECT group_plant, contract_date, product, incoterm, unplanned_contract_backlog FROM backlog
+    SELECT
+      d.group_plant,
+      d.contract_date,
+      d.product,
+      d.incoterm,
+      COALESCE(b.unplanned_contract_backlog, 0)::bigint AS unplanned_contract_backlog,
+      COALESCE(p.preplanned_contract_count, 0)::bigint AS preplanned_contract_count
+    FROM dims d
+    LEFT JOIN backlog b
+      ON b.group_plant = d.group_plant
+     AND b.contract_date = d.contract_date
+     AND b.product = d.product
+     AND b.incoterm = d.incoterm
+    LEFT JOIN preplanned p
+      ON p.group_plant = d.group_plant
+     AND p.contract_date = d.contract_date
+     AND p.product = d.product
+     AND p.incoterm = d.incoterm
     ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
-      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
+      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog,
+      preplanned_contract_count = EXCLUDED.preplanned_contract_count`;
 }

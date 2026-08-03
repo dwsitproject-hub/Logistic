@@ -5,6 +5,7 @@
 
 export type ShipmentPagePipelineStage =
   | 'UNPLANNED'
+  | 'PREPLANNED'
   | 'PLANNED'
   | 'AT_LOADING_PORT'
   | 'SAILED'
@@ -14,6 +15,7 @@ export type ShipmentPagePipelineStage =
 
 export type ShipmentPagePipelineStatusCounts = {
   unplanned: number
+  preplanned: number
   planned: number
   atLoadingPort: number
   sailed: number
@@ -39,6 +41,7 @@ export type DischargePortBreakdown = {
 /** Sorted distinct non-blank vessel names per pipeline stage (Section 1 cards). */
 export type ShipmentPagePipelineVesselNames = {
   unplanned: string[]
+  preplanned: string[]
   planned: string[]
   atLoadingPort: string[]
   sailed: string[]
@@ -52,6 +55,8 @@ export type ShipmentPagePipelineSummary = {
   statusVesselNames?: ShipmentPagePipelineVesselNames
   loadingPortBreakdown?: LoadingPortBreakdown
   dischargePortBreakdown?: DischargePortBreakdown
+  statusContractQty?: ShipmentPagePipelineContractQtyKg
+  statusOutstandingQty?: ShipmentPagePipelineOutstandingQtyKg
   unplannedTable?: {
     contractRows: number
     shipmentRows: number
@@ -62,6 +67,69 @@ export type ShipmentPagePipelineSummary = {
     thirdParty: { fobKg: number; cifKg: number }
     interco: { fobKg: number; cifKg: number }
   }
+}
+
+export type ShipmentPagePipelineContractQtyKg = {
+  unplanned: number
+  preplanned: number
+  planned: number
+  completed: number
+  cancelled: number
+}
+
+export type ShipmentPagePipelineOutstandingQtyKg = {
+  atLoadingPort: number
+  sailed: number
+  atDischargePort: number
+}
+
+export type ShipmentPipelineCardQtyDisplay = {
+  label: 'Contract Qty' | 'Outstanding Qty'
+  kg: number
+}
+
+const SHIPMENT_CONTRACT_QTY_STAGES = new Set<ShipmentPagePipelineStage>([
+  'UNPLANNED',
+  'PREPLANNED',
+  'PLANNED',
+  'COMPLETED',
+  'CANCELLED',
+])
+
+const SHIPMENT_OUTSTANDING_QTY_STAGES = new Set<ShipmentPagePipelineStage>([
+  'AT_LOADING_PORT',
+  'SAILED',
+  'AT_DISCHARGE_PORT',
+])
+
+export function pipelineCardQtyForStage(
+  stage: ShipmentPagePipelineStage,
+  contractQty?: Partial<ShipmentPagePipelineContractQtyKg> | null,
+  outstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg> | null,
+): ShipmentPipelineCardQtyDisplay | null {
+  if (SHIPMENT_CONTRACT_QTY_STAGES.has(stage)) {
+    const kg =
+      stage === 'UNPLANNED'
+        ? Number(contractQty?.unplanned ?? 0)
+        : stage === 'PREPLANNED'
+          ? Number(contractQty?.preplanned ?? 0)
+          : stage === 'PLANNED'
+            ? Number(contractQty?.planned ?? 0)
+            : stage === 'COMPLETED'
+              ? Number(contractQty?.completed ?? 0)
+              : Number(contractQty?.cancelled ?? 0)
+    return { label: 'Contract Qty', kg }
+  }
+  if (SHIPMENT_OUTSTANDING_QTY_STAGES.has(stage)) {
+    const kg =
+      stage === 'AT_LOADING_PORT'
+        ? Number(outstandingQty?.atLoadingPort ?? 0)
+        : stage === 'SAILED'
+          ? Number(outstandingQty?.sailed ?? 0)
+          : Number(outstandingQty?.atDischargePort ?? 0)
+    return { label: 'Outstanding Qty', kg }
+  }
+  return null
 }
 
 export interface ShipmentPipelineCardConfig {
@@ -83,6 +151,15 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     badgeColor: 'bg-slate-600',
     tooltip:
       'Rows in the Unplanned view table: open contracts without a shipment record, plus unplanned STO/shipment execution groups (no ETA and no port milestones yet). The badge count matches the table row total.',
+  },
+  {
+    status: 'PREPLANNED',
+    label: 'Preplanned',
+    color: 'bg-amber-100',
+    textColor: 'text-amber-800',
+    badgeColor: 'bg-amber-600',
+    tooltip:
+      'Unique accepted grouping suggestions that are not yet linked to a real shipment (no vessel/ETA entered). The badge counts groups, not individual contracts.',
   },
   {
     status: 'PLANNED',
@@ -145,6 +222,8 @@ export function pipelineCountForStage(
   switch (stage) {
     case 'UNPLANNED':
       return counts.unplanned
+    case 'PREPLANNED':
+      return counts.preplanned
     case 'PLANNED':
       return counts.planned
     case 'AT_LOADING_PORT':
@@ -170,6 +249,8 @@ export function pipelineVesselNamesForStage(
   switch (stage) {
     case 'UNPLANNED':
       return vessels.unplanned
+    case 'PREPLANNED':
+      return vessels.preplanned
     case 'PLANNED':
       return vessels.planned
     case 'AT_LOADING_PORT':

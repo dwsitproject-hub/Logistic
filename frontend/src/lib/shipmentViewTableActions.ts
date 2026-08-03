@@ -3,20 +3,20 @@ import { resolveShipmentDisplayStoNumber } from '@/lib/shipmentStoDisplay'
 
 export type ShipmentTablePrimaryAction = 'add' | 'edit' | 'view'
 
-/** Primary action for Shipments view-table row (Unplanned → Add, Planned–Completed → Edit, Cancelled → View). */
+/** Primary action for Shipments view-table row (Unplanned/Preplanned → Add, Planned–Completed → Edit, Cancelled → View). */
 export function resolveShipmentTablePrimaryAction(
   status: string | null | undefined,
 ): ShipmentTablePrimaryAction {
   const key = normalizeShipmentStatusKey(status)
   if (key === 'CANCELLED') return 'view'
-  if (key === 'UNPLANNED') return 'add'
+  if (key === 'UNPLANNED' || key === 'PREPLANNED') return 'add'
   return 'edit'
 }
 
-/** True when list row already has ETA/planning registered (not Unplanned). */
+/** True when list row already has ETA/planning registered (not Unplanned/Preplanned). */
 export function shipmentRowHasRegisteredPlanning(status: string | null | undefined): boolean {
   const key = normalizeShipmentStatusKey(status)
-  return key !== '' && key !== 'UNPLANNED'
+  return key !== '' && key !== 'UNPLANNED' && key !== 'PREPLANNED'
 }
 
 /** KLIP-only shipment groups (no official SAP STO) may be cancelled from the view table. */

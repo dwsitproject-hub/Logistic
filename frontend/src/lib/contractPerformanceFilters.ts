@@ -23,6 +23,17 @@ export type ContractPerfSourceFilter = 'All' | 'Interco' | '3rd Party'
 
 export const CONTRACT_PERF_SOURCE_TABS: ContractPerfSourceFilter[] = ['All', 'Interco', '3rd Party']
 
+/** Multi-select Source options (Section 1 — empty selection = all). */
+export const CONTRACT_PERF_SOURCE_MULTI_OPTIONS = ['Interco', '3rd Party'] as const
+
+/** Multi-select Product options (Section 1 — empty selection = all). */
+export const CONTRACT_PERF_PRODUCT_MULTI_OPTIONS = [
+  'CPO',
+  'PK',
+  'POME',
+  'Shell Palm',
+] as const
+
 export type ContractPerfDrilldownFilters = {
   product: string | null
   plant: string | null
@@ -68,11 +79,11 @@ export type ContractPerfColumnFilter =
 export type ContractPerformanceGlobalFilters = {
   dateFrom: string
   dateTo: string
-  sourceFilter: ContractPerfSourceFilter
+  selectedSources: string[]
+  selectedProducts: string[]
   selectedIncoterms: string[]
   selectedSuppliers: string[]
   selectedGroupPlants: string[]
-  productTabQuery: string | undefined
   summaryCardStatus: 'All' | 'Open' | 'Close'
   lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME'
   perfDashMode: 'late' | 'ontrack'
@@ -86,6 +97,7 @@ export type ContractPerformanceScope = {
   global: ContractPerformanceGlobalFilters
   drilldown: ContractPerfDrilldownFilters
   resolvedProduct: string | undefined
+  resolvedProducts: string[]
   resolvedPlants: string[]
   resolvedIncoterms: string[]
   resolvedSupplier: string | null
@@ -146,6 +158,44 @@ export function matchesContractPerfSourceFilter(
   return true
 }
 
+export function contractPerfProductLabelToApiValue(label: string): string {
+  const trimmed = String(label ?? '').trim()
+  if (!trimmed) return ''
+  const tab = trimmed as Exclude<ContractPerfProductTab, 'All'>
+  if (tab in CONTRACT_PERF_PRODUCT_TAB_API_VALUE) {
+    return CONTRACT_PERF_PRODUCT_TAB_API_VALUE[tab]
+  }
+  return trimmed.toUpperCase()
+}
+
+export function contractPerfProductMultiApiValues(selectedProducts: readonly string[]): string[] {
+  return selectedProducts
+    .map((p) => contractPerfProductLabelToApiValue(p))
+    .filter(Boolean)
+}
+
+/** OR match — empty selection = all sources. */
+export function matchesContractPerfSourceMultiFilter(
+  sourceType: unknown,
+  selectedSources: readonly string[],
+): boolean {
+  if (!selectedSources.length) return true
+  return selectedSources.some((source) =>
+    matchesContractPerfSourceFilter(sourceType, source as ContractPerfSourceFilter),
+  )
+}
+
+/** OR substring match — empty selection = all products. */
+export function matchesContractPerfProductMultiFilter(
+  rowProduct: unknown,
+  selectedProducts: readonly string[],
+): boolean {
+  if (!selectedProducts.length) return true
+  return selectedProducts.some((product) =>
+    matchesContractPerfProductTabFilter(rowProduct, contractPerfProductLabelToApiValue(product)),
+  )
+}
+
 export function isContractPerfDrilldownValueSet(value: string | null | undefined): value is string {
   return value != null && value !== ''
 }
@@ -161,14 +211,14 @@ export function hasContractPerfDrilldownSelection(selection: ContractPerfDrilldo
 
 /** Section 3 lazy gate — reveal table when any top-level or drilldown filter is active. */
 export function isContractPerfSection3FilterApplied(input: {
-  sourceFilter: ContractPerfSourceFilter
-  selectedProductTab: ContractPerfProductTab
+  selectedSources: string[]
+  selectedProducts: string[]
   summaryCardStatus: 'All' | 'Open' | 'Close'
   appliedDrilldown: ContractPerfDrilldownFilters
 }): boolean {
   return (
-    input.sourceFilter !== 'All' ||
-    input.selectedProductTab !== 'All' ||
+    input.selectedSources.length > 0 ||
+    input.selectedProducts.length > 0 ||
     input.summaryCardStatus === 'Open' ||
     input.summaryCardStatus === 'Close' ||
     hasContractPerfDrilldownSelection(input.appliedDrilldown)
@@ -271,15 +321,28 @@ export function resolveContractPerfIncoterms(
 }
 
 export function resolveContractPerfTableProduct(
-  productTabQuery: string | undefined,
+  selectedProducts: readonly string[],
   drilldownProduct: string | null,
 ): string | undefined {
   if (isContractPerfDrilldownValueSet(drilldownProduct)) {
     if (drilldownProduct === 'Blank' || drilldownProduct === 'Uncategorized') return undefined
     return normalizePerfProductGroupKey(drilldownProduct)
   }
-  if (!productTabQuery) return undefined
-  return normalizePerfProductGroupKey(productTabQuery)
+  if (selectedProducts.length === 1) {
+    return normalizePerfProductGroupKey(contractPerfProductLabelToApiValue(selectedProducts[0]))
+  }
+  return undefined
+}
+
+export function resolveContractPerfTableProducts(
+  selectedProducts: readonly string[],
+  drilldownProduct: string | null,
+): string[] {
+  if (isContractPerfDrilldownValueSet(drilldownProduct)) {
+    const single = resolveContractPerfTableProduct(selectedProducts, drilldownProduct)
+    return single ? [single] : []
+  }
+  return contractPerfProductMultiApiValues(selectedProducts)
 }
 
 /** Build the unified scope object consumed by every section. */
@@ -288,10 +351,12 @@ export function resolveContractPerformanceScope(input: {
   drilldown: ContractPerfDrilldownFilters
 }): ContractPerformanceScope {
   const { global, drilldown } = input
+  const resolvedProducts = resolveContractPerfTableProducts(global.selectedProducts, drilldown.product)
   return {
     global,
     drilldown,
-    resolvedProduct: resolveContractPerfTableProduct(global.productTabQuery, drilldown.product),
+    resolvedProduct: resolveContractPerfTableProduct(global.selectedProducts, drilldown.product),
+    resolvedProducts,
     resolvedPlants: resolveContractPerfTablePlants(global.selectedGroupPlants, drilldown.plant),
     resolvedIncoterms: resolveContractPerfIncoterms(global.selectedIncoterms, drilldown.incoterm),
     resolvedSupplier: drilldown.supplier,
@@ -454,7 +519,7 @@ export function filterContractsForPerformanceTable(
       return false
     }
 
-    if (!matchesContractPerfSourceFilter(c.source_type, scope.global.sourceFilter)) {
+    if (!matchesContractPerfSourceMultiFilter(c.source_type, scope.global.selectedSources)) {
       return false
     }
 
@@ -485,8 +550,15 @@ export function filterContractsForPerformanceTable(
       if (!scope.resolvedPlants.includes(plant)) return false
     }
     if (
-      scope.resolvedProduct &&
       !isContractPerfDrilldownValueSet(drilldown.product) &&
+      scope.global.selectedProducts.length > 0 &&
+      !matchesContractPerfProductMultiFilter(c.product, scope.global.selectedProducts)
+    ) {
+      return false
+    }
+    if (
+      scope.resolvedProduct &&
+      isContractPerfDrilldownValueSet(drilldown.product) &&
       !matchesContractPerfProductTabFilter(c.product, scope.resolvedProduct)
     ) {
       return false
@@ -708,10 +780,12 @@ export function appendContractPerformanceApiParams(
   options: ContractPerformanceApiParamOptions,
 ): void {
   const drilldown = options.includeDrilldown ? scope.drilldown : EMPTY_CONTRACT_PERF_DRILLDOWN
-  const resolvedProduct = resolveContractPerfTableProduct(
-    scope.global.productTabQuery,
+  const resolvedProducts = resolveContractPerfTableProducts(
+    scope.global.selectedProducts,
     drilldown.product,
   )
+  const resolvedProduct =
+    resolvedProducts.length === 1 ? resolvedProducts[0] : scope.resolvedProduct
   const resolvedPlants = resolveContractPerfTablePlants(
     scope.global.selectedGroupPlants,
     drilldown.plant,
@@ -731,12 +805,14 @@ export function appendContractPerformanceApiParams(
   const useFilteredScope =
     hasToolbarDateScope ||
     (!omitContractStatus && scope.contractStatus !== 'All') ||
-    (scope.global.sourceFilter && scope.global.sourceFilter !== 'All') ||
+    scope.global.selectedSources.length > 0 ||
+    scope.global.selectedProducts.length > 0 ||
     resolvedIncoterms.length > 0 ||
     resolvedPlants.length > 0 ||
     searchTrim.length >= 2 ||
     isContractPerfDrilldownValueSet(supplier) ||
-    Boolean(resolvedProduct)
+    Boolean(resolvedProduct) ||
+    resolvedProducts.length > 1
 
   params.append('scope', useFilteredScope ? 'filtered' : 'ytd')
   params.append('_ts', String(Date.now()))
@@ -745,9 +821,13 @@ export function appendContractPerformanceApiParams(
   if (scope.global.perfTransportMode !== 'ALL') {
     params.append('transportMode', scope.global.perfTransportMode)
   }
-  if (resolvedProduct) params.append('product', resolvedProduct)
-  if (scope.global.sourceFilter && scope.global.sourceFilter !== 'All') {
-    params.append('sourceType', scope.global.sourceFilter)
+  if (resolvedProducts.length > 1) {
+    params.append('products', resolvedProducts.join(','))
+  } else if (resolvedProduct) {
+    params.append('product', resolvedProduct)
+  }
+  if (scope.global.selectedSources.length > 0) {
+    params.append('sourceTypes', scope.global.selectedSources.join(','))
   }
   if (scope.global.b2bFlagFilter !== 'ALL') params.append('b2bFlag', scope.global.b2bFlagFilter)
   if (!omitContractStatus && scope.contractStatus !== 'All') {
@@ -819,11 +899,11 @@ export function stableContractPerfApiParamsKey(params: URLSearchParams): string 
 export function buildContractPerfToolbarGlobal(input: {
   dateFrom: string
   dateTo: string
-  sourceFilter: ContractPerfSourceFilter
+  selectedSources: string[]
+  selectedProducts: string[]
   selectedIncoterms: string[]
   selectedSuppliers: string[]
   selectedGroupPlants: string[]
-  productTabQuery: string | undefined
   lateOnTimeFilter: ContractPerformanceGlobalFilters['lateOnTimeFilter']
   perfDashMode: ContractPerformanceGlobalFilters['perfDashMode']
   perfTransportMode: ContractPerformanceGlobalFilters['perfTransportMode']

@@ -1,18 +1,23 @@
 'use client'
 
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, HelpCircle, Loader2, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, HelpCircle, Loader2, MessageSquare, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
+import { isAuthenticatedLocally } from '@/lib/authSession'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
+import {
+  contractShowsAddShipment,
+  contractShowsAddTrucking,
+} from '@/lib/contractLogisticsActions'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
@@ -59,17 +64,18 @@ import {
   handleDownloadDocument,
   partiesBuyerDisplay,
 } from '@/components/contracts/ContractDetailModal'
+import { HistoricalRemarksModal } from '@/components/shared/HistoricalRemarksModal'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { getInitialUserScopeFilters, markUserScopeFiltersCleared, wereUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
 import {
   type ContractPerfColumnFilter,
   type ContractPerfDrilldownFilters,
   type ContractPerfHotspot,
-  type ContractPerfProductTab,
   type LatePerfApiTreeNode,
-  CONTRACT_PERF_PRODUCT_TABS,
-  CONTRACT_PERF_SOURCE_TABS,
-  type ContractPerfSourceFilter,
+  CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+  CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
   EMPTY_CONTRACT_PERF_DRILLDOWN,
   buildContractPerfTableFetchScope,
   buildContractPerfToolbarGlobal,
@@ -77,8 +83,7 @@ import {
   buildContractPerfTableListParams,
   contractPerfDrilldownSelectionsEqual,
   contractPerfDrilldownToTableColumnFilters,
-  contractPerfProductQueryValue,
-  contractPerfGroupPlantsQueryValue,
+  contractPerfProductLabelToApiValue,
   stableContractPerfApiParamsKey,
   flattenLatePerfApiTreeToHotspots,
   hasContractPerfDrilldownSelection,
@@ -90,6 +95,10 @@ import {
   resolveContractPerformanceScope,
   sumHotspotQtyKg,
 } from '@/lib/contractPerformanceFilters'
+import {
+  resolvePerformancePeriodDateRange,
+  type PerformancePeriodKey,
+} from '@/lib/performancePeriodFilters'
 import {
   findUnifiedPerfNode,
   mergeUnifiedPerfBranchTrees,
@@ -114,7 +123,6 @@ import {
   contractPerfTableColumnWidthPx,
   migrateContractColumnLayout,
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
-  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
@@ -420,18 +428,17 @@ const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
 
 /** Contract Performance page-only product tabs (Section 1–3) — tab list lives in contractPerformanceFilters. */
 
-/** Staff default product tab — sync on first render so Section 1 API matches toolbar scope. */
-function resolveStaffContractPerfProductTab(): (typeof CONTRACT_PERF_PRODUCT_TABS)[number] {
-  if (typeof window === 'undefined') return 'All'
-  if (wereUserScopeFiltersCleared('contracts')) return 'All'
+/** Staff default product multi-select for Contract Performance Section 1. */
+function resolveStaffContractPerfInitialProducts(): string[] {
+  if (typeof window === 'undefined') return []
+  if (wereUserScopeFiltersCleared('contracts')) return []
   const { products } = getInitialUserScopeFilters()
-  if (products.length !== 1) return 'All'
-  const match = CONTRACT_PERF_PRODUCT_TABS.find(
-    (tab) =>
-      tab !== 'All' &&
-      normalizePerfProductGroupKey(tab) === normalizePerfProductGroupKey(products[0]),
+  if (products.length !== 1) return []
+  const match = CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find(
+    (option) =>
+      normalizePerfProductGroupKey(option) === normalizePerfProductGroupKey(products[0]),
   )
-  return match ?? 'All'
+  return match ? [match] : []
 }
 
 /** Contract Performance first load — Open selected so Section 1, drilldown, and table stay in sync.
@@ -528,14 +535,6 @@ function buildNextContractPerfDrilldownSelection(
     return { ...prev, incoterm: label, supplier: null }
   }
   return { ...prev, supplier: label }
-}
-
-function defaultContractPerfYtdDateRange(): { dateFrom: string; dateTo: string } {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return { dateFrom: `${y}-01-01`, dateTo: `${y}-${m}-${day}` }
 }
 
 function contractPerfTradeCycleDaysForAgg(tradeCycle: number | null | undefined): number {
@@ -848,46 +847,6 @@ function defaultCompactVisibleColumnIds(isContractPerformance: boolean): string[
   return [...CONTRACTS_DEFAULT_COLUMN_ORDER]
 }
 
-/** Isolated cell so updatingContractId changes don't rebuild the entire compactColumns array.
- * `updatingRef` is a stable ref so this component still re-renders when saving state changes
- * via the `savingId` prop, which is the only reactive value that matters here. */
-const CargoReadinessCell = memo(function CargoReadinessCell({
-  internalId,
-  value,
-  savingId,
-  onChange,
-  onSave,
-}: {
-  internalId: string
-  value: string
-  savingId: string | null
-  onChange: (internalId: string, nextDate: string) => void
-  onSave: (internalId: string, value: string) => void
-}) {
-  const saving = savingId === internalId
-  return (
-    <div className="flex items-center gap-1 w-full">
-      <input
-        type="date"
-        className="text-sm border rounded px-1 py-0.5 flex-1 min-w-[130px]"
-        value={value}
-        disabled={saving}
-        onChange={(e) => onChange(internalId, e.target.value)}
-      />
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={saving}
-        className="px-2 py-0 h-7 text-xs shrink-0"
-        onClick={() => onSave(internalId, value)}
-      >
-        {saving ? 'Saving...' : 'Save'}
-      </Button>
-    </div>
-  )
-})
-
 type ContractPerfQtyReconciliation = {
   status: 'All' | 'Open' | 'Close'
   productKey: string
@@ -1123,8 +1082,9 @@ function ContractsPageContent() {
   )
   const [b2bFlagFilter, setB2bFlagFilter] = useState<string>('ALL')
   /** Default YTD on first load so GET /contracts stays bounded (same as Contract Performance). */
-  const [dateFrom, setDateFrom] = useState(() => defaultContractPerfYtdDateRange().dateFrom)
-  const [dateTo, setDateTo] = useState(() => defaultContractPerfYtdDateRange().dateTo)
+  const [performancePeriod, setPerformancePeriod] = useState<PerformancePeriodKey>('YTD')
+  const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolvePerformancePeriodDateRange('YTD').dateTo)
   const [availableB2bFlags, setAvailableB2bFlags] = useState<string[]>([])
   const {
     selectedProducts,
@@ -1136,12 +1096,11 @@ function ContractsPageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
   } = useUserScopeFilterDefaults('contracts')
-  const [sourceFilter, setSourceFilter] = useState<ContractPerfSourceFilter>('All')
-  const [selectedProductTab, setSelectedProductTab] = useState<(typeof CONTRACT_PERF_PRODUCT_TABS)[number]>(
-    () => resolveStaffContractPerfProductTab(),
+  const [contractPerfSelectedSources, setContractPerfSelectedSources] = useState<string[]>([])
+  const [contractPerfSelectedProducts, setContractPerfSelectedProducts] = useState<string[]>(
+    () => resolveStaffContractPerfInitialProducts(),
   )
-  /** Contract Performance Section 1 only — isolated from /contracts list group-plant scope. */
-  const [contractPerfPlantFilter, setContractPerfPlantFilter] = useState<string>('All')
+  const [contractPerfSelectedGroupPlants, setContractPerfSelectedGroupPlants] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
@@ -1173,6 +1132,7 @@ function ContractsPageContent() {
   }, [isContractPerformance])
 
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [contractPerfSelectedIncoterms, setContractPerfSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
@@ -1184,6 +1144,9 @@ function ContractsPageContent() {
   const [docsModalContract, setDocsModalContract] = useState<Contract | null>(null)
   const [docsModalDocs, setDocsModalDocs] = useState<DocumentItem[]>([])
   const [docsModalLoading, setDocsModalLoading] = useState(false)
+  const [remarksModal, setRemarksModal] = useState<{ contractId: string; subtitle: string } | null>(
+    null,
+  )
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [totalContracts, setTotalContracts] = useState(0)
@@ -1193,8 +1156,6 @@ function ContractsPageContent() {
   const [unassignedMixContracts, setUnassignedMixContracts] = useState(0)
   const [unassignedCountsFetching, setUnassignedCountsFetching] = useState(false)
   const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | 'mix' | null>(null)
-  const [updatingContractId, setUpdatingContractId] = useState<string | null>(null)
-  const updatingContractIdRef = useRef<string | null>(null)
   /** Monotonic id — only the latest GET /contracts response may update table state. */
   const contractsFetchGenRef = useRef(0)
   const appliedContractsUrlFiltersRef = useRef(false)
@@ -1252,15 +1213,11 @@ function ContractsPageContent() {
   const contractPerfPendingLoadsRef = useRef(0)
   type LatePerfHotspot = ContractPerfHotspot
 
-  const contractPerfProductQuery = useMemo(
-    () => contractPerfProductQueryValue(selectedProductTab),
-    [selectedProductTab],
-  )
-
-  const contractPerfGroupPlantsForApi = useMemo(
-    () => contractPerfGroupPlantsQueryValue(contractPerfPlantFilter),
-    [contractPerfPlantFilter],
-  )
+  useEffect(() => {
+    const { dateFrom: from, dateTo: to } = resolvePerformancePeriodDateRange(performancePeriod)
+    setDateFrom(from)
+    setDateTo(to)
+  }, [performancePeriod])
 
   /** Section 1 card totals — toolbar only; never tied to Open/Close tab selection. */
   const contractPerfToolbarGlobal = useMemo(
@@ -1268,11 +1225,11 @@ function ContractsPageContent() {
       buildContractPerfToolbarGlobal({
         dateFrom,
         dateTo,
-        sourceFilter,
-        selectedIncoterms,
+        selectedSources: contractPerfSelectedSources,
+        selectedProducts: contractPerfSelectedProducts,
+        selectedIncoterms: contractPerfSelectedIncoterms,
         selectedSuppliers,
-        selectedGroupPlants: contractPerfGroupPlantsForApi,
-        productTabQuery: contractPerfProductQuery,
+        selectedGroupPlants: contractPerfSelectedGroupPlants,
         lateOnTimeFilter,
         perfDashMode,
         perfTransportMode,
@@ -1282,11 +1239,11 @@ function ContractsPageContent() {
     [
       dateFrom,
       dateTo,
-      sourceFilter,
-      selectedIncoterms,
+      contractPerfSelectedSources,
+      contractPerfSelectedProducts,
+      contractPerfSelectedIncoterms,
       selectedSuppliers,
-      contractPerfGroupPlantsForApi,
-      contractPerfProductQuery,
+      contractPerfSelectedGroupPlants,
       lateOnTimeFilter,
       perfDashMode,
       perfTransportMode,
@@ -1319,11 +1276,11 @@ function ContractsPageContent() {
     () => ({
       dateFrom,
       dateTo,
-      sourceFilter,
-      selectedIncoterms,
+      selectedSources: contractPerfSelectedSources,
+      selectedProducts: contractPerfSelectedProducts,
+      selectedIncoterms: contractPerfSelectedIncoterms,
       selectedSuppliers,
-      selectedGroupPlants: contractPerfGroupPlantsForApi,
-      productTabQuery: contractPerfProductQuery,
+      selectedGroupPlants: contractPerfSelectedGroupPlants,
       summaryCardStatus,
       lateOnTimeFilter,
       perfDashMode,
@@ -1334,11 +1291,11 @@ function ContractsPageContent() {
     [
       dateFrom,
       dateTo,
-      sourceFilter,
-      selectedIncoterms,
+      contractPerfSelectedSources,
+      contractPerfSelectedProducts,
+      contractPerfSelectedIncoterms,
       selectedSuppliers,
-      contractPerfGroupPlantsForApi,
-      contractPerfProductQuery,
+      contractPerfSelectedGroupPlants,
       summaryCardStatus,
       lateOnTimeFilter,
       perfDashMode,
@@ -1376,12 +1333,17 @@ function ContractsPageContent() {
   const contractPerfSection3FilterApplied = useMemo(
     () =>
       isContractPerfSection3FilterApplied({
-        sourceFilter,
-        selectedProductTab,
+        selectedSources: contractPerfSelectedSources,
+        selectedProducts: contractPerfSelectedProducts,
         summaryCardStatus,
         appliedDrilldown: appliedDrilldownSelection,
       }),
-    [sourceFilter, selectedProductTab, summaryCardStatus, appliedDrilldownSelection],
+    [
+      contractPerfSelectedSources,
+      contractPerfSelectedProducts,
+      summaryCardStatus,
+      appliedDrilldownSelection,
+    ],
   )
 
   /** Section 3 skeleton: API fetch (`loading`) or immediate lock from Section 1/2 (`isTableLoading`). */
@@ -1469,7 +1431,9 @@ function ContractsPageContent() {
   const contractPerfQtyReconciliation = useMemo(() => {
     if (!isContractPerformance) return null
     const productKey =
-      selectedProductTab === 'All' ? 'All' : normalizePerfProductGroupKey(selectedProductTab)
+      contractPerfSelectedProducts.length === 0
+        ? 'All'
+        : contractPerfSelectedProducts.map((p) => normalizePerfProductGroupKey(p)).join(',')
     const onTimeKg = contractPerfPipeline.debug.onTimeQtyKg
     const lateKg = contractPerfPipeline.debug.lateQtyKg
     const unscheduledKg = contractPerfPipeline.debug.unscheduledQtyKg
@@ -1514,7 +1478,7 @@ function ContractsPageContent() {
   }, [
     isContractPerformance,
     summaryCardStatus,
-    selectedProductTab,
+    contractPerfSelectedProducts,
     statusCardSummary.openOutstandingQty,
     statusCardSummary.closeContractQty,
     contractPerfPipeline.debug.section1QtyKg,
@@ -1615,13 +1579,14 @@ function ContractsPageContent() {
     if (!isContractPerformance) return
     markUserScopeFiltersCleared('contracts')
     lockSection1FilterChange()
-    const { dateFrom: ytdFrom, dateTo: ytdTo } = defaultContractPerfYtdDateRange()
-    setSourceFilter('All')
-    setSelectedProductTab('All')
-    setContractPerfPlantFilter('All')
+    setPerformancePeriod('YTD')
+    const { dateFrom: ytdFrom, dateTo: ytdTo } = resolvePerformancePeriodDateRange('YTD')
+    setContractPerfSelectedSources([])
+    setContractPerfSelectedProducts([])
+    setContractPerfSelectedGroupPlants([])
+    setContractPerfSelectedIncoterms([])
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
-    setSelectedIncoterms([])
     setSelectedSuppliers([])
     resetUserScopeFilters()
     setPerfTransportMode('ALL')
@@ -1766,14 +1731,14 @@ function ContractsPageContent() {
   // Avoid firing API calls until a token exists.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const hasToken = () => Boolean(localStorage.getItem('token'))
-    if (hasToken()) {
+    const hasAuth = () => isAuthenticatedLocally()
+    if (hasAuth()) {
       setAuthReady(true)
       return
     }
     const startedAt = Date.now()
     const interval = window.setInterval(() => {
-      if (hasToken()) {
+      if (hasAuth()) {
         window.clearInterval(interval)
         setAuthReady(true)
       } else if (Date.now() - startedAt > 3000) {
@@ -1787,13 +1752,14 @@ function ContractsPageContent() {
     if (!userScopeReady || !isContractPerformance || wereUserScopeFiltersCleared('contracts')) return
     const { products } = getInitialUserScopeFilters()
     if (products.length !== 1) return
-    const match = CONTRACT_PERF_PRODUCT_TABS.find(
-      (tab) =>
-        tab !== 'All' &&
-        normalizePerfProductGroupKey(tab) === normalizePerfProductGroupKey(products[0]),
+    const match = CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find(
+      (option) =>
+        normalizePerfProductGroupKey(option) === normalizePerfProductGroupKey(products[0]),
     )
-    if (match && selectedProductTab !== match) setSelectedProductTab(match)
-  }, [userScopeReady, isContractPerformance, selectedProductTab])
+    if (match) {
+      setContractPerfSelectedProducts((prev) => (prev.length === 0 ? [match] : prev))
+    }
+  }, [userScopeReady, isContractPerformance])
 
   useEffect(() => {
     if (!userScopeReady || !isContractPerformance) return
@@ -1843,14 +1809,16 @@ function ContractsPageContent() {
     sortKey,
     sortDir,
     isContractPerformance,
-    sourceFilter,
-    selectedProductTab,
-    contractPerfPlantFilter,
+    contractPerfSelectedSources,
+    contractPerfSelectedProducts,
+    contractPerfSelectedGroupPlants,
+    contractPerfSelectedIncoterms,
     appliedDrilldownSelection,
     searchTerm,
     summaryCardStatus,
     section3FilterMode,
     perfDashMode,
+    performancePeriod,
   ])
 
   useEffect(() => {
@@ -1865,10 +1833,10 @@ function ContractsPageContent() {
     })
     setCurrentPage(1)
   }, [
-    sourceFilter,
-    selectedProductTab,
-    contractPerfPlantFilter,
-    selectedIncoterms,
+    contractPerfSelectedSources,
+    contractPerfSelectedProducts,
+    contractPerfSelectedGroupPlants,
+    contractPerfSelectedIncoterms,
     dateFrom,
     dateTo,
     perfTransportMode,
@@ -2439,9 +2407,9 @@ function ContractsPageContent() {
   const handleTruckIconClick = (contract: Contract) => {
     const hasTrucking = countGt0(contract.trucking_count)
     if (!hasTrucking) {
-      if (!transportIsLand(contract) && !transportIsMix(contract)) {
+      if (!contractShowsAddTrucking(contract.incoterm)) {
         alert(
-          'Trucking operations apply to LAND contracts only. Open the Trucking page from the menu if you need to work across transport modes.',
+          'Trucking operations apply to FRC and LCO incoterms only. Open the Trucking page from the menu if you need to work across contracts.',
         )
         return
       }
@@ -2454,9 +2422,9 @@ function ContractsPageContent() {
   const handleShipIconClick = (contract: Contract) => {
     const hasKlipShipment = contractHasKlipShipment(contract)
     if (!hasKlipShipment) {
-      if (!transportIsSea(contract) && !transportIsMix(contract)) {
+      if (!contractShowsAddShipment(contract.incoterm)) {
         alert(
-          'Shipments apply to SEA contracts only. Open the Shipments page from the menu if you need to work across transport modes.',
+          'Shipments apply to FOB, CIF, and CFR incoterms only. Open the Shipments page from the menu if you need to work across contracts.',
         )
         return
       }
@@ -2563,43 +2531,17 @@ function ContractsPageContent() {
     }
   }
 
-  const handleUpdateContractField = async (contract: Contract, field: keyof Contract, value: string) => {
-    try {
-      updatingContractIdRef.current = contract.id
-      setUpdatingContractId(contract.id)
-      const payload: any = {}
-      if (field === 'cargo_readiness_date') {
-        payload.cargo_readiness_date = value || null
-      } else {
-        payload[field] = value
-      }
-      const res = await api.put(`/contracts/${contract.id}`, payload)
-      if (res.data?.success && res.data.data) {
-        setContracts(prev =>
-          prev.map(c => (c.id === contract.id ? { ...c, ...res.data.data } : c))
-        )
-      }
-    } catch (error) {
-      console.error('Failed to update contract field', error)
-      alert('Failed to update contract. Please try again.')
-    } finally {
-      updatingContractIdRef.current = null
-      setUpdatingContractId(null)
-    }
-  }
-
-  const handleCargoReadinessCellChange = useCallback((internalId: string, nextDate: string) => {
-    setContracts((prev) =>
-      prev.map((row) => (row.id === internalId ? { ...row, cargo_readiness_date: nextDate } : row)),
-    )
-  }, [])
-
-  const handleCargoReadinessCellSave = useCallback((internalId: string, value: string) => {
-    const contract = contracts.find((c) => c.id === internalId)
-    if (!contract) return
-    void handleUpdateContractField(contract, 'cargo_readiness_date', value)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contracts])
+  const handleContractDetailUpdated = useCallback(
+    (patch: { id: string; cargo_readiness_date?: string }) => {
+      setContracts((prev) =>
+        prev.map((c) => (c.id === patch.id ? { ...c, ...patch } : c)),
+      )
+      setSelectedContract((prev) =>
+        prev && prev.id === patch.id ? { ...prev, ...patch } : prev,
+      )
+    },
+    [],
+  )
 
   const downloadCargoReadinessTemplate = () => {
     triggerCargoReadinessTemplateDownload()
@@ -3299,13 +3241,9 @@ function ContractsPageContent() {
       sortable: true,
       getSortValue: (c) => c.cargo_readiness_date || '',
       render: (c) => (
-        <CargoReadinessCell
-          internalId={c.id}
-          value={c.cargo_readiness_date ? String(c.cargo_readiness_date).substring(0, 10) : ''}
-          savingId={updatingContractId}
-          onChange={handleCargoReadinessCellChange}
-          onSave={handleCargoReadinessCellSave}
-        />
+        <span className="text-sm">
+          {c.cargo_readiness_date ? formatShortDate(c.cargo_readiness_date) : '-'}
+        </span>
       ),
     },
     {
@@ -3338,7 +3276,7 @@ function ContractsPageContent() {
     }
     return columns.filter((column) => !CONTRACTS_HIDDEN_COLUMN_IDS.has(column.id))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isContractPerformance, formatMonthDeliveryEnd, handleCargoReadinessCellChange, handleCargoReadinessCellSave])
+  }, [isContractPerformance, formatMonthDeliveryEnd, formatShortDate])
 
   /**
    * Same arrays as {@link defaultCompactVisibleColumnIds}; kept for reset + deps.
@@ -3869,48 +3807,84 @@ function ContractsPageContent() {
             </h1>
             <div className="flex items-center justify-between gap-4 flex-wrap">
               <div className="flex items-center gap-6 flex-wrap">
+                <PerformancePeriodSelect
+                  value={performancePeriod}
+                  onChange={(value) => {
+                    lockSection1FilterChange()
+                    setPerformancePeriod(value)
+                    setCurrentPage(1)
+                  }}
+                />
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Select Source:</span>
-                  <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
-                    {CONTRACT_PERF_SOURCE_TABS.map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        onClick={() => {
-                          lockSection1FilterChange()
-                          setSourceFilter(tab)
-                        }}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                          sourceFilter === tab
-                            ? 'bg-slate-800 text-white'
-                            : 'text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
+                  <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
+                  <div className="w-48">
+                    <SearchableMultiSelect
+                      label=""
+                      options={availableGroupPlants}
+                      selected={contractPerfSelectedGroupPlants}
+                      onChange={(values) => {
+                        lockSection1FilterChange()
+                        setContractPerfSelectedGroupPlants(values)
+                        setCurrentPage(1)
+                      }}
+                      placeholder="All group plants"
+                      emptyMessage="No group plants"
+                      uppercaseOptionLabels
+                    />
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Select Product:</span>
-                  <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
-                    {CONTRACT_PERF_PRODUCT_TABS.map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        onClick={() => {
-                          lockSection1FilterChange()
-                          setSelectedProductTab(tab)
-                        }}
-                        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                          selectedProductTab === tab
-                            ? 'bg-slate-800 text-white'
-                            : 'text-slate-700 hover:bg-slate-100'
-                        }`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
+                  <span className="text-sm font-medium text-gray-700 shrink-0">Source:</span>
+                  <div className="w-48">
+                    <SearchableMultiSelect
+                      label=""
+                      options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                      selected={contractPerfSelectedSources}
+                      onChange={(values) => {
+                        lockSection1FilterChange()
+                        setContractPerfSelectedSources(values)
+                        setCurrentPage(1)
+                      }}
+                      placeholder="All sources"
+                      emptyMessage="No sources"
+                      uppercaseOptionLabels
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700 shrink-0">Incoterm:</span>
+                  <div className="w-48">
+                    <SearchableMultiSelect
+                      label=""
+                      options={availableIncoterms}
+                      selected={contractPerfSelectedIncoterms}
+                      onChange={(values) => {
+                        lockSection1FilterChange()
+                        setContractPerfSelectedIncoterms(values)
+                        setCurrentPage(1)
+                      }}
+                      placeholder="All incoterms"
+                      emptyMessage="No incoterms"
+                      uppercaseOptionLabels
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
+                  <div className="w-48">
+                    <SearchableMultiSelect
+                      label=""
+                      options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                      selected={contractPerfSelectedProducts}
+                      onChange={(values) => {
+                        lockSection1FilterChange()
+                        setContractPerfSelectedProducts(values)
+                        setCurrentPage(1)
+                      }}
+                      placeholder="All products"
+                      emptyMessage="No products"
+                      uppercaseOptionLabels
+                    />
                   </div>
                 </div>
               </div>
@@ -4434,12 +4408,10 @@ function ContractsPageContent() {
               {isContractPerformance ? (
                 <PerformanceScopeFilters
                   hideGroupPlantFilter
+                  showIncoterm={false}
                   incotermOptions={availableIncoterms}
-                  selectedIncoterms={selectedIncoterms}
-                  onIncotermsChange={(selected) => {
-                    lockSection1FilterChange()
-                    setSelectedIncoterms(selected)
-                  }}
+                  selectedIncoterms={[]}
+                  onIncotermsChange={() => {}}
                   showSupplierFilter
                   supplierOptions={availableSuppliers}
                   selectedSuppliers={selectedSuppliers}
@@ -4448,11 +4420,8 @@ function ContractsPageContent() {
                     setSelectedSuppliers(selected)
                   }}
                   groupPlantOptions={availableGroupPlants}
-                  selectedGroupPlants={selectedGroupPlants}
-                  onGroupPlantsChange={(selected) => {
-                    lockSection1FilterChange()
-                    handleGroupPlantsChange(selected)
-                  }}
+                  selectedGroupPlants={[]}
+                  onGroupPlantsChange={() => {}}
                   dateFrom={dateFrom}
                   dateTo={dateTo}
                   onDateFromChange={(iso) => {
@@ -4464,10 +4433,7 @@ function ContractsPageContent() {
                     setDateTo(iso)
                   }}
                   showDateRange={false}
-                  incotermEmptyMessage="Loading incoterms..."
                   supplierEmptyMessage="Loading suppliers..."
-                  groupPlantPlaceholder="Select group plant(s)"
-                  groupPlantEmptyMessage="No group plants"
                 />
               ) : (
                 <PerformanceScopeFilters
@@ -4542,11 +4508,13 @@ function ContractsPageContent() {
                     (!isContractPerformance && hasActiveContractsPageFilters) ||
                     hasActiveSectionOneColumnFilters(columnFilters) ||
                     (isContractPerformance &&
-                      (lateOnTimeFilter !== 'ALL' ||
+                      (performancePeriod !== 'YTD' ||
+                        lateOnTimeFilter !== 'ALL' ||
                         perfTransportMode !== 'ALL' ||
-                        selectedProductTab !== 'All' ||
-                        contractPerfPlantFilter !== 'All' ||
-                        selectedIncoterms.length > 0 ||
+                        contractPerfSelectedSources.length > 0 ||
+                        contractPerfSelectedProducts.length > 0 ||
+                        contractPerfSelectedGroupPlants.length > 0 ||
+                        contractPerfSelectedIncoterms.length > 0 ||
                         selectedSuppliers.length > 0 ||
                         Boolean(
                           hasContractPerfDrilldownSelection(appliedDrilldownSelection),
@@ -4888,7 +4856,7 @@ function ContractsPageContent() {
                             }}
                           />
                         ))}
-                        <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                        <col style={{ width: isContractPerformance ? 120 : 192 }} />
                       </colgroup>
                       {/* Header */}
                       <thead>
@@ -5265,7 +5233,7 @@ function ContractsPageContent() {
                               ? COMPACT_TABLE_ACTIONS_HEADER_CLASS
                               : cn(
                                   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
-                                  'text-center align-top font-semibold border-l border-gray-200 min-w-[160px]',
+                                  'text-center align-top font-semibold border-l border-gray-200 min-w-[192px]',
                                   contractPerfTableCellPad,
                                 ),
                           )}
@@ -5352,7 +5320,7 @@ function ContractsPageContent() {
                                       ? cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)
                                       : 'sticky right-0 z-10 border-l border-gray-200 align-middle',
                                     !isContractPerformance && contractPerfTableCellPad,
-                                    !isContractPerformance && 'min-w-[160px]',
+                                    !isContractPerformance && 'min-w-[192px]',
                                     !isContractPerformance && stripeClass,
                                   )}
                                 >
@@ -5362,7 +5330,7 @@ function ContractsPageContent() {
                                       isContractPerformance ? 'justify-center' : 'justify-end',
                                     )}
                                   >
-                                  {!isContractPerformance && (transportIsLand(contract) || transportIsMix(contract)) && (() => {
+                                  {!isContractPerformance && contractShowsAddTrucking(contract.incoterm) && (() => {
                                     const hasData = countGt0(contract.trucking_count)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleTruckIconClick(contract)}
@@ -5372,7 +5340,7 @@ function ContractsPageContent() {
                                       </Button>
                                     )
                                   })()}
-                                  {!isContractPerformance && (transportIsSea(contract) || transportIsMix(contract)) && (() => {
+                                  {!isContractPerformance && contractShowsAddShipment(contract.incoterm) && (() => {
                                     const hasData = contractHasKlipShipment(contract)
                                     return (
                                       <Button variant="outline" size="icon" onClick={() => handleShipIconClick(contract)}
@@ -5420,6 +5388,23 @@ function ContractsPageContent() {
                                       </Button>
                                     </>
                                   )}
+                                  <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() =>
+                                      setRemarksModal({
+                                        contractId: contract.id,
+                                        subtitle:
+                                          contract.po_numbers ||
+                                          contract.po_number ||
+                                          contract.contract_id,
+                                      })
+                                    }
+                                    title="View remarks"
+                                    className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
+                                  >
+                                    <MessageSquare className="h-4 w-4" />
+                                  </Button>
                                   </div>
                                 </td>
                               </tr>
@@ -5516,7 +5501,7 @@ function ContractsPageContent() {
 
                         <div className="flex items-center gap-2 shrink-0">
                           {/* Icons: Trucking, Shipping, Documents */}
-                          {!isContractPerformance && (transportIsLand(contract) || transportIsMix(contract)) && (() => {
+                          {!isContractPerformance && contractShowsAddTrucking(contract.incoterm) && (() => {
                             const hasData = countGt0(contract.trucking_count)
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleTruckIconClick(contract)}
@@ -5525,7 +5510,7 @@ function ContractsPageContent() {
                               </Button>
                             )
                           })()}
-                          {!isContractPerformance && (transportIsSea(contract) || transportIsMix(contract)) && (() => {
+                          {!isContractPerformance && contractShowsAddShipment(contract.incoterm) && (() => {
                             const hasData = contractHasKlipShipment(contract)
                             return (
                               <Button variant="outline" size="sm" onClick={() => handleShipIconClick(contract)}
@@ -5752,8 +5737,17 @@ function ContractsPageContent() {
         <ContractDetailModal
           contract={selectedContract}
           onClose={() => setSelectedContract(null)}
+          onContractUpdated={handleContractDetailUpdated}
           showMonthDeliveryEnd={isContractPerformance}
           documentsRefreshKey={detailDocsRefreshKey}
+        />
+
+        <HistoricalRemarksModal
+          open={remarksModal != null}
+          onClose={() => setRemarksModal(null)}
+          entityType="contract"
+          entityId={remarksModal?.contractId ?? null}
+          subtitle={remarksModal?.subtitle}
         />
 
         <CreateTruckingOperationModal

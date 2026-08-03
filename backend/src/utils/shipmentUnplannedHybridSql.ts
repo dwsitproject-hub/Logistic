@@ -17,6 +17,7 @@ import {
   buildShipmentPageSeaIncotermColumnSql,
   buildShipmentPageSeaIncotermScopeSql,
 } from './shipmentIncotermScope';
+import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
 
 export { buildShipmentPageUnplannedOpenContractsCte };
 
@@ -154,8 +155,11 @@ export function appendContractScopeToolbarFilters(
   };
 }
 
-/** Shared WHERE for open CIF/FOB/CFR contracts without shipment and without registered ETA. */
-export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
+/**
+ * Core WHERE for open CIF/FOB/CFR contracts without shipment and without registered ETA
+ * (shared by Unplanned backlog and Preplanned backlog).
+ */
+export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
   return `
     ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
     AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
@@ -166,8 +170,25 @@ export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAli
     )`;
 }
 
+/** Shared WHERE for Unplanned contract backlog (excludes Preplanned / ACCEPTED-unlinked). */
+export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
+  return `
+    ${contractBacklogCoreWhereSql(contractAlias, spdAlias)}
+    AND NOT ${contractInAcceptedUnlinkedPrePlannedGroupExistsSql(contractAlias)}`;
+}
+
+/** Shared WHERE for Preplanned contract backlog (ACCEPTED group, no shipment yet). */
+export function preplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
+  return `
+    ${contractBacklogCoreWhereSql(contractAlias, spdAlias)}
+    AND ${contractInAcceptedUnlinkedPrePlannedGroupExistsSql(contractAlias)}`;
+}
+
 /** SELECT list aligned with shipment list row shape for contract backlog rows. */
-export function unplannedContractBacklogRowSelectSql(outstandingExpr: string): string {
+export function unplannedContractBacklogRowSelectSql(
+  outstandingExpr: string,
+  statusLiteral: 'UNPLANNED' | 'PREPLANNED' = 'UNPLANNED',
+): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   const contractExtNoExpr = `COALESCE(
     NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
@@ -210,7 +231,7 @@ export function unplannedContractBacklogRowSelectSql(outstandingExpr: string): s
     0::numeric AS outbound_weight,
     0::numeric AS gain_loss_percentage,
     0::numeric AS gain_loss_amount,
-    'UNPLANNED'::text AS status,
+    '${statusLiteral}'::text AS status,
     FALSE AS is_contract_sap_closed,
     c.created_at AS created_at,
     c.id::text AS contract_row_id,
@@ -298,6 +319,25 @@ export function buildUnplannedContractBacklogCountQuery(
     SELECT COUNT(*)::bigint AS c FROM unplanned_contract_backlog`;
 }
 
+/** Sum contract quantity_ordered for sea unplanned backlog (one row per contract). */
+export function buildShipmentUnplannedBacklogContractQtyQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    unplanned_contract_backlog AS (
+      SELECT c.quantity_ordered
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
+        ${contractScopeSql}
+        ${toolbarSql}
+    )
+    SELECT COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+    FROM unplanned_contract_backlog`;
+}
+
 export function buildUnplannedContractBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
@@ -321,7 +361,7 @@ export function buildUnplannedContractBacklogPageQuery(
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     unplanned_contract_backlog AS (
-      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr)}
+      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED')}
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}
@@ -329,6 +369,100 @@ export function buildUnplannedContractBacklogPageQuery(
       LIMIT ${limit} OFFSET ${offset}
     )
     SELECT * FROM unplanned_contract_backlog`;
+}
+
+export function buildPreplannedContractsCountQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    preplanned_contracts AS (
+      SELECT
+        c.id AS contract_uuid,
+        c.quantity_ordered,
+        (
+          SELECT pg.id
+          FROM pre_planned_group_members pgm
+          INNER JOIN pre_planned_groups pg ON pg.id = pgm.group_id
+          WHERE pgm.contract_id = c.id
+            AND pgm.released_at IS NULL
+            AND pg.status = 'ACCEPTED'
+            AND pg.shipment_id IS NULL
+          ORDER BY pg.group_code
+          LIMIT 1
+        ) AS group_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${preplannedContractBacklogBaseWhereSql('c', 'l')}
+        ${contractScopeSql}
+        ${toolbarSql}
+    )
+    SELECT
+      COUNT(*)::bigint AS contract_count,
+      COUNT(DISTINCT group_id)::bigint AS group_count,
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+    FROM preplanned_contracts`;
+}
+
+export function buildPreplannedContractsPageQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+  limit: number,
+  offset: number,
+): string {
+  const backlogWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      INNER JOIN pre_planned_group_members pgm
+        ON pgm.contract_id = c.id AND pgm.released_at IS NULL
+      INNER JOIN pre_planned_groups pg
+        ON pg.id = pgm.group_id
+       AND pg.status = 'ACCEPTED'
+       AND pg.shipment_id IS NULL
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    preplanned_contracts AS (
+      SELECT
+        ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'PREPLANNED')},
+        pg.id::text AS pre_planned_group_id,
+        pg.group_code AS pre_planned_group_code
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      INNER JOIN pre_planned_group_members pgm
+        ON pgm.contract_id = c.id AND pgm.released_at IS NULL
+      INNER JOIN pre_planned_groups pg
+        ON pg.id = pgm.group_id
+       AND pg.status = 'ACCEPTED'
+       AND pg.shipment_id IS NULL
+      WHERE ${backlogWhere}
+    ),
+    preplanned_groups_page AS (
+      SELECT pre_planned_group_id AS group_id
+      FROM preplanned_contracts
+      GROUP BY pre_planned_group_id
+      ORDER BY MIN(pre_planned_group_code) ASC NULLS LAST,
+               MIN(contract_date) DESC NULLS LAST,
+               MIN(contract_number) ASC
+      LIMIT ${limit} OFFSET ${offset}
+    )
+    SELECT pc.*
+    FROM preplanned_contracts pc
+    WHERE pc.pre_planned_group_id IN (SELECT group_id FROM preplanned_groups_page)
+    ORDER BY pc.pre_planned_group_code ASC NULLS LAST,
+             pc.contract_date DESC NULLS LAST,
+             pc.contract_number ASC`;
 }
 
 /** Shipment-side unplanned filter (toolbar + unplanned execution predicate). */
@@ -357,6 +491,21 @@ export function buildUnplannedContractBacklogTableCountCte(contractScopeSql = ''
         FROM contracts c
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
+          ${contractScopeSql}
+      ),
+      preplanned_contract_table AS (
+        SELECT
+          COUNT(*)::bigint AS preplanned_contract_count,
+          COUNT(DISTINCT pg.id)::bigint AS preplanned_group_count
+        FROM contracts c
+        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        INNER JOIN pre_planned_group_members pgm
+          ON pgm.contract_id = c.id AND pgm.released_at IS NULL
+        INNER JOIN pre_planned_groups pg
+          ON pg.id = pgm.group_id
+         AND pg.status = 'ACCEPTED'
+         AND pg.shipment_id IS NULL
+        WHERE ${preplannedContractBacklogBaseWhereSql('c', 'l')}
           ${contractScopeSql}
       )`;
 }

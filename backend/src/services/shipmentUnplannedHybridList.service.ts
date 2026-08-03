@@ -13,6 +13,8 @@ import {
   buildUnplannedContractBacklogPageQuery,
   buildUnplannedShipmentExecutionCountQuery,
   buildUnplannedContractToolbarScope,
+  buildPreplannedContractsCountQuery,
+  buildPreplannedContractsPageQuery,
   unplannedShipmentExecutionOuterSql,
 } from '../utils/shipmentUnplannedHybridSql';
 import { computeHybridListPageSlices } from '../utils/hybridListPageSlices';
@@ -36,7 +38,24 @@ export interface UnplannedHybridBreakdown {
   totalTableRows: number;
 }
 
-function buildContractQueryParts(ctx: UnplannedHybridListContext): {
+export interface PreplannedContractsBreakdown {
+  /** Contract rows shown in the Preplanned table. */
+  contractRows: number;
+  /** Unique accepted grouping suggestions — used for the Preplanned card badge. */
+  groupCount: number;
+  /** Alias of contractRows for list pagination. */
+  totalTableRows: number;
+  /** Sum of quantity_ordered (kg) for preplanned contracts. */
+  contractQtyKg?: number;
+}
+
+/** Contract-scope filters shared by Unplanned backlog and Preplanned list. */
+export type PreplannedListContext = Pick<
+  UnplannedHybridListContext,
+  'contractScope' | 'globalSearch' | 'colFilters'
+>;
+
+function buildContractQueryParts(ctx: PreplannedListContext): {
   contractScopeSql: string;
   toolbarSql: string;
   params: unknown[];
@@ -182,4 +201,65 @@ export async function resolveUnplannedHybridShipmentsList(
 
 export function isUnplannedHybridListRequest(status: unknown): boolean {
   return String(status ?? '').trim().toUpperCase() === 'UNPLANNED';
+}
+
+export function isPreplannedListRequest(status: unknown): boolean {
+  return String(status ?? '').trim().toUpperCase() === 'PREPLANNED';
+}
+
+export async function countPreplannedContracts(
+  ctx: PreplannedListContext,
+): Promise<PreplannedContractsBreakdown> {
+  const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
+  const res = await query(
+    buildPreplannedContractsCountQuery(contractScopeSql, toolbarSql),
+    params,
+  );
+  const contractRows = parseInt(String(res.rows[0]?.contract_count ?? '0'), 10) || 0;
+  const groupCount = parseInt(String(res.rows[0]?.group_count ?? '0'), 10) || 0;
+  const contractQtyKg = Number(res.rows[0]?.contract_qty_kg ?? 0) || 0;
+  return { contractRows, groupCount, totalTableRows: contractRows, contractQtyKg };
+}
+
+export async function resolvePreplannedContractsList(
+  req: AuthRequest,
+  ctx: PreplannedListContext,
+): Promise<ShipmentListResponseData & { preplannedBreakdown: PreplannedContractsBreakdown }> {
+  const { page = 1, limit = 20 } = req.query;
+  const pageNum = Math.max(1, Number(page) || 1);
+  const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
+  const offset = (pageNum - 1) * limitNum;
+
+  const breakdown = await countPreplannedContracts(ctx);
+  const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
+  const text = buildPreplannedContractsPageQuery(
+    contractScopeSql,
+    toolbarSql,
+    limitNum,
+    offset,
+  );
+  const result = await query(text, params);
+  const contractPage = result.rows as Record<string, unknown>[];
+
+  for (const row of contractPage) {
+    row.status = 'PREPLANNED';
+    row.row_kind = 'contract_backlog';
+  }
+
+  const shipments = normalizeShipmentListRows(contractPage) as ShipmentListResponseData['shipments'];
+  // normalizeShipmentListRows defaults contract_backlog → UNPLANNED; restore PREPLANNED.
+  for (const row of shipments) {
+    (row as { status?: string }).status = 'PREPLANNED';
+  }
+
+  return {
+    shipments,
+    pagination: {
+      total: breakdown.groupCount,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(breakdown.groupCount / limitNum) || 0,
+    },
+    preplannedBreakdown: breakdown,
+  };
 }

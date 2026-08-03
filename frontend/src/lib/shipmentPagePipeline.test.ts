@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatLoadingPortBreakdownTooltip,
+  pipelineCardQtyForStage,
   pipelineCountForStage,
   pipelineVesselNamesForStage,
   splitVesselNamesForCard,
@@ -8,10 +9,11 @@ import {
 } from './shipmentPagePipeline'
 
 describe('shipmentPagePipeline', () => {
-  it('defines seven pipeline cards', () => {
-    expect(SHIPMENT_PAGE_PIPELINE_CARDS).toHaveLength(7)
+  it('defines eight pipeline cards including Preplanned', () => {
+    expect(SHIPMENT_PAGE_PIPELINE_CARDS).toHaveLength(8)
     expect(SHIPMENT_PAGE_PIPELINE_CARDS.map((c) => c.status)).toEqual([
       'UNPLANNED',
+      'PREPLANNED',
       'PLANNED',
       'AT_LOADING_PORT',
       'SAILED',
@@ -24,6 +26,7 @@ describe('shipmentPagePipeline', () => {
   it('resolves pipeline stage counts', () => {
     const counts = {
       unplanned: 10,
+      preplanned: 4,
       planned: 32,
       atLoadingPort: 5,
       sailed: 8,
@@ -33,12 +36,37 @@ describe('shipmentPagePipeline', () => {
       total: 100,
     }
     expect(pipelineCountForStage('PLANNED', counts)).toBe(32)
+    expect(pipelineCountForStage('PREPLANNED', counts)).toBe(4)
     expect(pipelineCountForStage('AT_LOADING_PORT', counts)).toBe(5)
+  })
+
+  it('resolves per-card contract vs outstanding qty labels', () => {
+    const contractQty = {
+      unplanned: 1000,
+      preplanned: 2000,
+      planned: 3000,
+      completed: 4000,
+      cancelled: 500,
+    }
+    const outstandingQty = {
+      atLoadingPort: 1100,
+      sailed: 2200,
+      atDischargePort: 3300,
+    }
+    expect(pipelineCardQtyForStage('PLANNED', contractQty, outstandingQty)).toEqual({
+      label: 'Contract Qty',
+      kg: 3000,
+    })
+    expect(pipelineCardQtyForStage('AT_LOADING_PORT', contractQty, outstandingQty)).toEqual({
+      label: 'Outstanding Qty',
+      kg: 1100,
+    })
   })
 
   it('resolves per-stage distinct vessel names and hides when absent', () => {
     const vessels = {
       unplanned: [],
+      preplanned: [],
       planned: ['KM ANDALAS', 'TB. MITRA 1'],
       atLoadingPort: ['SPOB SEJAHTERA'],
       sailed: [],
@@ -48,6 +76,7 @@ describe('shipmentPagePipeline', () => {
     }
     expect(pipelineVesselNamesForStage('PLANNED', vessels)).toEqual(['KM ANDALAS', 'TB. MITRA 1'])
     expect(pipelineVesselNamesForStage('UNPLANNED', vessels)).toEqual([])
+    expect(pipelineVesselNamesForStage('PREPLANNED', vessels)).toEqual([])
     // Older cached summaries have no statusVesselNames — the card hides the vessel list.
     expect(pipelineVesselNamesForStage('PLANNED', undefined)).toBeNull()
   })

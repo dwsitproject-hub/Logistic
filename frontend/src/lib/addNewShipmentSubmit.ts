@@ -1,7 +1,9 @@
 import api from '@/lib/api'
 import type { AddNewShipmentSubmitPayload } from '@/components/shared/addNewShipmentTypes'
 
-export async function submitAddNewShipmentPayload(payload: AddNewShipmentSubmitPayload): Promise<void> {
+export async function submitAddNewShipmentPayload(
+  payload: AddNewShipmentSubmitPayload,
+): Promise<{ shipmentIds?: string[] } | void> {
   if (payload.kind === 'update') {
     const body: Record<string, unknown> = {
       eta_arrival: payload.eta_arrival,
@@ -33,4 +35,5 @@ export async function submitAddNewShipmentPayload(payload: AddNewShipmentSubmitP
   if (!response.data?.success) {
     throw new Error(response.data?.error?.message || 'Failed to create shipment')
   }
+  return { shipmentIds: response.data?.data?.shipmentIds as string[] | undefined }
 }

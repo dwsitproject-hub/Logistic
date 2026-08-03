@@ -17,13 +17,9 @@ export const OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS: readonly OilLossGlobalTransportF
   'Truck',
 ] as const
 
-export const OIL_LOSS_GLOBAL_PRODUCT_OPTIONS: readonly OilLossGlobalProductFilter[] = [
-  'All',
-  'CPO',
-  'PK',
-  'POME',
-  'SHELL PALM',
-] as const
+export const OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS = ['CPO', 'PK', 'POME', 'SHELL PALM'] as const
+
+export type OilLossGlobalProductMultiOption = (typeof OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS)[number]
 
 const MONTH_NAMES = [
   'January',
@@ -111,6 +107,16 @@ export function matchesOilLossGlobalTransportFilter(
   return true
 }
 
+export function matchesOilLossGlobalProductsMultiFilter(
+  row: OilLossSourceRow,
+  selectedProducts: readonly string[],
+): boolean {
+  if (selectedProducts.length === 0) return true
+  const rowProduct = String(row.product ?? '').trim()
+  return selectedProducts.some((product) => rowProduct === product)
+}
+
+/** @deprecated Single product tab — use matchesOilLossGlobalProductsMultiFilter */
 export function matchesOilLossGlobalProductFilter(
   row: OilLossSourceRow,
   filter: OilLossGlobalProductFilter,
@@ -123,22 +129,20 @@ export type ApplyOilLossGlobalFiltersInput = {
   rows: OilLossSourceRow[]
   period: OilLossGlobalPeriodKey
   transport: OilLossGlobalTransportFilter
-  product: OilLossGlobalProductFilter
-  selectedStaffProducts?: string[]
-  selectedStaffGroupPlants?: string[]
+  selectedProducts?: string[]
+  selectedGroupPlants?: string[]
   selectedModes?: string[]
   selectedIncoterms?: string[]
   referenceDate?: Date
 }
 
-/** SSOT pipeline for Oil Loss Section 1 + Section 3 (global bar + staff scope + toolbar mode/incoterm). */
+/** SSOT pipeline for Oil Loss Section 1 + Section 3 (global bar + toolbar mode/incoterm). */
 export function applyOilLossGlobalFilters({
   rows,
   period,
   transport,
-  product,
-  selectedStaffProducts = [],
-  selectedStaffGroupPlants = [],
+  selectedProducts = [],
+  selectedGroupPlants = [],
   selectedModes = [],
   selectedIncoterms = [],
   referenceDate = new Date(),
@@ -149,12 +153,10 @@ export function applyOilLossGlobalFilters({
     if (!matchesOilLossModeFilter(row.transport_mode, selectedModes)) return false
     const incoterm = String(row.incoterm || '').trim() || 'Blank'
     if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(incoterm)) return false
-    const staffProduct = String(row.product || '').trim() || 'Blank'
-    if (selectedStaffProducts.length > 0 && !selectedStaffProducts.includes(staffProduct)) return false
     const groupPlant = String(row.group_plant || '').trim() || 'Blank'
-    if (selectedStaffGroupPlants.length > 0 && !selectedStaffGroupPlants.includes(groupPlant)) return false
+    if (selectedGroupPlants.length > 0 && !selectedGroupPlants.includes(groupPlant)) return false
     if (!matchesOilLossGlobalTransportFilter(row, transport)) return false
-    if (!matchesOilLossGlobalProductFilter(row, product)) return false
+    if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)
     if (!d) return false
     if (d < dateFrom || d > dateTo) return false

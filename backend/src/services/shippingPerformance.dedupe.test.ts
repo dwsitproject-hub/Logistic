@@ -347,4 +347,37 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.status).toBe('SAILED');
   });
+
+  it('recomputes ATA loading deltas after MAX-merging milestones across STO members', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        id: 'a',
+        shipment_id: 'STO-DELTA-1',
+        sto_number: 'STO-DELTA-1',
+        status: 'COMPLETED',
+        cargo_readiness_date: '2026-01-01',
+        loading_ata_arrival: '2026-01-10',
+        loading_ata_berthed: '2026-01-11',
+        ata_loading_delta_eta_etr_days: 999,
+        ata_loading_delta_eta_etb_days: 999,
+      },
+      {
+        id: 'b',
+        shipment_id: 'STO-DELTA-1',
+        sto_number: 'STO-DELTA-1',
+        status: 'COMPLETED',
+        cargo_readiness_date: '2026-02-01',
+        loading_ata_arrival: '2026-02-15',
+        loading_ata_berthed: '2026-02-16',
+        ata_loading_delta_eta_etr_days: 888,
+        ata_loading_delta_eta_etb_days: 888,
+      },
+    ]);
+
+    expect(merged.loading_ata_arrival).toBe('2026-02-15');
+    expect(merged.loading_ata_berthed).toBe('2026-02-16');
+    expect(merged.cargo_readiness_date).toBe('2026-02-01');
+    expect(merged.ata_loading_delta_eta_etr_days).toBe(14);
+    expect(merged.ata_loading_delta_eta_etb_days).toBe(-1);
+  });
 });

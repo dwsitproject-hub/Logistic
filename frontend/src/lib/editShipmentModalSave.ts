@@ -1,7 +1,12 @@
 import api from '@/lib/api'
 import { toApiDateOnly } from '@/lib/dateFormat'
 import type { ShipmentAtaFields } from '@/lib/shipmentAtaFields'
-import { buildAtaOverridePayload } from '@/lib/shipmentAtaFields'
+import { buildAtaOverridePayload, emptyAtaFields } from '@/lib/shipmentAtaFields'
+import {
+  DISCHARGE_QUALITY_PORT_KEY,
+  shipmentQualityFieldsEqual,
+  type ShipmentQualityFields,
+} from '@/lib/shipmentQualityFields'
 import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/vesselPortsQuantityEdits'
 import {
   hasVesselPortsQuantityUserEdits,
@@ -121,6 +126,17 @@ export type LoadingPortRef = {
   ata_loading_start?: string | null
   ata_loading_completed?: string | null
   ata_vessel_sailed?: string | null
+  sap_ata_vessel_arrival?: string | null
+  sap_ata_vessel_berthed?: string | null
+  sap_ata_loading_start?: string | null
+  sap_ata_loading_completed?: string | null
+  sap_ata_vessel_sailed?: string | null
+  sap_quality_ffa?: number | null
+  sap_quality_mi?: number | null
+  sap_quality_dobi?: number | null
+  sap_quality_red?: number | null
+  sap_quality_ds?: number | null
+  sap_quality_stone?: number | null
 }
 
 export type SaveEditShipmentInput = {
@@ -149,6 +165,12 @@ export type SaveEditShipmentInput = {
   originalAtaFields?: ShipmentAtaFields
   /** Multi-port: per-loading-port ATA (persisted on vessel_loading_ports). */
   loadingPortAtas?: LoadingPortAtaSave[]
+  /** Current quality values keyed by port id / discharge key. */
+  qualityByPortKey?: Record<string, ShipmentQualityFields>
+  /** Baseline quality at load — used to skip unchanged port PUTs. */
+  originalQualityByPortKey?: Record<string, ShipmentQualityFields>
+  /** When true, skip shipment header / ETA / qty saves (View Shipment limited edit). */
+  ataQualityOnly?: boolean
 }
 
 function quantityValuesEqual(a: unknown, b: unknown): boolean {
@@ -177,7 +199,7 @@ function mergeActiveEtaFromMultiPort(
 export async function saveShipmentEditRemark(shipmentId: string, text: string): Promise<void> {
   const remark = text.trim()
   if (!remark) {
-    throw new Error('Remark is required when editing ETA or quantities.')
+    throw new Error('Remark is required when editing shipment data.')
   }
   const res = await api.post(`/shipments/${shipmentId}/remarks`, {
     text: remark,
@@ -189,6 +211,11 @@ export async function saveShipmentEditRemark(shipmentId: string, text: string): 
 }
 
 export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Promise<void> {
+  if (input.ataQualityOnly) {
+    await saveAtaAndQualityChanges(input)
+    return
+  }
+
   const sums = sumVesselPortsQuantityEdits(input.qtyRows, input.qtyEdits)
   const qtyUserEdited = hasVesselPortsQuantityUserEdits(input.qtyRows, input.qtyEdits)
 
@@ -312,6 +339,7 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
             ata_vessel_sailed: ataSave.fields.ata_vessel_sailed_from_loading_port,
           }
         : {}),
+      ...mergeQualityIntoPortSource(existing, input, existing ? loadingPortAtaStateKeyFromRef(existing) : ''),
     }
 
     if (existing?.id) {
@@ -352,6 +380,7 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
         eta_loading_start: null,
         eta_loading_completed: null,
         eta_vessel_sailed: null,
+        ...mergeQualityIntoPortSource(dischargePort, input, DISCHARGE_QUALITY_PORT_KEY),
       },
       dischargePort.id,
     )
@@ -359,21 +388,192 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
     await api.put(`/shipments/${dischargeOwnerShipmentId}/loading-ports/${dischargePort.id}`, dischargePayload)
   }
 
-  if (input.ataFields && input.originalAtaFields) {
-    // Multi-port: loading ATA is on vessel_loading_ports; overrides only for discharge.
-    const currentAta = input.isMultiPortLoading
-      ? emptyDischargeOnlyAta(input.ataFields)
-      : input.ataFields
-    const baselineAta = input.isMultiPortLoading
-      ? emptyDischargeOnlyAta(input.originalAtaFields)
-      : input.originalAtaFields
-    const ataPayload = buildAtaOverridePayload(currentAta, baselineAta)
-    if (ataPayload) {
-      const ataRes = await api.put(`/shipments/${input.shipmentId}/ata-override`, ataPayload)
-      if (!ataRes.data?.success) {
-        throw new Error(ataRes.data?.error?.message || 'Failed to save ATA override')
+  await persistAtaOverride(input)
+}
+
+function loadingPortAtaStateKeyFromRef(port: LoadingPortRef): string {
+  if (port.id && String(port.id).trim()) return String(port.id).trim()
+  return `seq-${port.port_sequence ?? 1}`
+}
+
+function mergeQualityIntoPortSource(
+  existing: LoadingPortRef | undefined,
+  input: SaveEditShipmentInput,
+  portKey: string,
+): Partial<ShipmentQualityFields> {
+  const current = input.qualityByPortKey?.[portKey]
+  const baseline = input.originalQualityByPortKey?.[portKey]
+  if (!current) return {}
+  if (baseline && shipmentQualityFieldsEqual(current, baseline)) return {}
+  return { ...current }
+}
+
+async function persistAtaOverride(input: SaveEditShipmentInput): Promise<void> {
+  if (!input.ataFields || !input.originalAtaFields) return
+  const currentAta = input.isMultiPortLoading
+    ? emptyDischargeOnlyAta(input.ataFields)
+    : input.ataFields
+  const baselineAta = input.isMultiPortLoading
+    ? emptyDischargeOnlyAta(input.originalAtaFields)
+    : input.originalAtaFields
+  const ataPayload = buildAtaOverridePayload(currentAta, baselineAta)
+  if (!ataPayload) return
+  const ataRes = await api.put(`/shipments/${input.shipmentId}/ata-override`, ataPayload)
+  if (!ataRes.data?.success) {
+    throw new Error(ataRes.data?.error?.message || 'Failed to save ATA override')
+  }
+}
+
+/** View Shipment limited save — ATA overrides + port quality only. */
+export async function saveAtaAndQualityChanges(input: SaveEditShipmentInput): Promise<void> {
+  const portsRes = await api.get(`/shipments/${input.shipmentId}/loading-ports`)
+  const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? input.loadingPorts
+
+  if (input.isMultiPortLoading && input.loadingPortAtas?.length) {
+    for (const ataSave of input.loadingPortAtas) {
+      const existing =
+        (ataSave.portId ? ports.find((p) => p.id === ataSave.portId) : undefined) ??
+        ports.find((p) => !p.is_discharge_port && p.port_sequence === ataSave.portSequence)
+      if (!existing?.id) continue
+
+      const portKey = loadingPortAtaStateKeyFromRef(existing)
+      const qualityPatch = mergeQualityIntoPortSource(existing, input, portKey)
+      const hasAtaChange = LOADING_ATA_FIELD_KEYS.some(
+        (key) =>
+          normalizePortDate(ataSave.fields[key]) !==
+          normalizePortDate(
+            mapLoadingPortRowToAtaFields(existing as Record<string, unknown>)[key],
+          ),
+      )
+      const hasQualityChange = Object.keys(qualityPatch).length > 0
+      if (!hasAtaChange && !hasQualityChange) continue
+
+      const portSource = {
+        ...(existing as Record<string, unknown>),
+        ata_vessel_arrival: ataSave.fields.ata_vessel_arrival_at_loading_port,
+        ata_vessel_berthed: ataSave.fields.ata_vessel_berthed_at_loading_port,
+        ata_loading_start: ataSave.fields.ata_vessel_start_loading,
+        ata_loading_completed: ataSave.fields.ata_vessel_completed_loading,
+        ata_vessel_sailed: ataSave.fields.ata_vessel_sailed_from_loading_port,
+        ...qualityPatch,
+      }
+      const payload = buildLoadingPortUpdatePayload(portSource, existing.id)
+      const ownerShipmentId = existing.shipment_id || input.shipmentId
+      await api.put(`/shipments/${ownerShipmentId}/loading-ports/${existing.id}`, payload)
+    }
+  } else if (!input.isMultiPortLoading && input.ataFields) {
+    const loadingPort = ports.find((p) => !p.is_discharge_port)
+    if (loadingPort?.id) {
+      const portKey = loadingPortAtaStateKeyFromRef(loadingPort)
+      const qualityPatch = mergeQualityIntoPortSource(loadingPort, input, portKey)
+      const hasLoadingAtaChange = LOADING_ATA_FIELD_KEYS.some(
+        (key) =>
+          normalizePortDate(input.ataFields![key]) !==
+          normalizePortDate(input.originalAtaFields?.[key]),
+      )
+      const hasQualityChange = Object.keys(qualityPatch).length > 0
+      if (hasLoadingAtaChange || hasQualityChange) {
+        const portSource = {
+          ...(loadingPort as Record<string, unknown>),
+          ata_vessel_arrival: input.ataFields.ata_vessel_arrival_at_loading_port,
+          ata_vessel_berthed: input.ataFields.ata_vessel_berthed_at_loading_port,
+          ata_loading_start: input.ataFields.ata_vessel_start_loading,
+          ata_loading_completed: input.ataFields.ata_vessel_completed_loading,
+          ata_vessel_sailed: input.ataFields.ata_vessel_sailed_from_loading_port,
+          ...qualityPatch,
+        }
+        const payload = buildLoadingPortUpdatePayload(portSource, loadingPort.id)
+        const ownerShipmentId = loadingPort.shipment_id || input.shipmentId
+        await api.put(`/shipments/${ownerShipmentId}/loading-ports/${loadingPort.id}`, payload)
       }
     }
+  }
+
+  const dischargePort = ports.find((p) => p.is_discharge_port)
+  if (dischargePort?.id) {
+    const qualityPatch = mergeQualityIntoPortSource(dischargePort, input, DISCHARGE_QUALITY_PORT_KEY)
+    if (Object.keys(qualityPatch).length > 0) {
+      const portSource = {
+        ...(dischargePort as Record<string, unknown>),
+        ...qualityPatch,
+      }
+      const payload = buildLoadingPortUpdatePayload(portSource, dischargePort.id)
+      const ownerShipmentId = dischargePort.shipment_id || input.shipmentId
+      await api.put(`/shipments/${ownerShipmentId}/loading-ports/${dischargePort.id}`, payload)
+    }
+  }
+
+  await persistAtaOverride(input)
+
+  // Quality-only on ports not covered by ATA loop (multi-port without ATA change)
+  if (input.qualityByPortKey && input.originalQualityByPortKey) {
+    for (const port of ports) {
+      const portKey = port.is_discharge_port
+        ? DISCHARGE_QUALITY_PORT_KEY
+        : loadingPortAtaStateKeyFromRef(port)
+      const qualityPatch = mergeQualityIntoPortSource(port, input, portKey)
+      if (!qualityPatch || Object.keys(qualityPatch).length === 0 || !port.id) continue
+      if (input.isMultiPortLoading && input.loadingPortAtas?.some(
+        (a) =>
+          (a.portId && a.portId === port.id) ||
+          (!port.is_discharge_port && a.portSequence === port.port_sequence),
+      )) {
+        // Already handled in ATA loop above when ATA changed; re-PUT if only quality changed
+        const ataSave = input.loadingPortAtas?.find(
+          (a) =>
+            (a.portId && a.portId === port.id) ||
+            (!port.is_discharge_port && a.portSequence === port.port_sequence),
+        )
+        if (ataSave) {
+          const hasAtaChange = LOADING_ATA_FIELD_KEYS.some(
+            (key) =>
+              normalizePortDate(ataSave.fields[key]) !==
+              normalizePortDate(
+                mapLoadingPortRowToAtaFields(port as Record<string, unknown>)[key],
+              ),
+          )
+          if (hasAtaChange) continue
+        }
+      }
+      if (port.is_discharge_port && input.isMultiPortLoading) {
+        const dischargeAtaChanged =
+          buildAtaOverridePayload(
+            emptyDischargeOnlyAta(input.ataFields ?? emptyAtaFields()),
+            emptyDischargeOnlyAta(input.originalAtaFields ?? emptyAtaFields()),
+          ) != null
+        if (dischargeAtaChanged) continue
+      }
+      const portSource = {
+        ...(port as Record<string, unknown>),
+        ...qualityPatch,
+      }
+      const payload = buildLoadingPortUpdatePayload(portSource, port.id)
+      const ownerShipmentId = port.shipment_id || input.shipmentId
+      await api.put(`/shipments/${ownerShipmentId}/loading-ports/${port.id}`, payload)
+    }
+  }
+}
+
+const LOADING_ATA_FIELD_KEYS: (keyof LoadingAtaFields)[] = [
+  'ata_vessel_arrival_at_loading_port',
+  'ata_vessel_berthed_at_loading_port',
+  'ata_vessel_start_loading',
+  'ata_vessel_completed_loading',
+  'ata_vessel_sailed_from_loading_port',
+]
+
+function normalizePortDate(value: unknown): string {
+  if (value == null || value === '') return ''
+  return String(value).trim().slice(0, 10)
+}
+
+function mapLoadingPortRowToAtaFields(row: Record<string, unknown>): LoadingAtaFields {
+  return {
+    ata_vessel_arrival_at_loading_port: normalizePortDate(row.ata_vessel_arrival),
+    ata_vessel_berthed_at_loading_port: normalizePortDate(row.ata_vessel_berthed),
+    ata_vessel_start_loading: normalizePortDate(row.ata_loading_start),
+    ata_vessel_completed_loading: normalizePortDate(row.ata_loading_completed),
+    ata_vessel_sailed_from_loading_port: normalizePortDate(row.ata_vessel_sailed),
   }
 }
 

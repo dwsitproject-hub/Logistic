@@ -630,6 +630,20 @@ async function upsertVesselLoadingPortRow(
   );
 
   const current = existing.rows[0] as Record<string, unknown> | undefined;
+  const sapAtaArrival = mergeSapSnapshot(port.ata_vessel_arrival, current?.sap_ata_vessel_arrival);
+  const sapAtaBerthed = mergeSapSnapshot(port.ata_vessel_berthed, current?.sap_ata_vessel_berthed);
+  const sapAtaLoadingStart = mergeSapSnapshot(port.ata_loading_start, current?.sap_ata_loading_start);
+  const sapAtaLoadingCompleted = mergeSapSnapshot(
+    port.ata_loading_completed,
+    current?.sap_ata_loading_completed,
+  );
+  const sapAtaSailed = mergeSapSnapshot(port.ata_vessel_sailed, current?.sap_ata_vessel_sailed);
+  const sapQualityFfa = mergeSapSnapshot(port.quality_ffa, current?.sap_quality_ffa);
+  const sapQualityMi = mergeSapSnapshot(port.quality_mi, current?.sap_quality_mi);
+  const sapQualityDobi = mergeSapSnapshot(port.quality_dobi, current?.sap_quality_dobi);
+  const sapQualityRed = mergeSapSnapshot(port.quality_red, current?.sap_quality_red);
+  const sapQualityDs = mergeSapSnapshot(port.quality_ds, current?.sap_quality_ds);
+  const sapQualityStone = mergeSapSnapshot(port.quality_stone, current?.sap_quality_stone);
   const values = [
     port.port_name,
     port.port_sequence,
@@ -657,6 +671,17 @@ async function upsertVesselLoadingPortRow(
     mergeSapPortValue(port.eta_vessel_berthed_at_discharge_port, current?.eta_vessel_berthed_at_discharge_port),
     mergeSapPortValue(port.eta_vessel_start_discharging, current?.eta_vessel_start_discharging),
     mergeSapPortValue(port.eta_vessel_complete_discharge, current?.eta_vessel_complete_discharge),
+    sapAtaArrival,
+    sapAtaBerthed,
+    sapAtaLoadingStart,
+    sapAtaLoadingCompleted,
+    sapAtaSailed,
+    sapQualityFfa,
+    sapQualityMi,
+    sapQualityDobi,
+    sapQualityRed,
+    sapQualityDs,
+    sapQualityStone,
   ];
 
   if (existing.rows.length > 0) {
@@ -688,6 +713,17 @@ async function upsertVesselLoadingPortRow(
          eta_vessel_berthed_at_discharge_port = $25::timestamp,
          eta_vessel_start_discharging = $26::timestamp,
          eta_vessel_complete_discharge = $27::timestamp,
+         sap_ata_vessel_arrival = $28::date,
+         sap_ata_vessel_berthed = $29::date,
+         sap_ata_loading_start = $30::date,
+         sap_ata_loading_completed = $31::date,
+         sap_ata_vessel_sailed = $32::date,
+         sap_quality_ffa = $33::numeric,
+         sap_quality_mi = $34::numeric,
+         sap_quality_dobi = $35::numeric,
+         sap_quality_red = $36::numeric,
+         sap_quality_ds = $37::numeric,
+         sap_quality_stone = $38::numeric,
          is_cancelled = false,
          cancel_remark = NULL,
          cancelled_at = NULL,
@@ -708,7 +744,10 @@ async function upsertVesselLoadingPortRow(
        quality_ffa, quality_mi, quality_dobi, quality_red, quality_ds, quality_stone,
        is_discharge_port,
        eta_vessel_berthed_at_loading_port, eta_vessel_arrive_at_discharge_port,
-       eta_vessel_berthed_at_discharge_port, eta_vessel_start_discharging, eta_vessel_complete_discharge
+       eta_vessel_berthed_at_discharge_port, eta_vessel_start_discharging, eta_vessel_complete_discharge,
+       sap_ata_vessel_arrival, sap_ata_vessel_berthed, sap_ata_loading_start,
+       sap_ata_loading_completed, sap_ata_vessel_sailed,
+       sap_quality_ffa, sap_quality_mi, sap_quality_dobi, sap_quality_red, sap_quality_ds, sap_quality_stone
      ) VALUES (
        $1::uuid, $2, $3, $4::numeric,
        $5::timestamp, $6::timestamp, $7::timestamp, $8::timestamp,
@@ -716,7 +755,9 @@ async function upsertVesselLoadingPortRow(
        $13::timestamp, $14::timestamp, $15::numeric,
        $16::numeric, $17::numeric, $18::numeric, $19::numeric, $20::numeric, $21::numeric,
        $22::boolean,
-       $23::timestamp, $24::timestamp, $25::timestamp, $26::timestamp, $27::timestamp
+       $23::timestamp, $24::timestamp, $25::timestamp, $26::timestamp, $27::timestamp,
+       $28::date, $29::date, $30::date, $31::date, $32::date,
+       $33::numeric, $34::numeric, $35::numeric, $36::numeric, $37::numeric, $38::numeric
      )`,
     [shipmentId, ...values],
   );
@@ -824,6 +865,16 @@ export function mergeSapPortQuality(incoming: unknown, current: unknown): unknow
     Number(current) === 0;
   if (!isEmptyish) return current;
   return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+}
+
+/** SAP snapshot columns — refresh from import when incoming has a value; KLIP saves never touch these. */
+export function mergeSapSnapshot(incoming: unknown, current: unknown): unknown {
+  const hasIncoming =
+    incoming !== null &&
+    incoming !== undefined &&
+    !(typeof incoming === 'string' && incoming.trim() === '');
+  if (!hasIncoming) return current ?? null;
+  return incoming;
 }
 
 /**

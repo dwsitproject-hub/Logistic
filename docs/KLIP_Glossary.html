@@ -145,7 +145,12 @@
     <nav class="toc" aria-label="Daftar isi">
       <h2>Contents</h2>
       <ul>
-        <li><a href="#umum">Umum</a></li>
+        <li><a href="#umum">Umum</a>
+          <ul class="sub">
+            <li><a href="#umum-contract-status">Status kontrak (Incoterm × GR)</a></li>
+            <li><a href="#umum-outstanding-qty">Outstanding Qty (Incoterm)</a></li>
+          </ul>
+        </li>
         <li><a href="#logistics-ids">Operation ID &amp; Shipment ID</a>
           <ul class="sub">
             <li><a href="#logistics-sto-no">STO No</a></li>
@@ -236,8 +241,92 @@
         <p><strong>Contract Date</strong> — tanggal kontrak untuk filter periodik; prioritas dari tabel <code>contracts.contract_date</code>, fallback SAP raw <code>Contract Date</code>.</p>
         <p><strong>MT</strong> — Metric Ton. Data qty disimpan dalam <strong>Kg</strong> di sistem; tampilan UI Oil Loss dibagi 1000 (2 desimal).</p>
         <p><strong>Calendar days</strong> — selisih tanggal dalam hari kalender utuh (bukan jam kerja). Dipakai di Contract Performance &amp; Shipping Performance: <span class="formula">hari = tanggal akhir − tanggal awal</span>. Nilai positif = milestone kedua lebih lambat dari yang pertama.</p>
-        <p><strong>Open vs Close (kontrak)</strong> — status dari SAP <code>import_status</code> (fallback <code>contracts.status</code>). Open = kontrak belum selesai; Close = selesai. Aturan cycle berbeda untuk Open dan Close.</p>
         <p><strong>LAND vs SEA</strong> — mode transport kontrak menentukan sumber tanggal completion: LAND → <code>trucking_operations</code>; SEA → <code>shipments</code> + <code>vessel_loading_ports</code>.</p>
+
+        <h3 id="umum-contract-status">Status kontrak (<code>import_status</code>) — Incoterm × GR PO / GR STO</h3>
+        <p>Status kontrak yang ditampilkan di Contracts, Trucking, Shipments, dan Shipping Performance berasal dari agregasi baris SAP (<code>sap_processed_data</code>) per PO — <strong>bukan</strong> hanya baris SAP terakhir (<code>LIMIT 1</code>) dan <strong>bukan</strong> kolom commercial <em>Status</em> SAP.</p>
+        <p>Sumber implementasi: <code>backend/src/utils/contractDeliveryStatus.ts</code>, <code>backend/src/utils/sapIncotermMetrics.ts</code>.</p>
+
+        <h4>Matriks Incoterm → field GR yang dipakai</h4>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Field SAP (prioritas)</th><th>Arti</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC, CIF, CFR</strong></td><td><code>GR PO Status</code> (<code>raw</code> → <code>contract.gr_po_status</code>)</td><td>Goods Receipt di level PO</td></tr>
+            <tr><td><strong>LCO, FOB</strong></td><td><code>GR STO Status</code> (<code>raw</code> → <code>contract.gr_sto_status</code>)</td><td>Goods Receipt di level STO</td></tr>
+            <tr><td><strong>Lainnya</strong></td><td>GR PO, lalu GR STO</td><td>Fallback jika incoterm di luar matriks UAT</td></tr>
+          </tbody>
+        </table>
+        <p>Per baris SAP (<code>spd</code>), status incoterm-aware:</p>
+        <p class="formula">status_row = CASE incoterm WHEN FRC/CIF/CFR THEN GR PO Status WHEN LCO/FOB THEN GR STO Status ELSE COALESCE(GR PO, GR STO) END</p>
+
+        <h4>Agregasi ke status kontrak (PO-scoped)</h4>
+        <p>Semua baris <code>sap_processed_data</code> dengan <code>contract_number</code> yang sama dan <code>po_number</code> yang cocok diagregasi:</p>
+        <ol>
+          <li><strong>Open menang</strong> — jika ada baris dengan GR terkait = Open/Active, atau sinyal open incoterm-scoped pada baris dengan GR kosong.</li>
+          <li><strong>Close</strong> — jika tidak ada Open, dan ada baris Close/Closed/Completed.</li>
+          <li><strong>Cancelled</strong> — jika tidak ada Open/Close, dan ada Cancelled.</li>
+          <li><strong>Fallback</strong> — <code>contracts.status</code> (dinormalisasi ke Open / Close / Cancelled).</li>
+        </ol>
+        <p class="formula">import_status = COALESCE( aggregate_sap_gr_status , normalize(contracts.status) )</p>
+        <p>Normalisasi tampilan: <code>ACTIVE/OPEN → Open</code>, <code>CLOSE/CLOSED/COMPLETED → Close</code>, <code>CANCELLED → Cancelled</code>.</p>
+
+        <h4>Scope STO (Shipments / Shipping Performance)</h4>
+        <p>Untuk incoterm <strong>LCO/FOB</strong> (GR STO), status dapat di-scope per <code>sto_key</code> shipment agar STO sibling yang sudah Close tidak tertahan Open oleh STO lain di PO yang sama:</p>
+        <ul>
+          <li>Contracts list &amp; Trucking — agregat PO-wide (tanpa <code>sto_key</code>).</li>
+          <li>Shipments / Perf — <code>sqlIsContractSapClosedForStoExpr</code> memfilter baris SAP ke STO yang relevan (CIF/FRC/CFR tetap PO-wide).</li>
+        </ul>
+        <div class="note">
+          <strong>Open vs Close (kontrak)</strong> — <em>Open</em> = kontrak belum selesai menurut matriks GR di atas; <em>Close</em> = GR Close/Completed. Aturan cycle (Trade, Log, Cash) berbeda untuk Open dan Close. Lihat juga modul Contract Performance.
+        </div>
+
+        <h3 id="umum-outstanding-qty">Outstanding Qty — berdasarkan Incoterm</h3>
+        <p>Rumus global kontrak (Contracts list, Contract Performance, agregat Shipments/Trucking attention, dll.) memakai <strong>Contract Qty</strong> (<code>contracts.quantity_ordered</code>) dikurangi kuantitas terpenuhi (<em>fulfilled</em>) menurut incoterm.</p>
+        <p>Sumber implementasi: <code>backend/src/utils/contractGlobalOutstandingSql.ts</code>, <code>backend/src/utils/sapIncotermMetrics.ts</code> (<code>sqlContractGlobalOutstandingExpr</code>).</p>
+
+        <h4>Matriks Incoterm → qty yang dikurangi</h4>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Qty fulfilled (dikurangi dari Contract Qty)</th><th>Sumber data (CTE <code>qty_move</code>)</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>FRC, CIF, CFR</strong></td><td><code>Quantity Receive</code></td><td><code>qty_move.quantity_receive</code> — agregat SAP per kontrak (+ overlay KLIP/WB bila Open)</td></tr>
+            <tr><td><strong>LCO, FOB</strong></td><td><code>Quantity Delivery</code></td><td><code>qty_move.quantity_delivery</code> — incoterm + transport aware (trucking vs vessel)</td></tr>
+            <tr><td><strong>Lainnya</strong></td><td>Receive jika &gt; 0, else Delivery</td><td><code>COALESCE(NULLIF(receive,0), delivery)</code></td></tr>
+          </tbody>
+        </table>
+
+        <h4>Formula</h4>
+        <p class="formula">qty_fulfilled = CASE incoterm WHEN FRC/CIF/CFR THEN Quantity Receive WHEN LCO/FOB THEN Quantity Delivery ELSE COALESCE(NULLIF(Receive,0), Delivery) END</p>
+        <p class="formula">Outstanding Qty (kg) = GREATEST(0, Contract Qty − qty_fulfilled)</p>
+        <p>Varian signed (Contract Performance tabel, boleh negatif = over-delivery):</p>
+        <p class="formula">Outstanding signed = Contract Qty − qty_fulfilled</p>
+
+        <h4>Penyusunan <code>qty_move</code> (fulfilled dari SAP)</h4>
+        <ul>
+          <li>Agregat per kontrak dari <code>sap_processed_data</code> — latest per STO, dedupe multi-STO, guard over-sum (&gt;120% contract qty).</li>
+          <li><code>quantity_delivery_trucking</code> / <code>quantity_delivery_vessel</code> dari kolom SAP Quantity Delivery Trucking / Vessel.</li>
+          <li><code>quantity_delivery</code> = delivery incoterm-aware (FRC/LCO → trucking; FOB/CIF → vessel; MIX → kombinasi).</li>
+          <li><strong>Open + actual KLIP/WB</strong> — kontrak Open dapat di-override: FRC/LCO pakai sum WB (<code>trucking_daily_actuals</code>); FOB/CIF pakai sum KLIP shipment actuals. Kontrak Close tetap SAP.</li>
+        </ul>
+
+        <h4>Matriks delivery incoterm × transport (langkah qty_move)</h4>
+        <table>
+          <thead>
+            <tr><th>Incoterm</th><th>Transport</th><th>Delivery qty yang dipakai</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>FRC, LCO</td><td>LAND / (kosong)</td><td>Quantity Delivery Trucking</td></tr>
+            <tr><td>FOB, CIF</td><td>SEA</td><td>Quantity Delivery Vessel</td></tr>
+            <tr><td>FOB, CIF</td><td>MIX</td><td>Trucking + Vessel</td></tr>
+            <tr><td>FOB, CIF</td><td>LAND</td><td>Quantity Delivery Vessel</td></tr>
+          </tbody>
+        </table>
+        <div class="note">
+          UI menampilkan <strong>MT</strong> (= kg ÷ 1000). Modul spesifik (Shipping Performance STO-scoped, Trucking pipeline tolerance, dll.) dapat memakai varian rumus yang sama dengan scope berbeda — lihat bagian Contract Performance, Shipping Performance, dan Operation Trucking.
+        </div>
       </section>
 
       <section id="logistics-ids">

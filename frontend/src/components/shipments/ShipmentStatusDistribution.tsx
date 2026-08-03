@@ -6,16 +6,20 @@ import { Loader2, Ship } from 'lucide-react'
 import {
   formatDischargePortBreakdownTooltip,
   formatLoadingPortBreakdownTooltip,
+  pipelineCardQtyForStage,
   pipelineCountForStage,
   pipelineVesselNamesForStage,
   splitVesselNamesForCard,
   SHIPMENT_PAGE_PIPELINE_CARDS,
   type DischargePortBreakdown,
   type LoadingPortBreakdown,
+  type ShipmentPagePipelineContractQtyKg,
+  type ShipmentPagePipelineOutstandingQtyKg,
   type ShipmentPagePipelineStage,
   type ShipmentPagePipelineStatusCounts,
   type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
+import { formatQtyMtFromKg } from '@/lib/utils'
 
 export interface ShipmentStatusDistributionProps {
   loading: boolean
@@ -25,6 +29,14 @@ export interface ShipmentStatusDistributionProps {
   loadingPortBreakdown: LoadingPortBreakdown
   dischargePortBreakdown: DischargePortBreakdown
   onStageClick: (stage: ShipmentPagePipelineStage) => void
+  /** Pre-planned grouping suggestion counts — tooltip on Unplanned card only. */
+  unplannedSuggestionSummary?: {
+    groupCount: number
+    ungroupedCount: number | null
+    isFilterScoped?: boolean
+  }
+  contractQtys?: Partial<ShipmentPagePipelineContractQtyKg>
+  outstandingQtys?: Partial<ShipmentPagePipelineOutstandingQtyKg>
 }
 
 export function ShipmentStatusDistribution({
@@ -35,10 +47,14 @@ export function ShipmentStatusDistribution({
   loadingPortBreakdown,
   dischargePortBreakdown,
   onStageClick,
+  unplannedSuggestionSummary,
+  contractQtys,
+  outstandingQtys,
 }: ShipmentStatusDistributionProps) {
   const renderPipelineCard = (card: (typeof SHIPMENT_PAGE_PIPELINE_CARDS)[number]) => {
     const isActive = statusFilter === card.status
     const count = pipelineCountForStage(card.status, counts)
+    const cardQty = pipelineCardQtyForStage(card.status, contractQtys, outstandingQtys)
     const stageVessels = pipelineVesselNamesForStage(card.status, vesselNames) ?? []
     const { preview, moreCount } = splitVesselNamesForCard(stageVessels)
     const breakdownTooltip =
@@ -51,7 +67,20 @@ export function ShipmentStatusDistribution({
       stageVessels.length > 0
         ? `Vessels (${stageVessels.length}):\n${stageVessels.join('\n')}`
         : null
-    const tooltipBody = [card.tooltip, breakdownTooltip, vesselListTooltip]
+    const suggestionTooltip =
+      card.status === 'UNPLANNED' && unplannedSuggestionSummary && unplannedSuggestionSummary.groupCount > 0
+        ? `${unplannedSuggestionSummary.groupCount} pre-planned grouping suggestion${
+            unplannedSuggestionSummary.groupCount === 1 ? '' : 's'
+          }${
+            unplannedSuggestionSummary.isFilterScoped ? ' matching current global filters' : ''
+          } ready to review in the table below${
+            unplannedSuggestionSummary.ungroupedCount != null &&
+            unplannedSuggestionSummary.ungroupedCount > 0
+              ? ` (${unplannedSuggestionSummary.ungroupedCount} contracts not yet grouped)`
+              : ''
+          }.`
+        : null
+    const tooltipBody = [card.tooltip, suggestionTooltip, breakdownTooltip, vesselListTooltip]
       .filter(Boolean)
       .join('\n\n')
 
@@ -73,8 +102,18 @@ export function ShipmentStatusDistribution({
         <div className={`mt-1 text-2xl font-bold tabular-nums ${card.textColor}`}>
           {count.toLocaleString('en-US')}
         </div>
+        {cardQty ? (
+          <div
+            className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] leading-snug ${card.textColor} opacity-80`}
+          >
+            <div className="font-medium">{cardQty.label}</div>
+            <div className="mt-0.5 tabular-nums font-semibold opacity-90">
+              {formatQtyMtFromKg(cardQty.kg)}
+            </div>
+          </div>
+        ) : null}
         <div
-          className={`mt-1.5 flex min-h-[4.75rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
+          className={`mt-1.5 flex min-h-[3.5rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
         >
           <div className="flex items-center gap-1 opacity-80">
             <Ship className="h-3 w-3 shrink-0" aria-hidden />

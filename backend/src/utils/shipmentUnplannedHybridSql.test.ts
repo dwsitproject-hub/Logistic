@@ -41,6 +41,15 @@ describe('shipmentUnplannedHybridSql', () => {
   it('builds summary table count CTE', () => {
     const cte = buildUnplannedContractBacklogTableCountCte('AND 1=1');
     expect(cte).toContain('unplanned_contract_backlog_table');
+    expect(cte).toContain('preplanned_contract_table');
+    expect(cte).toContain('preplanned_group_count');
+    expect(cte).toContain('COUNT(DISTINCT pg.id)');
+  });
+
+  it('excludes ACCEPTED-unlinked (Preplanned) contracts from Unplanned backlog', () => {
+    const sql = unplannedContractBacklogBaseWhereSql('c', 'l');
+    expect(sql).toContain("pg.status = 'ACCEPTED'");
+    expect(sql).toContain('pg.shipment_id IS NULL');
   });
 
   it('applies product multi filter on contract scope', () => {
@@ -67,5 +76,16 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).toContain("'CIF'");
     expect(sql).toContain("'FOB'");
     expect(sql).toContain("'CFR'");
+  });
+});
+
+describe('buildPreplannedContractsPageQuery', () => {
+  it('paginates by group_id and includes pre_planned_group_id on rows', async () => {
+    const { buildPreplannedContractsPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildPreplannedContractsPageQuery('', '', 20, 0);
+    expect(text).toContain('preplanned_groups_page');
+    expect(text).toContain('pre_planned_group_id');
+    expect(text).toContain('GROUP BY pre_planned_group_id');
+    expect(text).not.toMatch(/preplanned_contracts[\s\S]*LIMIT 20 OFFSET 0[\s\S]*SELECT \* FROM preplanned_contracts/);
   });
 });

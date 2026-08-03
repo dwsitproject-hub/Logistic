@@ -15,6 +15,7 @@ import { buildShipmentPageSeaIncotermColumnSql, buildShipmentPageSeaIncotermScop
 /** Pipeline stage keys used by GET /shipments?status=… (Shipments page only). */
 export const SHIPMENT_PAGE_PIPELINE_STAGES = [
   'UNPLANNED',
+  'PREPLANNED',
   'PLANNED',
   'AT_LOADING_PORT',
   'SAILED',
@@ -262,6 +263,15 @@ export function appendShipmentPipelineStageFilter(
   if (stage === 'UNPLANNED') {
     return {
       sql: ` AND ${shipmentPagePipelineUnplannedRowPredicate('sb')} AND ${buildShipmentPageSeaIncotermColumnSql('sb.incoterm')}`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+
+  // Preplanned contracts have no shipment rows; dedicated list resolver handles them.
+  if (stage === 'PREPLANNED') {
+    return {
+      sql: ' AND FALSE',
       params: [],
       nextIndex: startIndex,
     };

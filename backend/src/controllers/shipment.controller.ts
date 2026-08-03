@@ -4,6 +4,7 @@ import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
 import { runShippingPerformance, invalidateShippingPerformanceRowCache } from '../services/shippingPerformance.service';
 import {
   buildShipmentListCacheKey,
@@ -12,13 +13,18 @@ import {
   buildShipmentSummaryCacheKey,
   invalidateShipmentsListCache,
   loadShipmentOutstandingQtyForRequest,
+  loadShipmentAttentionInsightsForRequest,
+  loadShipmentStatusCardQtyForRequest,
   loadShipmentSummaryBundle,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
   seedShipmentListFilteredTotal,
   type ShipmentOutstandingQtySummary,
+  type ShipmentStatusContractQtyKg,
+  type ShipmentStatusOutstandingQtyKg,
 } from '../services/shipmentList.service';
 import { EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY } from '../utils/shipmentOutstandingQtySummarySql';
+import type { ShipmentAttentionInsightsRow } from '../utils/shipmentAttentionInsightsSql';
 import {
   isPipelineDailySummaryEligible,
   loadShipmentStagePageFromSnapshot,
@@ -26,9 +32,13 @@ import {
 } from '../services/pipelineDailySummary.service';
 import {
   buildShipmentUnplannedHybridListContext,
+  countPreplannedContracts,
   countUnplannedHybridBreakdown,
+  isPreplannedListRequest,
   isUnplannedHybridListRequest,
+  resolvePreplannedContractsList,
   resolveUnplannedHybridShipmentsList,
+  type PreplannedContractsBreakdown,
   type UnplannedHybridBreakdown,
 } from '../services/shipmentUnplannedHybridList.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
@@ -306,7 +316,13 @@ function shipmentListSummaryPayload(
   totalCount: number,
   summaryRow: Record<string, unknown>,
   unplannedBreakdown?: UnplannedHybridBreakdown | null,
+  preplannedBreakdown?: PreplannedContractsBreakdown | null,
   outstandingQty?: ShipmentOutstandingQtySummary | null,
+  attentionInsights?: ShipmentAttentionInsightsRow | null,
+  statusCardQty?: {
+    statusContractQty?: ShipmentStatusContractQtyKg | null;
+    statusOutstandingQty?: ShipmentStatusOutstandingQtyKg | null;
+  } | null,
 ) {
   const unplannedContractRows = unplannedBreakdown
     ? unplannedBreakdown.contractRows
@@ -317,11 +333,19 @@ function shipmentListSummaryPayload(
   const unplannedTableTotal = unplannedBreakdown
     ? unplannedBreakdown.totalTableRows
     : unplannedContractRows + unplannedShipmentRows;
+  const preplannedGroupCount = preplannedBreakdown
+    ? preplannedBreakdown.groupCount
+    : Number(summaryRow.preplanned_count || 0);
+  const preplannedContractRows = preplannedBreakdown
+    ? preplannedBreakdown.contractRows
+    : Number(summaryRow.preplanned_contract_count || 0);
   return {
     total: totalCount,
     status: {
       /** Matches hybrid Unplanned table row total (backlog + STO execution groups). */
       unplanned: unplannedTableTotal,
+      /** Unique accepted grouping suggestions (not contract rows). */
+      preplanned: preplannedGroupCount,
       planned: Number(summaryRow.planned_count || 0),
       atLoadingPort: Number(summaryRow.at_loading_port_count || 0),
       sailed: Number(summaryRow.sailed_count || 0),
@@ -332,6 +356,7 @@ function shipmentListSummaryPayload(
     /** Sorted distinct non-blank vessel names per pipeline card (Section 1 rectangles). */
     statusVesselNames: {
       unplanned: normalizeVesselNameList(summaryRow.unplanned_vessel_names),
+      preplanned: [] as string[],
       planned: normalizeVesselNameList(summaryRow.planned_vessel_names),
       atLoadingPort: normalizeVesselNameList(summaryRow.at_loading_port_vessel_names),
       sailed: normalizeVesselNameList(summaryRow.sailed_vessel_names),
@@ -369,9 +394,21 @@ function shipmentListSummaryPayload(
       shipmentRows: unplannedShipmentRows,
       totalTableRows: unplannedTableTotal,
     },
+    preplannedTable: {
+      groupCount: preplannedGroupCount,
+      contractRows: preplannedContractRows,
+      totalTableRows: preplannedContractRows,
+    },
     // Omit when not loaded — callers must not block status cards on OS SQL.
     ...(outstandingQty !== undefined
       ? { outstandingQty: outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY }
+      : {}),
+    ...(attentionInsights !== undefined ? { attentionInsights: attentionInsights ?? null } : {}),
+    ...(statusCardQty?.statusContractQty != null
+      ? { statusContractQty: statusCardQty.statusContractQty }
+      : {}),
+    ...(statusCardQty?.statusOutstandingQty != null
+      ? { statusOutstandingQty: statusCardQty.statusOutstandingQty }
       : {}),
   };
 }
@@ -1043,10 +1080,25 @@ ${contractMetaSelectCore}
     });
     const loadSection1UnplannedBreakdown = () =>
       countUnplannedHybridBreakdown(section1UnplannedHybridCtx);
+    const loadSection1PreplannedBreakdown = () =>
+      countPreplannedContracts({
+        contractScope: { dateFrom, dateTo, contract, plants },
+        globalSearch,
+        colFilters,
+      });
 
     const loadSection1OutstandingQty = () =>
       loadShipmentOutstandingQtyForRequest(req, {
         shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      });
+
+    const loadSection1StatusCardQty = () =>
+      loadShipmentStatusCardQtyForRequest(req, {
+        shipmentBaseCteSql: shipmentBaseCteSqlFull,
         toolbarOuterSql: section1SummaryFilterSql,
         innerParams,
         toolbarOuterParams,
@@ -1151,6 +1203,8 @@ ${contractMetaSelectCore}
         ${shipmentPagePipelineVesselNamesSelectSql()},
         ARRAY_AGG(DISTINCT ${shipmentPipelineVesselKeyExpr('e.vessel_name')}) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')} AND ${shipmentPipelineVesselKeyExpr('e.vessel_name')} IS NOT NULL) AS unplanned_vessel_names,
         (SELECT backlog_count FROM unplanned_contract_backlog_table)::bigint AS unplanned_contract_backlog_count,
+        (SELECT preplanned_group_count FROM preplanned_contract_table)::bigint AS preplanned_count,
+        (SELECT preplanned_contract_count FROM preplanned_contract_table)::bigint AS preplanned_contract_count,
         COUNT(*) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')})::bigint AS unplanned_shipment_execution_count,
         COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,
         COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
@@ -1169,14 +1223,42 @@ ${contractMetaSelectCore}
         shipmentListFilterCacheKey,
         scopeStatusParam,
       );
-      const tSum0 = performance.now();
-      const summaryBundle = await loadShipmentSummaryBundle(req, {
-        summaryCountQuery,
-        params: [...section1SummaryFilterParams, ...summaryScopeParams],
-        cacheKey: summaryCacheKey,
-        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+      const attentionOpts = {
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      };
+      const outstandingQtyPromise = loadSection1OutstandingQty();
+      const statusCardQtyPromise = loadSection1StatusCardQty().catch((err) => {
+        logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
+        return null;
       });
-      const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, source: summarySource } =
+      const tSum0 = performance.now();
+      const attentionInsightsPromise = isAttentionInsightsEnabled()
+        ? loadShipmentAttentionInsightsForRequest(
+            req,
+            attentionOpts,
+            outstandingQtyPromise.then((os) => os.totalKg),
+          ).catch((err) => {
+            logger.error('Shipment attention insights failed (summaryOnly-compact)', err);
+            return null;
+          })
+        : Promise.resolve(undefined);
+      const [summaryBundle, outstandingQty, statusCardQty, attentionInsights] = await Promise.all([
+        loadShipmentSummaryBundle(req, {
+          summaryCountQuery,
+          params: [...section1SummaryFilterParams, ...summaryScopeParams],
+          cacheKey: summaryCacheKey,
+          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+          loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+        }),
+        outstandingQtyPromise,
+        statusCardQtyPromise,
+        attentionInsightsPromise,
+      ]);
+      const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, preplannedBreakdown: preplannedBreakdownForSummary, source: summarySource } =
         summaryBundle;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
@@ -1192,7 +1274,15 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+          summary: shipmentListSummaryPayload(
+            tc,
+            sr,
+            unplannedBreakdownForSummary,
+            preplannedBreakdownForSummary,
+            outstandingQty,
+            attentionInsights,
+            statusCardQty,
+          ),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1260,11 +1350,14 @@ ${contractMetaSelectCore}
             params: [...section1SummaryFilterParams, ...summaryScopeParams],
             cacheKey: summaryCacheKey,
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
           });
+          // Section 1 cards must use toolbar-scope breakdowns (not list hybrid / page filters).
           hybridSummary = shipmentListSummaryPayload(
             summaryBundle.totalCount,
             summaryBundle.summaryRow,
-            hybrid.unplannedBreakdown,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
           );
         }
         timingsMs.total = performance.now() - tReq0;
@@ -1290,6 +1383,54 @@ ${contractMetaSelectCore}
         });
       }
 
+      if (isPreplannedListRequest(status)) {
+        const preplanned = await resolvePreplannedContractsList(req, {
+          contractScope: { dateFrom, dateTo, contract, plants },
+          globalSearch,
+          colFilters,
+        });
+        let preplannedSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+          });
+          preplannedSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-preplanned',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: preplanned.shipments.length,
+          contractRows: preplanned.preplannedBreakdown.contractRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: preplanned.shipments,
+            pagination: preplanned.pagination,
+            preplannedBreakdown: preplanned.preplannedBreakdown,
+            ...(preplannedSummary ? { summary: preplannedSummary } : {}),
+          },
+        });
+      }
+
       if (includeSummary) {
         const summaryCacheKey = buildShipmentSummaryCacheKey(
           shipmentListFilterCacheKey,
@@ -1301,6 +1442,7 @@ ${contractMetaSelectCore}
             params: [...section1SummaryFilterParams, ...summaryScopeParams],
             cacheKey: summaryCacheKey,
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
           });
 
         const [data, summaryBundle] = await Promise.all([
@@ -1321,6 +1463,7 @@ ${contractMetaSelectCore}
           summaryRow: sr,
           totalCount: tc,
           unplannedBreakdown: unplannedBreakdownForSummary,
+          preplannedBreakdown: preplannedBreakdownForSummary,
           source: summarySource,
         } = summaryBundle;
         timingsMs.total = performance.now() - tReq0;
@@ -1347,7 +1490,12 @@ ${contractMetaSelectCore}
           success: true,
           data: {
             ...data,
-            summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+            summary: shipmentListSummaryPayload(
+              tc,
+              sr,
+              unplannedBreakdownForSummary,
+              preplannedBreakdownForSummary,
+            ),
           },
         });
       }
@@ -1392,16 +1540,24 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const summaryBundle = await loadShipmentSummaryBundle(req, {
-        summaryCountQuery,
-        params: [...section1SummaryFilterParams, ...summaryScopeParams],
-        cacheKey: summaryCacheKey,
-        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-      });
+      const [summaryBundle, statusCardQty] = await Promise.all([
+        loadShipmentSummaryBundle(req, {
+          summaryCountQuery,
+          params: [...section1SummaryFilterParams, ...summaryScopeParams],
+          cacheKey: summaryCacheKey,
+          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+          loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+        }),
+        loadSection1StatusCardQty().catch((err) => {
+          logger.error('Shipment status card qty failed (summaryOnly)', err);
+          return null;
+        }),
+      ]);
       const {
         summaryRow: sr,
         totalCount: tc,
         unplannedBreakdown: unplannedBreakdownForSummary,
+        preplannedBreakdown: preplannedBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
       timingsMs.dbSummaryOnly = performance.now() - tSum0;
@@ -1420,7 +1576,15 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+          summary: shipmentListSummaryPayload(
+            tc,
+            sr,
+            unplannedBreakdownForSummary,
+            preplannedBreakdownForSummary,
+            undefined,
+            undefined,
+            statusCardQty,
+          ),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1540,6 +1704,7 @@ ${contractMetaSelectCore}
 
     let summaryRow: Record<string, unknown> = {};
     let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
+    let preplannedBreakdownForSummary: PreplannedContractsBreakdown | null = null;
     let summarySource: string | undefined;
     if (includeSummary) {
       const tSa0 = performance.now();
@@ -1552,9 +1717,11 @@ ${contractMetaSelectCore}
         params: [...section1SummaryFilterParams, ...summaryScopeParams],
         cacheKey: summaryCacheKey,
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
       });
       summaryRow = summaryBundle.summaryRow;
       unplannedBreakdownForSummary = summaryBundle.unplannedBreakdown;
+      preplannedBreakdownForSummary = summaryBundle.preplannedBreakdown;
       summarySource = summaryBundle.source;
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
     }
@@ -1576,7 +1743,12 @@ ${contractMetaSelectCore}
       success: true,
       data: {
         shipments: result.rows,
-        summary: shipmentListSummaryPayload(totalCount, summaryRow, unplannedBreakdownForSummary),
+        summary: shipmentListSummaryPayload(
+          totalCount,
+          summaryRow,
+          unplannedBreakdownForSummary,
+          preplannedBreakdownForSummary,
+        ),
         pagination: {
           total: totalCount,
           page: Number(page),
@@ -2453,6 +2625,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlp.quality_red,
           vlp.quality_ds,
           vlp.quality_stone,
+          vlp.sap_ata_vessel_arrival,
+          vlp.sap_ata_vessel_berthed,
+          vlp.sap_ata_loading_start,
+          vlp.sap_ata_loading_completed,
+          vlp.sap_ata_vessel_sailed,
+          vlp.sap_quality_ffa,
+          vlp.sap_quality_mi,
+          vlp.sap_quality_dobi,
+          vlp.sap_quality_red,
+          vlp.sap_quality_ds,
+          vlp.sap_quality_stone,
           vlp.is_discharge_port,
           vlp.created_at,
           vlp.updated_at,
@@ -2543,6 +2726,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
                 vlp.eta_vessel_berthed_at_loading_port, vlp.eta_vessel_arrive_at_discharge_port,
                 vlp.eta_vessel_berthed_at_discharge_port, vlp.eta_vessel_start_discharging, vlp.eta_vessel_complete_discharge,
                 vlp.loading_rate, vlp.quality_ffa, vlp.quality_mi, vlp.quality_dobi, vlp.quality_red, vlp.quality_ds, vlp.quality_stone,
+                vlp.sap_ata_vessel_arrival, vlp.sap_ata_vessel_berthed, vlp.sap_ata_loading_start, vlp.sap_ata_loading_completed, vlp.sap_ata_vessel_sailed,
+                vlp.sap_quality_ffa, vlp.sap_quality_mi, vlp.sap_quality_dobi, vlp.sap_quality_red, vlp.sap_quality_ds, vlp.sap_quality_stone,
                 vlp.is_discharge_port, vlp.created_at, vlp.updated_at,
                 c.contract_id as contract_number
                FROM vessel_loading_ports vlp
@@ -2594,6 +2779,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
               vlp.quality_red,
               vlp.quality_ds,
               vlp.quality_stone,
+              vlp.sap_ata_vessel_arrival,
+              vlp.sap_ata_vessel_berthed,
+              vlp.sap_ata_loading_start,
+              vlp.sap_ata_loading_completed,
+              vlp.sap_ata_vessel_sailed,
+              vlp.sap_quality_ffa,
+              vlp.sap_quality_mi,
+              vlp.sap_quality_dobi,
+              vlp.sap_quality_red,
+              vlp.sap_quality_ds,
+              vlp.sap_quality_stone,
               vlp.is_discharge_port,
               vlp.created_at,
               vlp.updated_at,
@@ -2729,6 +2925,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlp.quality_red,
           vlp.quality_ds,
           vlp.quality_stone,
+          vlp.sap_ata_vessel_arrival,
+          vlp.sap_ata_vessel_berthed,
+          vlp.sap_ata_loading_start,
+          vlp.sap_ata_loading_completed,
+          vlp.sap_ata_vessel_sailed,
+          vlp.sap_quality_ffa,
+          vlp.sap_quality_mi,
+          vlp.sap_quality_dobi,
+          vlp.sap_quality_red,
+          vlp.sap_quality_ds,
+          vlp.sap_quality_stone,
           vlp.is_discharge_port,
           vlp.created_at,
           vlp.updated_at,
@@ -4183,6 +4390,7 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       eta_discharge_start,
       eta_discharge_complete,
       etaByContract,
+      prePlannedGroupId,
     } = req.body;
 
     // Validate required fields - Contract Numbers are required, STO Number is optional
@@ -4530,6 +4738,29 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
             });
           });
       });
+    }
+
+    const attachedContractUuids = contractCheck.rows.map((row: { id: string }) => String(row.id));
+    void import('../services/prePlannedGroup.service').then(({ releaseContractsFromPrePlanned }) =>
+      releaseContractsFromPrePlanned(attachedContractUuids),
+    );
+    if (prePlannedGroupId && typeof prePlannedGroupId === 'string' && shipmentIds.length > 0) {
+      void import('../services/prePlannedGroup.service').then(({ acceptPrePlannedGroupLink }) =>
+        acceptPrePlannedGroupLink(prePlannedGroupId, String(shipmentIds[0]), req.user?.id),
+      );
+    }
+    // Auto-detect: any contract here that belongs to a Preplanned (ACCEPTED,
+    // shipment_id NULL) group should transition to Planned now that a real
+    // shipment exists, regardless of whether prePlannedGroupId was passed.
+    if (shipmentIds.length > 0) {
+      void import('../services/prePlannedGroup.service').then(
+        ({ linkAcceptedPrePlannedGroupsForContracts }) =>
+          linkAcceptedPrePlannedGroupsForContracts(
+            attachedContractUuids,
+            String(shipmentIds[0]),
+            req.user?.id,
+          ),
+      );
     }
 
     return res.json({

@@ -1,6 +1,12 @@
-import { OIL_LOSS_ELIGIBILITY_WHERE_SQL, OIL_LOSS_TRANSPORTER_EXPR } from './oilLossEligibility';
+import {
+  OIL_LOSS_ELIGIBILITY_WHERE_SQL,
+  OIL_LOSS_TRANSPORTER_EXPR,
+  OIL_LOSS_VESSEL_ELIGIBILITY_WHERE_SQL,
+} from './oilLossEligibility';
 import { sqlContractImportStatusIsClosedExpr } from './contractDeliveryStatus';
 import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
+import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
+import { buildUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import {
   OIL_LOSS_SFAL_QTY_EXPR,
   OIL_LOSS_SFBD_QTY_EXPR,
@@ -103,13 +109,10 @@ export const OIL_LOSS_LOOKUP_CTES = `
   )
 `;
 
-export function buildOilLossMainSql(): string {
-  // MATERIALIZED: PG14 inlines single-reference CTEs, which pushed these JSONB key
-  // expressions into nested-loop join filters — re-parsing the large spd.data blob
-  // millions of times (measured 44.7s). Materializing computes each key once per row
-  // and lets the planner hash-join on real row counts (~9s). Results are identical.
+/** Shared Oil Loss CTE chain through `with_qty` (parsed → enriched → resolved qty). */
+export function buildOilLossWithQtyCtes(): string {
   return `
-    WITH parsed AS MATERIALIZED (
+    parsed AS MATERIALIZED (
       SELECT
         spd.id,
         COALESCE(NULLIF(TRIM(spd.sto_number::text), ''), NULLIF(TRIM(spd.data->'raw'->>'STO No'), '')) AS sto_key,
@@ -242,7 +245,12 @@ export function buildOilLossMainSql(): string {
         ${shipmentManualQtyResolveSql('b.shipment_qty_delivered_kg', 'b.qty_delivery_sap')} AS qty_delivery_resolved,
         ${shipmentManualQtyResolveSql('b.shipment_qty_receive_kg', 'b.qty_receive')} AS qty_receive_resolved
       FROM with_qty_base b
-    )
+    )`;
+}
+
+export function buildOilLossMainSql(): string {
+  return `
+    WITH ${buildOilLossWithQtyCtes()}
     SELECT
       id,
       transport_mode,
@@ -343,4 +351,41 @@ export function buildOilLossGainSql(): string {
         "LOWER(COALESCE(status, '')) IN ('close', 'closed', 'completed', 'complete')",
       )}
   `;
+}
+
+/**
+ * Shipments Attention — top loss rows aligned with Oil Loss (SAP receive < delivery, vessel CIF/FOB).
+ * Toolbar-scoped via contract filters (date / plant / contract / search / column filters).
+ */
+export function buildShipmentAttentionOilLossQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+  limit = 10,
+): string {
+  const safeLimit = Math.max(1, Math.min(limit, 10));
+  return `
+    WITH ${buildOilLossWithQtyCtes()},
+    ${buildUnplannedContractBacklogLatestSpdCte()},
+    scoped AS (
+      SELECT w.*
+      FROM with_qty w
+      INNER JOIN contracts c ON TRIM(c.contract_id) = TRIM(w.contract_number)
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${buildShipmentPageSeaIncotermScopeSql('c')}
+        ${contractScopeSql}
+        ${toolbarSql}
+    )
+    SELECT
+      NULLIF(TRIM(supplier), '') AS supplier,
+      CASE
+        WHEN qty_delivery_resolved > 0
+        THEN ROUND((qty_receive_resolved - qty_delivery_resolved) / qty_delivery_resolved * 100, 4)
+        ELSE 0
+      END AS gain_loss_pct
+    FROM scoped
+    WHERE ${OIL_LOSS_VESSEL_ELIGIBILITY_WHERE_SQL}
+      AND qty_receive_resolved < qty_delivery_resolved
+      AND NULLIF(TRIM(supplier), '') IS NOT NULL
+    ORDER BY gain_loss_pct ASC, id ASC
+    LIMIT ${safeLimit}`;
 }

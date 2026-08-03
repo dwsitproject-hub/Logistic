@@ -10,8 +10,8 @@ import { AuthRequest } from '../middleware/auth';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
-import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
-import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
+import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
+import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractImportStatusIsOpenExpr,
@@ -52,9 +52,24 @@ export interface LatePerformanceFilters {
   selectedIncoterms: string | undefined;
   b2bFlag: string | undefined;
   productFilter: string | undefined;
+  productFilters: string[];
   sourceTypeFilter: string | undefined;
+  sourceTypeFilters: string[];
   statusNorm: string;
   plants: string[];
+}
+
+export function parseCommaSeparatedQuery(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => String(entry).split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
 }
 
 const ROW_CACHE = new Map<string, { rows: any[]; expiresAt: number }>();
@@ -83,7 +98,9 @@ function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
     selectedIncoterms: f.selectedIncoterms ?? '',
     b2bFlag: f.b2bFlag ?? '',
     productFilter: f.productFilter ?? '',
+    productFilters: [...f.productFilters].sort(),
     sourceTypeFilter: f.sourceTypeFilter ?? '',
+    sourceTypeFilters: [...f.sourceTypeFilters].sort(),
   };
   return JSON.stringify(norm);
 }
@@ -111,7 +128,21 @@ export function parseLatePerformanceFilters(
   const selectedIncoterms = (req.query as any).incoterms as string | undefined;
   const b2bFlag = (req.query as any).b2bFlag as string | undefined;
   const productFilter = (req.query as any).product as string | undefined;
+  const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
+  const productFilters =
+    productsQuery.length > 0
+      ? productsQuery
+      : productFilter?.trim()
+        ? [productFilter.trim()]
+        : [];
   const sourceTypeFilter = (req.query as any).sourceType as string | undefined;
+  const sourceTypesQuery = parseCommaSeparatedQuery((req.query as any).sourceTypes);
+  const sourceTypeFilters =
+    sourceTypesQuery.length > 0
+      ? sourceTypesQuery
+      : sourceTypeFilter?.trim()
+        ? [sourceTypeFilter.trim()]
+        : [];
 
   const now = new Date();
   const y = now.getFullYear();
@@ -144,7 +175,9 @@ export function parseLatePerformanceFilters(
     selectedIncoterms,
     b2bFlag,
     productFilter,
+    productFilters,
     sourceTypeFilter,
+    sourceTypeFilters,
     statusNorm,
     plants,
   };
@@ -173,7 +206,9 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     selectedIncoterms,
     b2bFlag,
     productFilter,
+    productFilters,
     sourceTypeFilter,
+    sourceTypeFilters,
   } = filters;
 
   const queryParams: any[] = [];
@@ -383,14 +418,33 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
-  const productClause = appendContractPerfProductSubstringSql(productFilter, 'base.product', paramIndex);
-  if (productClause) {
-    queryText += productClause.clause;
-    queryParams.push(productClause.param);
-    paramIndex = productClause.nextParamIndex;
+  const multiProductClause = appendContractPerfProductsMultiSql(
+    productFilters.length > 1 ? productFilters : undefined,
+    'base.product',
+    paramIndex,
+  );
+  if (multiProductClause) {
+    queryText += multiProductClause.clause;
+    queryParams.push(...multiProductClause.params);
+    paramIndex = multiProductClause.nextParamIndex;
+  } else {
+    const singleProduct =
+      productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+    const productClause = appendContractPerfProductSubstringSql(singleProduct, 'base.product', paramIndex);
+    if (productClause) {
+      queryText += productClause.clause;
+      queryParams.push(productClause.param);
+      paramIndex = productClause.nextParamIndex;
+    }
   }
 
-  queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
+  if (sourceTypeFilters.length > 1) {
+    queryText += appendContractPerfSourceTypesFilter(sourceTypeFilters, 'base.source_type');
+  } else {
+    const singleSource =
+      sourceTypeFilter?.trim() || (sourceTypeFilters.length === 1 ? sourceTypeFilters[0] : undefined);
+    queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
+  }
 
   if (plants.length > 0) {
     const blankIncluded = plants.some((p) => p === 'Blank');

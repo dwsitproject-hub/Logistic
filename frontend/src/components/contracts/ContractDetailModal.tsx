@@ -15,7 +15,16 @@ import {
   logCycleDaysClass,
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
-import { formatDateDMY } from '@/lib/dateFormat'
+import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import {
+  SectionCancelButton,
+  SectionEditButton,
+} from '@/components/shared/ShipmentModalSectionActions'
+import {
+  buildCargoReadinessChangeRemark,
+  cargoReadinessDatesEqual,
+} from '@/lib/contractCargoReadinessRemark'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
@@ -362,15 +371,23 @@ export async function fetchContractForDetailModal(
   return null
 }
 
+function sliceIsoDate(value: string | null | undefined): string {
+  if (!value) return ''
+  return String(value).trim().slice(0, 10)
+}
+
 export function ContractDetailModal({
   contract,
   onClose,
+  onContractUpdated,
   showMonthDeliveryEnd = false,
   documentsRefreshKey = 0,
   stacked = false,
 }: {
   contract: ContractDetailModalContract | null
   onClose: () => void
+  /** Called after a successful in-modal contract field update (e.g. cargo readiness). */
+  onContractUpdated?: (patch: Partial<ContractDetailModalContract> & { id: string }) => void
   showMonthDeliveryEnd?: boolean
   /** Increment to refetch documents while the modal stays open (e.g. after table upload). */
   documentsRefreshKey?: number
@@ -394,6 +411,7 @@ export function ContractDetailModal({
       }
 
   const perms = usePermissions()
+  const canEditContract = canEditPermission(perms, 'data.contracts')
   const canViewContractPaymentInfo = canViewPermission(perms, CONTRACT_PAYMENT_INFO_PERMISSION)
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
   const canEditShipment = canEditPermission(perms, 'data.shipments')
@@ -476,8 +494,20 @@ export function ContractDetailModal({
   const [contractRemarksLoading, setContractRemarksLoading] = useState(false)
   const [newRemarkText, setNewRemarkText] = useState('')
   const [newRemarkSaving, setNewRemarkSaving] = useState(false)
+  const [displayContract, setDisplayContract] = useState<ContractDetailModalContract | null>(contract)
+  const [cargoReadinessEditing, setCargoReadinessEditing] = useState(false)
+  const [cargoReadinessDraft, setCargoReadinessDraft] = useState('')
+  const [cargoReadinessRemark, setCargoReadinessRemark] = useState('')
+  const [cargoReadinessSaving, setCargoReadinessSaving] = useState(false)
   const [b2bParties, setB2bParties] = useState<B2bPartyRow[]>([])
   const [b2bPartiesLoading, setB2bPartiesLoading] = useState(false)
+
+  useEffect(() => {
+    setDisplayContract(contract)
+    setCargoReadinessEditing(false)
+    setCargoReadinessDraft('')
+    setCargoReadinessRemark('')
+  }, [contract])
 
   const fetchContractDocuments = useCallback(async (contractInternalId: string) => {
     try {
@@ -627,6 +657,68 @@ export function ContractDetailModal({
       setNewRemarkSaving(false)
     }
   }, [newRemarkText, contract?.id])
+
+  const startCargoReadinessEdit = useCallback(() => {
+    if (!displayContract) return
+    setCargoReadinessDraft(sliceIsoDate(displayContract.cargo_readiness_date))
+    setCargoReadinessRemark('')
+    setCargoReadinessEditing(true)
+  }, [displayContract])
+
+  const cancelCargoReadinessEdit = useCallback(() => {
+    setCargoReadinessEditing(false)
+    setCargoReadinessDraft('')
+    setCargoReadinessRemark('')
+  }, [])
+
+  const saveCargoReadinessEdit = useCallback(async () => {
+    if (!displayContract?.id) return
+    const remark = cargoReadinessRemark.trim()
+    if (!remark) {
+      alert('Remark is required when changing Cargo Readiness Date.')
+      return
+    }
+    const nextDate = toApiDateOnly(cargoReadinessDraft)
+    const prevDate = toApiDateOnly(displayContract.cargo_readiness_date)
+    if (cargoReadinessDatesEqual(prevDate, nextDate)) {
+      alert('Cargo Readiness Date has not changed.')
+      return
+    }
+    setCargoReadinessSaving(true)
+    try {
+      const putRes = await api.put(`/contracts/${displayContract.id}`, {
+        cargo_readiness_date: nextDate,
+      })
+      const remarkText = buildCargoReadinessChangeRemark(prevDate, nextDate, remark)
+      await api.post(`/contracts/${displayContract.id}/remarks`, {
+        text: remarkText,
+        category: 'CARGO_READINESS',
+      })
+      const updatedDate =
+        putRes.data?.data?.cargo_readiness_date != null
+          ? sliceIsoDate(String(putRes.data.data.cargo_readiness_date))
+          : nextDate ?? ''
+      const patch = {
+        id: displayContract.id,
+        cargo_readiness_date: updatedDate || undefined,
+      }
+      setDisplayContract((prev) => (prev ? { ...prev, ...patch } : prev))
+      onContractUpdated?.(patch)
+      const remarksRes = await api.get(`/contracts/${displayContract.id}/remarks`)
+      setContractRemarks(Array.isArray(remarksRes.data?.data) ? remarksRes.data.data : [])
+      setDetailLogTab('comments')
+      setCargoReadinessEditing(false)
+      setCargoReadinessDraft('')
+      setCargoReadinessRemark('')
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+          ?.message || 'Failed to update Cargo Readiness Date. Please try again.'
+      alert(message)
+    } finally {
+      setCargoReadinessSaving(false)
+    }
+  }, [cargoReadinessDraft, cargoReadinessRemark, displayContract, onContractUpdated])
 
   useEffect(() => {
     if (!contract?.id) {
@@ -1062,9 +1154,51 @@ export function ContractDetailModal({
                       </div>
                     </>
                   )}
-                  <div className="p-3 bg-gray-50 rounded">
-                    <div className="text-gray-500">Cargo Readiness Date</div>
-                    <div className="font-medium mt-1">{formatDate(contract.cargo_readiness_date)}</div>
+                  <div className="p-3 bg-gray-50 rounded col-span-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-gray-500">Cargo Readiness Date</div>
+                      {canEditContract && !cargoReadinessEditing && (
+                        <SectionEditButton onClick={startCargoReadinessEdit} />
+                      )}
+                      {canEditContract && cargoReadinessEditing && (
+                        <div className="flex gap-2">
+                          <SectionCancelButton
+                            onClick={cancelCargoReadinessEdit}
+                            disabled={cargoReadinessSaving}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => void saveCargoReadinessEdit()}
+                            disabled={cargoReadinessSaving || !cargoReadinessRemark.trim()}
+                          >
+                            {cargoReadinessSaving ? 'Saving...' : 'Save'}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    {cargoReadinessEditing ? (
+                      <div className="mt-2 space-y-2">
+                        <DateInputDdMmYyyy
+                          valueIso={cargoReadinessDraft}
+                          onChangeIso={setCargoReadinessDraft}
+                          className="h-9 text-sm bg-white max-w-[200px]"
+                          disabled={cargoReadinessSaving}
+                        />
+                        <textarea
+                          className="w-full min-h-[72px] border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-200 bg-white"
+                          placeholder="Remark (required) — explain why Cargo Readiness Date is changing"
+                          value={cargoReadinessRemark}
+                          onChange={(e) => setCargoReadinessRemark(e.target.value)}
+                          disabled={cargoReadinessSaving}
+                        />
+                      </div>
+                    ) : (
+                      <div className="font-medium mt-1">
+                        {formatDate(displayContract?.cargo_readiness_date ?? contract.cargo_readiness_date)}
+                      </div>
+                    )}
                   </div>
                   {showMonthDeliveryEnd && (
                     <div className="p-3 bg-gray-50 rounded">
@@ -1764,6 +1898,16 @@ export function ContractDetailModal({
         editContractId={viewShipmentModal?.editContractId ?? null}
         editStoNumber={viewShipmentModal?.editStoNumber ?? null}
         editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
+        onSubmit={async () => {}}
+        onShipmentChanged={() => {
+          if (!contract?.id) return
+          void api
+            .get(`/contracts/${contract.id}/sto-information`)
+            .then((res) => {
+              if (res.data?.data?.stos) setStoInfo(res.data.data.stos)
+            })
+            .catch(() => {})
+        }}
       />
 
       <ViewTruckingOperationModal

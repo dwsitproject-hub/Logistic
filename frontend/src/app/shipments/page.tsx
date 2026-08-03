@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2 } from 'lucide-react'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -25,7 +25,19 @@ import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateForma
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
-import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import {
+  acceptPrePlannedGroup,
+  dismissPrePlannedGroup,
+  fetchPrePlannedGroups,
+  filterPrePlannedGroupsByGlobalScope,
+  hasPrePlannedGlobalScopeFilters,
+  revertPrePlannedGroup,
+  type PrePlannedGroup,
+} from '@/lib/prePlannedGroups'
+import {
+  enrichShipmentPoOptions,
+  type ShipmentPoOption,
+} from '@/components/shared/addNewShipmentTypes'
 import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
 import {
   buildVesselPortsQuantityRows,
@@ -121,11 +133,31 @@ import {
   SHIPMENT_PAGE_PIPELINE_LABELS,
   type DischargePortBreakdown,
   type LoadingPortBreakdown,
+  type ShipmentPagePipelineContractQtyKg,
+  type ShipmentPagePipelineOutstandingQtyKg,
   type ShipmentPagePipelineStage,
   type ShipmentPagePipelineStatusCounts,
   type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
 import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
+import { AttentionInsightsSection } from '@/components/logistics/AttentionInsightsSection'
+import { mapShipmentAttentionInsights } from '@/lib/shipmentAttentionInsights'
+import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
+import {
+  buildPrePlannedGroupLookupMap,
+  formatPrePlannedGroupTooltip,
+  resolvePrePlannedGroupForRow,
+  resolveShipmentContractNumber,
+} from '@/lib/prePlannedGroupTableSpans'
+import {
+  collectDistinctFormattedValues,
+  getPrePlannedGroupRepresentativeMember,
+  getPrePlannedGroupSortValue,
+  groupShipmentsByPrePlannedSuggestion,
+  prePlannedGroupColumnAggregationMode,
+  sumGroupQtyKgForColumn,
+  type PrePlannedTableGroup,
+} from '@/lib/prePlannedGroupTableRows'
 import { ShipmentOutstandingQtySummary } from '@/components/shipments/ShipmentOutstandingQtySummary'
 import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
 import { VesselIdleModal, type VesselIdleListRow } from '@/components/shipments/VesselIdleModal'
@@ -297,6 +329,7 @@ interface Shipment {
   vlp_discharge_port_name?: string
   quantity_delivered_sap?: number
   is_contract_sap_closed?: boolean
+  pre_planned_group_id?: string | null
   sfal_qty?: number | null
   sfbd_qty?: number | null
   // Basic ETA loading dates at shipment level
@@ -898,6 +931,9 @@ function ShipmentsPageContent() {
       thirdParty: { fobKg: number; cifKg: number }
       interco: { fobKg: number; cifKg: number }
     }
+    statusContractQty?: Partial<ShipmentPagePipelineContractQtyKg>
+    statusOutstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg>
+    attentionInsights?: ReturnType<typeof mapShipmentAttentionInsights>
     etaLoading?: Record<string, number>
     etaDischarge?: Record<string, number>
   } | null>(null)
@@ -1152,6 +1188,10 @@ function ShipmentsPageContent() {
   const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
   const [addShipmentPrefilledSto, setAddShipmentPrefilledSto] = useState<string | null>(null)
   const [addShipmentPrefilledContractNumbers, setAddShipmentPrefilledContractNumbers] = useState<string[] | null>(null)
+  const [addShipmentPrePlannedGroupId, setAddShipmentPrePlannedGroupId] = useState<string | null>(null)
+  const [prePlannedGroups, setPrePlannedGroups] = useState<PrePlannedGroup[]>([])
+  const [prePlannedAcceptedGroups, setPrePlannedAcceptedGroups] = useState<PrePlannedGroup[]>([])
+  const [prePlannedUngroupedCount, setPrePlannedUngroupedCount] = useState(0)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -1516,12 +1556,10 @@ function ShipmentsPageContent() {
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
       const isUnplannedHybridList = statusFilter === 'UNPLANNED'
-      if (isUnplannedHybridList) {
-        params.append('includeSummary', 'true')
-      } else {
-        // Section 1 summary comes from parallel summaryOnly request — skip duplicate SQL on list shell.
-        params.append('includeSummary', 'false')
-      }
+      // Section 1 cards always come from parallel summaryOnly (toolbar scope, no status card).
+      // List includeSummary previously overwrote Unplanned with hybrid/table-scoped counts when
+      // switching Unplanned ↔ Preplanned, which made the Unplanned card flicker.
+      params.append('includeSummary', 'false')
       if (statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -1663,17 +1701,15 @@ function ShipmentsPageContent() {
         setTotalCount(total)
         setTotalPages(Math.max(1, pages))
         setTableScopeLoading(false)
-        if (envelope?.data?.summary) {
-          setShipmentsSection1Summary((prev) => {
-            const next = { ...envelope.data!.summary! }
-            if (next.outstandingQty == null && prev?.outstandingQty != null) {
-              next.outstandingQty = prev.outstandingQty
-            }
-            return next
-          })
-          setSummaryFetching(false)
-          section1SummaryForceNextFetchRef.current = false
+        // List may still carry a cached summary; Section 1 is owned by summaryOnly.
+        // Only apply OS strip from list if present — never replace status card totals from list.
+        if (envelope?.data?.summary?.outstandingQty != null) {
+          setShipmentsSection1Summary((prev) => ({
+            ...(prev ?? {}),
+            outstandingQty: envelope.data!.summary!.outstandingQty!,
+          }))
         }
+        // Table-only hybrid breakdown (do not feed Section 1 cards).
         const breakdown = envelope?.data?.unplannedBreakdown
         if (breakdown) {
           setUnplannedBreakdown({
@@ -1988,6 +2024,113 @@ function ShipmentsPageContent() {
     setAddShipmentPrefilledPOs(null)
     setAddShipmentPrefilledSto(null)
     setAddShipmentPrefilledContractNumbers(null)
+    setAddShipmentPrePlannedGroupId(null)
+  }
+
+  const handleAcceptPrePlannedGroup = async (group: PrePlannedGroup) => {
+    try {
+      await acceptPrePlannedGroup(group.id)
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipments(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — UI will refresh on next fetch.
+    }
+  }
+
+  const refetchPrePlannedGroups = useCallback(async () => {
+    try {
+      const data = await fetchPrePlannedGroups({ status: 'SUGGESTED' })
+      setPrePlannedGroups(data.groups)
+      setPrePlannedUngroupedCount(data.ungroupedContractCount)
+    } catch {
+      setPrePlannedGroups([])
+      setPrePlannedUngroupedCount(0)
+    }
+  }, [])
+
+  const refetchPrePlannedAcceptedGroups = useCallback(async () => {
+    try {
+      const data = await fetchPrePlannedGroups({ status: 'ACCEPTED' })
+      setPrePlannedAcceptedGroups(data.groups.filter((g) => !g.shipmentId))
+    } catch {
+      setPrePlannedAcceptedGroups([])
+    }
+  }, [])
+
+  useEffect(() => {
+    void refetchPrePlannedGroups()
+    void refetchPrePlannedAcceptedGroups()
+  }, [refetchPrePlannedGroups, refetchPrePlannedAcceptedGroups])
+
+  const prePlannedGlobalScope = useMemo(
+    () => ({
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      selectedGroupPlants,
+    }),
+    [
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      selectedGroupPlants,
+    ],
+  )
+
+  const filteredPrePlannedGroups = useMemo(
+    () => filterPrePlannedGroupsByGlobalScope(prePlannedGroups, prePlannedGlobalScope),
+    [prePlannedGroups, prePlannedGlobalScope],
+  )
+
+  const filteredPrePlannedAcceptedGroups = useMemo(
+    () => filterPrePlannedGroupsByGlobalScope(prePlannedAcceptedGroups, prePlannedGlobalScope),
+    [prePlannedAcceptedGroups, prePlannedGlobalScope],
+  )
+
+  const prePlannedSuggestionsScoped = hasPrePlannedGlobalScopeFilters(prePlannedGlobalScope)
+
+  const displayedPrePlannedUngroupedCount = prePlannedSuggestionsScoped ? null : prePlannedUngroupedCount
+
+  const contractNumberToPrePlannedGroup = useMemo(
+    () => buildPrePlannedGroupLookupMap(filteredPrePlannedGroups),
+    [filteredPrePlannedGroups],
+  )
+
+  const contractNumberToAcceptedPrePlannedGroup = useMemo(
+    () => buildPrePlannedGroupLookupMap(filteredPrePlannedAcceptedGroups),
+    [filteredPrePlannedAcceptedGroups],
+  )
+
+  const handleDismissPrePlannedGroup = async (groupId: string) => {
+    try {
+      await dismissPrePlannedGroup(groupId)
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipments(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — the badge will simply retry to reflect current state on next refetch.
+    }
+  }
+
+  const handleRevertPrePlannedGroup = async (groupId: string) => {
+    try {
+      await revertPrePlannedGroup(groupId)
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipments(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — UI will refresh on next fetch.
+    }
   }
 
   const isContractBacklogRow = (shipment: Shipment): boolean =>
@@ -2030,6 +2173,43 @@ function ShipmentsPageContent() {
     }
   }
 
+  const prePlannedMemberToPoOption = (
+    member: {
+      contractId: string
+      contractNumber: string
+      supplier?: string | null
+      product?: string | null
+      deliveryStart?: string | null
+      deliveryEnd?: string | null
+      osMtAtGrouping: number
+    },
+    group: { groupPlant: string | null; supplier: string | null; product: string | null },
+    backlogRow?: Shipment,
+  ): ShipmentPoOption => {
+    if (backlogRow) return contractBacklogRowToPoOption(backlogRow)
+    const osMt = Number(member.osMtAtGrouping)
+    const outstandingKg = Number.isFinite(osMt) ? osMt * 1000 : null
+    return {
+      key: member.contractId,
+      contractId: member.contractNumber,
+      poNumber: null,
+      plantCode: group.groupPlant,
+      label: member.contractNumber,
+      contractData: {
+        contract_id: member.contractNumber,
+        po_number: null,
+        // quantity_ordered filled via enrichShipmentPoOptions (purchase-orders API)
+        outstanding_quantity: outstandingKg,
+        outstanding_quantity_planning: outstandingKg,
+        supplier: member.supplier || group.supplier || null,
+        product: member.product || group.product || null,
+        plant_code: group.groupPlant,
+        delivery_start_date: member.deliveryStart || null,
+        delivery_end_date: member.deliveryEnd || null,
+      },
+    }
+  }
+
   const handleOpenAddShipmentForContractRow = (shipment: Shipment) => {
     if (perms.loaded && !canOpenAddShipmentModal) {
       alert('You need permission to create shipments. Ask an admin to update your role.')
@@ -2050,9 +2230,60 @@ function ShipmentsPageContent() {
     setPlotShipmentFromTable(null)
 
     if (isContractBacklogRow(shipment)) {
+      const acceptedGroup = resolvePrePlannedGroupForRow(
+        shipment,
+        contractNumberToAcceptedPrePlannedGroup,
+      )
+      if (acceptedGroup || String(shipment.status ?? '').trim().toUpperCase() === 'PREPLANNED') {
+        const group = acceptedGroup
+        if (group) {
+          const contractNumbersFromGroup = group.members
+            .map((m) => m.contractNumber)
+            .filter(Boolean)
+          const backlogByKey = new Map<string, Shipment>()
+          for (const row of shipments) {
+            if (!isContractBacklogRow(row)) continue
+            const id = String(row.id ?? '').trim()
+            const rowId = String(row.contract_row_id ?? '').trim()
+            const cn = String(row.contract_number || row.contract_numbers || '').trim()
+            if (id) backlogByKey.set(id, row)
+            if (rowId) backlogByKey.set(rowId, row)
+            if (cn) backlogByKey.set(cn, row)
+          }
+          // Prefer the clicked row for its own member when list page is stale.
+          if (isContractBacklogRow(shipment)) {
+            const clickedId = String(shipment.id ?? '').trim()
+            const clickedRowId = String(shipment.contract_row_id ?? '').trim()
+            const clickedCn = String(shipment.contract_number || shipment.contract_numbers || '').trim()
+            if (clickedId) backlogByKey.set(clickedId, shipment)
+            if (clickedRowId) backlogByKey.set(clickedRowId, shipment)
+            if (clickedCn) backlogByKey.set(clickedCn, shipment)
+          }
+          const stubOptions: ShipmentPoOption[] = group.members.map((m) =>
+            prePlannedMemberToPoOption(
+              m,
+              group,
+              backlogByKey.get(m.contractId) ?? backlogByKey.get(m.contractNumber),
+            ),
+          )
+          setAddShipmentPrefilledSto(null)
+          setAddShipmentPrefilledContractNumbers(
+            contractNumbersFromGroup.length > 0 ? contractNumbersFromGroup : null,
+          )
+          setAddShipmentPrePlannedGroupId(group.id)
+          // Enrich Contract Qty (and fill any missing PO metadata) before opening.
+          void (async () => {
+            const poOptions = await enrichShipmentPoOptions(stubOptions)
+            setAddShipmentPrefilledPOs(poOptions)
+            setShowAddShipment(true)
+          })()
+          return
+        }
+      }
       setAddShipmentPrefilledPOs([contractBacklogRowToPoOption(shipment)])
       setAddShipmentPrefilledSto(null)
       setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+      setAddShipmentPrePlannedGroupId(null)
       setShowAddShipment(true)
       return
     }
@@ -2670,11 +2901,14 @@ function ShipmentsPageContent() {
 
   const section1StatusCounts = useMemo((): ShipmentPagePipelineStatusCounts => {
     const s = shipmentsSection1Summary?.status
-    const unplannedFromTable =
-      unplannedTableBreakdown?.totalTableRows ??
-      shipmentsSection1Summary?.unplannedTable?.totalTableRows
+    // Section 1 Unplanned must stay on summaryOnly / toolbar-scope totals.
+    // Do not prefer `unplannedBreakdown` (list hybrid) — that changes when opening the
+    // Unplanned table and previously made the card flicker vs Preplanned/ALL.
+    const unplannedFromSummary =
+      shipmentsSection1Summary?.unplannedTable?.totalTableRows ?? s?.unplanned
     return {
-      unplanned: Number(unplannedFromTable ?? s?.unplanned ?? 0),
+      unplanned: Number(unplannedFromSummary ?? 0),
+      preplanned: Number(s?.preplanned ?? 0),
       planned: Number(s?.planned ?? 0),
       atLoadingPort: Number(s?.atLoadingPort ?? 0),
       sailed: Number(s?.sailed ?? 0),
@@ -2683,7 +2917,29 @@ function ShipmentsPageContent() {
       cancelled: Number(s?.cancelled ?? 0),
       total: Number(shipmentsSection1Summary?.total ?? 0),
     }
-  }, [shipmentsSection1Summary, unplannedTableBreakdown?.totalTableRows])
+  }, [shipmentsSection1Summary])
+
+  const section1ContractQtys = useMemo((): Partial<ShipmentPagePipelineContractQtyKg> => {
+    const q = shipmentsSection1Summary?.statusContractQty
+    if (!q) return {}
+    return {
+      unplanned: Number(q.unplanned ?? 0),
+      preplanned: Number(q.preplanned ?? 0),
+      planned: Number(q.planned ?? 0),
+      completed: Number(q.completed ?? 0),
+      cancelled: Number(q.cancelled ?? 0),
+    }
+  }, [shipmentsSection1Summary?.statusContractQty])
+
+  const section1OutstandingQtys = useMemo((): Partial<ShipmentPagePipelineOutstandingQtyKg> => {
+    const q = shipmentsSection1Summary?.statusOutstandingQty
+    if (!q) return {}
+    return {
+      atLoadingPort: Number(q.atLoadingPort ?? 0),
+      sailed: Number(q.sailed ?? 0),
+      atDischargePort: Number(q.atDischargePort ?? 0),
+    }
+  }, [shipmentsSection1Summary?.statusOutstandingQty])
 
   const section1VesselNames = useMemo((): ShipmentPagePipelineVesselNames | undefined => {
     const v = shipmentsSection1Summary?.statusVesselNames
@@ -2691,6 +2947,7 @@ function ShipmentsPageContent() {
     const list = (x: unknown): string[] => (Array.isArray(x) ? x.map(String) : [])
     return {
       unplanned: list(v.unplanned),
+      preplanned: list(v.preplanned),
       planned: list(v.planned),
       atLoadingPort: list(v.atLoadingPort),
       sailed: list(v.sailed),
@@ -2775,7 +3032,7 @@ function ShipmentsPageContent() {
   }, [statusFilter])
   const tableShipmentCount = useMemo(() => totalCount, [totalCount])
 
-  /** Unplanned: headline and Section 1 card both use hybrid table row total. */
+  /** Unplanned: hybrid table row total. Preplanned: unique Grouping Suggestion count. */
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
       const rowTotal =
@@ -2787,6 +3044,18 @@ function ShipmentsPageContent() {
         noun: 'rows' as const,
       }
     }
+    if (statusFilter === 'PREPLANNED') {
+      const groupTotal =
+        tableShipmentCount > 0
+          ? tableShipmentCount
+          : filteredPrePlannedAcceptedGroups.length > 0
+            ? filteredPrePlannedAcceptedGroups.length
+            : section1StatusCounts.preplanned
+      return {
+        value: groupTotal,
+        noun: groupTotal === 1 ? 'Grouping' : 'Groupings',
+      }
+    }
     return {
       value: tableShipmentCount,
       noun: 'shipments' as const,
@@ -2795,6 +3064,8 @@ function ShipmentsPageContent() {
     statusFilter,
     unplannedTableBreakdown?.totalTableRows,
     section1StatusCounts.unplanned,
+    section1StatusCounts.preplanned,
+    filteredPrePlannedAcceptedGroups.length,
     tableShipmentCount,
   ])
 
@@ -3293,6 +3564,106 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm">{resolveShipmentDisplayStoNumber(s.sto_number)}</span>
       ),
+    },
+    {
+      id: 'pre_planned_group',
+      label: 'Grouping Suggestion',
+      formulaHelp:
+        'Auto-suggested vessel grouping for unplanned contracts. Accept moves contracts to Preplanned; dismiss removes the suggestion. On Preplanned rows, revert returns them to Unplanned suggestions.',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (s) => {
+        if (!isContractBacklogRow(s)) return ''
+        const suggested = resolvePrePlannedGroupForRow(s, contractNumberToPrePlannedGroup)
+        const accepted = resolvePrePlannedGroupForRow(s, contractNumberToAcceptedPrePlannedGroup)
+        const groupCode = suggested?.groupCode ?? accepted?.groupCode ?? ''
+        return `${groupCode}\0${resolveShipmentContractNumber(s)}`
+      },
+      render: (s) => {
+        if (!isContractBacklogRow(s)) return <span className="text-xs text-gray-400">—</span>
+
+        const statusUpper = String(s.status ?? '').trim().toUpperCase()
+        const acceptedGroup = resolvePrePlannedGroupForRow(s, contractNumberToAcceptedPrePlannedGroup)
+        if (statusUpper === 'PREPLANNED' || acceptedGroup) {
+          const group = acceptedGroup
+          if (!group) return <span className="text-xs text-gray-400">—</span>
+          const tooltipText = formatPrePlannedGroupTooltip(group)
+          return (
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge className="cursor-default whitespace-nowrap bg-amber-100 text-amber-800 hover:bg-amber-100">
+                    {group.groupCode}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="whitespace-pre-wrap text-xs" side="top">
+                  {tooltipText}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-6 w-6 bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
+                    onClick={() => void handleRevertPrePlannedGroup(group.id)}
+                    aria-label="Revert preplanned grouping"
+                  >
+                    <Undo2 className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Revert to Unplanned</TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        }
+
+        const group = resolvePrePlannedGroupForRow(s, contractNumberToPrePlannedGroup)
+        if (!group) return <span className="text-xs text-gray-400">—</span>
+        const tooltipText = formatPrePlannedGroupTooltip(group)
+        return (
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="secondary" className="cursor-default whitespace-nowrap">
+                  {group.groupCode}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="whitespace-pre-wrap text-xs" side="top">
+                {tooltipText}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-6 w-6 bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                  onClick={() => void handleAcceptPrePlannedGroup(group)}
+                  aria-label="Accept grouping suggestion"
+                >
+                  <Check className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Accept as Preplanned</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-6 w-6 bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
+                  onClick={() => void handleDismissPrePlannedGroup(group.id)}
+                  aria-label="Dismiss grouping suggestion"
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Dismiss suggestion</TooltipContent>
+            </Tooltip>
+          </div>
+        )
+      },
     },
     {
       id: 'loading_port',
@@ -3825,7 +4196,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.ata_vessel_start_discharging || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
     },
-  ], [qtyFieldsReady])
+  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
 
   const defaultVisibleColumnIds = useMemo(() => {
     return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
@@ -3976,6 +4347,30 @@ function ShipmentsPageContent() {
 
   const paginatedShipments = sortedShipments
 
+  const prePlannedTableGroups = useMemo(() => {
+    if (statusFilter !== 'PREPLANNED') return null
+    return groupShipmentsByPrePlannedSuggestion(
+      paginatedShipments,
+      contractNumberToAcceptedPrePlannedGroup,
+    )
+  }, [statusFilter, paginatedShipments, contractNumberToAcceptedPrePlannedGroup])
+
+  const sortedPrePlannedTableGroups = useMemo(() => {
+    if (!prePlannedTableGroups) return null
+    const col = compactColumns.find((c) => c.id === sortKey)
+    if (!col?.sortable) return prePlannedTableGroups
+
+    const dirMul = sortDir === 'asc' ? 1 : -1
+    return [...prePlannedTableGroups].sort((a, b) => {
+      const aVal = getPrePlannedGroupSortValue(a, sortKey, getColumnRawValue)
+      const bVal = getPrePlannedGroupSortValue(b, sortKey, getColumnRawValue)
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+        return (aVal - bVal) * dirMul
+      }
+      return String(aVal).localeCompare(String(bVal)) * dirMul
+    })
+  }, [prePlannedTableGroups, compactColumns, sortKey, sortDir, getColumnRawValue])
+
   const stoGroupedShipments = useMemo(
     () => groupShipmentsBySto(paginatedShipments),
     [paginatedShipments],
@@ -3983,8 +4378,78 @@ function ShipmentsPageContent() {
 
   /** Left expand/chevron column only when STO grouping needs collapse (otherwise it looks like empty left gap). */
   const showStoExpandColumn = useMemo(
-    () => stoGroupedShipments.some((group) => group.rows.length > 1),
-    [stoGroupedShipments],
+    () =>
+      statusFilter !== 'PREPLANNED' &&
+      stoGroupedShipments.some((group) => group.rows.length > 1),
+    [statusFilter, stoGroupedShipments],
+  )
+
+  const renderPrePlannedGroupedCell = useCallback(
+    (col: CompactColumn, group: PrePlannedTableGroup<Shipment>) => {
+      const rep = getPrePlannedGroupRepresentativeMember(group)
+      const mode = prePlannedGroupColumnAggregationMode(col.id)
+
+      if (col.id === 'shipment_id') {
+        return <span className="text-sm">—</span>
+      }
+
+      if (mode === 'sumKg') {
+        if (!qtyFieldsReady && col.id !== 'contract_qty') {
+          return <QtyLoadingDots />
+        }
+        const kg = sumGroupQtyKgForColumn(group.members, col.id)
+        if (col.id === 'outstanding_quantity') {
+          return (
+            <span
+              className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
+            >
+              {formatSapOutstandingQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            </span>
+          )
+        }
+        return (
+          <span className="text-sm break-words tabular-nums">
+            {formatSapQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          </span>
+        )
+      }
+
+      if (mode === 'stackDistinct') {
+        const isDateCol =
+          col.id === 'contract_date' ||
+          col.id === 'delivery_start_date' ||
+          col.id === 'delivery_end_date' ||
+          col.id === 'delivery_start' ||
+          col.id === 'delivery_end'
+        const lines = collectDistinctFormattedValues(
+          group.members,
+          (m) => {
+            const raw = getColumnRawValue(m, col.id)
+            if (raw == null || raw === '') return ''
+            return String(raw)
+          },
+          isDateCol ? (v) => formatShortDate(v) : undefined,
+        )
+        if (lines.length === 0) {
+          return <span className="text-sm">-</span>
+        }
+        if (lines.length === 1) {
+          return <span className="text-sm">{lines[0]}</span>
+        }
+        return (
+          <span className="text-sm flex flex-col gap-0.5">
+            {lines.map((line, i) => (
+              <span key={`${line}-${i}`} className="block whitespace-nowrap">
+                {line}
+              </span>
+            ))}
+          </span>
+        )
+      }
+
+      return col.render(rep)
+    },
+    [qtyFieldsReady],
   )
 
   const toggleStoGroupCollapse = useCallback((stoKey: string) => {
@@ -5049,6 +5514,14 @@ function ShipmentsPageContent() {
           onClearFilters={clearShipmentFilters}
         />
 
+        {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
+        <AttentionInsightsSection
+          variant="shipment"
+          loading={section1DataLoading}
+          data={mapShipmentAttentionInsights(shipmentsSection1Summary?.attentionInsights)}
+        />
+        ) : null}
+
         <ShipmentStatusDistribution
           loading={section1DataLoading}
           statusFilter={statusFilter}
@@ -5057,6 +5530,13 @@ function ShipmentsPageContent() {
           loadingPortBreakdown={loadingPortBreakdown}
           dischargePortBreakdown={dischargePortBreakdown}
           onStageClick={handleStatusCardClick}
+          contractQtys={section1ContractQtys}
+          outstandingQtys={section1OutstandingQtys}
+          unplannedSuggestionSummary={{
+            groupCount: filteredPrePlannedGroups.length,
+            ungroupedCount: displayedPrePlannedUngroupedCount,
+            isFilterScoped: prePlannedSuggestionsScoped,
+          }}
         />
 
         {/* Section 2 — ETA Loading / Discharge (hidden while SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED is false) */}
@@ -5627,7 +6107,32 @@ function ShipmentsPageContent() {
                           {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO without ETA)
                         </>
                       ) : null}
+                      {statusFilter === 'PREPLANNED' ? (
+                        <>
+                          {' · '}
+                          ({tableShipmentCount.toLocaleString('en-US')}{' '}
+                          {tableShipmentCount === 1 ? 'grouping' : 'groupings'})
+                        </>
+                      ) : null}
                     </span>
+                    {statusFilter === 'UNPLANNED' && filteredPrePlannedGroups.length > 0 ? (
+                      <span className="whitespace-nowrap">
+                        <span className="text-gray-400" aria-hidden>
+                          ·
+                        </span>{' '}
+                        <span className="font-medium text-blue-700">
+                          {filteredPrePlannedGroups.length} grouping suggestion
+                          {filteredPrePlannedGroups.length === 1 ? '' : 's'}
+                          {prePlannedSuggestionsScoped ? ' (filtered)' : ''}
+                        </span>
+                        {displayedPrePlannedUngroupedCount != null && displayedPrePlannedUngroupedCount > 0 ? (
+                          <span className="text-gray-500">
+                            {' '}
+                            ({displayedPrePlannedUngroupedCount.toLocaleString('en-US')} ungrouped)
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
                     {shipmentsTableScopeLabel ? (
                       <>
                         <span className="text-gray-400" aria-hidden>
@@ -5903,6 +6408,51 @@ function ShipmentsPageContent() {
                           </tr>
                         ) : (() => {
                           let stripeIdx = 0
+
+                          if (statusFilter === 'PREPLANNED' && sortedPrePlannedTableGroups) {
+                            return sortedPrePlannedTableGroups.map((group) => {
+                              const rep = getPrePlannedGroupRepresentativeMember(group)
+                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              stripeIdx += 1
+                              return (
+                                <tr key={group.groupKey} className={rowBg}>
+                                  {visibleColumns.map((col) => {
+                                    const layout = getOperationalColumnLayout('shipments', col.id)
+                                    const opColClass = operationalTableColumnClass(layout)
+                                    const cellContent = renderPrePlannedGroupedCell(col, group)
+                                    return (
+                                      <td
+                                        key={col.id}
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
+                                      >
+                                        <div
+                                          className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}
+                                        >
+                                          {cellContent}
+                                        </div>
+                                      </td>
+                                    )
+                                  })}
+                                  <td
+                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
+                                  >
+                                    <ShipmentViewTableRowActions
+                                      shipment={rep}
+                                      onAddShipment={() => void handleOpenAddShipmentForContractRow(rep)}
+                                      onEditShipment={() => handleOpenEditShipmentModal(rep)}
+                                      onViewShipment={() => handleOpenViewShipmentModal(rep)}
+                                      onCancelShipment={() => openCancelShipmentDialog(rep)}
+                                      cancelShipmentLoading={
+                                        cancelShipmentSubmitting && cancelShipmentTarget?.id === rep.id
+                                      }
+                                      onViewDocs={() => void handleViewDocuments(rep)}
+                                    />
+                                  </td>
+                                </tr>
+                              )
+                            })
+                          }
+
                           return stoGroupedShipments.flatMap((group) => {
                             const isMultiStoGroup = group.rows.length > 1
                             const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
@@ -6347,6 +6897,54 @@ function ShipmentsPageContent() {
                     <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
                       No shipments found
                     </div>
+                  ) : statusFilter === 'PREPLANNED' && sortedPrePlannedTableGroups ? (
+                  sortedPrePlannedTableGroups.map((group) => {
+                    const rep = getPrePlannedGroupRepresentativeMember(group)
+                    return (
+                      <div
+                        key={group.groupKey}
+                        className="border rounded-lg transition-colors hover:bg-gray-50"
+                      >
+                        <div className="p-4 flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="min-w-0">
+                                <div className="font-semibold truncate">
+                                  {group.group?.groupCode ?? 'Preplanned group'}
+                                </div>
+                                <div className="text-xs text-gray-600 truncate">
+                                  {group.members.length}{' '}
+                                  {group.members.length === 1 ? 'contract' : 'contracts'}
+                                </div>
+                              </div>
+                              <Badge className={getStatusColor(rep.status)}>
+                                {formatShipmentStatusLabel(rep.status)}
+                              </Badge>
+                            </div>
+                            <ShipmentViewTableRowActions
+                              shipment={rep}
+                              onAddShipment={() => void handleOpenAddShipmentForContractRow(rep)}
+                              onEditShipment={() => handleOpenEditShipmentModal(rep)}
+                              onViewShipment={() => handleOpenViewShipmentModal(rep)}
+                              onCancelShipment={() => openCancelShipmentDialog(rep)}
+                              cancelShipmentLoading={
+                                cancelShipmentSubmitting && cancelShipmentTarget?.id === rep.id
+                              }
+                              onViewDocs={() => void handleViewDocuments(rep)}
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            {visibleColumns.slice(0, 8).map((col) => (
+                              <div key={col.id}>
+                                <div className="text-gray-500">{col.label}</div>
+                                <div className="font-medium">{renderPrePlannedGroupedCell(col, group)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
                   ) : (
                   stoGroupedShipments.flatMap((group) => {
                     const isMultiStoGroup = group.rows.length > 1
@@ -6390,7 +6988,7 @@ function ShipmentsPageContent() {
                         key={`${group.stoKey}|${shipment.id}`}
                         className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
-                        <div className="p-4">
+                        <div className="p-4 flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="hidden">
@@ -6597,7 +7195,14 @@ function ShipmentsPageContent() {
                 {totalPages > 1 && (
                   <div className="mt-6 flex items-center justify-between border-t pt-4">
                     <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({tableShipmentCount} total shipments)
+                      Showing page {page} of {totalPages} (
+                      {tableShipmentCount}{' '}
+                      {statusFilter === 'PREPLANNED'
+                        ? tableShipmentCount === 1
+                          ? 'grouping'
+                          : 'groupings'
+                        : 'total shipments'}
+                      )
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
@@ -7998,6 +8603,7 @@ function ShipmentsPageContent() {
         prefilledPOs={addShipmentPrefilledPOs}
         prefilledStoNumber={addShipmentPrefilledSto}
         prefilledContractNumbers={addShipmentPrefilledContractNumbers}
+        prePlannedGroupId={addShipmentPrePlannedGroupId}
         onClose={handleCloseShipmentModal}
         onShipmentChanged={() => {
           invalidateLogisticsListCaches()
@@ -8011,6 +8617,8 @@ function ShipmentsPageContent() {
           handleCloseShipmentModal()
           invalidateLogisticsListCaches()
           section1SummaryForceNextFetchRef.current = true
+          void refetchPrePlannedGroups()
+          void refetchPrePlannedAcceptedGroups()
           void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
         }}

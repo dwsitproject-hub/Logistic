@@ -7,6 +7,8 @@ const nextConfig = {
   },
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api',
+    NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED:
+      process.env.NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED ?? 'false',
   },
   /**
    * When BACKEND_INTERNAL_URL is set at build time (Docker + host port 80 without Nginx),
@@ -17,7 +19,10 @@ const nextConfig = {
     const backend = process.env.BACKEND_INTERNAL_URL
     if (!backend || String(backend).trim() === '') return []
     const base = String(backend).replace(/\/$/, '')
-    return [{ source: '/api/:path*', destination: `${base}/api/:path*` }]
+    return [
+      { source: '/api/:path*', destination: `${base}/api/:path*` },
+      { source: '/auth/:path*', destination: `${base}/auth/:path*` },
+    ]
   },
 }
 

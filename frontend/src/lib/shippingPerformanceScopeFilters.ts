@@ -1,14 +1,11 @@
 /**
- * Shipping Performance — Source / Product pill scope (client-side only).
+ * Shipping Performance — Source / Product multi-select scope (client-side only).
  * Does not change API URL, cache key, or refetch behaviour.
  */
 
 import {
-  contractPerfProductQueryValue,
-  matchesContractPerfProductTabFilter,
-  matchesContractPerfSourceFilter,
-  type ContractPerfProductTab,
-  type ContractPerfSourceFilter,
+  matchesContractPerfProductMultiFilter,
+  matchesContractPerfSourceMultiFilter,
 } from '@/lib/contractPerformanceFilters'
 
 export type ShippingPerfScopeRow = {
@@ -18,14 +15,13 @@ export type ShippingPerfScopeRow = {
 
 export function applyShippingPerfSourceProductFilter<T extends ShippingPerfScopeRow>(
   rows: T[],
-  sourceFilter: ContractPerfSourceFilter,
-  productTab: ContractPerfProductTab,
+  selectedSources: readonly string[],
+  selectedProducts: readonly string[],
 ): T[] {
-  const productQuery = contractPerfProductQueryValue(productTab)
-  if (sourceFilter === 'All' && !productQuery) return rows
+  if (selectedSources.length === 0 && selectedProducts.length === 0) return rows
   return rows.filter(
     (row) =>
-      matchesContractPerfSourceFilter(row.source_type, sourceFilter) &&
-      matchesContractPerfProductTabFilter(row.product, productQuery),
+      matchesContractPerfSourceMultiFilter(row.source_type, selectedSources) &&
+      matchesContractPerfProductMultiFilter(row.product, selectedProducts),
   )
 }

@@ -4,6 +4,7 @@
  */
 export const SHIPMENT_STATUS_DISPLAY_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
+  PREPLANNED: 'Preplanned',
   PLANNED: 'Planned',
   ARRIVED_LP: 'Arrived LP',
   BERTHED_LP: 'Berthed LP',
@@ -57,6 +58,8 @@ export function shipmentStatusBadgeClass(status: string | null | undefined): str
   switch (normalizeShipmentStatusKey(status)) {
     case 'UNPLANNED':
       return 'bg-slate-100 text-slate-800'
+    case 'PREPLANNED':
+      return 'bg-amber-100 text-amber-800'
     case 'PLANNED':
       return 'bg-blue-100 text-blue-800'
     case 'ARRIVED_LP':

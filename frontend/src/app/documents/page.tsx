@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Download, FileText, Search, ChevronDown, ChevronRight } from 'lucide-react'
 import api from '@/lib/api'
+import { isAuthenticatedLocally } from '@/lib/authSession'
 import { formatDateTimeDMY } from '@/lib/dateFormat'
 
 interface Contract {
@@ -60,14 +61,14 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const hasToken = () => Boolean(localStorage.getItem('token'))
-    if (hasToken()) {
+    const hasAuth = () => isAuthenticatedLocally()
+    if (hasAuth()) {
       setAuthReady(true)
       return
     }
     const startedAt = Date.now()
     const interval = window.setInterval(() => {
-      if (hasToken()) {
+      if (hasAuth()) {
         window.clearInterval(interval)
         setAuthReady(true)
       } else if (Date.now() - startedAt > 3000) {

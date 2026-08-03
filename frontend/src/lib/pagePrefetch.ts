@@ -85,11 +85,11 @@ function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
       const toolbar = buildContractPerfToolbarGlobal({
         dateFrom,
         dateTo,
-        sourceFilter: 'All',
+        selectedSources: [],
+        selectedProducts: [],
         selectedIncoterms: [],
         selectedSuppliers: [],
         selectedGroupPlants: [],
-        productTabQuery: undefined,
         lateOnTimeFilter: 'ALL',
         perfDashMode: 'late',
         perfTransportMode: 'ALL',

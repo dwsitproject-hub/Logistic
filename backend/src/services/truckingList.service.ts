@@ -1,5 +1,8 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
+import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
+import logger from '../utils/logger';
+import { runQueriesInBatches } from '../utils/runQueriesInBatches';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 import {
   appendTruckingColumnFilters,
@@ -40,6 +43,13 @@ import {
   parseTruckingOutstandingQtySummaryRow,
   type TruckingOutstandingQtySummary,
 } from '../utils/truckingOutstandingQtySummarySql';
+import {
+  buildTruckingCarryOverInsightsQuery,
+  buildTruckingOverdueInsightsAggregateQuery,
+  buildTruckingOverdueTopSuppliersQuery,
+  parseTruckingAttentionInsights,
+  type TruckingAttentionInsightsRow,
+} from '../utils/truckingAttentionInsightsSql';
 import {
   isPipelineDailySummaryEligible,
   loadTruckingStagePageFromSnapshot,
@@ -82,6 +92,11 @@ export interface TruckingStatusContractQtyKg {
   cancelled: number;
 }
 
+export interface TruckingStatusOutstandingQtyKg {
+  planned: number;
+  inProgress: number;
+}
+
 export interface TruckingListResponseData {
   truckingOperations: TruckingListRow[];
   summary?: {
@@ -98,12 +113,15 @@ export interface TruckingListResponseData {
     };
     /** Sum of contract quantity_ordered (kg), one contract once per status bucket. */
     statusContractQty?: TruckingStatusContractQtyKg;
+    /** Sum of outstanding_quantity (kg) for Planned / In Progress cards. */
+    statusOutstandingQty?: TruckingStatusOutstandingQtyKg;
     unplannedTable?: {
       contractRows: number;
       executionRows: number;
       totalTableRows: number;
     };
     outstandingQty?: TruckingOutstandingQtySummary;
+    attentionInsights?: TruckingAttentionInsightsRow;
   };
   pagination: {
     total: number;
@@ -255,7 +273,7 @@ export function buildTruckingSummaryCacheKey(filterCacheKey: string): string {
 
 function buildTruckingMergedSummaryCacheKey(filterCacheKey: string): string {
   // Status-card osStatus no longer scopes OS; one merged summary per toolbar filters.
-  return `${filterCacheKey}:summary-unplanned-merged:active-os`;
+  return `${filterCacheKey}:summary-unplanned-merged:active-os:attention-v1`;
 }
 
 function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
@@ -335,6 +353,20 @@ async function loadTruckingStatusContractQtyForRequest(
     ...execution,
     unplanned: execution.unplanned + backlog.contractQtyKg,
   };
+}
+
+async function loadTruckingStatusOutstandingQtyForRequest(
+  built: TruckingListBuiltQuery,
+): Promise<TruckingStatusOutstandingQtyKg> {
+  const qtyBuilt: TruckingListBuiltQuery = {
+    ...built,
+    skipSapJoin: false,
+  };
+  const q = buildTruckingStatusOutstandingQtyQuery(qtyBuilt);
+  const qtyRes = await query(q.text, q.params);
+  return parseTruckingStatusOutstandingQtyFromSqlRow(
+    (qtyRes.rows[0] || {}) as Record<string, unknown>,
+  );
 }
 
 /**
@@ -576,6 +608,15 @@ export function parseTruckingStatusContractQtyFromSqlRow(
     inProgress: Number(row.in_progress_contract_qty || 0) || 0,
     completed: Number(row.completed_contract_qty || 0) || 0,
     cancelled: Number(row.cancelled_contract_qty || 0) || 0,
+  };
+}
+
+export function parseTruckingStatusOutstandingQtyFromSqlRow(
+  row: Record<string, unknown>,
+): TruckingStatusOutstandingQtyKg {
+  return {
+    planned: Number(row.planned_outstanding_qty || 0) || 0,
+    inProgress: Number(row.in_progress_outstanding_qty || 0) || 0,
   };
 }
 
@@ -886,6 +927,39 @@ export function buildTruckingStatusContractQtyQuery(
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
 
+/** Live outstanding-qty aggregate for Planned / In Progress status cards. */
+export function buildTruckingStatusOutstandingQtyQuery(
+  built: TruckingListBuiltQuery,
+): { text: string; params: unknown[] } {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
+    selectOutstanding: true,
+    skipSapJoin: built.skipSapJoin,
+  });
+  const text = `
+      WITH filtered AS (
+        SELECT status, contract_number, outstanding_quantity
+        FROM (
+          ${expanded}
+        ) trucking_source
+      ),
+      per_contract AS (
+        SELECT
+          status,
+          contract_number,
+          MAX(COALESCE(outstanding_quantity, 0))::numeric AS outstanding_quantity
+        FROM filtered
+        WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+          AND status IN ('PLANNED', 'IN_PROGRESS')
+        GROUP BY status, contract_number
+      )
+      SELECT
+        COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
+        COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_outstanding_qty
+      FROM per_contract`;
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
+
 function buildTruckingFilteredExpansionSql(built: TruckingListBuiltQuery): string {
   const innerSql = `${built.preOuterQuery}${built.outerSql}`;
   return wrapTruckingListQueryWithStoExpansion(innerSql, {
@@ -1149,6 +1223,44 @@ async function loadTruckingOutstandingQtyForRequest(
   return mergeTruckingOutstandingQtySummaries(execution, backlog);
 }
 
+async function loadTruckingAttentionInsightsForRequest(
+  req: AuthRequest,
+  totalOutstandingKg: number | null | undefined,
+): Promise<TruckingAttentionInsightsRow | undefined> {
+  if (!isAttentionInsightsEnabled()) return undefined;
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const params = [...scope.params, ...g.params, ...c.params];
+  const toolbarSql = `${g.sql}${c.sql}`;
+
+  const [aggregateRes, topSuppliersRes, carryRes] =
+    await runQueriesInBatches([
+      () => query(buildTruckingOverdueInsightsAggregateQuery(scope.sql, toolbarSql), params),
+      () => query(buildTruckingOverdueTopSuppliersQuery(scope.sql, toolbarSql, 3), params),
+      () => query(buildTruckingCarryOverInsightsQuery(scope.sql, toolbarSql), params),
+    ]);
+
+  return parseTruckingAttentionInsights({
+    aggregateRow: (aggregateRes.rows[0] || {}) as Record<string, unknown>,
+    topSupplierRows: topSuppliersRes.rows as Record<string, unknown>[],
+    carryRow: (carryRes.rows[0] || {}) as Record<string, unknown>,
+    lossRows: [],
+    totalOutstandingKg,
+  });
+}
+
 /** Concurrent identical summary loads share one execution (single-flight). */
 const MERGED_SUMMARY_IN_FLIGHT = new Map<string, Promise<TruckingListResponseData['summary']>>();
 
@@ -1194,19 +1306,32 @@ async function runTruckingListSummaryWithBacklog(
 
   const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built);
   const statusContractQtyPromise = loadTruckingStatusContractQtyForRequest(req, built);
+  const statusOutstandingQtyPromise = loadTruckingStatusOutstandingQtyForRequest(built);
 
   const filters = buildPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
     const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
     if (fromDaily) {
-      const [outstandingQty, statusContractQty] = await Promise.all([
+      const [outstandingQty, statusContractQty, statusOutstandingQty] = await Promise.all([
         outstandingQtyPromise,
         statusContractQtyPromise,
+        statusOutstandingQtyPromise,
       ]);
+      const attentionInsights = isAttentionInsightsEnabled()
+        ? await loadTruckingAttentionInsightsForRequest(
+            req,
+            outstandingQty.totalKg,
+          ).catch((err) => {
+            logger.error('Trucking attention insights failed (daily summary path)', err);
+            return undefined;
+          })
+        : undefined;
       const merged: NonNullable<TruckingListResponseData['summary']> = {
         ...fromDaily,
         outstandingQty,
         statusContractQty,
+        statusOutstandingQty,
+        ...(attentionInsights !== undefined ? { attentionInsights } : {}),
       };
       MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
         summary: merged,
@@ -1218,14 +1343,24 @@ async function runTruckingListSummaryWithBacklog(
     }
   }
 
-  const [base, backlog, outstandingQty, statusContractQty] = await Promise.all([
+  const [base, backlog, outstandingQty, statusContractQty, statusOutstandingQty] = await Promise.all([
     loadTruckingListSummary(built, req),
     loadTruckingUnplannedContractBacklogForRequest(req),
     outstandingQtyPromise,
     statusContractQtyPromise,
+    statusOutstandingQtyPromise,
   ]);
   if (!base) return base;
 
+  const attentionInsights = isAttentionInsightsEnabled()
+    ? await loadTruckingAttentionInsightsForRequest(
+        req,
+        outstandingQty.totalKg,
+      ).catch((err) => {
+        logger.error('Trucking attention insights failed', err);
+        return undefined;
+      })
+    : undefined;
   const executionRows = base.status?.unplanned ?? 0;
   const merged = mergeTruckingUnplannedBreakdownIntoSummary(
     { ...base, statusContractQty },
@@ -1239,7 +1374,9 @@ async function runTruckingListSummaryWithBacklog(
   const withOs: NonNullable<TruckingListResponseData['summary']> = {
     ...merged,
     statusContractQty,
+    statusOutstandingQty,
     outstandingQty,
+    ...(attentionInsights !== undefined ? { attentionInsights } : {}),
   };
   MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
     summary: withOs,

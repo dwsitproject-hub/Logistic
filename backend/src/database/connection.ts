@@ -4,13 +4,21 @@ import logger from '../utils/logger';
 
 dotenv.config();
 
+const poolMax = parseInt(process.env.DB_POOL_MAX || '40', 10);
+const poolConnectionTimeoutMs = parseInt(
+  process.env.DB_POOL_CONNECTION_TIMEOUT_MS ||
+    process.env.DB_CONNECTION_TIMEOUT_MS ||
+    '10000',
+  10,
+);
+
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'klip_db',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD,
-  max: 20,
+  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 40,
   idleTimeoutMillis: 30000,
   // Time allowed to acquire a pool slot AND finish the TCP + auth handshake.
   // 2s was written when Postgres was a container on the same Docker network
@@ -21,7 +29,10 @@ const pool = new Pool({
   // code change; the default is generous rather than tight because the failure mode
   // of being too low is a user-visible 500, while being too high only delays an
   // error that was going to happen anyway.
-  connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '10000'),
+  connectionTimeoutMillis:
+    Number.isFinite(poolConnectionTimeoutMs) && poolConnectionTimeoutMs > 0
+      ? poolConnectionTimeoutMs
+      : 10000,
   // Keep idle sockets alive across the network hop. Without this, NAT / firewall
   // idle timeouts silently drop connections that the pool still believes are good;
   // the next use surfaces ECONNRESET on an idle client (see the 'error' handler).

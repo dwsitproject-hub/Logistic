@@ -5,13 +5,14 @@ import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { canViewShippingPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
+import { isAuthenticatedLocally } from '@/lib/authSession'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Eye, GripVertical, Loader2, Package, Search, SlidersHorizontal, X } from 'lucide-react'
+import { Eye, GripVertical, Loader2, MessageSquare, Package, Search, SlidersHorizontal, X } from 'lucide-react'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -52,7 +53,6 @@ import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
-  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   SHIPPING_PERF_TABLE_BODY_CLASS,
   SHIPPING_PERF_TABLE_CELL_PAD,
@@ -85,6 +85,7 @@ import {
 } from '@/lib/shippingPerformancePorts'
 import { cn } from '@/lib/utils'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import { HistoricalRemarksModal } from '@/components/shared/HistoricalRemarksModal'
 import {
   mergeShippingPerfColumnOrder,
   mergeShippingPerfVisibleColumns,
@@ -97,13 +98,17 @@ import {
   type ShippingPerfColumnPrefsByMode,
 } from '@/lib/shippingPerformanceColumnPrefs'
 import { resolveShipmentApiLookupKey } from '@/lib/shipmentStoDisplay'
+import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
 import {
-  CONTRACT_PERF_PRODUCT_TABS,
-  CONTRACT_PERF_SOURCE_TABS,
-  type ContractPerfProductTab,
-  type ContractPerfSourceFilter,
+  CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+  CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
 } from '@/lib/contractPerformanceFilters'
 import { applyShippingPerfSourceProductFilter } from '@/lib/shippingPerformanceScopeFilters'
+import {
+  resolvePerformancePeriodDateRange,
+  rowMatchesPerformancePeriod,
+  type PerformancePeriodKey,
+} from '@/lib/performancePeriodFilters'
 import {
   applyShippingPerfCardFilter,
 } from '@/lib/shippingPerformanceCardFilter'
@@ -472,7 +477,6 @@ type PerVesselPerfSummary = {
   avgLoadingEtbEtc: number | null
   avgDischargeEtaEtb: number | null
   avgDischargeEtbEtc: number | null
-  avgTotalDelta: number | null
 }
 
 const EMPTY_PER_VESSEL_SUMMARY: PerVesselPerfSummary = {
@@ -484,7 +488,6 @@ const EMPTY_PER_VESSEL_SUMMARY: PerVesselPerfSummary = {
   avgLoadingEtbEtc: null,
   avgDischargeEtaEtb: null,
   avgDischargeEtbEtc: null,
-  avgTotalDelta: null,
 }
 
 function normalizeGroupKey(value: unknown, fallback = 'Blank'): string {
@@ -665,7 +668,6 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
     avgLoadingEtbEtc: avgDelta('loading_delta_etb_etc_days'),
     avgDischargeEtaEtb: avgDelta('discharge_delta_eta_etb_days'),
     avgDischargeEtbEtc: avgDelta('discharge_delta_etb_etc_days'),
-    avgTotalDelta: avgDelta('total_delta_days'),
   }
 }
 
@@ -1184,23 +1186,14 @@ function ShippingPerformancePageContent() {
   const [searchDraft, setSearchDraft] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
+  const [selectedSources, setSelectedSources] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
   const [selectedVessels, setSelectedVessels] = useState<string[]>([])
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const d = new Date()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return `${d.getFullYear()}-${m}-${day}`
-  })
+  const [performancePeriod, setPerformancePeriod] = useState<PerformancePeriodKey>('YTD')
+  const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolvePerformancePeriodDateRange('YTD').dateTo)
   const [perfCardFilter, setPerfCardFilter] = useState<ShippingPerfCardFilter>('ongoing')
-  /** Client-only scope toggles — do not change fetch URL / cache key. */
-  const [sourceFilter, setSourceFilter] = useState<ContractPerfSourceFilter>('All')
-  const [productTab, setProductTab] = useState<ContractPerfProductTab>('All')
   const perfDashMode = useMemo(() => perfDataModeFromCard(perfCardFilter), [perfCardFilter])
   const [drilldownFilters, setDrilldownFilters] = useState<DrilldownFilters>(EMPTY_DRILLDOWN_FILTERS)
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
@@ -1212,6 +1205,9 @@ function ShippingPerformancePageContent() {
     editStoNumber: string | null
     editContractNumbers: string | null
   } | null>(null)
+  const [remarksModal, setRemarksModal] = useState<{ shipmentId: string; subtitle: string } | null>(
+    null,
+  )
 
   const openViewShipmentFromRow = useCallback((row: ShippingPerformanceRow) => {
     const shipmentId = String(row.id || '').trim()
@@ -1232,14 +1228,14 @@ function ShippingPerformancePageContent() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const hasToken = () => Boolean(localStorage.getItem('token'))
-    if (hasToken()) {
+    const hasAuth = () => isAuthenticatedLocally()
+    if (hasAuth()) {
       setAuthReady(true)
       return
     }
     const startedAt = Date.now()
     const interval = window.setInterval(() => {
-      if (hasToken()) {
+      if (hasAuth()) {
         window.clearInterval(interval)
         setAuthReady(true)
       } else if (Date.now() - startedAt > 3000) {
@@ -1248,6 +1244,12 @@ function ShippingPerformancePageContent() {
     }, 150)
     return () => window.clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    const { dateFrom: from, dateTo: to } = resolvePerformancePeriodDateRange(performancePeriod)
+    setDateFrom(from)
+    setDateTo(to)
+  }, [performancePeriod])
 
   const shippingPerfListUrl = '/shipments/performance?scope=ytd'
 
@@ -1298,10 +1300,19 @@ function ShippingPerformancePageContent() {
     [rows],
   )
 
-  // Step A2: Source / Product pill scope (client-side only; no refetch / no cache-key change)
+  // Step A2: Period scope (contract_date)
+  const periodFilteredRows = useMemo(
+    () =>
+      baseFilteredRows.filter((row) =>
+        rowMatchesPerformancePeriod(String(row.contract_date ?? ''), dateFrom, dateTo),
+      ),
+    [baseFilteredRows, dateFrom, dateTo],
+  )
+
+  // Step A3: Source / Product multi-select (client-side only; no refetch)
   const scopeFilteredRows = useMemo(
-    () => applyShippingPerfSourceProductFilter(baseFilteredRows, sourceFilter, productTab),
-    [baseFilteredRows, sourceFilter, productTab],
+    () => applyShippingPerfSourceProductFilter(periodFilteredRows, selectedSources, selectedProducts),
+    [periodFilteredRows, selectedSources, selectedProducts],
   )
 
   // Options for the 3 toolbar filters (Group Plant/Product/Incoterm) — always populated from the
@@ -1344,7 +1355,6 @@ function ShippingPerformancePageContent() {
     }
     if (
       selectedIncoterms.length === 0 &&
-      selectedProducts.length === 0 &&
       selectedGroupPlants.length === 0
     ) {
       return scopeFilteredRows
@@ -1352,7 +1362,6 @@ function ShippingPerformancePageContent() {
     return scopeFilteredRows.filter((row) =>
       rowMatchesToolbarMultiFilters(row, {
         selectedIncoterms,
-        selectedProducts,
         selectedGroupPlants,
       }),
     )
@@ -1460,12 +1469,12 @@ function ShippingPerformancePageContent() {
   )
 
   const globalFilterEffectKey = [
-    sourceFilter,
-    productTab,
+    performancePeriod,
+    selectedSources.join('\0'),
+    selectedProducts.join('\0'),
     SHIPPING_PERF_GLOBAL_FILTERS_ENABLED
       ? [
           selectedIncoterms.join('\0'),
-          selectedProducts.join('\0'),
           selectedGroupPlants.join('\0'),
           selectedVessels.join('\0'),
           statusFilter,
@@ -1473,7 +1482,7 @@ function ShippingPerformancePageContent() {
           dateTo,
           searchTerm,
         ].join('|')
-      : '',
+      : [selectedIncoterms.join('\0'), selectedGroupPlants.join('\0')].join('|'),
   ].join('::')
 
   useEffect(() => {
@@ -1587,8 +1596,9 @@ function ShippingPerformancePageContent() {
 
   const resetPerfSelections = useCallback(() => {
     setPerfCardFilter('all')
-    setSourceFilter('All')
-    setProductTab('All')
+    setPerformancePeriod('YTD')
+    setSelectedSources([])
+    setSelectedProducts([])
     setSelectedGroupPlants([])
     setSelectedIncoterms([])
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
@@ -1645,7 +1655,6 @@ function ShippingPerformancePageContent() {
       { key: 'loadingEtc', value: summary.avgLoadingEtbEtc },
       { key: 'dischargeEtb', value: summary.avgDischargeEtaEtb },
       { key: 'dischargeEtc', value: summary.avgDischargeEtbEtc },
-      { key: 'total', value: summary.avgTotalDelta },
     ]
 
     return (
@@ -1653,14 +1662,10 @@ function ShippingPerformancePageContent() {
         {metrics.map(({ key, value }) => {
           const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
           const fullLabel = getShippingSummaryMetricLabel(key, labelMode, 'full')
-          const isTotal = key === 'total'
           return (
             <div
               key={key}
-              className={cn(
-                'flex min-w-[max-content] flex-row items-center justify-between gap-3',
-                isTotal && 'mt-0.5 border-t border-gray-200 pt-1.5',
-              )}
+              className="flex min-w-[max-content] flex-row items-center justify-between gap-3"
             >
               <span
                 className="min-w-0 shrink text-[10px] leading-none text-gray-500 whitespace-nowrap"
@@ -1876,50 +1881,13 @@ function ShippingPerformancePageContent() {
           </div>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-6 flex-wrap">
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Source:</span>
-                <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
-                  {CONTRACT_PERF_SOURCE_TABS.map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => {
-                        setSourceFilter(tab)
-                        setCurrentPage(1)
-                      }}
-                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                        sourceFilter === tab
-                          ? 'bg-slate-800 text-white'
-                          : 'text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
-                <div className="inline-flex rounded-lg border bg-white p-1 flex-wrap gap-1">
-                  {CONTRACT_PERF_PRODUCT_TABS.map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => {
-                        setProductTab(tab)
-                        setCurrentPage(1)
-                      }}
-                      className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                        productTab === tab
-                          ? 'bg-slate-800 text-white'
-                          : 'text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <PerformancePeriodSelect
+                value={performancePeriod}
+                onChange={(value) => {
+                  setPerformancePeriod(value)
+                  setCurrentPage(1)
+                }}
+              />
               <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
                 <div className="w-48">
@@ -1930,6 +1898,24 @@ function ShippingPerformancePageContent() {
                     onChange={setSelectedGroupPlants}
                     placeholder="All group plants"
                     emptyMessage="No group plants"
+                    uppercaseOptionLabels
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Source:</span>
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label=""
+                    options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                    selected={selectedSources}
+                    onChange={(values) => {
+                      setSelectedSources(values)
+                      setCurrentPage(1)
+                    }}
+                    placeholder="All sources"
+                    emptyMessage="No sources"
+                    uppercaseOptionLabels
                   />
                 </div>
               </div>
@@ -1943,6 +1929,24 @@ function ShippingPerformancePageContent() {
                     onChange={setSelectedIncoterms}
                     placeholder="All incoterms"
                     emptyMessage="No incoterms"
+                    uppercaseOptionLabels
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
+                <div className="w-48">
+                  <SearchableMultiSelect
+                    label=""
+                    options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                    selected={selectedProducts}
+                    onChange={(values) => {
+                      setSelectedProducts(values)
+                      setCurrentPage(1)
+                    }}
+                    placeholder="All products"
+                    emptyMessage="No products"
+                    uppercaseOptionLabels
                   />
                 </div>
               </div>
@@ -2481,7 +2485,7 @@ function ShippingPerformancePageContent() {
                       )
                     })}
                     {showTableActionsColumn ? (
-                      <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                      <col style={{ width: 120 }} />
                     ) : null}
                   </colgroup>
                   <thead>
@@ -2728,17 +2732,37 @@ function ShippingPerformancePageContent() {
                           })}
                           {showTableActionsColumn ? (
                             <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
-                              <div className="flex items-center justify-center">
+                              <div className="flex items-center justify-center gap-2">
                                 {String(row.id || '').trim() ? (
-                                  <Button
-                                    variant="outline"
-                                    size="icon"
-                                    onClick={() => openViewShipmentFromRow(row)}
-                                    title="View shipment"
-                                    className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                                  >
-                                    <Eye className="h-4 w-4" />
-                                  </Button>
+                                  <>
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() => openViewShipmentFromRow(row)}
+                                      title="View shipment"
+                                      className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                    >
+                                      <Eye className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      onClick={() =>
+                                        setRemarksModal({
+                                          shipmentId: row.id,
+                                          subtitle:
+                                            row.operation_id ||
+                                            row.shipment_id ||
+                                            row.sto_number ||
+                                            '',
+                                        })
+                                      }
+                                      title="View remarks"
+                                      className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
+                                    >
+                                      <MessageSquare className="h-4 w-4" />
+                                    </Button>
+                                  </>
                                 ) : null}
                               </div>
                             </td>
@@ -2778,6 +2802,19 @@ function ShippingPerformancePageContent() {
           editContractId={viewShipmentModal?.editContractId ?? null}
           editStoNumber={viewShipmentModal?.editStoNumber ?? null}
           editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
+          onSubmit={async () => {}}
+          onShipmentChanged={() => {
+            invalidateLogisticsListCaches()
+            void fetchShippingPerformanceDashboard()
+          }}
+        />
+
+        <HistoricalRemarksModal
+          open={remarksModal != null}
+          onClose={() => setRemarksModal(null)}
+          entityType="shipment"
+          entityId={remarksModal?.shipmentId ?? null}
+          subtitle={remarksModal?.subtitle}
         />
       </div>
   )

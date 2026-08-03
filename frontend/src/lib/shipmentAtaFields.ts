@@ -50,6 +50,26 @@ export function ataSapReferenceFromShipmentInfo(info: Record<string, unknown>): 
   return out;
 }
 
+/** Per-port SAP ATA snapshot from vessel_loading_ports.sap_ata_* columns. */
+export function loadingAtaSapFromPortRow(
+  portRow: Record<string, unknown> | undefined,
+): Pick<
+  ShipmentAtaFields,
+  | 'ata_vessel_arrival_at_loading_port'
+  | 'ata_vessel_berthed_at_loading_port'
+  | 'ata_vessel_start_loading'
+  | 'ata_vessel_completed_loading'
+  | 'ata_vessel_sailed_from_loading_port'
+> {
+  return {
+    ata_vessel_arrival_at_loading_port: sliceIsoDate(portRow?.sap_ata_vessel_arrival),
+    ata_vessel_berthed_at_loading_port: sliceIsoDate(portRow?.sap_ata_vessel_berthed),
+    ata_vessel_start_loading: sliceIsoDate(portRow?.sap_ata_loading_start),
+    ata_vessel_completed_loading: sliceIsoDate(portRow?.sap_ata_loading_completed),
+    ata_vessel_sailed_from_loading_port: sliceIsoDate(portRow?.sap_ata_vessel_sailed),
+  };
+}
+
 export function buildAtaOverridePayload(
   current: ShipmentAtaFields,
   baseline: ShipmentAtaFields,
