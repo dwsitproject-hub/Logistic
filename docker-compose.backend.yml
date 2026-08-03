@@ -51,10 +51,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5001
-      # Override host-oriented DB settings from env_file — required for in-stack networking
-      # Use container_name to avoid DNS edge cases on some hosts
-      DB_HOST: klip-postgres
-      DB_PORT: "5432"
+      # DB host: default in-stack postgres; SIT uses remote DB via /opt/klip/.env (172.28.92.60:5442)
+      DB_HOST: ${DB_HOST:-klip-postgres}
+      DB_PORT: ${DB_PORT:-5432}
       # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
       JWT_EXPIRES_IN: 7d
       # Shared upload root inside container (see backend_uploads volume below; Synology optional override)

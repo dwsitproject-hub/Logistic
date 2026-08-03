@@ -91,6 +91,11 @@ export const query = async (text: string, params?: any[]): Promise<QueryResult> 
 
 export const getClient = async (): Promise<PoolClient> => {
   const client = await pool.connect();
+  // Checked-out clients can emit 'error' when the network drops mid-request; without a
+  // listener Node treats it as fatal and the whole API exits (502 for every caller).
+  client.on('error', (err) => {
+    logger.error('Unexpected error on checked-out client (connection dropped)', err);
+  });
   return client;
 };
 
