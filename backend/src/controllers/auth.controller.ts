@@ -8,8 +8,10 @@ import {
   buildSessionUserPayload,
   establishSession,
   loadActiveUserById,
+  saveSession,
 } from '../services/sessionAuth.service';
 import { AuthRequest } from '../middleware/auth';
+import { getAuthLoginOptions, isLocalLoginEnabled } from '../config/authConfig';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -67,8 +69,26 @@ export const register = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
+/** GET /api/auth/login-options — which login paths are available (public). */
+export const getLoginOptions = (_req: Request, res: Response): void => {
+  res.json({
+    success: true,
+    data: getAuthLoginOptions(),
+  });
+};
+
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
+    if (!isLocalLoginEnabled()) {
+      res.status(403).json({
+        success: false,
+        error: {
+          message: 'Local login is disabled on this server. Please use Sign in with DWS Hub.',
+        },
+      });
+      return;
+    }
+
     const { username, password } = req.body;
 
     // Find user
@@ -112,6 +132,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
     const sessionUser = await buildSessionUserPayload(user);
     establishSession(req, String(user.id));
+    await saveSession(req);
 
     const token = jwt.sign(
       { id: user.id, username: user.username, email: user.email, role: user.role },

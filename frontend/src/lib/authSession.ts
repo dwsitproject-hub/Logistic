@@ -10,6 +10,16 @@ export type AuthUser = {
   is_first_login?: boolean;
 };
 
+export type LoginOptions = {
+  localLogin: boolean;
+  hubSso: boolean;
+};
+
+const DEFAULT_LOGIN_OPTIONS: LoginOptions = {
+  localLogin: true,
+  hubSso: false,
+};
+
 export function storeUserLocally(user: AuthUser): void {
   if (typeof window === 'undefined') return;
   localStorage.setItem('user', JSON.stringify(user));
@@ -35,6 +45,19 @@ export function clearLocalAuth(): void {
 export function isAuthenticatedLocally(): boolean {
   if (typeof window === 'undefined') return false;
   return Boolean(localStorage.getItem('user') || localStorage.getItem('token'));
+}
+
+export async function fetchLoginOptions(): Promise<LoginOptions> {
+  try {
+    const response = await api.get('/auth/login-options');
+    const data = response.data?.data as LoginOptions | undefined;
+    if (data && typeof data.localLogin === 'boolean' && typeof data.hubSso === 'boolean') {
+      return data;
+    }
+  } catch {
+    /* fall back — keep local login available */
+  }
+  return DEFAULT_LOGIN_OPTIONS;
 }
 
 export async function fetchCurrentUser(): Promise<AuthUser | null> {

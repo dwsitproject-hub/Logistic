@@ -4,12 +4,45 @@ import { clearLocalAuth, isAuthenticatedLocally } from '@/lib/authSession';
 import { mapHttpMethodToEventType, trackApiMutation } from '@/lib/userActivityTracker';
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:5001/api';
-const configuredBase = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE;
+
+/**
+ * Prefer same-origin /api on staging/production when the baked-in URL points at another host
+ * (e.g. NEXT_PUBLIC_API_URL=http://172.28.92.57:5001/api). Cross-origin breaks session cookies.
+ */
+export function resolveApiBaseUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE;
+  if (typeof window === 'undefined') return configured;
+  if (configured.startsWith('/')) return configured;
+  try {
+    const apiHost = new URL(configured, window.location.origin).host;
+    if (apiHost !== window.location.host) {
+      console.warn(
+        '[KLIP] API base points to a different host; using same-origin /api instead of',
+        configured,
+      );
+      return '/api';
+    }
+  } catch {
+    /* use configured */
+  }
+  return configured;
+}
+
+const configuredBase = resolveApiBaseUrl();
 
 const api = axios.create({
   baseURL: configuredBase,
   withCredentials: true,
 });
+
+function isExpectedAnonymous401(status: number | undefined, requestUrl: string): boolean {
+  if (status !== 401) return false;
+  return (
+    requestUrl.includes('/auth/me') ||
+    requestUrl.includes('/auth/login-options') ||
+    requestUrl.includes('/user-activity/')
+  );
+}
 
 // Add Bearer token when present (legacy / transitional); cookie sessions use withCredentials.
 api.interceptors.request.use((config) => {
@@ -32,10 +65,13 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    const status = error.response?.status;
+    const requestUrl = String(error.config?.url || '');
+
     // Enhanced error logging for debugging
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && !isExpectedAnonymous401(status, requestUrl)) {
       const baseURL = configuredBase;
-      
+
       if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
         console.error('❌ Network Error: Cannot connect to backend API');
         console.error('   API URL:', baseURL);
@@ -45,13 +81,12 @@ api.interceptors.response.use(
           console.error('   Tip: On Windows, use http://127.0.0.1:5001/api instead of localhost');
         }
       } else if (error.response) {
-        // Server responded with error status
-        const { status, data } = error.response;
+        const { data } = error.response;
         console.error(`❌ API Error [${status}]:`, {
           url: error.config?.url,
           method: error.config?.method,
           message: data?.error?.message || data?.message || 'Unknown error',
-          data: data
+          data: data,
         });
       } else {
         console.error('❌ Request Error:', error.message);
@@ -59,14 +94,13 @@ api.interceptors.response.use(
     }
 
     // Treat 401 or 403 (invalid/expired token) as "need to re-login"
-    const status = error.response?.status;
     const message = error.response?.data?.error?.message || '';
-    const requestUrl = String(error.config?.url || '');
     const isLoginAttempt = requestUrl.includes('/auth/login');
     const isAuthFailure =
       status === 401 || (status === 403 && (message.includes('token') || message.includes('expired')));
+    const onLoginPage = typeof window !== 'undefined' && window.location.pathname.startsWith('/login');
     // Do not hard-redirect on failed login — login page must show the error message.
-    if (isAuthFailure && !isLoginAttempt && typeof window !== 'undefined') {
+    if (isAuthFailure && !isLoginAttempt && !onLoginPage && typeof window !== 'undefined') {
       if (isAuthenticatedLocally()) {
         clearClientDataCache();
         clearLocalAuth();
@@ -74,7 +108,7 @@ api.interceptors.response.use(
       }
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 export { api };

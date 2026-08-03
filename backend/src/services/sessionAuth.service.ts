@@ -69,6 +69,20 @@ export function establishSession(req: Request, userId: string): void {
   delete req.session.oidcCodeVerifier;
 }
 
+/** Persist session before redirect/JSON — ensures Set-Cookie reaches browser behind nginx. */
+export function saveSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!req.session) {
+      resolve();
+      return;
+    }
+    req.session.save((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
 export function frontendUrl(): string {
   return String(process.env.FRONTEND_URL || process.env.APP_PUBLIC_ORIGIN || 'http://localhost:3001').replace(
     /\/$/,

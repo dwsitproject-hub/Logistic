@@ -17,7 +17,7 @@ import {
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
-import { fetchCurrentUser, logoutSession, readUserLocally } from '@/lib/authSession'
+import { fetchCurrentUser, logoutSession, clearLocalAuth } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 
 type UserLite = {
@@ -225,11 +225,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         setUser(sessionUser)
         return
       }
-      const stored = readUserLocally()
-      if (stored) {
-        setUser(stored)
-        return
-      }
+      clearLocalAuth()
       router.replace('/login')
     })()
   }, [router])

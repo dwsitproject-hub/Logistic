@@ -67,6 +67,7 @@ services:
       # Add to /opt/klip/backend/.env on the backend host; do not set them here.
       # OIDC SSO — values from /opt/klip/.env or backend/.env (must match Hub Admin registration).
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+      CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
@@ -76,6 +77,7 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-true}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

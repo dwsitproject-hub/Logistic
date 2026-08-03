@@ -1,5 +1,13 @@
 import express from 'express';
-import { register, login, getProfile, getMe, logout, updateProfile } from '../controllers/auth.controller';
+import {
+  register,
+  login,
+  getLoginOptions,
+  getProfile,
+  getMe,
+  logout,
+  updateProfile,
+} from '../controllers/auth.controller';
 import { ssoExchangeHandler } from '../controllers/sso.controller';
 import { authenticateToken } from '../middleware/auth';
 import { body } from 'express-validator';
@@ -80,6 +88,8 @@ router.post(
  *       401:
  *         description: Invalid credentials
  */
+router.get('/login-options', getLoginOptions);
+
 router.post('/login', login);
 
 /**

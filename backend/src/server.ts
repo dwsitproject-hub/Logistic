@@ -74,6 +74,10 @@ configureTrustProxy(app);
 // Middleware
 app.use(helmet());
 const corsOrigin = frontendUrl();
+const extraCorsOrigins = String(process.env.CORS_EXTRA_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -81,15 +85,17 @@ app.use(
         callback(null, true);
         return;
       }
+      const normalized = origin.replace(/\/$/, '');
       const allowed = new Set(
         [
           corsOrigin,
           process.env.APP_PUBLIC_ORIGIN?.replace(/\/$/, ''),
           'http://localhost:3001',
           'http://127.0.0.1:3001',
+          ...extraCorsOrigins,
         ].filter(Boolean) as string[],
       );
-      callback(null, allowed.has(origin));
+      callback(null, allowed.has(normalized));
     },
     credentials: true,
   }),

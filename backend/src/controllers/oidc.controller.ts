@@ -17,6 +17,7 @@ import {
   frontendUrl,
   loadActiveUserByEmail,
   persistHubOidcSub,
+  saveSession,
 } from '../services/sessionAuth.service';
 
 function redirectLoginError(res: Response, errorCode: string): void {
@@ -142,6 +143,7 @@ export const oidcCallbackHandler = async (req: Request, res: Response): Promise<
     });
 
     establishSession(req, String(userRow.id));
+    await saveSession(req);
 
     logger.info(`OIDC SSO login: user ${userRow.username} via Downstream Hub`);
 
