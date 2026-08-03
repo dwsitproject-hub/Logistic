@@ -1946,7 +1946,6 @@ export default function OilLossPage() {
           rows={globallyFilteredRows}
           filters={drilldownFilters}
           onFiltersChange={applyOilLossDrilldownChange}
-          onReset={resetOilLossDrilldown}
           scopeSegments={[
             globalPeriodMeta.label,
             ...(globalTransport !== 'All' ? [globalTransport] : []),

@@ -1602,12 +1602,6 @@ function ContractsPageContent() {
     [collapseAll, isContractPerformance],
   )
 
-  /** Clears Section 2 drilldown only (e.g. when switching On Time / Late tab). */
-  const resetDrilldownSelectionOnly = useCallback(() => {
-    if (!isContractPerformance) return
-    applyDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
-  }, [applyDrilldownSelection, isContractPerformance])
-
   /** Section 1 reset — clears all Contract Performance filters (Sections 1–3).
    * Returns to All scope (Open/Close cards unselected); page-load default Open is only for first visit.
    */
@@ -4083,15 +4077,6 @@ function ContractsPageContent() {
                 <div className="text-sm text-gray-500">No schedulable contracts found in YTD.</div>
               ) : (
                 <div className="relative">
-                    <div className="flex items-center justify-end mb-3">
-                      <button
-                        type="button"
-                        onClick={resetDrilldownSelectionOnly}
-                        className="text-sm text-blue-700 hover:underline"
-                      >
-                        Reset selection
-                      </button>
-                    </div>
                     <div
                       className={`grid grid-cols-1 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
                         isSection2TreeLoading && activePerformanceHasData

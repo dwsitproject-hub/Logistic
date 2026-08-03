@@ -22,7 +22,6 @@ type OilLossDrilldownSectionProps = {
   rows: OilLossSourceRow[]
   filters: OilLossDrilldownFilters
   onFiltersChange: (filters: OilLossDrilldownFilters) => void
-  onReset: () => void
   /** Active global scope tokens under the title (period, transport, multi-filters). */
   scopeSegments?: readonly string[]
   loading?: boolean
@@ -37,7 +36,6 @@ export default function OilLossDrilldownSection({
   rows,
   filters,
   onFiltersChange,
-  onReset,
   scopeSegments = [],
   loading = false,
   dataFetching = false,
@@ -121,12 +119,6 @@ export default function OilLossDrilldownSection({
               isRefreshing ? 'opacity-65' : 'opacity-100'
             }`}
           >
-            <div className="flex items-center justify-end mb-3">
-              <button type="button" onClick={onReset} className="text-sm text-blue-700 hover:underline shrink-0">
-                Reset selection
-              </button>
-            </div>
-
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
               {OIL_LOSS_DRILLDOWN_CATEGORIES.map(({ level, title }) => {
                 const style = OIL_LOSS_DRILLDOWN_LEVEL_STYLES[level]

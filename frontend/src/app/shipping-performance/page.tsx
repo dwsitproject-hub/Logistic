@@ -2035,15 +2035,6 @@ function ShippingPerformancePageContent() {
                   (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                 }`}
               >
-                <div className="flex items-center justify-end mb-3">
-                  <button
-                    type="button"
-                    onClick={resetPerfSelections}
-                    className="text-sm text-blue-700 hover:underline"
-                  >
-                    Reset selection
-                  </button>
-                </div>
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                   {([
                       { title: 'Product',     subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick one',                             level: 'product'  as const },
