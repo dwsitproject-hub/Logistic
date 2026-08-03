@@ -1,6 +1,7 @@
 import { Pool, PoolClient, QueryResult } from 'pg';
 import dotenv from 'dotenv';
 import logger from '../utils/logger';
+import { isTransientDbError, transientRetryDelayMs } from './transientDbError';
 
 dotenv.config();
 
@@ -76,10 +77,44 @@ export const handleIdlePoolError = (err: Error): void => {
 
 pool.on('error', handleIdlePoolError);
 
+export const QUERY_TRANSIENT_MAX_ATTEMPTS = 3;
+
+/** Retry pool.query on transient connection failures (staging DB is a separate VM). */
+export async function runPoolQueryWithRetry(
+  run: () => Promise<QueryResult>,
+  options?: {
+    maxAttempts?: number;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<QueryResult> {
+  const maxAttempts = options?.maxAttempts ?? QUERY_TRANSIENT_MAX_ATTEMPTS;
+  const sleep = options?.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isTransientDbError(error)) {
+        throw error;
+      }
+      const delay = transientRetryDelayMs(attempt);
+      logger.warn(
+        `Transient DB error on query (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms...`,
+        { message: (error as Error).message },
+      );
+      await sleep(delay);
+    }
+  }
+
+  throw lastError;
+}
+
 export const query = async (text: string, params?: any[]): Promise<QueryResult> => {
   const start = Date.now();
   try {
-    const res = await pool.query(text, params);
+    const res = await runPoolQueryWithRetry(() => pool.query(text, params));
     const duration = Date.now() - start;
     logger.debug('Executed query', { text, duration, rows: res.rowCount });
     return res;

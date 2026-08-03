@@ -15,6 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Eye, GripVertical, Loader2, MessageSquare, Package, Search, SlidersHorizontal, X } from 'lucide-react'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
+import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
@@ -1455,18 +1456,35 @@ function ShippingPerformancePageContent() {
   const ongoingPerformanceSummary = ongoingDatasetBundle.summary
   const closePerformanceSummary = closeDatasetBundle.summary
 
-  /** Unique contracts in the current card + drilldown scope (Section 2 header & Section 3 subtitle). */
+  /** Unique contracts in the current card + drilldown scope (Section 3 subtitle). */
   const scopedUniqueContractCount = useMemo(
     () => countUniqueContractsFromRows(drilldownFilteredRows),
     [drilldownFilteredRows],
   )
 
-  const hasActiveDrilldown = Boolean(
-    drilldownFilters.product ||
-      drilldownFilters.plant ||
-      drilldownFilters.incoterm ||
-      drilldownFilters.vessel,
-  )
+  /** Section 2 title subtitle: period, card mode, and non-empty global filters. */
+  const shippingPerfDrilldownScopeSegments = useMemo(() => {
+    const parts: string[] = [
+      resolvePerformancePeriodDateRange(performancePeriod).label,
+      SHIPPING_PERF_CARD_TITLES[perfCardFilter],
+    ]
+    if (selectedSources.length > 0) parts.push(selectedSources.join(', '))
+    if (selectedProducts.length > 0) parts.push(selectedProducts.join(', '))
+    if (selectedGroupPlants.length > 0) parts.push(selectedGroupPlants.join(', '))
+    if (selectedVessels.length > 0) parts.push(selectedVessels.join(', '))
+    if (selectedIncoterms.length > 0) parts.push(selectedIncoterms.join(', '))
+    if (statusFilter === 'Open' || statusFilter === 'Closed') parts.push(statusFilter)
+    return parts
+  }, [
+    performancePeriod,
+    perfCardFilter,
+    selectedSources,
+    selectedProducts,
+    selectedGroupPlants,
+    selectedVessels,
+    selectedIncoterms,
+    statusFilter,
+  ])
 
   const globalFilterEffectKey = [
     performancePeriod,
@@ -1688,7 +1706,7 @@ function ShippingPerformancePageContent() {
   ) => {
     return (
       <div className="relative w-full min-w-0 text-left">
-        <div className="min-w-0 pt-1 sm:max-w-[calc(100%-10.5rem)] sm:border-r sm:border-gray-200 sm:pr-3">
+        <div className="min-w-0 pt-1 sm:max-w-[calc(100%-10.5rem)]">
           {renderSummaryPrimaryTotals(summary)}
         </div>
         <div className="mt-2 w-fit shrink-0 sm:absolute sm:bottom-0 sm:right-0 sm:mt-0">
@@ -2000,14 +2018,12 @@ function ShippingPerformancePageContent() {
             <div>
               <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>
-                  {perfDashMode === 'eta' ? 'Performance Drilldown (ETA)' : 'Performance Drilldown (ATA)'}
-                  <span className="font-normal text-gray-500"> · {SHIPPING_PERF_CARD_TITLES[perfCardFilter]}</span>
+                  {perfDashMode === 'eta'
+                    ? 'Shipping Performance Drilldown (ETA)'
+                    : 'Shipping Performance Drilldown (ATA)'}
                 </span>
               </CardTitle>
-              <div className="text-sm text-gray-600 mt-1">
-                Navigate as a tree: <span className="font-medium">Product → Group Plant → Incoterm → Vessel</span>.
-                Click a node to filter the table below.
-              </div>
+              <PerformanceDrilldownScopeLine segments={shippingPerfDrilldownScopeSegments} />
             </div>
           </CardHeader>
           <CardContent className="pt-2">
@@ -2015,30 +2031,11 @@ function ShippingPerformancePageContent() {
               <div className="text-sm text-gray-500">No shipments found for the current filters.</div>
             ) : (
               <div
-                className={`rounded-xl border bg-white p-4 transition-opacity duration-200 ${
+                className={`transition-opacity duration-200 ${
                   (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
                 }`}
               >
-                <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">Drilldown</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
-                      <span className="font-semibold text-gray-800 tabular-nums">
-                        {scopedUniqueContractCount.toLocaleString('en-US')}
-                      </span>{' '}
-                      unique contracts
-                      {hasActiveDrilldown ? ' (drilldown scope)' : ' (card scope)'}
-                      <span className="text-gray-400 mx-1" aria-hidden>
-                        ·
-                      </span>
-                      <span className="tabular-nums">{drilldownFilteredRows.length.toLocaleString('en-US')}</span>{' '}
-                      shipments
-                      <span className="text-gray-400 mx-1" aria-hidden>
-                        ·
-                      </span>
-                      {activeDatasetBundle.summary.vesselCount.toLocaleString('en-US')} unique vessels
-                    </div>
-                  </div>
+                <div className="flex items-center justify-end mb-3">
                   <button
                     type="button"
                     onClick={resetPerfSelections}

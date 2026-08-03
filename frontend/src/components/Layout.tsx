@@ -17,7 +17,7 @@ import {
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
-import { fetchCurrentUser, logoutSession, clearLocalAuth } from '@/lib/authSession'
+import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 
 type UserLite = {
@@ -216,13 +216,23 @@ function LayoutWithPermissions({
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  const [user, setUser] = useState<UserLite | null>(null)
+  // Hydrate from localStorage on client remount so route changes keep the shell visible
+  // while page content shows its own spinners (avoid full-screen blank "Loading...").
+  const [user, setUser] = useState<UserLite | null>(() => {
+    if (typeof window === 'undefined') return null
+    return readUserLocally()
+  })
 
   useEffect(() => {
     void (async () => {
       const sessionUser = await fetchCurrentUser()
       if (sessionUser) {
         setUser(sessionUser)
+        return
+      }
+      const stored = readUserLocally()
+      if (stored) {
+        setUser(stored)
         return
       }
       clearLocalAuth()

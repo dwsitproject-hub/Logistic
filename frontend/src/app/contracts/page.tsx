@@ -108,6 +108,7 @@ import {
   type PerfSegmentFilter,
 } from '@/components/contract-performance/ContractPerfUnifiedNodeCard'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
+import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import {
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION,
   CONTRACT_PERF_COLUMN_LAYOUT_VERSION_KEY,
@@ -1329,6 +1330,43 @@ function ContractsPageContent() {
     [appliedDrilldownSelection],
   )
 
+  /** Section 2 title subtitle: period, Open/Close, and non-empty global filters. */
+  const contractPerfDrilldownScopeSegments = useMemo(() => {
+    if (!isContractPerformance) return [] as string[]
+    const parts: string[] = [resolvePerformancePeriodDateRange(performancePeriod).label]
+    if (summaryCardStatus === 'Open' || summaryCardStatus === 'Close') {
+      parts.push(summaryCardStatus)
+    }
+    if (contractPerfSelectedGroupPlants.length > 0) {
+      parts.push(contractPerfSelectedGroupPlants.join(', '))
+    }
+    if (contractPerfSelectedIncoterms.length > 0) {
+      parts.push(contractPerfSelectedIncoterms.join(', '))
+    }
+    if (contractPerfSelectedProducts.length > 0) {
+      parts.push(contractPerfSelectedProducts.join(', '))
+    }
+    if (contractPerfSelectedSources.length > 0) {
+      parts.push(contractPerfSelectedSources.join(', '))
+    }
+    if (selectedSuppliers.length > 0) {
+      parts.push(selectedSuppliers.join(', '))
+    }
+    if (lateOnTimeFilter === 'ON_TIME') parts.push('On Time')
+    else if (lateOnTimeFilter === 'LATE') parts.push('Late')
+    return parts
+  }, [
+    isContractPerformance,
+    performancePeriod,
+    summaryCardStatus,
+    contractPerfSelectedGroupPlants,
+    contractPerfSelectedIncoterms,
+    contractPerfSelectedProducts,
+    contractPerfSelectedSources,
+    selectedSuppliers,
+    lateOnTimeFilter,
+  ])
+
   /** True when user narrowed Section 3 via Source, Product, Open/Close card, or drilldown (UI labels only). */
   const contractPerfSection3FilterApplied = useMemo(
     () =>
@@ -1373,8 +1411,6 @@ function ContractsPageContent() {
   const contractPerfTablePlants = contractPerfTableFetchScope.plants
   const contractPerfTableProduct = contractPerfTableFetchScope.product
   const section3FilterMode = contractPerfPipeline.section3Mode
-  const section2DrilldownContractCount = contractPerfPipeline.section2TreeContractCount
-  const section2ActiveNodeContractCount = contractPerfPipeline.section2ActiveNodeContractCount
 
   const displayTotalContracts = totalContracts
 
@@ -4018,7 +4054,7 @@ function ContractsPageContent() {
                 <div>
                   <div className="flex items-center gap-2">
                     <CardTitle className="text-base mb-0 flex items-center gap-2">
-                      <span>Contract Performance Drilldown (YTD)</span>
+                      <span>Contract Performance Drilldown</span>
                       {latePerfTreeLoading && activePerformanceHasData ? (
                         <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                       ) : null}
@@ -4038,6 +4074,7 @@ function ContractsPageContent() {
                       </span>
                     )}
                   </div>
+                  <PerformanceDrilldownScopeLine segments={contractPerfDrilldownScopeSegments} />
                 </div>
               </div>
             </CardHeader>
@@ -4045,36 +4082,16 @@ function ContractsPageContent() {
               {!activePerformanceHasData && !latePerfTreeLoading ? (
                 <div className="text-sm text-gray-500">No schedulable contracts found in YTD.</div>
               ) : (
-                <div className="space-y-3">
-                  <div className="rounded-xl border bg-white p-4 relative">
-                    <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900">Unified performance drilldown</div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          {section2DrilldownContractCount.toLocaleString('en-US')} unique contracts in drilldown tree
-                          {lateOnTimeFilter !== 'ALL' ? (
-                            <span className="ml-1 font-medium text-gray-700">
-                              · Segment: {lateOnTimeFilter === 'ON_TIME' ? 'On Time' : 'Late'}
-                            </span>
-                          ) : null}
-                          {section3FilterMode === 'linked' ? (
-                            <span className="ml-1 text-blue-700">
-                              · Active path
-                              {contractPerfAppliedDrilldownLabel
-                                ? `: ${contractPerfAppliedDrilldownLabel}`
-                                : ''}{' '}
-                              — Section 3 shows{' '}
-                              {section2ActiveNodeContractCount.toLocaleString('en-US')} contracts; card totals
-                              stay at branch level
-                            </span>
-                          ) : (
-                            <span className="ml-1 text-gray-600">· Section 3 uses global filters only</span>
-                          )}
-                          <span className="ml-1 text-gray-600">· Quantity in MT</span>
-                        </div>
-                      </div>
+                <div className="relative">
+                    <div className="flex items-center justify-end mb-3">
+                      <button
+                        type="button"
+                        onClick={resetDrilldownSelectionOnly}
+                        className="text-sm text-blue-700 hover:underline"
+                      >
+                        Reset selection
+                      </button>
                     </div>
-
                     <div
                       className={`grid grid-cols-1 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
                         isSection2TreeLoading && activePerformanceHasData
@@ -4159,7 +4176,6 @@ function ContractsPageContent() {
                         )
                       })}
                     </div>
-                  </div>
                 </div>
               )}
             </CardContent>
@@ -5233,7 +5249,7 @@ function ContractsPageContent() {
                               ? COMPACT_TABLE_ACTIONS_HEADER_CLASS
                               : cn(
                                   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
-                                  'text-center align-top font-semibold border-l border-gray-200 min-w-[192px]',
+                                  'text-center align-top font-semibold border-l border-gray-200 whitespace-nowrap w-[1%]',
                                   contractPerfTableCellPad,
                                 ),
                           )}
@@ -5318,15 +5334,14 @@ function ContractsPageContent() {
                                   className={cn(
                                     isContractPerformance
                                       ? cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)
-                                      : 'sticky right-0 z-10 border-l border-gray-200 align-middle',
+                                      : 'sticky right-0 z-10 border-l border-gray-200 align-middle whitespace-nowrap w-[1%]',
                                     !isContractPerformance && contractPerfTableCellPad,
-                                    !isContractPerformance && 'min-w-[192px]',
                                     !isContractPerformance && stripeClass,
                                   )}
                                 >
                                   <div
                                     className={cn(
-                                      'flex items-center gap-2',
+                                      'flex items-center gap-1.5',
                                       isContractPerformance ? 'justify-center' : 'justify-end',
                                     )}
                                   >
@@ -5354,40 +5369,6 @@ function ContractsPageContent() {
                                     <Eye className="h-4 w-4" />
                                   </Button>
 
-                                  {!isContractPerformance && (
-                                    <>
-                                      <Button
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={() => openContractDocsModal(contract)}
-                                        title="Docs"
-                                        className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100"
-                                      >
-                                        <FileText className="h-4 w-4" />
-                                      </Button>
-                                      <input
-                                        id={`contract-file-${contract.id}`}
-                                        type="file"
-                                        accept="application/pdf,image/png,image/jpeg"
-                                        className="hidden"
-                                        onChange={(e) => handleUploadFileChange(contract, e)}
-                                      />
-                                      <Button
-                                        variant="outline"
-                                        size="icon"
-                                        onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
-                                        disabled={uploadingId === contract.id}
-                                        title="Upload"
-                                        className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                      >
-                                        {uploadingId === contract.id ? (
-                                          <span className="h-4 w-4 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                        ) : (
-                                          <Upload className="h-4 w-4" />
-                                        )}
-                                      </Button>
-                                    </>
-                                  )}
                                   <Button
                                     variant="outline"
                                     size="icon"
@@ -5528,57 +5509,6 @@ function ContractsPageContent() {
                             <Eye className="h-4 w-4 mr-2" />
                             View
                           </Button>
-
-                          {!isContractPerformance && (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                onClick={() => openContractDocsModal(contract)}
-                                title="Docs"
-                                className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 md:hidden"
-                              >
-                                <FileText className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => openContractDocsModal(contract)}
-                                title="Docs"
-                                className="bg-violet-50 border-violet-200 text-violet-700 hover:bg-violet-100 hidden md:inline-flex"
-                              >
-                                <FileText className="h-4 w-4 mr-2" />
-                                Docs
-                              </Button>
-                              {/* Upload supporting document */}
-                              <input
-                                id={`contract-file-${contract.id}`}
-                                type="file"
-                                accept="application/pdf,image/png,image/jpeg"
-                                className="hidden"
-                                onChange={(e) => handleUploadFileChange(contract, e)}
-                              />
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => document.getElementById(`contract-file-${contract.id}`)?.click()}
-                                disabled={uploadingId === contract.id}
-                                className="bg-red-50 border-red-200 text-red-700 hover:bg-red-100 hidden md:inline-flex"
-                              >
-                                {uploadingId === contract.id ? (
-                                  <>
-                                    <span className="h-4 w-4 mr-2 inline-block border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
-                                    Uploading...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Upload className="h-4 w-4 mr-2" />
-                                    Upload
-                                  </>
-                                )}
-                              </Button>
-                            </>
-                          )}
                         </div>
                       </div>
 

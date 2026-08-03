@@ -5,17 +5,38 @@ import { mapHttpMethodToEventType, trackApiMutation } from '@/lib/userActivityTr
 
 const DEFAULT_API_BASE = 'http://127.0.0.1:5001/api';
 
+function isLocalDevFrontendHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const { hostname, port } = window.location;
+  return (
+    (hostname === 'localhost' || hostname === '127.0.0.1') &&
+    (port === '3001' || port === '')
+  );
+}
+
 /**
- * Prefer same-origin /api on staging/production when the baked-in URL points at another host
- * (e.g. NEXT_PUBLIC_API_URL=http://172.28.92.57:5001/api). Cross-origin breaks session cookies.
+ * Resolve API base URL for axios.
+ * - Staging/production: relative `/api` (nginx same-origin proxy).
+ * - Local dev (localhost:3001, no nginx): direct backend on :5001.
+ * - Misconfigured absolute backend IP in browser build: fall back to `/api` on non-local hosts.
  */
 export function resolveApiBaseUrl(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE;
   if (typeof window === 'undefined') return configured;
-  if (configured.startsWith('/')) return configured;
+
+  if (configured.startsWith('/')) {
+    if (isLocalDevFrontendHost()) {
+      return DEFAULT_API_BASE;
+    }
+    return configured;
+  }
+
   try {
     const apiHost = new URL(configured, window.location.origin).host;
     if (apiHost !== window.location.host) {
+      if (isLocalDevFrontendHost()) {
+        return DEFAULT_API_BASE;
+      }
       console.warn(
         '[KLIP] API base points to a different host; using same-origin /api instead of',
         configured,

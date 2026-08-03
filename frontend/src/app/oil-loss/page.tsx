@@ -1171,7 +1171,11 @@ export default function OilLossPage() {
   const globalPeriodOptions = useMemo(() => buildOilLossPeriodOptions(), [])
 
   const globalTransportOptions = useMemo(
-    () => OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({ value, label: value })),
+    () =>
+      OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({
+        value,
+        label: value === 'All' ? 'All transports' : value,
+      })),
     [],
   )
   const globalPeriodMeta = useMemo(
@@ -1852,7 +1856,7 @@ export default function OilLossPage() {
                 value={globalTransport}
                 onChange={setGlobalTransport}
                 options={globalTransportOptions}
-                uppercaseLabels
+                selectClassName={globalTransport === 'All' ? 'text-gray-500' : undefined}
               />
               <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
@@ -1943,7 +1947,12 @@ export default function OilLossPage() {
           filters={drilldownFilters}
           onFiltersChange={applyOilLossDrilldownChange}
           onReset={resetOilLossDrilldown}
-          drilldownScopedRowCount={drilldownFilteredRows.length}
+          scopeSegments={[
+            globalPeriodMeta.label,
+            ...(globalTransport !== 'All' ? [globalTransport] : []),
+            ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
+            ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
+          ]}
           loading={showBlockingLoad}
           dataFetching={dataFetching}
         />

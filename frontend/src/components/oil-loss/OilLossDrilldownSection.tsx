@@ -3,11 +3,11 @@
 import { useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { formatOilLossMtFromKg } from '@/lib/oilLossFormat'
 import {
   buildOilLossDrilldownTree,
-  countUniqueOilLossContracts,
   displayOilLossGroupLabel,
   OIL_LOSS_DRILLDOWN_CATEGORIES,
   OIL_LOSS_DRILLDOWN_LEVEL_STYLES,
@@ -23,7 +23,8 @@ type OilLossDrilldownSectionProps = {
   filters: OilLossDrilldownFilters
   onFiltersChange: (filters: OilLossDrilldownFilters) => void
   onReset: () => void
-  drilldownScopedRowCount: number
+  /** Active global scope tokens under the title (period, transport, multi-filters). */
+  scopeSegments?: readonly string[]
   loading?: boolean
   dataFetching?: boolean
 }
@@ -37,12 +38,11 @@ export default function OilLossDrilldownSection({
   filters,
   onFiltersChange,
   onReset,
-  drilldownScopedRowCount,
+  scopeSegments = [],
   loading = false,
   dataFetching = false,
 }: OilLossDrilldownSectionProps) {
   const tree = useMemo(() => buildOilLossDrilldownTree(rows), [rows])
-  const scopeContractCount = useMemo(() => countUniqueOilLossContracts(rows), [rows])
   const scopeTotalKg = useMemo(() => sumOilLossKgFromRows(rows), [rows])
 
   const productNode = tree.find((n) => n.key === filters.product)
@@ -108,11 +108,7 @@ export default function OilLossDrilldownSection({
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
           ) : null}
         </CardTitle>
-        <div className="text-sm text-gray-600 mt-1">
-          Navigate as a tree:{' '}
-          <span className="font-medium">Product → Plant → Incoterm → Transporter → Supplier</span>. Click a card to
-          filter the table below.
-        </div>
+        <PerformanceDrilldownScopeLine segments={scopeSegments} />
       </CardHeader>
       <CardContent className="pt-2">
         {showBlocking ? (
@@ -121,30 +117,11 @@ export default function OilLossDrilldownSection({
           <div className="text-sm text-gray-500">No oil loss rows for the current filters.</div>
         ) : (
           <div
-            className={`rounded-xl border bg-white p-4 transition-opacity duration-200 ${
+            className={`transition-opacity duration-200 ${
               isRefreshing ? 'opacity-65' : 'opacity-100'
             }`}
           >
-            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">Drilldown</div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  <span className="font-semibold text-gray-800 tabular-nums">
-                    {scopeContractCount.toLocaleString('en-US')}
-                  </span>{' '}
-                  unique contracts (global scope)
-                  <span className="text-gray-400 mx-1" aria-hidden>
-                    ·
-                  </span>
-                  <span className="tabular-nums">{drilldownScopedRowCount.toLocaleString('en-US')}</span> rows in table
-                  scope
-                  <span className="text-gray-400 mx-1" aria-hidden>
-                    ·
-                  </span>
-                  <span className="font-semibold text-slate-800 tabular-nums">{formatOilLossMtSuffix(scopeTotalKg)}</span>{' '}
-                  total oil loss
-                </div>
-              </div>
+            <div className="flex items-center justify-end mb-3">
               <button type="button" onClick={onReset} className="text-sm text-blue-700 hover:underline shrink-0">
                 Reset selection
               </button>
