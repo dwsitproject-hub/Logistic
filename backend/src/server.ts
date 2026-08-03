@@ -71,8 +71,12 @@ const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '50mb';
 
 configureTrustProxy(app);
 
-// Middleware
-app.use(helmet());
+// Middleware — disable COOP on HTTP (browser ignores it anyway; noisy on SSO redirects)
+app.use(
+  helmet({
+    crossOriginOpenerPolicy: process.env.SESSION_COOKIE_SECURE === 'true',
+  }),
+);
 const corsOrigin = frontendUrl();
 const extraCorsOrigins = String(process.env.CORS_EXTRA_ORIGINS || '')
   .split(',')

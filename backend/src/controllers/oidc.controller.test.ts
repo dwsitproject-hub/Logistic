@@ -27,10 +27,11 @@ vi.mock('../services/sessionAuth.service', () => ({
   frontendUrl: vi.fn(() => 'http://localhost:3001'),
   loadActiveUserByEmail: vi.fn(),
   persistHubOidcSub: vi.fn().mockResolvedValue(undefined),
+  saveSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { isOidcConfigured, exchangeAuthorizationCode, verifyIdToken } from '../services/oidc.service';
-import { establishSession, loadActiveUserByEmail } from '../services/sessionAuth.service';
+import { establishSession, loadActiveUserByEmail, saveSession } from '../services/sessionAuth.service';
 import { oidcCallbackHandler, oidcLoginHandler } from './oidc.controller';
 
 function mockRes() {
@@ -81,6 +82,7 @@ describe('oidc.controller', () => {
     const req = { session: {} } as Request;
     const res = mockRes();
     await oidcLoginHandler(req, res);
+    expect(saveSession).toHaveBeenCalledWith(req);
     expect(res.redirectUrl).toBe('https://hub.example/authorize');
     expect(req.session?.oidcState).toBe('state-1');
     expect(req.session?.oidcCodeVerifier).toBe('verifier-1');

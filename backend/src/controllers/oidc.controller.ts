@@ -58,6 +58,7 @@ export const oidcLoginHandler = async (req: Request, res: Response): Promise<voi
       nonce,
       codeChallenge,
     });
+    await saveSession(req);
     res.redirect(302, authorizeUrl);
   } catch (error) {
     logger.error('OIDC login initiation failed', { error });
