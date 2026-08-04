@@ -10,6 +10,11 @@ export default defineConfig({
     include: ['src/test/integration/**/*.integration.test.ts'],
     testTimeout: 120_000,
     hookTimeout: 60_000,
+    // Integration test files share one Postgres test database. Running them
+    // concurrently lets one file's fixture seed/cleanup race another file's
+    // queries (e.g. deleting/inserting shared rows mid-query), causing flaky
+    // failures unrelated to the code under test. Force sequential execution.
+    fileParallelism: false,
     env: {
       NODE_ENV: 'test',
       JWT_SECRET: process.env.JWT_SECRET || 'vitest-jwt-secret-key-minimum-32-characters-long',

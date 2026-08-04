@@ -47,7 +47,13 @@ export function sqlTruckingPoLevelSapRowMatch(
   )`;
 }
 
-const SAP_DELIVERY_RAW_COALESCE = `COALESCE(
+/**
+ * Exported (in addition to being used locally below) so
+ * `truckingPoQtyResolutionCteSql.ts` can build the same raw-value matching
+ * used by `sqlTruckingPoLevelSapQtyWithDedup`, but pre-aggregated via GROUP BY
+ * across all contracts in one pass instead of once per outer row.
+ */
+export const SAP_DELIVERY_RAW_COALESCE = `COALESCE(
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered Trucking'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered via Trucking'), ''),
@@ -56,7 +62,7 @@ const SAP_DELIVERY_RAW_COALESCE = `COALESCE(
       ''
     )`;
 
-const SAP_RECEIVE_RAW_COALESCE = `COALESCE(
+export const SAP_RECEIVE_RAW_COALESCE = `COALESCE(
       NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
       NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
       ''
@@ -285,6 +291,19 @@ export function sqlTruckingHasDailyActualsExpr(operationIdExpr = 't.id'): string
 }
 
 /**
+ * Optional pre-computed overrides for the GR-closed / WB-actuals pieces of the
+ * resolved qty CASE below. When provided (e.g. plain column refs joined from a
+ * pre-aggregated CTE — see `truckingPoQtyResolutionCteSql.ts`), the caller
+ * avoids re-embedding the underlying `sap_processed_data` / `trucking_daily_actuals`
+ * subqueries inline; when omitted, behavior is unchanged from before.
+ */
+export interface TruckingResolvedQtyOverrides {
+  grClosedExpr?: string;
+  hasWbExpr?: string;
+  wbQtyExpr?: string;
+}
+
+/**
  * Delivery Qty for list/STO expand:
  * - GR Open (LCO: GR STO / FRC: GR PO) + WB actuals → WB delivery sum
  * - GR Close → SAP (PO-level sum, latest row per STO)
@@ -295,10 +314,11 @@ export function sqlTruckingResolvedDeliveryQty(
   sapQtyExpr: string,
   operationIdExpr = 't.id',
   contractAlias = 'c',
+  overrides?: TruckingResolvedQtyOverrides,
 ): string {
-  const grClosed = sqlIsContractSapClosedExpr(contractAlias);
-  const hasWb = sqlTruckingHasDailyActualsExpr(operationIdExpr);
-  const wbDelivery = sqlWbActualDeliverySumKg(operationIdExpr);
+  const grClosed = overrides?.grClosedExpr ?? sqlIsContractSapClosedExpr(contractAlias);
+  const hasWb = overrides?.hasWbExpr ?? sqlTruckingHasDailyActualsExpr(operationIdExpr);
+  const wbDelivery = overrides?.wbQtyExpr ?? sqlWbActualDeliverySumKg(operationIdExpr);
   return `CASE
     WHEN (${hasWb}) AND NOT (${grClosed}) THEN ${wbDelivery}
     WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
@@ -314,10 +334,11 @@ export function sqlTruckingResolvedReceiveQty(
   sapQtyExpr: string,
   operationIdExpr = 't.id',
   contractAlias = 'c',
+  overrides?: TruckingResolvedQtyOverrides,
 ): string {
-  const grClosed = sqlIsContractSapClosedExpr(contractAlias);
-  const hasWb = sqlTruckingHasDailyActualsExpr(operationIdExpr);
-  const wbReceive = sqlWbActualReceiveSumKg(operationIdExpr);
+  const grClosed = overrides?.grClosedExpr ?? sqlIsContractSapClosedExpr(contractAlias);
+  const hasWb = overrides?.hasWbExpr ?? sqlTruckingHasDailyActualsExpr(operationIdExpr);
+  const wbReceive = overrides?.wbQtyExpr ?? sqlWbActualReceiveSumKg(operationIdExpr);
   return `CASE
     WHEN (${hasWb}) AND NOT (${grClosed}) THEN ${wbReceive}
     WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)

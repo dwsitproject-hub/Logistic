@@ -5,11 +5,14 @@ import { TRUCKING_REALIZATIONS_JOIN } from './truckingRealizationSql';
 import {
   sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingPoLevelSapDeliveryQty,
-  sqlTruckingPoLevelSapReceiveQty,
   sqlTruckingResolvedDeliveryQty,
   sqlTruckingResolvedReceiveQty,
 } from './truckingQuantitySql';
+import {
+  buildTruckingQtyResolutionCtes,
+  TRUCKING_QTY_RESOLUTION_JOIN,
+  TRUCKING_QTY_RESOLUTION_OVERRIDES,
+} from './truckingPoQtyResolutionCteSql';
 
 const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
 
@@ -115,29 +118,30 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     };
   }
 
-  // PO-grain: sum SAP Delivery/Receive across all STOs for the PO.
-  const qtyDeliveredPoSap = sqlTruckingPoLevelSapDeliveryQty(
-    'e.contract_number',
-    'e.contract_id',
-    'e.po_number',
-  );
-  const qtyReceivePoSap = sqlTruckingPoLevelSapReceiveQty(
-    'e.contract_number',
-    'e.contract_id',
-    'e.po_number',
-  );
-
+  // PO-grain SAP Delivery/Receive (dedup'd across STOs) — pre-aggregated once per
+  // contract via sap_delivery_dedup / sap_receive_dedup (see TRUCKING_QTY_RESOLUTION_JOIN)
+  // instead of a correlated subquery re-run (and text-duplicated) per output row.
   const qtyDelivered = sqlTruckingResolvedDeliveryQty(
     'COALESCE(e.quantity_delivered, 0)',
-    qtyDeliveredPoSap,
+    TRUCKING_QTY_RESOLUTION_OVERRIDES.sapDeliveryExpr,
     'e.id',
     'c',
+    {
+      grClosedExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+      hasWbExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.hasWbExpr,
+      wbQtyExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.wbDeliveryExpr,
+    },
   );
   const qtyReceive = sqlTruckingResolvedReceiveQty(
     'COALESCE(e.quantity_receive, e.quantity_delivered, 0)',
-    qtyReceivePoSap,
+    TRUCKING_QTY_RESOLUTION_OVERRIDES.sapReceiveExpr,
     'e.id',
     'c',
+    {
+      grClosedExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+      hasWbExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.hasWbExpr,
+      wbQtyExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.wbReceiveExpr,
+    },
   );
   const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr();
   // OS = Contract Qty − Σ Delivery (LCO) / Σ Receive (FRC) across all STOs on the PO.
@@ -287,12 +291,18 @@ export function buildTruckingListExpansionSql(
         NULLIF(TRIM(e.sto_numbers::text), '')
       )`;
 
+  // Delivery/receive/GR-closed/WB-actuals computed once per distinct contract or
+  // operation (see truckingPoQtyResolutionCteSql.ts) instead of re-run as a
+  // correlated, text-duplicated subquery for every row below.
+  const qtyResolutionCte = skipSapJoin ? '' : `,${buildTruckingQtyResolutionCtes('expanded')}`;
+  const qtyResolutionJoin = skipSapJoin ? '' : TRUCKING_QTY_RESOLUTION_JOIN;
+
   return `
       WITH trucking_source AS (
         ${innerSql}
       ),
       ${buildContractStoLinesCte(skipSapJoin)},${pagingBlock}
-      ${buildExpandedJoinSql(Boolean(paging) || Boolean(resolvedKeys))}
+      ${buildExpandedJoinSql(Boolean(paging) || Boolean(resolvedKeys))}${qtyResolutionCte}
       SELECT
         e.id,
         e.operation_id,
@@ -371,6 +381,7 @@ export function buildTruckingListExpansionSql(
         ON sn.operation_id = e.id`
           : ''
       }
+      ${qtyResolutionJoin}
       ${TRUCKING_REALIZATIONS_JOIN}`;
 }
 
