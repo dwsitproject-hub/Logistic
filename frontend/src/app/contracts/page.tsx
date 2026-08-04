@@ -2077,7 +2077,8 @@ function ContractsPageContent() {
       const status = (error as any)?.response?.status
       // 401 is handled by axios interceptor (redirects to /login)
       if (status === 401 || status === 403) return
-      alert('Failed to load contracts. Please try again.')
+      // No blocking alert — transient DB/network errors on staging should not interrupt
+      // the user. Existing rows stay on screen; the next refetch recovers silently.
       if (fetchGen === contractsFetchGenRef.current) setListFetching(false)
     } finally {
       if (trackContractPerfTableLoad) finishContractPerfTableLoad()

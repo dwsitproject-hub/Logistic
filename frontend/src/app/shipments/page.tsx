@@ -1893,12 +1893,10 @@ function ShipmentsPageContent() {
         url: error.config?.url
       })
 
-      const errorMessage = error.response?.data?.error?.message
-        || error.response?.data?.message
-        || error.message
-        || 'Unknown error occurred'
-
-      alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
+      // No blocking alert — transient DB/network errors on staging (e.g. "Connection
+      // terminated unexpectedly") should not interrupt the user. Keep whatever rows are
+      // already on screen; the next refetch (filter change, pagination, or poll) recovers
+      // silently, same as the Late Performance summary/tree failure handling.
       if (!hadRows) {
         setShipments([])
       }

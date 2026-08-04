@@ -2190,7 +2190,8 @@ function TruckingPageContent() {
     } catch (error) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch trucking operations:', error)
-      alert('Failed to load trucking operations. Please refresh the page.')
+      // No blocking alert — transient DB/network errors on staging should not interrupt
+      // the user. Existing rows stay on screen; the next refetch recovers silently.
       setListFetching(false)
       setSummaryFetching(false)
       setOutstandingQtyFetching(false)

@@ -92,7 +92,7 @@ export default function DocumentsPage() {
       console.error('Failed to fetch contracts:', error)
       const status = (error as any)?.response?.status
       if (status === 401 || status === 403) return
-      alert('Failed to load contracts. Please try again.')
+      // No blocking alert — transient DB/network errors should not interrupt the user.
     } finally {
       setLoading(false)
     }
