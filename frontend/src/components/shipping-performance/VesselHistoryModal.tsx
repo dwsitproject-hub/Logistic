@@ -109,13 +109,20 @@ function displayLabel(value: unknown, fallback = '-'): string {
   return formatSapDisplayValue(value, fallback)
 }
 
+/** Postgres `numeric` columns (e.g. TC vessel metrics) arrive as strings — coerce, don't reject. */
+function toFiniteNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 function avgAtaDelta(
   rows: VesselHistoryShipmentRow[],
   key: keyof VesselHistoryShipmentRow,
 ): number | null {
   const vals = rows
-    .map((r) => r[key])
-    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+    .map((r) => toFiniteNumber(r[key]))
+    .filter((v): v is number => v !== null)
   if (vals.length === 0) return null
   const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
   return Math.round(avg * 10) / 10

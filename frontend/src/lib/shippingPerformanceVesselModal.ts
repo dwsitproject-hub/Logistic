@@ -180,13 +180,20 @@ function resolveAggregatedStoDisplay(rows: ShippingPerfVesselModalSourceRow[]): 
   return null
 }
 
+/** Postgres `numeric` columns (e.g. TC vessel metrics) arrive as strings — coerce, don't reject. */
+function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 function avgMetric(
   rows: ShippingPerfVesselModalSourceRow[],
   key: keyof ShippingPerfVesselModalSourceRow,
 ): number | null {
   const values = rows
-    .map((row) => row[key])
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    .map((row) => toFiniteNumber(row[key]))
+    .filter((value): value is number => value !== null)
   if (values.length === 0) return null
   const avg = values.reduce((sum, value) => sum + value, 0) / values.length
   return Math.round(avg * 10) / 10
