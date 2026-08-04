@@ -85,8 +85,8 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-/** Bumped when STO merge recomputes cycle deltas from MAX-merged milestones. */
-const ROW_CACHE_KEY = 'shipping-performance-rows-v36';
+/** Bumped when Shipments scope ignores STO Type T (incoterm-only CIF/FOB/CFR). */
+const ROW_CACHE_KEY = 'shipping-performance-rows-v37';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what

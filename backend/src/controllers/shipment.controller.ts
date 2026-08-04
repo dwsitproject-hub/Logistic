@@ -613,7 +613,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    /** Shipments page scope: CIF/FOB/CFR + exclude STO Type T (trucking legs). */
+    /** Shipments page scope: CIF/FOB/CFR only (STO Type ignored for list visibility). */
     const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
     const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');

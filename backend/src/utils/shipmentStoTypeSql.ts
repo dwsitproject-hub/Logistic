@@ -1,7 +1,7 @@
 /**
  * SAP STO Type / STO number helpers — shared JSON field expressions.
  *
- * Shipments page list scope: CIF/FOB/CFR incoterm + exclude STO Type T — see shipmentIncotermScope.ts.
+ * Shipments page list scope: CIF/FOB/CFR incoterm only — see shipmentIncotermScope.ts.
  * Trucking page: FRC/LCO — see truckingIncotermScope.ts.
  * Oil Loss vessel segment: MIX + STO Type 'V' — see oilLossEligibility.ts.
  */
@@ -143,7 +143,10 @@ export function shipmentResolvedStoTypeExpr(
   )))`;
 }
 
-/** Exclude trucking legs (STO Type T). Blank / unknown types are kept. Requires `l` = latest_spd_contract. */
+/**
+ * @deprecated Shipments list no longer filters STO Type T — scope is CIF/FOB/CFR incoterm only.
+ * Kept for Oil Loss / ad-hoc scripts that still need Type T predicates.
+ */
 export function buildShipmentExcludeStoTypeTSql(
   contractAlias = 'c',
   spdAlias = 'l',
@@ -153,13 +156,13 @@ export function buildShipmentExcludeStoTypeTSql(
 }
 
 /**
- * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm and exclude STO Type T.
- * Requires `l` = latest_spd_contract on the same query.
+ * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm only (STO Type ignored).
+ * spdAlias/shipmentAlias params kept for call-site compatibility.
  */
 export function buildShipmentPageSeaRowScopeSql(
   contractAlias = 'c',
-  spdAlias = 'l',
-  shipmentAlias = 's',
+  _spdAlias = 'l',
+  _shipmentAlias = 's',
 ): string {
-  return `(${buildShipmentPageSeaIncotermScopeSql(contractAlias)} AND ${buildShipmentExcludeStoTypeTSql(contractAlias, spdAlias, shipmentAlias)})`;
+  return buildShipmentPageSeaIncotermScopeSql(contractAlias);
 }

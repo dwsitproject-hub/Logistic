@@ -69,10 +69,10 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('NOT (');
   });
 
-  it('buildShipmentPageSeaRowScopeSql combines CIF/FOB/CFR incoterm and exclude Type T', () => {
+  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm only (no STO Type T filter)', () => {
     const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
-    expect(sql).toContain("= 'T')");
-    expect(sql).toContain(' AND ');
+    expect(sql).not.toMatch(/=\s*'T'/);
+    expect(sql).not.toContain(' AND ');
   });
 });
