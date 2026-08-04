@@ -23,6 +23,31 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql.match(/LEFT JOIN sto_metrics sm/g)?.length).toBe(1);
   });
 
+  it('defines a shipment_page CTE so the spliced-in SAP-agg CTEs (shipment_page_contracts, spd_keyed, perf_sto_keys) resolve', () => {
+    const sql = buildShipmentSection1CombinedSummaryQuery({
+      shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
+      unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
+      toolbarOuterSql: '',
+      summaryScopeCte: '',
+      summaryEnrichedFrom: 'filtered_shipments',
+    });
+    expect(sql).toContain('shipment_page AS (');
+    expect(sql).toContain('SELECT * FROM filtered_shipments');
+    // shipment_page must be defined before it is first referenced downstream.
+    expect(sql.indexOf('shipment_page AS (')).toBeLessThan(sql.indexOf('FROM shipment_page sp'));
+  });
+
+  it('aliases shipment_page to the scoped source when Section 1 stage scope is active', () => {
+    const sql = buildShipmentSection1CombinedSummaryQuery({
+      shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
+      unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
+      toolbarOuterSql: '',
+      summaryScopeCte: ", scoped_shipments AS (SELECT sb.* FROM filtered_shipments sb WHERE 1=1)",
+      summaryEnrichedFrom: 'scoped_shipments',
+    });
+    expect(sql).toContain('shipment_page AS (\n        SELECT * FROM scoped_shipments\n      )');
+  });
+
   it('parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow maps combined row', () => {
     const parsed = parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow({
       unplanned_execution_contract_qty: '1000',

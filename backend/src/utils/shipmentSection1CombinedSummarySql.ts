@@ -112,6 +112,9 @@ export function buildShipmentSection1CombinedSummaryQuery(
           AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       )${opts.summaryScopeCte}
       , ${shipmentListQtyMoveCteFromPage('filtered_shipments')}
+      , shipment_page AS (
+        SELECT * FROM ${opts.summaryEnrichedFrom}
+      )
       , ${spdAggCtes}
       , enriched AS (
         SELECT
