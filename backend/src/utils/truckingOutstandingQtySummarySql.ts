@@ -204,6 +204,9 @@ export function buildTruckingOutstandingQtyExecutionAggregateQuery(
 /**
  * Aggregate OS from open-contract unplanned backlog (no trucking op yet).
  * Caller supplies contractScopeSql / toolbarSql params separately.
+ * @deprecated Use `buildTruckingUnplannedBacklogCombinedQuery` for the Section 1 Summary/OS
+ * flow — it computes count + contract qty + this same OS aggregate in one scan instead of
+ * three separate scans of the identical backlog set.
  */
 export function buildTruckingOutstandingQtyBacklogAggregateQuery(
   contractScopeSql: string,
@@ -237,6 +240,54 @@ export function buildTruckingOutstandingQtyBacklogAggregateQuery(
         AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'LCO')
     )
     SELECT
+      ${sqlTruckingOutstandingQtyAggregateSelect(
+        'br.outstanding_quantity',
+        'br.source_type',
+        'br.incoterm',
+      )}
+    FROM backlog_rows br`;
+}
+
+/**
+ * Section 1 Summary/OS backlog — single scan of the unplanned contract backlog for
+ * COUNT + contract qty (kg) + OS bucket aggregates. Replaces 3 separate queries
+ * (backlog count, backlog contract qty, backlog OS aggregate) that scanned the exact
+ * same `contracts x latest_spd_contract` filtered set.
+ */
+export function buildTruckingUnplannedBacklogCombinedQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}`,
+  });
+
+  return `
+    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    backlog_rows AS (
+      SELECT
+        c.quantity_ordered,
+        c.source_type,
+        c.incoterm,
+        ${outstandingExpr} AS outstanding_quantity
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    )
+    SELECT
+      COUNT(*)::bigint AS c,
+      COALESCE(SUM(COALESCE(br.quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
       ${sqlTruckingOutstandingQtyAggregateSelect(
         'br.outstanding_quantity',
         'br.source_type',

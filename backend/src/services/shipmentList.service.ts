@@ -33,8 +33,6 @@ import {
 import {
   appendUnplannedContractBacklogColumnFilters,
   appendUnplannedContractBacklogGlobalSearch,
-  buildShipmentUnplannedBacklogContractQtyQuery,
-  buildPreplannedContractsCountQuery,
   buildUnplannedContractToolbarScope,
 } from '../utils/shipmentUnplannedHybridSql';
 import {
@@ -105,7 +103,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v32';
+const CACHE_VERSION = 'shipment-list-v33';
 const MAX_CACHE_ENTRIES = 80;
 const OUTSTANDING_QTY_CACHE = new Map<
   string,
@@ -226,42 +224,23 @@ const STATUS_CARD_QTY_CACHE = new Map<
 const STATUS_CARD_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentStatusCardQtyBundle>>();
 const OUTSTANDING_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentOutstandingQtySummary>>();
 
-async function loadShipmentStatusCardQtyBacklogParts(req: AuthRequest): Promise<{
+/** Backlog qty parts already computed by the Unplanned/Preplanned breakdown queries. */
+export interface ShipmentStatusCardQtyBacklogParts {
   unplannedBacklogContractQtyKg: number;
   preplannedContractQtyKg: number;
-}> {
-  const { dateFrom, dateTo, contract, plant } = req.query;
-  const globalSearch =
-    typeof (req.query as { search?: string }).search === 'string'
-      ? (req.query as { search?: string }).search!.trim()
-      : '';
-  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
-  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
-  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const scope = buildUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
-  let idx = scope.params.length + 1;
-  const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
-  idx = g.nextIndex;
-  const c = appendUnplannedContractBacklogColumnFilters(colFilters, idx);
-  const backlogToolbarSql = `${g.sql}${c.sql}`;
-  const backlogParams = [...scope.params, ...g.params, ...c.params];
-  const [backlogRes, preplannedRes] = await Promise.all([
-    query(buildShipmentUnplannedBacklogContractQtyQuery(scope.sql, backlogToolbarSql), backlogParams),
-    query(buildPreplannedContractsCountQuery(scope.sql, backlogToolbarSql), backlogParams),
-  ]);
-  return {
-    unplannedBacklogContractQtyKg: Number(backlogRes.rows[0]?.contract_qty_kg ?? 0) || 0,
-    preplannedContractQtyKg: Number(preplannedRes.rows[0]?.contract_qty_kg ?? 0) || 0,
-  };
 }
 
-/** Merge backlog/preplanned into execution qty fields from a combined summary row. */
+/**
+ * Merge backlog/preplanned into execution qty fields from a combined summary row.
+ * `backlogParts` must come from the same-request Unplanned/Preplanned breakdown (Section 1
+ * already computes those) — do NOT re-query here, that was firing the identical
+ * Preplanned-count SQL twice per request.
+ */
 export async function mergeShipmentStatusCardQtyFromCombinedSummaryRow(
-  req: AuthRequest,
   summaryRow: Record<string, unknown>,
+  backlogParts: ShipmentStatusCardQtyBacklogParts,
 ): Promise<ShipmentStatusCardQtyBundle> {
   const executionPartial = parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow(summaryRow);
-  const backlogParts = await loadShipmentStatusCardQtyBacklogParts(req);
   return mergeShipmentStatusCardQtyParts({
     execution: {
       unplannedExecution: executionPartial.statusContractQty.unplanned,
@@ -288,7 +267,6 @@ function summaryRowHasCombinedStatusCardQty(summaryRow: Record<string, unknown>)
  * Scoped by Global Filters (toolbar) — same scope as status counts.
  */
 export async function loadShipmentStatusCardQtyForRequest(
-  req: AuthRequest,
   opts: {
     shipmentBaseCteSql: string;
     toolbarOuterSql: string;
@@ -296,6 +274,7 @@ export async function loadShipmentStatusCardQtyForRequest(
     toolbarOuterParams: unknown[];
     filterCacheKey: string;
   },
+  backlogParts: ShipmentStatusCardQtyBacklogParts,
 ): Promise<ShipmentStatusCardQtyBundle> {
   const cacheKey = buildShipmentStatusCardQtyCacheKey(opts.filterCacheKey);
   const cached = STATUS_CARD_QTY_CACHE.get(cacheKey);
@@ -313,10 +292,7 @@ export async function loadShipmentStatusCardQtyForRequest(
       opts.shipmentBaseCteSql,
       opts.toolbarOuterSql,
     );
-    const [execRes, backlogParts] = await Promise.all([
-      query(execText, baseParams),
-      loadShipmentStatusCardQtyBacklogParts(req),
-    ]);
+    const execRes = await query(execText, baseParams);
     const execution = parseShipmentStatusContractQtyFromExecutionRow(
       (execRes.rows[0] || {}) as Record<string, unknown>,
     );
@@ -504,12 +480,14 @@ export type ShipmentSummaryUnplannedBreakdown = {
   contractRows: number;
   shipmentRows: number;
   totalTableRows: number;
+  contractQtyKg: number;
 };
 
 export type ShipmentSummaryPreplannedBreakdown = {
   contractRows: number;
   groupCount: number;
   totalTableRows: number;
+  contractQtyKg: number;
 };
 
 export type ShipmentSummaryLoadSource = 'cache' | 'daily' | 'live';
@@ -606,6 +584,7 @@ export async function loadShipmentSummaryBundle(
     contractRows: 0,
     groupCount: 0,
     totalTableRows: 0,
+    contractQtyKg: 0,
   };
   const loadPreplanned = opts.loadPreplannedBreakdown ?? (async () => emptyPreplanned);
 

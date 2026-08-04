@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildTruckingOutstandingQtyExecutionAggregateQuery,
+  buildTruckingUnplannedBacklogCombinedQuery,
   isTruckingOsStatusOutsideActiveScope,
   mergeTruckingOutstandingQtySummaries,
   normalizeTruckingOsStatusParam,
@@ -85,5 +86,17 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(sqlTruckingSourceIsThirdParty('c.source_type')).toContain("'PARTY'")
     expect(sqlTruckingSourceIsInterco('c.source_type')).toContain('INTERCO')
     expect(sqlTruckingSourceIsInterco('c.source_type')).toContain('INHOUSE')
+  })
+
+  it('combined backlog query scans the backlog once for count + contract qty + OS aggregates', () => {
+    const text = buildTruckingUnplannedBacklogCombinedQuery('AND c.contract_date >= $1', '')
+    expect(text).toContain('backlog_rows')
+    expect(text).toContain('latest_spd_contract')
+    expect(text).toContain('COUNT(*)::bigint AS c')
+    expect(text).toContain('AS contract_qty_kg')
+    expect(text).toContain('third_party_frc_kg')
+    expect(text).toContain('interco_lco_kg')
+    // Single FROM/backlog scan — not three separate SELECTs like the deprecated helpers.
+    expect(text.match(/FROM backlog_rows/g)?.length).toBe(1)
   })
 })

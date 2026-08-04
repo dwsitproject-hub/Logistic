@@ -302,6 +302,10 @@ export function buildUnplannedContractBacklogLatestSpdCte(): string {
       )`;
 }
 
+/**
+ * Backlog count + contract qty (kg) in one scan — was 2 separate queries against the same
+ * filtered contract set (count-only + qty-only), now merged to avoid a redundant scan.
+ */
 export function buildUnplannedContractBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
@@ -309,32 +313,16 @@ export function buildUnplannedContractBacklogCountQuery(
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     unplanned_contract_backlog AS (
-      SELECT c.id
+      SELECT c.id, c.quantity_ordered
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
         ${contractScopeSql}
         ${toolbarSql}
     )
-    SELECT COUNT(*)::bigint AS c FROM unplanned_contract_backlog`;
-}
-
-/** Sum contract quantity_ordered for sea unplanned backlog (one row per contract). */
-export function buildShipmentUnplannedBacklogContractQtyQuery(
-  contractScopeSql: string,
-  toolbarSql: string,
-): string {
-  return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
-    unplanned_contract_backlog AS (
-      SELECT c.quantity_ordered
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
-        ${contractScopeSql}
-        ${toolbarSql}
-    )
-    SELECT COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+    SELECT
+      COUNT(*)::bigint AS c,
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
     FROM unplanned_contract_backlog`;
 }
 

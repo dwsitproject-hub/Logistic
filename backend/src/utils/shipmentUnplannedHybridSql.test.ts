@@ -22,10 +22,12 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).not.toMatch(/=\s*'T'/);
   });
 
-  it('builds contract backlog count query', () => {
+  it('builds contract backlog count query with contract qty in the same scan', () => {
     const text = buildUnplannedContractBacklogCountQuery('AND c.contract_date >= $1', '');
     expect(text).toContain('unplanned_contract_backlog');
     expect(text).toContain('latest_spd_contract');
+    expect(text).toContain('COUNT(*)::bigint AS c');
+    expect(text).toContain('AS contract_qty_kg');
   });
 
   it('builds contract backlog page query with contract ext no and outstanding qty', () => {

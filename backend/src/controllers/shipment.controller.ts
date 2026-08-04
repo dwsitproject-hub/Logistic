@@ -22,6 +22,7 @@ import {
   seedShipmentListFilteredTotal,
   summaryRowHasCombinedStatusCardQty,
   type ShipmentOutstandingQtySummary,
+  type ShipmentStatusCardQtyBacklogParts,
   type ShipmentStatusContractQtyKg,
   type ShipmentStatusOutstandingQtyKg,
 } from '../services/shipmentList.service';
@@ -1094,14 +1095,17 @@ ${contractMetaSelectCore}
         filterCacheKey: shipmentListFilterCacheKey,
       });
 
-    const loadSection1StatusCardQty = () =>
-      loadShipmentStatusCardQtyForRequest(req, {
-        shipmentBaseCteSql: shipmentBaseCteSqlFull,
-        toolbarOuterSql: section1SummaryFilterSql,
-        innerParams,
-        toolbarOuterParams,
-        filterCacheKey: shipmentListFilterCacheKey,
-      });
+    const loadSection1StatusCardQty = (backlogParts: ShipmentStatusCardQtyBacklogParts) =>
+      loadShipmentStatusCardQtyForRequest(
+        {
+          shipmentBaseCteSql: shipmentBaseCteSqlFull,
+          toolbarOuterSql: section1SummaryFilterSql,
+          innerParams,
+          toolbarOuterParams,
+          filterCacheKey: shipmentListFilterCacheKey,
+        },
+        backlogParts,
+      );
 
     /** Decoupled OS strip — do not wait inside summaryOnly (status cards stay fast). */
     if (compact && outstandingQtyOnly) {
@@ -1156,9 +1160,13 @@ ${contractMetaSelectCore}
         preplannedBreakdown: preplannedBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
+      const statusCardQtyBacklogParts: ShipmentStatusCardQtyBacklogParts = {
+        unplannedBacklogContractQtyKg: unplannedBreakdownForSummary.contractQtyKg,
+        preplannedContractQtyKg: preplannedBreakdownForSummary.contractQtyKg,
+      };
       const statusCardQtyPromise = summaryRowHasCombinedStatusCardQty(sr)
-        ? mergeShipmentStatusCardQtyFromCombinedSummaryRow(req, sr)
-        : loadSection1StatusCardQty().catch((err) => {
+        ? mergeShipmentStatusCardQtyFromCombinedSummaryRow(sr, statusCardQtyBacklogParts)
+        : loadSection1StatusCardQty(statusCardQtyBacklogParts).catch((err) => {
             logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
             return null;
           });
@@ -1473,12 +1481,16 @@ ${contractMetaSelectCore}
         preplannedBreakdown: preplannedBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
+      const statusCardQtyBacklogParts: ShipmentStatusCardQtyBacklogParts = {
+        unplannedBacklogContractQtyKg: unplannedBreakdownForSummary.contractQtyKg,
+        preplannedContractQtyKg: preplannedBreakdownForSummary.contractQtyKg,
+      };
       const statusCardQty = summaryRowHasCombinedStatusCardQty(sr)
-        ? await mergeShipmentStatusCardQtyFromCombinedSummaryRow(req, sr).catch((err) => {
+        ? await mergeShipmentStatusCardQtyFromCombinedSummaryRow(sr, statusCardQtyBacklogParts).catch((err) => {
             logger.error('Shipment status card qty failed (summaryOnly combined)', err);
             return null;
           })
-        : await loadSection1StatusCardQty().catch((err) => {
+        : await loadSection1StatusCardQty(statusCardQtyBacklogParts).catch((err) => {
             logger.error('Shipment status card qty failed (summaryOnly)', err);
             return null;
           });

@@ -36,6 +36,8 @@ export interface UnplannedHybridBreakdown {
   contractRows: number;
   shipmentRows: number;
   totalTableRows: number;
+  /** Sum of quantity_ordered (kg) for the unplanned contract backlog (no shipment row yet). */
+  contractQtyKg: number;
 }
 
 export interface PreplannedContractsBreakdown {
@@ -46,7 +48,7 @@ export interface PreplannedContractsBreakdown {
   /** Alias of contractRows for list pagination. */
   totalTableRows: number;
   /** Sum of quantity_ordered (kg) for preplanned contracts. */
-  contractQtyKg?: number;
+  contractQtyKg: number;
 }
 
 /** Contract-scope filters shared by Unplanned backlog and Preplanned list. */
@@ -123,7 +125,8 @@ export async function countUnplannedHybridBreakdown(
 
   const contractRows = parseInt(String(contractRes.rows[0]?.c ?? '0'), 10) || 0;
   const shipmentRows = parseInt(String(shipmentRes.rows[0]?.c ?? '0'), 10) || 0;
-  return { contractRows, shipmentRows, totalTableRows: contractRows + shipmentRows };
+  const contractQtyKg = Number(contractRes.rows[0]?.contract_qty_kg ?? 0) || 0;
+  return { contractRows, shipmentRows, totalTableRows: contractRows + shipmentRows, contractQtyKg };
 }
 
 async function fetchContractBacklogPage(
