@@ -147,6 +147,16 @@ export type SaveEditShipmentInput = {
   sfbdQty: number | null
   originalSfalQty: number | null
   originalSfbdQty: number | null
+  fuelConsumption: number | null
+  freight: number | null
+  pumpRate: number | null
+  sailingSpeed: number | null
+  shortage: number | null
+  originalFuelConsumption: number | null
+  originalFreight: number | null
+  originalPumpRate: number | null
+  originalSailingSpeed: number | null
+  originalShortage: number | null
   loadingPort: string
   dischargePort: string
   activeEta: EditEtaFields
@@ -249,6 +259,15 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   // KLIP Delivered/Receive are persisted per PO via /po-klip-qty (not summed onto this row).
   if (!quantityValuesEqual(input.sfalQty, input.originalSfalQty)) updateBody.sfal_qty = input.sfalQty
   if (!quantityValuesEqual(input.sfbdQty, input.originalSfbdQty)) updateBody.sfbd_qty = input.sfbdQty
+  if (!quantityValuesEqual(input.fuelConsumption, input.originalFuelConsumption)) {
+    updateBody.fuel_consumption = input.fuelConsumption
+  }
+  if (!quantityValuesEqual(input.freight, input.originalFreight)) updateBody.freight = input.freight
+  if (!quantityValuesEqual(input.pumpRate, input.originalPumpRate)) updateBody.pump_rate = input.pumpRate
+  if (!quantityValuesEqual(input.sailingSpeed, input.originalSailingSpeed)) {
+    updateBody.sailing_speed = input.sailingSpeed
+  }
+  if (!quantityValuesEqual(input.shortage, input.originalShortage)) updateBody.shortage = input.shortage
 
   const pol = input.loadingPort.trim()
   if (pol && pol !== '0.00') updateBody.port_of_loading = pol

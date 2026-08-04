@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Suspense } from 'react'
+import * as XLSX from 'xlsx'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -410,6 +411,22 @@ const CONTRACTS_HIDDEN_COLUMN_IDS = new Set([
   'log_cycle_days',
   'trade_cycle_days',
   'contract_aging',
+])
+
+/**
+ * Full calendar-date columns (raw ISO value from `getSortValue`) shown as DD/MM/YYYY on screen.
+ * Used by Contract Performance's "Download Table" export so cell values match the UI format
+ * instead of the raw ISO string. Excludes `month_delivery_end`, which is a month-only value.
+ */
+const CONTRACT_PERF_EXPORT_DATE_COLUMN_IDS = new Set([
+  'contract_date',
+  'eta_vessel_completed_loading',
+  'eta_vessel_complete_discharge',
+  'delivery_start',
+  'delivery_end',
+  'last_planning_delivery_date',
+  'cargo_readiness_date',
+  'created_at',
 ])
 
 /** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
@@ -1070,6 +1087,8 @@ function ContractsPageContent() {
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [sortKey, setSortKey] = useState<string>('contract_date')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // Contract Performance "Download Table" — exports every filtered row (all pages) + all columns to .xlsx.
+  const [downloadingTable, setDownloadingTable] = useState(false)
 
   const contractsTableRef = useRef<HTMLDivElement | null>(null)
 
@@ -3310,6 +3329,101 @@ function ContractsPageContent() {
   }, [isContractPerformance, formatMonthDeliveryEnd, formatShortDate])
 
   /**
+   * Contract Performance "Download Table" — exports every row matching the currently active
+   * filters (across all pages, not just the current 20-row page) with ALL columns (regardless of
+   * the Columns picker's visible/hidden state), as .xlsx. Mirrors Trucking's
+   * `downloadFilteredActualsTemplate` fetch-all-pages loop.
+   */
+  const resolveContractPerfExportValue = (column: CompactColumn, c: Contract): string | number => {
+    if (column.id === 'delivery_status') {
+      return formatContractDeliveryStatusLabel(c.import_status || c.status) || ''
+    }
+    if (column.id === 'status_overall') {
+      return resolveContractStatusDisplay(c) || ''
+    }
+    if (column.id === 'unusual_status') {
+      return column.getSortValue?.(c) === 1 ? 'Unusual' : 'Normal'
+    }
+    if (column.id === 'over_under_delivery_status') {
+      return formatSapDisplayValue(c.over_under_delivery_status)
+    }
+    if (column.id === 'lt_spot') {
+      return formatSapDisplayValue(c.lt_spot)
+    }
+    if (CONTRACT_PERF_EXPORT_DATE_COLUMN_IDS.has(column.id)) {
+      const raw = column.getSortValue ? column.getSortValue(c) : ''
+      return raw ? formatDateDMY(String(raw)) : ''
+    }
+    return column.getSortValue ? column.getSortValue(c) : ''
+  }
+
+  const downloadContractPerformanceTable = async () => {
+    if (!isContractPerformance || downloadingTable) return
+    setDownloadingTable(true)
+    try {
+      const exportPageSize = 500
+      const collected: Contract[] = []
+      let page = 1
+      let totalPages = 1
+      while (page <= totalPages) {
+        const params = buildContractPerfTableListParams({
+          scope: contractPerfSection3Scope,
+          section3Mode: section3FilterMode,
+          columnFilters,
+          lateOnTimeFilter,
+          perfDashMode,
+        })
+        params.set('page', String(page))
+        params.set('limit', String(exportPageSize))
+        const apiSortKey = resolveApiSortKey(sortKey)
+        if (apiSortKey) {
+          params.set('sortKey', apiSortKey)
+          params.set('sortDir', sortDir)
+        }
+        const response = await api.get(`/contracts?${params.toString()}`)
+        const envelope = response.data as {
+          data?: { contracts?: Contract[]; pagination?: { totalPages?: number } }
+        }
+        collected.push(...(envelope?.data?.contracts || []))
+        totalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        page += 1
+      }
+
+      if (collected.length === 0) {
+        alert('No contracts match the current filters.')
+        return
+      }
+
+      const header = compactColumns.map((col) => col.label)
+      const rows = collected.map((c) => compactColumns.map((col) => resolveContractPerfExportValue(col, c)))
+      const matrix = [header, ...rows]
+
+      const ws = XLSX.utils.aoa_to_sheet(matrix)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Contract Performance')
+      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+      const blob = new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+
+      const today = new Date().toISOString().slice(0, 10)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `contract-performance-${today}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download Contract Performance table:', error)
+      alert('Failed to download table. Please try again.')
+    } finally {
+      setDownloadingTable(false)
+    }
+  }
+
+  /**
    * Same arrays as {@link defaultCompactVisibleColumnIds}; kept for reset + deps.
    */
   const defaultVisibleColumnIds = useMemo(
@@ -4645,6 +4759,22 @@ function ContractsPageContent() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {isContractPerformance && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                    onClick={downloadContractPerformanceTable}
+                    disabled={listFetching || section3TableLoading || downloadingTable || displayTotalContracts === 0}
+                  >
+                    {downloadingTable ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Download className="h-4 w-4 mr-2" />
+                    )}
+                    Download Table
+                  </Button>
+                )}
                 <div className="relative">
                   <Button
                     variant="outline"

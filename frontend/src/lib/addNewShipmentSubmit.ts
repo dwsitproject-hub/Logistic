@@ -23,6 +23,11 @@ export async function submitAddNewShipmentPayload(
     }
     if (payload.sfal_qty !== undefined) body.sfal_qty = payload.sfal_qty
     if (payload.sfbd_qty !== undefined) body.sfbd_qty = payload.sfbd_qty
+    if (payload.fuel_consumption !== undefined) body.fuel_consumption = payload.fuel_consumption
+    if (payload.freight !== undefined) body.freight = payload.freight
+    if (payload.pump_rate !== undefined) body.pump_rate = payload.pump_rate
+    if (payload.sailing_speed !== undefined) body.sailing_speed = payload.sailing_speed
+    if (payload.shortage !== undefined) body.shortage = payload.shortage
 
     const response = await api.put(`/shipments/${payload.shipmentId}`, body)
     if (!response.data?.success) {

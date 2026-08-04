@@ -188,6 +188,12 @@ interface ShippingPerformanceRow {
   lp_flow_rate?: number | null
   /** Computed: numerator MT / discharge berth→complete days (actual). Null when N/A. */
   dp_flow_rate?: number | null
+  // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+  fuel_consumption?: number | null
+  freight?: number | null
+  pump_rate?: number | null
+  sailing_speed?: number | null
+  shortage?: number | null
 }
 
 type TableViewMode = 'all' | 'by_vessel'
@@ -446,6 +452,13 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       // By Vessel = average of the per-shipment flow rates (same as the delta columns).
       lp_flow_rate: avgMetric(vesselRows, 'lp_flow_rate'),
       dp_flow_rate: avgMetric(vesselRows, 'dp_flow_rate'),
+      // TC vessel performance metrics — By Vessel shows the average across shown shipments
+      // (skips shipments where the metric is null, doesn't zero-fill).
+      fuel_consumption: avgMetric(vesselRows, 'fuel_consumption'),
+      freight: avgMetric(vesselRows, 'freight'),
+      pump_rate: avgMetric(vesselRows, 'pump_rate'),
+      sailing_speed: avgMetric(vesselRows, 'sailing_speed'),
+      shortage: avgMetric(vesselRows, 'shortage'),
       cargo_readiness_date: null,
       loading_eta_arrival: null,
       loading_eta_berthed: null,
@@ -455,6 +468,82 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       discharge_eta_completed: null,
     }
   })
+}
+
+/** TC vessel metrics used for the "Top" ranking — direction-aware (lower/higher is better). */
+const TOP_RANK_METRICS: ReadonlyArray<{
+  key: 'fuel_consumption' | 'freight' | 'pump_rate' | 'sailing_speed' | 'shortage'
+  lowerIsBetter: boolean
+}> = [
+  { key: 'fuel_consumption', lowerIsBetter: true },
+  { key: 'freight', lowerIsBetter: true },
+  { key: 'pump_rate', lowerIsBetter: false },
+  { key: 'sailing_speed', lowerIsBetter: false },
+  { key: 'shortage', lowerIsBetter: true },
+]
+
+/**
+ * Direction-aware 0-100 percentile score for one metric across vessels that have that metric.
+ * Best value in the peer group scores 100, worst scores 0. A lone vessel (n=1) scores 100
+ * (nothing to compare against).
+ */
+function computeMetricPercentileScores(
+  vesselValues: ReadonlyArray<{ vesselKey: string; value: number }>,
+  lowerIsBetter: boolean,
+): Map<string, number> {
+  const scores = new Map<string, number>()
+  const n = vesselValues.length
+  if (n === 0) return scores
+  if (n === 1) {
+    scores.set(vesselValues[0].vesselKey, 100)
+    return scores
+  }
+  const sorted = [...vesselValues].sort((a, b) => a.value - b.value)
+  sorted.forEach((item, idx) => {
+    const posScore = (idx / (n - 1)) * 100 // 0 = lowest raw value, 100 = highest raw value
+    scores.set(item.vesselKey, lowerIsBetter ? 100 - posScore : posScore)
+  })
+  return scores
+}
+
+/**
+ * Top-5 Vessel composite ranking (Shipping Performance > By Vessel).
+ * Each of the 5 TC metrics is normalized to a 0-100 percentile score across vessels that have
+ * that metric, then averaged per vessel over whichever metrics it has data for (missing metrics
+ * are skipped, not penalized as 0). Vessels with none of the 5 metrics are excluded entirely.
+ */
+function computeVesselTopRanking(
+  vesselRows: ShippingPerformanceRow[],
+): Map<string, { rank: number; score: number }> {
+  const perMetricScores = TOP_RANK_METRICS.map(({ key, lowerIsBetter }) => {
+    const values = vesselRows.reduce<Array<{ vesselKey: string; value: number }>>((acc, row) => {
+      const value = row[key]
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        acc.push({ vesselKey: String(row.vessel_name ?? ''), value })
+      }
+      return acc
+    }, [])
+    return computeMetricPercentileScores(values, lowerIsBetter)
+  })
+
+  const compositeScores: Array<{ vesselKey: string; score: number }> = []
+  for (const row of vesselRows) {
+    const vesselKey = String(row.vessel_name ?? '')
+    const scoresForVessel = perMetricScores
+      .map((scoreMap) => scoreMap.get(vesselKey))
+      .filter((s): s is number => typeof s === 'number')
+    if (scoresForVessel.length === 0) continue
+    const avgScore = scoresForVessel.reduce((sum, s) => sum + s, 0) / scoresForVessel.length
+    compositeScores.push({ vesselKey, score: avgScore })
+  }
+
+  compositeScores.sort((a, b) => b.score - a.score || a.vesselKey.localeCompare(b.vesselKey))
+
+  const ranking = new Map<string, { rank: number; score: number }>()
+  compositeScores.forEach((entry, idx) => {
+    ranking.set(entry.vesselKey, { rank: idx + 1, score: entry.score })
+  })
+  return ranking
 }
 
 type LatePerfNode = {
@@ -914,6 +1003,46 @@ const COLUMN_DEFS: ColumnDef[] = [
       'Discharge-port flow rate (MT/day) = shipped MT ÷ discharge berth→complete days (actual). ' +
       'FOB uses Delivered Qty; CIF/CFR use Received Qty. "-" when the duration is missing or ≤ 0.',
   },
+  {
+    key: 'fuel_consumption',
+    label: 'Fuel Consumption',
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: false,
+    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+  },
+  {
+    key: 'freight',
+    label: 'Freight',
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: false,
+    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+  },
+  {
+    key: 'pump_rate',
+    label: 'Pump Rate',
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: false,
+    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+  },
+  {
+    key: 'sailing_speed',
+    label: 'Sailing Speed',
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: false,
+    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+  },
+  {
+    key: 'shortage',
+    label: 'Shortage',
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: false,
+    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+  },
 ]
 
 function applyAllShipmentsColumnDefaults(): {
@@ -1140,6 +1269,33 @@ function NumberCell({
   return <span className="text-sm font-normal tabular-nums">{n}</span>
 }
 
+/** Shipping Performance > By Vessel > "Top" column — medal badge for ranks 1-5, plain number for 6+. */
+function TopRankBadge({ rank }: { rank: number | null | undefined }) {
+  if (rank == null) return <span className="text-sm text-gray-400">-</span>
+  if (rank > 5) {
+    return <span className="text-sm font-normal tabular-nums text-gray-700">{rank}</span>
+  }
+  const rankClass =
+    rank === 1
+      ? 'bg-yellow-400 text-yellow-900'
+      : rank === 2
+        ? 'bg-gray-300 text-gray-800'
+        : rank === 3
+          ? 'bg-amber-600 text-white'
+          : 'bg-blue-500 text-white'
+  return (
+    <span
+      className={cn(
+        'inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold tabular-nums',
+        rankClass,
+      )}
+      title={`Top ${rank} vessel (composite of Fuel Consumption, Freight, Pump Rate, Sailing Speed, Shortage)`}
+    >
+      {rank}
+    </span>
+  )
+}
+
 export default function ShippingPerformancePage() {
   return (
     <Layout>
@@ -1198,6 +1354,8 @@ function ShippingPerformancePageContent() {
   const perfDashMode = useMemo(() => perfDataModeFromCard(perfCardFilter), [perfCardFilter])
   const [drilldownFilters, setDrilldownFilters] = useState<DrilldownFilters>(EMPTY_DRILLDOWN_FILTERS)
   const [tableViewMode, setTableViewMode] = useState<TableViewMode>('all')
+  /** By Vessel default sort — Top rank ascending. Cleared the moment the user clicks a column header. */
+  const [useTopRankSort, setUseTopRankSort] = useState(false)
   const [vesselModalOpen, setVesselModalOpen] = useState(false)
   const [selectedVesselData, setSelectedVesselData] = useState<VesselHistoryModalSelection | null>(null)
   const [viewShipmentModal, setViewShipmentModal] = useState<{
@@ -1524,6 +1682,7 @@ function ShippingPerformancePageContent() {
       setTableViewMode(nextMode)
       setColumnOrder(nextPrefs.columnOrder as ShippingPerfColumnKey[])
       setVisibleColumns({ ...nextPrefs.visibleColumns })
+      if (nextMode === 'by_vessel') setUseTopRankSort(true)
       setCurrentPage(1)
     },
     [columnOrder, visibleColumns, tableViewMode],
@@ -1797,10 +1956,22 @@ function ShippingPerformancePageContent() {
     return sorted
   }, [section3DisplayRows, sortBy, sortDirection, perfDashMode])
 
-  const tableRows = useMemo(() => {
-    if (tableViewMode === 'all') return filteredRows
+  const byVesselRows = useMemo(() => {
+    if (tableViewMode !== 'by_vessel') return []
     return aggregateByVessel(filteredRows)
   }, [filteredRows, tableViewMode])
+
+  const vesselRankingMap = useMemo(() => computeVesselTopRanking(byVesselRows), [byVesselRows])
+
+  const tableRows = useMemo(() => {
+    if (tableViewMode === 'all') return filteredRows
+    if (!useTopRankSort) return byVesselRows
+    return [...byVesselRows].sort((a, b) => {
+      const aRank = vesselRankingMap.get(String(a.vessel_name ?? ''))?.rank ?? Number.POSITIVE_INFINITY
+      const bRank = vesselRankingMap.get(String(b.vessel_name ?? ''))?.rank ?? Number.POSITIVE_INFINITY
+      return aRank - bRank
+    })
+  }, [filteredRows, tableViewMode, byVesselRows, useTopRankSort, vesselRankingMap])
 
   const columnManagerKeys = useMemo(
     () => buildShippingPerfColumnManagerKeys(columnOrder, visibleColumns, tableViewMode),
@@ -1812,7 +1983,9 @@ function ShippingPerformancePageContent() {
     [columnOrder, visibleColumns, tableViewMode],
   )
   const showTableActionsColumn = tableViewMode !== 'by_vessel'
-  const tableColSpan = (tableColumnKeys.length || 0) + (showTableActionsColumn ? 1 : 0)
+  const showTopRankColumn = tableViewMode === 'by_vessel'
+  const tableColSpan =
+    (tableColumnKeys.length || 0) + (showTableActionsColumn ? 1 : 0) + (showTopRankColumn ? 1 : 0)
 
   const totalPages = Math.max(1, Math.ceil(tableRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -1866,6 +2039,7 @@ function ShippingPerformancePageContent() {
       sortBy === key ? (sortDirection === 'asc' ? 'desc' : 'asc') : 'asc'
     setSortDirection(nextDir)
     setSortBy(key)
+    setUseTopRankSort(false)
     setCurrentPage(1)
   }
 
@@ -2458,6 +2632,7 @@ function ShippingPerformancePageContent() {
                   )}
                 >
                   <colgroup>
+                    {showTopRankColumn ? <col style={{ width: 64 }} /> : null}
                     {tableColumnKeys.map((key) => {
                       const col = COLUMN_MAP[String(key)]
                       const columnLabel = getColumnHeaderLabel(col)
@@ -2478,6 +2653,25 @@ function ShippingPerformancePageContent() {
                   </colgroup>
                   <thead>
                     <tr className={SHIPPING_PERF_TABLE_HEADER_ROW_CLASS}>
+                      {showTopRankColumn ? (
+                        <th
+                          scope="col"
+                          className={cn(
+                            'relative select-none text-left font-semibold align-top sticky top-0 z-20 bg-gray-50',
+                            SHIPPING_PERF_TABLE_CELL_PAD,
+                          )}
+                        >
+                          <ContractPerfTableSortHeader
+                            label="Top"
+                            activeSort={useTopRankSort}
+                            sortDir="asc"
+                            onSortClick={() => {
+                              setUseTopRankSort(true)
+                              setCurrentPage(1)
+                            }}
+                          />
+                        </th>
+                      ) : null}
                       {tableColumnKeys.map((key) => {
                         const col = COLUMN_MAP[String(key)]
                         const columnLabel = getColumnHeaderLabel(col)
@@ -2544,6 +2738,25 @@ function ShippingPerformancePageContent() {
                         const stripeClass = rowIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                         return (
                         <tr key={row.id} className={stripeClass}>
+                          {showTopRankColumn ? (
+                            <td
+                              className={cn(
+                                COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+                                'align-middle',
+                                SHIPPING_PERF_TABLE_CELL_PAD,
+                                stripeClass,
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+                                  SHIPPING_PERF_TABLE_ROW_MIN_H,
+                                )}
+                              >
+                                <TopRankBadge rank={vesselRankingMap.get(String(row.vessel_name ?? ''))?.rank} />
+                              </div>
+                            </td>
+                          ) : null}
                           {tableColumnKeys.map((key) => {
                             const col = COLUMN_MAP[String(key)]
                             const colKey = String(key)

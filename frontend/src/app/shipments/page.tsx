@@ -332,6 +332,12 @@ interface Shipment {
   pre_planned_group_id?: string | null
   sfal_qty?: number | null
   sfbd_qty?: number | null
+  // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+  fuel_consumption?: number | null
+  freight?: number | null
+  pump_rate?: number | null
+  sailing_speed?: number | null
+  shortage?: number | null
   // Basic ETA loading dates at shipment level
   eta_arrival?: string
   eta_berthed?: string
@@ -2464,7 +2470,7 @@ function ShipmentsPageContent() {
   const exportFilteredData = async () => {
     // Export actual filtered shipments data from the page
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
+      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated Nautical Miles','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','BL Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty vs BL Qty (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID','Fuel Consumption','Freight','Pump Rate','Sailing Speed','Shortage',
       // Loading port groups (1..3)
       'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
       'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
@@ -2539,7 +2545,12 @@ function ShipmentsPageContent() {
         escapeCsvValue(s.arrival_date ? String(s.arrival_date).substring(0,10) : ''),
         escapeCsvValue(s.sla_days),
         s.is_delayed ? 'TRUE' : 'FALSE',
-        escapeCsvValue(s.sap_delivery_id)
+        escapeCsvValue(s.sap_delivery_id),
+        escapeCsvValue(s.fuel_consumption ?? ''),
+        escapeCsvValue(s.freight ?? ''),
+        escapeCsvValue(s.pump_rate ?? ''),
+        escapeCsvValue(s.sailing_speed ?? ''),
+        escapeCsvValue(s.shortage ?? ''),
       ]
 
       // Escape loading port data
@@ -3095,7 +3106,7 @@ function ShipmentsPageContent() {
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
     if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
@@ -3137,6 +3148,11 @@ function ShipmentsPageContent() {
       case 'outstanding_quantity': return typeof s.outstanding_quantity === 'number' ? s.outstanding_quantity : null
       case 'sfal_qty': return typeof s.sfal_qty === 'number' ? s.sfal_qty : null
       case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
+      case 'fuel_consumption': return typeof s.fuel_consumption === 'number' ? s.fuel_consumption : null
+      case 'freight': return typeof s.freight === 'number' ? s.freight : null
+      case 'pump_rate': return typeof s.pump_rate === 'number' ? s.pump_rate : null
+      case 'sailing_speed': return typeof s.sailing_speed === 'number' ? s.sailing_speed : null
+      case 'shortage': return typeof s.shortage === 'number' ? s.shortage : null
       case 'inbound_weight': return typeof s.inbound_weight === 'number' ? s.inbound_weight : null
       case 'outbound_weight': return typeof s.outbound_weight === 'number' ? s.outbound_weight : null
       case 'gain_loss_percentage': return typeof s.gain_loss_percentage === 'number' ? s.gain_loss_percentage : null
@@ -4063,6 +4079,66 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words">
           {s.average_vessel_speed ? `${formatNumber(s.average_vessel_speed)} knots` : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'fuel_consumption',
+      label: 'Fuel Consumption',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.fuel_consumption || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.fuel_consumption != null ? formatNumber(s.fuel_consumption) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'freight',
+      label: 'Freight',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.freight || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.freight != null ? formatNumber(s.freight) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'pump_rate',
+      label: 'Pump Rate',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.pump_rate || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.pump_rate != null ? formatNumber(s.pump_rate) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'sailing_speed',
+      label: 'Sailing Speed',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.sailing_speed || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.sailing_speed != null ? formatNumber(s.sailing_speed) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'shortage',
+      label: 'Shortage',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.shortage || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.shortage != null ? formatNumber(s.shortage) : '-'}
         </span>
       )
     },

@@ -51,6 +51,11 @@ export type UpdateShipmentFormPayload = {
   actual_vessel_qty_receive?: number | null
   sfal_qty?: number | null
   sfbd_qty?: number | null
+  fuel_consumption?: number | null
+  freight?: number | null
+  pump_rate?: number | null
+  sailing_speed?: number | null
+  shortage?: number | null
   eta_arrival: string | null
   eta_berthed: string | null
   eta_loading_start: string | null

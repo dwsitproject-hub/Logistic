@@ -165,6 +165,11 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   total_delta_days: 56,
   lp_flow_rate: 88,
   dp_flow_rate: 88,
+  fuel_consumption: 96,
+  freight: 80,
+  pump_rate: 80,
+  sailing_speed: 88,
+  shortage: 80,
 }
 
 const DEFAULT_COLUMN_WIDTH_PX = 88

@@ -85,8 +85,12 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-/** Bumped when Shipments scope ignores STO Type T (incoterm-only CIF/FOB/CFR). */
-const ROW_CACHE_KEY = 'shipping-performance-rows-v37';
+/**
+ * Bumped when TC vessel performance metrics (fuel/freight/pump rate/sailing speed/shortage) were
+ * added to the row SELECT, and again when the STO-group merge started surfacing these fields
+ * from whichever member row has them set (see mergeTcVesselMetricFields).
+ */
+const ROW_CACHE_KEY = 'shipping-performance-rows-v39';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
@@ -182,6 +186,35 @@ function maxMergeMilestoneFields(rows: Record<string, unknown>[]): Record<string
 }
 
 /**
+ * Manually entered TC (Time Charter) vessel metrics — a per-voyage attribute, not per shipment
+ * row. STO groups can span multiple physical `shipments` rows (multi-contract STO, or duplicate
+ * legs); the priority `pick` used for most other display fields is not guaranteed to be the
+ * specific row a user edited. Surface the value from whichever member has it set instead of
+ * silently dropping it when `pick` resolves to a different (unset) member.
+ */
+const TC_VESSEL_METRIC_FIELDS = [
+  'fuel_consumption',
+  'freight',
+  'pump_rate',
+  'sailing_speed',
+  'shortage',
+] as const;
+
+function mergeTcVesselMetricFields(rows: Record<string, unknown>[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of TC_VESSEL_METRIC_FIELDS) {
+    for (const row of rows) {
+      const v = row[field];
+      if (v !== null && v !== undefined) {
+        out[field] = v;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Least-advanced *persisted* DB status among active members (Shipments group_status_floor).
  * CANCELLED is skipped; returns null when no active status or only one distinct active status
  * is not required here — callers check distinct count separately.
@@ -239,6 +272,7 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
   const merged: Record<string, unknown> = {
     ...pick,
     ...maxMergeMilestoneFields(rows),
+    ...mergeTcVesselMetricFields(rows),
     sto_key: pick.sto_key ?? shippingPerfStoGroupKey(pick).replace(/^(sto:|ship:|op:|id:)/, ''),
     po_number:
       (pick.po_numbers as string | undefined) ??
@@ -517,6 +551,12 @@ const SHIPPING_PERFORMANCE_SQL = `
         COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
         ${sqlShipmentDisplayVesselName('sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
+        NULLIF(TRIM(s.charter_type), '') AS charter_type,
+        s.fuel_consumption,
+        s.freight,
+        s.pump_rate,
+        s.sailing_speed,
+        s.shortage,
         COALESCE(
           NULLIF(TRIM(pnc.group_plant), ''),
           NULLIF(TRIM(pna.group_plant), ''),

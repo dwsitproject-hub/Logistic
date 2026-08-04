@@ -813,6 +813,11 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
           MAX(s.sfal_qty) as sfal_qty,
           MAX(s.sfbd_qty) as sfbd_qty,
+          MAX(s.fuel_consumption) as fuel_consumption,
+          MAX(s.freight) as freight,
+          MAX(s.pump_rate) as pump_rate,
+          MAX(s.sailing_speed) as sailing_speed,
+          MAX(s.shortage) as shortage,
           MAX(s.difference_final_qty_vs_bl_qty) as difference_final_qty_vs_bl_qty,
           MAX(s.average_vessel_speed) as average_vessel_speed,
           MAX(s.status) as status,
@@ -2281,6 +2286,37 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+    if (updateData.fuel_consumption !== undefined) {
+      updateFields.push(`fuel_consumption = $${paramIndex}::numeric`);
+      updateValues.push(updateData.fuel_consumption);
+      paramIndex++;
+    }
+
+    if (updateData.freight !== undefined) {
+      updateFields.push(`freight = $${paramIndex}::numeric`);
+      updateValues.push(updateData.freight);
+      paramIndex++;
+    }
+
+    if (updateData.pump_rate !== undefined) {
+      updateFields.push(`pump_rate = $${paramIndex}::numeric`);
+      updateValues.push(updateData.pump_rate);
+      paramIndex++;
+    }
+
+    if (updateData.sailing_speed !== undefined) {
+      updateFields.push(`sailing_speed = $${paramIndex}::numeric`);
+      updateValues.push(updateData.sailing_speed);
+      paramIndex++;
+    }
+
+    if (updateData.shortage !== undefined) {
+      updateFields.push(`shortage = $${paramIndex}::numeric`);
+      updateValues.push(updateData.shortage);
+      paramIndex++;
+    }
+
     if (updateData.difference_final_qty_vs_bl_qty !== undefined && updateData.difference_final_qty_vs_bl_qty !== null) {
       updateFields.push(`difference_final_qty_vs_bl_qty = $${paramIndex}::numeric`);
       updateValues.push(updateData.difference_final_qty_vs_bl_qty);
@@ -2478,6 +2514,7 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     logger.info('Shipment updated:', { id, updatedFields: updateFields.length, autoStatus });
 
     invalidateShipmentsListCache();
+    invalidateShippingPerformanceRowCache();
     setImmediate(() => {
       import('../services/contractQtyMoveSnapshot.service')
         .then(({ ContractQtyMoveSnapshotService }) =>
@@ -2751,6 +2788,11 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           s.actual_vessel_qty_receive,
           s.sfal_qty,
           s.sfbd_qty,
+          s.fuel_consumption,
+          s.freight,
+          s.pump_rate,
+          s.sailing_speed,
+          s.shortage,
           s.vessel_oa_actual,
           s.vessel_oa_budget,
           s.bl_quantity,
@@ -2915,6 +2957,11 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
           MAX(s.sfal_qty) as sfal_qty,
           MAX(s.sfbd_qty) as sfbd_qty,
+          MAX(s.fuel_consumption) as fuel_consumption,
+          MAX(s.freight) as freight,
+          MAX(s.pump_rate) as pump_rate,
+          MAX(s.sailing_speed) as sailing_speed,
+          MAX(s.shortage) as shortage,
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.vessel_oa_budget) as vessel_oa_budget,
           MAX(s.bl_quantity) as bl_quantity,

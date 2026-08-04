@@ -77,6 +77,20 @@ services:
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
       OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
       LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-true}
+      # Email / SMTP (Contract ETA reminder and future notifications) — set real values in
+      # /opt/klip/.env (symlinked to backend/.env), never commit real credentials.
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_REJECT_UNAUTHORIZED: ${SMTP_REJECT_UNAUTHORIZED:-true}
+      CONTRACT_ETA_REMINDER_ENABLED: ${CONTRACT_ETA_REMINDER_ENABLED:-true}
+      CONTRACT_ETA_REMINDER_CRON: ${CONTRACT_ETA_REMINDER_CRON:-0 7 * * *}
+      # SIT-only testing recipient(s) — added on top of the DB-driven Logistics distribution
+      # list. Comma/semicolon-separated. Intentionally NOT set on local (docker-compose.yml).
+      CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS: ${CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS:-ryan.pohan@energi-up.com}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

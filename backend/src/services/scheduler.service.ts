@@ -3,6 +3,7 @@ import { ExcelImportService } from './excelImport.service';
 import logger from '../utils/logger';
 import { FinanceMaterializedViewService } from './financeMaterializedView.service';
 import { PipelineDailySummaryService } from './pipelineDailySummary.service';
+import { runContractEtaReminderJob } from './contractEtaReminder.service';
 
 export interface ScheduledImport {
   id: string;
@@ -29,8 +30,32 @@ export class SchedulerService {
     
     // Start all active schedules
     this.startAllSchedules();
-    
+
+    // Independent cron (not part of the Excel-import ScheduledImport framework/admin UI).
+    this.startContractEtaReminderCron();
+
     logger.info('Scheduler service initialized successfully');
+  }
+
+  /**
+   * Daily email to Logistics users (above Staff level) listing open contracts missing ETA
+   * near their Cargo Readiness Date. Configurable via CONTRACT_ETA_REMINDER_ENABLED /
+   * CONTRACT_ETA_REMINDER_CRON; defaults to 07:00 Asia/Jakarta.
+   */
+  private static startContractEtaReminderCron(): void {
+    if (String(process.env.CONTRACT_ETA_REMINDER_ENABLED ?? 'true').toLowerCase() === 'false') {
+      logger.info('Contract ETA reminder cron is disabled (CONTRACT_ETA_REMINDER_ENABLED=false)');
+      return;
+    }
+    const schedule = process.env.CONTRACT_ETA_REMINDER_CRON || '0 7 * * *';
+    cron.schedule(
+      schedule,
+      async () => {
+        await runContractEtaReminderJob();
+      },
+      { timezone: 'Asia/Jakarta' },
+    );
+    logger.info(`Contract ETA reminder cron scheduled: ${schedule} (Asia/Jakarta)`);
   }
   
   /**
