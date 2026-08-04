@@ -16,9 +16,11 @@ import {
   loadShipmentAttentionInsightsForRequest,
   loadShipmentStatusCardQtyForRequest,
   loadShipmentSummaryBundle,
+  mergeShipmentStatusCardQtyFromCombinedSummaryRow,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
   seedShipmentListFilteredTotal,
+  summaryRowHasCombinedStatusCardQty,
   type ShipmentOutstandingQtySummary,
   type ShipmentStatusContractQtyKg,
   type ShipmentStatusOutstandingQtyKg,
@@ -69,7 +71,6 @@ import {
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
-  shipmentEffectiveStatusExpr,
   sqlShipmentGroupStatusFloorAgg,
 } from '../utils/shipmentListFilters';
 import {
@@ -85,15 +86,12 @@ import {
   appendShipmentPipelineScopeStageFilter,
   appendShipmentPipelineStageFilter,
   normalizeShipmentPagePipelineStageParam,
-  shipmentPagePipelineSummarySelectSql,
-  shipmentPagePipelineUnplannedRowPredicate,
-  shipmentPagePipelineVesselNamesSelectSql,
-  shipmentPipelineVesselKeyExpr,
 } from '../utils/shipmentPagePipelineSql';
 import {
   buildUnplannedContractBacklogTableCountCte,
   appendContractScopeToolbarFilters,
 } from '../utils/shipmentUnplannedHybridSql';
+import { buildShipmentSection1CombinedSummaryQuery } from '../utils/shipmentSection1CombinedSummarySql';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
 import {
@@ -1123,100 +1121,13 @@ ${contractMetaSelectCore}
       });
     }
 
-    const summaryCountQuery = `${shipmentBaseCteSqlSummary}
-      ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
-      , filtered_shipments AS (
-        SELECT sb.*
-        FROM shipment_base sb
-        WHERE 1=1 ${section1SummaryFilterSql}
-          -- Totals only: STOs whose contracts were all cancelled/deleted in SAP are excluded
-          -- here but still returned by the list query, which does not apply this predicate.
-          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
-      )${summaryScopeCte}
-      , enriched AS (
-        SELECT
-          f.*,
-          ${shipmentEffectiveStatusExpr('f')} AS effective_status,
-          (
-            f.eta_arrival IS NULL AND f.eta_berthed IS NULL AND f.eta_loading_start IS NULL AND f.eta_loading_complete IS NULL AND f.eta_sailed IS NULL
-          ) AS loading_no_eta,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) < 0) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) < 0) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) < 0) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) < 0) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) < 0)
-          ) AS loading_delay,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) = 0) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) = 0) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) = 0) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) = 0) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) = 0)
-          ) AS loading_d,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) BETWEEN 1 AND 2)
-          ) AS loading_d_minus_2,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) > 7) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) > 7) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) > 7) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) > 7) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) > 7)
-          ) AS loading_more_than_7d,
-          (
-            f.eta_discharge_arrival IS NULL AND f.eta_discharge_berthed IS NULL AND f.eta_discharge_start IS NULL AND f.eta_vessel_complete_discharge IS NULL
-          ) AS discharge_no_eta,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) < 0) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) < 0) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) < 0) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) < 0)
-          ) AS discharge_delay,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) = 0) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) = 0) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) = 0) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) = 0)
-          ) AS discharge_d,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) BETWEEN 1 AND 2)
-          ) AS discharge_d_minus_2,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) > 7) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) > 7) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) > 7) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) > 7)
-          ) AS discharge_more_than_7d
-        FROM ${summaryEnrichedFrom} f
-      )
-      SELECT
-        COUNT(*)::bigint AS total_count,
-        ${shipmentPagePipelineSummarySelectSql()},
-        ${shipmentPagePipelineVesselNamesSelectSql()},
-        ARRAY_AGG(DISTINCT ${shipmentPipelineVesselKeyExpr('e.vessel_name')}) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')} AND ${shipmentPipelineVesselKeyExpr('e.vessel_name')} IS NOT NULL) AS unplanned_vessel_names,
-        (SELECT backlog_count FROM unplanned_contract_backlog_table)::bigint AS unplanned_contract_backlog_count,
-        (SELECT preplanned_group_count FROM preplanned_contract_table)::bigint AS preplanned_count,
-        (SELECT preplanned_contract_count FROM preplanned_contract_table)::bigint AS preplanned_contract_count,
-        COUNT(*) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')})::bigint AS unplanned_shipment_execution_count,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND discharge_no_eta)::bigint AS eta_discharge_no_eta,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
-      FROM enriched e`;
+    const summaryCountQuery = buildShipmentSection1CombinedSummaryQuery({
+      shipmentBaseCteSql: shipmentBaseCteSqlFull,
+      unplannedBacklogCountCteSql: buildUnplannedContractBacklogTableCountCte(contractScopeSql),
+      toolbarOuterSql: section1SummaryFilterSql,
+      summaryScopeCte,
+      summaryEnrichedFrom,
+    });
 
     if (compact && summaryOnly) {
       const summaryCacheKey = buildShipmentSummaryCacheKey(
@@ -1230,40 +1141,48 @@ ${contractMetaSelectCore}
         toolbarOuterParams,
         filterCacheKey: shipmentListFilterCacheKey,
       };
-      const outstandingQtyPromise = loadSection1OutstandingQty();
-      const statusCardQtyPromise = loadSection1StatusCardQty().catch((err) => {
-        logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
-        return null;
-      });
       const tSum0 = performance.now();
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+      });
+      const {
+        summaryRow: sr,
+        totalCount: tc,
+        unplannedBreakdown: unplannedBreakdownForSummary,
+        preplannedBreakdown: preplannedBreakdownForSummary,
+        source: summarySource,
+      } = summaryBundle;
+      const statusCardQtyPromise = summaryRowHasCombinedStatusCardQty(sr)
+        ? mergeShipmentStatusCardQtyFromCombinedSummaryRow(req, sr)
+        : loadSection1StatusCardQty().catch((err) => {
+            logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
+            return null;
+          });
       const attentionInsightsPromise = isAttentionInsightsEnabled()
         ? loadShipmentAttentionInsightsForRequest(
             req,
             attentionOpts,
-            outstandingQtyPromise.then((os) => os.totalKg),
+            loadSection1OutstandingQty().then((os) => os.totalKg),
           ).catch((err) => {
             logger.error('Shipment attention insights failed (summaryOnly-compact)', err);
             return null;
           })
         : Promise.resolve(undefined);
-      const [summaryBundle, outstandingQty, statusCardQty, attentionInsights] = await Promise.all([
-        loadShipmentSummaryBundle(req, {
-          summaryCountQuery,
-          params: [...section1SummaryFilterParams, ...summaryScopeParams],
-          cacheKey: summaryCacheKey,
-          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-          loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
-        }),
-        outstandingQtyPromise,
+      const [statusCardQty, attentionInsights] = await Promise.all([
         statusCardQtyPromise,
         attentionInsightsPromise,
       ]);
-      const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, preplannedBreakdown: preplannedBreakdownForSummary, source: summarySource } =
-        summaryBundle;
-      timingsMs.dbSummaryOnly = performance.now() - tSum0;
+      timingsMs.dbSummaryCombined = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: summarySource === 'daily' ? 'summaryOnly-compact-daily' : 'summaryOnly-compact-sql',
+        path:
+          summarySource === 'daily'
+            ? 'summaryOnly-compact-daily-combined'
+            : 'summaryOnly-compact-combined-sql',
         compact,
         page: Number(page),
         limit: Number(limit),
@@ -1279,7 +1198,7 @@ ${contractMetaSelectCore}
             sr,
             unplannedBreakdownForSummary,
             preplannedBreakdownForSummary,
-            outstandingQty,
+            undefined,
             attentionInsights,
             statusCardQty,
           ),
@@ -1540,19 +1459,13 @@ ${contractMetaSelectCore}
         scopeStatusParam,
       );
       const tSum0 = performance.now();
-      const [summaryBundle, statusCardQty] = await Promise.all([
-        loadShipmentSummaryBundle(req, {
-          summaryCountQuery,
-          params: [...section1SummaryFilterParams, ...summaryScopeParams],
-          cacheKey: summaryCacheKey,
-          loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
-          loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
-        }),
-        loadSection1StatusCardQty().catch((err) => {
-          logger.error('Shipment status card qty failed (summaryOnly)', err);
-          return null;
-        }),
-      ]);
+      const summaryBundle = await loadShipmentSummaryBundle(req, {
+        summaryCountQuery,
+        params: [...section1SummaryFilterParams, ...summaryScopeParams],
+        cacheKey: summaryCacheKey,
+        loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+      });
       const {
         summaryRow: sr,
         totalCount: tc,
@@ -1560,10 +1473,19 @@ ${contractMetaSelectCore}
         preplannedBreakdown: preplannedBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
-      timingsMs.dbSummaryOnly = performance.now() - tSum0;
+      const statusCardQty = summaryRowHasCombinedStatusCardQty(sr)
+        ? await mergeShipmentStatusCardQtyFromCombinedSummaryRow(req, sr).catch((err) => {
+            logger.error('Shipment status card qty failed (summaryOnly combined)', err);
+            return null;
+          })
+        : await loadSection1StatusCardQty().catch((err) => {
+            logger.error('Shipment status card qty failed (summaryOnly)', err);
+            return null;
+          });
+      timingsMs.dbSummaryCombined = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: summarySource === 'daily' ? 'summaryOnly-daily' : 'summaryOnly',
+        path: summarySource === 'daily' ? 'summaryOnly-daily-combined' : 'summaryOnly-combined',
         compact,
         skipSapJoin,
         effectiveListStoPaging,

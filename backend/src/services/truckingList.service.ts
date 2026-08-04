@@ -38,11 +38,11 @@ import {
 } from '../utils/truckingListSelectSql';
 import {
   buildTruckingOutstandingQtyBacklogAggregateQuery,
-  buildTruckingOutstandingQtyExecutionAggregateQuery,
   mergeTruckingOutstandingQtySummaries,
   parseTruckingOutstandingQtySummaryRow,
   type TruckingOutstandingQtySummary,
 } from '../utils/truckingOutstandingQtySummarySql';
+import { buildTruckingStatusSummaryCombinedQuery } from '../utils/truckingStatusSummaryCombinedSql';
 import {
   buildTruckingCarryOverInsightsQuery,
   buildTruckingOverdueInsightsAggregateQuery,
@@ -151,7 +151,7 @@ const UNPLANNED_BACKLOG_CACHE = new Map<
   { count: number; contractQtyKg: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v36';
+const CACHE_VERSION = 'trucking-list-v37';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -333,39 +333,59 @@ async function loadTruckingUnplannedContractBacklogForRequest(
   return { count, contractQtyKg };
 }
 
-async function loadTruckingStatusContractQtyForRequest(
-  req: AuthRequest,
-  built: TruckingListBuiltQuery,
-): Promise<TruckingStatusContractQtyKg> {
-  const qtyBuilt: TruckingListBuiltQuery = {
-    ...built,
-    skipSapJoin: false,
-  };
-  const q = buildTruckingStatusContractQtyQuery(qtyBuilt);
-  const [qtyRes, backlog] = await Promise.all([
-    query(q.text, q.params),
-    loadTruckingUnplannedContractBacklogForRequest(req),
-  ]);
-  const execution = parseTruckingStatusContractQtyFromSqlRow(
-    (qtyRes.rows[0] || {}) as Record<string, unknown>,
-  );
-  return {
-    ...execution,
-    unplanned: execution.unplanned + backlog.contractQtyKg,
-  };
+function parseTruckingCombinedSummaryRow(
+  row: Record<string, unknown>,
+  opts: { includeCounts: boolean },
+): {
+  summary?: NonNullable<TruckingListResponseData['summary']>;
+  statusContractQty: TruckingStatusContractQtyKg;
+  statusOutstandingQty: TruckingStatusOutstandingQtyKg;
+  osExecution: TruckingOutstandingQtySummary;
+} {
+  const statusContractQty = parseTruckingStatusContractQtyFromSqlRow(row);
+  const statusOutstandingQty = parseTruckingStatusOutstandingQtyFromSqlRow(row);
+  const osExecution = parseTruckingOutstandingQtySummaryRow(row);
+  const summary = opts.includeCounts ? buildTruckingSummaryFromSqlRow(row) : undefined;
+  return { summary, statusContractQty, statusOutstandingQty, osExecution };
 }
 
-async function loadTruckingStatusOutstandingQtyForRequest(
+/** Single STO expansion for counts + card qty + card OS + strip OS (execution). */
+async function loadTruckingCombinedSummaryExecution(
   built: TruckingListBuiltQuery,
-): Promise<TruckingStatusOutstandingQtyKg> {
-  const qtyBuilt: TruckingListBuiltQuery = {
-    ...built,
-    skipSapJoin: false,
-  };
-  const q = buildTruckingStatusOutstandingQtyQuery(qtyBuilt);
-  const qtyRes = await query(q.text, q.params);
-  return parseTruckingStatusOutstandingQtyFromSqlRow(
-    (qtyRes.rows[0] || {}) as Record<string, unknown>,
+  opts: { includeCounts: boolean },
+): Promise<ReturnType<typeof parseTruckingCombinedSummaryRow>> {
+  const qtyBuilt: TruckingListBuiltQuery = { ...built, skipSapJoin: false };
+  const q = buildTruckingStatusSummaryCombinedQuery(qtyBuilt, {
+    includeCounts: opts.includeCounts,
+  });
+  const res = await query(q.text, q.params);
+  return parseTruckingCombinedSummaryRow((res.rows[0] || {}) as Record<string, unknown>, opts);
+}
+
+async function loadTruckingOutstandingQtyBacklogForRequest(
+  req: AuthRequest,
+): Promise<TruckingOutstandingQtySummary> {
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const backlogText = buildTruckingOutstandingQtyBacklogAggregateQuery(
+    scope.sql,
+    `${g.sql}${c.sql}`,
+  );
+  const backlogParams = [...scope.params, ...g.params, ...c.params];
+  const backlogRes = await query(backlogText, backlogParams);
+  return parseTruckingOutstandingQtySummaryRow(
+    (backlogRes.rows[0] || {}) as Record<string, unknown>,
   );
 }
 
@@ -1181,48 +1201,6 @@ export async function loadTruckingListSummary(
   return summary;
 }
 
-async function loadTruckingOutstandingQtyForRequest(
-  req: AuthRequest,
-  built: TruckingListBuiltQuery,
-): Promise<TruckingOutstandingQtySummary> {
-  const executionBuilt: TruckingListBuiltQuery = {
-    ...built,
-    skipSapJoin: false,
-  };
-  // Always Unplanned + Planned + In Progress (ignore status-card osStatus).
-  const execQ = buildTruckingOutstandingQtyExecutionAggregateQuery(executionBuilt, null);
-  const execPromise = query(execQ.text, execQ.params).then((res) =>
-    parseTruckingOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
-  );
-
-  const { dateFrom, dateTo, contract, plant } = req.query;
-  const globalSearch =
-    typeof (req.query as { search?: string }).search === 'string'
-      ? (req.query as { search?: string }).search!.trim()
-      : '';
-  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
-  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
-  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
-  let idx = scope.params.length + 1;
-  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
-  idx = g.nextIndex;
-  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
-  const backlogText = buildTruckingOutstandingQtyBacklogAggregateQuery(
-    scope.sql,
-    `${g.sql}${c.sql}`,
-  );
-  const backlogParams = [...scope.params, ...g.params, ...c.params];
-
-  const [execution, backlog] = await Promise.all([
-    execPromise,
-    query(backlogText, backlogParams).then((res) =>
-      parseTruckingOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
-    ),
-  ]);
-  return mergeTruckingOutstandingQtySummaries(execution, backlog);
-}
-
 async function loadTruckingAttentionInsightsForRequest(
   req: AuthRequest,
   totalOutstandingKg: number | null | undefined,
@@ -1304,59 +1282,65 @@ async function runTruckingListSummaryWithBacklog(
     );
   };
 
-  const outstandingQtyPromise = loadTruckingOutstandingQtyForRequest(req, built);
-  const statusContractQtyPromise = loadTruckingStatusContractQtyForRequest(req, built);
-  const statusOutstandingQtyPromise = loadTruckingStatusOutstandingQtyForRequest(built);
+  const timingsMs: Record<string, number> = {};
+  const tCombined0 = performance.now();
 
   const filters = buildPipelineDailyFilterInput(req);
-  if (isPipelineDailySummaryEligible(filters)) {
-    const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
-    if (fromDaily) {
-      const [outstandingQty, statusContractQty, statusOutstandingQty] = await Promise.all([
-        outstandingQtyPromise,
-        statusContractQtyPromise,
-        statusOutstandingQtyPromise,
-      ]);
-      const attentionInsights = isAttentionInsightsEnabled()
-        ? await loadTruckingAttentionInsightsForRequest(
-            req,
-            outstandingQty.totalKg,
-          ).catch((err) => {
-            logger.error('Trucking attention insights failed (daily summary path)', err);
-            return undefined;
-          })
-        : undefined;
-      const merged: NonNullable<TruckingListResponseData['summary']> = {
-        ...fromDaily,
-        outstandingQty,
-        statusContractQty,
-        statusOutstandingQty,
-        ...(attentionInsights !== undefined ? { attentionInsights } : {}),
-      };
-      MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
-        summary: merged,
-        expiresAt: Date.now() + CACHE_TTL_MS,
-      });
-      evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
-      registerKeepWarm();
-      return merged;
-    }
+  const dailyEligible = isPipelineDailySummaryEligible(filters);
+  let fromDaily: Awaited<ReturnType<typeof loadTruckingSummaryFromDaily>> | null = null;
+  if (dailyEligible) {
+    fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
   }
 
-  const [base, backlog, outstandingQty, statusContractQty, statusOutstandingQty] = await Promise.all([
-    loadTruckingListSummary(built, req),
+  const [combined, backlog, backlogOs] = await Promise.all([
+    loadTruckingCombinedSummaryExecution(built, { includeCounts: !fromDaily }),
     loadTruckingUnplannedContractBacklogForRequest(req),
-    outstandingQtyPromise,
-    statusContractQtyPromise,
-    statusOutstandingQtyPromise,
+    loadTruckingOutstandingQtyBacklogForRequest(req),
   ]);
+  timingsMs.dbCombinedSummary = performance.now() - tCombined0;
+
+  const statusContractQty: TruckingStatusContractQtyKg = {
+    ...combined.statusContractQty,
+    unplanned: combined.statusContractQty.unplanned + backlog.contractQtyKg,
+  };
+  const statusOutstandingQty = combined.statusOutstandingQty;
+  const outstandingQty = mergeTruckingOutstandingQtySummaries(combined.osExecution, backlogOs);
+
+  if (fromDaily) {
+    const attentionInsights = isAttentionInsightsEnabled()
+      ? await loadTruckingAttentionInsightsForRequest(req, outstandingQty.totalKg).catch((err) => {
+          logger.error('Trucking attention insights failed (daily summary path)', err);
+          return undefined;
+        })
+      : undefined;
+    const merged: NonNullable<TruckingListResponseData['summary']> = {
+      ...fromDaily,
+      outstandingQty,
+      statusContractQty,
+      statusOutstandingQty,
+      ...(attentionInsights !== undefined ? { attentionInsights } : {}),
+    };
+    MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
+      summary: merged,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+    registerKeepWarm();
+    if (process.env.LOG_TRUCKING_TIMING === '1' || process.env.NODE_ENV === 'development') {
+      logger.info('Trucking summaryOnly timings (ms)', {
+        ...timingsMs,
+        path: 'summary-daily-combined',
+        total: Date.now() - liveLoadStartedAt,
+      });
+    }
+    return merged;
+  }
+
+  const base = combined.summary;
   if (!base) return base;
 
   const attentionInsights = isAttentionInsightsEnabled()
-    ? await loadTruckingAttentionInsightsForRequest(
-        req,
-        outstandingQty.totalKg,
-      ).catch((err) => {
+    ? await loadTruckingAttentionInsightsForRequest(req, outstandingQty.totalKg).catch((err) => {
         logger.error('Trucking attention insights failed', err);
         return undefined;
       })
@@ -1384,6 +1368,13 @@ async function runTruckingListSummaryWithBacklog(
   });
   evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
   registerKeepWarm();
+  if (process.env.LOG_TRUCKING_TIMING === '1' || process.env.NODE_ENV === 'development') {
+    logger.info('Trucking summaryOnly timings (ms)', {
+      ...timingsMs,
+      path: 'summary-live-combined',
+      total: Date.now() - liveLoadStartedAt,
+    });
+  }
   return withOs;
 }
 

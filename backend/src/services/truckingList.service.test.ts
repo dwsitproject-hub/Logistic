@@ -5,6 +5,7 @@ import {
   buildPaginatedListQuery,
   buildTruckingStatusContractQtyQuery,
   buildTruckingStatusOutstandingQtyQuery,
+  buildTruckingSummaryQuery,
   getCachedFilteredTotal,
   invalidateTruckingListCache,
   mergeTruckingUnplannedBreakdownIntoSummary,
@@ -13,6 +14,7 @@ import {
   sortTruckingListRows,
   type TruckingListRow,
 } from './truckingList.service';
+import { buildTruckingStatusSummaryCombinedQuery } from '../utils/truckingStatusSummaryCombinedSql';
 import { appendTruckingPipelineStageFilter } from '../utils/truckingPagePipelineSql';
 
 describe('truckingList.service', () => {
@@ -140,6 +142,23 @@ describe('truckingList.service', () => {
     expect(text).toContain("status IN ('PLANNED', 'IN_PROGRESS')");
     expect(text).toContain('planned_outstanding_qty');
     expect(text).toContain('in_progress_outstanding_qty');
+  });
+
+  it('buildTruckingStatusSummaryCombinedQuery replaces separate summary/qty/os builders', () => {
+    const req = {
+      query: { page: '1', limit: '20', skipSapJoin: 'true' },
+    } as Parameters<typeof buildTruckingListQuery>[0];
+    const built = buildTruckingListQuery(req, { omitStatusFilter: true });
+    const combined = buildTruckingStatusSummaryCombinedQuery(built);
+    const summary = buildTruckingSummaryQuery(built);
+    const contractQty = buildTruckingStatusContractQtyQuery(built);
+    const statusOs = buildTruckingStatusOutstandingQtyQuery(built);
+    expect(combined.text).toContain('unplanned_count');
+    expect(combined.text).toContain('third_party_frc_kg');
+    expect(combined.text.match(/per_contract AS/g)?.length).toBe(1);
+    expect(
+      summary.text.length + contractQty.text.length + statusOs.text.length,
+    ).toBeGreaterThan(combined.text.length);
   });
 
   it('sortTruckingListRows paginates consistently (sort + slice)', () => {
