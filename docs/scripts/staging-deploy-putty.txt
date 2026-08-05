@@ -126,6 +126,98 @@ Di server yang bermasalah:
   docker compose -f docker-compose.frontend.yml up -d --build  # di .56
 
 ================================================================================
+WB Upload gagal: "Multiple FRC/LCO trucking operations share PO" — FIX ALL PO
+================================================================================
+Penyebab: lebih dari 1 trucking_operations aktif (status <> CANCELLED) untuk PO
+yang sama di DB SIT. Bukan data kotor di file Excel.
+
+Target: 1 keeper per PO (WB paling lengkap); loser di-CANCELLED (tetap di DB).
+
+Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+Prasyarat backup: postgresql-client di host .57
+  sudo apt-get install -y postgresql-client
+
+----- A) Pull code + rebuild backend -----
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  docker compose -f docker-compose.backend.yml up -d --build
+  curl -s http://127.0.0.1:5001/health
+
+----- B) Satu perintah (disarankan) — preview lalu apply -----
+
+  cd /opt/klip
+
+  # Preview: pre-flight count + dry-run JSON (keeper/loser), TIDAK mengubah DB
+  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh
+
+  # Apply: backup otomatis + cancel semua loser + verify
+  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply
+
+  # Lewati backup (tidak disarankan):
+  # bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --skip-backup
+
+Script di atas memanggil run-dedupe-trucking-by-po-staging.sh --all:
+  - Merge trucking_daily_actuals dari loser ke keeper
+  - Set loser status = CANCELLED
+  - Refresh trucking pipeline snapshot
+
+----- C) Manual step-by-step (alternatif) -----
+
+  # Backup
+  bash docs/scripts/dump-sit-transactional-data.sh
+
+  # Pre-flight SQL (read-only, via psql client di host .57):
+  # Load DB_* dari backend container, lalu:
+  # PGPASSWORD=... psql -h 172.28.92.60 -p 5442 -U postgres -d klip_db \
+  #   -f backend/src/scripts/sql/previewDuplicateTruckingByPo.sql
+
+  # Dry-run
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --all
+
+  # Apply
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --all --apply
+
+----- D) Verifikasi PO WB yang gagal -----
+
+  for PO in 1001030428 1001029797 1001030446; do
+    echo "=== PO $PO ==="
+    docker compose -f docker-compose.backend.yml exec -T backend node -e "
+const { Pool } = require('pg');
+const p = new Pool({ host: process.env.DB_HOST, port: +process.env.DB_PORT, database: process.env.DB_NAME, user: process.env.DB_USER, password: process.env.DB_PASSWORD });
+(async () => {
+  const r = await p.query(
+    \`SELECT t.operation_id, t.status,
+            (SELECT COUNT(DISTINCT da.progress_date)::int FROM trucking_daily_actuals da WHERE da.trucking_operation_id = t.id) AS wb_dates
+     FROM trucking_operations t JOIN contracts c ON c.id = t.contract_id
+     WHERE TRIM(c.po_number::text) = \$1 ORDER BY CASE WHEN UPPER(t.status)='CANCELLED' THEN 1 ELSE 0 END\`,
+    [process.argv[1]]
+  );
+  console.table(r.rows);
+  await p.end();
+})().catch(e => { console.error(e); process.exit(1); });
+" "$PO"
+  done
+
+  # Harapan: 1 baris aktif (keeper) per PO; sisanya CANCELLED
+
+----- E) Upload ulang WB di browser -----
+
+  http://8.215.6.189/trucking → Upload WB → file yang sama
+  Hard refresh: Ctrl+Shift+R
+  Status Upload tidak boleh lagi "Multiple FRC/LCO trucking operations share PO"
+
+----- F) Opsional — hard-delete CANCELLED shell tanpa WB -----
+
+  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh          # preview
+  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply
+
+JANGAN pakai run-cleanup-trucking-staging.sh (legacy — hapus SEMUA CANCELLED).
+
+Per-PO saja (bukan --all):
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --po 1001030428 --apply
+
+================================================================================
 Cleanup Trucking CANCELLED dedupe losers (preferred) — TARGETED HARD-DELETE
 ================================================================================
 Hapus CANCELLED yang:
