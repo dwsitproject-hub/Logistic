@@ -38,15 +38,13 @@ export function canUseTruckingStoKeyPaging(input: TruckingStoPagingFilterInput):
   return true;
 }
 
-/** Aggregated STO list for expansion-key sort (PO grain — one row per operation). */
-const AGGREGATED_STO_SORT = `COALESCE(
-  (
-    SELECT STRING_AGG(DISTINCT csl.sto_line, ', ' ORDER BY csl.sto_line)
-    FROM contract_sto_lines csl
-    WHERE csl.contract_uuid = ts.contract_id
-  ),
-  NULLIF(TRIM(ts.sto_number::text), '')
-)`;
+/**
+ * Aggregated STO list for expansion-key sort (PO grain — one row per operation).
+ * Reads the pre-aggregated contract_sto_lines_agg (LEFT JOINed as `csla` in ranked_expansion)
+ * instead of a correlated STRING_AGG subquery re-run per row — same fix as sto_line_resolved
+ * in truckingListStoExpandSql.ts.
+ */
+const AGGREGATED_STO_SORT = `COALESCE(csla.agg_sto_lines, NULLIF(TRIM(ts.sto_number::text), ''))`;
 
 /** Sort expressions available on expansion_keys (trucking_source + contracts). */
 const EXPANSION_KEY_SORT_FIELD: Record<string, string> = {

@@ -107,11 +107,14 @@ import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
   SHIPMENT_EXPAND_COL_WIDTH_PX,
+  SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
   buildShipmentVisibleColumns,
+  filterShipmentVisibleColumnIdsForStage,
+  isShipmentGroupingSuggestionColumnEligible,
   mergeShipmentColumnOrder,
   migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
-  shipmentDefaultVisibleColumnIds,
+  shipmentDefaultVisibleColumnIdsForStage,
   shipmentTableColumnWidthPx,
 } from '@/lib/shipmentColumns'
 import {
@@ -3584,7 +3587,7 @@ function ShipmentsPageContent() {
       label: 'Grouping Suggestion',
       formulaHelp:
         'Auto-suggested vessel grouping for unplanned contracts. Accept moves contracts to Preplanned; dismiss removes the suggestion. On Preplanned rows, revert returns them to Unplanned suggestions.',
-      defaultVisible: true,
+      defaultVisible: false,
       sortable: true,
       getSortValue: (s) => {
         if (!isContractBacklogRow(s)) return ''
@@ -4273,8 +4276,27 @@ function ShipmentsPageContent() {
   ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
 
   const defaultVisibleColumnIds = useMemo(() => {
-    return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
-  }, [compactColumns])
+    const allIds = compactColumns.map((c) => c.id)
+    return shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter)
+  }, [compactColumns, statusFilter])
+
+  const compactColumnPickerColumns = useMemo(
+    () =>
+      isShipmentGroupingSuggestionColumnEligible(statusFilter)
+        ? compactColumns
+        : compactColumns.filter((c) => c.id !== SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID),
+    [compactColumns, statusFilter],
+  )
+
+  useEffect(() => {
+    if (!isShipmentGroupingSuggestionColumnEligible(statusFilter)) return
+    setVisibleColumnIds((prev) => {
+      if (prev.has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)) return prev
+      const next = new Set(prev)
+      next.add(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)
+      return next
+    })
+  }, [statusFilter])
 
   const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
 
@@ -4345,7 +4367,7 @@ function ShipmentsPageContent() {
         }
       }
       if (savedVisible.length === 0) {
-        applyMigratedLayout(shipmentDefaultVisibleColumnIds(allIds), canonical)
+        applyMigratedLayout(shipmentDefaultVisibleColumnIdsForStage(allIds, 'ALL'), canonical)
       } else {
         applyMigratedLayout(savedVisible, savedOrder)
       }
@@ -4360,9 +4382,14 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compactColumnIdsKey])
 
+  const effectiveVisibleColumnIds = useMemo(
+    () => filterShipmentVisibleColumnIdsForStage(visibleColumnIds, statusFilter),
+    [visibleColumnIds, statusFilter],
+  )
+
   const visibleColumns = useMemo(
-    () => buildShipmentVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
-    [compactColumns, visibleColumnIds, columnOrderIds],
+    () => buildShipmentVisibleColumns(compactColumns, effectiveVisibleColumnIds, columnOrderIds),
+    [compactColumns, effectiveVisibleColumnIds, columnOrderIds],
   )
 
   const moveColumnOrder = (id: string, direction: 'up' | 'down') => {
@@ -4548,7 +4575,7 @@ function ShipmentsPageContent() {
 
   const resetCompactColumnView = useCallback(() => {
     const allIds = compactColumns.map((c) => c.id)
-    const vis = new Set(shipmentDefaultVisibleColumnIds(allIds))
+    const vis = new Set(shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter))
     const order = shipmentCompactColumnFallbackOrder(allIds)
     setVisibleColumnIds(vis)
     setColumnOrderIds(order)
@@ -4560,7 +4587,7 @@ function ShipmentsPageContent() {
         // ignore
       }
     }
-  }, [compactColumns, columnStorageKey, columnOrderStorageKey])
+  }, [compactColumns, columnStorageKey, columnOrderStorageKey, statusFilter])
 
   const allVisibleIds = useMemo(() => sortedShipments.map(s => s.id), [sortedShipments])
   const expandedCount = expandedShipmentIds.size
@@ -6239,18 +6266,18 @@ function ShipmentsPageContent() {
                         </Button>
                       </div>
                       <div className="flex items-center gap-1 mb-2">
-                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}>Select All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumnPickerColumns.map(c => c.id)))}>Select All</Button>
                         <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set())}>Unselect All</Button>
                         <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => resetCompactColumnView()}>Reset</Button>
                       </div>
                       <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
                         {(() => {
                           const visibleIds = new Set(visibleColumns.map((c) => c.id))
-                          const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+                          const byId = new Map(compactColumnPickerColumns.map((c) => [c.id, c] as const))
                           const orderedIds =
                             columnOrderIds.length > 0
                               ? columnOrderIds
-                              : shipmentCompactColumnFallbackOrder(compactColumns.map((c) => c.id))
+                              : shipmentCompactColumnFallbackOrder(compactColumnPickerColumns.map((c) => c.id))
                           const hiddenCols = orderedIds
                             .map((id) => byId.get(id))
                             .filter((c): c is CompactColumn => !!c && !visibleIds.has(c.id))

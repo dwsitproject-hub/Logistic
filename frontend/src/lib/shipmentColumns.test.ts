@@ -2,21 +2,25 @@ import { describe, expect, it } from 'vitest'
 import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS,
+  SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
   buildShipmentVisibleColumns,
+  filterShipmentVisibleColumnIdsForStage,
+  isShipmentGroupingSuggestionColumnEligible,
   mergeShipmentColumnOrder,
   migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
+  shipmentDefaultVisibleColumnIdsForStage,
 } from './shipmentColumns'
 
 describe('shipmentColumns', () => {
-  it('uses v7 default visible order', () => {
-    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v7')
+  it('uses v9 default visible order (status then grouping suggestion first)', () => {
+    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v9')
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.slice(0, 5)).toEqual([
+      'status',
+      'pre_planned_group',
       'late_indicator',
       'vessel_name',
       'shipment_id',
-      'loading_port',
-      'discharge_port',
     ])
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain('contract_qty')
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain('outstanding_qty_planning')
@@ -24,9 +28,33 @@ describe('shipmentColumns', () => {
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('sto_quantity')
   })
 
+  it('omits Grouping Suggestion from defaults unless Unplanned/Preplanned filter is active', () => {
+    const allIds = [...SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS, 'contract_date']
+    expect(isShipmentGroupingSuggestionColumnEligible('UNPLANNED')).toBe(true)
+    expect(isShipmentGroupingSuggestionColumnEligible('PREPLANNED')).toBe(true)
+    expect(isShipmentGroupingSuggestionColumnEligible('ALL')).toBe(false)
+    expect(isShipmentGroupingSuggestionColumnEligible('PLANNED')).toBe(false)
+
+    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'UNPLANNED')).toContain(
+      SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
+    )
+    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'ALL')).not.toContain(
+      SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
+    )
+
+    const visible = new Set([SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID, 'status'])
+    expect(filterShipmentVisibleColumnIdsForStage(visible, 'PLANNED').has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(
+      false,
+    )
+    expect(filterShipmentVisibleColumnIdsForStage(visible, 'UNPLANNED').has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(
+      true,
+    )
+  })
+
   it('places primary columns first then extras', () => {
-    const allIds = ['contract_date', 'vessel_name', 'loading_port', 'po_numbers', 'late_indicator']
+    const allIds = ['contract_date', 'vessel_name', 'loading_port', 'po_numbers', 'late_indicator', 'status']
     expect(shipmentCompactColumnFallbackOrder(allIds)).toEqual([
+      'status',
       'late_indicator',
       'vessel_name',
       'loading_port',

@@ -432,7 +432,6 @@ export default function VesselHistoryModal({
     }),
     [vesselRows],
   )
-  const hasTcMetrics = Object.values(avgTcMetrics).some((v) => v !== null)
 
   // Per-vessel oil-loss R1-R4 (% and MT), from the same /api/oil-loss data the Oil Loss page uses.
   const vesselOilLoss = useMemo(() => {
@@ -608,56 +607,56 @@ export default function VesselHistoryModal({
                 <VesselAtaAveragesGrid historyShipments={historySourceRows} />
               </div>
             </div>
-            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50/40 p-4">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-                Flow rate &amp; oil loss (vessel average)
-                {oilLossLoading ? <Loader2 className="h-3 w-3 animate-spin text-gray-400" /> : null}
+            <div className="mt-4 grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-gray-50/40 p-4 lg:grid-cols-2">
+              <div className="min-w-0">
+                <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Flow rate &amp; oil loss (vessel average)
+                  {oilLossLoading ? <Loader2 className="h-3 w-3 animate-spin text-gray-400" /> : null}
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                  {[
+                    { label: 'Avg LP Flow Rate', value: formatFlowRate1(avgLpFlowRate) },
+                    { label: 'Avg DP Flow Rate', value: formatFlowRate1(avgDpFlowRate) },
+                    {
+                      label: 'Avg R1 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r1.avgPct)} · ${formatMt1(vesselOilLoss.r1.avgMt)}`,
+                    },
+                    {
+                      label: 'Avg R2 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r2.avgPct)} · ${formatMt1(vesselOilLoss.r2.avgMt)}`,
+                    },
+                    {
+                      label: 'Avg R3 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r3.avgPct)} · ${formatMt1(vesselOilLoss.r3.avgMt)}`,
+                    },
+                    {
+                      label: 'Avg R4 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r4.avgPct)} · ${formatMt1(vesselOilLoss.r4.avgMt)}`,
+                    },
+                  ].map((metric) => (
+                    <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
+                      <span
+                        className="truncate text-[10px] leading-tight text-gray-500"
+                        title={metric.label}
+                      >
+                        {metric.label}
+                      </span>
+                      <span className="text-[11px] font-bold tabular-nums text-gray-900">
+                        {metric.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] leading-snug text-gray-400">
+                  Flow rate = MT ÷ berth→complete days (FOB: Delivered, CIF/CFR: Received).
+                  Oil loss shown as avg % · avg MT across the vessel&apos;s closed contracts.
+                </p>
               </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3 lg:grid-cols-6">
-                {[
-                  { label: 'Avg LP Flow Rate', value: formatFlowRate1(avgLpFlowRate) },
-                  { label: 'Avg DP Flow Rate', value: formatFlowRate1(avgDpFlowRate) },
-                  {
-                    label: 'Avg R1 Oil Loss',
-                    value: `${formatPct1(vesselOilLoss.r1.avgPct)} · ${formatMt1(vesselOilLoss.r1.avgMt)}`,
-                  },
-                  {
-                    label: 'Avg R2 Oil Loss',
-                    value: `${formatPct1(vesselOilLoss.r2.avgPct)} · ${formatMt1(vesselOilLoss.r2.avgMt)}`,
-                  },
-                  {
-                    label: 'Avg R3 Oil Loss',
-                    value: `${formatPct1(vesselOilLoss.r3.avgPct)} · ${formatMt1(vesselOilLoss.r3.avgMt)}`,
-                  },
-                  {
-                    label: 'Avg R4 Oil Loss',
-                    value: `${formatPct1(vesselOilLoss.r4.avgPct)} · ${formatMt1(vesselOilLoss.r4.avgMt)}`,
-                  },
-                ].map((metric) => (
-                  <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
-                    <span
-                      className="truncate text-[10px] leading-tight text-gray-500"
-                      title={metric.label}
-                    >
-                      {metric.label}
-                    </span>
-                    <span className="text-[11px] font-bold tabular-nums text-gray-900">
-                      {metric.value}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-2 text-[10px] leading-snug text-gray-400">
-                Flow rate = MT ÷ berth→complete days (FOB: Delivered, CIF/CFR: Received).
-                Oil loss shown as avg % · avg MT across the vessel&apos;s closed contracts.
-              </p>
-            </div>
-            {hasTcMetrics && (
-              <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50/40 p-4">
+              <div className="min-w-0 border-t border-gray-200 pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
                   TC Vessel Performance (avg)
                 </div>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3 lg:grid-cols-5">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
                   {[
                     { label: 'Fuel Consumption', value: formatTcVesselMetric(avgTcMetrics.fuel_consumption) },
                     { label: 'Freight', value: formatTcVesselMetric(avgTcMetrics.freight) },
@@ -677,7 +676,7 @@ export default function VesselHistoryModal({
                   Manually entered per shipment (T/C vessels). Average across shipments in scope.
                 </p>
               </div>
-            )}
+            </div>
           </section>
 
           <section className="mb-6">

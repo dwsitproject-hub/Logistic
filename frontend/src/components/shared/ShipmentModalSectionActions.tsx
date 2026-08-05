@@ -14,7 +14,7 @@ type SectionActionButtonProps = {
 
 export function SectionEditButton({
   label = 'Edit',
-  lockLabel = 'Lock',
+  lockLabel = 'Cancel',
   isEditing = false,
   onClick,
   disabled,

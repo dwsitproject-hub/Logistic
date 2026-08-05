@@ -4,24 +4,27 @@
  */
 
 import { migrateSavedColumnLayout, mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
+import type { ShipmentsPipelineStageFilter } from '@/lib/shipmentsPageFilterState'
 import {
   buildCompactTableColumnWidthTracks,
   resolveCompactColumnWidthPx,
   type CompactTableColumnWidthInput,
 } from '@/lib/compactTableUi'
 
+export const SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID = 'pre_planned_group' as const
+
 /** Default visible columns in left-to-right table order. */
 export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
+  'status',
+  'pre_planned_group',
   'late_indicator',
   'vessel_name',
   'shipment_id',
-  'pre_planned_group',
   'loading_port',
   'discharge_port',
   'supplier',
   'incoterm',
   'product',
-  'status',
   'contract_qty',
   'outstanding_quantity',
   'outstanding_qty_planning',
@@ -35,7 +38,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 export const SHIPMENT_OBSOLETE_COLUMN_IDS = ['port_of_loading', 'port_of_discharge'] as const
 
 /** Bump when default column order/visibility changes — triggers one-time layout migration. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v8'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v9'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
@@ -104,6 +107,38 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
 
 export function shipmentDefaultVisibleColumnIds(allIds: string[]): string[] {
   return SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
+}
+
+/** Grouping Suggestion is only eligible when the pipeline stage filter is Unplanned or Preplanned. */
+export function isShipmentGroupingSuggestionColumnEligible(
+  pipelineStage: ShipmentsPipelineStageFilter,
+): boolean {
+  return pipelineStage === 'UNPLANNED' || pipelineStage === 'PREPLANNED'
+}
+
+/** Default visible set — omits Grouping Suggestion unless Unplanned/Preplanned is active. */
+export function shipmentDefaultVisibleColumnIdsForStage(
+  allIds: string[],
+  pipelineStage: ShipmentsPipelineStageFilter,
+): string[] {
+  const base = shipmentDefaultVisibleColumnIds(allIds)
+  if (isShipmentGroupingSuggestionColumnEligible(pipelineStage)) {
+    return base
+  }
+  return base.filter((id) => id !== SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)
+}
+
+/** Hide Grouping Suggestion from the rendered table when the stage filter is not eligible. */
+export function filterShipmentVisibleColumnIdsForStage(
+  visibleIds: ReadonlySet<string>,
+  pipelineStage: ShipmentsPipelineStageFilter,
+): Set<string> {
+  if (isShipmentGroupingSuggestionColumnEligible(pipelineStage)) {
+    return new Set(visibleIds)
+  }
+  const next = new Set(visibleIds)
+  next.delete(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)
+  return next
 }
 
 /** Primary columns first (default visible order), then remaining definition order. */
@@ -181,7 +216,7 @@ export function migrateShipmentColumnLayout(
     visibleColumnIds,
     columnOrderIds,
     obsoleteColumnIds: SHIPMENT_OBSOLETE_COLUMN_IDS,
-    ensureVisibleIds: ['loading_port', 'discharge_port', 'pre_planned_group'],
+    ensureVisibleIds: ['loading_port', 'discharge_port'],
   })
   const allIds =
     allColumnIds && allColumnIds.length > 0

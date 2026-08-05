@@ -55,6 +55,19 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toMatch(/expansion_keys AS \(\s*SELECT DISTINCT ts\.id AS operation_id/s);
   });
 
+  it('resolves sto_line_resolved via a pre-aggregated JOIN, not a correlated per-row subquery', () => {
+    const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id');
+    // Computed once (GROUP BY), not re-run per output row.
+    expect(sql).toContain('contract_sto_lines_agg AS MATERIALIZED');
+    expect(sql).toMatch(/GROUP BY contract_uuid/);
+    // expanded LEFT JOINs the pre-aggregated result instead of a correlated subquery.
+    expect(sql).toContain('LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id');
+    expect(sql).toContain('COALESCE(csla.agg_sto_lines,');
+    // The old correlated-per-row shape (WHERE csl.contract_uuid = ts.contract_id inside the
+    // SELECT list) must not reappear — that was the ~12s-of-42s regression this guards against.
+    expect(sql).not.toMatch(/WHERE csl\.contract_uuid = ts\.contract_id/);
+  });
+
   it('resolves row stage from trucking_list_stage_snapshot only when enabled', () => {
     const inner = 'SELECT 1 AS id, 2 AS contract_id';
     const withSnap = buildTruckingListExpansionSql(inner, {

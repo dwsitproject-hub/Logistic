@@ -1276,7 +1276,7 @@ function NumberCell({
   return <span className="text-sm font-normal tabular-nums">{n}</span>
 }
 
-/** Shipping Performance > By Vessel > "Top" column — medal badge for ranks 1-5, plain number for 6+. */
+/** Shipping Performance > By Vessel > "Rank" column — medal badge for ranks 1-5, plain number for 6+. */
 function TopRankBadge({ rank }: { rank: number | null | undefined }) {
   if (rank == null) return <span className="text-sm text-gray-400">-</span>
   if (rank > 5) {
@@ -1296,7 +1296,7 @@ function TopRankBadge({ rank }: { rank: number | null | undefined }) {
         'inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold tabular-nums',
         rankClass,
       )}
-      title={`Top ${rank} vessel (composite of Fuel Consumption, Freight, Pump Rate, Sailing Speed, Shortage)`}
+      title={`Rank ${rank} vessel (composite of Fuel Consumption, Freight, Pump Rate, Sailing Speed, Shortage)`}
     >
       {rank}
     </span>
@@ -2669,7 +2669,7 @@ function ShippingPerformancePageContent() {
                           )}
                         >
                           <ContractPerfTableSortHeader
-                            label="Top"
+                            label="Rank"
                             activeSort={useTopRankSort}
                             sortDir="asc"
                             onSortClick={() => {

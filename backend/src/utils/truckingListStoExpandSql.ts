@@ -46,7 +46,11 @@ export interface TruckingListStoExpansionOptions {
   resolvedExpansionKeys?: Array<{ operationId: string; stoLine?: string }>;
 }
 
-/** Aggregated STO display for a trucking_source / expanded row (comma-separated). */
+/**
+ * @deprecated Correlated per-row subquery — re-scans contract_sto_lines once per output row
+ * (measured ~12s of ~42s on the default YTD scope). Use CONTRACT_STO_LINES_AGG_CTE +
+ * sqlTruckingAggregatedStoLinesFromAgg instead. Kept only for any external callers/tests.
+ */
 export function sqlTruckingAggregatedStoLinesExpr(
   contractIdExpr = 'ts.contract_id',
   fallbackStoExpr = 'ts.sto_number',
@@ -59,6 +63,24 @@ export function sqlTruckingAggregatedStoLinesExpr(
     ),
     NULLIF(TRIM(${fallbackStoExpr}::text), '')
   )`;
+}
+
+/**
+ * Pre-aggregated STO-line display, one row per contract — computed once instead of via a
+ * correlated STRING_AGG subquery re-run for every output row (measured at ~12s of the ~42s
+ * Trucking Summary query for the default YTD scope: 5128 CTE Scan loops on contract_sto_lines).
+ * Callers LEFT JOIN this on contract_uuid instead of using sqlTruckingAggregatedStoLinesExpr.
+ */
+export const CONTRACT_STO_LINES_AGG_CTE = `
+      contract_sto_lines_agg AS MATERIALIZED (
+        SELECT contract_uuid, STRING_AGG(DISTINCT sto_line, ', ' ORDER BY sto_line) AS agg_sto_lines
+        FROM contract_sto_lines
+        GROUP BY contract_uuid
+      )`;
+
+/** Resolved STO display using the pre-aggregated contract_sto_lines_agg (JOIN alias `csla`). */
+export function sqlTruckingAggregatedStoLinesFromAgg(fallbackStoExpr = 'ts.sto_number'): string {
+  return `COALESCE(csla.agg_sto_lines, NULLIF(TRIM(${fallbackStoExpr}::text), ''))`;
 }
 
 export function buildContractStoLinesCte(skipSapJoin: boolean): string {
@@ -210,6 +232,7 @@ function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): strin
         FROM expansion_keys ek
         INNER JOIN trucking_source ts ON ts.id = ek.operation_id
         INNER JOIN contracts c ON c.id = ts.contract_id
+        LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id
       ),
       paged_expansion AS (
         SELECT operation_id
@@ -219,7 +242,7 @@ function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): strin
 }
 
 function buildExpandedJoinSql(usePaging: boolean): string {
-  const stoAgg = sqlTruckingAggregatedStoLinesExpr('ts.contract_id', 'ts.sto_number');
+  const stoAgg = sqlTruckingAggregatedStoLinesFromAgg('ts.sto_number');
   if (!usePaging) {
     return `
       expanded AS (
@@ -227,6 +250,7 @@ function buildExpandedJoinSql(usePaging: boolean): string {
           ts.*,
           ${stoAgg} AS sto_line_resolved
         FROM trucking_source ts
+        LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id
       )`;
   }
 
@@ -237,6 +261,7 @@ function buildExpandedJoinSql(usePaging: boolean): string {
           ${stoAgg} AS sto_line_resolved
         FROM trucking_source ts
         INNER JOIN paged_expansion pe ON pe.operation_id = ts.id
+        LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id
       )`;
 }
 
@@ -301,7 +326,8 @@ export function buildTruckingListExpansionSql(
       WITH trucking_source AS (
         ${innerSql}
       ),
-      ${buildContractStoLinesCte(skipSapJoin)},${pagingBlock}
+      ${buildContractStoLinesCte(skipSapJoin)},
+      ${CONTRACT_STO_LINES_AGG_CTE},${pagingBlock}
       ${buildExpandedJoinSql(Boolean(paging) || Boolean(resolvedKeys))}${qtyResolutionCte}
       SELECT
         e.id,

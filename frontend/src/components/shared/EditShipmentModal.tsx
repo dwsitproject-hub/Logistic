@@ -1730,6 +1730,55 @@ export function EditShipmentModal({
     })
   }
 
+  const handleCancelEtaEdit = () => {
+    if (isMultiPortLoading) {
+      if (etaBaseline) {
+        setDischargeEtaFields({ ...etaBaseline.dischargeEta })
+        setEtaBlocks((prev) =>
+          prev.map((block) => {
+            const baselinePort = etaBaseline.loadingPorts.find(
+              (p) => p.portSequence === block.portSequence,
+            )
+            if (!baselinePort || block.status !== 'active') {
+              return { ...block, isEditing: false }
+            }
+            return {
+              ...block,
+              isEditing: false,
+              fields: {
+                ...block.fields,
+                ...baselinePort.fields,
+              },
+            }
+          }),
+        )
+      }
+      setEtaSectionEditing(false)
+      return
+    }
+
+    const draft = etaBlocks.find((b) => b.status === 'active' && b.isDraft)
+    if (draft) {
+      handleCancelAddEta()
+      return
+    }
+
+    if (!etaBaseline?.singlePortActiveEta) {
+      setEtaBlocks((prev) =>
+        prev.map((b) => (b.status === 'active' ? { ...b, isEditing: false } : b)),
+      )
+      return
+    }
+
+    setEtaBlocks((prev) =>
+      prev.map((b) =>
+        b.status === 'active'
+          ? { ...b, isEditing: false, fields: { ...etaBaseline.singlePortActiveEta! } }
+          : b,
+      ),
+    )
+  }
+
   const handleCancelAtaEdit = () => {
     setAtaFields({ ...originalAtaFields })
     setLoadingPortAtaByKey({ ...originalLoadingPortAtaByKey })
@@ -1824,6 +1873,9 @@ export function EditShipmentModal({
 
   const activeEtaBlock = etaBlocks.find((b) => b.status === 'active')
   const historicalEtaBlocks = etaBlocks.filter((b) => b.status === 'historical')
+  const etaSectionIsEditing = isMultiPortLoading
+    ? etaSectionEditing
+    : Boolean(activeEtaBlock?.isEditing || activeEtaBlock?.isDraft)
 
   const step1Done = Boolean(vesselName.trim())
   const step2Done = detailRows.length > 0 || Boolean(stoNumber.trim())
@@ -2380,22 +2432,28 @@ export function EditShipmentModal({
                     <>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty (MT)</label>
-                        <MtQtyInput valueKg={sfalQty} onChange={setSfalQty} />
+                        <MetricDecimalInput
+                          value={sfalQty === null ? null : sfalQty / 1000}
+                          onChange={(mt) => setSfalQty(mt === null ? null : mt * 1000)}
+                        />
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
-                        <MtQtyInput valueKg={sfbdQty} onChange={setSfbdQty} />
+                        <MetricDecimalInput
+                          value={sfbdQty === null ? null : sfbdQty / 1000}
+                          onChange={(mt) => setSfbdQty(mt === null ? null : mt * 1000)}
+                        />
                       </div>
                     </>
                   ) : (
                     <>
                       <ReadOnlyInfoField
                         label="SFAL Qty (MT)"
-                        value={sfalQty === null ? null : formatQtyMtFromKg(sfalQty)}
+                        value={formatMetricReadOnly(sfalQty === null ? null : sfalQty / 1000)}
                       />
                       <ReadOnlyInfoField
                         label="SFBD Qty (MT)"
-                        value={sfbdQty === null ? null : formatQtyMtFromKg(sfbdQty)}
+                        value={formatMetricReadOnly(sfbdQty === null ? null : sfbdQty / 1000)}
                       />
                     </>
                   )}
@@ -2413,12 +2471,30 @@ export function EditShipmentModal({
                   <h4 className="text-sm font-semibold text-gray-800">3. Estimation + Loading Port</h4>
                   {step3Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                {isMultiPortLoading && canModifyCoreSections && (
+                {canModifyCoreSections && (
                   <SectionActionGroup>
-                    <SectionEditButton
-                      isEditing={etaSectionEditing}
-                      onClick={() => setEtaSectionEditing((v) => !v)}
-                    />
+                    {!etaSectionIsEditing ? (
+                      <>
+                        <SectionEditButton
+                          onClick={() => {
+                            if (isMultiPortLoading) {
+                              setEtaSectionEditing(true)
+                              return
+                            }
+                            setEtaBlocks((prev) =>
+                              prev.map((b) =>
+                                b.status === 'active' ? { ...b, isEditing: true } : b,
+                              ),
+                            )
+                          }}
+                        />
+                        {!isMultiPortLoading && !activeEtaBlock?.isDraft ? (
+                          <SectionAddButton onClick={handleAddEta} />
+                        ) : null}
+                      </>
+                    ) : (
+                      <SectionCancelButton onClick={handleCancelEtaEdit} />
+                    )}
                   </SectionActionGroup>
                 )}
               </div>
@@ -2503,7 +2579,7 @@ export function EditShipmentModal({
                   <>
                 {activeEtaBlock && (
                   <div className="rounded-lg border border-blue-100 bg-white p-3">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
                       <Badge
                         className={
                           activeEtaBlock.isDraft
@@ -2513,27 +2589,6 @@ export function EditShipmentModal({
                       >
                         {activeEtaBlock.isDraft ? 'New Estimation' : 'Active Estimation'}
                       </Badge>
-                      {canModifyCoreSections && (
-                      <SectionActionGroup>
-                        {activeEtaBlock.isDraft ? (
-                          <SectionCancelButton onClick={handleCancelAddEta} />
-                        ) : (
-                          <>
-                            <SectionEditButton
-                              isEditing={activeEtaBlock.isEditing}
-                              onClick={() =>
-                                setEtaBlocks((prev) =>
-                                  prev.map((b) =>
-                                    b.status === 'active' ? { ...b, isEditing: !b.isEditing } : b,
-                                  ),
-                                )
-                              }
-                            />
-                            <SectionAddButton onClick={handleAddEta} />
-                          </>
-                        )}
-                      </SectionActionGroup>
-                      )}
                     </div>
                     <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div>
