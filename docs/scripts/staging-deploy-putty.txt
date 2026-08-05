@@ -154,6 +154,11 @@ Prasyarat backup: postgresql-client di host .57
   # Apply: backup otomatis + cancel semua loser + verify
   bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply
 
+  # Hilangkan CANCELLED loser dari view table / kartu Cancelled (via backend DB):
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+  # Satu OP saja:
+  # bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply --op OP-LAND-130720260012
+
   # Lewati backup (tidak disarankan):
   # bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --skip-backup
 

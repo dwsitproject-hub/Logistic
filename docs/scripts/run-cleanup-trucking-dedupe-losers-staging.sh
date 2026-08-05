@@ -82,9 +82,34 @@ load_keys_from_backend_container() {
   done < <(docker exec klip-backend printenv 2>/dev/null | grep -E '^(DB_HOST|DB_PORT|DB_NAME|DB_USER|DB_PASSWORD)=' || true)
 }
 
+is_docker_dns_db_host() {
+  case "${1:-}" in
+    postgres|klip-postgres|"") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 load_keys_from_file "$ENV_FILE" DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD POSTGRES_PORT
 load_keys_from_file "$ROOT_ENV_FILE" DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD POSTGRES_PORT
+ENV_DB_HOST="${DB_HOST:-}"
+ENV_DB_PORT="${DB_PORT:-}"
 load_keys_from_backend_container
+
+# When backend container reports Docker DNS (postgres/klip-postgres), host psql must use
+# the external DB from .env (SIT: 172.28.92.60:5442), not local klip-postgres.
+if is_docker_dns_db_host "${DB_HOST:-}"; then
+  if [[ -n "$ENV_DB_HOST" ]] && ! is_docker_dns_db_host "$ENV_DB_HOST"; then
+    DB_HOST="$ENV_DB_HOST"
+    DB_PORT="${ENV_DB_PORT:-5442}"
+  else
+    DB_HOST="${DB_HOST:-172.28.92.60}"
+    DB_PORT="${DB_PORT:-5442}"
+    if is_docker_dns_db_host "$DB_HOST"; then
+      DB_HOST="172.28.92.60"
+      DB_PORT="5442"
+    fi
+  fi
+fi
 
 DB_NAME="${DB_NAME:-klip_db}"
 DB_USER="${DB_USER:-postgres}"
@@ -98,13 +123,6 @@ fi
 PSQL_MODE="" # docker_exec | compose_exec | host_psql
 PSQL_HOST=""
 PSQL_PORT=""
-
-is_docker_dns_db_host() {
-  case "${1:-}" in
-    postgres|klip-postgres|"") return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 resolve_psql_target() {
   # 1) Backend points at a host-reachable DB (SIT dedicated DB .60:5442)
