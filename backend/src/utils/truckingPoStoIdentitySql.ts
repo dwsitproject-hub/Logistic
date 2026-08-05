@@ -89,3 +89,34 @@ export const SQL_RESOLVE_PO_FROM_STO = `
   ORDER BY c.contract_date DESC NULLS LAST, c.updated_at DESC NULLS LAST
   LIMIT 1
 `;
+
+/**
+ * Batch version of SQL_RESOLVE_PO_FROM_STO — resolve PO numbers for a whole array of STO
+ * keys ($1::text[]) in a single round trip. Returns one row per distinct input key
+ * (po_number is NULL when not found). Feeds a `Map<stoKey, poNumber | null>`.
+ */
+export const SQL_RESOLVE_PO_FROM_STO_BATCH = `
+  SELECT
+    x.sto_key,
+    (
+      SELECT NULLIF(TRIM(c.po_number::text), '')
+      FROM contracts c
+      WHERE COALESCE(c.po_number, '') != ''
+        AND (
+          EXISTS (
+            SELECT 1 FROM contract_stos cs
+            WHERE cs.contract_id = c.id
+              AND TRIM(cs.sto_number::text) = x.sto_key
+          )
+          OR TRIM(COALESCE(c.sto_number::text, '')) = x.sto_key
+          OR EXISTS (
+            SELECT 1 FROM sap_processed_data spd
+            WHERE TRIM(spd.contract_number) = TRIM(c.contract_id::text)
+              AND TRIM(${SPD_EFFECTIVE_STO}) = x.sto_key
+          )
+        )
+      ORDER BY c.contract_date DESC NULLS LAST, c.updated_at DESC NULLS LAST
+      LIMIT 1
+    ) AS po_number
+  FROM UNNEST($1::text[]) AS x(sto_key)
+`;

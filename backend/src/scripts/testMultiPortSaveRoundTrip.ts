@@ -27,7 +27,7 @@ function isoDateOnly(value: string | null | undefined): string | null {
 
 async function main() {
   const login = await axios.post(`${BASE}/auth/login`, {
-    username: 'admin',
+    email: 'admin@klip.com',
     password: 'admin123',
   });
   const token = login.data?.data?.token as string;

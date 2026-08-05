@@ -41,9 +41,12 @@ export type WbRekapAggregatedRow = {
   sumNettoEupKg: number;
   ticketCount: number;
   sheetNames: string[];
-  /** STO for this aggregate row (empty = legacy PO-level / no STO on ticket). */
+  /**
+   * First/representative STO seen for this PO+date (informational only — WB storage is
+   * always PO-level; see `stoNumbers` for the full distinct list used in failure messages).
+   */
   stoNumber: string;
-  /** Distinct STO values on tickets for this key (usually 0–1 after per-STO split). */
+  /** Distinct STO values across tickets aggregated into this PO+date row. */
   stoNumbers: string[];
 };
 
@@ -79,6 +82,10 @@ function isPoHeader(h: string): boolean {
   if (h.includes('no po/sto') || h.includes('no po / sto')) return true;
   // Tj Pura / plant layouts: dedicated NO PO column (not "No PO/STO")
   if (h === 'no po' || h === 'nomor po') return true;
+  // Palembang / Tj Buton: "No. PO" (period-tolerant)
+  if (h === 'no. po') return true;
+  // Kumai: bare "PO" column
+  if (h === 'po') return true;
   return false;
 }
 
@@ -87,8 +94,11 @@ function isDateHeader(h: string): boolean {
   if (h.includes('tanggal masuk')) return true;
   // Tj Pura ticket sheets use Tanggal Laporan (not Tanggal Pengiriman / Tanggal 1st)
   if (h === 'tanggal laporan') return true;
-  // SPC layout uses a plain TANGGAL column (avoid matching "Tanggal Muat/Bongkar/…")
+  // SPC / Palembang / Tj Buton layout uses a plain TANGGAL column
+  // (avoid matching "Tanggal Muat/Bongkar/Pengiriman Vendor…")
   if (h === 'tanggal') return true;
+  // Kumai: Tanggal Penerimaan (receipt date) is the report's primary date column
+  if (h === 'tanggal penerimaan') return true;
   return false;
 }
 
@@ -167,6 +177,29 @@ function parseQtyKg(raw: unknown): number | null {
   return Math.round(n * 100) / 100;
 }
 
+/** Normalize + strip all whitespace, so "TOTAL" and "T O T A L " both collapse to "total". */
+function normalizeCompact(value: unknown): string {
+  return normalizeHeader(value).replace(/\s+/g, '');
+}
+
+/**
+ * Grand-total / subtotal footer rows embedded in ticket data (e.g. a period's "TOTAL" or
+ * "T O T A L" row, sometimes landing in the PO/STO cell due to a merged-cell shift).
+ * These already fail safely today (rejected for missing/unparseable PO or date), but are
+ * skipped silently here so they don't surface as confusing noise in the failure list.
+ */
+function isWbTotalFooterRow(
+  cells: unknown[],
+  cols: { poIdx: number; stoIdx: number },
+): boolean {
+  const candidates = [
+    cells[0],
+    cells[cols.poIdx],
+    cols.stoIdx >= 0 ? cells[cols.stoIdx] : undefined,
+  ];
+  return candidates.some((c) => normalizeCompact(c) === 'total');
+}
+
 function normalizePoNumber(raw: unknown): string {
   const s = String(raw ?? '').trim();
   if (!s) return '';
@@ -243,31 +276,102 @@ function resolveWbColumns(matrix: unknown[][], headerIdx: number): ResolvedWbCol
   let deliveryIdx = findColumnIndexByCandidates(headers, ['netto pks']);
   let receiveIdx = findColumnIndexByCandidates(headers, ['netto eup', 'netto eop']);
 
+  // "No. Tiket Timbangan Kebun/Pabrik/RSB/EUP" ticket-id columns can precede the real
+  // "Timbangan X (kg)" quantity column and would otherwise win the first-match lookup below.
+  const isTimbanganQtyHeader = (needle: string) => (h: string) =>
+    h.includes(needle) && !h.includes('tiket');
+
   // SPC 2-row: Timbangan Kebun / Timbangan SPC(kg) → Netto
-  // Tj Pura: Pihak Ketiga / Pabrik → NETT
-  const hasKebun = headers.some((h) => h.includes('timbangan kebun'));
-  const hasSpc = headers.some((h) => h.includes('timbangan spc'));
+  // Palembang 2-row: Timbangan Kebun / Timbangan EUP(kg) → Netto
+  // Tj Buton 2-row: Timbangan pabrik(kg) / Timbangan RSB(kg) → Netto
+  // Tj Pura: bare Pihak Ketiga / Pabrik (merged 2-row parent, Netto on sub-row) → NETT
+  // Kumai: single-row "NETT (Pihak Ketiga)" / "NETT (Pabrik)" cells (Netto already in the header cell)
+  const hasKebun = headers.some(isTimbanganQtyHeader('timbangan kebun'));
+  const hasSpc = headers.some(isTimbanganQtyHeader('timbangan spc'));
+  const hasTimbanganEup = headers.some(isTimbanganQtyHeader('timbangan eup'));
+  const hasTimbanganPabrik = headers.some(isTimbanganQtyHeader('timbangan pabrik'));
+  const hasTimbanganRsb = headers.some(isTimbanganQtyHeader('timbangan rsb'));
   const hasPihakKetiga = headers.some((h) => h.includes('pihak ketiga'));
   const hasPabrik = headers.some((h) => h === 'pabrik');
   let dataStartRow = headerIdx + 1;
-  if (hasKebun || hasSpc || hasPihakKetiga || hasPabrik) {
+  if (
+    hasKebun ||
+    hasSpc ||
+    hasTimbanganEup ||
+    hasTimbanganPabrik ||
+    hasTimbanganRsb ||
+    hasPihakKetiga ||
+    hasPabrik
+  ) {
     if (hasKebun || hasSpc) {
-      const kebunNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
-        h.includes('timbangan kebun'),
+      const kebunNetto = findMergedNettoColumnIndex(
+        matrix,
+        headerIdx,
+        isTimbanganQtyHeader('timbangan kebun'),
       );
-      const spcNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
-        h.includes('timbangan spc'),
+      const spcNetto = findMergedNettoColumnIndex(
+        matrix,
+        headerIdx,
+        isTimbanganQtyHeader('timbangan spc'),
       );
       if (kebunNetto >= 0) deliveryIdx = kebunNetto;
       if (spcNetto >= 0) receiveIdx = spcNetto;
     }
-    if (hasPihakKetiga || hasPabrik) {
-      const pihakNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
-        h.includes('pihak ketiga'),
+    if (hasTimbanganEup) {
+      // Palembang receive-side (delivery side reuses the hasKebun branch above).
+      const eupNetto = findMergedNettoColumnIndex(
+        matrix,
+        headerIdx,
+        isTimbanganQtyHeader('timbangan eup'),
       );
-      const pabrikNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) => h === 'pabrik');
-      if (pihakNetto >= 0) deliveryIdx = pihakNetto;
-      if (pabrikNetto >= 0) receiveIdx = pabrikNetto;
+      if (eupNetto >= 0) receiveIdx = eupNetto;
+    }
+    if (hasTimbanganPabrik) {
+      // Tj Buton delivery-side — do NOT reuse the bare `pabrik` (Tj Pura) rule below,
+      // this is a distinct 2-row merged header with the opposite delivery/receive sense.
+      const pabrikMergedNetto = findMergedNettoColumnIndex(
+        matrix,
+        headerIdx,
+        isTimbanganQtyHeader('timbangan pabrik'),
+      );
+      if (pabrikMergedNetto >= 0) deliveryIdx = pabrikMergedNetto;
+    }
+    if (hasTimbanganRsb) {
+      // Tj Buton receive-side.
+      const rsbNetto = findMergedNettoColumnIndex(
+        matrix,
+        headerIdx,
+        isTimbanganQtyHeader('timbangan rsb'),
+      );
+      if (rsbNetto >= 0) receiveIdx = rsbNetto;
+    }
+    if (hasPihakKetiga || hasPabrik) {
+      // Kumai: the header cell itself already says Nett/Netto — resolve directly,
+      // do NOT use the merged-sub-row lookup (Kumai repeats "(Pihak Ketiga)"/"(Pabrik)"
+      // across 3 sibling single-row headers — Berat Kotor / Tare / NETT — so the merged
+      // lookup would grab the first one, "Berat Kotor", instead of "NETT").
+      const nettPihakKetigaIdx = findColumnIndex(
+        headers,
+        (h) => (h.includes('nett') || h.includes('netto')) && h.includes('pihak ketiga'),
+      );
+      const nettPabrikIdx = findColumnIndex(
+        headers,
+        (h) => (h.includes('nett') || h.includes('netto')) && h.includes('pabrik'),
+      );
+      if (nettPihakKetigaIdx >= 0) {
+        deliveryIdx = nettPihakKetigaIdx;
+      } else {
+        const pihakNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) =>
+          h.includes('pihak ketiga'),
+        );
+        if (pihakNetto >= 0) deliveryIdx = pihakNetto;
+      }
+      if (nettPabrikIdx >= 0) {
+        receiveIdx = nettPabrikIdx;
+      } else {
+        const pabrikNetto = findMergedNettoColumnIndex(matrix, headerIdx, (h) => h === 'pabrik');
+        if (pabrikNetto >= 0) receiveIdx = pabrikNetto;
+      }
     }
     const subRow = matrix[headerIdx + 1] ?? [];
     const subLooksLikeQty = subRow.some((c) => {
@@ -348,6 +452,9 @@ export function parseWbRekapSheetMatrix(
   for (let r = cols.dataStartRow; r < matrix.length; r += 1) {
     const cells = matrix[r] ?? [];
     const rowNumber = r + 1;
+
+    // Skip grand-total / subtotal footer rows silently (not a row-parse failure).
+    if (isWbTotalFooterRow(cells, cols)) continue;
 
     // Skip repeated label / subheader rows under multi-row headers (Tj Pura, SPC).
     if (looksLikeWbLabelOrSubheaderRow(cells, cols)) continue;
@@ -433,11 +540,12 @@ export function parseWbRekapSheetMatrix(
 export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAggregatedRow[] {
   const byKey = new Map<string, WbRekapAggregatedRow>();
   for (const ticket of tickets) {
-    // Aggregate by PO (or STO identity) + date + STO so multi-STO POs stay separate.
+    // Aggregate by PO (or STO identity) + date only — WB matching/storage is PO-level,
+    // so multiple STO tickets for the same PO+date are summed into a single row.
     const identity = (ticket.poNumber || ticket.stoNumber || '').toLowerCase();
     if (!identity) continue;
     const sto = String(ticket.stoNumber ?? '').trim();
-    const key = `${identity}::${ticket.progressDateIso}::${sto.toLowerCase()}`;
+    const key = `${identity}::${ticket.progressDateIso}`;
     const existing = byKey.get(key);
     if (existing) {
       existing.sumNettoPksKg += ticket.nettoPksKg;
@@ -468,8 +576,6 @@ export function aggregateWbRekapTickets(tickets: WbRekapTicketRow[]): WbRekapAgg
   return Array.from(byKey.values()).sort((a, b) => {
     const poCmp = a.poNumber.localeCompare(b.poNumber, undefined, { numeric: true });
     if (poCmp !== 0) return poCmp;
-    const stoCmp = a.stoNumber.localeCompare(b.stoNumber, undefined, { numeric: true });
-    if (stoCmp !== 0) return stoCmp;
     return a.progressDateIso.localeCompare(b.progressDateIso);
   });
 }

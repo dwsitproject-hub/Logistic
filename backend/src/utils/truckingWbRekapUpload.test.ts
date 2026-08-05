@@ -274,7 +274,7 @@ describe('truckingWbRekapUpload', () => {
     expect(tickets[0]?.progressDateIso).toBe('2026-07-01');
   });
 
-  it('parses EUP ticket rows with STO and aggregates by PO + date + STO', () => {
+  it('parses EUP ticket rows with STO and aggregates by PO + date only (multi-STO sums into one row)', () => {
     const matrix = [
       ['No.', 'STO', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EUP'],
       [1, '1006018596', '1001029784', '01/06/2026', 17200, 17140],
@@ -286,19 +286,17 @@ describe('truckingWbRekapUpload', () => {
     expect(tickets[0]?.stoNumber).toBe('1006018596');
     expect(tickets[0]?.klipProduct).toBe('CPO');
     const aggregated = aggregateWbRekapTickets(tickets);
-    expect(aggregated).toHaveLength(3);
-    const sto1 = aggregated.find(
-      (a) => a.poNumber === '1001029784' && a.stoNumber === '1006018596',
-    );
-    const sto2 = aggregated.find(
-      (a) => a.poNumber === '1001029784' && a.stoNumber === '1006018597',
-    );
-    expect(sto1?.sumNettoPksKg).toBe(17200);
-    expect(sto1?.sumNettoEupKg).toBe(17140);
-    expect(sto2?.sumNettoPksKg).toBe(17350);
-    expect(sto2?.sumNettoEupKg).toBe(17310);
-    expect(sto1?.ticketCount).toBe(1);
-    expect(sto2?.stoNumbers).toEqual(['1006018597']);
+    // Same PO + same date, different STOs → merged into a single PO-level row.
+    expect(aggregated).toHaveLength(2);
+    const combined = aggregated.find((a) => a.poNumber === '1001029784');
+    const other = aggregated.find((a) => a.poNumber === '1001030126');
+    expect(combined?.sumNettoPksKg).toBe(17200 + 17350);
+    expect(combined?.sumNettoEupKg).toBe(17140 + 17310);
+    expect(combined?.ticketCount).toBe(2);
+    expect(combined?.stoNumbers?.sort()).toEqual(['1006018596', '1006018597']);
+    expect(other?.sumNettoPksKg).toBe(17120);
+    expect(other?.sumNettoEupKg).toBe(17110);
+    expect(other?.stoNumbers).toEqual(['1006019000']);
   });
 
   it('parses EOP Netto EOP as receive qty', () => {
@@ -432,6 +430,171 @@ describe('truckingWbRekapUpload', () => {
     expect(tickets[0]?.progressDateIso).toBe('2026-06-02');
   });
 
+  it('silently skips TOTAL / T O T A L subtotal footer rows instead of reporting a row-parse failure', () => {
+    const matrix = [
+      ['No.', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EUP'],
+      [1, '1001029784', '01/06/2026', 17200, 17140],
+      ['TOTAL', '', '', 17200, 17140],
+      [2, '1001029785', '02/06/2026', 8000, 7900],
+      ['T O T A L ', '', '', 8000, 7900],
+    ];
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix('CPO', matrix, parseDate);
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(2);
+    expect(tickets.map((t) => t.poNumber)).toEqual(['1001029784', '1001029785']);
+  });
+
+  it('skips a TOTAL footer row even when the label lands in the STO cell', () => {
+    const matrix = [
+      ['No.', 'STO', 'PO/SO', 'Tanggal Masuk', 'Netto PKS', 'Netto EUP'],
+      [1, '1006018596', '1001029784', '01/06/2026', 17200, 17140],
+      [2, 'TOTAL', '', '', 17200, 17140],
+    ];
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix('CPO', matrix, parseDate);
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(1);
+  });
+
+  it('resolves Kumai single-row header: bare PO/STO, Tanggal Penerimaan, NETT (Pihak Ketiga)/NETT (Pabrik)', () => {
+    const matrix = [
+      [
+        'No.',
+        'TX',
+        'No Ref',
+        'Tanggal Penerimaan',
+        'STO',
+        'PO',
+        'Relasi',
+        'Nama Supir',
+        'Nomor Truck',
+        'Berat Kotor (Pihak Ketiga)',
+        'Tare (Pihak Ketiga)',
+        'NETT (Pihak Ketiga)',
+        'Berat Kotor (Pabrik)',
+        'Tare (Pabrik)',
+        'NETT (Pabrik)',
+      ],
+      [1, 'BEL', 'EUK1', '01/06/2026', '1006018750', '1001030371', 'SUP', 'DRV', 'TRK', 20000, 4810, 15190, 19980, 4810, 15170],
+    ];
+    expect(findWbRekapHeaderRowIndex(matrix)).toBe(0);
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix('01 Juli', matrix, parseDate);
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]?.poNumber).toBe('1001030371');
+    expect(tickets[0]?.stoNumber).toBe('1006018750');
+    expect(tickets[0]?.nettoPksKg).toBe(15190);
+    expect(tickets[0]?.nettoEupKg).toBe(15170);
+  });
+
+  it('resolves Palembang 2-row header: No. PO + Timbangan Kebun/EUP Netto (ignores No. Tiket Timbangan Pabrik decoy)', () => {
+    const matrix = [
+      [
+        'No.',
+        'TANGGAL',
+        'No.',
+        'No. Tiket Timbangan Pabrik',
+        'No. DO',
+        'No. KONTRAK',
+        'No. PO',
+        'Term',
+        'Tanggal Muat',
+        'Timbangan Kebun',
+        '',
+        '',
+        '',
+        'Tanggal Bongkar',
+        'Timbangan EUP (kg)',
+        '',
+        '',
+        '',
+      ],
+      [
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Masuk',
+        'Keluar',
+        'Netto',
+        'TOTAL',
+        '',
+        'Masuk',
+        'Keluar',
+        'Netto',
+        'TOTAL',
+      ],
+      [803, '05/01/2026', 1, 'EU5500', 'DO-1', 'KTR-1', '1001026574', 'LOCO', '05/01/2026', 18000, 5060, 12940, 12940, '05/01/2026', 18020, 5070, 12950, 12950],
+    ];
+    expect(findWbRekapHeaderRowIndex(matrix)).toBe(0);
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix('CKG (3)', matrix, parseDate);
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]?.poNumber).toBe('1001026574');
+    expect(tickets[0]?.nettoPksKg).toBe(12940);
+    expect(tickets[0]?.nettoEupKg).toBe(12950);
+  });
+
+  it('resolves Tj Buton 2-row header: No. PO/No. STO + Timbangan pabrik(delivery)/RSB(receive) Netto (ignores No. Tiket Timbangan RSB decoy)', () => {
+    const matrix = [
+      [
+        'No.',
+        'TANGGAL',
+        'No. Tiket Timbangan RSB',
+        'NO DO',
+        'NO KONTRAK',
+        'No. PO',
+        'No. STO',
+        'Term',
+        'Tanggal Muat',
+        'Timbangan pabrik  (kg)',
+        '',
+        '',
+        '',
+        'Moist pabrik',
+        'Tanggal Bongkar',
+        'Timbangan RSB (kg)',
+        '',
+        '',
+        '',
+      ],
+      [
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+        'Bruto',
+        'Tarra',
+        'Netto',
+        'Total',
+        '',
+        '',
+        'Bruto',
+        'Tarra',
+        'Netto',
+        'Total',
+      ],
+      [1, '02/01/2026', 'RSB1135066', 'DO-1', 'KTR-1', '1361001949', '1366000999', 'LOCO', '01/01/2026', 43.31, 12.42, 30.89, 245.86, 19.96, '02/01/2026', 43.12, 12.39, 30.73, 241.41],
+    ];
+    expect(findWbRekapHeaderRowIndex(matrix)).toBe(0);
+    const { tickets, rowParseFailures } = parseWbRekapSheetMatrix('Sheet1', matrix, parseDate);
+    expect(rowParseFailures).toEqual([]);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]?.poNumber).toBe('1361001949');
+    expect(tickets[0]?.stoNumber).toBe('1366000999');
+    expect(tickets[0]?.nettoPksKg).toBe(30.89);
+    expect(tickets[0]?.nettoEupKg).toBe(30.73);
+  });
+
   it('parses sheets by PO header even when sheet name is not in the legacy product map', () => {
     const result = parseWbRekapWorkbook(
       [
@@ -489,6 +652,10 @@ describe('truckingWbRekapUpload', () => {
       'WB - Laporan Tiimbangan Material Trade EOP - TJMorawa ( JUNI 2026) (1).xlsx',
       'WB - Laporan Tiimbangan Material Trade EOP - TJMorawa ( JUNI 2026) (2).xlsx',
       'WB - Tj Pura.xlsx',
+      'WB - Bontang.xlsx',
+      'WB - Kumai.xlsx',
+      'WB - Palembang.xlsx',
+      'WB - Tj Buton.xlsx',
     ];
     for (const name of candidates) {
       const samplePath = path.resolve(__dirname, `../../../docs/${name}`);
@@ -532,6 +699,20 @@ describe('truckingWbRekapUpload', () => {
         expect(cpoTickets.length).toBeGreaterThan(0);
         expect(cpoTickets.some((t) => t.nettoPksKg > 0 && t.nettoEupKg > 0)).toBe(true);
         expect(cpoTickets.every((t) => Boolean(t.poNumber))).toBe(true);
+      }
+      if (name.includes('Bontang')) {
+        expect(result.sheetsProcessed.length).toBeGreaterThan(0);
+        expect(result.rawTicketRows).toBeGreaterThan(0);
+        expect(result.tickets.some((t) => t.nettoPksKg > 0 && t.nettoEupKg > 0)).toBe(true);
+        // No stray "TOTAL"-labeled tickets should leak through as data rows.
+        expect(result.tickets.every((t) => !/^t\s*o\s*t\s*a\s*l$/i.test(t.poNumber))).toBe(true);
+      }
+      if (name.includes('Kumai') || name.includes('Palembang') || name.includes('Tj Buton')) {
+        expect(result.sheetsProcessed.length).toBeGreaterThan(0);
+        expect(result.rawTicketRows).toBeGreaterThan(0);
+        const withBoth = result.tickets.filter((t) => t.nettoPksKg > 0 && t.nettoEupKg > 0);
+        expect(withBoth.length).toBeGreaterThan(0);
+        expect(result.tickets.every((t) => !/^t\s*o\s*t\s*a\s*l$/i.test(t.poNumber))).toBe(true);
       }
     }
   });

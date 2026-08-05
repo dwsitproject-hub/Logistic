@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  combineSapStoActuals,
   formatSapQtyMtOrDash,
   filterActualRowsForSto,
   normalizeDailyActualRows,
@@ -105,7 +106,7 @@ describe('truckingModalDailyTables', () => {
     expect(resolveWbActualsDisplayMode(rows, sto)).toBe('poLevelMultiSto')
   })
 
-  it('resolveWbActualsDisplayMode uses perSto when WB rows are sto-tagged', () => {
+  it('resolveWbActualsDisplayMode uses poLevelMultiSto even when WB rows are sto-tagged (always combined per PO)', () => {
     const sto = normalizeStoActuals([
       { sto_number: '1006018926' },
       { sto_number: '1006018927' },
@@ -114,9 +115,47 @@ describe('truckingModalDailyTables', () => {
       { date: '2026-06-01', quantity_delivery_kg: 100, sto_number: '1006018926' },
       { date: '2026-06-01', quantity_delivery_kg: 200, sto_number: '1006018927' },
     ])
-    expect(resolveWbActualsDisplayMode(rows, sto)).toBe('perSto')
+    expect(resolveWbActualsDisplayMode(rows, sto)).toBe('poLevelMultiSto')
     expect(filterActualRowsForSto(rows, '1006018926')).toHaveLength(1)
     expect(filterActualRowsForSto(rows, '1006018927')).toHaveLength(1)
+  })
+
+  it('combineSapStoActuals merges per-STO SAP fields into one PO-level block', () => {
+    const sto = normalizeStoActuals([
+      {
+        sto_number: '1006018596',
+        sap_trucking_start_receive_date: '2026-06-03',
+        sap_trucking_last_receive_date: '2026-06-10',
+        sap_qty_delivery: 244840,
+        sap_qty_receive: 242540,
+      },
+      {
+        sto_number: '1006018597',
+        sap_trucking_start_receive_date: '2026-06-15',
+        sap_trucking_last_receive_date: '2026-06-20',
+        sap_qty_delivery: 168400,
+        sap_qty_receive: 166680,
+      },
+    ])
+    const combined = combineSapStoActuals(sto)
+    expect(combined).toEqual({
+      start_receive_date: '2026-06-03',
+      last_receive_date: '2026-06-20',
+      qty_delivery: 244840 + 168400,
+      qty_receive: 242540 + 166680,
+    })
+  })
+
+  it('combineSapStoActuals returns null quantities when no STO has any value', () => {
+    const sto = normalizeStoActuals([
+      { sto_number: '1006018926' },
+      { sto_number: '1006018927' },
+    ])
+    const combined = combineSapStoActuals(sto)
+    expect(combined.qty_delivery).toBeNull()
+    expect(combined.qty_receive).toBeNull()
+    expect(combined.start_receive_date).toBe('')
+    expect(combined.last_receive_date).toBe('')
   })
 
   it('wbGrandTotalsFromActualRows sums catalog STOs only (drops empty + junk)', () => {

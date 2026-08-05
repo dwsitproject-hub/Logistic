@@ -4,6 +4,7 @@ import { PoolClient } from 'pg';
 import { query, getClient } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
+import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -232,7 +233,6 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
 
   try {
     const {
-      username,
       email,
       password,
       full_name,
@@ -244,6 +244,17 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       plants,
       products,
     } = req.body;
+
+    const normalizedEmail = normalizeEmail(email);
+    const username = deriveUsernameFromEmail(normalizedEmail);
+
+    if (!normalizedEmail) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Email is required' },
+      });
+      return;
+    }
 
     const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
     const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
@@ -278,14 +289,14 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const existingUser = await client.query(
-      'SELECT * FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR username = $2',
+      [normalizedEmail, username]
     );
 
     if (existingUser.rows.length > 0) {
       res.status(400).json({
         success: false,
-        error: { message: 'Username or email already exists' },
+        error: { message: 'Email already exists' },
       });
       return;
     }
@@ -303,7 +314,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
        RETURNING id, username, email, full_name, role, is_active, is_first_login, phone, department, level, transport_type, plant, created_at`,
       [
         username,
-        email,
+        normalizedEmail,
         password_hash,
         full_name,
         role,
@@ -327,7 +338,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
 
     await client.query('COMMIT');
 
-    logger.info(`User created by ${req.user?.username}: ${username}`);
+    logger.info(`User created by ${req.user?.username}: ${normalizedEmail}`);
 
     res.status(201).json({
       success: true,
@@ -361,7 +372,6 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
   try {
     const { id } = req.params;
     const {
-      username,
       email,
       full_name,
       role,
@@ -383,6 +393,13 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       });
       return;
     }
+
+    const normalizedEmail = email != null && String(email).trim() !== ''
+      ? normalizeEmail(email)
+      : null;
+    const nextUsername = normalizedEmail != null
+      ? deriveUsernameFromEmail(normalizedEmail)
+      : null;
 
     if (role) {
       const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
@@ -418,16 +435,20 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       }
     }
 
-    if (username || email) {
+    if (normalizedEmail || nextUsername) {
       const duplicateCheck = await client.query(
-        'SELECT * FROM users WHERE (username = $1 OR email = $2) AND id != $3',
-        [username || existingUser.rows[0].username, email || existingUser.rows[0].email, id]
+        'SELECT * FROM users WHERE (username = $1 OR LOWER(email) = LOWER($2)) AND id != $3',
+        [
+          nextUsername ?? existingUser.rows[0].username,
+          normalizedEmail ?? existingUser.rows[0].email,
+          id,
+        ]
       );
 
       if (duplicateCheck.rows.length > 0) {
         res.status(400).json({
           success: false,
-          error: { message: 'Username or email already exists' },
+          error: { message: 'Email already exists' },
         });
         return;
       }
@@ -455,8 +476,8 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const updateParams = [
-      username,
-      email,
+      nextUsername,
+      normalizedEmail,
       full_name,
       role,
       phone,
@@ -492,7 +513,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
 
     await client.query('COMMIT');
 
-    logger.info(`User updated by ${req.user?.username}: ${username || existingUser.rows[0].username}`);
+    logger.info(`User updated by ${req.user?.username}: ${normalizedEmail ?? existingUser.rows[0].email}`);
 
     const responseData = { ...result.rows[0] };
     if (savedPlants) {

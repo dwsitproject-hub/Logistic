@@ -27,14 +27,11 @@ const router = express.Router();
  *           schema:
  *             type: object
  *             required:
- *               - username
  *               - email
  *               - password
  *               - full_name
  *               - role
  *             properties:
- *               username:
- *                 type: string
  *               email:
  *                 type: string
  *               password:
@@ -53,7 +50,6 @@ const router = express.Router();
 router.post(
   '/register',
   [
-    body('username').notEmpty().isLength({ min: 3, max: 100 }),
     body('email').isEmail(),
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
@@ -75,10 +71,10 @@ router.post(
  *           schema:
  *             type: object
  *             required:
- *               - username
+ *               - email
  *               - password
  *             properties:
- *               username:
+ *               email:
  *                 type: string
  *               password:
  *                 type: string
@@ -90,7 +86,11 @@ router.post(
  */
 router.get('/login-options', getLoginOptions);
 
-router.post('/login', login);
+router.post(
+  '/login',
+  [body('email').isEmail(), body('password').notEmpty()],
+  login
+);
 
 /**
  * @swagger

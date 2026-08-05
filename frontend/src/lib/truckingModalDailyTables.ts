@@ -22,25 +22,61 @@ export interface TruckingModalStoActual {
 }
 
 /** How Section 4 renders WB daily actuals when multiple STOs exist on one PO. */
-export type WbActualsDisplayMode = 'singleSto' | 'perSto' | 'poLevelMultiSto'
+export type WbActualsDisplayMode = 'singleSto' | 'poLevelMultiSto'
 
 /**
  * Resolve WB table layout for Truck Actual (Section 4).
  * - singleSto: one or zero STO rows → PO-level SAP + WB block
- * - perSto: multi-STO with sto-tagged WB rows → split per STO
- * - poLevelMultiSto: multi-STO but WB rows have no sto_number (legacy PO upload)
+ * - poLevelMultiSto: multiple STOs on the PO → one combined SAP fields block + one
+ *   combined WB actuals table/total (WB upload/storage is always PO-level; see
+ *   combineSapStoActuals — any still-existing legacy per-STO rows display combined too).
  */
 export function resolveWbActualsDisplayMode(
-  actualRows: TruckingModalActualRow[],
+  _actualRows: TruckingModalActualRow[],
   stoActuals: TruckingModalStoActual[],
 ): WbActualsDisplayMode {
-  if (stoActuals.length <= 1) return 'singleSto'
-  const stoSet = new Set(stoActuals.map((s) => s.sto_number))
-  const hasTagged = actualRows.some((r) => {
-    const sto = String(r.sto_number ?? '').trim()
-    return sto !== '' && stoSet.has(sto)
-  })
-  return hasTagged ? 'perSto' : 'poLevelMultiSto'
+  return stoActuals.length <= 1 ? 'singleSto' : 'poLevelMultiSto'
+}
+
+/**
+ * Combine per-STO SAP fields into one PO-level block: earliest start date, latest last
+ * date, and null-safe summed quantities (matches wbGrandTotalsFromActualRows' null
+ * handling — null when no STO has a value, otherwise the sum of the ones that do).
+ */
+export function combineSapStoActuals(stoActuals: TruckingModalStoActual[]): {
+  start_receive_date: string
+  last_receive_date: string
+  qty_delivery: number | null
+  qty_receive: number | null
+} {
+  let startDate = ''
+  let lastDate = ''
+  let deliverySum = 0
+  let hasDelivery = false
+  let receiveSum = 0
+  let hasReceive = false
+  for (const sto of stoActuals) {
+    if (sto.start_receive_date && (!startDate || sto.start_receive_date < startDate)) {
+      startDate = sto.start_receive_date
+    }
+    if (sto.last_receive_date && (!lastDate || sto.last_receive_date > lastDate)) {
+      lastDate = sto.last_receive_date
+    }
+    if (sto.qty_delivery != null && Number.isFinite(sto.qty_delivery)) {
+      deliverySum += sto.qty_delivery
+      hasDelivery = true
+    }
+    if (sto.qty_receive != null && Number.isFinite(sto.qty_receive)) {
+      receiveSum += sto.qty_receive
+      hasReceive = true
+    }
+  }
+  return {
+    start_receive_date: startDate,
+    last_receive_date: lastDate,
+    qty_delivery: hasDelivery ? deliverySum : null,
+    qty_receive: hasReceive ? receiveSum : null,
+  }
 }
 
 export function parseDailyDeliverablesRaw(

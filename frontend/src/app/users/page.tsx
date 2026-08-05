@@ -94,7 +94,6 @@ export default function UsersPage() {
   const [productOptions, setProductOptions] = useState<string[]>([])
 
   const emptyFormData = {
-    username: '',
     email: '',
     password: '',
     full_name: '',
@@ -202,7 +201,6 @@ export default function UsersPage() {
 
     try {
       await api.put(`/users/${selectedUser.id}`, {
-        username: formData.username,
         email: formData.email,
         full_name: formData.full_name,
         role: formData.role,
@@ -264,7 +262,6 @@ export default function UsersPage() {
     setError('')
     setSuccess('')
     setFormData({
-      username: user.username,
       email: user.email,
       password: '',
       full_name: user.full_name,
@@ -292,7 +289,6 @@ export default function UsersPage() {
   }
 
   const filteredUsers = users.filter((user) =>
-    user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
     user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
     user.full_name.toLowerCase().includes(searchTerm.toLowerCase())
   )
@@ -434,10 +430,7 @@ export default function UsersPage() {
                     filteredUsers.map((user) => (
                       <TableRow key={user.id}>
                         <TableCell>
-                          <div>
-                            <div className="font-medium">{user.full_name}</div>
-                            <div className="text-sm text-gray-500">@{user.username}</div>
-                          </div>
+                          <div className="font-medium">{user.full_name}</div>
                         </TableCell>
                         <TableCell>{user.email}</TableCell>
                         <TableCell>
@@ -554,11 +547,12 @@ export default function UsersPage() {
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="username">Username *</Label>
+                    <Label htmlFor="email">Email *</Label>
                     <Input
-                      id="username"
-                      value={formData.username}
-                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                       autoComplete="off"
                       required
                     />
@@ -572,17 +566,6 @@ export default function UsersPage() {
                       required
                     />
                   </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email *</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    required
-                  />
                 </div>
 
                 <div className="space-y-2">
@@ -765,16 +748,17 @@ export default function UsersPage() {
               <div className="grid gap-4 py-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="edit_username">Username</Label>
+                    <Label htmlFor="edit_email">Email *</Label>
                     <Input
-                      id="edit_username"
-                      value={formData.username}
-                      onChange={(e) => setFormData({ ...formData, username: e.target.value })}
+                      id="edit_email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                       required
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="edit_full_name">Full Name</Label>
+                    <Label htmlFor="edit_full_name">Full Name *</Label>
                     <Input
                       id="edit_full_name"
                       value={formData.full_name}
@@ -782,17 +766,6 @@ export default function UsersPage() {
                       required
                     />
                   </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="edit_email">Email</Label>
-                  <Input
-                    id="edit_email"
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    required
-                  />
                 </div>
 
                 <div className="space-y-2">

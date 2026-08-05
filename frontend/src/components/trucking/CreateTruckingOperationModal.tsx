@@ -40,6 +40,7 @@ function sliceIsoDate(value: string | null | undefined): string {
 }
 
 import {
+  combineSapStoActuals,
   formatQtyKgAsMt,
   formatSapQtyMtOrDash,
   filterActualRowsForSto,
@@ -50,7 +51,6 @@ import {
   sumActualDeliveryKg,
   sumActualReceiveKg,
   sumPlanningDeliveryKg,
-  wbGrandTotalsFromActualRows,
   type TruckingModalActualRow,
   type TruckingModalPlanningRow,
   type TruckingModalStoActual,
@@ -763,29 +763,6 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     )
   }
 
-  const renderWbGrandTotalBanner = () => {
-    if (actualRows.length === 0) return null
-    const catalog = stoActuals.map((s) => s.sto_number)
-    const { deliveryKg, receiveKg } = wbGrandTotalsFromActualRows(actualRows, catalog)
-    return (
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3">
-        <p className="text-xs font-semibold text-emerald-900">
-          Grand total (all STOs) — matches Trucking list when GR is Open
-        </p>
-        <div className="mt-1.5 flex flex-wrap gap-x-6 gap-y-1 text-sm tabular-nums text-emerald-950">
-          <span>
-            Delivery:{' '}
-            <span className="font-semibold">{formatQtyKgAsMt(deliveryKg)}</span> MT
-          </span>
-          <span>
-            Receive:{' '}
-            <span className="font-semibold">{formatQtyKgAsMt(receiveKg)}</span> MT
-          </span>
-        </div>
-      </div>
-    )
-  }
-
   const renderSapActualFields = (block: {
     start_receive_date: string
     last_receive_date: string
@@ -1278,43 +1255,13 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 {step4Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
-                {wbDisplayMode === 'perSto' ? (
+                {wbDisplayMode === 'poLevelMultiSto' ? (
                   <>
-                    {stoActuals.map((sto) => {
-                      const stoRows = filterActualRowsForSto(actualRows, sto.sto_number, {
-                        includeLegacyEmpty: false,
-                      })
-                      return (
-                        <div
-                          key={sto.sto_number}
-                          className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3 space-y-3"
-                        >
-                          <p className="text-xs font-semibold text-emerald-900">
-                            STO {sto.sto_number}
-                          </p>
-                          {renderSapActualFields(sto)}
-                          {renderDailyActualsTable(stoRows, { totalLabel: 'Total (this STO)' })}
-                        </div>
-                      )
-                    })}
-                    {renderWbGrandTotalBanner()}
-                  </>
-                ) : wbDisplayMode === 'poLevelMultiSto' ? (
-                  <>
-                    {stoActuals.map((sto) => (
-                      <div
-                        key={sto.sto_number}
-                        className="rounded-lg border border-emerald-100 bg-emerald-50/30 p-3 space-y-3"
-                      >
-                        <p className="text-xs font-semibold text-emerald-900">
-                          STO {sto.sto_number}
-                        </p>
-                        {renderSapActualFields(sto)}
-                      </div>
-                    ))}
+                    {renderSapActualFields(combineSapStoActuals(stoActuals))}
                     <div className="space-y-2">
                       <p className="text-[10px] text-gray-500 italic">
-                        WB uploaded at PO level — not split by STO
+                        Combined total across {stoActuals.length} STOs on this PO — WB is uploaded
+                        and matched at PO level, not split by STO.
                       </p>
                       {renderDailyActualsTable(actualRows)}
                     </div>

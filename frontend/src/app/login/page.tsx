@@ -17,7 +17,7 @@ import { redirectAfterAuth, resolvePostAuthRedirect, type StoredAuthUser } from 
 function LoginPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -32,7 +32,7 @@ function LoginPageContent() {
     } else if (errorCode === 'sso_no_access') {
       setError('Your account is not registered for SSO access. Contact your administrator.')
     } else if (errorCode === 'sso_failed' || errorCode === 'sso_not_configured') {
-      setError('SSO login failed. Please try again or use your KLIP username/password.')
+      setError('SSO login failed. Please try again or use your KLIP email/password.')
     }
   }, [searchParams])
 
@@ -59,7 +59,7 @@ function LoginPageContent() {
     setLoading(true)
 
     try {
-      const response = await api.post('/auth/login', { username, password })
+      const response = await api.post('/auth/login', { email, password })
       const payload = response.data?.data
       if (!payload?.user) {
         setError('Unexpected server response. Please contact support.')
@@ -136,13 +136,13 @@ function LoginPageContent() {
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
-                id="username"
-                type="text"
-                placeholder="Enter your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="email"
+                type="email"
+                placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
               />
             </div>

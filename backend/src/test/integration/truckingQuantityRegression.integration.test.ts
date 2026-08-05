@@ -26,14 +26,14 @@ import {
 
 let token: string;
 
-async function login(username: string, password: string): Promise<string> {
-  const res = await request(app).post('/api/auth/login').send({ username, password }).expect(200);
+async function login(email: string, password: string): Promise<string> {
+  const res = await request(app).post('/api/auth/login').send({ email, password }).expect(200);
   return res.body.data.token as string;
 }
 
 beforeAll(async () => {
   await seedTruckingQtyFixtures();
-  token = await login('admin', 'admin123');
+  token = await login('admin@klip.com', 'admin123');
 }, 60000);
 
 describe('Integration: Trucking quantity regression — list endpoint (STO expansion + dedup)', () => {

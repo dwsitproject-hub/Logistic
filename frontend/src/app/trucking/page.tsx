@@ -3558,25 +3558,33 @@ function TruckingPageContent() {
             <h1 className="text-3xl font-bold">Trucking</h1>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-              onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
-              disabled={wbUploading}
-            >
-              {wbUploading ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Uploading...
-                </>
-              ) : (
-                <>
-                  <Upload className="h-4 w-4 mr-2" />
-                  Upload WB
-                </>
-              )}
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+                onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
+                disabled={wbUploading}
+              >
+                {wbUploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Upload WB
+                  </>
+                )}
+              </Button>
+              <FieldHelp
+                text={
+                  'Format yang didukung: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
+                }
+                side="bottom"
+              />
+            </div>
             <Button
               size="sm"
               variant="outline"

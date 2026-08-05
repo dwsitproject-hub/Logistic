@@ -12,21 +12,24 @@ import {
 } from '../services/sessionAuth.service';
 import { AuthRequest } from '../middleware/auth';
 import { getAuthLoginOptions, isLocalLoginEnabled } from '../config/authConfig';
+import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, email, password, full_name, role } = req.body;
+    const { email, password, full_name, role } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    const username = deriveUsernameFromEmail(normalizedEmail);
 
     // Check if user already exists
     const existingUser = await query(
-      'SELECT * FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR username = $2',
+      [normalizedEmail, username]
     );
 
     if (existingUser.rows.length > 0) {
       res.status(400).json({
         success: false,
-        error: { message: 'Username or email already exists' },
+        error: { message: 'Email already exists' },
       });
       return;
     }
@@ -39,7 +42,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       `INSERT INTO users (username, email, password_hash, full_name, role)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, username, email, full_name, role, is_active, created_at`,
-      [username, email, password_hash, full_name, role]
+      [username, normalizedEmail, password_hash, full_name, role]
     );
 
     const user = result.rows[0];
@@ -51,7 +54,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       { expiresIn: '7d' }
     ) as string;
 
-    logger.info(`User registered: ${username}`);
+    logger.info(`User registered: ${normalizedEmail}`);
 
     res.status(201).json({
       success: true,
@@ -89,12 +92,13 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const { username, password } = req.body;
+    const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     // Find user
     const result = await query(
-      'SELECT * FROM users WHERE username = $1 AND is_active = true',
-      [username]
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) AND is_active = true',
+      [normalizedEmail]
     );
 
     if (result.rows.length === 0) {
@@ -118,7 +122,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    logger.info(`User logged in: ${username}`);
+    logger.info(`User logged in: ${user.email}`);
 
     // Log the login action
     await AuditService.log({

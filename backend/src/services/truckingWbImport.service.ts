@@ -1,5 +1,5 @@
 import type { PoolClient, QueryResultRow } from 'pg';
-import { query } from '../database/connection';
+import { getClient, query } from '../database/connection';
 import {
   isContractDeliveryClosed,
   SQL_CONTRACT_IMPORT_STATUS,
@@ -14,11 +14,16 @@ import {
   type WbRekapParseFailure,
   type WbRekapWorkbookSheet,
 } from '../utils/truckingWbRekapUpload';
-import { SQL_RESOLVE_PO_FROM_STO } from '../utils/truckingPoStoIdentitySql';
+import { SQL_RESOLVE_PO_FROM_STO_BATCH } from '../utils/truckingPoStoIdentitySql';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
+import { syncTruckingQuantityDeliveredFromDailyActuals } from './truckingRealization.service';
 import {
-  syncTruckingQuantityDeliveredFromDailyActuals,
-} from './truckingRealization.service';
+  allocateNextSyntheticSequence,
+  buildSyntheticOperationId,
+  formatDDMMYYYY,
+} from '../utils/operationId';
+import { findActiveTruckingOpsByContractId } from '../utils/truckingOperationUniqueness';
+import { invalidateTruckingListCache } from './truckingList.service';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -67,54 +72,19 @@ type TruckingOpForWbRow = {
   product: string | null;
 };
 
-async function findTruckingOpsByPoForWbImport(
-  db: Queryable,
-  poNumber: string,
-): Promise<TruckingOpForWbRow[]> {
-  const incotermExpr = contractEffectiveIncotermExpr('c');
-  const result = await runQuery<TruckingOpForWbRow>(
-    db,
-    `SELECT
-       t.id,
-       t.operation_id,
-       t.status,
-       ${incotermExpr} AS incoterm,
-       NULLIF(TRIM(COALESCE(c.product::text, '')), '') AS product
-     FROM trucking_operations t
-     INNER JOIN contracts c ON c.id = t.contract_id
-     WHERE COALESCE(t.status, '') <> 'CANCELLED'
-       AND TRIM(COALESCE(c.po_number::text, '')) = TRIM($1::text)
-       AND ${incotermExpr} IN ('FRC', 'LCO')
-     ORDER BY
-       CASE
-         WHEN UPPER(COALESCE(t.status, '')) IN ('PLANNED', 'IN_PROGRESS') THEN 0
-         WHEN UPPER(COALESCE(t.status, '')) = 'UNPLANNED' THEN 1
-         ELSE 2
-       END,
-       t.updated_at DESC NULLS LAST,
-       t.id ASC`,
-    [poNumber],
-  );
-  return result.rows;
-}
-
-/** Resolve PO from STO key; returns null when not found. */
-async function resolvePoNumberFromSto(
-  db: Queryable,
-  stoKey: string,
-): Promise<string | null> {
-  const result = await runQuery<{ po_number: string | null }>(
-    db,
-    SQL_RESOLVE_PO_FROM_STO,
-    [stoKey],
-  );
-  const po = result.rows[0]?.po_number;
-  return po && String(po).trim() ? String(po).trim() : null;
-}
-
-type WbB2bChildLookup = {
+/**
+ * Contract-level diagnostic used both to build precise "no active operation" failure
+ * reasons and to decide auto-create eligibility — fetched once per distinct PO candidate
+ * across the whole workbook instead of per aggregated row.
+ */
+type WbContractDiagnostic = {
   poNumber: string;
-  originPoNumber: string;
+  contractUuid: string;
+  transportMode: string | null;
+  incoterm: string | null;
+  importStatus: string | null;
+  /** Non-null when this PO is itself a B2B child pointing at an origin PO. */
+  b2bOriginPo: string | null;
 };
 
 /**
@@ -130,89 +100,178 @@ export function formatWbB2bChildRejectReason(poNumber: string, originPoNumber: s
   return `PO "${po}" is a B2B child PO. Upload WB applies to the origin (parent) PO only — child POs are excluded from trucking.`;
 }
 
-async function lookupWbB2bChildPo(
+/**
+ * Batch-resolve trucking operations (active, FRC/LCO only) for a whole set of PO candidates
+ * in one round trip — replaces the old per-row `findTruckingOpsByPoForWbImport` query.
+ */
+async function findTruckingOpsByPoForWbImportBatch(
   db: Queryable,
-  poNumber: string,
-): Promise<WbB2bChildLookup | null> {
-  const po = String(poNumber ?? '').trim();
-  if (!po) return null;
-  const result = await runQuery<{ po_number: string; origin_po: string | null }>(
+  poNumbers: string[],
+): Promise<Map<string, TruckingOpForWbRow[]>> {
+  const map = new Map<string, TruckingOpForWbRow[]>();
+  if (poNumbers.length === 0) return map;
+  const incotermExpr = contractEffectiveIncotermExpr('c');
+  const result = await runQuery<TruckingOpForWbRow & { po_number: string }>(
     db,
     `SELECT
-       TRIM(COALESCE(c.po_number::text, '')) AS po_number,
-       NULLIF(TRIM(COALESCE(
-         l.data->'contract'->>'contract_reference_po',
-         l.data->>'CONTRACT REFF PO',
-         l.data->>'Contract Reff PO Ini',
-         l.data->'raw'->>'Contract Reff PO Ini',
-         l.data->'raw'->>'CONTRACT REFF PO',
-         ''
-       )), '') AS origin_po
-     FROM contracts c
-     LEFT JOIN LATERAL (
-       SELECT spd.data
-       FROM sap_processed_data spd
-       WHERE spd.contract_number = c.contract_id
-       ORDER BY spd.created_at DESC NULLS LAST
-       LIMIT 1
-     ) l ON true
-     WHERE TRIM(COALESCE(c.po_number::text, '')) = TRIM($1::text)
-       AND UPPER(NULLIF(TRIM(COALESCE(
-         l.data->'contract'->>'contract_type',
-         l.data->>'B2B Flag',
-         l.data->'raw'->>'B2B Flag',
-         c.contract_type::text,
-         ''
-       )), '')) = 'B2B'
-       AND NULLIF(TRIM(COALESCE(
-         l.data->'contract'->>'contract_reference_po',
-         l.data->>'CONTRACT REFF PO',
-         l.data->>'Contract Reff PO Ini',
-         l.data->'raw'->>'Contract Reff PO Ini',
-         l.data->'raw'->>'CONTRACT REFF PO',
-         ''
-       )), '') IS NOT NULL
-     LIMIT 1`,
-    [po],
+       t.id,
+       t.operation_id,
+       t.status,
+       ${incotermExpr} AS incoterm,
+       NULLIF(TRIM(COALESCE(c.product::text, '')), '') AS product,
+       TRIM(COALESCE(c.po_number::text, '')) AS po_number
+     FROM trucking_operations t
+     INNER JOIN contracts c ON c.id = t.contract_id
+     WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       AND TRIM(COALESCE(c.po_number::text, '')) = ANY($1::text[])
+       AND ${incotermExpr} IN ('FRC', 'LCO')
+     ORDER BY
+       TRIM(COALESCE(c.po_number::text, '')),
+       CASE
+         WHEN UPPER(COALESCE(t.status, '')) IN ('PLANNED', 'IN_PROGRESS') THEN 0
+         WHEN UPPER(COALESCE(t.status, '')) = 'UNPLANNED' THEN 1
+         ELSE 2
+       END,
+       t.updated_at DESC NULLS LAST,
+       t.id ASC`,
+    [poNumbers],
   );
-  const row = result.rows[0];
-  if (!row?.po_number) return null;
-  return {
-    poNumber: String(row.po_number).trim(),
-    originPoNumber: String(row.origin_po ?? '').trim(),
-  };
+  for (const row of result.rows) {
+    const list = map.get(row.po_number) ?? [];
+    list.push(row);
+    map.set(row.po_number, list);
+  }
+  return map;
 }
 
-async function buildWbNoOpsFailureReason(
+/** Batch-resolve PO numbers for a whole set of STO keys in one round trip. */
+async function batchResolvePoFromSto(
   db: Queryable,
-  candidates: string[],
-  fallbackLabel: string,
-): Promise<string> {
-  for (const key of candidates) {
-    const asPo = await lookupWbB2bChildPo(db, key);
-    if (asPo) {
-      return formatWbB2bChildRejectReason(asPo.poNumber, asPo.originPoNumber);
-    }
-    const resolvedPo = await resolvePoNumberFromSto(db, key);
-    if (resolvedPo) {
-      const asResolved = await lookupWbB2bChildPo(db, resolvedPo);
-      if (asResolved) {
-        return formatWbB2bChildRejectReason(asResolved.poNumber, asResolved.originPoNumber);
-      }
-    }
+  stoKeys: string[],
+): Promise<Map<string, string | null>> {
+  const map = new Map<string, string | null>();
+  if (stoKeys.length === 0) return map;
+  const result = await runQuery<{ sto_key: string; po_number: string | null }>(
+    db,
+    SQL_RESOLVE_PO_FROM_STO_BATCH,
+    [stoKeys],
+  );
+  for (const row of result.rows) {
+    const po = row.po_number && String(row.po_number).trim() ? String(row.po_number).trim() : null;
+    map.set(row.sto_key, po);
   }
-  return `No active FRC/LCO trucking operation found for PO/STO "${fallbackLabel}"`;
+  return map;
 }
 
 /**
- * Resolve WB aggregate identity to a PO number:
- * 1) Use poNumber as PO
- * 2) If no ops / blank, try stoNumbers / poNumber as STO → PO
+ * Batch-fetch contract-level diagnostics (existence in SAP, transport mode, effective
+ * incoterm, GR import status, B2B child status) for a whole set of PO candidates in one
+ * round trip. Feeds both the detailed "no active operation" failure reasons and the
+ * auto-create eligibility check.
  */
-async function resolveWbAggregatePoNumber(
+async function batchFetchContractDiagnostics(
   db: Queryable,
-  row: WbRekapAggregatedRow,
-): Promise<{ poNumber: string; ops: TruckingOpForWbRow[] } | { error: string }> {
+  poNumbers: string[],
+): Promise<Map<string, WbContractDiagnostic>> {
+  const map = new Map<string, WbContractDiagnostic>();
+  if (poNumbers.length === 0) return map;
+  const incotermExpr = contractEffectiveIncotermExpr('c');
+  const result = await runQuery<{
+    po_number: string;
+    contract_uuid: string;
+    transport_mode: string | null;
+    incoterm: string | null;
+    import_status: string | null;
+    b2b_origin_po: string | null;
+    contract_type_norm: string | null;
+  }>(
+    db,
+    `SELECT x.po_number, x.contract_uuid, x.transport_mode, x.incoterm, x.import_status,
+            x.b2b_origin_po, x.contract_type_norm
+     FROM (
+       SELECT
+         TRIM(COALESCE(c.po_number::text, '')) AS po_number,
+         c.id::text AS contract_uuid,
+         NULLIF(TRIM(COALESCE(c.transport_mode::text, '')), '') AS transport_mode,
+         ${incotermExpr} AS incoterm,
+         ${SQL_CONTRACT_IMPORT_STATUS} AS import_status,
+         NULLIF(TRIM(COALESCE(
+           l.data->'contract'->>'contract_reference_po',
+           l.data->>'CONTRACT REFF PO',
+           l.data->>'Contract Reff PO Ini',
+           l.data->'raw'->>'Contract Reff PO Ini',
+           l.data->'raw'->>'CONTRACT REFF PO',
+           ''
+         )), '') AS b2b_origin_po,
+         UPPER(NULLIF(TRIM(COALESCE(
+           l.data->'contract'->>'contract_type',
+           l.data->>'B2B Flag',
+           l.data->'raw'->>'B2B Flag',
+           c.contract_type::text,
+           ''
+         )), '')) AS contract_type_norm,
+         ROW_NUMBER() OVER (
+           PARTITION BY TRIM(COALESCE(c.po_number::text, ''))
+           ORDER BY c.updated_at DESC NULLS LAST, c.created_at DESC
+         ) AS rn
+       FROM contracts c
+       LEFT JOIN LATERAL (
+         SELECT spd.data
+         FROM sap_processed_data spd
+         WHERE spd.contract_number = c.contract_id
+         ORDER BY spd.created_at DESC NULLS LAST
+         LIMIT 1
+       ) l ON true
+       WHERE TRIM(COALESCE(c.po_number::text, '')) = ANY($1::text[])
+     ) x
+     WHERE x.rn = 1`,
+    [poNumbers],
+  );
+  for (const row of result.rows) {
+    const isB2bChild = row.contract_type_norm === 'B2B' && Boolean(row.b2b_origin_po);
+    map.set(row.po_number, {
+      poNumber: row.po_number,
+      contractUuid: row.contract_uuid,
+      transportMode: row.transport_mode,
+      incoterm: row.incoterm,
+      importStatus: row.import_status,
+      b2bOriginPo: isB2bChild ? row.b2b_origin_po : null,
+    });
+  }
+  return map;
+}
+
+/**
+ * Batch-fetch trucking_operations counts (any status vs non-cancelled) per PO — lets the
+ * "no active op" failure path distinguish "all cancelled" from "none created yet" without
+ * a per-row query (the FRC/LCO-only lookup above never returns CANCELLED rows at all).
+ */
+async function batchFetchAnyStatusOpsCounts(
+  db: Queryable,
+  poNumbers: string[],
+): Promise<Map<string, { total: number; active: number }>> {
+  const map = new Map<string, { total: number; active: number }>();
+  if (poNumbers.length === 0) return map;
+  const result = await runQuery<{ po_number: string; total: string; active: string }>(
+    db,
+    `SELECT
+       TRIM(COALESCE(c.po_number::text, '')) AS po_number,
+       COUNT(*)::text AS total,
+       COUNT(*) FILTER (WHERE COALESCE(t.status, '') <> 'CANCELLED')::text AS active
+     FROM trucking_operations t
+     INNER JOIN contracts c ON c.id = t.contract_id
+     WHERE TRIM(COALESCE(c.po_number::text, '')) = ANY($1::text[])
+     GROUP BY TRIM(COALESCE(c.po_number::text, ''))`,
+    [poNumbers],
+  );
+  for (const row of result.rows) {
+    map.set(row.po_number, { total: Number(row.total) || 0, active: Number(row.active) || 0 });
+  }
+  return map;
+}
+
+/** Distinct PO/STO candidates to try for one aggregated row (PO first, then its STOs). */
+function buildWbRowCandidates(row: WbRekapAggregatedRow): string[] {
   const candidates: string[] = [];
   const push = (v: string | undefined | null) => {
     const s = String(v ?? '').trim();
@@ -220,32 +279,174 @@ async function resolveWbAggregatePoNumber(
   };
   push(row.poNumber);
   for (const sto of row.stoNumbers ?? []) push(sto);
+  return candidates;
+}
 
-  let lastOps: TruckingOpForWbRow[] = [];
+/** Resolve a row's candidates to a PO + its active FRC/LCO ops using precomputed batch maps. */
+function resolveRowOps(
+  candidates: string[],
+  opsByPo: Map<string, TruckingOpForWbRow[]>,
+  poFromSto: Map<string, string | null>,
+): { poNumber: string; ops: TruckingOpForWbRow[] } {
+  let lastPo = candidates[0] ?? '';
   for (const key of candidates) {
-    let ops = await findTruckingOpsByPoForWbImport(db, key);
-    if (ops.length > 0) {
-      return { poNumber: key, ops };
-    }
-    const resolvedPo = await resolvePoNumberFromSto(db, key);
+    const direct = opsByPo.get(key);
+    if (direct && direct.length > 0) return { poNumber: key, ops: direct };
+    const resolvedPo = poFromSto.get(key);
     if (resolvedPo) {
-      ops = await findTruckingOpsByPoForWbImport(db, resolvedPo);
-      if (ops.length > 0) {
-        return { poNumber: resolvedPo, ops };
-      }
-      lastOps = ops;
-    } else {
-      lastOps = ops;
+      lastPo = resolvedPo;
+      const ops = opsByPo.get(resolvedPo);
+      if (ops && ops.length > 0) return { poNumber: resolvedPo, ops };
     }
   }
+  return { poNumber: lastPo || candidates[0] || '', ops: [] };
+}
 
-  const label = candidates.join(' / ') || row.poNumber || '-';
-  if (lastOps.length === 0) {
+/** Pick the best candidate (found in SAP takes priority) to report/act on when ops.length === 0. */
+function pickDiagnosticForCandidates(
+  candidates: string[],
+  poFromSto: Map<string, string | null>,
+  diagnostics: Map<string, WbContractDiagnostic>,
+): { poNumber: string; diag?: WbContractDiagnostic } {
+  for (const key of candidates) {
+    if (diagnostics.has(key)) return { poNumber: key, diag: diagnostics.get(key) };
+  }
+  for (const key of candidates) {
+    const resolvedPo = poFromSto.get(key);
+    if (resolvedPo && diagnostics.has(resolvedPo)) {
+      return { poNumber: resolvedPo, diag: diagnostics.get(resolvedPo) };
+    }
+  }
+  // No diagnostic matched any candidate — report the row's primary identity only
+  // (row.poNumber is always pushed first by buildWbRowCandidates), not a joined
+  // "PO / STO" string.
+  return { poNumber: candidates[0] || '-' };
+}
+
+type NoOpsOutcome =
+  | { kind: 'failure'; poNumber: string; reason: string }
+  | { kind: 'auto-create'; poNumber: string; diag: WbContractDiagnostic };
+
+/**
+ * Classify why a PO/STO has zero active FRC/LCO trucking operations, using only the
+ * already-batched diagnostic data (no extra per-row query). Distinguishes: not found in
+ * SAP, B2B child, all-cancelled operations, SEA transport, GR-Close, wrong incoterm — or,
+ * when none of those apply, the "clean" case that now auto-creates an operation instead
+ * of failing the row.
+ */
+function classifyNoOpsOutcome(
+  candidates: string[],
+  poFromSto: Map<string, string | null>,
+  diagnostics: Map<string, WbContractDiagnostic>,
+  anyStatusCounts: Map<string, { total: number; active: number }>,
+): NoOpsOutcome {
+  const { poNumber, diag } = pickDiagnosticForCandidates(candidates, poFromSto, diagnostics);
+  if (!diag) {
     return {
-      error: await buildWbNoOpsFailureReason(db, candidates, label),
+      kind: 'failure',
+      poNumber,
+      reason: `PO "${poNumber}" not found in SAP — verify the PO in the WB file matches an existing contract`,
     };
   }
-  return { poNumber: candidates[0] || row.poNumber, ops: lastOps };
+  if (diag.b2bOriginPo) {
+    return {
+      kind: 'failure',
+      poNumber,
+      reason: formatWbB2bChildRejectReason(poNumber, diag.b2bOriginPo),
+    };
+  }
+  const counts = anyStatusCounts.get(poNumber) ?? { total: 0, active: 0 };
+  if (counts.total > 0 && counts.active === 0) {
+    return {
+      kind: 'failure',
+      poNumber,
+      reason: `Trucking operation(s) for PO "${poNumber}" are CANCELLED — WB not applied`,
+    };
+  }
+  if (String(diag.transportMode ?? '').trim().toUpperCase() === 'SEA') {
+    return {
+      kind: 'failure',
+      poNumber,
+      reason: `Contract for PO "${poNumber}" is SEA transport — WB import only applies to LAND trucking operations`,
+    };
+  }
+  if (isContractDeliveryClosed(diag.importStatus)) {
+    const grLabel = usesGrStoStatus(diag.incoterm) ? 'GR STO Status' : 'GR PO Status';
+    return {
+      kind: 'failure',
+      poNumber,
+      reason: `Cannot create trucking from WB: ${grLabel} is Close for PO "${poNumber}"`,
+    };
+  }
+  const inc = String(diag.incoterm ?? '').trim().toUpperCase();
+  if (inc !== 'FRC' && inc !== 'LCO') {
+    return {
+      kind: 'failure',
+      poNumber,
+      reason: `Trucking operation for PO "${poNumber}" has incoterm "${diag.incoterm || 'unknown'}" — WB import only applies to FRC/LCO shipments`,
+    };
+  }
+  return { kind: 'auto-create', poNumber, diag };
+}
+
+/**
+ * Auto-create a minimal UNPLANNED trucking_operations row (mirrors
+ * truckingEnsureUnplannedOps.service's pattern) so WB data is not lost while a contract
+ * has zero operations yet. Daily Planning stays empty until it is actually uploaded —
+ * findTruckingOpForUnplannedPlanningUpload matches by PO regardless of status, so a later
+ * Daily Planning upload attaches to this same operation instead of creating a duplicate.
+ */
+async function getOrCreateAutoUnplannedOp(
+  client: PoolClient,
+  contractUuid: string,
+  incoterm: string | null,
+  cache: Map<string, TruckingOpForWbRow>,
+): Promise<TruckingOpForWbRow> {
+  const cached = cache.get(contractUuid);
+  if (cached) return cached;
+
+  // Race guard against another request creating an op for this contract concurrently.
+  // Uses the pooled connection (not this transaction's client) — matches the existing
+  // truckingEnsureUnplannedOps.service precedent; within this batch, same-contract
+  // dedup is already handled by `cache` above.
+  const existingActive = await findActiveTruckingOpsByContractId(contractUuid);
+  if (existingActive.length > 0) {
+    const first = existingActive[0];
+    const resolvedOp: TruckingOpForWbRow = {
+      id: first.id,
+      operation_id: first.operation_id,
+      status: first.status,
+      incoterm,
+      product: null,
+    };
+    cache.set(contractUuid, resolvedOp);
+    return resolvedOp;
+  }
+
+  const dmy = formatDDMMYYYY(new Date());
+  const seq = await allocateNextSyntheticSequence(
+    (text: string, params?: unknown[]) => client.query(text, params),
+    'trucking_operations',
+    'LAND',
+    dmy,
+  );
+  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
+  const insertRes = await client.query<{ id: string }>(
+    `INSERT INTO trucking_operations (
+       contract_id, operation_id, status, daily_deliverables
+     ) VALUES ($1::uuid, $2, 'UNPLANNED', '[]'::jsonb)
+     RETURNING id`,
+    [contractUuid, operationId],
+  );
+  const newOp: TruckingOpForWbRow = {
+    id: String(insertRes.rows[0]?.id),
+    operation_id: operationId,
+    status: 'UNPLANNED',
+    incoterm,
+    product: null,
+  };
+  cache.set(contractUuid, newOp);
+  return newOp;
 }
 
 async function upsertDailyActualWithWbImport(
@@ -260,8 +461,9 @@ async function upsertDailyActualWithWbImport(
 ): Promise<void> {
   // A given (operation, progress_date) holds EITHER one PO-level row (blank sto_number)
   // OR per-STO rows — never both, or every sum counts the same weighbridge day twice
-  // (migration 124 cleaned historical duplicates). An STO-stamped upload supersedes the
-  // legacy PO-level row; a PO-level upload replaces per-STO detail for that date.
+  // (migration 124 cleaned historical duplicates). WB uploads now always write PO-level
+  // (blank STO) rows — this also cleans up any still-existing legacy per-STO rows for a
+  // date the moment that date is re-uploaded.
   const stoTrimmed = String(stoNumber ?? '').trim();
   if (stoTrimmed) {
     await runQuery(
@@ -415,34 +617,22 @@ async function createWbImportBatch(
   return String(result.rows[0]?.id);
 }
 
-async function applyAggregatedRow(
+/**
+ * Apply one aggregated PO+date row against its already-resolved operation(s). GR-Close
+ * contracts are allowed through here — sqlTruckingResolvedDeliveryQty /
+ * sqlTruckingResolvedReceiveQty always use the SAP quantity once GR is Close regardless
+ * of trucking_daily_actuals, so storing the WB row has no effect on displayed quantity
+ * but avoids a confusing upload failure for legitimately closed contracts.
+ */
+async function applyResolvedRow(
   db: Queryable,
   row: WbRekapAggregatedRow,
+  poNumber: string,
+  ops: TruckingOpForWbRow[],
   wbImportId: string,
   operationFailures: WbImportOperationFailure[],
   operationWarnings: WbImportOperationFailure[],
 ): Promise<{ updated: boolean; upserted: number; operationId?: string }> {
-  const resolved = await resolveWbAggregatePoNumber(db, row);
-  if ('error' in resolved) {
-    operationFailures.push({
-      po_number: row.poNumber,
-      sto_numbers: row.stoNumbers,
-      progress_date: row.progressDateIso,
-      reason: resolved.error,
-    });
-    return { updated: false, upserted: 0 };
-  }
-
-  const { poNumber, ops } = resolved;
-  if (ops.length === 0) {
-    operationFailures.push({
-      po_number: poNumber,
-      sto_numbers: row.stoNumbers,
-      progress_date: row.progressDateIso,
-      reason: 'No active FRC/LCO trucking operation found for this PO',
-    });
-    return { updated: false, upserted: 0 };
-  }
   if (ops.length > 1) {
     const labels = ops
       .map((o) => {
@@ -462,27 +652,6 @@ async function applyAggregatedRow(
   }
 
   const op = ops[0];
-  const statusRes = await runQuery<{ import_status: string | null }>(
-    db,
-    `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status
-     FROM trucking_operations t
-     LEFT JOIN contracts c ON t.contract_id = c.id
-     WHERE t.id = $1::uuid
-     LIMIT 1`,
-    [op.id],
-  );
-  const importStatus = statusRes.rows[0]?.import_status ?? null;
-  if (isContractDeliveryClosed(importStatus)) {
-    const grLabel = usesGrStoStatus(op.incoterm) ? 'GR STO Status' : 'GR PO Status';
-    operationFailures.push({
-      po_number: poNumber,
-      sto_numbers: row.stoNumbers,
-      progress_date: row.progressDateIso,
-      reason: `Cannot update quantity from WB: ${grLabel} is Close — quantity delivery/receive remain from SAP`,
-      operation_ids: [String(op.operation_id ?? op.id)],
-    });
-    return { updated: false, upserted: 0 };
-  }
 
   const qtyResult = resolveWbActualQtyKg(
     String(op.incoterm ?? ''),
@@ -501,9 +670,8 @@ async function applyAggregatedRow(
   }
 
   // Always persist Delivery → quantity_delivery_kg and Receive → quantity_receive_kg.
-  const stoForRow =
-    String(row.stoNumber ?? '').trim() ||
-    (row.stoNumbers?.length === 1 ? String(row.stoNumbers[0]).trim() : '');
+  // PO-level only (blank STO) — WB no longer splits daily actuals per STO; multiple
+  // STOs for the same PO+date are already summed at aggregation time.
   await upsertDailyActualWithWbImport(
     db,
     op.id,
@@ -512,10 +680,8 @@ async function applyAggregatedRow(
     wbImportId,
     row.sumNettoPksKg,
     row.sumNettoEupKg,
-    stoForRow,
+    '',
   );
-  await syncTruckingQuantityDeliveredFromDailyActuals(db, op.id);
-  await promoteOperationToInProgress(db, op.id, row.progressDateIso);
 
   if (qtyResult.softWarning) {
     const sapProductNote = op.product ? ` (SAP product: ${op.product})` : '';
@@ -537,24 +703,23 @@ export async function processWbRekapWorkbookUpload(args: {
   sheets: WbRekapWorkbookSheet[];
 }): Promise<WbImportApplyResult> {
   const parsed = parseWbRekapWorkbook(args.sheets, toIsoDate10FromCell);
-  const operationFailures: WbImportOperationFailure[] = [];
-  const operationWarnings: WbImportOperationFailure[] = [];
-  let operationsUpdated = 0;
-  let rowsUpserted = 0;
 
-  const touchedOpIds = new Set<string>();
-
-  // Resolve STO → PO on tickets that lack PO so multi-STO same-date rows merge before apply.
-  const stoPoCache = new Map<string, string | null>();
+  // Batch-resolve STO → PO on tickets that lack PO so multi-STO same-date rows merge
+  // before apply (one round trip for every distinct STO, instead of one per ticket).
+  const blankPoStos = [
+    ...new Set(
+      parsed.tickets
+        .filter((t) => !t.poNumber && t.stoNumber)
+        .map((t) => String(t.stoNumber).trim())
+        .filter(Boolean),
+    ),
+  ];
+  const ticketStoPoMap = await batchResolvePoFromSto(query, blankPoStos);
   for (const ticket of parsed.tickets) {
     if (ticket.poNumber) continue;
     const sto = String(ticket.stoNumber ?? '').trim();
     if (!sto) continue;
-    let resolved = stoPoCache.get(sto);
-    if (resolved === undefined) {
-      resolved = await resolvePoNumberFromSto(query, sto);
-      stoPoCache.set(sto, resolved);
-    }
+    const resolved = ticketStoPoMap.get(sto);
     if (resolved) ticket.poNumber = resolved;
   }
   const aggregated = aggregateWbRekapTickets(parsed.tickets);
@@ -574,22 +739,112 @@ export async function processWbRekapWorkbookUpload(args: {
     operationFailures: [],
   });
 
-  for (const agg of aggregated) {
-    const result = await applyAggregatedRow(
-      query,
-      agg,
-      importId,
-      operationFailures,
-      operationWarnings,
-    );
-    if (result.updated) {
-      rowsUpserted += result.upserted;
-      if (result.operationId) touchedOpIds.add(result.operationId);
+  const operationFailures: WbImportOperationFailure[] = [];
+  const operationWarnings: WbImportOperationFailure[] = [];
+  let rowsUpserted = 0;
+  // operationId -> earliest applied progress date (for the one-time promote-to-IN_PROGRESS call).
+  const touchedOps = new Map<string, string>();
+  let autoCreatedAny = false;
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    // --- Batch pre-resolution: once per distinct PO/STO candidate in the whole file,
+    // not once per aggregated PO+date row. ---
+    const allCandidates = new Set<string>();
+    for (const row of aggregated) {
+      for (const c of buildWbRowCandidates(row)) allCandidates.add(c);
     }
+    const candidateList = [...allCandidates];
+
+    const opsByPo = await findTruckingOpsByPoForWbImportBatch(client, candidateList);
+    const poFromSto = await batchResolvePoFromSto(client, candidateList);
+
+    // Candidates that were actually STO keys resolving to a PO not already covered above.
+    const secondaryPos = new Set<string>();
+    for (const cand of candidateList) {
+      const resolvedPo = poFromSto.get(cand);
+      if (resolvedPo && !opsByPo.has(resolvedPo)) secondaryPos.add(resolvedPo);
+    }
+    if (secondaryPos.size > 0) {
+      const secondaryOps = await findTruckingOpsByPoForWbImportBatch(client, [...secondaryPos]);
+      for (const [po, ops] of secondaryOps) opsByPo.set(po, ops);
+    }
+
+    const diagnosticPoSet = new Set<string>([...candidateList, ...secondaryPos]);
+    const diagnostics = await batchFetchContractDiagnostics(client, [...diagnosticPoSet]);
+    const anyStatusCounts = await batchFetchAnyStatusOpsCounts(client, [...diagnosticPoSet]);
+
+    // Dedupe auto-create across multiple aggregated rows for the same contract in this file.
+    const autoCreateCache = new Map<string, TruckingOpForWbRow>();
+
+    for (const row of aggregated) {
+      const candidates = buildWbRowCandidates(row);
+      let resolved = resolveRowOps(candidates, opsByPo, poFromSto);
+
+      if (resolved.ops.length === 0) {
+        const outcome = classifyNoOpsOutcome(candidates, poFromSto, diagnostics, anyStatusCounts);
+        if (outcome.kind === 'failure') {
+          operationFailures.push({
+            po_number: outcome.poNumber || resolved.poNumber || row.poNumber,
+            sto_numbers: row.stoNumbers,
+            progress_date: row.progressDateIso,
+            reason: outcome.reason,
+          });
+          continue;
+        }
+        // Clean case: contract is FRC/LCO, open, non-SEA, non-B2B-child, zero ops yet —
+        // auto-create a minimal UNPLANNED operation instead of failing the WB row.
+        const autoOp = await getOrCreateAutoUnplannedOp(
+          client,
+          outcome.diag.contractUuid,
+          outcome.diag.incoterm,
+          autoCreateCache,
+        );
+        opsByPo.set(outcome.poNumber, [autoOp]);
+        autoCreatedAny = true;
+        resolved = { poNumber: outcome.poNumber, ops: [autoOp] };
+      }
+
+      const result = await applyResolvedRow(
+        client,
+        row,
+        resolved.poNumber,
+        resolved.ops,
+        importId,
+        operationFailures,
+        operationWarnings,
+      );
+      if (result.updated && result.operationId) {
+        rowsUpserted += result.upserted;
+        const existingEarliest = touchedOps.get(result.operationId);
+        if (!existingEarliest || row.progressDateIso < existingEarliest) {
+          touchedOps.set(result.operationId, row.progressDateIso);
+        }
+      }
+    }
+
+    // Deferred: sync quantity_delivered + promote status exactly once per touched
+    // operation (previously re-ran in full for every date row of the same operation).
+    for (const [operationId, earliestDate] of touchedOps) {
+      await syncTruckingQuantityDeliveredFromDailyActuals(client, operationId);
+      await promoteOperationToInProgress(client, operationId, earliestDate);
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
   }
 
-  operationsUpdated = touchedOpIds.size;
+  if (autoCreatedAny) {
+    invalidateTruckingListCache();
+  }
 
+  const operationsUpdated = touchedOps.size;
   const status: WbImportApplyResult['status'] =
     rowsUpserted === 0 && operationFailures.length > 0
       ? 'failed'
@@ -619,8 +874,8 @@ export async function processWbRekapWorkbookUpload(args: {
 
   // Keep Contracts / Contract Performance Delivery & Received Qty in sync with WB
   // (list uses contract_qty_move_snapshot when fresh).
-  if (touchedOpIds.size > 0) {
-    const opIds = [...touchedOpIds];
+  if (touchedOps.size > 0) {
+    const opIds = [...touchedOps.keys()];
     setImmediate(() => {
       import('./contractQtyMoveSnapshot.service')
         .then(({ ContractQtyMoveSnapshotService }) =>

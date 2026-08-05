@@ -33,7 +33,6 @@ router.post(
   '/',
   authorize('ADMIN'),
   [
-    body('username').notEmpty().isLength({ min: 3, max: 100 }),
     body('email').isEmail(),
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
