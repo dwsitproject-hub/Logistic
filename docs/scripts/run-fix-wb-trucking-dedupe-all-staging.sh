@@ -8,6 +8,7 @@
 #   bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh
 #   bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply
 #   bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --skip-backup
+#   bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --cleanup-cancelled
 #
 # Prereq:
 #   git pull origin SIT
@@ -17,17 +18,19 @@ set -euo pipefail
 
 APPLY=false
 SKIP_BACKUP=false
+CLEANUP_CANCELLED=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) APPLY=true; shift ;;
     --skip-backup) SKIP_BACKUP=true; shift ;;
+    --cleanup-cancelled) CLEANUP_CANCELLED=true; shift ;;
     -h|--help)
-      sed -n '2,18p' "$0"
+      sed -n '2,20p' "$0"
       exit 0
       ;;
     *)
-      echo "Unknown arg: $1 (use --apply | --skip-backup)" >&2
+      echo "Unknown arg: $1 (use --apply | --skip-backup | --cleanup-cancelled)" >&2
       exit 1
       ;;
   esac
@@ -38,6 +41,7 @@ cd "$ROOT"
 
 COMPOSE=(docker compose -f docker-compose.backend.yml)
 DEDUPE_SCRIPT="$ROOT/docs/scripts/run-dedupe-trucking-by-po-staging.sh"
+CLEANUP_LOSERS_SCRIPT="$ROOT/docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh"
 PREVIEW_SQL="$ROOT/backend/src/scripts/sql/previewDuplicateTruckingByPo.sql"
 DUMP_SCRIPT="$ROOT/docs/scripts/dump-sit-transactional-data.sh"
 
@@ -243,6 +247,12 @@ if ! $APPLY; then
   echo "Preview complete. Review keeper/loser JSON above."
   echo "To apply (backup + cancel losers + refresh pipeline):"
   echo "  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply"
+  if $CLEANUP_CANCELLED; then
+    echo "  (with --cleanup-cancelled: also hard-delete CANCELLED dedupe losers from UI)"
+  else
+    echo "To also remove CANCELLED losers from view table / Cancelled card after apply:"
+    echo "  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply"
+  fi
   exit 0
 fi
 
@@ -264,9 +274,22 @@ else
   echo "WARN: some duplicate PO groups may still exist — review output above."
 fi
 
+if $CLEANUP_CANCELLED; then
+  echo ""
+  echo "==> Hard-delete CANCELLED dedupe losers (remove from Cancelled table/card)"
+  if [[ -f "$CLEANUP_LOSERS_SCRIPT" ]]; then
+    bash "$CLEANUP_LOSERS_SCRIPT" --apply
+  else
+    echo "WARN: $CLEANUP_LOSERS_SCRIPT not found — run manually:" >&2
+    echo "  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply" >&2
+  fi
+fi
+
 echo ""
 echo "Next steps:"
 echo "  1. Re-upload WB at http://8.215.6.189/trucking (Ctrl+Shift+R)"
 echo "  2. Status Upload should no longer show 'Multiple FRC/LCO trucking operations share PO'"
-echo "  3. Optional: hard-delete cancelled shells:"
-echo "       bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply"
+if ! $CLEANUP_CANCELLED; then
+  echo "  3. Remove CANCELLED duplicate ops from view table / Cancelled card:"
+  echo "       bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply"
+fi

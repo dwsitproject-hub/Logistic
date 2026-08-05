@@ -207,10 +207,23 @@ const p = new Pool({ host: process.env.DB_HOST, port: +process.env.DB_PORT, data
   Hard refresh: Ctrl+Shift+R
   Status Upload tidak boleh lagi "Multiple FRC/LCO trucking operations share PO"
 
------ F) Opsional — hard-delete CANCELLED shell tanpa WB -----
+----- F) Hilangkan CANCELLED duplicate dari View Table & kartu Cancelled -----
 
-  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh          # preview
-  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply
+Setelah dedupe (STEP B), loser masih status CANCELLED di DB → muncul di filter
+Cancelled dan kartu Cancelled (contoh PO 1001030428 / OP-LAND-130720260012).
+Hard-delete loser (keeper tetap):
+
+  cd /opt/klip
+  git pull origin SIT
+
+  # Preview — cek would_delete + delete_reason=active_keeper
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh
+
+  # Apply — hilangkan dari DB, UI, dan total Cancelled
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+
+Atau gabung saat dedupe (jika belum dedupe):
+  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --cleanup-cancelled
 
 JANGAN pakai run-cleanup-trucking-staging.sh (legacy — hapus SEMUA CANCELLED).
 
