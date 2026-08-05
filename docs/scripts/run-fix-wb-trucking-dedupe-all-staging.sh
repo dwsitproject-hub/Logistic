@@ -215,7 +215,13 @@ if ! $SKIP_BACKUP; then
   echo "==> Backup (transactional dump, recommended before --apply)"
   if [[ -f "$DUMP_SCRIPT" ]]; then
     if $APPLY; then
-      bash "$DUMP_SCRIPT"
+      if ! bash "$DUMP_SCRIPT"; then
+        echo "" >&2
+        echo "ERROR: backup failed — dedupe NOT applied." >&2
+        echo "  Fix DB connectivity (see dump script hints), or re-run with:" >&2
+        echo "    bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --skip-backup" >&2
+        exit 1
+      fi
       echo "    Backup complete."
     else
       echo "    Skipped in preview mode. Will run automatically with --apply."
