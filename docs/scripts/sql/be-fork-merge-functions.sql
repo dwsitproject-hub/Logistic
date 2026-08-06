@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-8
+-- Version: 20260806-9
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-8'::text;
+  SELECT '20260806-9'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
@@ -393,15 +393,23 @@ BEGIN
         LIMIT 1
       ), %1$I.%2$I)$q$, v_row_alias, p_column);
     WHEN 'users' THEN
-      RETURN format($q$COALESCE((
-        SELECT pub.id
-        FROM be_fork.users fu
-        JOIN public.users pub ON pub.email IS NOT DISTINCT FROM fu.email
-        WHERE fu.id = %1$I.%2$I
-        LIMIT 1
-      ), (
+      IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'be_fork' AND table_name = 'users'
+      ) THEN
+        RETURN format($q$COALESCE((
+          SELECT pub.id
+          FROM be_fork.users fu
+          JOIN public.users pub ON pub.email IS NOT DISTINCT FROM fu.email
+          WHERE fu.id = %1$I.%2$I
+          LIMIT 1
+        ), (
+          SELECT u.id FROM public.users u WHERE u.id = %1$I.%2$I LIMIT 1
+        ))$q$, v_row_alias, p_column);
+      END IF;
+      RETURN format($q$(
         SELECT u.id FROM public.users u WHERE u.id = %1$I.%2$I LIMIT 1
-      ))$q$, v_row_alias, p_column);
+      )$q$, v_row_alias, p_column);
     WHEN 'trucking_wb_imports' THEN
       RETURN format($q$COALESCE((
         SELECT COALESCE(pub.id, fi.id)
