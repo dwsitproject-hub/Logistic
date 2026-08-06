@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-6
+-- Version: 20260806-7
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-6'::text;
+  SELECT '20260806-7'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
@@ -233,6 +233,48 @@ AS $$
           LIMIT 1
         ), r.contract_id)
       )$j$
+    WHEN 'pre_planned_groups' THEN
+      $j$LEFT JOIN public.pre_planned_groups p ON (
+        p.group_code IS NOT DISTINCT FROM r.group_code
+      )$j$
+    WHEN 'pre_planned_group_members' THEN
+      $j$LEFT JOIN public.pre_planned_group_members p ON (
+        (
+          r.released_at IS NULL
+          AND p.released_at IS NULL
+          AND p.contract_id = COALESCE((
+            SELECT COALESCE(pubc.id, fc.id)
+            FROM be_fork.contracts fc
+            LEFT JOIN public.contracts pubc ON (
+              NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+              AND TRIM(COALESCE(pubc.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+            )
+            WHERE fc.id = r.contract_id
+            LIMIT 1
+          ), r.contract_id)
+        )
+        OR (
+          p.group_id = COALESCE((
+            SELECT COALESCE(pubg.id, fg.id)
+            FROM be_fork.pre_planned_groups fg
+            LEFT JOIN public.pre_planned_groups pubg ON (
+              pubg.group_code IS NOT DISTINCT FROM fg.group_code
+            )
+            WHERE fg.id = r.group_id
+            LIMIT 1
+          ), r.group_id)
+          AND p.contract_id = COALESCE((
+            SELECT COALESCE(pubc.id, fc.id)
+            FROM be_fork.contracts fc
+            LEFT JOIN public.contracts pubc ON (
+              NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+              AND TRIM(COALESCE(pubc.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+            )
+            WHERE fc.id = r.contract_id
+            LIMIT 1
+          ), r.contract_id)
+        )
+      )$j$
     ELSE ''
   END;
 $$;
@@ -343,6 +385,16 @@ BEGIN
               COALESCE(NULLIF(TRIM(COALESCE(pub.sto_number::text, '')), ''), '')
         )
         WHERE fp.id = %1$I.%2$I
+        LIMIT 1
+      ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    WHEN 'pre_planned_groups' THEN
+      RETURN format($q$COALESCE((
+        SELECT COALESCE(pub.id, fg.id)
+        FROM be_fork.pre_planned_groups fg
+        LEFT JOIN public.pre_planned_groups pub ON (
+          pub.group_code IS NOT DISTINCT FROM fg.group_code
+        )
+        WHERE fg.id = %1$I.%2$I
         LIMIT 1
       ), %1$I.%2$I)$q$, v_row_alias, p_column);
     ELSE
