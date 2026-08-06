@@ -12,6 +12,8 @@ function shipmentTableHasAnyEtaExpr(alias: string): string {
   )`;
 }
 
+export const VESSEL_WILL_FREE_HORIZON_DAYS = 7;
+
 export interface VesselIdleRow {
   vessel_code: string;
   vessel_name: string;
@@ -19,6 +21,10 @@ export interface VesselIdleRow {
   capacity_mt: number | null;
   most_loading_port: string | null;
   most_discharge_port: string | null;
+}
+
+export interface VesselWillFreeRow extends VesselIdleRow {
+  etc_at_discharge: string;
 }
 
 /** Match vessel master row to shipments (name or code). */
@@ -88,6 +94,34 @@ function sqlShipmentRowHasSapStoFromLatestSpdExpr(
   )), '') IS NOT NULL`;
 }
 
+function sqlShipmentDischargeEtcExpr(shipmentAlias: string, dischargePortAlias: string): string {
+  return `COALESCE(${dischargePortAlias}.discharge_eta_completed, ${shipmentAlias}.eta_discharge_complete::date)`;
+}
+
+function sqlLatestSpdCte(): string {
+  return `
+    latest_spd AS (
+      SELECT DISTINCT ON (spd.contract_number)
+        spd.contract_number,
+        ${sapStoNumberKeyExpr('spd')} AS effective_sto
+      FROM sap_processed_data spd
+      WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) <> ''
+      ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+    )`;
+}
+
+function sqlDischargePortLateralJoin(shipmentAlias: string, dischargePortAlias: string): string {
+  return `
+    LEFT JOIN LATERAL (
+      SELECT vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed
+      FROM vessel_loading_ports vlp
+      WHERE vlp.shipment_id = ${shipmentAlias}.id
+        AND COALESCE(vlp.is_discharge_port, false) = true
+      ORDER BY vlp.port_sequence NULLS LAST, vlp.id
+      LIMIT 1
+    ) ${dischargePortAlias} ON true`;
+}
+
 export function buildVesselIdleListQuery(): string {
   const vesselMatch = sqlVesselMasterShipmentMatch('mv', 's');
   const hasSapSto = sqlShipmentRowHasSapStoFromLatestSpdExpr('c', 'spd');
@@ -95,14 +129,7 @@ export function buildVesselIdleListQuery(): string {
   const isOngoing = sqlShipmentRowOngoingExpr('s', 'c');
 
   return `
-    WITH latest_spd AS (
-      SELECT DISTINCT ON (spd.contract_number)
-        spd.contract_number,
-        ${sapStoNumberKeyExpr('spd')} AS effective_sto
-      FROM sap_processed_data spd
-      WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) <> ''
-      ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-    ),
+    WITH ${sqlLatestSpdCte()},
     busy_vessel_ids AS (
       SELECT DISTINCT mv.id
       FROM master_vessels mv
@@ -179,6 +206,86 @@ export function buildVesselIdleListQuery(): string {
     ORDER BY iv.vessel_name ASC, iv.vessel_code ASC`;
 }
 
+/** T/C vessels with on-going shipment whose ETC at Discharge Port falls within the next 7 days. */
+export function buildVesselWillFreeListQuery(): string {
+  const vesselMatch = sqlVesselMasterShipmentMatch('mv', 's');
+  const isOngoing = sqlShipmentRowOngoingExpr('s', 'c');
+  const etcExpr = sqlShipmentDischargeEtcExpr('s', 'dp');
+
+  return `
+    WITH ${sqlLatestSpdCte()},
+    will_free_vessels AS (
+      SELECT
+        mv.id,
+        mv.vessel_code,
+        mv.vessel_name,
+        NULLIF(TRIM(mv.vessel_owner_group), '') AS company,
+        mv.vessel_capacity_mt AS capacity_mt,
+        MAX(${etcExpr}) AS etc_at_discharge
+      FROM master_vessels mv
+      INNER JOIN shipments s ON ${vesselMatch}
+      LEFT JOIN contracts c ON s.contract_id = c.id
+      ${sqlDischargePortLateralJoin('s', 'dp')}
+      WHERE UPPER(TRIM(COALESCE(mv.terms, ''))) = 'T/C'
+        AND ${sqlShipmentRowActiveEngagementExpr('s', 'c')}
+        AND ${isOngoing}
+        AND ${etcExpr} IS NOT NULL
+      GROUP BY mv.id, mv.vessel_code, mv.vessel_name, mv.vessel_owner_group, mv.vessel_capacity_mt
+      HAVING MAX(${etcExpr}) >= CURRENT_DATE
+        AND MAX(${etcExpr}) <= CURRENT_DATE + ${VESSEL_WILL_FREE_HORIZON_DAYS}
+    ),
+    port_usage AS (
+      SELECT
+        wfv.id AS vessel_id,
+        TRIM(p.port_name) AS port_name,
+        p.is_discharge,
+        COUNT(*)::int AS usage_count
+      FROM will_free_vessels wfv
+      INNER JOIN shipments s ON ${sqlVesselMasterShipmentMatch('wfv', 's')}
+      CROSS JOIN LATERAL (
+        SELECT TRIM(vlp.port_name) AS port_name, COALESCE(vlp.is_discharge_port, false) AS is_discharge
+        FROM vessel_loading_ports vlp
+        WHERE vlp.shipment_id = s.id
+          AND NULLIF(TRIM(COALESCE(vlp.port_name, '')), '') IS NOT NULL
+        UNION ALL
+        SELECT TRIM(s.port_of_loading), false
+        WHERE NULLIF(TRIM(COALESCE(s.port_of_loading, '')), '') IS NOT NULL
+        UNION ALL
+        SELECT TRIM(s.port_of_discharge), true
+        WHERE NULLIF(TRIM(COALESCE(s.port_of_discharge, '')), '') IS NOT NULL
+      ) p
+      GROUP BY wfv.id, TRIM(p.port_name), p.is_discharge
+    ),
+    most_loading AS (
+      SELECT DISTINCT ON (vessel_id)
+        vessel_id,
+        port_name AS most_loading_port
+      FROM port_usage
+      WHERE is_discharge = false
+      ORDER BY vessel_id, usage_count DESC, port_name ASC
+    ),
+    most_discharge AS (
+      SELECT DISTINCT ON (vessel_id)
+        vessel_id,
+        port_name AS most_discharge_port
+      FROM port_usage
+      WHERE is_discharge = true
+      ORDER BY vessel_id, usage_count DESC, port_name ASC
+    )
+    SELECT
+      wfv.vessel_code,
+      wfv.vessel_name,
+      wfv.company,
+      wfv.capacity_mt,
+      ml.most_loading_port,
+      md.most_discharge_port,
+      wfv.etc_at_discharge::text AS etc_at_discharge
+    FROM will_free_vessels wfv
+    LEFT JOIN most_loading ml ON ml.vessel_id = wfv.id
+    LEFT JOIN most_discharge md ON md.vessel_id = wfv.id
+    ORDER BY wfv.etc_at_discharge ASC, wfv.vessel_name ASC, wfv.vessel_code ASC`;
+}
+
 function normalizeVesselIdleRow(row: Record<string, unknown>): VesselIdleRow {
   const capacityRaw = row.capacity_mt;
   const capacity =
@@ -199,8 +306,39 @@ function normalizeVesselIdleRow(row: Record<string, unknown>): VesselIdleRow {
   };
 }
 
-export async function loadVesselIdleList(): Promise<{ count: number; vessels: VesselIdleRow[] }> {
-  const result = await query(buildVesselIdleListQuery(), []);
-  const vessels = result.rows.map((row) => normalizeVesselIdleRow(row as Record<string, unknown>));
-  return { count: vessels.length, vessels };
+function normalizeVesselWillFreeRow(row: Record<string, unknown>): VesselWillFreeRow {
+  const base = normalizeVesselIdleRow(row);
+  const etcRaw = row.etc_at_discharge;
+  const etc =
+    etcRaw instanceof Date
+      ? etcRaw.toISOString().slice(0, 10)
+      : String(etcRaw ?? '').trim().slice(0, 10);
+  return {
+    ...base,
+    etc_at_discharge: etc,
+  };
+}
+
+export async function loadVesselIdleList(): Promise<{
+  count: number;
+  vessels: VesselIdleRow[];
+  willFreeCount: number;
+  willFree: VesselWillFreeRow[];
+}> {
+  const [idleResult, willFreeResult] = await Promise.all([
+    query(buildVesselIdleListQuery(), []),
+    query(buildVesselWillFreeListQuery(), []),
+  ]);
+  const vessels = idleResult.rows.map((row) =>
+    normalizeVesselIdleRow(row as Record<string, unknown>),
+  );
+  const willFree = willFreeResult.rows.map((row) =>
+    normalizeVesselWillFreeRow(row as Record<string, unknown>),
+  );
+  return {
+    count: vessels.length,
+    vessels,
+    willFreeCount: willFree.length,
+    willFree,
+  };
 }

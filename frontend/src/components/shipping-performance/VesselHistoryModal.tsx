@@ -14,6 +14,7 @@ import {
   partitionShippingPerfVesselModalRows,
   resolveVesselModalHistoryDeltaDays,
   resolveVesselModalOpenDeltaDays,
+  resolveVesselModalTcMetricDisplay,
   sortShippingPerfVesselModalRows,
   VESSEL_MODAL_HISTORY_COLUMNS,
   VESSEL_MODAL_OPEN_COLUMNS,
@@ -26,6 +27,12 @@ import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import { cn } from '@/lib/utils'
 import { computeROilLossSummary } from '@/lib/oilLossSummary'
+import { resolveShippingTcShortageMtForListRow } from '@/lib/shipmentTcR4Shortage'
+import {
+  TC_VESSEL_PERF_LABELS,
+  TC_VESSEL_PERF_TOOLTIPS,
+} from '@/lib/shipmentTcPerformanceLabels'
+import { FieldHelp } from '@/components/FieldHelp'
 import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
@@ -168,6 +175,7 @@ function formatMt1(v: number | null): string {
 const TC_VESSEL_METRIC_COLUMN_KEYS = new Set<VesselModalOpenColumnKey | VesselModalHistoryColumnKey>([
   'fuel_consumption',
   'freight',
+  'vessel_oa_budget',
   'pump_rate',
   'sailing_speed',
   'shortage',
@@ -216,7 +224,11 @@ function renderOpenCell(row: ShippingPerfVesselModalAggregatedRow, key: VesselMo
     return renderDeltaDaysCell(resolveVesselModalOpenDeltaDays(row, key))
   }
   if (isTcVesselMetricColumn(key)) {
-    return <span className="tabular-nums">{formatTcVesselMetric(row[key])}</span>
+    return (
+      <span className="tabular-nums">
+        {formatTcVesselMetric(resolveVesselModalTcMetricDisplay(row, key))}
+      </span>
+    )
   }
   return <span>{displayLabel(row[key])}</span>
 }
@@ -240,7 +252,11 @@ function renderHistoryCell(row: ShippingPerfVesselModalAggregatedRow, key: Vesse
     return renderDeltaDaysCell(resolveVesselModalHistoryDeltaDays(row, key))
   }
   if (isTcVesselMetricColumn(key)) {
-    return <span className="tabular-nums">{formatTcVesselMetric(row[key])}</span>
+    return (
+      <span className="tabular-nums">
+        {formatTcVesselMetric(resolveVesselModalTcMetricDisplay(row, key))}
+      </span>
+    )
   }
   return <span>{displayLabel(row[key])}</span>
 }
@@ -426,9 +442,26 @@ export default function VesselHistoryModal({
     () => ({
       fuel_consumption: avgAtaDelta(vesselRows, 'fuel_consumption'),
       freight: avgAtaDelta(vesselRows, 'freight'),
+      vessel_oa_budget: avgAtaDelta(vesselRows, 'vessel_oa_budget'),
       pump_rate: avgAtaDelta(vesselRows, 'pump_rate'),
       sailing_speed: avgAtaDelta(vesselRows, 'sailing_speed'),
-      shortage: avgAtaDelta(vesselRows, 'shortage'),
+      shortage:
+        vesselRows.length > 0
+          ? (() => {
+              const vals = vesselRows
+                .map((row) =>
+                  resolveShippingTcShortageMtForListRow({
+                    shortage: toFiniteNumber(row.shortage),
+                    delivered_qty: toFiniteNumber(row.delivered_qty),
+                    received_qty: toFiniteNumber(row.received_qty),
+                  }),
+                )
+                .filter((v): v is number => v !== null)
+              if (vals.length === 0) return null
+              const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
+              return Math.round(avg * 100) / 100
+            })()
+          : null,
     }),
     [vesselRows],
   )
@@ -654,26 +687,54 @@ export default function VesselHistoryModal({
               </div>
               <div className="min-w-0 border-t border-gray-200 pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-                  TC Vessel Performance (avg)
+                  {TC_VESSEL_PERF_LABELS.sectionAvgTitle}
                 </div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
                   {[
-                    { label: 'Fuel Consumption', value: formatTcVesselMetric(avgTcMetrics.fuel_consumption) },
-                    { label: 'Freight', value: formatTcVesselMetric(avgTcMetrics.freight) },
-                    { label: 'Pump Rate', value: formatTcVesselMetric(avgTcMetrics.pump_rate) },
-                    { label: 'Sailing Speed', value: formatTcVesselMetric(avgTcMetrics.sailing_speed) },
-                    { label: 'Shortage', value: formatTcVesselMetric(avgTcMetrics.shortage) },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl,
+                      value: formatTcVesselMetric(avgTcMetrics.fuel_consumption),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.freightActualIdrKg,
+                      value: formatTcVesselMetric(avgTcMetrics.freight),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg,
+                      value: formatTcVesselMetric(avgTcMetrics.vessel_oa_budget),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.pumpRateMtH,
+                      value: formatTcVesselMetric(avgTcMetrics.pump_rate),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.sailingSpeed,
+                      value: formatTcVesselMetric(avgTcMetrics.sailing_speed),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.shortageMt,
+                      value: formatTcVesselMetric(avgTcMetrics.shortage),
+                      helpText: TC_VESSEL_PERF_TOOLTIPS.shortageMt,
+                    },
                   ].map((metric) => (
                     <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
-                      <span className="truncate text-[10px] leading-tight text-gray-500" title={metric.label}>
+                      <span
+                        className="inline-flex items-center gap-1 truncate text-[10px] leading-tight text-gray-500"
+                        title={metric.label}
+                      >
                         {metric.label}
+                        {'helpText' in metric && metric.helpText ? (
+                          <FieldHelp text={metric.helpText} iconClassName="h-3 w-3" />
+                        ) : null}
                       </span>
                       <span className="text-[11px] font-bold tabular-nums text-gray-900">{metric.value}</span>
                     </div>
                   ))}
                 </div>
                 <p className="mt-2 text-[10px] leading-snug text-gray-400">
-                  Manually entered per shipment (T/C vessels). Average across shipments in scope.
+                  Fuel/Freight Actual/Pump Rate/Speed are manually entered per shipment (T/C vessels).
+                  Freight Budget is from SAP. Shortage (MT) uses R4 oil loss when quantities allow.
+                  Averages across shipments in scope.
                 </p>
               </div>
             </div>

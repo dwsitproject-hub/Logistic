@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from './ui/button'
-import { TooltipProvider } from './ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import { UserActivityTracker } from './UserActivityTracker'
@@ -12,6 +12,7 @@ import { LogOut, Menu, X, BookOpen } from 'lucide-react'
 import {
   PermissionsProvider,
   clearPermissionsCache,
+  isAdminRole,
   usePermissions,
 } from '@/components/PermissionsContext'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
@@ -20,6 +21,7 @@ import { clearClientDataCache } from '@/lib/clientDataCache'
 import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 import { HeaderMissingEtaAlertBell } from '@/components/HeaderMissingEtaAlertBell'
+import { cn } from '@/lib/utils'
 
 type UserLite = {
   id?: string
@@ -108,25 +110,48 @@ function LayoutChrome({
         >
           <div className="flex w-full min-w-0 items-center justify-between gap-4">
             <h2 className="truncate text-xl font-semibold leading-snug text-gray-800">{pageTitle}</h2>
-            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-              <HeaderMissingEtaAlertBell />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => startTour()}
-                className="hidden sm:inline-flex"
-              >
-                <BookOpen className="h-4 w-4 sm:mr-2" />
-                <span className="hidden md:inline">App tour</span>
-              </Button>
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {!isAdminRole(user.role) && <HeaderMissingEtaAlertBell />}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => startTour()}
+                    aria-label="App tour"
+                    className={cn(
+                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200/90 shadow-sm transition-all',
+                      'bg-gradient-to-r from-blue-50 to-indigo-50',
+                      'hover:border-blue-300 hover:from-blue-100 hover:to-indigo-100',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2',
+                    )}
+                  >
+                    <BookOpen className="h-4 w-4 text-blue-700" aria-hidden />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">App tour</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    aria-label="Log out"
+                    className={cn(
+                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-amber-200/90 shadow-sm transition-all',
+                      'bg-gradient-to-r from-amber-50 to-orange-50',
+                      'hover:border-amber-300 hover:from-amber-100 hover:to-orange-100',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2',
+                    )}
+                  >
+                    <LogOut className="h-4 w-4 text-amber-700" aria-hidden />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Log out</TooltipContent>
+              </Tooltip>
               <div className="text-right max-w-[140px] sm:max-w-none">
                 <p className="text-sm font-medium text-gray-900">{user.full_name}</p>
                 <p className="text-xs text-gray-500">{user.role}</p>
               </div>
-              <Button variant="outline" size="icon" onClick={handleLogout} title="Log out">
-                <LogOut className="h-5 w-5" />
-              </Button>
             </div>
           </div>
         </header>

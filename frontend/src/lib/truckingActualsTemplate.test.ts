@@ -19,10 +19,12 @@ import {
   parseTruckingWidePlanningTemplateCsv,
   parseTruckingWidePlanningTemplateMatrix,
   resolveUnplannedPlanningWindow,
+  resolveUnplannedPlanningEndIso,
   shiftIsoDate,
+  shiftIsoDateByMonths,
   todayIsoDate,
   truckingTemplateSourceSortRank,
-  UNPLANNED_PLANNING_FORWARD_DAYS,
+  UNPLANNED_PLANNING_FORWARD_MONTHS,
   UNPLANNED_TEMPLATE_METADATA_HEADERS,
   UNPLANNED_TEMPLATE_OS_QTY_HEADER,
 } from './truckingActualsTemplate'
@@ -45,27 +47,28 @@ describe('truckingActualsTemplate', () => {
     expect(isUnplannedPlanningTemplateMode('PLANNED')).toBe(false)
   })
 
-  it('resolves unplanned planning window from today through +60 days', () => {
+  it('resolves unplanned planning window from today through +3 calendar months', () => {
     const window = resolveUnplannedPlanningWindow('', REF_TODAY)
     expect(window).toEqual({
       startIso: REF_TODAY,
-      endIso: shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS),
+      endIso: resolveUnplannedPlanningEndIso(REF_TODAY),
     })
     expect(isDateWithinUnplannedPlanningWindow(REF_TODAY, '', REF_TODAY)).toBe(true)
     expect(
       isDateWithinUnplannedPlanningWindow(
-        shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS),
+        resolveUnplannedPlanningEndIso(REF_TODAY),
         '',
         REF_TODAY,
       ),
     ).toBe(true)
     expect(
       isDateWithinUnplannedPlanningWindow(
-        shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS + 1),
+        shiftIsoDate(resolveUnplannedPlanningEndIso(REF_TODAY), 1),
         '',
         REF_TODAY,
       ),
     ).toBe(false)
+    expect(shiftIsoDateByMonths(REF_TODAY, UNPLANNED_PLANNING_FORWARD_MONTHS)).toBe('2026-09-10')
   })
 
   it('detects wide actuals template header with PO column', () => {
@@ -232,7 +235,7 @@ describe('truckingActualsTemplate', () => {
       REF_TODAY,
     )
 
-    const endIso = shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS)
+    const endIso = resolveUnplannedPlanningEndIso(REF_TODAY)
     expect(csv).toContain(UNPLANNED_TEMPLATE_OS_QTY_HEADER)
     expect(csv).toContain('Vendor G,Sup A,3rd Party')
     expect(csv).toContain('EXT-U1,PO-U1,Unplanned,125')

@@ -761,6 +761,7 @@ export function buildContractPerfTableListParams(input: {
     input.perfDashMode,
   )
   params.append('excludeUnscheduled', effectiveLate === 'ALL' ? 'false' : 'true')
+  params.append('compact', 'true')
   return params
 }
 

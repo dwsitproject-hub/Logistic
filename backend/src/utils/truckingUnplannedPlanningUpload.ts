@@ -331,12 +331,12 @@ export function filterEntriesWithinUnplannedWindow<
   return entries.filter((entry) => {
     const ok = isDateWithinUnplannedPlanningWindow(entry.dateIso);
     if (!ok) {
-      // Blank (clear) cells outside the window are silent no-ops — template always has ~60 days.
+      // Blank (clear) cells outside the window are silent no-ops — template spans ~3 months forward.
       if (entry.qtyMt == null) return false;
       rowParseFailures.push({
         rowNumber: entry.lineNumber,
         contract_ext_no: contractExtNo,
-        reason: `date ${entry.dateIso} is outside allowed planning window (today … today + 60 days) and was skipped`,
+        reason: `date ${entry.dateIso} is outside allowed planning window (today … today + 3 months) and was skipped`,
       });
     }
     return ok;

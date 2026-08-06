@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendShipmentGlobalSearch,
+  appendShipmentCharterTypeFilter,
   buildExactNumericGlobalSearchInnerSql,
   isExactStoGlobalSearch,
   shipmentEffectiveStatusExpr,
@@ -99,5 +100,23 @@ describe('shipmentEffectiveStatusExpr', () => {
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('IS NOT TRUE');
     expect(sql).toContain('group_status_floor');
+  });
+});
+
+describe('appendShipmentCharterTypeFilter', () => {
+  it('filters T/C including legacy TC storage', () => {
+    const result = appendShipmentCharterTypeFilter('T/C', 4);
+    expect(result.sql).toContain("= $4::text");
+    expect(result.params).toEqual(['T/C']);
+    expect(result.nextIndex).toBe(5);
+    expect(result.sql).toContain("WHEN");
+    expect(result.sql).toContain("'TC'");
+  });
+
+  it('returns empty SQL for ALL', () => {
+    const result = appendShipmentCharterTypeFilter('ALL', 2);
+    expect(result.sql).toBe('');
+    expect(result.params).toEqual([]);
+    expect(result.nextIndex).toBe(2);
   });
 });

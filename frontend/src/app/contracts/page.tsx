@@ -12,7 +12,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripV
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { isAuthenticatedLocally } from '@/lib/authSession'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import {
@@ -2106,63 +2106,16 @@ function ContractsPageContent() {
     }
   }
 
-  /** Section 1 cards — toolbar globals only; Open/Close tab does not refetch or reshape totals. */
-  const fetchLatePerformanceSummary = useCallback(async () => {
+  /** Section 1 cards + Section 2 tree — one combined API call (backend loads rows once for part=all). */
+  const fetchLatePerformanceData = useCallback(async () => {
     if (!authReady || !userScopeReady || !isContractPerformance) return
-    const query = buildLatePerformanceCardSummaryApiParams(contractPerfToolbarGlobal).toString()
-    if (query.includes('status=')) {
-      console.error('Contract Performance card summary must not include status filter:', query)
-      return
-    }
+    const query = contractPerfPipeline.treeApiParams.toString()
     const gen = ++cardSummaryFetchGenRef.current
-    // Combined data endpoint (summary + tree from one SQL execution) — when the tree
-    // refreshes with the same scope, the client in-flight dedupe collapses both fetches
-    // into a single request. Payload is a superset; extraction below is unchanged.
-    const summaryUrl = `/contracts/late-performance/data?${query}`
-    const summaryCacheKey = buildCacheKey('GET', summaryUrl)
-    const forceSummaryFetch = cardSummaryForceNextFetchRef.current
+    treeFetchGenRef.current = gen
+    const dataUrl = `/contracts/late-performance/data?${query}`
+    const dataCacheKey = buildCacheKey('GET', dataUrl)
+    const forceFetch = cardSummaryForceNextFetchRef.current
     cardSummaryForceNextFetchRef.current = false
-    try {
-      setLatePerfSummaryLoading(true)
-      const { data, revalidating } = await cachedGet(
-        summaryCacheKey,
-        () => api.get(summaryUrl).then((r) => r.data),
-        {
-          force: forceSummaryFetch,
-          onRevalidate: (fresh) => {
-            if (gen !== cardSummaryFetchGenRef.current) return
-            const next = fresh?.data?.statusCardSummary as StatusCardSummary | undefined
-            if (!next) return
-            statusCardSummaryRef.current = next
-            setStatusCardSummary(next)
-            setLatePerfSummaryLoading(false)
-          },
-        },
-      )
-      if (gen !== cardSummaryFetchGenRef.current) return
-      const next = data?.data?.statusCardSummary as StatusCardSummary | undefined
-      if (next) {
-        statusCardSummaryRef.current = next
-        setStatusCardSummary(next)
-      }
-      if (!revalidating) setLatePerfSummaryLoading(false)
-    } catch (e) {
-      if (gen !== cardSummaryFetchGenRef.current) return
-      console.error('Failed to load late performance summary:', e)
-      setStatusCardSummary(statusCardSummaryRef.current)
-      setLatePerfSummaryLoading(false)
-    }
-  }, [authReady, userScopeReady, isContractPerformance, cardSummaryRequestKey, contractPerfToolbarGlobal])
-
-  /** Section 2 drilldown tree — global scope only; node clicks do not refetch or collapse card counts.
-   *  Uses the combined late-performance/data endpoint (same aggregation, single SQL run) so that
-   *  when the card summary refreshes with the same scope, the client cache's in-flight dedupe
-   *  collapses both into ONE request; repeat filter combos are served stale-while-revalidate. */
-  const fetchLatePerformanceTree = useCallback(async () => {
-    if (!authReady || !userScopeReady || !isContractPerformance) return
-    const gen = ++treeFetchGenRef.current
-    const treeUrl = `/contracts/late-performance/data?${contractPerfPipeline.treeApiParams.toString()}`
-    const treeCacheKey = buildCacheKey('GET', treeUrl)
     const applyTreePayload = (payload: { data?: unknown }) => {
       const treeData = payload?.data as
         | { tree?: unknown; onTrackTree?: unknown; unscheduledTree?: unknown }
@@ -2176,38 +2129,56 @@ function ContractsPageContent() {
       )
     }
     try {
+      setLatePerfSummaryLoading(true)
       setLatePerfTreeLoading(true)
       const { data, revalidating } = await cachedGet(
-        treeCacheKey,
-        () => api.get(treeUrl).then((r) => r.data),
+        dataCacheKey,
+        () => api.get(dataUrl).then((r) => r.data),
         {
+          force: forceFetch,
           onRevalidate: (fresh) => {
-            if (gen !== treeFetchGenRef.current) return
-            applyTreePayload(fresh as { data?: unknown })
+            if (gen !== cardSummaryFetchGenRef.current) return
+            const payload = fresh as { data?: unknown }
+            const next = (payload?.data as { statusCardSummary?: StatusCardSummary } | undefined)
+              ?.statusCardSummary
+            if (next) {
+              statusCardSummaryRef.current = next
+              setStatusCardSummary(next)
+            }
+            applyTreePayload(payload)
+            setLatePerfSummaryLoading(false)
             setLatePerfTreeLoading(false)
           },
         },
       )
-      if (gen !== treeFetchGenRef.current) return
-      applyTreePayload(data as { data?: unknown })
-      if (!revalidating) setLatePerfTreeLoading(false)
+      if (gen !== cardSummaryFetchGenRef.current) return
+      const payload = data as { data?: unknown }
+      const next = (payload?.data as { statusCardSummary?: StatusCardSummary } | undefined)
+        ?.statusCardSummary
+      if (next) {
+        statusCardSummaryRef.current = next
+        setStatusCardSummary(next)
+      }
+      applyTreePayload(payload)
+      if (!revalidating) {
+        setLatePerfSummaryLoading(false)
+        setLatePerfTreeLoading(false)
+      }
     } catch (e) {
-      if (gen !== treeFetchGenRef.current) return
-      console.error('Failed to load late performance tree:', e)
+      if (gen !== cardSummaryFetchGenRef.current) return
+      console.error('Failed to load late performance data:', e)
+      setStatusCardSummary(statusCardSummaryRef.current)
       setLatePerformanceTree([])
       setOnTrackPerformanceTree([])
       setUnscheduledPerformanceTree([])
+      setLatePerfSummaryLoading(false)
       setLatePerfTreeLoading(false)
     }
   }, [authReady, userScopeReady, isContractPerformance, contractPerfPipeline.treeApiParams])
 
   useEffect(() => {
-    void fetchLatePerformanceSummary()
-  }, [fetchLatePerformanceSummary])
-
-  useEffect(() => {
-    void fetchLatePerformanceTree()
-  }, [fetchLatePerformanceTree])
+    void fetchLatePerformanceData()
+  }, [fetchLatePerformanceData])
 
   /** Section 2 node click — instantly commits drilldown and refreshes Section 3. */
   const applyDrilldownNodeSelection = useCallback(
@@ -2259,46 +2230,60 @@ function ContractsPageContent() {
   useEffect(() => {
     if (!authReady) return
     let cancelled = false
-    Promise.all([
+    const requests: Promise<unknown>[] = [
       api.get('/contracts/filter-options/incoterms'),
       api.get('/contracts/filter-options/group-plants'),
-      api.get('/dashboard/filter-options/products'),
       api.get('/dashboard/filter-options/suppliers'),
-      api.get('/dashboard/filter-options/groups'),
-    ])
-      .then(([incRes, plantRes, productRes, supplierRes, groupRes]) => {
+    ]
+    if (!isContractPerformance) {
+      requests.push(
+        api.get('/dashboard/filter-options/products'),
+        api.get('/dashboard/filter-options/groups'),
+      )
+    }
+    Promise.all(requests)
+      .then((results) => {
         if (cancelled) return
+        const incRes = results[0] as { data?: { data?: { incoterms?: string[] } } }
+        const plantRes = results[1] as { data?: { data?: { groupPlants?: string[] } } }
+        const supplierRes = results[2] as { data?: { data?: unknown } }
         const incs = (incRes.data?.data?.incoterms || []) as string[]
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
-        const productPayload = productRes.data?.data
-        const products = (Array.isArray(productPayload)
-          ? productPayload
-          : productPayload && typeof productPayload === 'object' && 'products' in productPayload
-            ? (productPayload as { products?: string[] }).products
-            : []) as string[]
-        const supplierPayload = supplierRes.data?.data
-        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        const groupPayload = groupRes.data?.data
-        const groups = (Array.isArray(groupPayload) ? groupPayload : []) as string[]
         setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableProducts(Array.isArray(products) ? products : [])
+        const supplierPayload = supplierRes.data?.data
+        const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
-        setAvailableGroups(Array.isArray(groups) ? groups : [])
+        if (!isContractPerformance) {
+          const productRes = results[3] as { data?: { data?: unknown } }
+          const groupRes = results[4] as { data?: { data?: unknown } }
+          const productPayload = productRes.data?.data
+          const products = (Array.isArray(productPayload)
+            ? productPayload
+            : productPayload && typeof productPayload === 'object' && 'products' in productPayload
+              ? (productPayload as { products?: string[] }).products
+              : []) as string[]
+          const groupPayload = groupRes.data?.data
+          const groups = (Array.isArray(groupPayload) ? groupPayload : []) as string[]
+          setAvailableProducts(Array.isArray(products) ? products : [])
+          setAvailableGroups(Array.isArray(groups) ? groups : [])
+        }
       })
       .catch((e) => {
         if (cancelled) return
         console.error('Failed to fetch filter options:', e)
         setAvailableIncoterms([])
         setAvailableGroupPlants([])
-        setAvailableProducts([])
         setAvailableSuppliers([])
-        setAvailableGroups([])
+        if (!isContractPerformance) {
+          setAvailableProducts([])
+          setAvailableGroups([])
+        }
       })
     return () => {
       cancelled = true
     }
-  }, [authReady])
+  }, [authReady, isContractPerformance])
 
   // Summary alert cards — always Open status; other toolbar filters sync counts to the table scope.
   const fetchUnassignedCounts = useCallback(async () => {
@@ -5807,6 +5792,7 @@ function ContractsPageContent() {
             const ui = contractLogisticsUi
             setContractLogisticsUi(null)
             invalidateLogisticsListCaches()
+            invalidateMissingEtaAlertCache()
             if (ui?.kind === 'truck-create') {
               const contractId = ui.contract.contract_id
               setContracts((prev) =>
@@ -5857,6 +5843,7 @@ function ContractsPageContent() {
             const ui = contractLogisticsUi
             setContractLogisticsUi(null)
             invalidateLogisticsListCaches()
+            invalidateMissingEtaAlertCache()
             if (ui?.kind === 'ship-create') {
               const contractId = ui.contract.contract_id
               setContracts((prev) =>

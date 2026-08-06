@@ -85,6 +85,10 @@ import {
   type LoadingAtaFields,
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
+import { FieldHelp } from '@/components/FieldHelp'
+import { computeShipmentFreightBudgetIdrKg } from '@/lib/shipmentTcFreightBudget'
+import { computeShipmentR4ShortageMt } from '@/lib/shipmentTcR4Shortage'
+import { TC_VESSEL_PERF_LABELS, TC_VESSEL_PERF_TOOLTIPS } from '@/lib/shipmentTcPerformanceLabels'
 import {
   buildShipmentEtaBaseline,
   DISCHARGE_QUALITY_PORT_KEY,
@@ -357,11 +361,13 @@ function ReadOnlyInfoField({
   value,
   compact = false,
   className,
+  helpText,
 }: {
   label: string
   value: unknown
   compact?: boolean
   className?: string
+  helpText?: string
 }) {
   return (
     <div className={className}>
@@ -372,7 +378,10 @@ function ReadOnlyInfoField({
             : 'mb-1 block text-xs font-medium text-gray-600'
         }
       >
-        {label}
+        <span className="inline-flex items-center gap-1">
+          {label}
+          {helpText ? <FieldHelp text={helpText} /> : null}
+        </span>
       </label>
       <div
         className={
@@ -531,6 +540,8 @@ type ShipmentDetailRow = {
   quantity_delivered_klip: number | null
   /** KLIP receive seed (editable after SLD/SDD). */
   quantity_receive_klip: number | null
+  /** SAP Vessel OA Budget (IDR/KG) for this PO line. */
+  vessel_oa_budget_sap: number | null
 }
 
 async function fetchContractValidateEnrichment(contractNumber: string): Promise<{
@@ -592,6 +603,7 @@ function contractDetailRowFromApi(
     quantity_receive_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
     quantity_delivered_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_delivered_klip)),
     quantity_receive_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_receive_klip)),
+    vessel_oa_budget_sap: parseApiNumber(d.vessel_oa_budget_sap),
   }
 }
 
@@ -646,6 +658,7 @@ async function buildContractDetailRows(
         quantity_receive_sap: null,
         quantity_delivered_klip: null,
         quantity_receive_klip: null,
+        vessel_oa_budget_sap: null,
       }
     })
   }
@@ -773,7 +786,6 @@ export function EditShipmentModal({
   const [freight, setFreight] = useState<number | null>(null)
   const [pumpRate, setPumpRate] = useState<number | null>(null)
   const [sailingSpeed, setSailingSpeed] = useState<number | null>(null)
-  const [shortage, setShortage] = useState<number | null>(null)
   const [originalFuelConsumption, setOriginalFuelConsumption] = useState<number | null>(null)
   const [originalFreight, setOriginalFreight] = useState<number | null>(null)
   const [originalPumpRate, setOriginalPumpRate] = useState<number | null>(null)
@@ -886,6 +898,36 @@ export function EditShipmentModal({
     [qtyTableRows, qtyEdits],
   )
 
+  const isTcCharter = isTcCharterType(vesselMeta.charter_type)
+  const headerVesselOaBudget = parseApiNumber(shipmentInfo.vessel_oa_budget)
+
+  const tcFreightBudgetIdrKg = useMemo(
+    () =>
+      computeShipmentFreightBudgetIdrKg(
+        detailRows.map((d) => ({
+          vessel_oa_budget_sap: d.vessel_oa_budget_sap,
+          shipment_plan_qty: planQtyEdits[d.rowKey] ?? d.shipment_plan_qty ?? 0,
+        })),
+        headerVesselOaBudget,
+      ),
+    [detailRows, planQtyEdits, headerVesselOaBudget],
+  )
+
+  const tcR4ShortageMt = useMemo(() => {
+    const rows = detailRows.map((d) => {
+      const edited = qtyEdits[d.rowKey]
+      return {
+        quantity_delivered_klip:
+          edited?.quantity_delivered !== undefined ? edited.quantity_delivered : d.quantity_delivered_klip,
+        quantity_delivered_sap: d.quantity_delivered_sap,
+        quantity_receive_klip:
+          edited?.quantity_receive !== undefined ? edited.quantity_receive : d.quantity_receive_klip,
+        quantity_receive_sap: d.quantity_receive_sap,
+      }
+    })
+    return computeShipmentR4ShortageMt(rows)
+  }, [detailRows, qtyEdits])
+
   const loadingPortRows = useMemo(
     () =>
       loadingPorts
@@ -981,7 +1023,7 @@ export function EditShipmentModal({
     setFreight(null)
     setPumpRate(null)
     setSailingSpeed(null)
-    setShortage(null)
+    setOriginalShortage(null)
     setEtaBlocks([])
     setDischargeEtaFields(emptyDischargeEtaFields())
     setEtaSectionEditing(false)
@@ -1236,7 +1278,6 @@ export function EditShipmentModal({
         setFreight(freightVal)
         setPumpRate(pumpRateVal)
         setSailingSpeed(sailingSpeedVal)
-        setShortage(shortageVal)
         setOriginalFuelConsumption(fuelConsumptionVal)
         setOriginalFreight(freightVal)
         setOriginalPumpRate(pumpRateVal)
@@ -1570,7 +1611,7 @@ export function EditShipmentModal({
         freight,
         pumpRate,
         sailingSpeed,
-        shortage,
+        autoPersistShortageMt: isTcCharter ? tcR4ShortageMt : undefined,
         originalFuelConsumption,
         originalFreight,
         originalPumpRate,
@@ -1665,7 +1706,7 @@ export function EditShipmentModal({
         freight,
         pump_rate: pumpRate,
         sailing_speed: sailingSpeed,
-        shortage,
+        ...(isTcCharter ? { shortage: tcR4ShortageMt } : {}),
         eta_arrival: toApiDateOnly(saveActiveEta!.etaVesselArrivalAtLoadingPort),
         eta_berthed: toApiDateOnly(saveActiveEta!.etaVesselBerthedAtLoadingPort),
         eta_loading_start: toApiDateOnly(saveActiveEta!.etaVesselStartLoading),
@@ -2014,42 +2055,74 @@ export function EditShipmentModal({
                 ))}
               </div>
 
-              {isTcCharterType(vesselMeta.charter_type) && (
+              {isTcCharter && (
                 <div className="border-t border-gray-100 p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <Gauge className="h-4 w-4 text-cyan-600" />
-                    <h5 className="text-sm font-semibold text-gray-800">TC Vessel Performance</h5>
+                    <h5 className="text-sm font-semibold text-gray-800">
+                      {TC_VESSEL_PERF_LABELS.sectionTitle}
+                    </h5>
                   </div>
                   {canModifyCoreSections ? (
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Fuel Consumption</label>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.fuelConsumptionKl}
+                        </label>
                         <MetricDecimalInput value={fuelConsumption} onChange={setFuelConsumption} />
                       </div>
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Freight</label>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.freightActualIdrKg}
+                        </label>
                         <MetricDecimalInput value={freight} onChange={setFreight} />
                       </div>
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.freightBudgetIdrKg}
+                        value={formatMetricReadOnly(tcFreightBudgetIdrKg)}
+                      />
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Pump Rate</label>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.pumpRateMtH}
+                        </label>
                         <MetricDecimalInput value={pumpRate} onChange={setPumpRate} />
                       </div>
                       <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Sailing Speed</label>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.sailingSpeed}
+                        </label>
                         <MetricDecimalInput value={sailingSpeed} onChange={setSailingSpeed} />
                       </div>
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Shortage</label>
-                        <MetricDecimalInput value={shortage} onChange={setShortage} />
-                      </div>
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.shortageMt}
+                        value={formatMetricReadOnly(tcR4ShortageMt)}
+                        helpText={TC_VESSEL_PERF_TOOLTIPS.shortageMt}
+                      />
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <ReadOnlyInfoField label="Fuel Consumption" value={formatMetricReadOnly(fuelConsumption)} />
-                      <ReadOnlyInfoField label="Freight" value={formatMetricReadOnly(freight)} />
-                      <ReadOnlyInfoField label="Pump Rate" value={formatMetricReadOnly(pumpRate)} />
-                      <ReadOnlyInfoField label="Sailing Speed" value={formatMetricReadOnly(sailingSpeed)} />
-                      <ReadOnlyInfoField label="Shortage" value={formatMetricReadOnly(shortage)} />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.fuelConsumptionKl}
+                        value={formatMetricReadOnly(fuelConsumption)}
+                      />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.freightActualIdrKg}
+                        value={formatMetricReadOnly(freight)}
+                      />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.freightBudgetIdrKg}
+                        value={formatMetricReadOnly(tcFreightBudgetIdrKg)}
+                      />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.pumpRateMtH}
+                        value={formatMetricReadOnly(pumpRate)}
+                      />
+                      <ReadOnlyInfoField label={TC_VESSEL_PERF_LABELS.sailingSpeed} value={formatMetricReadOnly(sailingSpeed)} />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.shortageMt}
+                        value={formatMetricReadOnly(tcR4ShortageMt)}
+                        helpText={TC_VESSEL_PERF_TOOLTIPS.shortageMt}
+                      />
                     </div>
                   )}
                 </div>

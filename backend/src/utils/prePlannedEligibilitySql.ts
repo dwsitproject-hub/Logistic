@@ -49,6 +49,7 @@ export function buildPrePlannedEligibleContractsQuery(opts: {
       c.product,
       c.incoterm,
       c.group_name,
+      c.contract_date,
       c.delivery_start_date,
       c.delivery_end_date,
       c.plant_code,
@@ -56,10 +57,12 @@ export function buildPrePlannedEligibleContractsQuery(opts: {
       c.transport_mode,
       c.status,
       ${plantExpr} AS group_plant,
-      (${outstandingKgExpr}) / 1000.0 AS os_mt
+      (${outstandingKgExpr}) / 1000.0 AS os_mt,
+      c.quantity_ordered / 1000.0 AS contract_qty_mt
     FROM contracts c
     WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
       AND UPPER(COALESCE(c.status, '')) NOT IN ('CLOSE', 'CLOSED', 'COMPLETED', 'CANCELLED')
+      AND c.contract_date IS NOT NULL
       AND c.delivery_start_date IS NOT NULL
       AND c.delivery_end_date IS NOT NULL
       AND (${outstandingKgExpr}) > $1
@@ -83,7 +86,7 @@ export function buildPrePlannedEligibleContractsQuery(opts: {
       )
       /* Also covers unlinked ACCEPTED (Preplanned) via the status check above. */
       AND ${plantExpr} NOT IN (${excludedPlaceholders})
-    ORDER BY c.delivery_start_date, c.contract_id
+    ORDER BY c.contract_date, c.contract_id
   `;
 
   return {

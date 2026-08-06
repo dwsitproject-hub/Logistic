@@ -151,7 +151,8 @@ export type SaveEditShipmentInput = {
   freight: number | null
   pumpRate: number | null
   sailingSpeed: number | null
-  shortage: number | null
+  /** Auto-computed R4 shortage (MT); persisted on save when TC charter. */
+  autoPersistShortageMt?: number | null
   originalFuelConsumption: number | null
   originalFreight: number | null
   originalPumpRate: number | null
@@ -267,7 +268,11 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
   if (!quantityValuesEqual(input.sailingSpeed, input.originalSailingSpeed)) {
     updateBody.sailing_speed = input.sailingSpeed
   }
-  if (!quantityValuesEqual(input.shortage, input.originalShortage)) updateBody.shortage = input.shortage
+  if (input.autoPersistShortageMt !== undefined) {
+    if (!quantityValuesEqual(input.autoPersistShortageMt, input.originalShortage)) {
+      updateBody.shortage = input.autoPersistShortageMt
+    }
+  }
 
   const pol = input.loadingPort.trim()
   if (pol && pol !== '0.00') updateBody.port_of_loading = pol

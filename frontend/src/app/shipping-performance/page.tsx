@@ -51,6 +51,12 @@ import {
 } from '@/lib/shippingPerformanceSummaryCounts'
 import { outstandingQtyMtColorClass } from '@/lib/utils'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { resolveShippingTcShortageMtForListRow } from '@/lib/shipmentTcR4Shortage'
+import {
+  TC_VESSEL_PERF_LABELS,
+  TC_VESSEL_PERF_TOOLTIPS,
+  TC_VESSEL_TOP_RANK_METRIC_LABELS,
+} from '@/lib/shipmentTcPerformanceLabels'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
@@ -191,6 +197,7 @@ interface ShippingPerformanceRow {
   // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
   fuel_consumption?: number | null
   freight?: number | null
+  vessel_oa_budget?: number | null
   pump_rate?: number | null
   sailing_speed?: number | null
   shortage?: number | null
@@ -463,6 +470,7 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       // (skips shipments where the metric is null, doesn't zero-fill).
       fuel_consumption: avgMetric(vesselRows, 'fuel_consumption'),
       freight: avgMetric(vesselRows, 'freight'),
+      vessel_oa_budget: avgMetric(vesselRows, 'vessel_oa_budget'),
       pump_rate: avgMetric(vesselRows, 'pump_rate'),
       sailing_speed: avgMetric(vesselRows, 'sailing_speed'),
       shortage: avgMetric(vesselRows, 'shortage'),
@@ -1012,43 +1020,51 @@ const COLUMN_DEFS: ColumnDef[] = [
   },
   {
     key: 'fuel_consumption',
-    label: 'Fuel Consumption',
+    label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl,
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: false,
-    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+    tooltip: TC_VESSEL_PERF_TOOLTIPS.fuelConsumptionKl,
   },
   {
     key: 'freight',
-    label: 'Freight',
+    label: TC_VESSEL_PERF_LABELS.freightActualIdrKg,
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: false,
-    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+    tooltip: TC_VESSEL_PERF_TOOLTIPS.freightActualIdrKg,
+  },
+  {
+    key: 'vessel_oa_budget',
+    label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg,
+    type: 'number',
+    defaultVisible: false,
+    byVesselDefaultVisible: false,
+    tooltip: TC_VESSEL_PERF_TOOLTIPS.freightBudgetIdrKg,
   },
   {
     key: 'pump_rate',
-    label: 'Pump Rate',
+    label: TC_VESSEL_PERF_LABELS.pumpRateMtH,
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: false,
-    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+    tooltip: TC_VESSEL_PERF_TOOLTIPS.pumpRateMtH,
   },
   {
     key: 'sailing_speed',
-    label: 'Sailing Speed',
+    label: TC_VESSEL_PERF_LABELS.sailingSpeed,
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: false,
-    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+    tooltip: TC_VESSEL_PERF_TOOLTIPS.sailingSpeed,
   },
   {
     key: 'shortage',
-    label: 'Shortage',
+    label: TC_VESSEL_PERF_LABELS.shortageMt,
     type: 'number',
     defaultVisible: false,
     byVesselDefaultVisible: false,
-    tooltip: 'Manually entered TC (Time Charter) vessel metric. By Vessel shows the average across shown shipments.',
+    tooltip: TC_VESSEL_PERF_TOOLTIPS.shortageMt,
   },
 ]
 
@@ -1296,7 +1312,7 @@ function TopRankBadge({ rank }: { rank: number | null | undefined }) {
         'inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold tabular-nums',
         rankClass,
       )}
-      title={`Rank ${rank} vessel (composite of Fuel Consumption, Freight, Pump Rate, Sailing Speed, Shortage)`}
+      title={`Rank ${rank} vessel (composite of ${TC_VESSEL_TOP_RANK_METRIC_LABELS.join(', ')})`}
     >
       {rank}
     </span>
@@ -2877,6 +2893,15 @@ function ShippingPerformancePageContent() {
                                     })}
                                   </span>
                                 )
+                            } else if (colKey === 'shortage') {
+                              const shortageMt = resolveShippingTcShortageMtForListRow({
+                                shortage: row.shortage,
+                                delivered_qty: row.delivered_qty,
+                                received_qty: row.received_qty,
+                              })
+                              cellContent = (
+                                <NumberCell value={shortageMt} />
+                              )
                             } else if (col.type === 'number') {
                               cellContent = (
                                 <NumberCell

@@ -4,7 +4,7 @@ import { Loader2, Ship } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const VESSEL_IDLE_TOOLTIP =
-  'Master vessels with no SAP STO assignment, no planned ETA shipment, and no on-going shipment. Opens the idle vessel list — does not filter the table.'
+  'Opens vessel availability: idle T/C vessels and vessels expected to free within 7 days (ETC at Discharge Port). Does not filter the table.'
 
 export interface VesselIdleInsightChipProps {
   count: number

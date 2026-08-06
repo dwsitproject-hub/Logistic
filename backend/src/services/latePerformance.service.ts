@@ -55,7 +55,10 @@ export interface LatePerformanceFilters {
   productFilters: string[];
   sourceTypeFilter: string | undefined;
   sourceTypeFilters: string[];
+  /** Open/Close tab filter for tree aggregation (in-memory when part=all). */
   statusNorm: string;
+  /** Status filter pushed into SQL — empty for part=all/summary so one row load serves both cards + tree. */
+  sqlStatusNorm: string;
   plants: string[];
 }
 
@@ -88,7 +91,7 @@ function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
     scope: f.scope,
     effectiveDateFrom: f.effectiveDateFrom ?? '',
     effectiveDateTo: f.effectiveDateTo ?? '',
-    statusNorm: f.statusNorm,
+    sqlStatusNorm: f.sqlStatusNorm,
     supplier: f.supplier ?? '',
     buyer: f.buyer ?? '',
     companyCode: f.companyCode ?? '',
@@ -152,8 +155,13 @@ export function parseLatePerformanceFilters(
   const effectiveDateTo = scope === 'filtered' ? dateTo : (dateTo || ytdTo);
 
   let statusNorm = scope === 'filtered' && typeof status === 'string' ? status.trim() : '';
+  let sqlStatusNorm = statusNorm;
   if (part === 'summary') {
     statusNorm = '';
+    sqlStatusNorm = '';
+  } else if (part === 'all') {
+    // Combined endpoint: load Open+Close rows once; apply statusNorm when building trees only.
+    sqlStatusNorm = '';
   }
   const plantArr = scope === 'filtered' ? (Array.isArray(plant) ? plant : plant ? [plant] : []) : [];
   const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
@@ -179,6 +187,7 @@ export function parseLatePerformanceFilters(
     sourceTypeFilter,
     sourceTypeFilters,
     statusNorm,
+    sqlStatusNorm,
     plants,
   };
 
@@ -186,6 +195,22 @@ export function parseLatePerformanceFilters(
     ...base,
     cacheKey: buildCacheKey(base),
   };
+}
+
+/** Mirrors SQL Open/Close status filter — used for in-memory tree scoping when part=all. */
+export function rowMatchesContractPerfStatusFilter(
+  row: { import_status?: unknown; status?: unknown },
+  statusNorm: string,
+): boolean {
+  if (!statusNorm || statusNorm === 'All Status' || statusNorm.toLowerCase() === 'all') {
+    return true;
+  }
+  const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+  const isClosed = statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED';
+  const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
+  if (statusNorm === 'Open' || statusNorm === 'ACTIVE') return isOpen;
+  if (statusNorm === 'Close' || statusNorm === 'CLOSE') return isClosed;
+  return statusText === statusNorm.toUpperCase();
 }
 
 export async function buildLatePerformanceQuery(filters: LatePerformanceFilters): Promise<{
@@ -196,7 +221,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     scope,
     effectiveDateFrom,
     effectiveDateTo,
-    statusNorm,
+    sqlStatusNorm,
     supplier,
     buyer,
     companyCode,
@@ -368,20 +393,20 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
       ${PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
-  if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
-    if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
+  if (sqlStatusNorm && sqlStatusNorm !== 'All Status' && sqlStatusNorm.toLowerCase() !== 'all') {
+    if (sqlStatusNorm === 'Open' || sqlStatusNorm === 'ACTIVE') {
       queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
         'base.import_status',
         'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
       )}`;
-    } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
+    } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
       queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
         'base.import_status',
         'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
       )}`;
     } else {
       queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
-      queryParams.push(statusNorm);
+      queryParams.push(sqlStatusNorm);
       paramIndex++;
     }
   }
@@ -910,6 +935,18 @@ export function sqlEffectiveDeliveryEndPresent(): string {
   )`;
 }
 
+/** ISO SAP/DB due-end date for SQL trade-cycle (mirrors resolveEffectiveDeliveryEnd for YYYY-MM-DD paths). */
+export function sqlEffectiveDeliveryEndDateExpr(): string {
+  return `COALESCE(
+    delivery_end_date::date,
+    CASE
+      WHEN NULLIF(TRIM(COALESCE(latest_spd_data->'contract'->>'due_date_delivery_end', '')), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+        THEN NULLIF(TRIM(latest_spd_data->'contract'->>'due_date_delivery_end'), '')::date
+      ELSE NULL
+    END
+  )`;
+}
+
 /** Trade cycle for performance tree / Section 3 schedulable checks (mirrors aggregateLatePerformanceRows). */
 export function computePerfTradeCycleDaysForRow(row: any, todayMid: Date = new Date()): number | null {
   const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
@@ -1004,6 +1041,8 @@ export function aggregateLatePerformanceRows(
 ) {
   const includeSummary = part === 'summary' || part === 'all';
   const includeTree = part === 'tree' || part === 'all';
+  const includeRowInTree = (row: any) =>
+    includeTree && rowMatchesContractPerfStatusFilter(row, filters.statusNorm);
   const todayMid = new Date();
   todayMid.setHours(0, 0, 0, 0);
 
@@ -1156,7 +1195,7 @@ export function aggregateLatePerformanceRows(
         if (isOpenNoDue) openStatusOutstandingQty += _outstandingQtyNoDue;
         else if (isClosedNoDue) closeStatusContractQty += _qtyOrderedNoDue;
       }
-      if (includeTree) {
+      if (includeRowInTree(row)) {
         addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerfNoDue);
       }
       if (filters.debug && debugNoScheduleRows.length < 500) {
@@ -1285,7 +1324,7 @@ export function aggregateLatePerformanceRows(
         dist.noData.count += 1;
         dist.noData.qty += _qtyForPerf;
       }
-      if (includeTree) {
+      if (includeRowInTree(row)) {
         addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerf);
       }
       if (filters.debug && debugNoScheduleRows.length < 500) {
@@ -1368,7 +1407,7 @@ export function aggregateLatePerformanceRows(
         else onTrackCloseOutstandingQty += _qtyOrdered;
       }
 
-      if (includeTree) {
+      if (includeRowInTree(row)) {
         addContractRowToPerfTree(onTrackRoot, row, tradeCycle, _qtyForPerf);
       }
       continue;
@@ -1410,7 +1449,7 @@ export function aggregateLatePerformanceRows(
       pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
     }
 
-    if (includeTree) {
+    if (includeRowInTree(row)) {
       addContractRowToPerfTree(root, row, tradeCycle, _qtyForPerf);
     }
   }

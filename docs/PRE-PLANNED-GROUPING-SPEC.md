@@ -93,21 +93,19 @@ sea-capable in §4.1.)
 Within each partition:
 
 1. Sub-partition by **supplier** (exact `contracts.supplier`).
-2. Sort by `delivery_start_date`, then `contract_id`.
-3. Chain into window clusters: contract joins the current cluster when
-   `|start − cluster.start| ≤ WINDOW_TOL_DAYS` **and** `|end − cluster.end| ≤ WINDOW_TOL_DAYS`
-   (cluster start/end = anchor of its first member). Default `WINDOW_TOL_DAYS = 3`
-   (0 and 3 backtest identically; 7 drops precision to ~76%).
-4. **Capacity split**: pack the cluster's contracts, in `contract_id` (creation) order, into
-   bins of `CAP = max(parcel_mt(group_plant), largest single contract)` with tolerance
-   `CAP_TOL = 1.05`, using outstanding qty in MT (`quantity_ordered`/outstanding stored in KG
-   → ÷ 1000). First bin that fits wins; overflow starts the next bin.
+2. Sort by `contract_date`, then `contract_id`.
+3. **Supplier cluster**: all contracts from the same supplier in the partition form one
+   cluster (no delivery-window or contract-date split).
+4. **Capacity split**: pack the cluster's contracts, in `contract_id` order, into bins of
+   `parcel_mt(group_plant)` (median historical BL qty for that plant; fallback 3000 MT) with
+   tolerance `CAP_TOL = 1.05`, using outstanding qty in MT for packing weight. Contracts whose
+   **contract qty** (`quantity_ordered` ÷ 1000) exceeds `parcel_mt` are placed in their own bin
+   and never merged with other contracts. Overflow by total OS starts the next bin.
 5. Each bin = one **Pre-Planned group** (`PP-<PLANT>-<seq>`). `est_vessels = 1` per bin by
    construction; a cluster of N bins is N suggested vessels.
 
-CIF/CFR/FRC contracts follow the same path — since supplier + identical window is required,
-they naturally stay single unless the same supplier cut one deal into several contracts,
-which is exactly the case that should merge.
+CIF/CFR/FRC contracts follow the same path — same supplier with several contracts naturally
+merge unless capacity rules split them.
 
 ### 4.4 Vessel capacity model
 

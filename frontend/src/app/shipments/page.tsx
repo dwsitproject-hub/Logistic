@@ -15,6 +15,8 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { resolveShippingTcShortageMtForListRow } from '@/lib/shipmentTcR4Shortage'
+import { TC_VESSEL_PERF_LABELS, TC_VESSEL_PERF_TOOLTIPS } from '@/lib/shipmentTcPerformanceLabels'
 import {
   formatShipmentStatusLabel,
   shipmentStatusBadgeClass,
@@ -163,7 +165,7 @@ import {
 } from '@/lib/prePlannedGroupTableRows'
 import { ShipmentOutstandingQtySummary } from '@/components/shipments/ShipmentOutstandingQtySummary'
 import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
-import { VesselIdleModal, type VesselIdleListRow } from '@/components/shipments/VesselIdleModal'
+import { VesselIdleModal, type VesselIdleListRow, type VesselWillFreeListRow } from '@/components/shipments/VesselIdleModal'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
   type VesselHistoryShipmentRow,
@@ -961,6 +963,7 @@ function ShipmentsPageContent() {
   const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
   const [vesselIdleCount, setVesselIdleCount] = useState(0)
   const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
+  const [vesselWillFreeList, setVesselWillFreeList] = useState<VesselWillFreeListRow[]>([])
   const [vesselIdleLoading, setVesselIdleLoading] = useState(false)
   const [vesselIdleModalOpen, setVesselIdleModalOpen] = useState(false)
   const [vesselHistoryModalOpen, setVesselHistoryModalOpen] = useState(false)
@@ -980,6 +983,7 @@ function ShipmentsPageContent() {
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
   const [statusFilter, setStatusFilter] = useState<ShipmentsPipelineStageFilter>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
+  const [charterTypeFilter, setCharterTypeFilter] = useState<string>('ALL')
   const [etaLoadingFilter, setEtaLoadingFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
@@ -1201,6 +1205,7 @@ function ShipmentsPageContent() {
   const [prePlannedGroups, setPrePlannedGroups] = useState<PrePlannedGroup[]>([])
   const [prePlannedAcceptedGroups, setPrePlannedAcceptedGroups] = useState<PrePlannedGroup[]>([])
   const [prePlannedUngroupedCount, setPrePlannedUngroupedCount] = useState(0)
+  const [acceptingPrePlannedGroupId, setAcceptingPrePlannedGroupId] = useState<string | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -1241,6 +1246,7 @@ function ShipmentsPageContent() {
       selectedSuppliers,
       selectedGroupPlants,
       lateIndicatorFilter,
+      charterTypeFilter,
       viewOption,
       viewFilterValue,
       columnFiltersJson: JSON.stringify(
@@ -1263,6 +1269,7 @@ function ShipmentsPageContent() {
       selectedSuppliers,
       selectedGroupPlants,
       lateIndicatorFilter,
+      charterTypeFilter,
       viewOption,
       viewFilterValue,
       columnFilters,
@@ -1352,7 +1359,9 @@ function ShipmentsPageContent() {
     try {
       const res = await api.get('/shipments/vessel-idle')
       const vessels = (res.data?.data?.vessels ?? []) as VesselIdleListRow[]
+      const willFree = (res.data?.data?.willFree ?? []) as VesselWillFreeListRow[]
       setVesselIdleList(vessels)
+      setVesselWillFreeList(willFree)
       setVesselIdleCount(Number(res.data?.data?.count ?? vessels.length))
     } catch (error) {
       console.error('Failed to fetch vessel idle list:', error)
@@ -1433,6 +1442,14 @@ function ShipmentsPageContent() {
     (value: string) => {
       resetPageForGlobalFilter()
       setLateIndicatorFilter(value)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onCharterTypeChange = useCallback(
+    (value: string) => {
+      resetPageForGlobalFilter()
+      setCharterTypeFilter(value)
     },
     [resetPageForGlobalFilter],
   )
@@ -1598,6 +1615,9 @@ function ShipmentsPageContent() {
       }
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
+      }
+      if (charterTypeFilter && charterTypeFilter !== 'ALL') {
+        params.append('charterType', charterTypeFilter)
       }
       if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
         params.append('viewOption', viewOption)
@@ -2034,17 +2054,17 @@ function ShipmentsPageContent() {
     setAddShipmentPrePlannedGroupId(null)
   }
 
-  const handleAcceptPrePlannedGroup = async (group: PrePlannedGroup) => {
-    try {
-      await acceptPrePlannedGroup(group.id)
-      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
-      invalidateLogisticsListCaches()
-      section1SummaryForceNextFetchRef.current = true
-      void fetchShipments(page, undefined, { force: true })
-    } catch {
-      // Silently ignore — UI will refresh on next fetch.
+  const handleVesselIdleAddShipment = useCallback(() => {
+    if (perms.loaded && !canOpenAddShipmentModal) {
+      alert(
+        'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.',
+      )
+      return
     }
-  }
+    setVesselIdleModalOpen(false)
+    handleCloseShipmentModal()
+    setShowAddShipment(true)
+  }, [canOpenAddShipmentModal, perms.loaded])
 
   const refetchPrePlannedGroups = useCallback(async () => {
     try {
@@ -2065,6 +2085,27 @@ function ShipmentsPageContent() {
       setPrePlannedAcceptedGroups([])
     }
   }, [])
+
+  const handleAcceptPrePlannedGroup = useCallback(async (group: PrePlannedGroup) => {
+    if (acceptingPrePlannedGroupId) return
+    setAcceptingPrePlannedGroupId(group.id)
+    try {
+      await acceptPrePlannedGroup(group.id)
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipments(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — UI will refresh on next fetch.
+    } finally {
+      setAcceptingPrePlannedGroupId(null)
+    }
+  }, [
+    acceptingPrePlannedGroupId,
+    page,
+    refetchPrePlannedAcceptedGroups,
+    refetchPrePlannedGroups,
+  ])
 
   useEffect(() => {
     void refetchPrePlannedGroups()
@@ -2473,7 +2514,7 @@ function ShipmentsPageContent() {
   const exportFilteredData = async () => {
     // Export actual filtered shipments data from the page
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated Nautical Miles','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','BL Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty vs BL Qty (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID','Fuel Consumption','Freight','Pump Rate','Sailing Speed','Shortage',
+      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated Nautical Miles','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','BL Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty vs BL Qty (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID','Fuel Consumption (KL)','Freight Actual (IDR/KG)','Freight Budget (IDR/KG)','Pump Rate (MT/H)','Sailing Speed','Shortage (MT)',
       // Loading port groups (1..3)
       'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
       'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
@@ -2551,9 +2592,19 @@ function ShipmentsPageContent() {
         escapeCsvValue(s.sap_delivery_id),
         escapeCsvValue(s.fuel_consumption ?? ''),
         escapeCsvValue(s.freight ?? ''),
+        escapeCsvValue(s.vessel_oa_budget ?? ''),
         escapeCsvValue(s.pump_rate ?? ''),
         escapeCsvValue(s.sailing_speed ?? ''),
-        escapeCsvValue(s.shortage ?? ''),
+        escapeCsvValue(
+          resolveShippingTcShortageMtForListRow({
+            shortage: s.shortage,
+            quantity_delivered: s.quantity_delivered,
+            quantity_delivered_klip: s.quantity_delivered_klip,
+            actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+            delivered_qty: s.quantity_delivered,
+            received_qty: s.actual_vessel_qty_receive,
+          }) ?? '',
+        ),
       ]
 
       // Escape loading port data
@@ -2869,6 +2920,7 @@ function ShipmentsPageContent() {
     Boolean(dateFrom || dateTo || searchDraft || searchTerm) ||
     statusFilter !== 'ALL' ||
     lateIndicatorFilter !== 'ALL' ||
+    charterTypeFilter !== 'ALL' ||
     viewFilterValue !== '' ||
     viewOption !== 'all' ||
     selectedGroupPlants.length > 0 ||
@@ -2885,6 +2937,7 @@ function ShipmentsPageContent() {
     setSearchTerm('')
     setStatusFilter('ALL')
     setLateIndicatorFilter('ALL')
+    setCharterTypeFilter('ALL')
     setViewOption('all')
     setViewFilterValue('')
     resetUserScopeFilters()
@@ -3109,7 +3162,7 @@ function ShipmentsPageContent() {
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'freight_budget' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
     if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
@@ -3153,6 +3206,7 @@ function ShipmentsPageContent() {
       case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
       case 'fuel_consumption': return typeof s.fuel_consumption === 'number' ? s.fuel_consumption : null
       case 'freight': return typeof s.freight === 'number' ? s.freight : null
+      case 'freight_budget': return typeof s.vessel_oa_budget === 'number' ? s.vessel_oa_budget : null
       case 'pump_rate': return typeof s.pump_rate === 'number' ? s.pump_rate : null
       case 'sailing_speed': return typeof s.sailing_speed === 'number' ? s.sailing_speed : null
       case 'shortage': return typeof s.shortage === 'number' ? s.shortage : null
@@ -3586,7 +3640,7 @@ function ShipmentsPageContent() {
       id: 'pre_planned_group',
       label: 'Grouping Suggestion',
       formulaHelp:
-        'Auto-suggested vessel grouping for unplanned contracts. Accept moves contracts to Preplanned; dismiss removes the suggestion. On Preplanned rows, revert returns them to Unplanned suggestions.',
+        'Auto-suggested vessel grouping for unplanned contracts with the same plant, buyer, incoterm, product, and supplier. All contracts from the same supplier are grouped together, then split when total outstanding qty or any contract qty exceeds the average vessel capacity for that plant. Accept moves contracts to Preplanned; dismiss removes the suggestion. On Preplanned rows, revert returns them to Unplanned suggestions.',
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => {
@@ -3638,8 +3692,15 @@ function ShipmentsPageContent() {
         const group = resolvePrePlannedGroupForRow(s, contractNumberToPrePlannedGroup)
         if (!group) return <span className="text-xs text-gray-400">—</span>
         const tooltipText = formatPrePlannedGroupTooltip(group)
+        const isAccepting = acceptingPrePlannedGroupId === group.id
         return (
           <div className="flex items-center gap-1">
+            {isAccepting ? (
+              <Loader2
+                className="h-3.5 w-3.5 shrink-0 animate-spin text-green-600"
+                aria-hidden
+              />
+            ) : null}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge variant="secondary" className="cursor-default whitespace-nowrap">
@@ -3657,12 +3718,20 @@ function ShipmentsPageContent() {
                   size="icon"
                   className="h-6 w-6 bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
                   onClick={() => void handleAcceptPrePlannedGroup(group)}
-                  aria-label="Accept grouping suggestion"
+                  disabled={isAccepting}
+                  aria-label={isAccepting ? 'Accepting as Preplanned' : 'Accept grouping suggestion'}
+                  aria-busy={isAccepting}
                 >
-                  <Check className="h-3 w-3" />
+                  {isAccepting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Check className="h-3 w-3" />
+                  )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="top">Accept as Preplanned</TooltipContent>
+              <TooltipContent side="top">
+                {isAccepting ? 'Accepting as Preplanned…' : 'Accept as Preplanned'}
+              </TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -3671,6 +3740,7 @@ function ShipmentsPageContent() {
                   size="icon"
                   className="h-6 w-6 bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
                   onClick={() => void handleDismissPrePlannedGroup(group.id)}
+                  disabled={isAccepting}
                   aria-label="Dismiss grouping suggestion"
                 >
                   <X className="h-3 w-3" />
@@ -3761,6 +3831,16 @@ function ShipmentsPageContent() {
       sortable: true,
       getSortValue: (s) => s.vessel_name || '',
       render: (s) => <span className="text-sm break-words">{formatVesselTableDisplay(s.vessel_name)}</span>
+    },
+    {
+      id: 'charter_type',
+      label: 'Charter Type',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.charter_type || '',
+      render: (s) => (
+        <span className="text-sm uppercase">{formatSapDisplayValue(s.charter_type) || '—'}</span>
+      ),
     },
     {
       id: 'status',
@@ -4087,7 +4167,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'fuel_consumption',
-      label: 'Fuel Consumption',
+      label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl,
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.fuel_consumption || 0,
@@ -4099,7 +4179,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'freight',
-      label: 'Freight',
+      label: TC_VESSEL_PERF_LABELS.freightActualIdrKg,
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.freight || 0,
@@ -4110,8 +4190,20 @@ function ShipmentsPageContent() {
       )
     },
     {
+      id: 'freight_budget',
+      label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.vessel_oa_budget || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.vessel_oa_budget != null ? formatNumber(s.vessel_oa_budget) : '-'}
+        </span>
+      )
+    },
+    {
       id: 'pump_rate',
-      label: 'Pump Rate',
+      label: TC_VESSEL_PERF_LABELS.pumpRateMtH,
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.pump_rate || 0,
@@ -4123,7 +4215,7 @@ function ShipmentsPageContent() {
     },
     {
       id: 'sailing_speed',
-      label: 'Sailing Speed',
+      label: TC_VESSEL_PERF_LABELS.sailingSpeed,
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => s.sailing_speed || 0,
@@ -4135,15 +4227,34 @@ function ShipmentsPageContent() {
     },
     {
       id: 'shortage',
-      label: 'Shortage',
+      label: TC_VESSEL_PERF_LABELS.shortageMt,
       defaultVisible: false,
       sortable: true,
-      getSortValue: (s) => s.shortage || 0,
-      render: (s) => (
-        <span className="text-sm break-words">
-          {s.shortage != null ? formatNumber(s.shortage) : '-'}
-        </span>
-      )
+      formulaHelp: TC_VESSEL_PERF_TOOLTIPS.shortageMt,
+      getSortValue: (s) =>
+        resolveShippingTcShortageMtForListRow({
+          shortage: s.shortage,
+          quantity_delivered: s.quantity_delivered,
+          quantity_delivered_klip: s.quantity_delivered_klip,
+          actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+          delivered_qty: s.quantity_delivered,
+          received_qty: s.actual_vessel_qty_receive,
+        }) || 0,
+      render: (s) => {
+        const shortageMt = resolveShippingTcShortageMtForListRow({
+          shortage: s.shortage,
+          quantity_delivered: s.quantity_delivered,
+          quantity_delivered_klip: s.quantity_delivered_klip,
+          actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+          delivered_qty: s.quantity_delivered,
+          received_qty: s.actual_vessel_qty_receive,
+        })
+        return (
+          <span className="text-sm break-words">
+            {shortageMt != null ? formatNumber(shortageMt) : '-'}
+          </span>
+        )
+      }
     },
     {
       id: 'eta_arrival',
@@ -4273,7 +4384,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.ata_vessel_start_discharging || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
     },
-  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
+  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
 
   const defaultVisibleColumnIds = useMemo(() => {
     const allIds = compactColumns.map((c) => c.id)
@@ -5595,6 +5706,8 @@ function ShipmentsPageContent() {
           onPipelineStageChange={handlePipelineStageChange}
           lateIndicatorFilter={lateIndicatorFilter}
           onLateIndicatorChange={onLateIndicatorChange}
+          charterTypeFilter={charterTypeFilter}
+          onCharterTypeChange={onCharterTypeChange}
           availableIncoterms={availableIncoterms}
           selectedIncoterms={selectedIncoterms}
           onIncotermsChange={onIncotermsChange}
@@ -8731,8 +8844,11 @@ function ShipmentsPageContent() {
         open={vesselIdleModalOpen}
         loading={vesselIdleLoading}
         vessels={vesselIdleList}
+        willFree={vesselWillFreeList}
         onClose={() => setVesselIdleModalOpen(false)}
         onVesselNameClick={handleVesselIdleNameClick}
+        onAddShipment={handleVesselIdleAddShipment}
+        canAddShipment={!perms.loaded || canOpenAddShipmentModal}
       />
 
       <VesselHistoryModal

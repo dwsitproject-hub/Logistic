@@ -46,7 +46,7 @@ export function formatPrePlannedGroupTooltip(group: PrePlannedGroup): string {
   return [
     group.groupCode,
     `${group.groupPlant} · ${group.supplier} · ${group.product} · ${group.incoterm}`,
-    `Window ${group.windowStart} – ${group.windowEnd} · ${group.totalOsMt.toLocaleString()} MT${
+    `Contract date ${group.windowStart} – ${group.windowEnd} · ${group.totalOsMt.toLocaleString()} MT${
       group.isPartial ? ' · partial' : ''
     }`,
     `Contracts: ${memberList}`,

@@ -28,7 +28,7 @@ function baseInput(over: Partial<SaveEditShipmentInput> = {}): SaveEditShipmentI
     freight: null,
     pumpRate: null,
     sailingSpeed: null,
-    shortage: null,
+    autoPersistShortageMt: -3.5,
     originalFuelConsumption: null,
     originalFreight: null,
     originalPumpRate: null,
@@ -116,5 +116,29 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
         },
       ],
     })
+  })
+
+  it('persists auto-computed R4 shortage MT when it differs from original', async () => {
+    await saveEditShipmentChanges(
+      baseInput({ autoPersistShortageMt: -3.5, originalShortage: 0 }),
+    )
+
+    const shipmentPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && /\/shipments\/[^/]+$/.test(String(c[0])),
+    )
+    const body = shipmentPuts[0][1] as Record<string, unknown>
+    expect(body.shortage).toBe(-3.5)
+  })
+
+  it('does not persist shortage when auto-computed value matches original', async () => {
+    await saveEditShipmentChanges(
+      baseInput({ autoPersistShortageMt: -3.5, originalShortage: -3.5 }),
+    )
+
+    const shipmentPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && /\/shipments\/[^/]+$/.test(String(c[0])),
+    )
+    const body = shipmentPuts[0][1] as Record<string, unknown>
+    expect(body.shortage).toBeUndefined()
   })
 })

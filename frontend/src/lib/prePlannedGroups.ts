@@ -9,6 +9,7 @@ export interface PrePlannedGroupMember {
   product?: string;
   deliveryStart?: string;
   deliveryEnd?: string;
+  contractDate?: string;
 }
 
 export interface PrePlannedGroup {
@@ -133,7 +134,7 @@ export function filterPrePlannedGroupsByGlobalScope(
       return false;
     }
     // Note: global toolbar dateFrom/dateTo filter shipments by contract_date; pre-planned
-    // groups use delivery windows — applying date here caused suggestions to disappear while
+    // groups cluster by contract date — applying date here caused suggestions to disappear while
     // unplanned rows remained visible. Plant/supplier/product/incoterm/search stay in sync.
     if (searchTerm && !groupMatchesSearchTerm(group, searchTerm)) {
       return false;

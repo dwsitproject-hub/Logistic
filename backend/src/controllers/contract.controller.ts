@@ -47,6 +47,7 @@ import {
   isContractPerfOnTimeTradeCycle,
   runLatePerformance,
   sqlEffectiveDeliveryEndPresent,
+  sqlEffectiveDeliveryEndDateExpr,
   parseCommaSeparatedQuery,
 } from '../services/latePerformance.service';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
@@ -130,7 +131,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const lateOnTimeFilterRaw = String((req.query as any).lateOnTimeFilter || 'ALL').toUpperCase();
     const wantLateFilter = lateOnTimeFilterRaw === 'LATE' || lateOnTimeFilterRaw === 'ON_TIME';
     const wantExcludeUnscheduled = String((req.query as any).excludeUnscheduled || 'false') === 'true';
-    const deferCycleFieldsToPage = !wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled;
+    const listCompact =
+      String((req.query as any).compact || '').toLowerCase() === 'true';
+    const useSqlLateFilter = wantLateFilter && !wantCycleSort;
+    const deferCycleFieldsToPage =
+      !wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled;
     const baseCycleFieldsSql = deferCycleFieldsToPage ? '' : `,${buildContractsListBaseCycleFieldSelectSql()}`;
 
     const queryParams: any[] = [];
@@ -429,33 +434,27 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       AND ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}`;
 
     // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
-    // This avoids fetching up to 10 000 rows just to filter them in Node.js.
-    // Keep late/on-time filtering in Node so it mirrors late-performance service logic
-    // (effective due-date fallback + Open Condition B when standard ETA is empty).
-    const useSqlLateFilter = false;
-
-    // Approximate SQL trade_cycle (JS resolveCycleCompletionDate is source of truth; SQL late filter off).
-    // LAND: Last Receive / WB only when OS ≤ tolerance; else planning / ETA.
-    //   positive  = delivered / projected AFTER delivery_end_date  → LATE
-    //   negative  = on / ahead of schedule                         → ON TRACK
+    // Open Condition A/B share the same on-time threshold (trade_cycle <= 0); trade cycle
+    // uses effective due-end + completion milestones aligned with latePerformance.service.
+    const effectiveDeliveryEndDateSql = sqlEffectiveDeliveryEndDateExpr();
     const landOsFulfilled = `(${filteredOutstandingSql} IS NOT NULL AND ${filteredOutstandingSql}::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
     const tradeCycleSqlExpr = `
       CASE
         WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'OPEN', 'ACTIVE')
-             AND delivery_end_date IS NOT NULL
+             AND ${sqlEffectiveDeliveryEndPresent()}
           THEN CASE
             WHEN ${_transportExpr} LIKE 'LAND%' AND ${landOsFulfilled} AND last_trucking_completion_date IS NOT NULL
-              THEN (last_trucking_completion_date::date - delivery_end_date::date)
+              THEN (last_trucking_completion_date::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'LAND%' AND ${landOsFulfilled} AND last_trucking_wb_actuals_date IS NOT NULL
-              THEN (last_trucking_wb_actuals_date::date - delivery_end_date::date)
+              THEN (last_trucking_wb_actuals_date::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
-              THEN (last_trucking_daily_deliverable_date::date - delivery_end_date::date)
+              THEN (last_trucking_daily_deliverable_date::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'LAND%' AND open_standard_eta_trucking IS NOT NULL
-              THEN (open_standard_eta_trucking::date - delivery_end_date::date)
+              THEN (open_standard_eta_trucking::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
-              THEN (last_ata_vessel_complete_discharge::date - delivery_end_date::date)
+              THEN (last_ata_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
-              THEN (open_standard_eta_vessel_loading::date - delivery_end_date::date)
+              THEN (open_standard_eta_vessel_loading::date - ${effectiveDeliveryEndDateSql})
             ELSE NULL END
         ELSE NULL
       END`;
@@ -464,57 +463,48 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       ? 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql > 0'
       : 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql <= 0';
 
-    // When using SQL late filter: inject two extra CTEs between filtered and page.
-    const sqlLateInject = useSqlLateFilter
-      ? `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM filtered)
-         , filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql})`
-      : '';
-
-    // Method 1 (Apply mode): inject CTE that mirrors the performance tree's inclusion rules.
-    // Contracts without delivery_end or Closed without completion date are excluded so that
-    // Section 3 row count equals Section 2 drilldown node count exactly.
+    const schedulableSource = wantExcludeUnscheduled ? 'filtered_perf' : 'filtered';
     const sqlExcludeUnscheduledInject = wantExcludeUnscheduled
       ? `, filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition})`
       : '';
+    const sqlLateInject = useSqlLateFilter
+      ? `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM ${schedulableSource})
+         , filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql})`
+      : '';
 
-    const pageSource = wantExcludeUnscheduled
-      ? 'filtered_perf'
-      : useSqlLateFilter
-        ? 'filtered_late'
-        : 'filtered';
+    const pageSource = useSqlLateFilter ? 'filtered_late' : schedulableSource;
 
     const filteredClosedAndPage = `
       )
-      ${sqlLateInject}
       ${sqlExcludeUnscheduledInject}
+      ${sqlLateInject}
       , page AS (
         SELECT * FROM ${pageSource}
         ORDER BY ${orderExpr} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_id DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       )
 `;
-    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage);
+    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage, { compact: listCompact });
     const listParams = [...queryParams, Number(limit), offset];
 
-    const countQuery = wantExcludeUnscheduled
-      ? `${queryText}), filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition}) SELECT COUNT(*)::int AS count FROM filtered_perf`
-      : useSqlLateFilter
-        ? `${queryText}), tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM filtered), filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql}) SELECT COUNT(*)::int AS count FROM filtered_late`
-        : `${queryText}) SELECT COUNT(*)::int AS count FROM filtered`;
+    let countQuery = `${queryText})`;
+    if (wantExcludeUnscheduled) {
+      countQuery += `, filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition})`;
+    }
+    const countSource = wantExcludeUnscheduled ? 'filtered_perf' : 'filtered';
+    if (useSqlLateFilter) {
+      countQuery += `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM ${countSource})`;
+      countQuery += `, filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql})`;
+      countQuery += ` SELECT COUNT(*)::int AS count FROM filtered_late`;
+    } else {
+      countQuery += ` SELECT COUNT(*)::int AS count FROM ${countSource}`;
+    }
     const countParams = [...queryParams];
 
     let totalCount = 0;
     let result: any;
-    if (!wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled) {
-      const [countResult, listResult] = await Promise.all([
-        query(countQuery, countParams),
-        query(listQuery, listParams),
-      ]);
-      totalCount = Number(countResult.rows[0]?.count ?? 0);
-      result = listResult;
-    } else if (useSqlLateFilter) {
-      // Late/On-Time drilldown: the page query does not depend on the count — run both
-      // concurrently (same two queries as before, just not back-to-back).
+    const needNodePostProcess = wantCycleSort || (wantLateFilter && !useSqlLateFilter);
+    if (!needNodePostProcess) {
       const [countResult, listResult] = await Promise.all([
         query(countQuery, countParams),
         query(listQuery, listParams),
@@ -732,13 +722,13 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     let responseTotal = totalCount;
 
     // Node-side late filter / cycle sort (10k fetch when either is active).
-    // useSqlLateFilter is already handled in SQL — skip JS late filter for that case.
     const needNodeLateFilter = wantLateFilter && !useSqlLateFilter;
+    const needNodeExcludeFilter = wantExcludeUnscheduled && !useSqlLateFilter;
     const needNodeSort = wantCycleSort;
-    if (needNodeLateFilter || needNodeSort || wantExcludeUnscheduled) {
+    if (needNodeLateFilter || needNodeExcludeFilter || needNodeSort) {
       let rows = result.rows as any[];
 
-      if (needNodeLateFilter || wantExcludeUnscheduled) {
+      if (needNodeLateFilter || needNodeExcludeFilter) {
         rows = rows.filter((r: any) =>
           isContractIncludedInPerfDrilldownTreeWithComputed(r, {
             lateOnTimeFilter: wantLateFilter ? lateOnTimeFilterRaw : 'ALL',

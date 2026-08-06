@@ -69,6 +69,7 @@ import {
   buildExactNumericGlobalSearchInnerSql,
   isExactStoGlobalSearch,
   appendShipmentLateIndicatorFilter,
+  appendShipmentCharterTypeFilter,
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
@@ -456,6 +457,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
     const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
     const lateIndicatorParam = (req.query as any).lateIndicator as string | undefined;
+    const charterTypeParam = (req.query as any).charterType as string | undefined;
     const viewOptionParam = (req.query as any).viewOption as string | undefined;
     const viewQueryParam = (req.query as any).viewQuery as string | undefined;
     const etaLoadingBucket = normalizeShipmentEtaBucketParam((req.query as any).etaLoading);
@@ -900,6 +902,8 @@ ${contractMetaSelectCore}
     fp = cCol.nextIndex;
     const li = appendShipmentLateIndicatorFilter(lateIndicatorParam, fp);
     fp = li.nextIndex;
+    const ct = appendShipmentCharterTypeFilter(charterTypeParam, fp);
+    fp = ct.nextIndex;
     const vo = appendShipmentViewOptionFilter(viewOptionParam, viewQueryParam, fp);
     fp = vo.nextIndex;
     const etaBuckets = appendShipmentEtaBucketFilters(etaLoadingBucket, etaDischargeBucket);
@@ -909,17 +913,18 @@ ${contractMetaSelectCore}
     );
     fp = statusFilter.nextIndex;
 
-    const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}`;
+    const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${ct.sql}${vo.sql}`;
     const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}`;
     const outerSql = `${toolbarOuterSql}${cardOuterSql}`;
     const outerParams = [
       ...gSearch.params,
       ...cCol.params,
       ...li.params,
+      ...ct.params,
       ...vo.params,
       ...statusFilter.params,
     ];
-    const toolbarOuterParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
+    const toolbarOuterParams = [...gSearch.params, ...cCol.params, ...li.params, ...ct.params, ...vo.params];
     const toolbarCountParams = [...innerParams, ...toolbarOuterParams];
 
     const shipmentListFilterCacheKey = buildShipmentListFilterCacheKey({
@@ -934,6 +939,7 @@ ${contractMetaSelectCore}
       globalSearch,
       colFilters,
       lateIndicator: lateIndicatorParam,
+      charterType: charterTypeParam,
       viewOption: viewOptionParam,
       viewQuery: viewQueryParam,
       status: typeof status === 'string' ? status : 'ALL',
@@ -952,6 +958,7 @@ ${contractMetaSelectCore}
         etaLoading: etaLoadingBucket,
         etaDischarge: etaDischargeBucket,
         lateIndicator: lateIndicatorParam,
+        charterType: charterTypeParam,
         globalSearch,
         colFilters,
         viewOption: viewOptionParam,
@@ -1003,6 +1010,7 @@ ${contractMetaSelectCore}
         etaLoading: etaLoadingBucket,
         etaDischarge: etaDischargeBucket,
         lateIndicator: lateIndicatorParam,
+        charterType: charterTypeParam,
         globalSearch,
         colFilters,
         viewOption: viewOptionParam,
@@ -1239,6 +1247,7 @@ ${contractMetaSelectCore}
         globalSearch,
         colFilters,
         lateIndicator: lateIndicatorParam,
+      charterType: charterTypeParam,
         viewOption: viewOptionParam,
         viewQuery: viewQueryParam,
         skipSapJoin,

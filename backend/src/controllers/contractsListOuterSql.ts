@@ -13,7 +13,39 @@ const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   deliveryExpr: 'base.quantity_delivery_sap',
 });
 
-const CONTRACTS_LIST_ROW_PROJECTION = `
+export type ContractsListOuterSqlOptions = {
+  /** Skip payments-table fallbacks and logistics/doc COUNT subqueries (Contract Performance list). */
+  compact?: boolean;
+};
+
+const CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION = `
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), '')) AS dp_date_deviation_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,
+        (SELECT p.payment_due_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS due_date_payment_fb,
+        (SELECT p.dp_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_fb,
+        (SELECT p.payoff_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_fb,
+        (SELECT (p.dp_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.dp_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_deviation_fb,
+        (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
+        (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count,
+        (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = base.id) AS shipment_count,
+        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,`;
+
+const CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION = `
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), '')) AS dp_date_deviation_raw,
+        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,`;
+
+function buildContractsListRowProjection(options: ContractsListOuterSqlOptions = {}): string {
+  const paymentBlock = options.compact
+    ? CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION
+    : CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION;
+
+  return `
         base.contract_id,
         base.id,
         base.buyer,
@@ -64,20 +96,7 @@ const CONTRACTS_LIST_ROW_PROJECTION = `
         ${sqlSapGrStoStatusFromJson('base.latest_spd_data')} AS gr_sto_status,
         base.import_status,
         base.sap_presence,
-        base.sap_withdrawn_reason,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'due_date_payment'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Due Date Payment'), ''), NULLIF(trim(base.latest_spd_data->>'due date payment'), '')) AS due_date_payment_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date'), ''), NULLIF(trim(base.latest_spd_data->>'dp date'), '')) AS dp_date_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date'), ''), NULLIF(trim(base.latest_spd_data->>'payoff date'), '')) AS payoff_date_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'dp_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'DP Date Deviation (Days) DP Date - Due Date'), '')) AS dp_date_deviation_raw,
-        COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,
-        (SELECT p.payment_due_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS due_date_payment_fb,
-        (SELECT p.dp_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_fb,
-        (SELECT p.payoff_date FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_fb,
-        (SELECT (p.dp_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.dp_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS dp_date_deviation_fb,
-        (SELECT (p.payoff_date::date - p.payment_due_date::date) FROM payments p INNER JOIN contracts c2 ON c2.id = p.contract_id WHERE c2.contract_id = base.contract_id AND p.payoff_date IS NOT NULL AND p.payment_due_date IS NOT NULL ORDER BY p.created_at DESC NULLS LAST LIMIT 1) AS payoff_date_deviation_fb,
-        (SELECT COUNT(*) FROM trucking_operations t WHERE t.contract_id = base.id) AS trucking_count,
-        (SELECT COUNT(*) FROM shipments s WHERE s.contract_id = base.id) AS shipment_count,
-        (SELECT COUNT(*) FROM documents d WHERE d.contract_id = base.id) AS document_count,
+        base.sap_withdrawn_reason,${paymentBlock}
         base.first_trucking_start_date,
         base.last_trucking_completion_date,
         base.last_trucking_wb_actuals_date,
@@ -90,23 +109,29 @@ const CONTRACTS_LIST_ROW_PROJECTION = `
         base.last_eta_vessel_complete_discharge AS eta_vessel_complete_discharge,
         base.open_standard_eta_trucking,
         base.open_standard_eta_vessel_loading`;
+}
 
 /**
  * Outer projection for GET /contracts list rows.
  * When deferCycleFromBase=true, cycle/milestone fields are computed for page rows only.
+ * When compact=true, skip payments-table fallbacks and logistics/doc COUNT subqueries.
  */
-export function buildContractsListOuterSql(deferCycleFromBase = false): string {
+export function buildContractsListOuterSql(
+  deferCycleFromBase = false,
+  options: ContractsListOuterSqlOptions = {},
+): string {
+  const rowProjection = buildContractsListRowProjection(options);
   if (!deferCycleFromBase) {
     return `
       SELECT
-${CONTRACTS_LIST_ROW_PROJECTION}
+${rowProjection}
       FROM page AS base
 `;
   }
 
   return `
       SELECT
-${CONTRACTS_LIST_ROW_PROJECTION}
+${rowProjection}
       FROM (
         SELECT
           p.*,

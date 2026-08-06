@@ -9,9 +9,16 @@ export interface PrePlannedEligibleContract {
   product: string;
   supplier: string;
   supplierGroup: string | null;
+  contractDate: Date;
   deliveryStart: Date;
   deliveryEnd: Date;
   osMt: number;
+  contractQtyMt: number;
+}
+
+export interface PackedCapacityBin {
+  members: PrePlannedEligibleContract[];
+  binCapacityMt: number;
 }
 
 export interface PrePlannedClusterBin {
@@ -40,12 +47,23 @@ function dayDiff(a: Date, b: Date): number {
 }
 
 function compareContracts(a: PrePlannedEligibleContract, b: PrePlannedEligibleContract): number {
-  const ds = a.deliveryStart.getTime() - b.deliveryStart.getTime();
-  if (ds !== 0) return ds;
+  const dc = a.contractDate.getTime() - b.contractDate.getTime();
+  if (dc !== 0) return dc;
   return a.contractId.localeCompare(b.contractId);
 }
 
-/** Chain window clusters within a supplier sub-partition (spec §4.3 step 3). */
+/**
+ * One cluster per supplier within a partition — vessel capacity packing (step 4) splits
+ * overflow bins; planners reconcile qty vs vessel capacity at accept time.
+ */
+export function clusterBySupplier(
+  contracts: PrePlannedEligibleContract[],
+): PrePlannedEligibleContract[][] {
+  if (contracts.length === 0) return [];
+  return [[...contracts].sort(compareContracts)];
+}
+
+/** @deprecated Prefer clusterBySupplier; kept for legacy tests / optional date chaining. */
 export function chainWindowClusters(
   contracts: PrePlannedEligibleContract[],
   windowTolDays: number,
@@ -57,10 +75,7 @@ export function chainWindowClusters(
     let placed = false;
     for (const cluster of clusters) {
       const anchor = cluster[0]!;
-      if (
-        dayDiff(c.deliveryStart, anchor.deliveryStart) <= windowTolDays &&
-        dayDiff(c.deliveryEnd, anchor.deliveryEnd) <= windowTolDays
-      ) {
+      if (dayDiff(c.contractDate, anchor.contractDate) <= windowTolDays) {
         cluster.push(c);
         placed = true;
         break;
@@ -73,35 +88,62 @@ export function chainWindowClusters(
   return clusters;
 }
 
+function binCapacityForMembers(
+  members: PrePlannedEligibleContract[],
+  parcelMt: number,
+): number {
+  const largestOs = members.reduce((m, c) => Math.max(m, c.osMt), 0);
+  const largestQty = members.reduce((m, c) => Math.max(m, c.contractQtyMt), 0);
+  return Math.max(parcelMt, largestOs, largestQty);
+}
+
 /** Capacity bin packing (spec §4.3 step 4). */
 export function packCapacityBins(
   contracts: PrePlannedEligibleContract[],
   parcelMt: number,
   capTol: number,
-): { bins: PrePlannedEligibleContract[][]; binCapacityMt: number; isPartial: boolean } {
+): { bins: PackedCapacityBin[]; isPartial: boolean } {
   const sorted = [...contracts].sort((a, b) => a.contractId.localeCompare(b.contractId));
-  const largest = sorted.reduce((m, c) => Math.max(m, c.osMt), 0);
-  const cap = Math.max(parcelMt, largest);
-  const bins: PrePlannedEligibleContract[][] = [];
+  const bins: PackedCapacityBin[] = [];
   let current: PrePlannedEligibleContract[] = [];
   let used = 0;
 
+  const flushCurrent = () => {
+    if (current.length === 0) return;
+    bins.push({
+      members: current,
+      binCapacityMt: binCapacityForMembers(current, parcelMt),
+    });
+    current = [];
+    used = 0;
+  };
+
   for (const c of sorted) {
-    if (current.length === 0 || used + c.osMt <= cap * capTol) {
+    if (c.contractQtyMt > parcelMt) {
+      flushCurrent();
+      bins.push({
+        members: [c],
+        binCapacityMt: binCapacityForMembers([c], parcelMt),
+      });
+      continue;
+    }
+
+    if (current.length === 0 || used + c.osMt <= parcelMt * capTol) {
       current.push(c);
       used += c.osMt;
     } else {
-      bins.push(current);
+      flushCurrent();
       current = [c];
       used = c.osMt;
     }
   }
-  if (current.length > 0) {
-    bins.push(current);
-  }
+  flushCurrent();
 
-  const isPartial = sorted.some((c) => c.osMt > cap) || bins.length > 1;
-  return { bins, binCapacityMt: cap, isPartial };
+  const isPartial =
+    bins.length > 1 ||
+    sorted.some((c) => c.contractQtyMt > parcelMt || c.osMt > parcelMt);
+
+  return { bins, isPartial };
 }
 
 export function buildClusterBins(
@@ -129,7 +171,7 @@ export function buildClusterBins(
     }
 
     for (const [, supplierContracts] of bySupplier) {
-      const windowClusters = chainWindowClusters(supplierContracts, cfg.windowTolDays);
+      const windowClusters = clusterBySupplier(supplierContracts);
       for (const cluster of windowClusters) {
         const plant = cluster[0]!.groupPlant;
         const parcelMt =
@@ -137,7 +179,11 @@ export function buildClusterBins(
           parcelMtByPlant.get('__fallback__') ??
           cfg.parcelFallbackMt;
         const packed = packCapacityBins(cluster, parcelMt, cfg.capTol);
-        for (const binMembers of packed.bins) {
+        for (const packedBin of packed.bins) {
+          const binMembers = packedBin.members;
+          const contractDates = binMembers.map((m) => m.contractDate.getTime());
+          const windowStart = new Date(Math.min(...contractDates));
+          const windowEnd = new Date(Math.max(...contractDates));
           const anchor = binMembers[0]!;
           const totalOsMt = binMembers.reduce((s, m) => s + m.osMt, 0);
           bins.push({
@@ -148,9 +194,9 @@ export function buildClusterBins(
             product: anchor.product,
             supplier: anchor.supplier,
             supplierGroup: anchor.supplierGroup,
-            windowStart: anchor.deliveryStart,
-            windowEnd: anchor.deliveryEnd,
-            binCapacityMt: packed.binCapacityMt,
+            windowStart,
+            windowEnd,
+            binCapacityMt: packedBin.binCapacityMt,
             totalOsMt,
             isPartial: packed.isPartial,
             members: binMembers,

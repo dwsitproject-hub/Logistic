@@ -572,6 +572,7 @@ export async function getGroupPlantPerformance(groupPlant: string): Promise<Grou
     sourceTypeFilter: undefined,
     sourceTypeFilters: [],
     statusNorm: '',
+    sqlStatusNorm: '',
     plants: [groupPlant],
   }
 

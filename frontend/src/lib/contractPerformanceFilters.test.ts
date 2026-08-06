@@ -461,6 +461,7 @@ describe('AC2 — Global Filter Propagation', () => {
       perfDashMode: 'late',
     })
     expect(params.get('excludeUnscheduled')).toBe('true')
+    expect(params.get('compact')).toBe('true')
   })
 })
 

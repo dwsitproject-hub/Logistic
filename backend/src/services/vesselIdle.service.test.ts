@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildVesselIdleListQuery } from '../services/vesselIdle.service';
+import {
+  buildVesselIdleListQuery,
+  buildVesselWillFreeListQuery,
+  VESSEL_WILL_FREE_HORIZON_DAYS,
+} from '../services/vesselIdle.service';
 
 describe('vesselIdle.service', () => {
   it('buildVesselIdleListQuery identifies busy vessels with SAP STO, planned ETA, or ongoing shipment', () => {
@@ -11,5 +15,13 @@ describe('vesselIdle.service', () => {
     expect(sql).toContain('master_vessels');
     expect(sql).toContain('spd.effective_sto');
     expect(sql).toMatch(/busy_vessel_ids[\s\S]*spd\.effective_sto/);
+  });
+
+  it('buildVesselWillFreeListQuery filters on-going vessels by ETC at discharge within horizon', () => {
+    const sql = buildVesselWillFreeListQuery();
+    expect(sql).toContain('will_free_vessels');
+    expect(sql).toContain('eta_vessel_complete_discharge');
+    expect(sql).toContain('eta_discharge_complete');
+    expect(sql).toContain(`CURRENT_DATE + ${VESSEL_WILL_FREE_HORIZON_DAYS}`);
   });
 });

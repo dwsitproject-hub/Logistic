@@ -17,6 +17,35 @@ import { LATEST_SPD_B2B_CTE, sqlB2bChildExcludeWhere } from './shippingPerforman
 /** PO number from SAP JSON (raw / contract) — default spd alias. */
 export const SPD_PO_NUMBER_SQL = sqlSpdPoNumberExpr('spd');
 
+/** Latest SAP Vessel OA Budget per contract (+ optional PO / STO scope). */
+function sqlVesselOaBudgetSapSubquery(
+  contractNumberExpr: string,
+  opts?: { poNumberExpr?: string; stoMatchExpr?: string },
+): string {
+  const poFilter = opts?.poNumberExpr
+    ? `AND (
+            ${opts.poNumberExpr} IS NULL
+            OR TRIM(COALESCE(${opts.poNumberExpr}, '')) = ''
+            OR ${sqlSpdPoNumberExpr('spd')} = ${opts.poNumberExpr}
+          )`
+    : '';
+  const stoFilter = opts?.stoMatchExpr ? `AND ${opts.stoMatchExpr}` : '';
+  return `(
+          SELECT CAST(REPLACE(REPLACE(TRIM(COALESCE(
+            spd.data->'raw'->>'Vessel OA Budget',
+            spd.data->'raw'->>'Vessell OA Budget',
+            spd.data->'raw'->>'vessel oa budget',
+            spd.data->'shipment'->>'vessel_oa_budget'
+          )), ',', ''), ' ', '') AS NUMERIC)
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = ${contractNumberExpr}
+            ${poFilter}
+            ${stoFilter}
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+        )`;
+}
+
 function stoScopedDeliveredKgSql(
   contractNumberExpr: string,
   contractQtyExpr: string,
@@ -291,6 +320,7 @@ export function buildContractDetailsForStoSql(): string {
          WHERE spd.contract_number = pl.contract_number
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1) AS contract_ext_no,
+        ${sqlVesselOaBudgetSapSubquery('pl.contract_number', { poNumberExpr: 'pl.po_number' })} AS vessel_oa_budget_sap,
         EXISTS (
           SELECT 1
           FROM sap_processed_data spd_lock
@@ -393,6 +423,10 @@ export function buildContractDetailsForStoSql(): string {
          WHERE spd.contract_number = soc.contract_number
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1) AS contract_ext_no,
+        ${sqlVesselOaBudgetSapSubquery('soc.contract_number', {
+          poNumberExpr: socPoNumberExpr,
+          stoMatchExpr: socStoMatch('spd'),
+        })} AS vessel_oa_budget_sap,
         EXISTS (
           SELECT 1 FROM sap_processed_data spd_lock
           WHERE spd_lock.contract_number = soc.contract_number

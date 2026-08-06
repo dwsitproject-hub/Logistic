@@ -24,6 +24,7 @@ export interface PrePlannedGroupMemberDto {
   product?: string;
   deliveryStart?: string;
   deliveryEnd?: string;
+  contractDate?: string;
 }
 
 export interface PrePlannedGroupDto {
@@ -58,9 +59,11 @@ function mapEligibleRow(row: Record<string, unknown>): PrePlannedEligibleContrac
     product: String(row.product ?? ''),
     supplier: String(row.supplier ?? ''),
     supplierGroup: row.group_name ? String(row.group_name) : null,
+    contractDate: new Date(String(row.contract_date)),
     deliveryStart: new Date(String(row.delivery_start_date)),
     deliveryEnd: new Date(String(row.delivery_end_date)),
     osMt: Number(row.os_mt ?? 0),
+    contractQtyMt: Number(row.contract_qty_mt ?? row.os_mt ?? 0),
   };
 }
 
@@ -379,7 +382,8 @@ export async function listPrePlannedGroups(filters: {
       c.buyer AS member_buyer,
       c.product AS member_product,
       c.delivery_start_date,
-      c.delivery_end_date
+      c.delivery_end_date,
+      c.contract_date
     FROM pre_planned_groups pg
     LEFT JOIN pre_planned_group_members pgm ON pgm.group_id = pg.id AND pgm.released_at IS NULL
     LEFT JOIN contracts c ON c.id = pgm.contract_id
@@ -432,6 +436,9 @@ export async function listPrePlannedGroups(filters: {
           : undefined,
         deliveryEnd: row.delivery_end_date
           ? String(row.delivery_end_date).slice(0, 10)
+          : undefined,
+        contractDate: row.contract_date
+          ? String(row.contract_date).slice(0, 10)
           : undefined,
       });
     }
@@ -618,7 +625,8 @@ export async function getPrePlannedGroupById(groupId: string): Promise<PrePlanne
       pgm.contract_number,
       pgm.os_mt_at_grouping,
       c.delivery_start_date,
-      c.delivery_end_date
+      c.delivery_end_date,
+      c.contract_date
     FROM pre_planned_groups pg
     LEFT JOIN pre_planned_group_members pgm ON pgm.group_id = pg.id AND pgm.released_at IS NULL
     LEFT JOIN contracts c ON c.id = pgm.contract_id
@@ -666,6 +674,9 @@ export async function getPrePlannedGroupById(groupId: string): Promise<PrePlanne
           : undefined,
         deliveryEnd: row.delivery_end_date
           ? String(row.delivery_end_date).slice(0, 10)
+          : undefined,
+        contractDate: row.contract_date
+          ? String(row.contract_date).slice(0, 10)
           : undefined,
       });
     }

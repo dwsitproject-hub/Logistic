@@ -2104,7 +2104,7 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         success: false,
         error: {
           message:
-            'Invalid daily planning template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, Status (optional), OS Qty (MT), Plan Qty (MT), then date columns (today … +60 days).',
+            'Invalid daily planning template. Expected headers: Group, Supplier, Source, Contract Date, Contract Ext No, PO, Status (optional), OS Qty (MT), Plan Qty (MT), then date columns (today … +3 months).',
         },
       });
     }

@@ -15,6 +15,7 @@ export interface ShipmentsGlobalFilterScope {
   selectedProducts: readonly string[]
   selectedGroupPlants: readonly string[]
   lateIndicatorFilter: string
+  charterTypeFilter: string
   viewOption: string
   viewFilterValue: string
   columnFiltersJson: string
@@ -44,6 +45,7 @@ export function buildShipmentsGlobalScopeKey(scope: ShipmentsGlobalFilterScope):
     prod: sortedKey(scope.selectedProducts),
     plant: sortedKey(scope.selectedGroupPlants),
     late: scope.lateIndicatorFilter,
+    charter: scope.charterTypeFilter,
     vo: scope.viewOption,
     vq: scope.viewFilterValue.trim(),
     cf: scope.columnFiltersJson,

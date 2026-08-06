@@ -370,6 +370,39 @@ export function appendShipmentLateIndicatorFilter(
   return { sql: '', params: [], nextIndex: startIndex }
 }
 
+function normalizedCharterTypeBucketExpr(alias = 'sb'): string {
+  const raw = `UPPER(REPLACE(TRIM(COALESCE(${alias}.charter_type, '')), ' ', ''))`;
+  return `CASE
+    WHEN ${raw} IN ('T/C', 'TC') THEN 'T/C'
+    WHEN ${raw} IN ('V/C', 'VC') THEN 'V/C'
+    WHEN ${raw} = 'CIF' THEN 'CIF'
+    ELSE NULL
+  END`;
+}
+
+/** Toolbar charter-type filter (T/C, V/C, CIF). */
+export function appendShipmentCharterTypeFilter(
+  charterType: string | undefined,
+  startIndex: number,
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const v = String(charterType ?? 'ALL').trim().toUpperCase()
+  if (!v || v === 'ALL') {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  let bucket: string | null = null
+  if (v === 'T/C' || v === 'TC') bucket = 'T/C'
+  else if (v === 'V/C' || v === 'VC') bucket = 'V/C'
+  else if (v === 'CIF') bucket = 'CIF'
+  if (!bucket) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  return {
+    sql: ` AND ${normalizedCharterTypeBucketExpr('sb')} = $${startIndex}::text`,
+    params: [bucket],
+    nextIndex: startIndex + 1,
+  }
+}
+
 /** View-by dropdown: narrow to one dimension (optional). */
 export function appendShipmentViewOptionFilter(
   viewOption: string | undefined,

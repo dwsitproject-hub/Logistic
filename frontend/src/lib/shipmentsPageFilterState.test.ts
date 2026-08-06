@@ -14,6 +14,7 @@ describe('shipmentsPageFilterState', () => {
     selectedProducts: ['PALM'],
     selectedGroupPlants: ['TP'],
     lateIndicatorFilter: 'ALL',
+    charterTypeFilter: 'ALL',
     viewOption: 'all',
     viewFilterValue: '',
     columnFiltersJson: '{}',

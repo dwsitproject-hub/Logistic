@@ -10,6 +10,7 @@ export type ShipmentStoPagingFilterInput = {
   etaLoading?: string | null;
   etaDischarge?: string | null;
   lateIndicator?: string;
+  charterType?: string;
   globalSearch?: string;
   colFilters?: ColumnFilterPayload;
   viewOption?: string;
@@ -44,6 +45,7 @@ export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput):
   if (globalSearchTrim.length >= 2 && !isExactStoGlobalSearch(globalSearchTrim)) return false;
   if (hasBlockingColumnFilters(input.colFilters)) return false;
   if (input.lateIndicator && String(input.lateIndicator).toUpperCase() !== 'ALL') return false;
+  if (input.charterType && String(input.charterType).toUpperCase() !== 'ALL') return false;
   const viewOpt = String(input.viewOption ?? 'all').toLowerCase();
   if (viewOpt !== 'all' && String(input.viewQuery ?? '').trim().length > 0) return false;
   const status = String(input.status ?? 'ALL').trim().toUpperCase();

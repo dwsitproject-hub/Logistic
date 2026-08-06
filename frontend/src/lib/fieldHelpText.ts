@@ -94,6 +94,7 @@ export const FIELD_HELP = {
   shipmentSlaDays: `SLA Days is the target duration for the shipment/leg. Used to flag delayed shipments when actual duration exceeds SLA.`,
   vesselOaBudget: `Vessel OA Budget is the planned operational allowance (budget) for the vessel/shipment leg.`,
   vesselOaActual: `Vessel OA Actual is the realized operational allowance (actual cost) for the vessel/shipment leg.`,
+  shipmentTcShortageMt: `R4 oil loss (MT): (Qty Receive − Qty Delivery) ÷ 1,000. Quantities are summed across all PO lines on this shipment (KLIP qty preferred, else SAP). Negative = loss; positive = gain. Shows — when delivery ≤ 0 or receive is missing.`,
 
   /** Shipments page — ETA Loading / Discharge status cards (grouped by STO). */
   shipmentEtaLoadingScope: `Counts grouped STOs in loading phase only (Unplanned, Planned, In Progress, Loading). Completed and Cancelled are excluded. One count per STO group.`,

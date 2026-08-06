@@ -198,6 +198,7 @@ const TC_VESSEL_METRIC_FIELDS = [
   'pump_rate',
   'sailing_speed',
   'shortage',
+  'vessel_oa_budget',
 ] as const;
 
 function mergeTcVesselMetricFields(rows: Record<string, unknown>[]): Record<string, unknown> {
@@ -557,6 +558,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         s.pump_rate,
         s.sailing_speed,
         s.shortage,
+        s.vessel_oa_budget,
         COALESCE(
           NULLIF(TRIM(pnc.group_plant), ''),
           NULLIF(TRIM(pna.group_plant), ''),
