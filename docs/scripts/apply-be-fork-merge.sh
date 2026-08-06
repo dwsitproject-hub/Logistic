@@ -35,7 +35,18 @@ echo "Staging: $STAGING_SCHEMA"
 echo "Cutoff : $CUTOFF"
 echo ""
 
-psql_remote -v ON_ERROR_STOP=1 -f "$ROOT/docs/scripts/sql/be-fork-merge-functions.sql" >/dev/null 2>&1 || true
+psql_remote -q -v ON_ERROR_STOP=1 -f "$ROOT/docs/scripts/sql/be-fork-merge-functions.sql" >/dev/null 2>&1 || true
+
+parse_merge_counts() {
+  local raw="$1"
+  local line
+  line="$(printf '%s\n' "$raw" | grep -E '^[0-9]+\|[0-9]+$' | tail -1)"
+  if [[ -z "$line" ]]; then
+    echo "0|0"
+    return 1
+  fi
+  echo "$line"
+}
 
 TOTAL_INS=0
 TOTAL_UPD=0
@@ -52,12 +63,15 @@ for t in "${BE_FORK_MERGE_TABLES[@]}"; do
   new_ids="$(psql_remote -Atc "SELECT be_fork.preview_new_ids('$t', '$CUTOFF'::timestamptz)" 2>/dev/null || echo "?")"
 
   if [[ "$APPLY" == "true" ]]; then
-    result="$(psql_remote -Atc "SELECT * FROM be_fork.merge_table('$t', '$CUTOFF'::timestamptz)" 2>&1)" || {
-      echo "ERROR merging $t: $result" >&2
+    result="$(psql_remote -q -Atc "SELECT * FROM be_fork.merge_table('$t', '$CUTOFF'::timestamptz)" 2>/dev/null)" || {
+      echo "ERROR merging $t: ${result:-psql failed}" >&2
       exit 1
     }
-    ins="$(echo "$result" | cut -d'|' -f1)"
-    upd="$(echo "$result" | cut -d'|' -f2)"
+    counts="$(parse_merge_counts "$result")" || echo "WARN: unexpected merge output for $t: $result" >&2
+    ins="$(echo "$counts" | cut -d'|' -f1)"
+    upd="$(echo "$counts" | cut -d'|' -f2)"
+    ins="${ins:-0}"
+    upd="${upd:-0}"
     TOTAL_INS=$((TOTAL_INS + ins))
     TOTAL_UPD=$((TOTAL_UPD + upd))
     echo "  $t: inserted=$ins updated=$upd new_ids_preview=$new_ids"
