@@ -6,7 +6,7 @@ import Layout from '@/components/Layout'
 import { canViewShippingPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import api from '@/lib/api'
 import { isAuthenticatedLocally } from '@/lib/authSession'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, peekCache } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -3013,6 +3013,7 @@ function ShippingPerformancePageContent() {
           onSubmit={async () => {}}
           onShipmentChanged={() => {
             invalidateLogisticsListCaches()
+            invalidateMissingEtaAlertCache()
             void fetchShippingPerformanceDashboard()
           }}
         />

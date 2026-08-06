@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -2275,6 +2275,13 @@ function TruckingPageContent() {
       const response = await api.put(`/trucking/${operationId}`, editedData)
       
       if (response.data.success) {
+        const truckingEtaFields = [
+          'eta_delivery_start_date',
+          'eta_delivery_end_date',
+          'eta_trucking_start_date',
+          'eta_trucking_completion_date',
+        ] as const
+        const hasEtaEdit = truckingEtaFields.some((field) => field in editedData)
         setTruckingOperations(prev => prev.map(operation => 
           operation.id === operationId 
             ? { ...operation, ...response.data.data }
@@ -2282,6 +2289,7 @@ function TruckingPageContent() {
         ))
         setEditingId(null)
         setEditedData({})
+        if (hasEtaEdit) invalidateMissingEtaAlertCache()
         alert('Trucking operation updated successfully!')
       }
     } catch (error: any) {
@@ -2357,6 +2365,7 @@ function TruckingPageContent() {
     setPage(1)
     setHasMore(true)
     invalidateLogisticsListCaches()
+    invalidateMissingEtaAlertCache()
     section1SummaryForceNextFetchRef.current = true
     void fetchTruckingOperations(1, undefined, { force: true })
   }

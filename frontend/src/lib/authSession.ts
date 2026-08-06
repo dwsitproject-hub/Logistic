@@ -7,6 +7,9 @@ export type AuthUser = {
   full_name?: string;
   role?: string;
   level?: string | null;
+  transport_type?: string | null;
+  group_plants?: string[];
+  products?: string[];
   is_first_login?: boolean;
 };
 

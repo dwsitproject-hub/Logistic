@@ -6,9 +6,12 @@ import {
   CLIENT_CACHE_GC_MS,
   CLIENT_CACHE_STALE_MS,
   invalidateClientCacheByPathPrefix,
+  invalidateMissingEtaAlertCache,
   isCacheFresh,
+  MISSING_ETA_ALERT_CACHE_KEY,
   peekCache,
   prefetchGet,
+  subscribeMissingEtaAlertRefresh,
 } from './clientDataCache'
 
 describe('buildCacheKey', () => {
@@ -135,5 +138,39 @@ describe('invalidateClientCacheByPathPrefix', () => {
     invalidateClientCacheByPathPrefix('/contracts')
     expect(peekCache(contractsKey)).toBeNull()
     expect(peekCache(shipmentsKey)).not.toBeNull()
+  })
+})
+
+describe('invalidateMissingEtaAlertCache', () => {
+  beforeEach(() => {
+    clearClientDataCache()
+  })
+
+  it('removes missing ETA alert cache entry', async () => {
+    await cachedGet(MISSING_ETA_ALERT_CACHE_KEY, async () => ({
+      total: 5,
+      items: [],
+      scopedAsStaff: false,
+      visible: true,
+    }))
+    expect(peekCache(MISSING_ETA_ALERT_CACHE_KEY)).not.toBeNull()
+    invalidateMissingEtaAlertCache()
+    expect(peekCache(MISSING_ETA_ALERT_CACHE_KEY)).toBeNull()
+  })
+
+  it('notifies subscribers on invalidation', async () => {
+    await cachedGet(MISSING_ETA_ALERT_CACHE_KEY, async () => ({
+      total: 1,
+      items: [],
+      scopedAsStaff: false,
+      visible: true,
+    }))
+    const listener = vi.fn()
+    const unsubscribe = subscribeMissingEtaAlertRefresh(listener)
+    invalidateMissingEtaAlertCache()
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsubscribe()
+    invalidateMissingEtaAlertCache()
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })

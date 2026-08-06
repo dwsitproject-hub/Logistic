@@ -36,6 +36,7 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
+import { invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import {
   resolveShipmentApiLookupKey,
   resolveShipmentDisplayStoNumber,
@@ -1677,6 +1678,7 @@ export function EditShipmentModal({
       })
 
       setNotification({ type: 'success', message: 'Shipment updated successfully.' })
+      invalidateMissingEtaAlertCache()
       onShipmentChanged?.()
       onClose()
     } catch (error: unknown) {

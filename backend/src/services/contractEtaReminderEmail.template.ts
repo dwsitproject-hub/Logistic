@@ -1,3 +1,5 @@
+import { MISSING_ETA_ALERT_CARGO_READINESS_WINDOW_DAYS } from '../utils/missingEtaAlertSql';
+
 /** One row of the Contract ETA reminder — a contract missing ETA near its Cargo Readiness Date. */
 export interface ContractEtaReminderRow {
   contract_id: string;
@@ -63,7 +65,7 @@ function daysRemainingCell(days: number): string {
 }
 
 export function buildContractEtaReminderEmailSubject(rows: ContractEtaReminderRow[]): string {
-  return `KLIP Alert: ${rows.length} Open Contract${rows.length === 1 ? '' : 's'} Missing ETA — Cargo Ready Within 7 Days`;
+  return `KLIP Alert: ${rows.length} Open Contract${rows.length === 1 ? '' : 's'} Missing ETA — Cargo Ready Within ${MISSING_ETA_ALERT_CARGO_READINESS_WINDOW_DAYS} Days`;
 }
 
 export function buildContractEtaReminderEmailHtml(
@@ -119,7 +121,7 @@ export function buildContractEtaReminderEmailHtml(
               <td style="padding:20px 24px 8px;">
                 <p style="margin:0 0 12px;font-size:14px;line-height:1.5;">
                   The following <strong>${rows.length}</strong> open contract${rows.length === 1 ? '' : 's'} have a
-                  <strong>Cargo Readiness Date</strong> within the next 7 days (or already passed) but do not yet
+                  <strong>Cargo Readiness Date</strong> within the next ${MISSING_ETA_ALERT_CARGO_READINESS_WINDOW_DAYS} days (or already passed) but do not yet
                   have a planned ETA for Shipment or Trucking. Please update the ETA in KLIP as soon as possible to
                   avoid delays.
                 </p>

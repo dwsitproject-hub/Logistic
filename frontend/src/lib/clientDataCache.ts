@@ -133,12 +133,45 @@ export function prefetchGet(cacheKey: string, fetcher: () => Promise<unknown>): 
 
 const hrefPrefetchAt = new Map<string, number>()
 
+export const MISSING_ETA_ALERT_CACHE_KEY = buildCacheKey(
+  'GET',
+  '/alerts/missing-eta-cargo-readiness',
+)
+
+const missingEtaAlertSubscribers = new Set<() => void>()
+
+/** Subscribe to missing ETA cache invalidation (e.g. header bell force-refetch). */
+export function subscribeMissingEtaAlertRefresh(listener: () => void): () => void {
+  missingEtaAlertSubscribers.add(listener)
+  return () => {
+    missingEtaAlertSubscribers.delete(listener)
+  }
+}
+
+function notifyMissingEtaAlertSubscribers(): void {
+  for (const listener of missingEtaAlertSubscribers) {
+    try {
+      listener()
+    } catch {
+      // Non-blocking: subscriber errors must not break invalidation.
+    }
+  }
+}
+
+/** Drop missing ETA alert cache and notify mounted bell to refetch. */
+export function invalidateMissingEtaAlertCache(): void {
+  store.delete(MISSING_ETA_ALERT_CACHE_KEY)
+  inFlight.delete(MISSING_ETA_ALERT_CACHE_KEY)
+  notifyMissingEtaAlertSubscribers()
+}
+
 /** Clear all cached API responses and prefetch cooldowns (e.g. on logout). */
 export function clearClientDataCache(): void {
   store.clear()
   inFlight.clear()
   prefetchCooldown.clear()
   hrefPrefetchAt.clear()
+  missingEtaAlertSubscribers.clear()
 }
 
 /** Drop cached GET responses whose path starts with the given prefix (e.g. `/contracts`). */

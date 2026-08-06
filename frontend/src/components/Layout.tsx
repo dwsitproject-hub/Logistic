@@ -19,6 +19,7 @@ import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
 import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
+import { HeaderMissingEtaAlertBell } from '@/components/HeaderMissingEtaAlertBell'
 
 type UserLite = {
   id?: string
@@ -60,8 +61,10 @@ function LayoutChrome({
           sidebarOpen ? 'w-52' : 'w-16'
         } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0 flex flex-col overflow-hidden`}
       >
-        <div className="flex h-14 items-center justify-between gap-1 border-b border-gray-200 px-3 shrink-0">
-          {sidebarOpen && <h1 className="text-xl font-bold text-primary leading-none">KLIP</h1>}
+        <div className="flex h-16 min-h-16 items-center justify-between gap-1 border-b border-gray-200 px-3 shrink-0">
+          {sidebarOpen && (
+            <h1 className="text-xl font-bold text-primary leading-snug tracking-tight">KLIP</h1>
+          )}
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </Button>
@@ -99,10 +102,14 @@ function LayoutChrome({
       </aside>
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 relative">
-        <header data-tour="tour-header" className="flex h-14 shrink-0 items-center border-b border-gray-200 bg-white px-6">
+        <header
+          data-tour="tour-header"
+          className="flex h-16 min-h-16 shrink-0 items-center border-b border-gray-200 bg-white px-6"
+        >
           <div className="flex w-full min-w-0 items-center justify-between gap-4">
-            <h2 className="truncate text-xl font-semibold leading-none text-gray-800">{pageTitle}</h2>
+            <h2 className="truncate text-xl font-semibold leading-snug text-gray-800">{pageTitle}</h2>
             <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+              <HeaderMissingEtaAlertBell />
               <Button
                 type="button"
                 variant="outline"

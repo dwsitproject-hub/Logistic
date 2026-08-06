@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2 } from 'lucide-react'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -8708,6 +8708,7 @@ function ShipmentsPageContent() {
         onClose={handleCloseShipmentModal}
         onShipmentChanged={() => {
           invalidateLogisticsListCaches()
+          invalidateMissingEtaAlertCache()
           section1SummaryForceNextFetchRef.current = true
           void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
@@ -8717,6 +8718,7 @@ function ShipmentsPageContent() {
           await submitAddNewShipmentPayload(payload)
           handleCloseShipmentModal()
           invalidateLogisticsListCaches()
+          invalidateMissingEtaAlertCache()
           section1SummaryForceNextFetchRef.current = true
           void refetchPrePlannedGroups()
           void refetchPrePlannedAcceptedGroups()

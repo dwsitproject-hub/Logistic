@@ -57,7 +57,9 @@
     "sap:absence-report": "ts-node src/scripts/sapAbsenceReport.ts",
     "sap:absence-report:prod": "node dist/scripts/sapAbsenceReport.js",
     "sap:presence:apply": "ts-node src/scripts/applySapPresence.ts",
-    "sap:presence:apply:prod": "node dist/scripts/applySapPresence.js"
+    "sap:presence:apply:prod": "node dist/scripts/applySapPresence.js",
+    "contract-eta-reminder:run": "ts-node src/scripts/runContractEtaReminderJob.ts",
+    "contract-eta-reminder:run:prod": "node dist/scripts/runContractEtaReminderJob.js"
   },
   "keywords": [
     "logistics",

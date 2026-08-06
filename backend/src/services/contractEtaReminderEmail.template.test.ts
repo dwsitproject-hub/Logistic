@@ -26,13 +26,13 @@ function makeRow(overrides: Partial<ContractEtaReminderRow> = {}): ContractEtaRe
 describe('buildContractEtaReminderEmailSubject', () => {
   it('pluralizes correctly for multiple contracts', () => {
     expect(buildContractEtaReminderEmailSubject([makeRow(), makeRow()])).toBe(
-      'KLIP Alert: 2 Open Contracts Missing ETA — Cargo Ready Within 7 Days',
+      'KLIP Alert: 2 Open Contracts Missing ETA — Cargo Ready Within 14 Days',
     );
   });
 
   it('uses singular wording for exactly one contract', () => {
     expect(buildContractEtaReminderEmailSubject([makeRow()])).toBe(
-      'KLIP Alert: 1 Open Contract Missing ETA — Cargo Ready Within 7 Days',
+      'KLIP Alert: 1 Open Contract Missing ETA — Cargo Ready Within 14 Days',
     );
   });
 });
