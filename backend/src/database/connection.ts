@@ -5,6 +5,27 @@ import { isTransientDbError, transientRetryDelayMs } from './transientDbError';
 
 dotenv.config();
 
+/** Warn or fail when production points at co-located Postgres (BE fork misconfig). */
+export function assertProductionDbHost(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+
+  const host = (process.env.DB_HOST || '').trim().toLowerCase();
+  const localHosts = new Set(['postgres', 'klip-postgres', 'localhost', '127.0.0.1', '::1']);
+  if (!localHosts.has(host)) return;
+
+  const msg =
+    `Production DB_HOST=${process.env.DB_HOST} points at co-located Postgres. ` +
+    'SIT must use the dedicated DB server (e.g. 172.28.92.60:5442). ' +
+    'Writes to klip-postgres on the BE host create a fork that requires manual migration.';
+
+  logger.error(msg);
+  if (process.env.KLIP_FAIL_ON_LOCAL_DB === 'true') {
+    throw new Error(msg);
+  }
+}
+
+assertProductionDbHost();
+
 const poolMax = parseInt(process.env.DB_POOL_MAX || '40', 10);
 const poolConnectionTimeoutMs = parseInt(
   process.env.DB_POOL_CONNECTION_TIMEOUT_MS ||

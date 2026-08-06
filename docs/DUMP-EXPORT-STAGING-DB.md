@@ -1,3 +1,16 @@
+# KLIP — Dump & export (read runbook for which server to use)
+#
+# **Authoritative SIT database** lives on the **DB server** (`172.28.92.60:5442`),
+# NOT on the backend host. See `docs/Update Staging Server Code.md`.
+#
+# | Purpose | Server | Script |
+# |---------|--------|--------|
+# | Authoritative DB backup | 172.28.92.60 | `backup-pre-merge-remote.sh` on `/opt/klip-db` |
+# | BE local fork backup (misconfig recovery) | 172.28.92.57 | `dump-be-local-fork.sh` |
+# | Full legacy export (local klip-postgres on BE) | 172.28.92.57 | `export-sit-db.sh` (below) |
+#
+# For fork → remote migration after env mispointing, see **`docs/BE-DB-FORK-MIGRATION-RUNBOOK.md`**.
+
 # Runbook: Dump & Export the Database from the Ali Cloud Staging Server
 
 Export the KLIP PostgreSQL database from the staging (SIT) backend server on Alibaba

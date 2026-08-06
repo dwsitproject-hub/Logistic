@@ -1,0 +1,19 @@
+# Backend-only stack when DB runs on a separate server (172.28.92.60:5442).
+# Use this overlay on the BE host so misconfig cannot silently write to co-located klip-postgres.
+#
+#   docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
+#
+# Requires /opt/klip/.env (or backend/.env):
+#   DB_HOST=172.28.92.60
+#   DB_PORT=5442
+
+services:
+  backend:
+    depends_on: {}
+    environment:
+      DB_HOST: ${DB_HOST:-172.28.92.60}
+      DB_PORT: ${DB_PORT:-5442}
+
+  postgres:
+    profiles:
+      - local-postgres-never-on-sit

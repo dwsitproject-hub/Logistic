@@ -1,6 +1,11 @@
 # Backend server stack: PostgreSQL + Backend API
 # Run on backend server (e.g. 172.28.92.57): docker compose -f docker-compose.backend.yml up -d
 #
+# **SIT production:** DB is on 172.28.92.60:5442 — use the remote-db overlay so the
+# co-located postgres service is never started:
+#   docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
+# Set KLIP_FAIL_ON_LOCAL_DB=true in backend/.env to refuse start if DB_HOST=klip-postgres.
+#
 # --- Database credentials (IMPORTANT) ---
 # - Docker Compose substitutes ${DB_NAME} etc. from a ".env" file in THIS DIRECTORY (/opt/klip/.env),
 #   NOT from backend/.env alone. Copy or symlink:  cp backend/.env .env
@@ -11,6 +16,7 @@
 # - Publish Postgres to the host (optional, for psql / ts-node on the server): POSTGRES_PORT default 5433
 #
 # Optional in /opt/klip/.env: DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT, BACKEND_PORT, JWT_SECRET
+# Optional: KLIP_FAIL_ON_LOCAL_DB=true — refuse backend start when DB_HOST points at local postgres
 
 services:
   postgres:
