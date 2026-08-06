@@ -249,10 +249,10 @@ describe('truckingActualsTemplate', () => {
     expect(formatTemplateQtyMtFromKg(null)).toBe('')
   })
 
-  it('rounds OS Qty (MT) to nearest whole ton', () => {
-    expect(formatTemplateOsQtyMtFromKg(24050)).toBe('24') // 24.05 → 24
-    expect(formatTemplateOsQtyMtFromKg(24550)).toBe('25') // 24.55 → 25
-    expect(formatTemplateOsQtyMtFromKg(24500)).toBe('25') // 24.5 → 25
+  it('formats OS Qty (MT) with up to 2 decimal places', () => {
+    expect(formatTemplateOsQtyMtFromKg(24050)).toBe('24.05')
+    expect(formatTemplateOsQtyMtFromKg(24550)).toBe('24.55')
+    expect(formatTemplateOsQtyMtFromKg(439020)).toBe('439.02')
     expect(formatTemplateOsQtyMtFromKg(0)).toBe('0')
     expect(formatTemplateOsQtyMtFromKg(null)).toBe('')
   })

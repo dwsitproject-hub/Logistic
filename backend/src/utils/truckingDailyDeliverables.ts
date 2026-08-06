@@ -129,6 +129,30 @@ export function mergeDailyDeliverablesRows(
     .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
 }
 
+/**
+ * Authoritative upload merge: drop all existing planning except WB-actual locked dates,
+ * then apply incoming file rows (+ optional clearDates for blank cells).
+ */
+export function prepareAuthoritativePlanningMerge(
+  existing: unknown,
+  incoming: NormalizedDailyDeliverableRow[],
+  options: { lockedDates: ReadonlySet<string> | string[]; clearDates?: string[] },
+): NormalizedDailyDeliverableRow[] {
+  const locked =
+    options.lockedDates instanceof Set ? options.lockedDates : new Set(options.lockedDates);
+  const preserved: NormalizedDailyDeliverableRow[] = [];
+  if (Array.isArray(existing)) {
+    for (const row of existing as DailyDeliverableInputRow[]) {
+      const date = String(row?.date ?? '').trim().slice(0, 10);
+      const qty = parseDailyDeliverableQuantity(row?.quantity_delivered);
+      if (date && locked.has(date) && qty !== null && qty >= 0) {
+        preserved.push({ date, quantity_delivered: qty });
+      }
+    }
+  }
+  return mergeDailyDeliverablesRows(preserved, incoming, { clearDates: options.clearDates });
+}
+
 /** Sum of quantity_delivered across normalized daily rows (kg). */
 export function sumDailyDeliverablesKg(rows: NormalizedDailyDeliverableRow[]): number {
   let sum = 0;

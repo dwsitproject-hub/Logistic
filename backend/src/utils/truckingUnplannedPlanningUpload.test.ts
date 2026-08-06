@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDailyDeliverablesKgFromMtEntries,
   collectEffectivePlanningClearDates,
+  collectLockedActualDates,
   isUnplannedWidePlanningTemplateMatrix,
   parseUnplannedWidePlanningMatrix,
 } from './truckingUnplannedPlanningUpload';
@@ -97,6 +98,15 @@ describe('truckingUnplannedPlanningUpload', () => {
       ],
     );
     expect(clears).toEqual(['2026-07-22']);
+  });
+
+  it('collectLockedActualDates returns ISO dates from daily_actuals', () => {
+    expect(
+      collectLockedActualDates([
+        { date: '2026-08-01', quantity_delivered: 10000 },
+        { progress_date: '2026-08-02' },
+      ]),
+    ).toEqual(new Set(['2026-08-01', '2026-08-02']));
   });
 
   it('parses new template PO row and skips metadata columns', () => {

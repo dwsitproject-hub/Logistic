@@ -197,14 +197,11 @@ export function formatTemplateQtyMtFromKg(kg: unknown, opts?: { maxFractionDigit
 }
 
 /**
- * OS Qty (MT) on Download Template — nearest whole MT
- * (e.g. 24.05 → 24, 24.55 → 25).
+ * OS Qty (MT) on Download Template — up to 2 decimal MT
+ * (aligns with backend OS validation messages, e.g. 439.02).
  */
 export function formatTemplateOsQtyMtFromKg(kg: unknown): string {
-  if (kg === null || kg === undefined || kg === '') return ''
-  const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg)
-  if (!Number.isFinite(n)) return ''
-  return String(Math.round(n / 1000))
+  return formatTemplateQtyMtFromKg(kg, { maxFractionDigits: 2 })
 }
 
 /** @deprecated Use formatTemplateQtyMtFromKg */

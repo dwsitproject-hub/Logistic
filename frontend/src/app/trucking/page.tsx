@@ -12,7 +12,6 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
-import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
@@ -130,12 +129,17 @@ const SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS = { maxFractionDigits: 0 } as const
 /** Display trucking qty stored in kg as MT (table, calendar, mobile). */
 function formatTruckingQtyMt(
   value: unknown,
-  opts: { maxFractionDigits?: number } = SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS,
+  opts: { maxFractionDigits?: number; nullAsZero?: boolean } = SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS,
 ): string {
   const kg = parseTruckingQtyKg(value)
-  if (kg === null) return '—'
+  if (kg === null) return opts.nullAsZero ? '0 MT' : '—'
   if (kg === 0) return '0 MT'
   return formatQtyMtFromKg(kg, opts)
+}
+
+/** View-table SAP delivery/receive qty — null/missing renders as 0 MT (display only). */
+function formatTruckingSapQtyMtDisplay(value: unknown): string {
+  return formatTruckingQtyMt(value, { ...SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS, nullAsZero: true })
 }
 
 /** API daily_deliverables.quantity_delivered is kg; calendar drafts/edits are MT. */
@@ -872,8 +876,6 @@ function CalendarDeliverablesTable({
               const dueStart = filledBounds ? formatDateDMY(filledBounds.start) : '-'
               const dueEnd = filledBounds ? formatDateDMY(filledBounds.end) : '-'
               const qtySent = Number(r.quantity_sent || 0)
-              const qtyDel = Number(r.quantity_delivered || 0)
-              const qtyRecv = Number(r.quantity_receive ?? 0)
               const plannedSum = sumPlannedQty(r)
               const outQty = Number((r as any).outstanding_quantity ?? 0)
               return (
@@ -943,9 +945,9 @@ function CalendarDeliverablesTable({
                         case 'qty_sent_planning':
                           return formatTruckingQtyMt(plannedSum)
                         case 'qty_delivered':
-                          return formatTruckingQtyMt(qtyDel)
+                          return formatTruckingSapQtyMtDisplay(r.quantity_delivered)
                         case 'qty_received':
-                          return formatTruckingQtyMt(qtyRecv)
+                          return formatTruckingSapQtyMtDisplay(r.quantity_receive)
                         default:
                           return '-'
                       }
@@ -3022,7 +3024,7 @@ function TruckingPageContent() {
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {qtyFieldsReady ? formatTruckingQtyMt(o.quantity_delivered) : <QtyLoadingDots />}
+          {qtyFieldsReady ? formatTruckingSapQtyMtDisplay(o.quantity_delivered) : <QtyLoadingDots />}
         </span>
       )
     },
@@ -3035,7 +3037,7 @@ function TruckingPageContent() {
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)
+            ? formatTruckingSapQtyMtDisplay(o.quantity_receive ?? o.quantity_delivered)
             : <QtyLoadingDots />}
         </span>
       )
@@ -3567,33 +3569,26 @@ function TruckingPageContent() {
             <h1 className="text-3xl font-bold">Trucking</h1>
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
-                onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
-                disabled={wbUploading}
-              >
-                {wbUploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Upload WB
-                  </>
-                )}
-              </Button>
-              <FieldHelp
-                text={
-                  'Format yang didukung: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
-                }
-                side="bottom"
-              />
-            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+              onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
+              disabled={wbUploading}
+              title="Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura"
+            >
+              {wbUploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload WB
+                </>
+              )}
+            </Button>
             <Button
               size="sm"
               variant="outline"

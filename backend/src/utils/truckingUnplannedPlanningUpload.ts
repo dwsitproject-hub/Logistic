@@ -292,6 +292,22 @@ export function resolvePlanningStartEndFromDeliverables(
   return { startIso: dates[0], endIso: dates[dates.length - 1] };
 }
 
+/** Dates with WB actual progress — preserved during authoritative planning upload merge. */
+export function collectLockedActualDates(dailyActualsRaw: unknown): Set<string> {
+  const actualDates = new Set<string>();
+  if (Array.isArray(dailyActualsRaw)) {
+    for (const row of dailyActualsRaw) {
+      const date = String(
+        (row as { date?: string; progress_date?: string })?.date ??
+          (row as { progress_date?: string })?.progress_date ??
+          '',
+      ).slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) actualDates.add(date);
+    }
+  }
+  return actualDates;
+}
+
 export function filterEntriesLockedByActuals<T extends { dateIso: string; lineNumber: number }>(
   entries: T[],
   dailyActualsRaw: unknown,

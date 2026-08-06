@@ -5,7 +5,7 @@ import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocati
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import {
-  mergeDailyDeliverablesRows,
+  prepareAuthoritativePlanningMerge,
   normalizeAndValidateDailyDeliverables,
   parseDailyDeliverableQuantity,
   sumDailyDeliverablesKg,
@@ -68,6 +68,7 @@ import {
 import {
   buildDailyDeliverablesFromKgEntries,
   collectEffectivePlanningClearDates,
+  collectLockedActualDates,
   filterEntriesLockedByActuals,
   filterEntriesWithinUnplannedWindow,
   isUnplannedWidePlanningTemplateMatrix,
@@ -2173,10 +2174,11 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           plannedOp.daily_deliverables,
         );
         const incomingDailyPlanned = buildDailyDeliverablesFromKgEntries(editableEntries);
-        const mergedDailyPlanned = mergeDailyDeliverablesRows(
+        const lockedDatesPlanned = collectLockedActualDates(plannedOp.daily_actuals);
+        const mergedDailyPlanned = prepareAuthoritativePlanningMerge(
           plannedOp.daily_deliverables,
           incomingDailyPlanned,
-          { clearDates: clearDatesPlanned },
+          { lockedDates: lockedDatesPlanned, clearDates: clearDatesPlanned },
         );
         const hasSetQtyPlanned = editableEntries.some((e) => e.qtyMt != null);
         if (!hasSetQtyPlanned && clearDatesPlanned.length === 0) {
@@ -2407,9 +2409,13 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         op && Array.isArray(op.daily_deliverables) ? op.daily_deliverables : [];
       const clearDates = collectEffectivePlanningClearDates(inWindowEntries, existingDailyForMerge);
       const incomingDaily = buildDailyDeliverablesFromKgEntries(inWindowEntries);
+      const lockedDates = op ? collectLockedActualDates(op.daily_actuals) : new Set<string>();
       const mergedDaily =
         op != null
-          ? mergeDailyDeliverablesRows(op.daily_deliverables, incomingDaily, { clearDates })
+          ? prepareAuthoritativePlanningMerge(op.daily_deliverables, incomingDaily, {
+              lockedDates,
+              clearDates,
+            })
           : incomingDaily;
       const hasSetQty = inWindowEntries.some((e) => e.qtyMt != null);
       if (!hasSetQty && clearDates.length === 0) {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { mergeDailyDeliverablesRows, normalizeAndValidateDailyDeliverables } from './truckingDailyDeliverables';
+import {
+  mergeDailyDeliverablesRows,
+  normalizeAndValidateDailyDeliverables,
+  prepareAuthoritativePlanningMerge,
+  sumDailyDeliverablesKg,
+} from './truckingDailyDeliverables';
 
 describe('mergeDailyDeliverablesRows', () => {
   it('preserves existing dates and overrides matching dates from upload', () => {
@@ -35,6 +40,55 @@ describe('mergeDailyDeliverablesRows', () => {
       { clearDates: ['2026-07-22'] },
     );
     expect(merged).toEqual([{ date: '2026-07-22', quantity_delivered: 10000 }]);
+  });
+});
+
+describe('prepareAuthoritativePlanningMerge', () => {
+  it('drops stale planning outside upload and keeps only locked actuals + incoming', () => {
+    const merged = prepareAuthoritativePlanningMerge(
+      [
+        { date: '2026-07-01', quantity_delivered: 250000 },
+        { date: '2026-08-07', quantity_delivered: 60000 },
+        { date: '2026-08-10', quantity_delivered: 45000 },
+      ],
+      [
+        { date: '2026-08-07', quantity_delivered: 60000 },
+        { date: '2026-08-10', quantity_delivered: 45000 },
+        { date: '2026-08-12', quantity_delivered: 60000 },
+      ],
+      { lockedDates: new Set(['2026-07-01']) },
+    );
+    expect(merged).toEqual([
+      { date: '2026-07-01', quantity_delivered: 250000 },
+      { date: '2026-08-07', quantity_delivered: 60000 },
+      { date: '2026-08-10', quantity_delivered: 45000 },
+      { date: '2026-08-12', quantity_delivered: 60000 },
+    ]);
+    expect(sumDailyDeliverablesKg(merged)).toBe(415000);
+  });
+
+  it('matches file total when no locked actuals (drops all legacy planning)', () => {
+    const merged = prepareAuthoritativePlanningMerge(
+      [
+        { date: '2026-07-01', quantity_delivered: 250000 },
+        { date: '2026-08-07', quantity_delivered: 500000 },
+      ],
+      [
+        { date: '2026-08-07', quantity_delivered: 250000 },
+        { date: '2026-08-08', quantity_delivered: 250000 },
+      ],
+      { lockedDates: new Set() },
+    );
+    expect(sumDailyDeliverablesKg(merged)).toBe(500000);
+  });
+
+  it('honours clearDates after authoritative strip', () => {
+    const merged = prepareAuthoritativePlanningMerge(
+      [{ date: '2026-08-07', quantity_delivered: 500000 }],
+      [],
+      { lockedDates: new Set(), clearDates: ['2026-08-07'] },
+    );
+    expect(merged).toEqual([]);
   });
 });
 

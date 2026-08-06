@@ -19,7 +19,8 @@ export type UnplannedPlanningOsQtyValidation =
       outstandingKg: number;
     };
 
-const KG_TOLERANCE = 0.01;
+/** ±1 MT — daily planning templates use whole MT; OS Qty in DB may have sub-MT precision. */
+const KG_TOLERANCE = 1000;
 
 export function formatPlanningQtyKgLabel(kg: number): string {
   if (!Number.isFinite(kg)) return '0';
