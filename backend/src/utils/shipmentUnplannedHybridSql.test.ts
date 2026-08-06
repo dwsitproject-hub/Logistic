@@ -4,6 +4,7 @@ import {
   buildUnplannedContractBacklogPageQuery,
   buildUnplannedContractBacklogTableCountCte,
   appendContractScopeToolbarFilters,
+  appendUnplannedContractBacklogGlobalSearch,
   unplannedContractBacklogBaseWhereSql,
   unplannedShipmentExecutionOuterSql,
 } from './shipmentUnplannedHybridSql';
@@ -78,6 +79,33 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).toContain("'CIF'");
     expect(sql).toContain("'FOB'");
     expect(sql).toContain("'CFR'");
+  });
+
+  it('appendUnplannedContractBacklogGlobalSearch matches PO via ILIKE', () => {
+    const { sql, params } = appendUnplannedContractBacklogGlobalSearch('1001031130', 3);
+    expect(sql).toContain('c.po_number');
+    expect(sql).toContain('ILIKE');
+    expect(params).toEqual(['%1001031130%']);
+  });
+});
+
+describe('buildAllHybridContractBacklogQuery', () => {
+  it('counts unplanned and preplanned contract backlog together', async () => {
+    const { buildAllHybridContractBacklogCountQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildAllHybridContractBacklogCountQuery('', '');
+    expect(text).toContain('unplanned_contract_backlog');
+    expect(text).toContain('preplanned_contract_backlog');
+    expect(text).toContain('all_contract_backlog');
+  });
+
+  it('pages flat contract rows with both UNPLANNED and PREPLANNED statuses', async () => {
+    const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0);
+    expect(text).toContain('UNPLANNED');
+    expect(text).toContain('PREPLANNED');
+    expect(text).toContain('pre_planned_group_id');
+    expect(text).toContain('ORDER BY contract_date DESC');
+    expect(text).toContain('LIMIT 20 OFFSET 0');
   });
 });
 

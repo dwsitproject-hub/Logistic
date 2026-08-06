@@ -27,6 +27,7 @@ import {
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
+import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
 import { ttlMemo } from '../utils/ttlMemo';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
@@ -2880,7 +2881,21 @@ export const createContract = async (req: AuthRequest, res: Response) => {
 export const updateContract = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const filtered = filterContractUpdatesForRole(req.user?.role, req.body ?? {});
+    if (!filtered.ok) {
+      return res.status(403).json({
+        success: false,
+        error: { message: filtered.message },
+      });
+    }
+    const updates = filtered.updates;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'No valid fields to update' },
+      });
+    }
 
     const setClause = Object.keys(updates)
       .map((key, index) => `${key} = $${index + 2}`)

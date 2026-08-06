@@ -11,6 +11,8 @@ import {
   appendUnplannedContractBacklogGlobalSearch,
   buildUnplannedContractBacklogCountQuery,
   buildUnplannedContractBacklogPageQuery,
+  buildAllHybridContractBacklogCountQuery,
+  buildAllHybridContractBacklogPageQuery,
   buildUnplannedShipmentExecutionCountQuery,
   buildUnplannedContractToolbarScope,
   buildPreplannedContractsCountQuery,
@@ -30,6 +32,8 @@ export interface UnplannedHybridListContext {
   };
   globalSearch: string;
   colFilters: ColumnFilterPayload;
+  /** ALL hybrid merges unplanned + preplanned backlog; UNPLANNED hybrid uses unplanned only. */
+  contractBacklogMode?: 'unplanned' | 'all';
 }
 
 export interface UnplannedHybridBreakdown {
@@ -86,24 +90,66 @@ export function buildShipmentUnplannedHybridListContext(input: {
   globalSearch: string;
   colFilters: ColumnFilterPayload;
 }): UnplannedHybridListContext {
+  return buildShipmentHybridListContext({
+    ...input,
+    executionOuterSql: unplannedShipmentExecutionOuterSql(input.toolbarOuterSql),
+    cacheKeySuffix: 'unplanned-hybrid',
+  });
+}
+
+/** ALL status: all execution rows (toolbar filters only) + unplanned/preplanned contract backlog. */
+export function buildShipmentAllHybridListContext(input: {
+  shipmentBaseCteSql: string;
+  toolbarOuterSql: string;
+  innerParams: unknown[];
+  toolbarOuterParams: unknown[];
+  skipSapJoin: boolean;
+  filterCacheKey: string;
+  contractScope: UnplannedHybridListContext['contractScope'];
+  globalSearch: string;
+  colFilters: ColumnFilterPayload;
+}): UnplannedHybridListContext {
+  return {
+    ...buildShipmentHybridListContext({
+      ...input,
+      executionOuterSql: input.toolbarOuterSql,
+      cacheKeySuffix: 'all-hybrid',
+    }),
+    contractBacklogMode: 'all',
+  };
+}
+
+function buildShipmentHybridListContext(input: {
+  shipmentBaseCteSql: string;
+  executionOuterSql: string;
+  innerParams: unknown[];
+  toolbarOuterParams: unknown[];
+  skipSapJoin: boolean;
+  filterCacheKey: string;
+  cacheKeySuffix: string;
+  contractScope: UnplannedHybridListContext['contractScope'];
+  globalSearch: string;
+  colFilters: ColumnFilterPayload;
+}): UnplannedHybridListContext {
   return {
     shipmentCtx: {
       shipmentBaseCteSql: input.shipmentBaseCteSql,
-      outerSql: unplannedShipmentExecutionOuterSql(input.toolbarOuterSql),
+      outerSql: input.executionOuterSql,
       innerParams: input.innerParams,
       outerParams: input.toolbarOuterParams,
       skipSapJoin: input.skipSapJoin,
-      cacheKey: `${input.filterCacheKey}:unplanned-hybrid`,
+      cacheKey: `${input.filterCacheKey}:${input.cacheKeySuffix}`,
       filterCacheKey: input.filterCacheKey,
       usesStoKeyPaging: false,
     },
     contractScope: input.contractScope,
     globalSearch: input.globalSearch,
     colFilters: input.colFilters,
+    contractBacklogMode: 'all',
   };
 }
 
-export async function countUnplannedHybridBreakdown(
+export async function countHybridBreakdown(
   ctx: UnplannedHybridListContext,
 ): Promise<UnplannedHybridBreakdown> {
   const { contractScopeSql, params: contractParams, toolbarSql } = buildContractQueryParts(ctx);
@@ -111,7 +157,9 @@ export async function countUnplannedHybridBreakdown(
 
   const [contractRes, shipmentRes] = await Promise.all([
     query(
-      buildUnplannedContractBacklogCountQuery(contractScopeSql, toolbarSql),
+      ctx.contractBacklogMode === 'all'
+        ? buildAllHybridContractBacklogCountQuery(contractScopeSql, toolbarSql)
+        : buildUnplannedContractBacklogCountQuery(contractScopeSql, toolbarSql),
       contractParams,
     ),
     query(
@@ -129,6 +177,13 @@ export async function countUnplannedHybridBreakdown(
   return { contractRows, shipmentRows, totalTableRows: contractRows + shipmentRows, contractQtyKg };
 }
 
+/** @deprecated Use countHybridBreakdown */
+export async function countUnplannedHybridBreakdown(
+  ctx: UnplannedHybridListContext,
+): Promise<UnplannedHybridBreakdown> {
+  return countHybridBreakdown(ctx);
+}
+
 async function fetchContractBacklogPage(
   ctx: UnplannedHybridListContext,
   limit: number,
@@ -136,7 +191,10 @@ async function fetchContractBacklogPage(
 ): Promise<Record<string, unknown>[]> {
   if (limit <= 0) return [];
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
-  const text = buildUnplannedContractBacklogPageQuery(contractScopeSql, toolbarSql, limit, offset);
+  const text =
+    ctx.contractBacklogMode === 'all'
+      ? buildAllHybridContractBacklogPageQuery(contractScopeSql, toolbarSql, limit, offset)
+      : buildUnplannedContractBacklogPageQuery(contractScopeSql, toolbarSql, limit, offset);
   const result = await query(text, params);
   return result.rows as Record<string, unknown>[];
 }
@@ -157,7 +215,7 @@ async function fetchShipmentExecutionPage(
   return rows;
 }
 
-export async function resolveUnplannedHybridShipmentsList(
+export async function resolveHybridShipmentsList(
   req: AuthRequest,
   ctx: UnplannedHybridListContext,
 ): Promise<ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown }> {
@@ -166,7 +224,7 @@ export async function resolveUnplannedHybridShipmentsList(
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
   const offset = (pageNum - 1) * limitNum;
 
-  const breakdown = await countUnplannedHybridBreakdown(ctx);
+  const breakdown = await countHybridBreakdown(ctx);
   const { shipmentRows: executionRows, totalTableRows } = breakdown;
 
   const slices = computeHybridListPageSlices({
@@ -181,7 +239,9 @@ export async function resolveUnplannedHybridShipmentsList(
   ]);
 
   for (const row of contractPage) {
-    row.status = 'UNPLANNED';
+    if (String(row.status ?? '').trim().toUpperCase() !== 'PREPLANNED') {
+      row.status = 'UNPLANNED';
+    }
     row.row_kind = 'contract_backlog';
   }
 
@@ -200,6 +260,25 @@ export async function resolveUnplannedHybridShipmentsList(
     },
     unplannedBreakdown: breakdown,
   };
+}
+
+export async function resolveAllHybridShipmentsList(
+  req: AuthRequest,
+  ctx: UnplannedHybridListContext,
+): Promise<ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown }> {
+  return resolveHybridShipmentsList(req, ctx);
+}
+
+export async function resolveUnplannedHybridShipmentsList(
+  req: AuthRequest,
+  ctx: UnplannedHybridListContext,
+): Promise<ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown }> {
+  return resolveHybridShipmentsList(req, ctx);
+}
+
+export function isAllHybridListRequest(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toUpperCase();
+  return !normalized || normalized === 'ALL';
 }
 
 export function isUnplannedHybridListRequest(status: unknown): boolean {

@@ -21,6 +21,32 @@ describe('shipmentListStoPaging', () => {
     ).toBe(true);
   });
 
+  it('canUseShipmentStoKeyPaging blocks ALL hybrid list path', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: {},
+        allHybrid: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('canUseShipmentStoKeyPaging blocks exact PO search when ALL hybrid is active', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '1001031130',
+        colFilters: {},
+        allHybrid: true,
+      }),
+    ).toBe(false);
+  });
+
   it('canUseShipmentStoKeyPaging blocks status card filters', () => {
     expect(
       canUseShipmentStoKeyPaging({

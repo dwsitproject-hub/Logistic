@@ -16,6 +16,7 @@ export type ShipmentStoPagingFilterInput = {
   viewOption?: string;
   viewQuery?: string;
   unplannedHybrid?: boolean;
+  allHybrid?: boolean;
 };
 
 /**
@@ -40,7 +41,7 @@ function hasBlockingColumnFilters(colFilters?: ColumnFilterPayload): boolean {
  * before status derivation would skew rows and totals.
  */
 export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput): boolean {
-  if (input.summaryOnly || input.unplannedHybrid || input.stoIsSet) return false;
+  if (input.summaryOnly || input.unplannedHybrid || input.allHybrid || input.stoIsSet) return false;
   const globalSearchTrim = String(input.globalSearch ?? '').trim();
   if (globalSearchTrim.length >= 2 && !isExactStoGlobalSearch(globalSearchTrim)) return false;
   if (hasBlockingColumnFilters(input.colFilters)) return false;

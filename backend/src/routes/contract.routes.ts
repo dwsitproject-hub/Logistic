@@ -21,7 +21,7 @@ import {
   bulkUpdateCargoReadiness,
 } from '../controllers/contract.controller';
 import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
-import { authenticateToken, authorize } from '../middleware/auth';
+import { authenticateToken, authorize, authorizePermission } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
 
@@ -197,7 +197,7 @@ router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), csvUpload.si
  *       404:
  *         description: Contract not found
  */
-router.put('/:id', authorize('ADMIN', 'TRADING'), blockWhenWithdrawn('contract'), auditLog('UPDATE', 'CONTRACT'), updateContract);
+router.put('/:id', authorizePermission('data.contracts', 'can_edit'), blockWhenWithdrawn('contract'), auditLog('UPDATE', 'CONTRACT'), updateContract);
 
 export default router;
 

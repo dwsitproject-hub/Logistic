@@ -177,3 +177,44 @@ export const authorizeSapImportsUpload = async (
     error: { message: 'Insufficient permissions to upload SAP data' },
   });
 };
+
+/** Role-permissions flag check (scoped by user level / transport_type). ADMIN always allowed. */
+export const authorizePermission = (
+  permissionKey: string,
+  flag: 'can_view' | 'can_create' | 'can_edit' | 'can_delete',
+) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        error: { message: 'Unauthorized' },
+      });
+      return;
+    }
+
+    if (req.user.role === 'ADMIN') {
+      next();
+      return;
+    }
+
+    try {
+      const allowed = await userHasPermissionFlag(
+        req.user.id,
+        req.user.role,
+        permissionKey,
+        flag,
+      );
+      if (allowed) {
+        next();
+        return;
+      }
+    } catch (error) {
+      logger.error('authorizePermission lookup failed:', error);
+    }
+
+    res.status(403).json({
+      success: false,
+      error: { message: 'Insufficient permissions' },
+    });
+  };
+};

@@ -34,11 +34,14 @@ import {
   toPipelineDailySummaryScope,
 } from '../services/pipelineDailySummary.service';
 import {
+  buildShipmentAllHybridListContext,
   buildShipmentUnplannedHybridListContext,
   countPreplannedContracts,
   countUnplannedHybridBreakdown,
+  isAllHybridListRequest,
   isPreplannedListRequest,
   isUnplannedHybridListRequest,
+  resolveAllHybridShipmentsList,
   resolvePreplannedContractsList,
   resolveUnplannedHybridShipmentsList,
   type PreplannedContractsBreakdown,
@@ -948,6 +951,7 @@ ${contractMetaSelectCore}
     });
 
     const isUnplannedHybridList = isUnplannedHybridListRequest(status);
+    const isAllHybridList = isAllHybridListRequest(status);
     const listUsesStoPaging =
       compact &&
       !summaryOnly &&
@@ -964,6 +968,7 @@ ${contractMetaSelectCore}
         viewOption: viewOptionParam,
         viewQuery: viewQueryParam,
         unplannedHybrid: isUnplannedHybridList,
+        allHybrid: isAllHybridList,
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
@@ -1257,6 +1262,69 @@ ${contractMetaSelectCore}
         etaLoading: etaLoadingBucket ?? 'ALL',
         etaDischarge: etaDischargeBucket ?? 'ALL',
       });
+
+      if (isAllHybridListRequest(status)) {
+        const hybrid = await resolveAllHybridShipmentsList(
+          req,
+          buildShipmentAllHybridListContext({
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            toolbarOuterSql,
+            innerParams,
+            toolbarOuterParams,
+            skipSapJoin,
+            filterCacheKey,
+            contractScope: {
+              dateFrom,
+              dateTo,
+              contract,
+              plants,
+            },
+            globalSearch,
+            colFilters,
+          }),
+        );
+        let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+          });
+          hybridSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-all-hybrid',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: hybrid.shipments.length,
+          contractRows: hybrid.unplannedBreakdown.contractRows,
+          shipmentRows: hybrid.unplannedBreakdown.shipmentRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: hybrid.shipments,
+            pagination: hybrid.pagination,
+            unplannedBreakdown: hybrid.unplannedBreakdown,
+            ...(hybridSummary ? { summary: hybridSummary } : {}),
+          },
+        });
+      }
 
       if (isUnplannedHybridListRequest(status)) {
         const hybrid = await resolveUnplannedHybridShipmentsList(req, {
