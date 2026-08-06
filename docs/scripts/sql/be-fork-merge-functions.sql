@@ -299,8 +299,10 @@ BEGIN
   IF v_natural_join = '' THEN
     v_sql := format($q$
       WITH src AS (
-        SELECT b.* FROM be_fork.%1$I b
+        SELECT DISTINCT ON (b.id) b.*
+        FROM be_fork.%1$I b
         WHERE b.%2$I >= $1%3$s
+        ORDER BY b.id, b.%2$I DESC NULLS LAST
       ),
       upserted AS (
         INSERT INTO public.%1$I (%4$s)
@@ -329,10 +331,15 @@ BEGIN
         SELECT b.* FROM be_fork.%1$I b
         WHERE b.%2$I >= $1%3$s
       ),
-      src AS (
+      src_mapped AS (
         SELECT %7$s
         FROM src_raw r
         %8$s
+      ),
+      src AS (
+        SELECT DISTINCT ON (id) src_mapped.*
+        FROM src_mapped
+        ORDER BY id, %2$I DESC NULLS LAST
       ),
       upserted AS (
         INSERT INTO public.%1$I (%4$s)
