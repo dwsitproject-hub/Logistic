@@ -29,9 +29,9 @@ fi
 echo ""
 echo "=== Mark snapshot caches stale (remote) ==="
 psql_remote -v ON_ERROR_STOP=0 <<'SQL' || true
-UPDATE contract_sto_agg_snapshot_meta SET is_stale = true WHERE id = 1;
-UPDATE contract_qty_move_snapshot_meta SET is_stale = true WHERE id = 1;
-UPDATE contract_latest_spd_snapshot_meta SET is_stale = true WHERE id = 1;
+UPDATE contract_sto_agg_snapshot_meta SET is_stale = true WHERE id = 'global';
+UPDATE contract_qty_move_snapshot_meta SET is_stale = true WHERE id = 'global';
+UPDATE contract_latest_spd_snapshot_meta SET is_stale = true WHERE id = 'global';
 SQL
 
 echo ""
