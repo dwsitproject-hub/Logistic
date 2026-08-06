@@ -42,8 +42,8 @@ if ! psql_remote -v ON_ERROR_STOP=1 -f "$ROOT/docs/scripts/sql/be-fork-merge-fun
 fi
 
 MERGE_SQL_VER="$(psql_remote -Atc "SELECT be_fork.merge_sql_version()" 2>/dev/null || echo "")"
-if [[ "$MERGE_SQL_VER" != "20260806-9" ]]; then
-  echo "ERROR: be_fork.merge_sql_version() is '$MERGE_SQL_VER' (expected 20260806-9)." >&2
+if [[ "$MERGE_SQL_VER" != "20260806-10" ]]; then
+  echo "ERROR: be_fork.merge_sql_version() is '$MERGE_SQL_VER' (expected 20260806-10)." >&2
   echo "       git pull origin SIT, then reload SQL manually if needed." >&2
   exit 1
 fi

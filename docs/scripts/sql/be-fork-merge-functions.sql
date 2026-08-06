@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-9
+-- Version: 20260806-10
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-9'::text;
+  SELECT '20260806-10'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
@@ -186,6 +186,35 @@ BEGIN
 END;
 $$;
 
+-- Map fork trucking_operations.id → public id via contract (PO) + operation_id.
+CREATE OR REPLACE FUNCTION be_fork.remap_trucking_operation_id_expr(p_expr text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT format($q$COALESCE((
+    SELECT COALESCE(pub.id, fo.id)
+    FROM be_fork.trucking_operations fo
+    LEFT JOIN public.trucking_operations pub ON (
+      pub.operation_id IS NOT DISTINCT FROM fo.operation_id
+      AND pub.contract_id = COALESCE((
+        SELECT COALESCE(pubc.id, fc.id)
+        FROM be_fork.contracts fc
+        LEFT JOIN public.contracts pubc ON (
+          NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+          AND TRIM(COALESCE(pubc.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+        )
+        WHERE fc.id = fo.contract_id
+        LIMIT 1
+      ), fo.contract_id)
+    )
+    WHERE fo.id = %1$s
+    LIMIT 1
+  ), (
+    SELECT t.id FROM public.trucking_operations t WHERE t.id = %1$s LIMIT 1
+  ))$q$, p_expr);
+$$;
+
 -- LEFT JOIN to map fork rows onto existing public rows by business natural key (PO+STO, PO, etc.).
 CREATE OR REPLACE FUNCTION be_fork.natural_key_join_sql(p_table text)
 RETURNS text
@@ -274,6 +303,16 @@ AS $$
             LIMIT 1
           ), r.contract_id)
         )
+      )$j$
+    WHEN 'trucking_daily_actuals' THEN
+      $j$LEFT JOIN public.trucking_daily_actuals p ON (
+        p.progress_date IS NOT DISTINCT FROM r.progress_date
+        AND p.sto_number IS NOT DISTINCT FROM r.sto_number
+        AND p.trucking_operation_id = $j$ || be_fork.remap_trucking_operation_id_expr('r.trucking_operation_id') || $j$
+      )$j$
+    WHEN 'trucking_realizations' THEN
+      $j$LEFT JOIN public.trucking_realizations p ON (
+        p.trucking_operation_id = $j$ || be_fork.remap_trucking_operation_id_expr('r.trucking_operation_id') || $j$
       )$j$
     WHEN 'trucking_wb_imports' THEN
       $j$LEFT JOIN public.trucking_wb_imports p ON (
@@ -392,6 +431,10 @@ BEGIN
         WHERE fp.id = %1$I.%2$I
         LIMIT 1
       ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    WHEN 'trucking_operations' THEN
+      RETURN be_fork.remap_trucking_operation_id_expr(
+        format('%I.%I', v_row_alias, p_column)
+      );
     WHEN 'users' THEN
       IF EXISTS (
         SELECT 1 FROM information_schema.tables
