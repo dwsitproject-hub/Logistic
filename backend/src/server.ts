@@ -14,6 +14,11 @@ import swaggerJsdoc from 'swagger-jsdoc';
 import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 import logger from './utils/logger';
+import { runWarmupJobsSequentially } from './utils/startupWarmupQueue';
+import {
+  startShipmentOutstandingQtyCacheWarmer,
+  startShipmentSummaryCacheWarmer,
+} from './services/shipmentSummaryWarmer.service';
 import { SchedulerService } from './services/scheduler.service';
 import { PipelineDailySummaryService, isPipelineDailySummaryFresh } from './services/pipelineDailySummary.service';
 import { ContractQtyMoveSnapshotService, isContractQtyMoveSnapshotFresh } from './services/contractQtyMoveSnapshot.service';
@@ -265,45 +270,41 @@ if (process.env.NODE_ENV !== 'test') {
       }
     });
 
-    // Warm the Shipping Performance row cache so the first visitor after a restart
-    // is served from memory instead of paying the full query cost.
-    try {
-      startShippingPerformanceCacheWarmer();
-      logger.info('🔥 Shipping Performance cache warmer started');
-    } catch (error) {
-      logger.warn('Failed to start Shipping Performance cache warmer', { error });
-    }
-
     /*
-     * Stagger the remaining warmers.
+     * Warm the page caches ONE AT A TIME.
      *
-     * All three used to fire at once, and each runs a heavy sap_processed_data scan. A visitor
-     * arriving seconds after a restart landed in that contention window and waited 13-18s for
-     * Shipping Performance - far longer than the ~3.5s the query costs on its own. Shipping
-     * Performance starts immediately (above) and the other two follow behind it, so the first
-     * page load competes with nothing. Nothing about what they compute changes.
+     * These used to be scheduled at fixed 0s / 20s / 40s offsets, which guesses at how long each
+     * job takes. When the guess is wrong they overlap, and each one is a heavy
+     * sap_processed_data scan. On staging (2026-08-06) that produced load average 16.77 on
+     * 2 vCPUs with five concurrent queries of 87-130s, two deadlocked on LWLock, and an 80s cold
+     * Trucking page.
+     *
+     * The queue starts each job only after the previous finishes, so at most one heavy query is
+     * in flight however slow any single one turns out to be. Wall-clock warm-up is longer, which
+     * is the right trade: nothing waits on the warmers, but the requests they were competing
+     * with do have a user waiting.
+     *
+     * Shipments is warmed here for the first time. Its two summary calls were the only heavy
+     * page calls with no warmer at all, costing the first visitor after each restart ~25s on the
+     * most-used page (measured: summaryOnly 16.8s, outstandingQtyOnly 8.3s).
+     *
+     * Ordering is by how likely a page is to be opened first, so the earliest visitor benefits
+     * most. Nothing about what any warmer computes or returns changes.
      */
-    const WARMER_STAGGER_MS = 20 * 1000;
-
-    // Warm the Oil Loss cache (two full sap_processed_data JSONB scans) for the same reason.
-    setTimeout(() => {
-      try {
-        startOilLossCacheWarmer();
-        logger.info('🔥 Oil Loss cache warmer started');
-      } catch (error) {
-        logger.warn('Failed to start Oil Loss cache warmer', { error });
-      }
-    }, WARMER_STAGGER_MS).unref?.();
-
-    // Warm the Trucking default-scope summary (status circles + Outstanding Qty).
-    setTimeout(() => {
-      try {
-        startTruckingListCacheWarmer();
-        logger.info('🔥 Trucking summary cache warmer started');
-      } catch (error) {
-        logger.warn('Failed to start Trucking summary cache warmer', { error });
-      }
-    }, WARMER_STAGGER_MS * 2).unref?.();
+    void runWarmupJobsSequentially(
+      [
+        { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
+        { name: 'Shipments summary', run: () => startShipmentSummaryCacheWarmer() },
+        { name: 'Shipments outstanding qty', run: () => startShipmentOutstandingQtyCacheWarmer() },
+        { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
+        { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
+      ],
+      {
+        // Let the app finish booting and serve any waiting request before we add DB load.
+        initialDelayMs: 5_000,
+        gapMs: 5_000,
+      },
+    );
   });
 }
 
