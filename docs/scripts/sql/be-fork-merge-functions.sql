@@ -71,6 +71,44 @@ AS $$
     AND tc.constraint_type = 'PRIMARY KEY';
 $$;
 
+CREATE OR REPLACE FUNCTION be_fork.unique_insert_exclude_sql(p_table text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_pk_match text;
+  v_filters text := '';
+  r record;
+BEGIN
+  v_pk_match := be_fork.pk_match_sql('be_fork', p_table, 'p', 'b');
+  IF v_pk_match = 'FALSE' THEN
+    RETURN '';
+  END IF;
+
+  FOR r IN
+    SELECT kcu.column_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+     AND tc.table_schema = kcu.table_schema
+     AND tc.table_name = kcu.table_name
+    WHERE tc.table_schema = 'be_fork'
+      AND tc.table_name = p_table
+      AND tc.constraint_type = 'UNIQUE'
+    GROUP BY tc.constraint_name, kcu.column_name
+    HAVING COUNT(*) = 1
+  LOOP
+    v_filters := v_filters || format(
+      ' AND NOT EXISTS (SELECT 1 FROM public.%I p WHERE p.%I = b.%I AND NOT (%s))',
+      p_table, r.column_name, r.column_name, v_pk_match
+    );
+  END LOOP;
+
+  RETURN v_filters;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION be_fork.merge_table(
   p_table text,
   p_cutoff timestamptz DEFAULT '2026-08-03'::timestamptz
@@ -83,6 +121,7 @@ DECLARE
   v_pk text;
   v_col_list text;
   v_set_clause text;
+  v_unique_filter text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
@@ -147,10 +186,12 @@ BEGIN
     v_set_clause := format('%s = %s', split_part(v_pk, ',', 1), split_part(v_pk, ',', 1));
   END IF;
 
+  v_unique_filter := be_fork.unique_insert_exclude_sql(p_table);
+
   v_sql := format($q$
     WITH src AS (
-      SELECT * FROM be_fork.%I
-      WHERE %I >= $1
+      SELECT b.* FROM be_fork.%I b
+      WHERE b.%I >= $1%s
     ),
     upserted AS (
       INSERT INTO public.%I (%s)
@@ -166,7 +207,7 @@ BEGIN
       COUNT(*) FILTER (WHERE NOT was_insert)
     FROM upserted
   $q$,
-    p_table, v_ts,
+    p_table, v_ts, v_unique_filter,
     p_table, v_col_list, v_col_list, v_pk, v_set_clause,
     p_table, v_ts, v_ts
   );

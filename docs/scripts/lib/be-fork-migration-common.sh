@@ -130,6 +130,34 @@ BE_FORK_MERGE_TABLES=(
   audit_logs
 )
 
+# Reference / master tables — merge failure should not block transactional tables.
+BE_FORK_MERGE_OPTIONAL_TABLES=(
+  pre_planned_parcel_capacity
+  suppliers
+  products
+  supplier_groups
+  master_plants
+  master_vessels
+  master_loading_ports
+  loading_ports
+  surveyors
+  commercial_document_files
+  commercial_document_history
+  settlement_invoice_summaries
+  alerts
+)
+
+be_fork_merge_table_is_optional() {
+  local t="$1"
+  local opt
+  for opt in "${BE_FORK_MERGE_OPTIONAL_TABLES[@]}"; do
+    if [[ "$opt" == "$t" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 table_exists_local() {
   local t="$1"
   psql_local_fork -Atc \

@@ -65,6 +65,12 @@ for t in "${BE_FORK_MERGE_TABLES[@]}"; do
   if [[ "$APPLY" == "true" ]]; then
     result="$(psql_remote -q -Atc "SELECT * FROM be_fork.merge_table('$t', '$CUTOFF'::timestamptz)" 2>&1)" || true
     counts="$(parse_merge_counts "$result")" || {
+      if be_fork_merge_table_is_optional "$t"; then
+        echo "  WARN $t: merge skipped/failed (optional reference table):" >&2
+        printf '%s\n' "$result" | tail -3 >&2
+        echo "  $t: inserted=0 updated=0 new_ids_preview=$new_ids (optional — continued)"
+        continue
+      fi
       echo "ERROR merging $t:" >&2
       printf '%s\n' "$result" >&2
       exit 1
