@@ -109,6 +109,51 @@ BEGIN
 END;
 $$;
 
+/** Require FK parent rows to exist in public before insert/update. */
+CREATE OR REPLACE FUNCTION be_fork.fk_parent_exists_sql(p_table text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_filters text := '';
+  r record;
+BEGIN
+  FOR r IN
+    SELECT
+      src_a.attname AS fk_column,
+      ref_ns.nspname AS ref_schema,
+      ref_cls.relname AS ref_table,
+      ref_a.attname AS ref_column
+    FROM pg_constraint c
+    JOIN pg_class src_cls ON src_cls.oid = c.conrelid
+    JOIN pg_namespace src_ns ON src_ns.oid = src_cls.relnamespace
+    JOIN pg_attribute src_a
+      ON src_a.attrelid = c.conrelid
+     AND src_a.attnum = ANY (c.conkey)
+     AND NOT src_a.attisdropped
+    JOIN pg_class ref_cls ON ref_cls.oid = c.confrelid
+    JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+    JOIN pg_attribute ref_a
+      ON ref_a.attrelid = c.confrelid
+     AND ref_a.attnum = ANY (c.confkey)
+     AND NOT ref_a.attisdropped
+    WHERE c.contype = 'f'
+      AND src_ns.nspname = 'public'
+      AND src_cls.relname = p_table
+      AND ref_ns.nspname = 'public'
+      AND array_length(c.conkey, 1) = 1
+  LOOP
+    v_filters := v_filters || format(
+      ' AND EXISTS (SELECT 1 FROM public.%I p WHERE p.%I = b.%I)',
+      r.ref_table, r.ref_column, r.fk_column
+    );
+  END LOOP;
+
+  RETURN v_filters;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION be_fork.merge_table(
   p_table text,
   p_cutoff timestamptz DEFAULT '2026-08-03'::timestamptz
@@ -122,6 +167,7 @@ DECLARE
   v_col_list text;
   v_set_clause text;
   v_unique_filter text;
+  v_fk_filter text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
@@ -187,11 +233,12 @@ BEGIN
   END IF;
 
   v_unique_filter := be_fork.unique_insert_exclude_sql(p_table);
+  v_fk_filter := be_fork.fk_parent_exists_sql(p_table);
 
   v_sql := format($q$
     WITH src AS (
       SELECT b.* FROM be_fork.%I b
-      WHERE b.%I >= $1%s
+      WHERE b.%I >= $1%s%s
     ),
     upserted AS (
       INSERT INTO public.%I (%s)
