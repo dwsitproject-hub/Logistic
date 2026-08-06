@@ -168,6 +168,7 @@ DECLARE
   v_set_clause text;
   v_unique_filter text;
   v_fk_filter text;
+  v_src_extra text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
@@ -234,19 +235,20 @@ BEGIN
 
   v_unique_filter := be_fork.unique_insert_exclude_sql(p_table);
   v_fk_filter := be_fork.fk_parent_exists_sql(p_table);
+  v_src_extra := coalesce(v_unique_filter, '') || coalesce(v_fk_filter, '');
 
   v_sql := format($q$
     WITH src AS (
-      SELECT b.* FROM be_fork.%I b
-      WHERE b.%I >= $1%s%s
+      SELECT b.* FROM be_fork.%1$I b
+      WHERE b.%2$I >= $1%3$s
     ),
     upserted AS (
-      INSERT INTO public.%I (%s)
-      SELECT %s FROM src
-      ON CONFLICT (%s) DO UPDATE SET
-        %s
-      WHERE COALESCE(public.%I.%I, 'epoch'::timestamptz)
-        < COALESCE(EXCLUDED.%I, 'epoch'::timestamptz)
+      INSERT INTO public.%1$I (%4$s)
+      SELECT %4$s FROM src
+      ON CONFLICT (%5$s) DO UPDATE SET
+        %6$s
+      WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
+        < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
       RETURNING (xmax = 0) AS was_insert
     )
     SELECT
@@ -254,9 +256,12 @@ BEGIN
       COUNT(*) FILTER (WHERE NOT was_insert)
     FROM upserted
   $q$,
-    p_table, v_ts, v_unique_filter,
-    p_table, v_col_list, v_col_list, v_pk, v_set_clause,
-    p_table, v_ts, v_ts
+    p_table,
+    v_ts,
+    v_src_extra,
+    v_col_list,
+    v_pk,
+    v_set_clause
   );
 
   BEGIN
