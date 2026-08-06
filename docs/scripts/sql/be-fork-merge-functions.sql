@@ -157,25 +157,8 @@ BEGIN
       SELECT %s FROM src
       ON CONFLICT (%s) DO UPDATE SET
         %s
-      WHERE (
-        SELECT COALESCE(
-          CASE
-            WHEN %L = 'updated_at' THEN public.%I.updated_at
-            WHEN %L = 'created_at' THEN public.%I.created_at
-            ELSE public.%I.refreshed_at
-          END,
-          'epoch'::timestamptz
-        )
-      ) < (
-        SELECT COALESCE(
-          CASE
-            WHEN %L = 'updated_at' THEN EXCLUDED.updated_at
-            WHEN %L = 'created_at' THEN EXCLUDED.created_at
-            ELSE EXCLUDED.refreshed_at
-          END,
-          'epoch'::timestamptz
-        )
-      )
+      WHERE COALESCE(public.%I.%I, 'epoch'::timestamptz)
+        < COALESCE(EXCLUDED.%I, 'epoch'::timestamptz)
       RETURNING (xmax = 0) AS was_insert
     )
     SELECT
@@ -185,8 +168,7 @@ BEGIN
   $q$,
     p_table, v_ts,
     p_table, v_col_list, v_col_list, v_pk, v_set_clause,
-    v_ts, p_table, v_ts, p_table, p_table,
-    v_ts, v_ts
+    p_table, v_ts, v_ts
   );
 
   BEGIN
