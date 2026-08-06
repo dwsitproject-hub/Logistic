@@ -154,6 +154,61 @@ BEGIN
 END;
 $$;
 
+/** LEFT JOIN to map fork rows onto existing public rows by business natural key (PO+STO, PO, etc.). */
+CREATE OR REPLACE FUNCTION be_fork.natural_key_join_sql(p_table text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE p_table
+    WHEN 'sap_processed_data' THEN
+      $j$LEFT JOIN public.sap_processed_data p ON (
+        NULLIF(TRIM(COALESCE(r.po_number::text, '')), '') IS NOT NULL
+        AND TRIM(COALESCE(p.po_number::text, '')) = TRIM(COALESCE(r.po_number::text, ''))
+        AND COALESCE(NULLIF(TRIM(COALESCE(p.sto_number::text, '')), ''), '') =
+            COALESCE(NULLIF(TRIM(COALESCE(r.sto_number::text, '')), ''), '')
+      )$j$
+    WHEN 'contracts' THEN
+      $j$LEFT JOIN public.contracts p ON (
+        NULLIF(TRIM(COALESCE(r.po_number::text, '')), '') IS NOT NULL
+        AND TRIM(COALESCE(p.po_number::text, '')) = TRIM(COALESCE(r.po_number::text, ''))
+      )$j$
+    WHEN 'shipments' THEN
+      $j$LEFT JOIN public.shipments p ON (
+        p.contract_id = r.contract_id
+        AND p.shipment_id IS NOT DISTINCT FROM r.shipment_id
+      )$j$
+    ELSE ''
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION be_fork.remapped_select_sql(p_table text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_select text;
+BEGIN
+  IF be_fork.natural_key_join_sql(p_table) = '' THEN
+    RETURN 'b.*';
+  END IF;
+
+  SELECT string_agg(
+    CASE
+      WHEN column_name = 'id' THEN 'COALESCE(p.id, r.id) AS id'
+      ELSE format('r.%I', column_name)
+    END,
+    ', ' ORDER BY ordinal_position
+  )
+  INTO v_select
+  FROM information_schema.columns
+  WHERE table_schema = 'be_fork' AND table_name = p_table;
+
+  RETURN COALESCE(v_select, 'r.*');
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION be_fork.merge_table(
   p_table text,
   p_cutoff timestamptz DEFAULT '2026-08-03'::timestamptz
@@ -169,6 +224,8 @@ DECLARE
   v_unique_filter text;
   v_fk_filter text;
   v_src_extra text;
+  v_natural_join text;
+  v_remap_select text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
@@ -236,33 +293,71 @@ BEGIN
   v_unique_filter := be_fork.unique_insert_exclude_sql(p_table);
   v_fk_filter := be_fork.fk_parent_exists_sql(p_table);
   v_src_extra := coalesce(v_unique_filter, '') || coalesce(v_fk_filter, '');
+  v_natural_join := be_fork.natural_key_join_sql(p_table);
+  v_remap_select := be_fork.remapped_select_sql(p_table);
 
-  v_sql := format($q$
-    WITH src AS (
-      SELECT b.* FROM be_fork.%1$I b
-      WHERE b.%2$I >= $1%3$s
-    ),
-    upserted AS (
-      INSERT INTO public.%1$I (%4$s)
-      SELECT %4$s FROM src
-      ON CONFLICT (%5$s) DO UPDATE SET
-        %6$s
-      WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
-        < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
-      RETURNING (xmax = 0) AS was_insert
-    )
-    SELECT
-      COUNT(*) FILTER (WHERE was_insert),
-      COUNT(*) FILTER (WHERE NOT was_insert)
-    FROM upserted
-  $q$,
-    p_table,
-    v_ts,
-    v_src_extra,
-    v_col_list,
-    v_pk,
-    v_set_clause
-  );
+  IF v_natural_join = '' THEN
+    v_sql := format($q$
+      WITH src AS (
+        SELECT b.* FROM be_fork.%1$I b
+        WHERE b.%2$I >= $1%3$s
+      ),
+      upserted AS (
+        INSERT INTO public.%1$I (%4$s)
+        SELECT %4$s FROM src
+        ON CONFLICT (%5$s) DO UPDATE SET
+          %6$s
+        WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
+          < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
+        RETURNING (xmax = 0) AS was_insert
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE was_insert),
+        COUNT(*) FILTER (WHERE NOT was_insert)
+      FROM upserted
+    $q$,
+      p_table,
+      v_ts,
+      v_src_extra,
+      v_col_list,
+      v_pk,
+      v_set_clause
+    );
+  ELSE
+    v_sql := format($q$
+      WITH src_raw AS (
+        SELECT b.* FROM be_fork.%1$I b
+        WHERE b.%2$I >= $1%3$s
+      ),
+      src AS (
+        SELECT %7$s
+        FROM src_raw r
+        %8$s
+      ),
+      upserted AS (
+        INSERT INTO public.%1$I (%4$s)
+        SELECT %4$s FROM src
+        ON CONFLICT (%5$s) DO UPDATE SET
+          %6$s
+        WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
+          < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
+        RETURNING (xmax = 0) AS was_insert
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE was_insert),
+        COUNT(*) FILTER (WHERE NOT was_insert)
+      FROM upserted
+    $q$,
+      p_table,
+      v_ts,
+      v_src_extra,
+      v_col_list,
+      v_pk,
+      v_set_clause,
+      v_remap_select,
+      v_natural_join
+    );
+  END IF;
 
   BEGIN
     EXECUTE v_sql INTO v_ins, v_upd USING p_cutoff;
