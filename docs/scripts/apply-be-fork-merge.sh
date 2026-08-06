@@ -63,11 +63,12 @@ for t in "${BE_FORK_MERGE_TABLES[@]}"; do
   new_ids="$(psql_remote -Atc "SELECT be_fork.preview_new_ids('$t', '$CUTOFF'::timestamptz)" 2>/dev/null || echo "?")"
 
   if [[ "$APPLY" == "true" ]]; then
-    result="$(psql_remote -q -Atc "SELECT * FROM be_fork.merge_table('$t', '$CUTOFF'::timestamptz)" 2>/dev/null)" || {
-      echo "ERROR merging $t: ${result:-psql failed}" >&2
+    result="$(psql_remote -q -Atc "SELECT * FROM be_fork.merge_table('$t', '$CUTOFF'::timestamptz)" 2>&1)" || true
+    counts="$(parse_merge_counts "$result")" || {
+      echo "ERROR merging $t:" >&2
+      printf '%s\n' "$result" >&2
       exit 1
     }
-    counts="$(parse_merge_counts "$result")" || echo "WARN: unexpected merge output for $t: $result" >&2
     ins="$(echo "$counts" | cut -d'|' -f1)"
     upd="$(echo "$counts" | cut -d'|' -f2)"
     ins="${ins:-0}"
