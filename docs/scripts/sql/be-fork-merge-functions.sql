@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-13
+-- Version: 20260806-14
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-13'::text;
+  SELECT '20260806-14'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
@@ -128,8 +128,19 @@ BEGIN
     WHERE tc.table_schema = 'be_fork'
       AND tc.table_name = p_table
       AND tc.constraint_type = 'UNIQUE'
-    GROUP BY tc.constraint_name, kcu.column_name
-    HAVING COUNT(*) = 1
+      AND tc.constraint_name IN (
+        SELECT uq.constraint_name
+        FROM information_schema.table_constraints uq
+        JOIN information_schema.key_column_usage uq_kcu
+          ON uq.constraint_name = uq_kcu.constraint_name
+         AND uq.table_schema = uq_kcu.table_schema
+         AND uq.table_name = uq_kcu.table_name
+        WHERE uq.table_schema = 'be_fork'
+          AND uq.table_name = p_table
+          AND uq.constraint_type = 'UNIQUE'
+        GROUP BY uq.constraint_name
+        HAVING COUNT(*) = 1
+      )
   LOOP
     v_filters := v_filters || format(
       ' AND NOT EXISTS (SELECT 1 FROM public.%I p WHERE p.%I = b.%I AND NOT (%s))',
