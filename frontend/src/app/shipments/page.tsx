@@ -1206,6 +1206,7 @@ function ShipmentsPageContent() {
   const [prePlannedAcceptedGroups, setPrePlannedAcceptedGroups] = useState<PrePlannedGroup[]>([])
   const [prePlannedUngroupedCount, setPrePlannedUngroupedCount] = useState(0)
   const [acceptingPrePlannedGroupId, setAcceptingPrePlannedGroupId] = useState<string | null>(null)
+  const [revertingPrePlannedGroupId, setRevertingPrePlannedGroupId] = useState<string | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -2169,7 +2170,9 @@ function ShipmentsPageContent() {
     }
   }
 
-  const handleRevertPrePlannedGroup = async (groupId: string) => {
+  const handleRevertPrePlannedGroup = useCallback(async (groupId: string) => {
+    if (revertingPrePlannedGroupId) return
+    setRevertingPrePlannedGroupId(groupId)
     try {
       await revertPrePlannedGroup(groupId)
       await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
@@ -2178,8 +2181,15 @@ function ShipmentsPageContent() {
       void fetchShipments(page, undefined, { force: true })
     } catch {
       // Silently ignore — UI will refresh on next fetch.
+    } finally {
+      setRevertingPrePlannedGroupId(null)
     }
-  }
+  }, [
+    revertingPrePlannedGroupId,
+    page,
+    refetchPrePlannedAcceptedGroups,
+    refetchPrePlannedGroups,
+  ])
 
   const isContractBacklogRow = (shipment: Shipment): boolean =>
     String(shipment.row_kind ?? '').trim() === 'contract_backlog'
@@ -3659,6 +3669,7 @@ function ShipmentsPageContent() {
           const group = acceptedGroup
           if (!group) return <span className="text-xs text-gray-400">—</span>
           const tooltipText = formatPrePlannedGroupTooltip(group)
+          const isReverting = revertingPrePlannedGroupId === group.id
           return (
             <div className="flex items-center gap-1">
               <Tooltip>
@@ -3678,12 +3689,20 @@ function ShipmentsPageContent() {
                     size="icon"
                     className="h-6 w-6 bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
                     onClick={() => void handleRevertPrePlannedGroup(group.id)}
-                    aria-label="Revert preplanned grouping"
+                    disabled={isReverting}
+                    aria-label={isReverting ? 'Reverting preplanned grouping' : 'Revert preplanned grouping'}
+                    aria-busy={isReverting}
                   >
-                    <Undo2 className="h-3 w-3" />
+                    {isReverting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Undo2 className="h-3 w-3" />
+                    )}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="top">Revert to Unplanned</TooltipContent>
+                <TooltipContent side="top">
+                  {isReverting ? 'Reverting to Unplanned…' : 'Revert to Unplanned'}
+                </TooltipContent>
               </Tooltip>
             </div>
           )
@@ -4378,7 +4397,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.ata_vessel_start_discharging || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
     },
-  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
+  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, revertingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
 
   const defaultVisibleColumnIds = useMemo(() => {
     const allIds = compactColumns.map((c) => c.id)
