@@ -3695,12 +3695,6 @@ function ShipmentsPageContent() {
         const isAccepting = acceptingPrePlannedGroupId === group.id
         return (
           <div className="flex items-center gap-1">
-            {isAccepting ? (
-              <Loader2
-                className="h-3.5 w-3.5 shrink-0 animate-spin text-green-600"
-                aria-hidden
-              />
-            ) : null}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge variant="secondary" className="cursor-default whitespace-nowrap">
