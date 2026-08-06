@@ -35,8 +35,20 @@ echo "Staging: $STAGING_SCHEMA"
 echo "Cutoff : $CUTOFF"
 echo ""
 
-psql_remote -q -v ON_ERROR_STOP=1 -f "$ROOT/docs/scripts/sql/be-fork-merge-functions.sql" >/dev/null 2>&1 || true
+echo "Loading merge SQL functions..."
+if ! psql_remote -v ON_ERROR_STOP=1 -f "$ROOT/docs/scripts/sql/be-fork-merge-functions.sql"; then
+  echo "ERROR: failed to load docs/scripts/sql/be-fork-merge-functions.sql" >&2
+  exit 1
+fi
 
+MERGE_SQL_VER="$(psql_remote -Atc "SELECT be_fork.merge_sql_version()" 2>/dev/null || echo "")"
+if [[ "$MERGE_SQL_VER" != "20260806-5" ]]; then
+  echo "ERROR: be_fork.merge_sql_version() is '$MERGE_SQL_VER' (expected 20260806-5)." >&2
+  echo "       git pull origin SIT, then reload SQL manually if needed." >&2
+  exit 1
+fi
+echo "Merge SQL version: $MERGE_SQL_VER"
+echo ""
 parse_merge_counts() {
   local raw="$1"
   local line

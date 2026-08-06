@@ -1,7 +1,16 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
+-- Version: 20260806-5
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
+
+CREATE OR REPLACE FUNCTION be_fork.merge_sql_version()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT '20260806-5'::text;
+$$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
 RETURNS text
@@ -132,7 +141,7 @@ BEGIN
 END;
 $$;
 
-/** Require FK parent rows to exist in public before insert/update. */
+-- Require FK parent rows to exist in public before insert/update.
 CREATE OR REPLACE FUNCTION be_fork.fk_parent_exists_sql(p_table text)
 RETURNS text
 LANGUAGE plpgsql
@@ -177,7 +186,7 @@ BEGIN
 END;
 $$;
 
-/** LEFT JOIN to map fork rows onto existing public rows by business natural key (PO+STO, PO, etc.). */
+-- LEFT JOIN to map fork rows onto existing public rows by business natural key (PO+STO, PO, etc.).
 CREATE OR REPLACE FUNCTION be_fork.natural_key_join_sql(p_table text)
 RETURNS text
 LANGUAGE sql
@@ -319,14 +328,15 @@ BEGIN
   v_src_extra := coalesce(v_unique_filter, '') || coalesce(v_fk_filter, '');
   v_natural_join := be_fork.natural_key_join_sql(p_table);
   v_remap_select := be_fork.remapped_select_sql(p_table);
+  v_pk_b := be_fork.pk_qualified_columns('be_fork', p_table, 'b');
 
   IF v_natural_join = '' THEN
     v_sql := format($q$
       WITH src AS (
-        SELECT DISTINCT ON (b.id) b.*
+        SELECT DISTINCT ON (%7$s) b.*
         FROM be_fork.%1$I b
         WHERE b.%2$I >= $1%3$s
-        ORDER BY b.id, b.%2$I DESC NULLS LAST
+        ORDER BY %7$s, b.%2$I DESC NULLS LAST
       ),
       upserted AS (
         INSERT INTO public.%1$I (%4$s)
@@ -347,7 +357,8 @@ BEGIN
       v_src_extra,
       v_col_list,
       v_pk,
-      v_set_clause
+      v_set_clause,
+      v_pk_b
     );
   ELSE
     v_sql := format($q$
@@ -361,9 +372,9 @@ BEGIN
         %8$s
       ),
       src AS (
-        SELECT DISTINCT ON (id) src_mapped.*
+        SELECT DISTINCT ON (%5$s) src_mapped.*
         FROM src_mapped
-        ORDER BY id, %2$I DESC NULLS LAST
+        ORDER BY %5$s, %2$I DESC NULLS LAST
       ),
       upserted AS (
         INSERT INTO public.%1$I (%4$s)
