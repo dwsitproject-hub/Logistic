@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-5
+-- Version: 20260806-6
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-5'::text;
+  SELECT '20260806-6'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
@@ -207,29 +207,167 @@ AS $$
       )$j$
     WHEN 'shipments' THEN
       $j$LEFT JOIN public.shipments p ON (
-        p.contract_id = r.contract_id
-        AND p.shipment_id IS NOT DISTINCT FROM r.shipment_id
+        p.shipment_id IS NOT DISTINCT FROM r.shipment_id
+        AND p.contract_id = COALESCE((
+          SELECT COALESCE(pubc.id, fc.id)
+          FROM be_fork.contracts fc
+          LEFT JOIN public.contracts pubc ON (
+            NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+            AND TRIM(COALESCE(pubc.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+          )
+          WHERE fc.id = r.contract_id
+          LIMIT 1
+        ), r.contract_id)
+      )$j$
+    WHEN 'contract_stos' THEN
+      $j$LEFT JOIN public.contract_stos p ON (
+        p.sto_number IS NOT DISTINCT FROM r.sto_number
+        AND p.contract_id = COALESCE((
+          SELECT COALESCE(pubc.id, fc.id)
+          FROM be_fork.contracts fc
+          LEFT JOIN public.contracts pubc ON (
+            NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+            AND TRIM(COALESCE(pubc.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+          )
+          WHERE fc.id = r.contract_id
+          LIMIT 1
+        ), r.contract_id)
       )$j$
     ELSE ''
   END;
 $$;
 
-CREATE OR REPLACE FUNCTION be_fork.remapped_select_sql(p_table text)
+CREATE OR REPLACE FUNCTION be_fork.fk_remap_expr(p_table text, p_column text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  v_ref_table text;
+  v_row_alias text := 'r';
+BEGIN
+  SELECT ref_cls.relname
+  INTO v_ref_table
+  FROM pg_constraint c
+  JOIN pg_class src_cls ON src_cls.oid = c.conrelid
+  JOIN pg_namespace src_ns ON src_ns.oid = src_cls.relnamespace
+  JOIN pg_attribute src_a
+    ON src_a.attrelid = c.conrelid
+   AND src_a.attnum = ANY (c.conkey)
+   AND NOT src_a.attisdropped
+  JOIN pg_class ref_cls ON ref_cls.oid = c.confrelid
+  JOIN pg_namespace ref_ns ON ref_ns.oid = ref_cls.relnamespace
+  WHERE c.contype = 'f'
+    AND src_ns.nspname = 'public'
+    AND src_cls.relname = p_table
+    AND src_a.attname = p_column
+    AND ref_ns.nspname = 'public'
+    AND array_length(c.conkey, 1) = 1
+  LIMIT 1;
+
+  IF v_ref_table IS NULL THEN
+    RETURN format('%s.%I', v_row_alias, p_column);
+  END IF;
+
+  CASE v_ref_table
+    WHEN 'contracts' THEN
+      RETURN format($q$COALESCE((
+        SELECT COALESCE(pub.id, fc.id)
+        FROM be_fork.contracts fc
+        LEFT JOIN public.contracts pub ON (
+          NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+          AND TRIM(COALESCE(pub.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+        )
+        WHERE fc.id = %1$I.%2$I
+        LIMIT 1
+      ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    WHEN 'shipments' THEN
+      RETURN format($q$COALESCE((
+        SELECT COALESCE(pub.id, fs.id)
+        FROM be_fork.shipments fs
+        LEFT JOIN public.shipments pub ON (
+          pub.shipment_id IS NOT DISTINCT FROM fs.shipment_id
+          AND pub.contract_id = COALESCE((
+            SELECT COALESCE(pubc.id, fc.id)
+            FROM be_fork.contracts fc
+            LEFT JOIN public.contracts pubc ON (
+              NULLIF(TRIM(COALESCE(fc.po_number::text, '')), '') IS NOT NULL
+              AND TRIM(COALESCE(pubc.po_number::text, '')) = TRIM(COALESCE(fc.po_number::text, ''))
+            )
+            WHERE fc.id = fs.contract_id
+            LIMIT 1
+          ), fs.contract_id)
+        )
+        WHERE fs.id = %1$I.%2$I
+        LIMIT 1
+      ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    WHEN 'sap_data_imports' THEN
+      RETURN format($q$COALESCE((
+        SELECT COALESCE(pub.id, fi.id)
+        FROM be_fork.sap_data_imports fi
+        LEFT JOIN public.sap_data_imports pub ON (
+          pub.import_date IS NOT DISTINCT FROM fi.import_date
+          AND pub.import_timestamp IS NOT DISTINCT FROM fi.import_timestamp
+        )
+        WHERE fi.id = %1$I.%2$I
+        LIMIT 1
+      ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    WHEN 'sap_raw_data' THEN
+      RETURN format($q$COALESCE((
+        SELECT COALESCE(pub.id, fr.id)
+        FROM be_fork.sap_raw_data fr
+        LEFT JOIN public.sap_raw_data pub ON (
+          pub.row_number = fr.row_number
+          AND pub.import_id = COALESCE((
+            SELECT COALESCE(pubi.id, ffi.id)
+            FROM be_fork.sap_data_imports ffi
+            LEFT JOIN public.sap_data_imports pubi ON (
+              pubi.import_date IS NOT DISTINCT FROM ffi.import_date
+              AND pubi.import_timestamp IS NOT DISTINCT FROM ffi.import_timestamp
+            )
+            WHERE ffi.id = fr.import_id
+            LIMIT 1
+          ), fr.import_id)
+        )
+        WHERE fr.id = %1$I.%2$I
+        LIMIT 1
+      ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    WHEN 'sap_processed_data' THEN
+      RETURN format($q$COALESCE((
+        SELECT COALESCE(pub.id, fp.id)
+        FROM be_fork.sap_processed_data fp
+        LEFT JOIN public.sap_processed_data pub ON (
+          NULLIF(TRIM(COALESCE(fp.po_number::text, '')), '') IS NOT NULL
+          AND TRIM(COALESCE(pub.po_number::text, '')) = TRIM(COALESCE(fp.po_number::text, ''))
+          AND COALESCE(NULLIF(TRIM(COALESCE(fp.sto_number::text, '')), ''), '') =
+              COALESCE(NULLIF(TRIM(COALESCE(pub.sto_number::text, '')), ''), '')
+        )
+        WHERE fp.id = %1$I.%2$I
+        LIMIT 1
+      ), %1$I.%2$I)$q$, v_row_alias, p_column);
+    ELSE
+      RETURN format('%s.%I', v_row_alias, p_column);
+  END CASE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION be_fork.merge_select_sql(p_table text)
 RETURNS text
 LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
   v_select text;
+  v_natural_join text;
 BEGIN
-  IF be_fork.natural_key_join_sql(p_table) = '' THEN
-    RETURN 'b.*';
-  END IF;
+  v_natural_join := be_fork.natural_key_join_sql(p_table);
 
   SELECT string_agg(
     CASE
-      WHEN column_name = 'id' THEN 'COALESCE(p.id, r.id) AS id'
-      ELSE format('r.%I', column_name)
+      WHEN column_name = 'id' AND v_natural_join <> '' THEN
+        'COALESCE(p.id, r.id) AS id'
+      ELSE
+        be_fork.fk_remap_expr(p_table, column_name) || format(' AS %I', column_name)
     END,
     ', ' ORDER BY ordinal_position
   )
@@ -254,11 +392,9 @@ DECLARE
   v_col_list text;
   v_set_clause text;
   v_unique_filter text;
-  v_fk_filter text;
   v_src_extra text;
   v_natural_join text;
-  v_remap_select text;
-  v_pk_b text;
+  v_merge_select text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
@@ -324,82 +460,48 @@ BEGIN
   END IF;
 
   v_unique_filter := be_fork.unique_insert_exclude_sql(p_table);
-  v_fk_filter := be_fork.fk_parent_exists_sql(p_table);
-  v_src_extra := coalesce(v_unique_filter, '') || coalesce(v_fk_filter, '');
+  v_src_extra := coalesce(v_unique_filter, '');
   v_natural_join := be_fork.natural_key_join_sql(p_table);
-  v_remap_select := be_fork.remapped_select_sql(p_table);
-  v_pk_b := be_fork.pk_qualified_columns('be_fork', p_table, 'b');
+  v_merge_select := be_fork.merge_select_sql(p_table);
 
-  IF v_natural_join = '' THEN
-    v_sql := format($q$
-      WITH src AS (
-        SELECT DISTINCT ON (%7$s) b.*
-        FROM be_fork.%1$I b
-        WHERE b.%2$I >= $1%3$s
-        ORDER BY %7$s, b.%2$I DESC NULLS LAST
-      ),
-      upserted AS (
-        INSERT INTO public.%1$I (%4$s)
-        SELECT %4$s FROM src
-        ON CONFLICT (%5$s) DO UPDATE SET
-          %6$s
-        WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
-          < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
-        RETURNING (xmax = 0) AS was_insert
-      )
-      SELECT
-        COUNT(*) FILTER (WHERE was_insert),
-        COUNT(*) FILTER (WHERE NOT was_insert)
-      FROM upserted
-    $q$,
-      p_table,
-      v_ts,
-      v_src_extra,
-      v_col_list,
-      v_pk,
-      v_set_clause,
-      v_pk_b
-    );
-  ELSE
-    v_sql := format($q$
-      WITH src_raw AS (
-        SELECT b.* FROM be_fork.%1$I b
-        WHERE b.%2$I >= $1%3$s
-      ),
-      src_mapped AS (
-        SELECT %7$s
-        FROM src_raw r
-        %8$s
-      ),
-      src AS (
-        SELECT DISTINCT ON (%5$s) src_mapped.*
-        FROM src_mapped
-        ORDER BY %5$s, %2$I DESC NULLS LAST
-      ),
-      upserted AS (
-        INSERT INTO public.%1$I (%4$s)
-        SELECT %4$s FROM src
-        ON CONFLICT (%5$s) DO UPDATE SET
-          %6$s
-        WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
-          < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
-        RETURNING (xmax = 0) AS was_insert
-      )
-      SELECT
-        COUNT(*) FILTER (WHERE was_insert),
-        COUNT(*) FILTER (WHERE NOT was_insert)
-      FROM upserted
-    $q$,
-      p_table,
-      v_ts,
-      v_src_extra,
-      v_col_list,
-      v_pk,
-      v_set_clause,
-      v_remap_select,
-      v_natural_join
-    );
-  END IF;
+  v_sql := format($q$
+    WITH src_raw AS (
+      SELECT b.* FROM be_fork.%1$I b
+      WHERE b.%2$I >= $1%3$s
+    ),
+    src_mapped AS (
+      SELECT %7$s
+      FROM src_raw r
+      %8$s
+    ),
+    src AS (
+      SELECT DISTINCT ON (%5$s) src_mapped.*
+      FROM src_mapped
+      ORDER BY %5$s, %2$I DESC NULLS LAST
+    ),
+    upserted AS (
+      INSERT INTO public.%1$I (%4$s)
+      SELECT %4$s FROM src
+      ON CONFLICT (%5$s) DO UPDATE SET
+        %6$s
+      WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
+        < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
+      RETURNING (xmax = 0) AS was_insert
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE was_insert),
+      COUNT(*) FILTER (WHERE NOT was_insert)
+    FROM upserted
+  $q$,
+    p_table,
+    v_ts,
+    v_src_extra,
+    v_col_list,
+    v_pk,
+    v_set_clause,
+    v_merge_select,
+    v_natural_join
+  );
 
   BEGIN
     EXECUTE v_sql INTO v_ins, v_upd USING p_cutoff;
