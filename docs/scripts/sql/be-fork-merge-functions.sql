@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-11
+-- Version: 20260806-12
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-11'::text;
+  SELECT '20260806-12'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
@@ -193,10 +193,18 @@ LANGUAGE sql
 IMMUTABLE
 AS $$
   SELECT format($q$COALESCE((
-    SELECT COALESCE(pub.id, fo.id)
+    SELECT pub.id
     FROM be_fork.trucking_operations fo
-    LEFT JOIN public.trucking_operations pub ON (
-      pub.operation_id IS NOT DISTINCT FROM fo.operation_id
+    JOIN public.trucking_operations pub ON pub.id = fo.id
+    WHERE fo.id = %1$s
+    LIMIT 1
+  ), (
+    SELECT pub.id
+    FROM be_fork.trucking_operations fo
+    JOIN public.trucking_operations pub ON (
+      fo.operation_id IS NOT NULL
+      AND pub.operation_id IS NOT NULL
+      AND pub.operation_id IS NOT DISTINCT FROM fo.operation_id
       AND pub.contract_id = COALESCE((
         SELECT COALESCE(pubc.id, fc.id)
         FROM be_fork.contracts fc
@@ -303,16 +311,6 @@ AS $$
             LIMIT 1
           ), r.contract_id)
         )
-      )$j$
-    WHEN 'trucking_daily_actuals' THEN
-      $j$LEFT JOIN public.trucking_daily_actuals p ON (
-        p.progress_date IS NOT DISTINCT FROM r.progress_date
-        AND p.sto_number IS NOT DISTINCT FROM r.sto_number
-        AND p.trucking_operation_id = $j$ || be_fork.remap_trucking_operation_id_expr('r.trucking_operation_id') || $j$
-      )$j$
-    WHEN 'trucking_realizations' THEN
-      $j$LEFT JOIN public.trucking_realizations p ON (
-        p.trucking_operation_id = $j$ || be_fork.remap_trucking_operation_id_expr('r.trucking_operation_id') || $j$
       )$j$
     WHEN 'trucking_wb_imports' THEN
       $j$LEFT JOIN public.trucking_wb_imports p ON (
@@ -508,6 +506,18 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION be_fork.merge_conflict_target(p_table text, p_pk text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE p_table
+    WHEN 'trucking_daily_actuals' THEN 'trucking_operation_id, progress_date, sto_number'
+    WHEN 'trucking_realizations' THEN 'trucking_operation_id'
+    ELSE p_pk
+  END;
+$$;
+
 CREATE OR REPLACE FUNCTION be_fork.merge_table(
   p_table text,
   p_cutoff timestamptz DEFAULT '2026-08-03'::timestamptz
@@ -524,6 +534,8 @@ DECLARE
   v_src_extra text;
   v_natural_join text;
   v_merge_select text;
+  v_conflict text;
+  v_update_guard text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
@@ -592,6 +604,15 @@ BEGIN
   v_src_extra := coalesce(v_unique_filter, '');
   v_natural_join := be_fork.natural_key_join_sql(p_table);
   v_merge_select := be_fork.merge_select_sql(p_table);
+  v_conflict := be_fork.merge_conflict_target(p_table, v_pk);
+  IF p_table IN ('trucking_daily_actuals', 'trucking_realizations') THEN
+    v_update_guard := 'TRUE';
+  ELSE
+    v_update_guard := format(
+      'COALESCE(public.%I.%I, ''epoch''::timestamptz) < COALESCE(EXCLUDED.%I, ''epoch''::timestamptz)',
+      p_table, v_ts, v_ts
+    );
+  END IF;
 
   v_sql := format($q$
     WITH src_raw AS (
@@ -604,17 +625,16 @@ BEGIN
       %8$s
     ),
     src AS (
-      SELECT DISTINCT ON (%5$s) src_mapped.*
+      SELECT DISTINCT ON (%9$s) src_mapped.*
       FROM src_mapped
-      ORDER BY %5$s, %2$I DESC NULLS LAST
+      ORDER BY %9$s, %2$I DESC NULLS LAST
     ),
     upserted AS (
       INSERT INTO public.%1$I (%4$s)
       SELECT %4$s FROM src
-      ON CONFLICT (%5$s) DO UPDATE SET
+      ON CONFLICT (%9$s) DO UPDATE SET
         %6$s
-      WHERE COALESCE(public.%1$I.%2$I, 'epoch'::timestamptz)
-        < COALESCE(EXCLUDED.%2$I, 'epoch'::timestamptz)
+      WHERE %10$s
       RETURNING (xmax = 0) AS was_insert
     )
     SELECT
@@ -629,7 +649,9 @@ BEGIN
     v_pk,
     v_set_clause,
     v_merge_select,
-    v_natural_join
+    v_natural_join,
+    v_conflict,
+    v_update_guard
   );
 
   BEGIN
