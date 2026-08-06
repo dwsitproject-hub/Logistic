@@ -44,6 +44,29 @@ AS $$
     AND tc.constraint_type = 'PRIMARY KEY';
 $$;
 
+CREATE OR REPLACE FUNCTION be_fork.pk_qualified_columns(
+  p_schema text,
+  p_table text,
+  p_alias text
+)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT COALESCE(
+    string_agg(format('%s.%I', p_alias, kcu.column_name), ', ' ORDER BY kcu.ordinal_position),
+    ''
+  )
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu
+    ON tc.constraint_name = kcu.constraint_name
+   AND tc.table_schema = kcu.table_schema
+   AND tc.table_name = kcu.table_name
+  WHERE tc.table_schema = p_schema
+    AND tc.table_name = p_table
+    AND tc.constraint_type = 'PRIMARY KEY';
+$$;
+
 CREATE OR REPLACE FUNCTION be_fork.pk_match_sql(
   p_schema text,
   p_table text,
@@ -226,6 +249,7 @@ DECLARE
   v_src_extra text;
   v_natural_join text;
   v_remap_select text;
+  v_pk_b text;
   v_sql text;
   v_ins bigint := 0;
   v_upd bigint := 0;
