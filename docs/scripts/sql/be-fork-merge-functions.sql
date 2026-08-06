@@ -1,6 +1,6 @@
 -- BE fork merge helpers: upsert from staging schema be_fork → public.
 -- Requires staging tables created by load-be-fork-to-remote-staging.sh
--- Version: 20260806-12
+-- Version: 20260806-13
 
 CREATE SCHEMA IF NOT EXISTS be_fork;
 
@@ -9,7 +9,7 @@ RETURNS text
 LANGUAGE sql
 IMMUTABLE
 AS $$
-  SELECT '20260806-12'::text;
+  SELECT '20260806-13'::text;
 $$;
 
 CREATE OR REPLACE FUNCTION be_fork.ts_column(p_schema text, p_table text)
