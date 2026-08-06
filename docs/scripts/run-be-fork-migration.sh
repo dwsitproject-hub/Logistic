@@ -13,6 +13,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
+# shellcheck source=docs/scripts/lib/be-fork-migration-common.sh
+source "$ROOT/docs/scripts/lib/be-fork-migration-common.sh"
 
 APPLY=false
 SKIP_BACKUP=false
