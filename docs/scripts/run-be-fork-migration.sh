@@ -34,9 +34,18 @@ done
 echo "========================================"
 echo " KLIP BE fork → remote DB migration"
 echo " Cutoff: ${BE_FORK_CUTOFF:-2026-08-03}"
-echo " Mode:   ${APPLY:+APPLY}${APPLY:-PREVIEW}"
+if [[ "$APPLY" == "true" ]]; then
+  echo " Mode:   APPLY"
+else
+  echo " Mode:   PREVIEW"
+fi
 echo "========================================"
 echo ""
+
+load_migration_env "$ROOT"
+if [[ "$APPLY" == "true" ]]; then
+  verify_backend_points_remote true
+fi
 
 echo ">>> Phase 0: verify & inventory"
 bash "$ROOT/docs/scripts/compare-be-fork-vs-remote.sh"

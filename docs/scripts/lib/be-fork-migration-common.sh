@@ -179,7 +179,43 @@ delta_count_local_since_cutoff() {
     "SELECT COUNT(*) FROM public.$t WHERE $ts_col >= '$cutoff'::timestamptz" 2>/dev/null || echo "ERR"
 }
 
+resolve_backend_db_target() {
+  # DB_* may live in env_file only (dotenv inside Node) — not always in printenv.
+  BACKEND_DB_HOST=""
+  BACKEND_DB_PORT=""
+
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'klip-backend'; then
+    BACKEND_DB_HOST="$(docker exec klip-backend printenv DB_HOST 2>/dev/null || true)"
+    BACKEND_DB_PORT="$(docker exec klip-backend printenv DB_PORT 2>/dev/null || true)"
+
+    if [[ -z "$BACKEND_DB_HOST" ]]; then
+      BACKEND_DB_HOST="$(
+        docker inspect klip-backend --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+          | sed -n 's/^DB_HOST=//p' | head -1
+      )"
+    fi
+    if [[ -z "$BACKEND_DB_PORT" ]]; then
+      BACKEND_DB_PORT="$(
+        docker inspect klip-backend --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+          | sed -n 's/^DB_PORT=//p' | head -1
+      )"
+    fi
+  fi
+
+  # Host env files — what compose / dotenv actually configure
+  if [[ -z "$BACKEND_DB_HOST" ]]; then
+    BACKEND_DB_HOST="${DB_HOST:-}"
+  fi
+  if [[ -z "$BACKEND_DB_PORT" ]]; then
+    BACKEND_DB_PORT="${DB_PORT:-}"
+  fi
+
+  export BACKEND_DB_HOST BACKEND_DB_PORT
+}
+
 verify_backend_points_remote() {
+  local strict="${1:-false}"
+
   if ! command -v docker >/dev/null 2>&1; then
     echo "WARN: klip-backend not checked (docker missing)"
     return 0
@@ -188,15 +224,32 @@ verify_backend_points_remote() {
     echo "WARN: klip-backend not running — skip DB_HOST check"
     return 0
   fi
-  local host port
-  host="$(docker exec klip-backend printenv DB_HOST 2>/dev/null || true)"
-  port="$(docker exec klip-backend printenv DB_PORT 2>/dev/null || true)"
-  echo "klip-backend DB_HOST=$host DB_PORT=$port"
-  if is_docker_dns_db_host "$host"; then
-    echo "ERROR: backend still points at local fork ($host). Fix env before merge." >&2
-    exit 1
+
+  resolve_backend_db_target
+  local host="$BACKEND_DB_HOST"
+  local port="$BACKEND_DB_PORT"
+
+  echo "klip-backend DB_HOST=${host:-<unset>} DB_PORT=${port:-<unset>} (container env + backend/.env)"
+
+  if [[ -z "$host" ]]; then
+    if [[ "$strict" == "true" ]]; then
+      echo "ERROR: DB_HOST not found in container or backend/.env — confirm env before merge." >&2
+      exit 1
+    fi
+    echo "WARN: DB_HOST unset — preview continues; set DB_HOST=172.28.92.60 in backend/.env before --apply."
+    return 0
   fi
-  if [[ "$host" != "$REMOTE_DB_HOST" || "$port" != "$REMOTE_DB_PORT" ]]; then
-    echo "WARN: backend DB target ($host:$port) differs from expected remote ($REMOTE_DB_HOST:$REMOTE_DB_PORT)"
+
+  if is_docker_dns_db_host "$host"; then
+    if [[ "$strict" == "true" ]]; then
+      echo "ERROR: backend still points at local fork ($host). Fix env before merge." >&2
+      exit 1
+    fi
+    echo "WARN: backend DB_HOST=$host looks like local fork — preview continues; fix before --apply."
+    return 0
+  fi
+
+  if [[ "$host" != "$REMOTE_DB_HOST" || "${port:-5442}" != "$REMOTE_DB_PORT" ]]; then
+    echo "WARN: backend DB target ($host:${port:-5432}) differs from migration remote ($REMOTE_DB_HOST:$REMOTE_DB_PORT)"
   fi
 }

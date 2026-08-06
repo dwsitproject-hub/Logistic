@@ -23,9 +23,13 @@ STAGING_SCHEMA="${BE_FORK_STAGING_SCHEMA:-be_fork}"
 CUTOFF="${BE_FORK_CUTOFF:-2026-08-03}"
 
 load_migration_env "$ROOT"
-verify_backend_points_remote
+if [[ "$APPLY" == "true" ]]; then
+  verify_backend_points_remote true
+else
+  verify_backend_points_remote false
+fi
 
-echo "=== BE fork merge ${APPLY:+APPLY}${APPLY:-PREVIEW} ==="
+echo "=== BE fork merge $(if [[ "$APPLY" == "true" ]]; then echo APPLY; else echo PREVIEW; fi) ==="
 echo "Remote : $REMOTE_DB_HOST:$REMOTE_DB_PORT/$DB_NAME"
 echo "Staging: $STAGING_SCHEMA"
 echo "Cutoff : $CUTOFF"

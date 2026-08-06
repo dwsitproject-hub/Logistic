@@ -17,7 +17,7 @@ mkdir -p "$OUT_DIR"
 
 load_migration_env "$ROOT"
 require_local_fork_postgres
-verify_backend_points_remote
+verify_backend_points_remote false
 
 echo "=== Phase 0: inventory BE fork vs remote ==="
 echo "Local fork : klip-postgres (docker)"
