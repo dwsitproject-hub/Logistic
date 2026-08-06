@@ -8,7 +8,8 @@
 # Notes:
 # - Email is sent only when open contracts match (cargo readiness <= 14 days, missing ETA).
 # - Without --recipients-only, DB Logistics recipients + CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS are included.
-# - Requires SMTP_* configured in /opt/klip/.env and backend container rebuilt after git pull.
+# - Requires SMTP_* configured in /opt/klip/.env and backend container recreated.
+#   One-shot setup: bash docs/scripts/setup-sit-smtp-eta-reminder-staging.sh --apply
 set -euo pipefail
 
 TO=""
