@@ -218,14 +218,40 @@ export async function markPipelineDailySummaryStale(
   schedulePipelineDailySummaryRefreshIfNeeded();
 }
 
+/**
+ * True from the moment a background refresh is scheduled until it finishes.
+ *
+ * The debounce below is time-based: lastStaleRefreshAt is stamped when a refresh is *scheduled*,
+ * not when it *completes*. The trucking half of refreshAll() generates a ~691KB INSERT that took
+ * 48.5s on staging (2026-08-06), so a second trigger 61s later started another full refresh while
+ * the first was still running - two of the heaviest statements in the app writing the same tables
+ * at once, on a 2-vCPU host shared with a dozen containers.
+ *
+ * A completion-based guard makes overlap impossible however slow a refresh becomes. Skipping is
+ * safe: the staleness flag stays set, so the next trigger after the in-flight run finishes will
+ * refresh, and readers fall back to live queries while it is stale.
+ */
+let refreshInFlight = false;
+
 function schedulePipelineDailySummaryRefreshIfNeeded(): void {
+  // Completion-based guard first - it must hold even when the time debounce has expired.
+  if (refreshInFlight) return;
+
   const now = Date.now();
   if (now - lastStaleRefreshAt < STALE_REFRESH_DEBOUNCE_MS) return;
   lastStaleRefreshAt = now;
+
+  // Set synchronously, before yielding to setImmediate, or two callers in the same tick both
+  // schedule a refresh.
+  refreshInFlight = true;
   setImmediate(() => {
-    PipelineDailySummaryService.refreshAll().catch((err) => {
-      logger.warn('Background pipeline daily summary refresh failed', { err });
-    });
+    PipelineDailySummaryService.refreshAll()
+      .catch((err) => {
+        logger.warn('Background pipeline daily summary refresh failed', { err });
+      })
+      .finally(() => {
+        refreshInFlight = false;
+      });
   });
 }
 
