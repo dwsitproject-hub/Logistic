@@ -1002,7 +1002,7 @@ export function buildPaginatedListQuery(
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
-    `${field} ${sortDir} NULLS LAST, created_at DESC`,
+    `${field} ${sortDir} NULLS LAST, created_at DESC, id`,
     normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
@@ -1061,7 +1061,7 @@ export function buildTruckingListPageQueryWithoutInlineCount(
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
-    `${field} ${sortDir} NULLS LAST, created_at DESC`,
+    `${field} ${sortDir} NULLS LAST, created_at DESC, id`,
     normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
@@ -1470,7 +1470,7 @@ async function loadTruckingStageSnapshotPage(
     );
     const orderBy = buildListOrderByWithSapStoPriority(
       'tf.sto_number',
-      `${SORT_FIELD_BY_KEY['supplier'] || 'supplier'} ${sortDir} NULLS LAST, created_at DESC`,
+      `${SORT_FIELD_BY_KEY['supplier'] || 'supplier'} ${sortDir} NULLS LAST, created_at DESC, id`,
       stage,
     );
     const text = `
