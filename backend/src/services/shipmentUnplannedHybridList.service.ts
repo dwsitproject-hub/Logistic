@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 import { AuthRequest } from '../middleware/auth';
 import {
   buildShipmentListEnrichedPageQuery,
@@ -215,13 +216,87 @@ async function fetchShipmentExecutionPage(
   return rows;
 }
 
+type HybridListResult = ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown };
+
+/*
+ * Response cache for the hybrid list.
+ *
+ * The default Shipments request (status empty or 'ALL') is routed here by
+ * isAllHybridListRequest, NOT through loadShipmentListPage - so it never touched PAGE_CACHE and
+ * every single page load re-ran three queries: countHybridBreakdown plus the contract-backlog
+ * and shipment-execution pages. Measured on a restore of staging: two identical back-to-back
+ * requests both cost ~4s, and that repeated work is a direct contributor to the staging CPU
+ * spikes, because the most-opened page in the app never served anything from memory.
+ *
+ * Same TTL and eviction bound as PAGE_CACHE so behaviour is consistent across list paths, plus
+ * in-flight sharing: concurrent identical requests (several users, or a refresh burst) run the
+ * queries once and all receive that result.
+ *
+ * Registered with the invalidation registry so an edit clears it - without that a cached list
+ * would keep showing pre-edit rows.
+ */
+const HYBRID_CACHE = new Map<string, { data: HybridListResult; expiresAt: number }>();
+const HYBRID_IN_FLIGHT = new Map<string, Promise<HybridListResult>>();
+const HYBRID_CACHE_TTL_MS = 5 * 60 * 1000;
+const HYBRID_MAX_CACHE_ENTRIES = 80;
+
+export function invalidateHybridShipmentsListCache(): void {
+  HYBRID_CACHE.clear();
+}
+
+registerListCacheInvalidator(invalidateHybridShipmentsListCache);
+
+function evictHybridCacheIfNeeded(): void {
+  const now = Date.now();
+  for (const [key, entry] of HYBRID_CACHE) {
+    if (entry.expiresAt <= now) HYBRID_CACHE.delete(key);
+  }
+  if (HYBRID_CACHE.size <= HYBRID_MAX_CACHE_ENTRIES) return;
+  const sorted = [...HYBRID_CACHE.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+  for (let i = 0; i < HYBRID_CACHE.size - HYBRID_MAX_CACHE_ENTRIES; i += 1) {
+    HYBRID_CACHE.delete(sorted[i][0]);
+  }
+}
+
 export async function resolveHybridShipmentsList(
   req: AuthRequest,
   ctx: UnplannedHybridListContext,
-): Promise<ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown }> {
+): Promise<HybridListResult> {
   const { page = 1, limit = 20 } = req.query;
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
+
+  // ctx.shipmentCtx.cacheKey already encodes every filter plus the hybrid mode suffix
+  // ('all-hybrid' / 'unplanned-hybrid'); the result is paged, so page and limit complete it.
+  const cacheKey = `${ctx.shipmentCtx.cacheKey}:p${pageNum}:l${limitNum}`;
+
+  const cached = HYBRID_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (cached) HYBRID_CACHE.delete(cacheKey);
+
+  const inFlight = HYBRID_IN_FLIGHT.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const run = computeHybridShipmentsList(ctx, pageNum, limitNum)
+    .then((data) => {
+      HYBRID_CACHE.set(cacheKey, { data, expiresAt: Date.now() + HYBRID_CACHE_TTL_MS });
+      evictHybridCacheIfNeeded();
+      return data;
+    })
+    .finally(() => {
+      HYBRID_IN_FLIGHT.delete(cacheKey);
+    });
+
+  HYBRID_IN_FLIGHT.set(cacheKey, run);
+  return run;
+}
+
+/** Unchanged hybrid list computation - extracted so the cache wraps it without altering it. */
+async function computeHybridShipmentsList(
+  ctx: UnplannedHybridListContext,
+  pageNum: number,
+  limitNum: number,
+): Promise<HybridListResult> {
   const offset = (pageNum - 1) * limitNum;
 
   const breakdown = await countHybridBreakdown(ctx);

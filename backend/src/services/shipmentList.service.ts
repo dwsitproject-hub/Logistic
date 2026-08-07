@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { invalidateRegisteredListCaches } from '../utils/listCacheRegistry';
 import { AuthRequest } from '../middleware/auth';
 import { deriveShipmentStatus, SHIPMENT_STATUS_RANK } from '../utils/shipmentStatus';
 import {
@@ -664,6 +665,9 @@ function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number):
 
 export function invalidateShipmentsListCache(): void {
   PAGE_CACHE.clear();
+  // Hybrid list keeps its own cache (see listCacheRegistry) - clear it too, or an edit
+  // leaves the default ALL view serving pre-edit rows.
+  invalidateRegisteredListCaches();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
   OUTSTANDING_QTY_CACHE.clear();
