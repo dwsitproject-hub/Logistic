@@ -428,11 +428,13 @@ export function sqlTruckingOutstandingWithinToleranceExpr(
 export function sqlTruckingPipelineIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,
+  /** Optional precomputed GR-close column (see sqlIsContractSapClosedExpr). */
+  grClosedExpr?: string,
 ): string {
   const outstanding =
     outstandingQtyExpr ?? sqlTruckingListBaseOutstandingQtyExpr(contractAlias);
   return `(
-    ${sqlIsContractSapClosedExpr(contractAlias)}
+    ${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)}
     OR ${sqlTruckingOutstandingWithinToleranceExpr(outstanding)}
   )`;
 }

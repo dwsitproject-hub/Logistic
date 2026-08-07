@@ -58,9 +58,10 @@ export function sqlTruckingPageUnplannedPredicate(
   _stoExpr?: string,
   truckingAlias = 't',
   outstandingQtyExpr?: string,
+  grClosedExpr?: string,
 ): string {
-  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
-  const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr)})`;
+  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)})`;
+  const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)})`;
   const noStartReceive = `${sqlRealizationStartDate(contractAlias)} IS NULL`;
   return `(
     ${contractOpen}
@@ -74,8 +75,9 @@ export function sqlTruckingPageUnplannedPredicate(
 export function sqlTruckingPageIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,
+  grClosedExpr?: string,
 ): string {
-  return sqlTruckingPipelineIsCompletedExpr(contractAlias, outstandingQtyExpr);
+  return sqlTruckingPipelineIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
 }
 
 /**
@@ -86,12 +88,13 @@ export function sqlTruckingPagePipelineStageExpr(
   contractAlias = 'c',
   stoExpr?: string,
   outstandingQtyExpr?: string,
+  grClosedExpr?: string,
 ): string {
   const stoCheck = stoExpr ?? `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
   const realizationStart = sqlRealizationStartDate(contractAlias);
-  const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr);
+  const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
   const notCompleted = `NOT (${isCompleted})`;
-  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
+  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)})`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
     WHEN ${isCompleted} THEN 'COMPLETED'
@@ -102,7 +105,7 @@ export function sqlTruckingPagePipelineStageExpr(
       AND ${sqlTruckingPageHasEtaOrPlanning('t')}
       AND ${notCompleted}
       THEN 'PLANNED'
-    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr)} THEN 'UNPLANNED'
+    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr, grClosedExpr)} THEN 'UNPLANNED'
     ELSE CASE
       WHEN ${sqlTruckingPageHasEtaOrPlanning('t')} THEN 'PLANNED'
       ELSE 'UNPLANNED'

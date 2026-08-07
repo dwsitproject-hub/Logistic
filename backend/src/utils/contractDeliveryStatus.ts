@@ -186,7 +186,24 @@ export function sqlContractImportStatusIsClosedExpr(
 }
 
 /** SQL predicate: true when SAP import status (or contracts.status fallback) is Close/Completed. */
-export function sqlIsContractSapClosedExpr(contractAlias = 'c'): string {
+/**
+ * Is this contract closed in SAP (GR Close / OS status)?
+ *
+ * `precomputed` lets a caller substitute a column reference for the whole expression, when the
+ * query has already resolved it once per contract in a CTE. The expression itself is large - it
+ * carries a correlated sap_processed_data subquery with several JSONB reads - and the trucking
+ * list emits it 54 times in a single 693KB statement (measured 2026-08-06), so Postgres evaluates
+ * the same per-contract answer dozens of times per row. Passing a precomputed column collapses
+ * that to one pass.
+ *
+ * Callers that pass nothing are completely unaffected, which deliberately keeps Contract
+ * Performance, Oil Loss and the shipment pipeline out of scope for this optimisation.
+ */
+export function sqlIsContractSapClosedExpr(
+  contractAlias = 'c',
+  precomputed?: string,
+): string {
+  if (precomputed) return precomputed;
   return sqlContractImportStatusIsClosedExpr(sqlContractImportStatusExpr(contractAlias));
 }
 
