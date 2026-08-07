@@ -33,13 +33,25 @@ function lateIndicatorTruckingExpr(): string {
 )`;
 }
 
-const TRUCK_COL: Record<string, string> = {
+/*
+ * Column expression map.
+ *
+ * A function rather than a constant so `status` can be built with an optional precomputed
+ * GR-close column: sqlTruckingPagePipelineStageExpr emits a correlated sap_processed_data
+ * subquery, and the trucking list statement carries 54 copies of it (693KB total, measured
+ * 2026-08-06). A module-level constant is evaluated once at import and cannot take a per-query
+ * value, so it had to become a function before the CTE can be wired in.
+ *
+ * Passing no grClosedExpr reproduces the previous map exactly.
+ */
+function truckCol(grClosedExpr?: string): Record<string, string> {
+  return {
   late_indicator: lateIndicatorTruckingExpr(),
   operation_id: 't.operation_id',
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   sto_number: 'c.sto_number',
-  status: sqlTruckingPagePipelineStageExpr('c'),
+    status: sqlTruckingPagePipelineStageExpr('c', undefined, undefined, grClosedExpr),
   location: 't.location',
   loading_location: 't.loading_location',
   unloading_location: 't.unloading_location',
@@ -68,7 +80,8 @@ const TRUCK_COL: Record<string, string> = {
   eta_trucking_completion_date: 't.eta_trucking_completion_date',
   delivery_start_date: 'c.delivery_start_date',
   delivery_end_date: 'c.delivery_end_date',
-  created_at: 't.created_at',
+    created_at: 't.created_at',
+  };
 }
 
 export function appendTruckingGlobalSearch(
@@ -93,8 +106,11 @@ export function appendTruckingGlobalSearch(
 
 export function appendTruckingColumnFilters(
   filters: ColumnFilterPayload,
-  startIndex: number
+  startIndex: number,
+  /** Optional precomputed GR-close column; see truckCol(). */
+  grClosedExpr?: string,
 ): { sql: string; params: any[]; nextIndex: number } {
+  const TRUCK_COL = truckCol(grClosedExpr)
   const parts: string[] = []
   const params: any[] = []
   let pi = startIndex
