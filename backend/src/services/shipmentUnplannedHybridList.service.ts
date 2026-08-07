@@ -150,7 +150,66 @@ function buildShipmentHybridListContext(input: {
   };
 }
 
+/*
+ * Breakdown cache.
+ *
+ * loadShipmentSummaryBundle awaits loadUnplannedBreakdown() + loadPreplannedBreakdown() in ALL
+ * three of its branches - daily snapshot, cache hit and live - so these counts ran on every
+ * summaryOnly request no matter what was cached. That was the entire remaining floor on the
+ * Shipments page: ~2-3.3s per load with everything else served from memory in single-digit ms.
+ *
+ * Caching them on the same 5-minute TTL as the list is also more consistent than leaving them
+ * live. The comment at the call site asks for live counts so the cards cannot diverge from the
+ * hybrid table - but the table itself is now cached for 5 minutes, so live counts against a
+ * cached table is precisely how they WOULD diverge. Sharing one TTL keeps card and table in step.
+ */
+const HYBRID_CACHE = new Map<string, { data: HybridListResult; expiresAt: number }>();
+const HYBRID_IN_FLIGHT = new Map<string, Promise<HybridListResult>>();
+const HYBRID_CACHE_TTL_MS = 5 * 60 * 1000;
+const HYBRID_MAX_CACHE_ENTRIES = 80;
+
+const BREAKDOWN_CACHE = new Map<string, { data: UnplannedHybridBreakdown; expiresAt: number }>();
+const BREAKDOWN_IN_FLIGHT = new Map<string, Promise<UnplannedHybridBreakdown>>();
+
+export function invalidateHybridBreakdownCache(): void {
+  BREAKDOWN_CACHE.clear();
+}
+
+registerListCacheInvalidator(invalidateHybridBreakdownCache);
+
 export async function countHybridBreakdown(
+  ctx: UnplannedHybridListContext,
+): Promise<UnplannedHybridBreakdown> {
+  const cacheKey = `${ctx.shipmentCtx.cacheKey}:breakdown:${ctx.contractBacklogMode ?? 'all'}`;
+
+  const cached = BREAKDOWN_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (cached) BREAKDOWN_CACHE.delete(cacheKey);
+
+  const inFlight = BREAKDOWN_IN_FLIGHT.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const run = computeHybridBreakdown(ctx)
+    .then((data) => {
+      BREAKDOWN_CACHE.set(cacheKey, { data, expiresAt: Date.now() + HYBRID_CACHE_TTL_MS });
+      if (BREAKDOWN_CACHE.size > HYBRID_MAX_CACHE_ENTRIES) {
+        const oldest = [...BREAKDOWN_CACHE.entries()].sort(
+          (a, b) => a[1].expiresAt - b[1].expiresAt,
+        )[0];
+        if (oldest) BREAKDOWN_CACHE.delete(oldest[0]);
+      }
+      return data;
+    })
+    .finally(() => {
+      BREAKDOWN_IN_FLIGHT.delete(cacheKey);
+    });
+
+  BREAKDOWN_IN_FLIGHT.set(cacheKey, run);
+  return run;
+}
+
+/** Unchanged breakdown computation - extracted verbatim so the cache cannot alter it. */
+async function computeHybridBreakdown(
   ctx: UnplannedHybridListContext,
 ): Promise<UnplannedHybridBreakdown> {
   const { contractScopeSql, params: contractParams, toolbarSql } = buildContractQueryParts(ctx);
@@ -235,10 +294,6 @@ type HybridListResult = ShipmentListResponseData & { unplannedBreakdown: Unplann
  * Registered with the invalidation registry so an edit clears it - without that a cached list
  * would keep showing pre-edit rows.
  */
-const HYBRID_CACHE = new Map<string, { data: HybridListResult; expiresAt: number }>();
-const HYBRID_IN_FLIGHT = new Map<string, Promise<HybridListResult>>();
-const HYBRID_CACHE_TTL_MS = 5 * 60 * 1000;
-const HYBRID_MAX_CACHE_ENTRIES = 80;
 
 export function invalidateHybridShipmentsListCache(): void {
   HYBRID_CACHE.clear();
