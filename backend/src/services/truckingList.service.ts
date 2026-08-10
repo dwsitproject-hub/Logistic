@@ -377,54 +377,25 @@ async function loadTruckingCombinedSummaryExecution(
  * base's timezone, so the cache key matches the browser's default date scope).
  * Best-effort: a failed warm just means the next request runs cold, as today.
  */
-/**
- * Warm the Trucking default scope.
- *
- * Previously this warmed ONLY the summaryOnly call (limit 1), so the status circles were fast
- * while the table underneath still paid full cost on the first visit after a restart. The page
- * itself requests limit=20 with skipSapJoin=true, then a second pass with skipSapJoin=false to
- * hydrate SAP columns - neither was warmed, and a cold trucking list measured 80s.
- *
- * The three queries are awaited in sequence, not fired together: each is a heavy
- * sap_processed_data scan, and running them concurrently on a 2-vCPU host is what produced the
- * contention this warm-up exists to avoid. Returning the promise also lets the startup queue
- * sequence this warmer exactly instead of falling back to a fixed gap.
- *
- * Query shape must match what the browser sends or we warm a key nobody reads: pageSize 20,
- * sortKey 'supplier', sortDir 'asc', and the 1 Jan..today range in Jakarta time.
- */
-export function startTruckingListCacheWarmer(): Promise<void> {
+export function startTruckingListCacheWarmer(): void {
   const jakartaNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
   const dateTo = jakartaNow.toISOString().slice(0, 10);
   const dateFrom = `${dateTo.slice(0, 4)}-01-01`;
-  const base = {
-    page: '1',
-    sortKey: 'supplier',
-    sortDir: 'asc',
-    dateFrom,
-    dateTo,
-  };
-  const asReq = (query: Record<string, string>) => ({ query }) as unknown as AuthRequest;
-
-  // Running the live loader also registers each key with the keep-warm maps, so they stay
+  const req = {
+    query: {
+      skipSapJoin: 'true',
+      limit: '1',
+      page: '1',
+      sortKey: 'supplier',
+      sortDir: 'asc',
+      dateFrom,
+      dateTo,
+      summaryOnly: 'true',
+    },
+  } as unknown as AuthRequest;
+  // Running the live loader also registers the key with SUMMARY_KEEP_WARM, so it stays
   // fresh via refresh-ahead while the page is in use.
-  const jobs: Array<() => Promise<unknown>> = [
-    // Status circles + Outstanding Qty.
-    () => resolveTruckingListForRequest(asReq({ ...base, skipSapJoin: 'true', limit: '1', summaryOnly: 'true' })),
-    // The table itself - shell pass, then the SAP hydrate pass.
-    () => resolveTruckingListForRequest(asReq({ ...base, skipSapJoin: 'true', limit: '20' })),
-    () => resolveTruckingListForRequest(asReq({ ...base, skipSapJoin: 'false', limit: '20' })),
-  ];
-
-  return (async () => {
-    for (const job of jobs) {
-      try {
-        await job();
-      } catch {
-        // A warm-up failure must leave the page slow, never break startup.
-      }
-    }
-  })();
+  void resolveTruckingListForRequest(req).catch(() => {});
 }
 
 export function invalidateTruckingListCache(): void {
