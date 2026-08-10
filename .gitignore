@@ -69,3 +69,6 @@ scripts/*.sql
 # Throwaway capture + profiling output from debugging sessions
 *.tmp.js
 lateperf*.json
+
+# Word/Excel temp lock files
+~$*
