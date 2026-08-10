@@ -428,6 +428,7 @@ export function startTruckingListCacheWarmer(): Promise<void> {
 }
 
 export function invalidateTruckingListCache(): void {
+  TRUCKING_RESPONSE_CACHE.clear();
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
@@ -1526,7 +1527,58 @@ async function loadTruckingStageSnapshotPage(
   return { rows, total };
 }
 
+/*
+ * Whole-response cache for the trucking list.
+ *
+ * The inner caches (PAGE_CACHE / SUMMARY_CACHE / MERGED_SUMMARY_CACHE) do not cover every
+ * branch: measured on a restore of staging, a status-filtered request cost 55.5s on the first
+ * call and 31.3s on an identical repeat - it never cached, on any request, for any user. Page
+ * turns did cache (58.6s then 17ms), so the gap was specific to the stage-filtered path.
+ *
+ * Rather than hunt every internal branch, cache the resolved response at the entry point. Any
+ * path that reaches this function is covered, including ones added later. The inner caches stay
+ * as they are and still short-circuit their own work.
+ *
+ * Safe to share across users: this module references req.user nowhere, so the payload is not
+ * user-scoped. Keyed on the sorted query parameters, which already encode page, limit, status,
+ * filters, search and sort. Same 5-minute TTL as the inner caches, and cleared by
+ * invalidateTruckingListCache so an edit cannot leave stale rows on screen.
+ */
+const TRUCKING_RESPONSE_CACHE = new Map<string, { data: TruckingListResponseData; expiresAt: number }>();
+const TRUCKING_RESPONSE_IN_FLIGHT = new Map<string, Promise<TruckingListResponseData>>();
+
+function truckingResponseCacheKey(query: Record<string, unknown>): string {
+  const keys = Object.keys(query).sort();
+  const norm: Record<string, unknown> = {};
+  for (const k of keys) norm[k] = query[k];
+  return JSON.stringify(norm);
+}
+
 export async function resolveTruckingListForRequest(req: AuthRequest): Promise<TruckingListResponseData> {
+  const cacheKey = truckingResponseCacheKey((req.query ?? {}) as Record<string, unknown>);
+
+  const cached = TRUCKING_RESPONSE_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (cached) TRUCKING_RESPONSE_CACHE.delete(cacheKey);
+
+  const inFlight = TRUCKING_RESPONSE_IN_FLIGHT.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const run = resolveTruckingListForRequestUncached(req)
+    .then((data) => {
+      TRUCKING_RESPONSE_CACHE.set(cacheKey, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+      evictMapIfNeeded(TRUCKING_RESPONSE_CACHE, MAX_CACHE_ENTRIES);
+      return data;
+    })
+    .finally(() => {
+      TRUCKING_RESPONSE_IN_FLIGHT.delete(cacheKey);
+    });
+
+  TRUCKING_RESPONSE_IN_FLIGHT.set(cacheKey, run);
+  return run;
+}
+
+async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<TruckingListResponseData> {
   const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
