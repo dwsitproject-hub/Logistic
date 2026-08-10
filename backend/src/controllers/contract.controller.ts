@@ -29,6 +29,7 @@ import {
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
 import { ttlMemo } from '../utils/ttlMemo';
+import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from '../utils/truckingQuantitySql';
@@ -94,7 +95,88 @@ function expandLogisticsLookupKeys(...values: (string | null | undefined)[]): st
   ];
 }
 
+/*
+ * Contracts list response cache.
+ *
+ * getContracts had no caching of any kind: measured on a restore of staging, two identical
+ * back-to-back requests both cost ~5.9s, so every user paid full price on every page load
+ * forever. On a 2-vCPU host that is ~0.33 requests/second of headroom - 50 concurrent users
+ * opening Contracts once is enough on its own to saturate the box.
+ *
+ * The payload is NOT user-scoped (no req.user reference anywhere in the handler), so one cache
+ * entry per query-parameter combination is safe to share across users.
+ *
+ * TTL is deliberately short (60s, not the 5 minutes used by the shipment/trucking lists):
+ * contract write paths in this controller have not been audited for cache invalidation, so a
+ * long TTL could show a user their own edit missing. 60s still collapses a burst of concurrent
+ * readers - which is the load problem - while bounding staleness to something a user would read
+ * as "the page hadn't refreshed yet". Register with listCacheRegistry so a shipment/trucking
+ * edit clears it too.
+ *
+ * Only successful 200 responses are cached; errors must never be served from memory.
+ */
+const CONTRACTS_LIST_CACHE = new Map<string, { payload: unknown; expiresAt: number }>();
+const CONTRACTS_LIST_IN_FLIGHT = new Map<string, Promise<{ status: number; payload: unknown }>>();
+const CONTRACTS_LIST_TTL_MS = 60 * 1000;
+const CONTRACTS_LIST_MAX_ENTRIES = 60;
+
+export function invalidateContractsListCache(): void {
+  CONTRACTS_LIST_CACHE.clear();
+}
+
+registerListCacheInvalidator(invalidateContractsListCache);
+
+function contractsListCacheKey(query: Record<string, unknown>): string {
+  const keys = Object.keys(query).sort();
+  const norm: Record<string, unknown> = {};
+  for (const k of keys) norm[k] = query[k];
+  return JSON.stringify(norm);
+}
+
 export const getContracts = async (req: AuthRequest, res: Response) => {
+  const cacheKey = contractsListCacheKey((req.query ?? {}) as Record<string, unknown>);
+
+  const cached = CONTRACTS_LIST_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    res.json(cached.payload);
+    return;
+  }
+  if (cached) CONTRACTS_LIST_CACHE.delete(cacheKey);
+
+  let run = CONTRACTS_LIST_IN_FLIGHT.get(cacheKey);
+  if (!run) {
+    run = (async () => {
+      // Capture what the original handler would have sent, without changing it.
+      let status = 200;
+      let payload: unknown;
+      const capture = {
+        status(code: number) { status = code; return capture; },
+        json(body: unknown) { payload = body; return capture; },
+        send(body: unknown) { payload = body; return capture; },
+        set() { return capture; },
+        setHeader() { return capture; },
+        headersSent: false,
+      } as unknown as Response;
+      await getContractsUncached(req, capture);
+      return { status, payload };
+    })().finally(() => {
+      CONTRACTS_LIST_IN_FLIGHT.delete(cacheKey);
+    });
+    CONTRACTS_LIST_IN_FLIGHT.set(cacheKey, run);
+  }
+
+  const { status, payload } = await run;
+  if (status === 200 && payload && (payload as { success?: boolean }).success === true) {
+    CONTRACTS_LIST_CACHE.set(cacheKey, { payload, expiresAt: Date.now() + CONTRACTS_LIST_TTL_MS });
+    if (CONTRACTS_LIST_CACHE.size > CONTRACTS_LIST_MAX_ENTRIES) {
+      const oldest = [...CONTRACTS_LIST_CACHE.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0];
+      if (oldest) CONTRACTS_LIST_CACHE.delete(oldest[0]);
+    }
+  }
+  res.status(status).json(payload);
+};
+
+const getContractsUncached = async (req: AuthRequest, res: Response) => {
   try {
     await ensureUserStoContractAssignmentsTable();
     const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
