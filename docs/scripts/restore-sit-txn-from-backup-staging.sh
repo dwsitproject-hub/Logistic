@@ -24,16 +24,23 @@ USE_LATEST=false
 REPROCESS_SAP=false
 INCLUDE_TRUCKING=false
 TRUNCATE_TRUCKING_FIRST=false
+TRUCKING_SKIP_OPERATIONS=false
 RESTORE_MODE="wipe-recovery"
 DUMP_FILE=""
 OUT_DIR="${OUT_DIR:-/opt/klip/backups}"
 
-# Child-first order; pg_restore uses --disable-triggers so FK order is relaxed.
+# pg_restore applies tables in archive TOC order, not -t flag order.
 TRUCKING_RESTORE_TABLES=(
   trucking_wb_imports
-  trucking_realizations
-  trucking_daily_actuals
   trucking_operations
+  trucking_daily_actuals
+  trucking_realizations
+)
+
+TRUCKING_CHILD_TABLES=(
+  trucking_wb_imports
+  trucking_daily_actuals
+  trucking_realizations
 )
 
 # After TRUNCATE master_vessels CASCADE only these domain tables were wiped (contracts/SAP/trucking remain).
@@ -59,6 +66,7 @@ while [[ $# -gt 0 ]]; do
     --wipe-recovery) RESTORE_MODE="wipe-recovery"; shift ;;
     --include-trucking) INCLUDE_TRUCKING=true; shift ;;
     --truncate-trucking-first) TRUNCATE_TRUCKING_FIRST=true; shift ;;
+    --trucking-skip-operations) TRUCKING_SKIP_OPERATIONS=true; INCLUDE_TRUCKING=true; shift ;;
     -h|--help)
       sed -n '2,22p' "$0"
       exit 0
@@ -257,10 +265,15 @@ resolve_wipe_recovery_tables() {
 
 append_trucking_restore_tables() {
   local -n _args=$1
+  local -n _tables=$2
   local t
   echo ""
-  echo "==> Include trucking domain (--include-trucking)"
-  for t in "${TRUCKING_RESTORE_TABLES[@]}"; do
+  if [[ "$TRUCKING_SKIP_OPERATIONS" == true ]]; then
+    echo "==> Include trucking child tables (--trucking-skip-operations; ops unchanged)"
+  else
+    echo "==> Include trucking domain (--include-trucking)"
+  fi
+  for t in "${_tables[@]}"; do
     _args+=(-t "$t")
     echo "    + $t"
   done
@@ -268,10 +281,18 @@ append_trucking_restore_tables() {
 
 truncate_trucking_tables() {
   echo ""
+  if [[ "$TRUCKING_SKIP_OPERATIONS" == true ]]; then
+    echo "==> Truncate trucking child tables only (--truncate-trucking-first + --trucking-skip-operations)"
+    psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c \
+      "TRUNCATE trucking_daily_actuals, trucking_realizations, trucking_wb_imports CASCADE;"
+    echo "    trucking_wb_imports, trucking_daily_actuals, trucking_realizations truncated"
+    return 0
+  fi
   echo "==> Truncate trucking domain (--truncate-trucking-first)"
+  echo "    WARN: TRUNCATE trucking_operations CASCADE may also empty linked documents rows." >&2
   psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c \
-    "TRUNCATE trucking_daily_actuals, trucking_realizations, trucking_operations CASCADE;"
-  echo "    trucking_daily_actuals, trucking_realizations, trucking_operations truncated"
+    "TRUNCATE trucking_wb_imports, trucking_daily_actuals, trucking_realizations, trucking_operations CASCADE;"
+  echo "    trucking_wb_imports, trucking_daily_actuals, trucking_realizations, trucking_operations truncated"
 }
 
 restore_from_dump() {
@@ -287,16 +308,30 @@ restore_from_dump() {
 
     local table_args=()
     if [[ "$RESTORE_MODE" == "wipe-recovery" ]]; then
-      echo ""
-      echo "==> Wipe-recovery mode (restore empty shipment domain tables only)"
-      local restore_tables=()
-      resolve_wipe_recovery_tables restore_tables
-      local t
-      for t in "${restore_tables[@]}"; do
-        table_args+=(-t "$t")
-      done
-      if [[ "$INCLUDE_TRUCKING" == true ]]; then
-        append_trucking_restore_tables table_args
+      if [[ "$INCLUDE_TRUCKING" == true && "$TRUNCATE_TRUCKING_FIRST" == true ]]; then
+        echo ""
+        echo "==> Trucking-focused restore (skip wipe-recovery shipment/documents tables)"
+        if [[ "$TRUCKING_SKIP_OPERATIONS" == true ]]; then
+          append_trucking_restore_tables table_args TRUCKING_CHILD_TABLES
+        else
+          append_trucking_restore_tables table_args TRUCKING_RESTORE_TABLES
+        fi
+      else
+        echo ""
+        echo "==> Wipe-recovery mode (restore empty shipment domain tables only)"
+        local restore_tables=()
+        resolve_wipe_recovery_tables restore_tables
+        local t
+        for t in "${restore_tables[@]}"; do
+          table_args+=(-t "$t")
+        done
+        if [[ "$INCLUDE_TRUCKING" == true ]]; then
+          if [[ "$TRUCKING_SKIP_OPERATIONS" == true ]]; then
+            append_trucking_restore_tables table_args TRUCKING_CHILD_TABLES
+          else
+            append_trucking_restore_tables table_args TRUCKING_RESTORE_TABLES
+          fi
+        fi
       fi
     else
       echo ""
@@ -440,6 +475,8 @@ if ! $APPLY; then
   echo "Full restore (only if DB was empty): add --full"
   echo "Trucking COMPLETED low — restore trucking from backup:"
   echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \"$DUMP_FILE\" --include-trucking --truncate-trucking-first --apply"
+  echo "Partial trucking restore (ops OK, missing daily_actuals/realizations):"
+  echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \"$DUMP_FILE\" --trucking-skip-operations --truncate-trucking-first --apply"
   if $USE_LATEST; then
     echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply"
   fi
@@ -448,7 +485,12 @@ fi
 
 if [[ "$TRUNCATE_TRUCKING_FIRST" == true ]]; then
   echo ""
-  echo "WARN: --truncate-trucking-first will DELETE all trucking_operations / daily_actuals / realizations." >&2
+  if [[ "$TRUCKING_SKIP_OPERATIONS" == true ]]; then
+    echo "WARN: --truncate-trucking-first will DELETE trucking_wb_imports / daily_actuals / realizations (ops kept)." >&2
+  else
+    echo "WARN: --truncate-trucking-first will DELETE all trucking domain rows (ops + WB + realizations)." >&2
+    echo "      Linked documents may CASCADE empty." >&2
+  fi
   echo "      Press Ctrl+C within 5s to abort..." >&2
   sleep 5
   truncate_trucking_tables

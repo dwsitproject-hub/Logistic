@@ -255,6 +255,11 @@ Script di atas memanggil run-dedupe-trucking-by-po-staging.sh --all:
     /opt/klip/backups/klip_sit_txn_20260811_164207.dump \
     --include-trucking --truncate-trucking-first --apply
 
+  # Jika ops sudah OK (6507) tapi daily_actuals/realizations=0 (pg_restore wb_imports duplicate):
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \
+    /opt/klip/backups/klip_sit_txn_20260811_164207.dump \
+    --trucking-skip-operations --truncate-trucking-first --apply
+
   # Bandingkan backup sebelum dedupe jika perlu (163607, 20260805_*):
   grep trucking_operations /opt/klip/backups/klip_sit_txn_*_counts.txt | tail -5
 
