@@ -89,12 +89,23 @@ if ! $APPLY; then
 fi
 
 echo ""
-echo "==> Applying import (null shipment FKs, truncate, reload SQL, relink by vessel_code)"
+echo "==> Applying import (null shipment FKs, delete master vessels, reload SQL, relink)"
+echo "    WARNING: never TRUNCATE master_vessels CASCADE — shipments FK would wipe all shipments."
 
-cat "$FILE" | "${COMPOSE[@]}" exec -T backend node -e "
+# pg_dump may emit psql meta-commands (\\restrict) and PowerShell may add UTF-8 BOM — strip before load.
+SANITIZED="$(
+  sed -e '1s/^\xEF\xBB\xBF//' -e '/^\\restrict/d' -e '/^\\unrestrict/d' "$FILE"
+)"
+
+echo "$SANITIZED" | "${COMPOSE[@]}" exec -T backend node -e "
 const fs = require('fs');
 const { Pool } = require('pg');
-const sql = fs.readFileSync(0, 'utf8');
+const raw = fs.readFileSync(0, 'utf8').replace(/^\uFEFF/, '');
+const inserts = raw.split('\n').map((l) => l.trim()).filter((l) => /^INSERT INTO public\\.(master_vessels|master_vessel_code_aliases)\\b/i.test(l));
+if (inserts.length === 0) {
+  console.error('ERROR: no INSERT statements found in SQL file (after sanitizing pg_dump meta-commands)');
+  process.exit(1);
+}
 const p = new Pool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT || 5432),
@@ -106,16 +117,47 @@ const p = new Pool({
   await p.query('BEGIN');
   await p.query('UPDATE shipments SET master_vessel_id = NULL WHERE master_vessel_id IS NOT NULL');
   await p.query('TRUNCATE master_vessel_code_aliases');
-  await p.query('TRUNCATE master_vessels CASCADE');
-  await p.query(sql);
+  // DELETE only — TRUNCATE master_vessels CASCADE would cascade-truncate shipments (FK master_vessel_id).
+  await p.query('DELETE FROM master_vessels');
+  for (const stmt of inserts) {
+    await p.query(stmt);
+  }
   await p.query(\`
     UPDATE shipments s
-    SET master_vessel_id = mv.id,
+    SET master_vessel_id = sub.master_vessel_id,
         updated_at = CURRENT_TIMESTAMP
-    FROM master_vessels mv
-    WHERE s.master_vessel_id IS NULL
-      AND NULLIF(TRIM(COALESCE(s.vessel_code, '')), '') IS NOT NULL
-      AND upper(trim(s.vessel_code)) = upper(trim(mv.vessel_code))
+    FROM (
+      SELECT s2.id AS shipment_id,
+             COALESCE(
+               mv_alias.id,
+               mv_primary.id,
+               mv_name.id
+             ) AS master_vessel_id
+      FROM shipments s2
+      LEFT JOIN master_vessel_code_aliases a
+        ON NULLIF(TRIM(COALESCE(s2.vessel_code, '')), '') IS NOT NULL
+       AND upper(trim(a.vessel_code)) = upper(trim(s2.vessel_code))
+      LEFT JOIN master_vessels mv_alias ON mv_alias.id = a.master_vessel_id
+      LEFT JOIN master_vessels mv_primary
+        ON NULLIF(TRIM(COALESCE(s2.vessel_code, '')), '') IS NOT NULL
+       AND upper(trim(mv_primary.vessel_code)) = upper(trim(s2.vessel_code))
+      LEFT JOIN LATERAL (
+        SELECT mv.id
+        FROM master_vessels mv
+        WHERE NULLIF(TRIM(COALESCE(s2.vessel_name, '')), '') IS NOT NULL
+          AND mv.normalized_vessel_name = upper(
+            regexp_replace(
+              regexp_replace(trim(s2.vessel_name), '^BG\\\\.\\\\s*', '', 'i'),
+              '^MT\\\\.\\\\s*', '', 'i'
+            )
+          )
+        ORDER BY CASE WHEN mv.code_status = 'OFFICIAL' THEN 0 ELSE 1 END, mv.updated_at DESC
+        LIMIT 1
+      ) mv_name ON true
+      WHERE COALESCE(mv_alias.id, mv_primary.id, mv_name.id) IS NOT NULL
+    ) sub
+    WHERE s.id = sub.shipment_id
+      AND (s.master_vessel_id IS NULL OR s.master_vessel_id <> sub.master_vessel_id)
   \`);
   const mv = await p.query('SELECT COUNT(*)::int AS n FROM master_vessels');
   const al = await p.query('SELECT COUNT(*)::int AS n FROM master_vessel_code_aliases');

@@ -26,12 +26,18 @@ SELECT 'master_vessel_code_aliases=' || COUNT(*)::text FROM master_vessel_code_a
 
 Write-Host "Local counts: $($counts -join ', ')" -ForegroundColor Cyan
 
-docker exec $container pg_dump -U klip_user -d klip_db `
+$dumpLines = docker exec $container pg_dump -U klip_user -d klip_db `
   --data-only `
   --inserts `
   --table=public.master_vessels `
-  --table=public.master_vessel_code_aliases `
-  | Set-Content -Path $OutFile -Encoding utf8
+  --table=public.master_vessel_code_aliases
+if ($LASTEXITCODE -ne 0) { throw "pg_dump failed (exit $LASTEXITCODE)" }
+
+# Drop psql-only meta-commands (pg_dump 14+) and write UTF-8 without BOM for node/psql loaders.
+$clean = ($dumpLines | Where-Object {
+  $_ -notmatch '^\\restrict\b' -and $_ -notmatch '^\\unrestrict\b'
+}) -join "`n"
+[System.IO.File]::WriteAllText($OutFile, $clean + "`n", (New-Object System.Text.UTF8Encoding $false))
 
 Write-Host "Exported: $OutFile" -ForegroundColor Green
 Write-Host "Upload to SIT backend (.57) - use WinSCP or PuTTY pscp -load session:" -ForegroundColor Yellow
