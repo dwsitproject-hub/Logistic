@@ -19,6 +19,7 @@ refresh_pipeline_summary_staging() {
   if "${compose[@]}" exec -T backend test -f dist/scripts/refreshPipelineDailySummary.js 2>/dev/null; then
     if "${compose[@]}" exec -T backend npm run pipeline-summary:refresh:prod; then
       echo "    pipeline summary refreshed"
+      invalidate_trucking_list_cache_staging || true
       return 0
     fi
     echo "    WARN: pipeline-summary:refresh:prod failed — marking shipment+trucking stale" >&2
@@ -37,6 +38,21 @@ const pool = require('./dist/database/connection').default;
 pool.query(
   \"UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module IN ('shipment', 'trucking')\"
 ).then(() => pool.end()).catch((e) => { console.error(e); process.exit(1); });
+" 2>/dev/null || true
+}
+
+invalidate_trucking_list_cache_staging() {
+  echo "    Clearing in-memory trucking list cache (Section 1 cards)"
+  "${COMPOSE[@]:-docker compose -f docker-compose.backend.yml}" exec -T backend node -e "
+try {
+  const svc = require('./dist/services/truckingList.service');
+  if (typeof svc.invalidateTruckingListCache === 'function') {
+    svc.invalidateTruckingListCache();
+    console.log('    trucking list cache cleared');
+  }
+} catch (e) {
+  console.log('    skip cache clear:', e.message || e);
+}
 " 2>/dev/null || true
 }
 
