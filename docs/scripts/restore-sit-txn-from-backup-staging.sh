@@ -11,6 +11,7 @@
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh /opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS.dump --apply
+#   bash docs/scripts/restore-sit-txn-from-backup-staging.sh ... --apply --full   # all tables (usually fails if DB intact)
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh --reprocess-sap --apply   # no backup (slow)
 #
 # Prereq: postgresql-client on host (apt-get install -y postgresql-client) for pg_restore/psql
@@ -20,8 +21,20 @@ APPLY=false
 LIST_ONLY=false
 USE_LATEST=false
 REPROCESS_SAP=false
+RESTORE_MODE="wipe-recovery"
 DUMP_FILE=""
 OUT_DIR="${OUT_DIR:-/opt/klip/backups}"
+
+# After TRUNCATE master_vessels CASCADE only these domain tables were wiped (contracts/SAP/trucking remain).
+WIPE_RECOVERY_TABLES=(
+  shipments
+  vessel_loading_ports
+  shipment_ata_overrides
+  documents
+  quality_surveys
+  remarks
+  payments
+)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,8 +42,10 @@ while [[ $# -gt 0 ]]; do
     --list) LIST_ONLY=true; shift ;;
     --latest) USE_LATEST=true; shift ;;
     --reprocess-sap) REPROCESS_SAP=true; shift ;;
+    --full) RESTORE_MODE="full"; shift ;;
+    --wipe-recovery) RESTORE_MODE="wipe-recovery"; shift ;;
     -h|--help)
-      sed -n '2,20p' "$0"
+      sed -n '2,22p' "$0"
       exit 0
       ;;
     -*)
@@ -195,6 +210,33 @@ pick_latest_backup_with_shipments() {
   DUMP_FILE="$best"
 }
 
+table_row_count() {
+  local table="$1"
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atc \
+    "SELECT COUNT(*)::bigint FROM public.\"$table\"" 2>/dev/null || echo "-1"
+}
+
+resolve_wipe_recovery_tables() {
+  local -n _out=$1
+  _out=()
+  local t cnt
+  for t in "${WIPE_RECOVERY_TABLES[@]}"; do
+    cnt="$(table_row_count "$t")"
+    if [[ "$cnt" == "0" ]]; then
+      _out+=("$t")
+      echo "    + $t (empty — will restore)"
+    elif [[ "$cnt" -gt 0 ]]; then
+      echo "    - $t (skip — already has $cnt rows; avoids duplicate key errors)"
+    else
+      echo "    ? $t (skip — table missing or unreadable)"
+    fi
+  done
+  if [[ ${#_out[@]} -eq 0 ]]; then
+    echo "ERROR: no empty wipe-recovery tables to restore (shipments already populated?)" >&2
+    exit 1
+  fi
+}
+
 restore_from_dump() {
   local file="$1"
   echo ""
@@ -205,10 +247,27 @@ restore_from_dump() {
       exit 1
     fi
     pg_restore -l "$file" | grep "TABLE DATA" | head -40
+
+    local table_args=()
+    if [[ "$RESTORE_MODE" == "wipe-recovery" ]]; then
+      echo ""
+      echo "==> Wipe-recovery mode (restore empty shipment domain tables only)"
+      local restore_tables=()
+      resolve_wipe_recovery_tables restore_tables
+      local t
+      for t in "${restore_tables[@]}"; do
+        table_args+=(-t "$t")
+      done
+    else
+      echo ""
+      echo "==> Full mode (all tables in backup — fails if contracts/SAP rows already exist)"
+    fi
+
     echo ""
     echo "==> Restoring (pg_restore data-only, disable triggers)..."
     pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
       --data-only --disable-triggers --no-owner --no-acl --exit-on-error \
+      "${table_args[@]}" \
       "$file"
   elif [[ "$file" == *.sql ]]; then
     if ! command -v psql >/dev/null 2>&1; then
@@ -269,6 +328,7 @@ const { SapDataDistributionService } = require('./dist/services/sapDataDistribut
 echo "=== KLIP SIT restore transactional data ==="
 echo "    repo:   $ROOT"
 echo "    target: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
+echo "    restore: $RESTORE_MODE (default wipe-recovery = shipments/ports only if empty)"
 echo "    mode:   $([[ "$APPLY" == true ]] && echo APPLY || echo PREVIEW)"
 
 if $LIST_ONLY; then
@@ -322,8 +382,9 @@ if ! $APPLY; then
   echo ""
   list_backups
   echo ""
-  echo "Preview only. To restore:"
+  echo "Preview only. To restore (wipe-recovery — recommended after master vessel CASCADE):"
   echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \"$DUMP_FILE\" --apply"
+  echo "Full restore (only if DB was empty): add --full"
   if $USE_LATEST; then
     echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply"
   fi
