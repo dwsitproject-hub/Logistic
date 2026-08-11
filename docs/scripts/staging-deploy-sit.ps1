@@ -43,38 +43,42 @@ if (Test-Path $exportFile) {
   $sizeKb = [math]::Round((Get-Item $exportFile).Length / 1KB, 1)
   Write-Host "Export ready: $exportFile ($sizeKb KB)" -ForegroundColor Green
 } else {
-  Write-Host "WARN: Export file missing — run export step before SIT master vessel sync." -ForegroundColor Yellow
+  Write-Host "WARN: Export file missing - run export step before SIT master vessel sync." -ForegroundColor Yellow
 }
 
-Write-Host @"
+$checklist = @(
+  ""
+  "========================================"
+  "STEP 1 - Upload master vessel SQL to backend (.57)"
+  "========================================"
+  "  scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/"
+  ""
+  "========================================"
+  "STEP 2 - PuTTY backend 172.28.92.57"
+  "========================================"
+  "  cd /opt/klip"
+  "  git fetch origin; git checkout SIT; git pull origin SIT"
+  "  bash docs/scripts/staging-deploy-backend-full.sh"
+  ""
+  "  # Preview dedupe only (no DB changes):"
+  "  # bash docs/scripts/staging-deploy-backend-full.sh --dedupe-dry-run --skip-master-vessel"
+  ""
+  "========================================"
+  "STEP 3 - PuTTY frontend 172.28.92.56"
+  "========================================"
+  "  cd /opt/klip"
+  "  git fetch origin; git checkout SIT; git pull origin SIT"
+  "  bash docs/scripts/staging-deploy-frontend.sh"
+  ""
+  "========================================"
+  "STEP 4 - Browser verify (Ctrl+Shift+R)"
+  "========================================"
+  "  http://8.215.6.189/api/health"
+  "  http://8.215.6.189/trucking       - re-upload WB PENERIMAAN"
+  "  http://8.215.6.189/master-vessel  - vessels from local export"
+  ""
+)
 
-========================================
-STEP 1 — Upload master vessel SQL to backend (.57)
-========================================
-  scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/
-
-========================================
-STEP 2 — PuTTY backend 172.28.92.57
-========================================
-  cd /opt/klip
-  git fetch origin && git checkout SIT && git pull origin SIT
-  bash docs/scripts/staging-deploy-backend-full.sh
-
-  # Preview dedupe only (no DB changes):
-  # bash docs/scripts/staging-deploy-backend-full.sh --dedupe-dry-run --skip-master-vessel
-
-========================================
-STEP 3 — PuTTY frontend 172.28.92.56
-========================================
-  cd /opt/klip
-  git fetch origin && git checkout SIT && git pull origin SIT
-  bash docs/scripts/staging-deploy-frontend.sh
-
-========================================
-STEP 4 — Browser verify (Ctrl+Shift+R)
-========================================
-  http://8.215.6.189/api/health
-  http://8.215.6.189/trucking       — re-upload WB PENERIMAAN
-  http://8.215.6.189/master-vessel  — 470 vessels from local
-
-"@ -ForegroundColor White
+foreach ($line in $checklist) {
+  Write-Host $line -ForegroundColor White
+}
