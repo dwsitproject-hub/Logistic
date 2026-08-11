@@ -1,20 +1,36 @@
 # KLIP — Export master vessel locally + PuTTY deploy checklist (SIT).
-# Does NOT SSH automatically — run the printed PuTTY blocks on .57 and .56.
+# Does NOT SSH automatically unless -Upload is passed.
 #
 # Usage:
 #   cd D:\Project\Klip
-#   Set-ExecutionPolicy -Scope Process Bypass -Force
-#   .\docs\scripts\staging-deploy-sit.ps1
-#   .\docs\scripts\staging-deploy-sit.ps1 -SkipExport
+#   powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1
+#   powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1 -Upload
+#   powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1 -SkipExport -Upload
 
 param(
   [switch]$SkipExport,
-  [switch]$SkipPush
+  [switch]$SkipPush,
+  [switch]$Upload,
+  [string]$StagingHost = "172.28.92.57",
+  [string]$User = "ubuntu",
+  [string]$Pscp = "C:\Program Files\PuTTY\pscp.exe",
+  [string]$Key = ""
 )
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $RepoRoot
+
+function Resolve-SitSshKey {
+  param([string]$ExplicitKey)
+  $candidates = @(
+    $ExplicitKey,
+    "$env:USERPROFILE\.ssh\id_rsa.ppk",
+    "$env:USERPROFILE\.ssh\klip-sit.ppk"
+  ) | Where-Object { $_ -and (Test-Path $_) }
+  if ($candidates.Count -gt 0) { return $candidates[0] }
+  return $null
+}
 
 Write-Host "KLIP SIT deploy helper" -ForegroundColor Cyan
 Write-Host "Repo: $RepoRoot"
@@ -46,15 +62,49 @@ if (Test-Path $exportFile) {
   Write-Host "WARN: Export file missing - run export step before SIT master vessel sync." -ForegroundColor Yellow
 }
 
+$keyPath = Resolve-SitSshKey -ExplicitKey $Key
+$pscpCmd = if ($keyPath) {
+  "& `"$Pscp`" -batch -i `"$keyPath`" tmp/master_vessel_local_to_sit.sql ${User}@${StagingHost}:/opt/klip/tmp/"
+} else {
+  "# PuTTY key not found - use WinSCP or set -Key C:\path\to\your.ppk"
+}
+
+if ($Upload) {
+  if (-not (Test-Path $exportFile)) {
+    throw "Export file missing: $exportFile"
+  }
+  if (-not (Test-Path $Pscp)) {
+    throw "pscp not found: $Pscp (install PuTTY)"
+  }
+  if (-not $keyPath) {
+    throw "No .ppk key found. Set -Key or place key at $env:USERPROFILE\.ssh\id_rsa.ppk"
+  }
+  Write-Host ""
+  Write-Host "==> Upload master vessel SQL via pscp" -ForegroundColor Cyan
+  Write-Host "    key: $keyPath"
+  & $Pscp -batch -i $keyPath $exportFile "${User}@${StagingHost}:/opt/klip/tmp/"
+  if ($LASTEXITCODE -ne 0) {
+    throw "pscp failed (exit $LASTEXITCODE). Connect VPN, confirm PuTTY key, ensure tmp/ exists on server."
+  }
+  Write-Host "Upload OK." -ForegroundColor Green
+}
+
 $checklist = @(
   ""
   "========================================"
   "STEP 1 - Upload master vessel SQL to backend (.57)"
   "========================================"
-  "  scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/"
+  "  SIT server uses PuTTY key auth (password scp will fail)."
+  "  Run from D:\Project\Klip:"
+  "  $pscpCmd"
+  ""
+  "  Or auto-upload:"
+  "  powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1 -SkipExport -Upload"
+  ""
+  "  Alternative: WinSCP -> host $StagingHost, user $User, key .ppk -> /opt/klip/tmp/"
   ""
   "========================================"
-  "STEP 2 - PuTTY backend 172.28.92.57"
+  "STEP 2 - PuTTY backend $StagingHost"
   "========================================"
   "  cd /opt/klip"
   "  git fetch origin; git checkout SIT; git pull origin SIT"

@@ -34,5 +34,6 @@ docker exec $container pg_dump -U klip_user -d klip_db `
   | Set-Content -Path $OutFile -Encoding utf8
 
 Write-Host "Exported: $OutFile" -ForegroundColor Green
-Write-Host "Copy to SIT backend (.57), then:"
-Write-Host "  bash docs/scripts/sync-master-vessel-staging.sh --file /opt/klip/tmp/master_vessel_local_to_sit.sql --apply"
+Write-Host "Upload to SIT backend (.57) with PuTTY pscp (OpenSSH scp/password will fail):"
+Write-Host "  & `"C:\Program Files\PuTTY\pscp.exe`" -i `"`$env:USERPROFILE\.ssh\id_rsa.ppk`" tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/"
+Write-Host "Or: powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1 -SkipExport -Upload"
