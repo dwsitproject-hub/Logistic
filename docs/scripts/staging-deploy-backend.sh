@@ -57,3 +57,6 @@ if [[ -f "${APP_DIR}/docs/scripts/verify-oidc-config.sh" ]]; then
 fi
 
 echo "Done. Tail logs: docker compose ${COMPOSE_ARGS[*]} logs -f backend"
+echo ""
+echo "Post-deploy data fix (dedupe + master vessel):"
+echo "  bash docs/scripts/staging-deploy-backend-full.sh --skip-deploy"

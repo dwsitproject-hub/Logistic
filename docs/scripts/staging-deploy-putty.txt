@@ -7,9 +7,14 @@ Repo di server: /opt/klip
 Branch:         SIT
 Panduan lengkap: docs/DEPLOY-SIT-GITHUB.md
 
-Urutan deploy:
-  STEP 1 — Laptop/PC dev: commit + push ke origin/SIT
-  STEP 2 — PuTTY: Backend (172.28.92.57) lalu Frontend (172.28.92.56)
+Urutan deploy (release WB + master vessel + dedupe):
+  STEP 1 — Laptop: export master vessel + push git (sudah selesai jika git push OK)
+  STEP 2 — PuTTY Backend (.57): staging-deploy-backend-full.sh  (deploy + migrate + dedupe + vessel)
+  STEP 3 — PuTTY Frontend (.56): staging-deploy-frontend.sh
+  STEP 4 — Browser verify
+
+Helper laptop (print PuTTY commands):
+  powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1
 
 ================================================================================
 STEP 1 — Push dari mesin development (Windows) — OTOMATIS
@@ -43,7 +48,37 @@ Catatan:
   - Jika ERROR "folder .git tidak ada": buka folder clone Git yang benar (bukan copy tanpa .git).
 
 ================================================================================
-STEP 2A — BACKEND (PuTTY → 172.28.92.57)
+STEP 2A — BACKEND FULL (PuTTY → 172.28.92.57) — deploy + dedupe + master vessel
+================================================================================
+Prasyarat laptop:
+  1. git push origin SIT sudah selesai
+  2. Export + upload master vessel SQL:
+       powershell -ExecutionPolicy Bypass -File docs/scripts/export-master-vessel-local.ps1
+       scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/
+
+Login SSH ke backend server, lalu SATU perintah:
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  bash docs/scripts/staging-deploy-backend-full.sh
+
+Script full otomatis:
+  - docker rebuild backend
+  - DB migrate (135/136 master vessel)
+  - trucking dedupe ALL duplicate PO (--apply + cleanup CANCELLED losers)
+  - import master_vessel_local_to_sit.sql (jika file ada di tmp/)
+
+Opsi:
+  # Preview dedupe saja, tanpa ubah DB:
+  bash docs/scripts/staging-deploy-backend-full.sh --dedupe-dry-run --skip-master-vessel
+
+  # Deploy tanpa dedupe/vessel (hanya rebuild):
+  bash docs/scripts/staging-deploy-backend.sh
+
+Tunggu sampai health mengembalikan JSON sukses sebelum lanjut ke frontend.
+
+================================================================================
+STEP 2A-lite — BACKEND deploy saja (tanpa dedupe / master vessel)
 ================================================================================
 Login SSH ke backend server, lalu salin per blok berikut:
 
@@ -126,8 +161,31 @@ Di server yang bermasalah:
   docker compose -f docker-compose.frontend.yml up -d --build  # di .56
 
 ================================================================================
+Master Vessel + WB dedupe — detail (sudah di staging-deploy-backend-full.sh)
+================================================================================
+Full deploy sudah memanggil:
+  - run-fix-wb-trucking-dedupe-all-staging.sh --apply
+  - run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+  - sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql --apply
+
+Manual / troubleshooting — lihat bagian WB dedupe di bawah.
+
+================================================================================
+Referensi
+================================================================================
+  docs/scripts/staging-deploy-sit.ps1          (laptop helper — print steps)
+  docs/scripts/staging-deploy-backend-full.sh  (PuTTY .57 — deploy + data fix)
+  docs/scripts/staging-deploy-backend.sh
+  docs/scripts/staging-deploy-frontend.sh
+  docs/scripts/export-master-vessel-local.ps1
+  docs/scripts/sync-master-vessel-staging.sh
+  docs/scripts/staging-deploy-all.sh   (jump host dengan SSH ke .57 & .56)
+  docs/DEPLOY-SIT-GITHUB.md
+
+================================================================================
 WB Upload gagal: "Multiple FRC/LCO trucking operations share PO" — FIX ALL PO
 ================================================================================
+(Penjelasan detail — otomatis ditangani oleh staging-deploy-backend-full.sh)
 Penyebab: lebih dari 1 trucking_operations aktif (status <> CANCELLED) untuk PO
 yang sama di DB SIT. Bukan data kotor di file Excel.
 
@@ -427,41 +485,5 @@ Catatan DB user:
       node -e "const{Pool}=require('pg');const p=new Pool({host:process.env.DB_HOST,port:+process.env.DB_PORT||5432,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD});p.query(\"SELECT filename,applied_at FROM schema_migrations WHERE filename='119_po_primary_identity.sql'\").then(r=>{console.log(r.rows);return p.end();})"
 
 ================================================================================
-Master Vessel — sync local DB → SIT (470 vessels + aliases)
-================================================================================
-Jalankan di laptop (export), lalu PuTTY backend .57 (import).
-
------ A) Laptop (Windows) — export dari Docker local -----
-
-  cd D:\Project\Klip
-  powershell -ExecutionPolicy Bypass -File docs/scripts/export-master-vessel-local.ps1
-  # Output: tmp/master_vessel_local_to_sit.sql
-
-  scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/
-
------ B) PuTTY → Backend 172.28.92.57 — deploy + migrate + import -----
-
-  cd /opt/klip
-  git fetch origin && git checkout SIT && git pull origin SIT
-  docker compose -f docker-compose.backend.yml up -d --build
-  curl -s http://127.0.0.1:5001/health
-
-  bash docs/scripts/sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql
-  bash docs/scripts/sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql --apply
-
------ C) Frontend .56 — rebuild -----
-
-  cd /opt/klip && git pull origin SIT
-  docker compose -f docker-compose.frontend.yml up -d --build
-
-Verifikasi: http://8.215.6.189/master-vessel (Ctrl+Shift+R)
-
-================================================================================
-Referensi
-================================================================================
-  docs/scripts/staging-deploy-backend.sh
-  docs/scripts/staging-deploy-frontend.sh
-  docs/scripts/staging-deploy-all.sh   (jump host dengan SSH ke .57 & .56)
-  docs/DEPLOYMENT.md
-
+(Legacy sections below — use staging-deploy-backend-full.sh for standard SIT release)
 ================================================================================
