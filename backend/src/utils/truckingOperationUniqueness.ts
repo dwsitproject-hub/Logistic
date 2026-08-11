@@ -129,8 +129,8 @@ export type UnplannedPlanningTruckingOpRow = ActiveTruckingOpRow & {
 };
 
 /**
- * Resolve a single trucking operation for Unplanned planning upload (match PO / Contract Ext No).
- * Prefers rows that already have an Operation ID assigned.
+ * Resolve a single trucking operation for Unplanned planning upload.
+ * When PO is present, match by PO only (Contract Ext No is informational — ext mismatch must not block lookup).
  */
 export async function findTruckingOpForUnplannedPlanningUpload(args: {
   poNumber?: string;
@@ -141,20 +141,18 @@ export async function findTruckingOpForUnplannedPlanningUpload(args: {
   if (!po && !ext) return null;
 
   const params: string[] = [];
-  const matchParts: string[] = [];
+  let matchSql: string;
   if (po) {
     params.push(po);
-    matchParts.push(`TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`);
-  }
-  if (ext) {
+    matchSql = `TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`;
+  } else {
     params.push(ext);
     const p = `$${params.length}::text`;
-    matchParts.push(`(
+    matchSql = `(
       TRIM(UPPER(COALESCE(ext.ext_no, ''))) = TRIM(UPPER(${p}))
       OR TRIM(c.contract_id::text) = TRIM(${p})
-    )`);
+    )`;
   }
-  const matchSql = matchParts.length === 1 ? matchParts[0] : matchParts.join(' AND ');
 
   const result = await query(
     `WITH candidates AS (

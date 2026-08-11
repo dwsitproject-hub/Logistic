@@ -55,9 +55,9 @@ export function buildShipmentsGlobalScopeKey(scope: ShipmentsGlobalFilterScope):
   })
 }
 
-/** Full list fetch key = global scope + pipeline stage modifier + pagination. Sort is client-side only. */
+/** Full list fetch key = global scope + pipeline stage + pagination + server sort. */
 export function buildShipmentsListQueryKey(scope: ShipmentsListQueryScope): string {
-  return `${buildShipmentsGlobalScopeKey(scope)}|st:${scope.pipelineStage}|p:${scope.page}`
+  return `${buildShipmentsGlobalScopeKey(scope)}|st:${scope.pipelineStage}|p:${scope.page}|sk:${scope.sortKey}|sd:${scope.sortDir}`
 }
 
 export function normalizePipelineStageFilter(value: string): ShipmentsPipelineStageFilter {

@@ -227,18 +227,38 @@ export function shipmentPagePipelineSummarySelectSql(): string {
         COUNT(*) FILTER (WHERE ${eff} = 'UNLOADING')::bigint AS discharge_port_unloading_count`;
 }
 
+import { sqlShipmentDisplayVesselName } from './sapVesselFields';
+
 /** Normalized non-blank vessel identity used for distinct-vessel counts. */
 export function shipmentPipelineVesselKeyExpr(vesselNameExpr = 'vessel_name'): string {
   return `NULLIF(UPPER(TRIM(COALESCE(${vesselNameExpr}, ''))), '')`;
+}
+
+/** Master → SAP → KLIP display name key (matches shipments list vessel column). */
+export function shipmentPipelineDisplayVesselKeyExpr(
+  masterExpr: string,
+  sapExpr: string,
+  klipExpr: string,
+): string {
+  return `NULLIF(UPPER(TRIM(${sqlShipmentDisplayVesselName(masterExpr, sapExpr, klipExpr)})), '')`;
+}
+
+/** Display vessel key on enriched summary rows (master lateral + sap_latest). */
+export function shipmentPipelineEnrichedDisplayVesselKeyExpr(alias = 'e'): string {
+  return shipmentPipelineDisplayVesselKeyExpr(
+    `${alias}.vessel_name_master`,
+    `${alias}.vessel_name_sap`,
+    `${alias}.vessel_name`,
+  );
 }
 
 /**
  * Summary SELECT — sorted distinct vessel names per pipeline card (blank names excluded).
  * Unplanned is added separately by callers because its predicate needs a row alias.
  */
-export function shipmentPagePipelineVesselNamesSelectSql(): string {
+export function shipmentPagePipelineVesselNamesSelectSql(vesselKeyExpr: string): string {
   const eff = 'effective_status';
-  const vessel = shipmentPipelineVesselKeyExpr();
+  const vessel = vesselKeyExpr;
   const loadingGroup = `${eff} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING')`;
   const dischargeGroup = `${eff} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING')`;
   return `

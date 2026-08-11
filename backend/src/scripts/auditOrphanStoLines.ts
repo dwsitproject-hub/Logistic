@@ -1,17 +1,12 @@
 /**
  * Audit: SAP STO lines that appear in NEITHER the Shipments page nor the Trucking page.
  *
- * Every SAP STO line is V (vessel) or T (truck):
- *   - Shipments shows a line only when STO Type <> 'T', the effective incoterm is CIF/FOB/CFR,
- *     and a non-cancelled shipment row exists for that STO.
- *   - Trucking shows a contract only when it has a trucking_operations row. Those are created by
- *     a user action from the Trucking "Unplanned" view - the SAP import never creates one.
+ * Shipments visibility (incoterm-tiered):
+ *   - CIF/CFR: incoterm match + non-cancelled shipment row for that STO (STO Type T allowed).
+ *   - FOB: incoterm FOB + STO Type <> 'T' + non-cancelled shipment row.
+ *   - Trucking: contract has trucking_operations (user-created from Unplanned).
  *
- * So a truck-leg STO on a sea contract that nobody materialised exists in SAP and is reachable
- * nowhere in KLIP. This report lists those lines so the volume can be reviewed BEFORE anything is
- * created, and re-run after each upload as a standing check.
- *
- * Read-only: it writes an .xlsx and touches no application data.
+ * Read-only: writes an .xlsx and touches no application data.
  *
  * Run:  npx ts-node src/scripts/auditOrphanStoLines.ts
  *       npx ts-node src/scripts/auditOrphanStoLines.ts --out ../docs/my-name.xlsx
@@ -64,7 +59,13 @@ const SQL_ORPHANS = `
         NULLIF(TRIM(pna.group_plant), ''),
         'Blank'
       ) AS group_plant,
-      NULLIF(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', ''), '')::numeric AS sto_quantity_kg
+      NULLIF(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', ''), '')::numeric AS sto_quantity_kg,
+      NULLIF(REPLACE(REPLACE(COALESCE(
+        spd.data->'contract'->>'qty_receive',
+        spd.data->'raw'->>'Qty Receive',
+        spd.data->'raw'->>'Qty Receive ',
+        ''
+      ), ',', ''), ' ', ''), '')::numeric AS qty_receive_kg
     FROM sap_processed_data spd
     JOIN contracts c ON TRIM(c.contract_id) = TRIM(spd.contract_number)
     LEFT JOIN LATERAL (
@@ -92,27 +93,170 @@ const SQL_ORPHANS = `
           AND TRIM(COALESCE(s.shipment_id, '')) = p.sto_number
           AND COALESCE(s.status, '') <> 'CANCELLED'
       ) AS has_shipment_row,
-      EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = p.contract_uuid) AS has_trucking_op
+      EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = p.contract_uuid) AS has_trucking_op,
+      (
+        p.incoterm IN ('CIF', 'CFR')
+        AND EXISTS (
+          SELECT 1 FROM shipments s
+          WHERE s.contract_id = p.contract_uuid
+            AND TRIM(COALESCE(s.shipment_id, '')) = p.sto_number
+            AND COALESCE(s.status, '') <> 'CANCELLED'
+        )
+      ) AS cif_incoterm_only_visible,
+      (
+        p.incoterm = 'FOB'
+        AND p.sto_type <> 'T'
+        AND EXISTS (
+          SELECT 1 FROM shipments s
+          WHERE s.contract_id = p.contract_uuid
+            AND TRIM(COALESCE(s.shipment_id, '')) = p.sto_number
+            AND COALESCE(s.status, '') <> 'CANCELLED'
+        )
+      ) AS fob_exclude_t_visible,
+      (
+        p.incoterm IN ('CIF', 'FOB', 'CFR')
+        AND p.sto_type <> 'T'
+        AND EXISTS (
+          SELECT 1 FROM shipments s
+          WHERE s.contract_id = p.contract_uuid
+            AND TRIM(COALESCE(s.shipment_id, '')) = p.sto_number
+            AND COALESCE(s.status, '') <> 'CANCELLED'
+        )
+      ) AS legacy_exclude_t_visible
     FROM pairs p
   )
   SELECT
     v.*,
-    (v.sto_type <> 'T' AND v.incoterm IN ('CIF', 'FOB', 'CFR') AND v.has_shipment_row) AS visible_in_shipments,
+    (
+      (v.incoterm IN ('CIF', 'CFR') AND v.has_shipment_row)
+      OR (v.incoterm = 'FOB' AND v.sto_type <> 'T' AND v.has_shipment_row)
+    ) AS visible_in_shipments,
     v.has_trucking_op AS visible_in_trucking,
     CASE
-      WHEN v.sto_type = 'T' AND NOT v.has_trucking_op
-        THEN 'Truck STO (Type T) with no trucking operation - Shipments filters Type T out, Trucking has no row'
-      WHEN v.sto_type <> 'T' AND NOT v.has_shipment_row AND NOT v.has_trucking_op
-        THEN 'Vessel STO (Type V) with no shipment row and no trucking operation'
-      WHEN v.sto_type <> 'T' AND v.incoterm NOT IN ('CIF', 'FOB', 'CFR') AND NOT v.has_trucking_op
-        THEN 'Incoterm not shown on Shipments (only CIF/FOB/CFR) and no trucking operation'
+      WHEN v.incoterm IN ('CIF', 'CFR') AND v.sto_type = 'T' AND NOT v.has_shipment_row AND NOT v.has_trucking_op
+        THEN 'CIF/CFR Type T STO with no shipment row — eligible by incoterm once materialized'
+      WHEN v.incoterm = 'FOB' AND v.sto_type = 'T' AND NOT v.has_trucking_op
+        THEN 'FOB truck STO (Type T) — excluded from Shipments; no trucking operation'
+      WHEN v.incoterm = 'FOB' AND v.sto_type <> 'T' AND NOT v.has_shipment_row AND NOT v.has_trucking_op
+        THEN 'FOB vessel STO (Type V) with no shipment row and no trucking operation'
+      WHEN v.incoterm NOT IN ('CIF', 'FOB', 'CFR') AND NOT v.has_trucking_op
+        THEN 'Incoterm not on Shipments page (FRC/LCO → Trucking) and no trucking operation'
       ELSE 'Other'
     END AS reason
   FROM vis v
-  WHERE NOT (v.sto_type <> 'T' AND v.incoterm IN ('CIF', 'FOB', 'CFR') AND v.has_shipment_row)
+  WHERE NOT (
+      (v.incoterm IN ('CIF', 'CFR') AND v.has_shipment_row)
+      OR (v.incoterm = 'FOB' AND v.sto_type <> 'T' AND v.has_shipment_row)
+    )
     AND NOT v.has_trucking_op
   ORDER BY v.sto_type, v.incoterm, v.po_number, v.sto_number
 `;
+
+/** CIF/CFR STO rows with no matching shipment (incoterm-only eligible). */
+const SQL_CIF_ORPHANS = `
+  WITH pairs AS (
+    SELECT
+      TRIM(spd.contract_number) AS contract_number,
+      TRIM(spd.sto_number) AS sto_number,
+      TRIM(COALESCE(spd.po_number, '')) AS po_number,
+      c.id AS contract_uuid,
+      UPPER(TRIM(COALESCE(c.incoterm, ''))) AS incoterm,
+      UPPER(TRIM(COALESCE(
+        spd.data->'raw'->>'STO Type',
+        spd.data->'raw'->>'STO Type ',
+        spd.data->'contract'->>'sto_type',
+        spd.data->'shipment'->>'sto_type',
+        ''
+      ))) AS sto_type,
+      COALESCE(NULLIF(TRIM(c.product), ''), 'Blank') AS product,
+      NULLIF(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', ''), '')::numeric AS sto_quantity_kg,
+      NULLIF(REPLACE(REPLACE(COALESCE(
+        spd.data->'contract'->>'qty_receive',
+        spd.data->'raw'->>'Qty Receive',
+        spd.data->'raw'->>'Qty Receive ',
+        ''
+      ), ',', ''), ' ', ''), '')::numeric AS qty_receive_kg
+    FROM sap_processed_data spd
+    JOIN contracts c ON TRIM(c.contract_id) = TRIM(spd.contract_number)
+    WHERE NULLIF(TRIM(spd.sto_number), '') IS NOT NULL
+      AND c.sap_presence = 'PRESENT'
+      AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('CIF', 'CFR')
+  )
+  SELECT p.*,
+    EXISTS (
+      SELECT 1 FROM shipments s
+      WHERE s.contract_id = p.contract_uuid
+        AND TRIM(COALESCE(s.shipment_id, '')) = p.sto_number
+        AND COALESCE(s.status, '') <> 'CANCELLED'
+    ) AS has_shipment_row,
+    (p.sto_type <> 'T') AS fob_style_would_match
+  FROM pairs p
+  WHERE NOT EXISTS (
+    SELECT 1 FROM shipments s
+    WHERE s.contract_id = p.contract_uuid
+      AND TRIM(COALESCE(s.shipment_id, '')) = p.sto_number
+      AND COALESCE(s.status, '') <> 'CANCELLED'
+  )
+  ORDER BY p.po_number, p.sto_number
+`;
+
+/** CIF shipments without Qty Receive > 0 (Qty Receive is not a Shipments gate). */
+const SQL_CIF_SHIPMENTS_NO_RECEIVE = `
+  SELECT
+    TRIM(c.contract_id) AS contract_number,
+    TRIM(COALESCE(c.po_number, '')) AS po_number,
+    TRIM(s.shipment_id) AS sto_number,
+    UPPER(TRIM(COALESCE(c.incoterm, ''))) AS incoterm,
+    COALESCE(s.status, '') AS shipment_status,
+    UPPER(TRIM(COALESCE(
+      (SELECT cs.sto_type FROM contract_stos cs
+       WHERE cs.contract_id = c.id AND TRIM(cs.sto_number::text) = TRIM(s.shipment_id::text)
+       LIMIT 1),
+      ''
+    ))) AS sto_type
+  FROM shipments s
+  JOIN contracts c ON c.id = s.contract_id
+  WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('CIF', 'CFR')
+    AND COALESCE(s.status, '') <> 'CANCELLED'
+    AND NULLIF(TRIM(s.shipment_id::text), '') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM sap_processed_data spd
+      WHERE TRIM(spd.contract_number) = TRIM(c.contract_id::text)
+        AND TRIM(spd.sto_number) = TRIM(s.shipment_id::text)
+        AND COALESCE(
+          NULLIF(REPLACE(REPLACE(COALESCE(
+            spd.data->'contract'->>'qty_receive',
+            spd.data->'raw'->>'Qty Receive',
+            spd.data->'raw'->>'Qty Receive ',
+            ''
+          ), ',', ''), ' ', ''), '')::numeric,
+          0
+        ) > 0
+    )
+  ORDER BY c.contract_id, s.shipment_id
+`;
+
+type CifOrphanRow = {
+  po_number: string;
+  contract_number: string;
+  sto_number: string;
+  sto_type: string;
+  incoterm: string;
+  product: string;
+  sto_quantity_kg: string | number | null;
+  qty_receive_kg: string | number | null;
+  has_shipment_row: boolean;
+  fob_style_would_match: boolean;
+};
+
+type CifNoReceiveRow = {
+  contract_number: string;
+  po_number: string;
+  sto_number: string;
+  incoterm: string;
+  shipment_status: string;
+  sto_type: string;
+};
 
 type OrphanRow = {
   po_number: string;
@@ -156,8 +300,14 @@ function sheetFrom(rows: Array<Record<string, unknown>>, headers: string[]) {
 }
 
 async function main() {
-  const res = await query(SQL_ORPHANS);
+  const [res, cifRes, noReceiveRes] = await Promise.all([
+    query(SQL_ORPHANS),
+    query(SQL_CIF_ORPHANS),
+    query(SQL_CIF_SHIPMENTS_NO_RECEIVE),
+  ]);
   const rows = (res.rows || []) as OrphanRow[];
+  const cifOrphans = (cifRes.rows || []) as CifOrphanRow[];
+  const cifNoReceive = (noReceiveRes.rows || []) as CifNoReceiveRow[];
   const today = new Date().toISOString().slice(0, 10);
 
   const detail = rows.map((r) => ({
@@ -235,27 +385,65 @@ async function main() {
       'STO Qty (MT)': Math.round(g.qty / KG_PER_MT),
     }));
 
+  const cifDetail = cifOrphans.map((r) => ({
+    'PO No': r.po_number || '',
+    'Contract No': r.contract_number,
+    'STO No': r.sto_number,
+    'STO Type': r.sto_type || '(blank)',
+    Incoterm: r.incoterm,
+    Product: r.product,
+    'STO Qty (MT)': asMt(r.sto_quantity_kg),
+    'Qty Receive (MT)': asMt(r.qty_receive_kg),
+    'Incoterm-only eligible': 'Yes',
+    'FOB-style exclude-T would match': r.fob_style_would_match ? 'Yes' : 'No',
+  }));
+  const cifNoReceiveDetail = cifNoReceive.map((r) => ({
+    'PO No': r.po_number || '',
+    'Contract No': r.contract_number,
+    'STO No': r.sto_number,
+    Incoterm: r.incoterm,
+    'STO Type': r.sto_type || '(blank)',
+    'Shipment Status': r.shipment_status,
+    Note: 'Existing shipment — Qty Receive not required for Shipments scope',
+  }));
+
   const notes = [
     { Item: 'Report date', Detail: today },
     { Item: 'What this lists', Detail: 'SAP STO lines that appear in neither the Shipments page nor the Trucking page.' },
-    { Item: 'Shipments visibility rule', Detail: "STO Type <> 'T' AND effective incoterm IN (CIF, FOB, CFR) AND a non-cancelled shipment row exists for that STO." },
-    { Item: 'Trucking visibility rule', Detail: 'The contract has at least one trucking_operations row. These are created by a user action from the Trucking Unplanned view; the SAP import does not create them.' },
-    { Item: 'Main cause', Detail: "Truck-leg STO lines (Type T) on sea contracts (CIF/FOB/CFR) that nobody materialised into a trucking operation." },
-    { Item: 'Second cause', Detail: 'Vessel STO lines (Type V) with no shipment row - these should have produced a shipment and did not.' },
-    { Item: 'Scope', Detail: "Only contracts with sap_presence = 'PRESENT' (SAP-withdrawn contracts excluded, same as every page)." },
-    { Item: 'Quantity unit', Detail: 'STO Qty is MT (converted from the Kg stored in KLIP), rounded to whole numbers.' },
-    { Item: 'Nothing was changed', Detail: 'This report is read-only. No trucking operation or shipment was created.' },
-    { Item: 'If you approve a backfill', Detail: 'Creating trucking operations for the Type T lines will add UNPLANNED work items that affect Trucking counts, Outstanding Qty and Contract Performance denominators.' },
+    { Item: 'Shipments — CIF/CFR', Detail: 'Incoterm CIF or CFR + non-cancelled shipment row for that STO (STO Type T allowed).' },
+    { Item: 'Shipments — FOB', Detail: "Incoterm FOB + STO Type <> 'T' + non-cancelled shipment row." },
+    { Item: 'Trucking visibility rule', Detail: 'The contract has at least one trucking_operations row (user-created from Unplanned).' },
+    { Item: 'CIF orphan sheet', Detail: `${cifOrphans.length} CIF/CFR STO rows without a shipment — incoterm-only eligible; FOB-style exclude-T would match 0 Type T rows.` },
+    { Item: 'CIF without Qty Receive', Detail: `${cifNoReceive.length} existing CIF/CFR shipments with no SAP Qty Receive > 0 — kept visible (Qty Receive is not a gate).` },
+    { Item: 'Scope', Detail: "Only contracts with sap_presence = 'PRESENT'." },
+    { Item: 'Quantity unit', Detail: 'STO Qty is MT (converted from Kg), rounded to whole numbers.' },
+    { Item: 'Nothing was changed', Detail: 'This report is read-only.' },
   ];
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheetFrom(summary, Object.keys(summary[0] ?? { 'STO Type': '' })), 'Summary');
   XLSX.utils.book_append_sheet(wb, sheetFrom(poRollup, Object.keys(poRollup[0] ?? { 'PO No': '' })), 'By PO');
   XLSX.utils.book_append_sheet(wb, sheetFrom(detail, detailHeaders), 'Invisible STO Lines');
+  if (cifDetail.length > 0) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      sheetFrom(cifDetail, Object.keys(cifDetail[0] ?? { 'PO No': '' })),
+      'CIF Orphan STO',
+    );
+  }
+  if (cifNoReceiveDetail.length > 0) {
+    XLSX.utils.book_append_sheet(
+      wb,
+      sheetFrom(cifNoReceiveDetail, Object.keys(cifNoReceiveDetail[0] ?? { 'PO No': '' })),
+      'CIF No Qty Receive',
+    );
+  }
   XLSX.utils.book_append_sheet(wb, sheetFrom(notes, ['Item', 'Detail']), 'Notes');
   XLSX.writeFile(wb, OUT_PATH);
 
   console.log(`Invisible STO lines: ${rows.length}`);
+  console.log(`CIF/CFR orphan STO (incoterm-only eligible): ${cifOrphans.length}`);
+  console.log(`CIF/CFR shipments without Qty Receive: ${cifNoReceive.length}`);
   for (const s of summary) {
     console.log(`  ${String(s['STO Type']).padEnd(6)} ${String(s.Incoterm).padEnd(8)} lines=${s['Invisible STO Lines']}  POs=${s['Distinct POs']}  qty=${s['STO Qty (MT)']} MT`);
   }

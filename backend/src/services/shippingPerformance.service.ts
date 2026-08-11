@@ -19,6 +19,7 @@ import {
   sqlSapVesselNameFromSpdJsonb,
   sqlShipmentDisplayVesselName,
 } from '../utils/sapVesselFields';
+import { SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
 import {
   aggregateImportStatusForStoGroup,
   isContractDeliveryClosed,
@@ -550,7 +551,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.supplier,
         ${sqlContractImportStatusForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR)} AS import_status,
         COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
-        ${sqlShipmentDisplayVesselName('sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
+        ${sqlShipmentDisplayVesselName('mv.vessel_name_master', 'sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
         NULLIF(TRIM(s.charter_type), '') AS charter_type,
         s.fuel_consumption,
@@ -674,6 +675,7 @@ const SHIPPING_PERFORMANCE_SQL = `
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
+      ${SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN}
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
       LEFT JOIN LATERAL (

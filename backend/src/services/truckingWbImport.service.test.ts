@@ -19,9 +19,13 @@ vi.mock('../utils/operationId', () => ({
   formatDDMMYYYY: vi.fn(() => '05082026'),
 }));
 
-vi.mock('../utils/truckingOperationUniqueness', () => ({
-  findActiveTruckingOpsByContractId: vi.fn().mockResolvedValue([]),
-}));
+vi.mock('../utils/truckingOperationUniqueness', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/truckingOperationUniqueness')>();
+  return {
+    ...actual,
+    findActiveTruckingOpsByContractId: vi.fn().mockResolvedValue([]),
+  };
+});
 
 vi.mock('./truckingList.service', () => ({
   invalidateTruckingListCache: vi.fn(),
@@ -97,6 +101,10 @@ function fakeClientHandler(scenario: Scenario, calls: { text: string; params: un
       const operationId = String(params[1]);
       scenario.insertedTruckingOps.push({ contractUuid: params[0], operationId, id });
       return { rows: [{ id }] };
+    }
+    if (t.includes('WHERE t.id = ANY($1::uuid[])') && t.includes('ORDER BY')) {
+      const ids = (params[0] as string[]) ?? [];
+      return { rows: ids.length ? [{ id: ids[0] }] : [] };
     }
     return { rows: [] };
   });
@@ -585,7 +593,7 @@ describe('processWbRekapWorkbookUpload', () => {
     expect(allocateNextSyntheticSequence).not.toHaveBeenCalled();
   });
 
-  it('reports "Multiple FRC/LCO operations" when more than one active op shares the PO', async () => {
+  it('warns and applies WB to keeper when more than one active op shares the PO', async () => {
     const scenario = buildScenario({
       opsByPo: {
         '1001029784': [
@@ -602,7 +610,35 @@ describe('processWbRekapWorkbookUpload', () => {
       sheets: sheet([[1, '1001029784', '01/06/2026', 1000, 900]]),
     });
 
-    expect(result.operationFailures).toHaveLength(1);
-    expect(result.operationFailures[0]?.reason).toMatch(/Multiple FRC\/LCO trucking operations share PO/);
+    expect(result.operationFailures).toEqual([]);
+    expect(result.rowsUpserted).toBe(1);
+    expect(result.operationWarnings).toHaveLength(1);
+    expect(result.operationWarnings[0]?.reason).toMatch(/Multiple FRC\/LCO trucking operations share PO/);
+    expect(result.operationWarnings[0]?.reason).toMatch(/WB actual applied to keeper/);
+    expect(result.operationWarnings[0]?.reason).toMatch(/Cancel or dedupe sibling/);
+    expect(result.operationWarnings[0]?.reason).toMatch(/Daily Planning upload/);
+  });
+
+  it('prefers non-COMPLETED op when PO has completed and active siblings', async () => {
+    const scenario = buildScenario({
+      opsByPo: {
+        '1001029784': [
+          { id: 'op-completed', operation_id: 'OP-LAND-OLD', status: 'COMPLETED', incoterm: 'LCO', product: 'CPO' },
+          { id: 'op-active', operation_id: 'OP-LAND-NEW', status: 'PLANNED', incoterm: 'LCO', product: 'CPO' },
+        ],
+      },
+    });
+    setupScenario(scenario);
+
+    const result = await processWbRekapWorkbookUpload({
+      originalFilename: 'wb.xlsx',
+      uploadedBy: null,
+      sheets: sheet([[1, '1001029784', '01/06/2026', 1000, 900]]),
+    });
+
+    expect(result.operationFailures).toEqual([]);
+    expect(result.operationWarnings).toEqual([]);
+    expect(result.rowsUpserted).toBe(1);
+    expect(syncTruckingQuantityDeliveredFromDailyActuals).toHaveBeenCalledWith(expect.anything(), 'op-active');
   });
 });

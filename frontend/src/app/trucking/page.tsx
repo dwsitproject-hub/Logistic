@@ -1123,9 +1123,16 @@ function TruckingPageContent() {
     operationsUpdated: number
     operationsFailed: number
     rowsUpserted: number
-    rowParseFailures: Array<{ sheetName?: string; rowNumber: number; po_number: string; reason: string }>
+    rowParseFailures: Array<{
+      sheetName?: string
+      rowNumber: number
+      po_number: string
+      reason: string
+      cells?: string[]
+    }>
     operationFailures: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
     operationWarnings?: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+    originalFilename?: string
   } | null>(null)
 
   const [bulkCreateUploadOpen, setBulkCreateUploadOpen] = useState(false)
@@ -1588,6 +1595,7 @@ function TruckingPageContent() {
           rowParseFailures: data.rowParseFailures ?? [],
           operationFailures: data.operationFailures ?? [],
           operationWarnings: data.operationWarnings ?? [],
+          originalFilename: file.name,
         })
         setWbUploadOpen(true)
       }
@@ -4010,6 +4018,10 @@ function TruckingPageContent() {
                   Status:{' '}
                   <span className="font-semibold uppercase text-slate-800">{wbUploadSummary.status}</span>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Baris tanpa PO (subtotal/rekap) dan sheet non-tiket (COVER, PIVOT) diabaikan. Hanya PO yang ada
+                  di file dan gagal disimpan yang ditampilkan di bawah.
+                </p>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <div className="rounded-md border bg-slate-50 px-3 py-2">
                     <div className="text-xs text-muted-foreground">WB tickets parsed</div>
@@ -4056,20 +4068,6 @@ function TruckingPageContent() {
                     </ul>
                   </div>
                 ) : null}
-                {(wbUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
-                  <div>
-                    <div className="font-medium text-gray-900 mb-2">Row parse issues</div>
-                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
-                      {wbUploadSummary.rowParseFailures.map((f, i) => (
-                        <li key={`wb-rpf-${i}`} className="text-gray-800">
-                          {f.sheetName ? `${f.sheetName} · ` : ''}
-                          <span className="font-mono">Line {f.rowNumber}</span>
-                          {f.po_number ? ` · PO ${f.po_number}` : ''}: {f.reason}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
                 {(wbUploadSummary.operationFailures?.length ?? 0) > 0 ? (
                   <div>
                     <div className="font-medium text-gray-900 mb-2">Failed PO / date (skipped)</div>
@@ -4085,7 +4083,13 @@ function TruckingPageContent() {
                 ) : null}
                 {(wbUploadSummary.operationWarnings?.length ?? 0) > 0 ? (
                   <div>
-                    <div className="font-medium text-amber-900 mb-2">Warnings (still saved)</div>
+                    <div className="font-medium text-amber-900 mb-2">
+                      Warnings (WB saved — review duplicate operations)
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Dua atau lebih operation trucking aktif untuk PO yang sama. WB actual disimpan ke operation
+                      keeper; cancel atau dedupe sibling operation di Trucking list bila perlu.
+                    </p>
                     <ul className="max-h-40 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-2 p-2">
                       {wbUploadSummary.operationWarnings?.map((f, i) => (
                         <li key={`wb-ow-${i}`} className="text-amber-950">

@@ -36,10 +36,11 @@ export function parseWbRekapWorkbookSheetsFromBuffer(
     const ws = wb.Sheets[sheetName];
     if (!ws) continue;
     const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: true }) as unknown[][];
-    const filtered = matrix
-      .map((row) => row.map((c) => (c === null || c === undefined ? '' : c)))
-      .filter((row) => row.some((c) => cellHasValue(c)));
-    sheets.push({ sheetName, matrix: filtered });
+    // Preserve empty rows so parser rowNumber (r + 1) matches Excel absolute row numbers.
+    const normalized = matrix.map((row) =>
+      row.map((c) => (c === null || c === undefined ? '' : c)),
+    );
+    sheets.push({ sheetName, matrix: normalized });
   }
   return sheets;
 }

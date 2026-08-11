@@ -1,7 +1,7 @@
 import { query } from '../database/connection';
 import { sqlIsContractSapClosedForStoExpr } from '../utils/contractDeliveryStatus';
-import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
 import { shippingPerfStoMetricsKeyExpr } from '../utils/shippingPerformanceStoSql';
+import { sqlVesselCanonicalShipmentMatch } from '../utils/masterVesselCanonicalSql';
 
 /** ETA milestones on raw `shipments` rows (not grouped `shipment_base` aliases). */
 function shipmentTableHasAnyEtaExpr(alias: string): string {
@@ -17,7 +17,12 @@ export const VESSEL_WILL_FREE_HORIZON_DAYS = 7;
 export interface VesselIdleRow {
   vessel_code: string;
   vessel_name: string;
+  /** Vessel owner (master_vessels.vessel_owner). */
   company: string | null;
+  /** Owner group (master_vessels.vessel_owner_group). */
+  company_group: string | null;
+  /** Charter terms from master vessel (V/C or T/C). */
+  terms: string | null;
   capacity_mt: number | null;
   most_loading_port: string | null;
   most_discharge_port: string | null;
@@ -27,15 +32,9 @@ export interface VesselWillFreeRow extends VesselIdleRow {
   etc_at_discharge: string;
 }
 
-/** Match vessel master row to shipments (name or code). */
+/** Match canonical master vessel row to shipments (alias code, primary code, or normalized name). */
 function sqlVesselMasterShipmentMatch(vAlias: string, sAlias = 's'): string {
-  return `(
-    LOWER(TRIM(${sAlias}.vessel_name)) = LOWER(TRIM(${vAlias}.vessel_name))
-    OR (
-      NULLIF(TRIM(${sAlias}.vessel_code), '') IS NOT NULL
-      AND LOWER(TRIM(${sAlias}.vessel_code)) = LOWER(TRIM(${vAlias}.vessel_code))
-    )
-  )`;
+  return sqlVesselCanonicalShipmentMatch(vAlias, sAlias);
 }
 
 function sqlShipmentRowEffectiveStatusExpr(alias: string, contractAlias = 'c'): string {
@@ -82,32 +81,13 @@ function sqlShipmentRowActiveEngagementExpr(alias: string, contractAlias = 'c'):
   )`;
 }
 
-/** Uses `latest_spd.effective_sto` — not sap_processed_data JSON (alias may be latest_spd CTE). */
-function sqlShipmentRowHasSapStoFromLatestSpdExpr(
-  contractAlias = 'c',
-  latestSpdAlias = 'spd',
-): string {
-  return `NULLIF(TRIM(COALESCE(
-    NULLIF(TRIM(${contractAlias}.sto_number::text), ''),
-    ${latestSpdAlias}.effective_sto,
-    ''
-  )), '') IS NOT NULL`;
+/** Shipment-scoped SAP STO (not contract-level sto_number). */
+function sqlShipmentRowHasSapStoExpr(contractAlias = 'c', shipmentAlias = 's'): string {
+  return `${shippingPerfStoMetricsKeyExpr(contractAlias, shipmentAlias)} IS NOT NULL`;
 }
 
 function sqlShipmentDischargeEtcExpr(shipmentAlias: string, dischargePortAlias: string): string {
   return `COALESCE(${dischargePortAlias}.discharge_eta_completed, ${shipmentAlias}.eta_discharge_complete::date)`;
-}
-
-function sqlLatestSpdCte(): string {
-  return `
-    latest_spd AS (
-      SELECT DISTINCT ON (spd.contract_number)
-        spd.contract_number,
-        ${sapStoNumberKeyExpr('spd')} AS effective_sto
-      FROM sap_processed_data spd
-      WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) <> ''
-      ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-    )`;
 }
 
 function sqlDischargePortLateralJoin(shipmentAlias: string, dischargePortAlias: string): string {
@@ -124,19 +104,19 @@ function sqlDischargePortLateralJoin(shipmentAlias: string, dischargePortAlias: 
 
 export function buildVesselIdleListQuery(): string {
   const vesselMatch = sqlVesselMasterShipmentMatch('mv', 's');
-  const hasSapSto = sqlShipmentRowHasSapStoFromLatestSpdExpr('c', 'spd');
+  const hasSapSto = sqlShipmentRowHasSapStoExpr('c', 's');
   const isPlanned = sqlShipmentRowPlannedExpr('s', 'c');
   const isOngoing = sqlShipmentRowOngoingExpr('s', 'c');
 
   return `
-    WITH ${sqlLatestSpdCte()},
-    busy_vessel_ids AS (
-      SELECT DISTINCT mv.id
+    WITH busy_canonical_names AS (
+      SELECT DISTINCT mv.normalized_vessel_name
       FROM master_vessels mv
       INNER JOIN shipments s ON ${vesselMatch}
       LEFT JOIN contracts c ON s.contract_id = c.id
-      LEFT JOIN latest_spd spd ON spd.contract_number = c.contract_id
-      WHERE ${sqlShipmentRowActiveEngagementExpr('s', 'c')}
+      WHERE mv.normalized_vessel_name IS NOT NULL
+        AND trim(mv.normalized_vessel_name) <> ''
+        AND ${sqlShipmentRowActiveEngagementExpr('s', 'c')}
         AND (
           ${hasSapSto}
           OR ${isPlanned}
@@ -144,16 +124,29 @@ export function buildVesselIdleListQuery(): string {
         )
     ),
     idle_vessels AS (
-      SELECT
+      SELECT DISTINCT ON (mv.normalized_vessel_name)
         mv.id,
-        mv.vessel_code,
+        mv.normalized_vessel_name,
+        CASE
+          WHEN mv.code_status = 'PROVISIONAL' OR upper(trim(mv.vessel_code)) LIKE 'TMP-%' THEN NULL
+          ELSE mv.vessel_code
+        END AS vessel_code,
         mv.vessel_name,
-        NULLIF(TRIM(mv.vessel_owner_group), '') AS company,
+        NULLIF(TRIM(mv.vessel_owner), '') AS company,
+        NULLIF(TRIM(mv.vessel_owner_group), '') AS company_group,
+        NULLIF(TRIM(mv.terms), '') AS terms,
         mv.vessel_capacity_mt AS capacity_mt
       FROM master_vessels mv
-      WHERE mv.id NOT IN (SELECT id FROM busy_vessel_ids)
-        -- Vessel idle is charter-relevant only for Time Charter (T/C) vessels.
+      WHERE mv.normalized_vessel_name IS NOT NULL
+        AND trim(mv.normalized_vessel_name) <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM busy_canonical_names b
+          WHERE b.normalized_vessel_name = mv.normalized_vessel_name
+        )
         AND UPPER(TRIM(COALESCE(mv.terms, ''))) = 'T/C'
+      ORDER BY mv.normalized_vessel_name,
+        CASE WHEN mv.code_status = 'OFFICIAL' THEN 0 ELSE 1 END,
+        mv.updated_at DESC
     ),
     port_usage AS (
       SELECT
@@ -197,6 +190,8 @@ export function buildVesselIdleListQuery(): string {
       iv.vessel_code,
       iv.vessel_name,
       iv.company,
+      iv.company_group,
+      iv.terms,
       iv.capacity_mt,
       ml.most_loading_port,
       md.most_discharge_port
@@ -213,13 +208,18 @@ export function buildVesselWillFreeListQuery(): string {
   const etcExpr = sqlShipmentDischargeEtcExpr('s', 'dp');
 
   return `
-    WITH ${sqlLatestSpdCte()},
-    will_free_vessels AS (
+    WITH will_free_raw AS (
       SELECT
         mv.id,
-        mv.vessel_code,
+        mv.normalized_vessel_name,
+        CASE
+          WHEN mv.code_status = 'PROVISIONAL' OR upper(trim(mv.vessel_code)) LIKE 'TMP-%' THEN NULL
+          ELSE mv.vessel_code
+        END AS vessel_code,
         mv.vessel_name,
-        NULLIF(TRIM(mv.vessel_owner_group), '') AS company,
+        NULLIF(TRIM(mv.vessel_owner), '') AS company,
+        NULLIF(TRIM(mv.vessel_owner_group), '') AS company_group,
+        NULLIF(TRIM(mv.terms), '') AS terms,
         mv.vessel_capacity_mt AS capacity_mt,
         MAX(${etcExpr}) AS etc_at_discharge
       FROM master_vessels mv
@@ -230,9 +230,23 @@ export function buildVesselWillFreeListQuery(): string {
         AND ${sqlShipmentRowActiveEngagementExpr('s', 'c')}
         AND ${isOngoing}
         AND ${etcExpr} IS NOT NULL
-      GROUP BY mv.id, mv.vessel_code, mv.vessel_name, mv.vessel_owner_group, mv.vessel_capacity_mt
+      GROUP BY mv.id, mv.normalized_vessel_name, mv.vessel_code, mv.vessel_name, mv.vessel_owner, mv.vessel_owner_group, mv.terms, mv.vessel_capacity_mt, mv.code_status
       HAVING MAX(${etcExpr}) >= CURRENT_DATE
         AND MAX(${etcExpr}) <= CURRENT_DATE + ${VESSEL_WILL_FREE_HORIZON_DAYS}
+    ),
+    will_free_vessels AS (
+      SELECT DISTINCT ON (normalized_vessel_name)
+        id,
+        normalized_vessel_name,
+        vessel_code,
+        vessel_name,
+        company,
+        company_group,
+        terms,
+        capacity_mt,
+        etc_at_discharge
+      FROM will_free_raw
+      ORDER BY normalized_vessel_name, etc_at_discharge ASC
     ),
     port_usage AS (
       SELECT
@@ -276,6 +290,8 @@ export function buildVesselWillFreeListQuery(): string {
       wfv.vessel_code,
       wfv.vessel_name,
       wfv.company,
+      wfv.company_group,
+      wfv.terms,
       wfv.capacity_mt,
       ml.most_loading_port,
       md.most_discharge_port,
@@ -298,6 +314,9 @@ function normalizeVesselIdleRow(row: Record<string, unknown>): VesselIdleRow {
     vessel_code: String(row.vessel_code ?? '').trim(),
     vessel_name: String(row.vessel_name ?? '').trim(),
     company: row.company != null ? String(row.company).trim() || null : null,
+    company_group:
+      row.company_group != null ? String(row.company_group).trim() || null : null,
+    terms: row.terms != null ? String(row.terms).trim() || null : null,
     capacity_mt: capacity,
     most_loading_port:
       row.most_loading_port != null ? String(row.most_loading_port).trim() || null : null,

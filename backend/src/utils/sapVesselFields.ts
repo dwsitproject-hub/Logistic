@@ -1,5 +1,7 @@
 /** Shared SAP JSON paths for vessel identity (shipments list + distribution). */
 
+import { resolveCanonicalVesselDisplayName } from './vesselNameNormalize';
+
 export function sqlSapVesselNameFromSpdJsonb(dataExpr: string): string {
   return `NULLIF(TRIM(COALESCE(
     ${dataExpr}->'shipment'->>'vessel_name',
@@ -79,20 +81,28 @@ export function resolveSapVesselIdentity(
   };
 }
 
-/** View-table vessel: SAP Vessel Name first, then KLIP user input on shipments. */
+/** View-table vessel: Master Vessel KLIP name first, then SAP, then stored shipment input. */
 export function resolveShipmentDisplayVesselName(
+  vesselNameMaster: unknown,
   vesselNameSap: unknown,
   vesselNameKlip: unknown,
 ): string | null {
+  const master = pickSapText(vesselNameMaster);
   const sap = pickSapText(vesselNameSap);
   const klip = pickSapText(vesselNameKlip);
-  return sap ?? klip;
+  const raw = master ?? sap ?? klip;
+  return raw ? resolveCanonicalVesselDisplayName(raw) : null;
 }
 
 export const sqlShipmentDisplayVesselName = (
+  masterExpr: string,
   sapExpr: string,
   klipExpr: string,
-): string => `COALESCE(${sapExpr}, NULLIF(TRIM(${klipExpr}), ''))`;
+): string => `COALESCE(
+  NULLIF(TRIM(${masterExpr}), ''),
+  NULLIF(TRIM(${sapExpr}), ''),
+  NULLIF(TRIM(${klipExpr}), '')
+)`;
 
 export function hasCompleteSapVesselIdentity(identity: SapVesselIdentity): boolean {
   return Boolean(identity.vessel_code && identity.vessel_name);

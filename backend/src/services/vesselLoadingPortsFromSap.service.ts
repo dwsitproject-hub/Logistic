@@ -1,6 +1,7 @@
 import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
 import logger from '../utils/logger';
+import { isGenericKlipPortPlaceholder } from '../utils/portPlaceholder';
 
 type SapPortRow = Record<string, unknown>;
 
@@ -48,6 +49,7 @@ export function isValidHumanPortName(value: unknown): boolean {
   const text = trimText(value);
   if (!text) return false;
   if (/^\d+(\.\d+)?$/.test(text)) return false;
+  if (isGenericKlipPortPlaceholder(text)) return false;
   return true;
 }
 
@@ -270,7 +272,8 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
     qualityLocation: string,
     eta: Record<string, unknown>,
   ) => {
-    const name = (isValidHumanPortName(portName) ? trimText(portName) : null) ?? `Loading Port ${sequence}`;
+    const name = isValidHumanPortName(portName) ? trimText(portName) : null;
+    if (!name) return;
     const etaBerthed = parseDate(eta.berthed);
     loadingPorts.push({
       port_name: name,
@@ -368,13 +371,15 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
   const dischargeQuality = mapQualityColumns(qualityByLocation, 'Discharge Port');
   const dischargePortName =
     trimText(shipmentData.vessel_discharge_port) ?? trimText(shipmentData.port_of_discharge);
-  if (dischargePortName || Object.keys(dischargeQuality).length > 0) {
+  const resolvedDischargeName =
+    dischargePortName && isValidHumanPortName(dischargePortName) ? dischargePortName : null;
+  if (resolvedDischargeName) {
     const etaArrival = parseDate(shipmentData.eta_arrival_at_discharge_port);
     const etaBerthed = parseDate(shipmentData.eta_vessel_berthed_at_discharge_port);
     const etaStart = parseDate(shipmentData.eta_discharging_start_at_discharge_port);
     const etaComplete = parseDate(shipmentData.eta_discharging_completed_at_discharge_port);
     loadingPorts.push({
-      port_name: dischargePortName ?? 'Discharge Port',
+      port_name: resolvedDischargeName,
       port_sequence: 999,
       quantity_at_loading_port: parseNumber(
         shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered,

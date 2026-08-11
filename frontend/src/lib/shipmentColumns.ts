@@ -38,7 +38,7 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 export const SHIPMENT_OBSOLETE_COLUMN_IDS = ['port_of_loading', 'port_of_discharge'] as const
 
 /** Bump when default column order/visibility changes — triggers one-time layout migration. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v9'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v10'
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
@@ -111,14 +111,14 @@ export function shipmentDefaultVisibleColumnIds(allIds: string[]): string[] {
   return SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
 }
 
-/** Grouping Suggestion is only eligible when the pipeline stage filter is Unplanned or Preplanned. */
+/** Grouping Suggestion is only eligible when the pipeline stage filter is Preplanned. */
 export function isShipmentGroupingSuggestionColumnEligible(
   pipelineStage: ShipmentsPipelineStageFilter,
 ): boolean {
-  return pipelineStage === 'UNPLANNED' || pipelineStage === 'PREPLANNED'
+  return pipelineStage === 'PREPLANNED'
 }
 
-/** Default visible set — omits Grouping Suggestion unless Unplanned/Preplanned is active. */
+/** Default visible set — omits Grouping Suggestion unless Preplanned is active. */
 export function shipmentDefaultVisibleColumnIdsForStage(
   allIds: string[],
   pipelineStage: ShipmentsPipelineStageFilter,

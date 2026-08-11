@@ -9,7 +9,9 @@ import {
   sqlContractImportStatusIsOpenExpr,
   sqlIsContractSapClosedExpr,
   sqlIsContractSapClosedForStoExpr,
+  sqlIsContractSapClosedForShipmentBacklogExpr,
   sqlNormalizeContractDeliveryStatusExpr,
+  sqlShipmentBacklogSpdSeaLegFilterSql,
 } from './contractDeliveryStatus';
 
 describe('normalizeContractDeliveryStatusForDisplay', () => {
@@ -120,5 +122,22 @@ describe('sqlContractImportStatusIsOpenExpr / ClosedExpr', () => {
   it('matches Open/Close on import_status column', () => {
     expect(sqlContractImportStatusIsOpenExpr('base.import_status')).toContain('OPEN');
     expect(sqlContractImportStatusIsClosedExpr('base.import_status')).toContain('CLOSED');
+  });
+});
+
+describe('sqlShipmentBacklogSpdSeaLegFilterSql / sqlIsContractSapClosedForShipmentBacklogExpr', () => {
+  it('filters FOB backlog closed check to sea-leg STO rows only', () => {
+    const filter = sqlShipmentBacklogSpdSeaLegFilterSql('c');
+    expect(filter).toContain("<> 'FOB'");
+    expect(filter).toContain("= 'V'");
+    expect(filter).toContain('IS DISTINCT FROM');
+  });
+
+  it('builds FOB-scoped closed predicate for shipment contract backlog', () => {
+    const sql = sqlIsContractSapClosedForShipmentBacklogExpr('c');
+    expect(sql).toContain("'CLOSE'");
+    expect(sql).toContain("<> 'FOB'");
+    expect(sql).toContain("= 'V'");
+    expect(sql).toContain('BOOL_OR');
   });
 });

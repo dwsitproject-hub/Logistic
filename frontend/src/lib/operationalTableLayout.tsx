@@ -243,6 +243,20 @@ const COMMERCIAL_DOCS_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLa
   doc_invoice_fp_full: 'short',
 }
 
+const MASTER_VESSEL_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayout>> = {
+  vessel_code: 'token',
+  vessel_name: 'truncate',
+  vessel_capacity_mt: 'short',
+  vessel_owner: 'truncate',
+  vessel_owner_group: 'truncate',
+  sap_vendor_code: 'token',
+  vessel_type: 'short',
+  year_of_creation: 'short',
+  heating: 'short',
+  lambung_type: 'short',
+  terms: 'short',
+}
+
 export function getOperationalColumnLayout(
   table:
     | 'shipments'
@@ -252,7 +266,8 @@ export function getOperationalColumnLayout(
     | 'oil_loss'
     | 'oil_loss_transporter'
     | 'oil_loss_supplier'
-    | 'shipping_performance',
+    | 'shipping_performance'
+    | 'master_vessel',
   colId: string,
 ): OperationalColumnLayout {
   const map =
@@ -262,6 +277,8 @@ export function getOperationalColumnLayout(
         ? TRUCKING_COLUMN_LAYOUT
         : table === 'commercial_documents'
           ? COMMERCIAL_DOCS_COLUMN_LAYOUT
+          : table === 'master_vessel'
+            ? MASTER_VESSEL_COLUMN_LAYOUT
           : table === 'oil_loss'
           ? OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT
           : table === 'oil_loss_transporter'

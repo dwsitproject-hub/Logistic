@@ -56,6 +56,8 @@ export type WbRekapParseFailure = {
   po_number: string;
   sto_number?: string;
   reason: string;
+  /** Stringified cell values from the failed Excel row (for failed-rows export). */
+  cells?: string[];
 };
 
 export type WbRekapParseResult = {
@@ -205,6 +207,58 @@ function normalizePoNumber(raw: unknown): string {
   if (!s) return '';
   if (/^\d+\.0+$/.test(s)) return String(Math.trunc(Number(s)));
   return s;
+}
+
+function wbRekapRowCellsToStrings(cells: unknown[]): string[] {
+  return cells.map((c) => {
+    if (c === null || c === undefined) return '';
+    if (c instanceof Date) {
+      const y = c.getFullYear();
+      const m = String(c.getMonth() + 1).padStart(2, '0');
+      const d = String(c.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    if (typeof c === 'number' && Number.isFinite(c)) return String(c);
+    return String(c).trim();
+  });
+}
+
+/**
+ * SPC / multi-plant templates insert period subtotal rows with empty PO/STO/date but
+ * aggregated Netto qty (or ticket-count + totals in cols ~11–14). Skip silently.
+ */
+function isWbPeriodSubtotalRow(
+  cells: unknown[],
+  poNumber: string,
+  stoNumber: string | null,
+  dateRaw: unknown,
+  pksRaw: unknown,
+  eupRaw: unknown,
+): boolean {
+  if (poNumber || stoNumber) return false;
+  const dateStr = dateRaw !== null && dateRaw !== undefined ? String(dateRaw).trim() : '';
+  if (dateStr !== '') return false;
+
+  const pks = pksRaw != null ? parseQtyKg(pksRaw) : 0;
+  const eup = eupRaw != null ? parseQtyKg(eupRaw) : 0;
+  if ((pks ?? 0) > 0 || (eup ?? 0) > 0) return true;
+
+  for (let i = 10; i <= 13; i += 1) {
+    const ticketCount = parseQtyKg(cells[i]);
+    const total1 = parseQtyKg(cells[i + 1]);
+    const total2 = parseQtyKg(cells[i + 2]);
+    if (
+      ticketCount !== null &&
+      ticketCount > 0 &&
+      ticketCount <= 999 &&
+      total1 !== null &&
+      total1 >= 1000 &&
+      (total2 === null || total2 >= 100)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -483,13 +537,12 @@ export function parseWbRekapSheetMatrix(
       continue;
     }
 
+    if (isWbPeriodSubtotalRow(cells, poNumber, stoNumber, dateRaw, pksRaw, eupRaw)) {
+      continue;
+    }
+
+    // Rows without PO/STO are not tickets (subtotal/rekap/blank) — skip silently.
     if (!poNumber && !stoNumber) {
-      rowParseFailures.push({
-        sheetName,
-        rowNumber,
-        po_number: '-',
-        reason: 'PO/SO (or No PO/STO / NO PO) and STO are both missing',
-      });
       continue;
     }
 
@@ -502,6 +555,7 @@ export function parseWbRekapSheetMatrix(
         sto_number: stoNumber ?? undefined,
         reason:
           'Date (Tanggal Masuk / TANGGAL / Tanggal Laporan) is missing or could not be parsed',
+        cells: wbRekapRowCellsToStrings(cells),
       });
       continue;
     }
@@ -515,6 +569,7 @@ export function parseWbRekapSheetMatrix(
         po_number: poNumber || stoNumber || '-',
         sto_number: stoNumber ?? undefined,
         reason: 'Delivery or Receive quantity is invalid',
+        cells: wbRekapRowCellsToStrings(cells),
       });
       continue;
     }
@@ -586,6 +641,18 @@ export type WbRekapWorkbookSheet = { sheetName: string; matrix: unknown[][] };
  * Parse every worksheet. Sheets are skipped only when empty or missing WB header —
  * never because of sheet product naming.
  */
+/** User-facing row parse failures: PO/STO identity present but ticket invalid. */
+export function filterWbRekapUserFacingRowParseFailures(
+  failures: WbRekapParseFailure[],
+): WbRekapParseFailure[] {
+  return failures.filter(
+    (f) =>
+      f.rowNumber > 0 &&
+      String(f.po_number ?? '').trim() !== '' &&
+      f.po_number !== '-',
+  );
+}
+
 export function parseWbRekapWorkbook(
   sheets: WbRekapWorkbookSheet[],
   parseDate: (raw: unknown) => string | null,
@@ -609,7 +676,6 @@ export function parseWbRekapWorkbook(
     );
     if (structuralFail && parsed.tickets.length === 0) {
       sheetsSkipped.push({ sheetName, reason: structuralFail.reason });
-      rowParseFailures.push(...parsed.rowParseFailures);
       continue;
     }
     if (parsed.tickets.length === 0 && parsed.rowParseFailures.length === 0) {

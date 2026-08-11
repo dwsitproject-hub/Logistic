@@ -20,6 +20,7 @@ import {
   buildPreplannedContractsPageQuery,
   unplannedShipmentExecutionOuterSql,
 } from '../utils/shipmentUnplannedHybridSql';
+import { normalizePipelineVesselNameList } from '../utils/pipelineVesselNames';
 import { computeHybridListPageSlices } from '../utils/hybridListPageSlices';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 
@@ -79,6 +80,30 @@ function buildContractQueryParts(ctx: PreplannedListContext): {
   };
 }
 
+/** Same execution scope as the Unplanned hybrid table (toolbar + unplanned predicate). */
+export async function loadUnplannedExecutionVesselNames(
+  ctx: UnplannedHybridListContext,
+): Promise<string[]> {
+  const { shipmentCtx } = ctx;
+  const breakdown = await countHybridBreakdown(ctx);
+  const executionRows = breakdown.shipmentRows;
+  if (executionRows <= 0) return [];
+
+  const pageSize = 500;
+  const rawNames: string[] = [];
+
+  for (let offset = 0; offset < executionRows; offset += pageSize) {
+    const limit = Math.min(pageSize, executionRows - offset);
+    const page = await fetchShipmentExecutionPage(shipmentCtx, limit, offset);
+    for (const row of page) {
+      const vessel = String(row.vessel_name ?? '').trim();
+      if (vessel) rawNames.push(vessel);
+    }
+  }
+
+  return normalizePipelineVesselNameList(rawNames);
+}
+
 /** Same scope as the Unplanned hybrid table (toolbar + backlog filters + execution predicate). */
 export function buildShipmentUnplannedHybridListContext(input: {
   shipmentBaseCteSql: string;
@@ -90,6 +115,9 @@ export function buildShipmentUnplannedHybridListContext(input: {
   contractScope: UnplannedHybridListContext['contractScope'];
   globalSearch: string;
   colFilters: ColumnFilterPayload;
+  sortKey?: string;
+  sortDir?: 'ASC' | 'DESC';
+  tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return buildShipmentHybridListContext({
     ...input,
@@ -109,6 +137,9 @@ export function buildShipmentAllHybridListContext(input: {
   contractScope: UnplannedHybridListContext['contractScope'];
   globalSearch: string;
   colFilters: ColumnFilterPayload;
+  sortKey?: string;
+  sortDir?: 'ASC' | 'DESC';
+  tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
     ...buildShipmentHybridListContext({
@@ -131,6 +162,9 @@ function buildShipmentHybridListContext(input: {
   contractScope: UnplannedHybridListContext['contractScope'];
   globalSearch: string;
   colFilters: ColumnFilterPayload;
+  sortKey?: string;
+  sortDir?: 'ASC' | 'DESC';
+  tableStatusFilter?: string;
 }): UnplannedHybridListContext {
   return {
     shipmentCtx: {
@@ -142,6 +176,9 @@ function buildShipmentHybridListContext(input: {
       cacheKey: `${input.filterCacheKey}:${input.cacheKeySuffix}`,
       filterCacheKey: input.filterCacheKey,
       usesStoKeyPaging: false,
+      tableStatusFilter: input.tableStatusFilter,
+      sortKey: input.sortKey ?? 'created_at',
+      sortDir: input.sortDir ?? 'DESC',
     },
     contractScope: input.contractScope,
     globalSearch: input.globalSearch,
@@ -251,10 +288,26 @@ async function fetchContractBacklogPage(
 ): Promise<Record<string, unknown>[]> {
   if (limit <= 0) return [];
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
+  const sortKey = ctx.shipmentCtx.sortKey ?? 'created_at';
+  const sortDir = ctx.shipmentCtx.sortDir ?? 'DESC';
   const text =
     ctx.contractBacklogMode === 'all'
-      ? buildAllHybridContractBacklogPageQuery(contractScopeSql, toolbarSql, limit, offset)
-      : buildUnplannedContractBacklogPageQuery(contractScopeSql, toolbarSql, limit, offset);
+      ? buildAllHybridContractBacklogPageQuery(
+          contractScopeSql,
+          toolbarSql,
+          limit,
+          offset,
+          sortKey,
+          sortDir,
+        )
+      : buildUnplannedContractBacklogPageQuery(
+          contractScopeSql,
+          toolbarSql,
+          limit,
+          offset,
+          sortKey,
+          sortDir,
+        );
   const result = await query(text, params);
   return result.rows as Record<string, unknown>[];
 }

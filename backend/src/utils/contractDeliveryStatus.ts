@@ -4,7 +4,7 @@ import {
   INCOTERM_GR_STO_STATUS,
   sqlIncotermImportStatusFromJson,
 } from './sapIncotermMetrics';
-import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+import { sapStoNumberKeyExpr, sqlIsSapSeaStoRowExpr } from './shipmentStoTypeSql';
 import { shippingPerfStoMetricsKeyExpr } from './shippingPerformanceStoSql';
 
 function sqlIncotermList(values: readonly string[]): string {
@@ -92,6 +92,7 @@ export function sqlContractImportStatusExpr(
   contractAlias = 'c',
   poNumberRef = `${contractAlias}.po_number`,
   stoKeyExpr?: string | null,
+  spdExtraAndSql = '',
 ): string {
   // NULL when the GR field is blank — never inject contracts.status per SPD row.
   const sapStatusNorm = sqlNormalizeContractDeliveryStatusExpr(
@@ -148,7 +149,7 @@ export function sqlContractImportStatusExpr(
               NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
               OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
               OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-            )${stoScope}
+            )${stoScope}${spdExtraAndSql}
         ) s
         WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
           OR s.row_open
@@ -217,6 +218,31 @@ export function sqlIsContractSapClosedForStoExpr(
 ): string {
   return sqlContractImportStatusIsClosedExpr(
     sqlContractImportStatusExpr(contractAlias, `${contractAlias}.po_number`, stoKeyExpr),
+  );
+}
+
+/**
+ * Shipment contract backlog: PO-wide GR status, but for FOB ignore Type T SPD rows
+ * when deciding if the contract is SAP-closed (truck legs must not block sea backlog).
+ */
+export function sqlShipmentBacklogSpdSeaLegFilterSql(contractAlias = 'c'): string {
+  const inc = `UPPER(TRIM(COALESCE(${contractAlias}.incoterm, '')))`;
+  return `
+    AND (
+      ${inc} <> 'FOB'
+      OR ${sqlIsSapSeaStoRowExpr('spd')}
+    )`.trim();
+}
+
+/** Closed check for Unplanned/Preplanned contract backlog cards (FOB Type V scoped). */
+export function sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias = 'c'): string {
+  return sqlContractImportStatusIsClosedExpr(
+    sqlContractImportStatusExpr(
+      contractAlias,
+      `${contractAlias}.po_number`,
+      null,
+      sqlShipmentBacklogSpdSeaLegFilterSql(contractAlias),
+    ),
   );
 }
 

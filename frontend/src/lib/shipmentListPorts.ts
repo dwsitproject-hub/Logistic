@@ -7,6 +7,7 @@
 
 import {
   isEmptyShippingPortValue,
+  isGenericKlipPortPlaceholder,
   isPortCodeLike,
   resolveShippingPerfDischargePort,
   resolveShippingPerfLoadingPort,
@@ -28,7 +29,13 @@ function splitCommaPorts(value: unknown): string[] {
   return raw
     .split(',')
     .map((part) => part.trim())
-    .filter((part) => part && !isEmptyShippingPortValue(part) && !isPortCodeLike(part))
+    .filter(
+      (part) =>
+        part &&
+        !isEmptyShippingPortValue(part) &&
+        !isPortCodeLike(part) &&
+        !isGenericKlipPortPlaceholder(part),
+    )
 }
 
 function joinUniquePorts(parts: string[]): string {

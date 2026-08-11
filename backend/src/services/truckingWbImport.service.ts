@@ -8,6 +8,7 @@ import { usesGrStoStatus } from '../utils/sapIncotermMetrics';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
   aggregateWbRekapTickets,
+  filterWbRekapUserFacingRowParseFailures,
   parseWbRekapWorkbook,
   resolveWbActualQtyKg,
   type WbRekapAggregatedRow,
@@ -22,7 +23,10 @@ import {
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
-import { findActiveTruckingOpsByContractId } from '../utils/truckingOperationUniqueness';
+import {
+  findActiveTruckingOpsByContractId,
+  SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE,
+} from '../utils/truckingOperationUniqueness';
 import { invalidateTruckingListCache } from './truckingList.service';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
@@ -268,6 +272,65 @@ async function batchFetchAnyStatusOpsCounts(
     map.set(row.po_number, { total: Number(row.total) || 0, active: Number(row.active) || 0 });
   }
   return map;
+}
+
+/** Prefer non-COMPLETED ops when multiple active rows share a PO (WB import match). */
+function narrowOpsForWbImport(ops: TruckingOpForWbRow[]): TruckingOpForWbRow[] {
+  if (ops.length <= 1) return ops;
+  const nonCompleted = ops.filter(
+    (o) => String(o.status ?? '').trim().toUpperCase() !== 'COMPLETED',
+  );
+  return nonCompleted.length > 0 ? nonCompleted : ops;
+}
+
+function normalizeOpsByPoMap(map: Map<string, TruckingOpForWbRow[]>): void {
+  for (const [po, ops] of map) {
+    map.set(po, narrowOpsForWbImport(ops));
+  }
+}
+
+async function pickWbImportKeeperOp(
+  db: Queryable,
+  ops: TruckingOpForWbRow[],
+): Promise<{ keeper: TruckingOpForWbRow; siblings: TruckingOpForWbRow[] }> {
+  if (ops.length === 0) {
+    throw new Error('pickWbImportKeeperOp: empty ops');
+  }
+  if (ops.length === 1) {
+    return { keeper: ops[0], siblings: [] };
+  }
+  const result = await runQuery<{ id: string }>(
+    db,
+    `SELECT t.id
+     FROM trucking_operations t
+     WHERE t.id = ANY($1::uuid[])
+     ORDER BY ${SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE}
+     LIMIT 1`,
+    [ops.map((o) => o.id)],
+  );
+  const keeperId = String(result.rows[0]?.id ?? ops[0].id);
+  const keeper = ops.find((o) => o.id === keeperId) ?? ops[0];
+  return { keeper, siblings: ops.filter((o) => o.id !== keeper.id) };
+}
+
+function formatOpLabel(o: TruckingOpForWbRow): string {
+  const id = (o.operation_id && String(o.operation_id).trim()) || o.id;
+  const prod = o.product ? ` / ${o.product}` : '';
+  return `${id}${prod}`;
+}
+
+function formatWbMultipleOpsSiblingWarning(
+  poNumber: string,
+  keeper: TruckingOpForWbRow,
+  siblings: TruckingOpForWbRow[],
+): string {
+  const siblingLabels = siblings.map(formatOpLabel).join(', ');
+  return (
+    `Multiple FRC/LCO trucking operations share PO "${poNumber}". ` +
+    `WB actual applied to keeper ${formatOpLabel(keeper)}. ` +
+    `Cancel or dedupe sibling operation(s): ${siblingLabels}. ` +
+    `Common cause: a later Daily Planning upload created a new operation while an older one is still active.`
+  );
 }
 
 /** Distinct PO/STO candidates to try for one aggregated row (PO first, then its STOs). */
@@ -633,25 +696,26 @@ async function applyResolvedRow(
   operationFailures: WbImportOperationFailure[],
   operationWarnings: WbImportOperationFailure[],
 ): Promise<{ updated: boolean; upserted: number; operationId?: string }> {
+  let targetOps = ops;
   if (ops.length > 1) {
-    const labels = ops
-      .map((o) => {
-        const id = (o.operation_id && String(o.operation_id).trim()) || o.id;
-        const prod = o.product ? ` / ${o.product}` : '';
-        return `${id}${prod}`;
-      })
-      .join(', ');
-    operationFailures.push({
+    const { keeper, siblings } = await pickWbImportKeeperOp(db, ops);
+    operationWarnings.push({
       po_number: poNumber,
       sto_numbers: row.stoNumbers,
       progress_date: row.progressDateIso,
-      reason: `Multiple FRC/LCO trucking operations share PO "${poNumber}" (${labels})`,
-      operation_ids: ops.map((o) => String(o.operation_id ?? o.id)),
+      reason: formatWbMultipleOpsSiblingWarning(poNumber, keeper, siblings),
+      operation_ids: [
+        String(keeper.operation_id ?? keeper.id),
+        ...siblings.map((o) => String(o.operation_id ?? o.id)),
+      ],
     });
-    return { updated: false, upserted: 0 };
+    targetOps = [keeper];
   }
 
-  const op = ops[0];
+  const op = targetOps[0];
+  if (!op) {
+    return { updated: false, upserted: 0 };
+  }
 
   const qtyResult = resolveWbActualQtyKg(
     String(op.incoterm ?? ''),
@@ -703,6 +767,9 @@ export async function processWbRekapWorkbookUpload(args: {
   sheets: WbRekapWorkbookSheet[];
 }): Promise<WbImportApplyResult> {
   const parsed = parseWbRekapWorkbook(args.sheets, toIsoDate10FromCell);
+  const userFacingRowParseFailures = filterWbRekapUserFacingRowParseFailures(
+    parsed.rowParseFailures,
+  );
 
   // Batch-resolve STO → PO on tickets that lack PO so multi-STO same-date rows merge
   // before apply (one round trip for every distinct STO, instead of one per ticket).
@@ -735,7 +802,7 @@ export async function processWbRekapWorkbookUpload(args: {
     operationsUpdated: 0,
     operationsFailed: 0,
     rowsUpserted: 0,
-    rowParseFailures: parsed.rowParseFailures,
+    rowParseFailures: userFacingRowParseFailures,
     operationFailures: [],
   });
 
@@ -759,6 +826,7 @@ export async function processWbRekapWorkbookUpload(args: {
     const candidateList = [...allCandidates];
 
     const opsByPo = await findTruckingOpsByPoForWbImportBatch(client, candidateList);
+    normalizeOpsByPoMap(opsByPo);
     const poFromSto = await batchResolvePoFromSto(client, candidateList);
 
     // Candidates that were actually STO keys resolving to a PO not already covered above.
@@ -769,7 +837,8 @@ export async function processWbRekapWorkbookUpload(args: {
     }
     if (secondaryPos.size > 0) {
       const secondaryOps = await findTruckingOpsByPoForWbImportBatch(client, [...secondaryPos]);
-      for (const [po, ops] of secondaryOps) opsByPo.set(po, ops);
+      normalizeOpsByPoMap(secondaryOps);
+      for (const [po, list] of secondaryOps) opsByPo.set(po, list);
     }
 
     const diagnosticPoSet = new Set<string>([...candidateList, ...secondaryPos]);
@@ -898,7 +967,7 @@ export async function processWbRekapWorkbookUpload(args: {
     operationsUpdated,
     operationsFailed: operationFailures.length,
     rowsUpserted,
-    rowParseFailures: parsed.rowParseFailures,
+    rowParseFailures: userFacingRowParseFailures,
     operationFailures,
     operationWarnings,
   };

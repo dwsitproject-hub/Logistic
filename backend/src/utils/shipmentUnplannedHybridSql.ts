@@ -2,7 +2,7 @@
  * Shipments page — Unplanned hybrid list (contract backlog + shipment execution rows).
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapClosedForShipmentBacklogExpr } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
 import { contractExtNoSubquery } from './portDisplaySql';
@@ -11,6 +11,7 @@ import {
   buildShipmentPageUnplannedOpenContractsCte,
   shipmentPageExcludeB2bChildCond,
   shipmentPagePipelineUnplannedRowPredicate,
+  shipmentPipelineVesselKeyExpr,
   sqlContractHasNoRegisteredEtaExpr,
 } from './shipmentPagePipelineSql';
 import {
@@ -18,6 +19,8 @@ import {
   buildShipmentPageSeaIncotermScopeSql,
 } from './shipmentIncotermScope';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
+
+import { buildShipmentContractBacklogOrderBy } from './shipmentListSortSql';
 
 export { buildShipmentPageUnplannedOpenContractsCte };
 
@@ -162,7 +165,7 @@ export function appendContractScopeToolbarFilters(
 export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
   return `
     ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
-    AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
+    AND NOT (${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias)})
     AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
     AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}
     AND NOT EXISTS (
@@ -372,6 +375,8 @@ export function buildAllHybridContractBacklogPageQuery(
   toolbarSql: string,
   limit: number,
   offset: number,
+  sortKey = 'created_at',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
 ): string {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
@@ -424,7 +429,7 @@ export function buildAllHybridContractBacklogPageQuery(
       WHERE ${preplannedWhere}
     )
     SELECT * FROM all_contract_backlog
-    ORDER BY contract_date DESC NULLS LAST, contract_number ASC
+    ORDER BY ${buildShipmentContractBacklogOrderBy(sortKey, sortDir)}
     LIMIT ${limit} OFFSET ${offset}`;
 }
 
@@ -433,6 +438,8 @@ export function buildUnplannedContractBacklogPageQuery(
   toolbarSql: string,
   limit: number,
   offset: number,
+  sortKey = 'created_at',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
 ): string {
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
@@ -455,7 +462,7 @@ export function buildUnplannedContractBacklogPageQuery(
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}
-      ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC
+      ORDER BY ${buildShipmentContractBacklogOrderBy(sortKey, sortDir)}
       LIMIT ${limit} OFFSET ${offset}
     )
     SELECT * FROM unplanned_contract_backlog`;
@@ -572,6 +579,27 @@ export function buildUnplannedShipmentExecutionCountQuery(
       WHERE 1=1 ${outerSql}
     )
     SELECT COUNT(*)::bigint AS c FROM filtered_shipments`;
+}
+
+/**
+ * Distinct vessel names on Unplanned hybrid execution rows (toolbar scope).
+ * Matches the shipment_execution slice of the Unplanned table — not contract backlog rows.
+ */
+export function buildUnplannedExecutionVesselNamesQuery(
+  shipmentBaseCteSql: string,
+  executionOuterSql: string,
+): string {
+  const vessel = shipmentPipelineVesselKeyExpr('sb.vessel_name');
+  return `
+    ${shipmentBaseCteSql},
+    filtered_shipments AS (
+      SELECT sb.*
+      FROM shipment_base sb
+      WHERE 1=1 ${executionOuterSql}
+        AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
+    )
+    SELECT ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${vessel} IS NOT NULL) AS unplanned_vessel_names
+    FROM filtered_shipments sb`;
 }
 
 export function buildUnplannedContractBacklogTableCountCte(contractScopeSql = ''): string {

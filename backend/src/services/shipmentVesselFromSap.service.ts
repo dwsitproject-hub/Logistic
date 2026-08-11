@@ -1,7 +1,8 @@
 import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { hasCompleteSapVesselIdentity } from '../utils/sapVesselFields';
+import { hasCompleteSapVesselIdentity, resolveShipmentDisplayVesselName } from '../utils/sapVesselFields';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
+import { resolveMasterVessel } from './resolveMasterVessel.service';
 
 type ShipmentVesselRow = Record<string, unknown>;
 
@@ -39,19 +40,21 @@ function pumpBackfillQueue(): void {
 
 /**
  * When shipment row lacks vessel but SAP has both code + name, expose SAP values on the row.
- * Display vessel name: SAP Vessel Name first, fallback to KLIP add/edit shipment input.
+ * Display vessel name: Master Vessel KLIP name first, then SAP, then stored shipment input.
  * Returns true when SAP has a complete vessel identity (code + name) for optional DB backfill.
  */
 export function mergeShipmentVesselFromSapRow(row: ShipmentVesselRow): boolean {
   const sapName = trimOrNull(row.vessel_name_sap);
   const sapCode = trimOrNull(row.vessel_code_sap);
   const sapOwner = trimOrNull(row.vessel_owner_sap);
+  const masterName = trimOrNull(row.vessel_name_master);
   const klipName = trimOrNull(row.vessel_name);
   delete (row as { vessel_name_sap?: unknown }).vessel_name_sap;
   delete (row as { vessel_code_sap?: unknown }).vessel_code_sap;
   delete (row as { vessel_owner_sap?: unknown }).vessel_owner_sap;
+  delete (row as { vessel_name_master?: unknown }).vessel_name_master;
 
-  const displayName = sapName ?? klipName;
+  const displayName = resolveShipmentDisplayVesselName(masterName, sapName, klipName);
   if (displayName) row.vessel_name = displayName;
 
   if (sapCode && !trimOrNull(row.vessel_code)) row.vessel_code = sapCode;
@@ -89,6 +92,16 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
         vessel_owner: trimOrNull(row.vessel_owner),
       });
 
+      const resolved = await resolveMasterVessel({
+        vessel_code: vesselCode,
+        vessel_name: vesselName,
+        vessel_owner: trimOrNull(row.vessel_owner),
+        source: 'sap_import',
+        updateAttributes: false,
+      });
+
+      const masterVesselId = resolved?.master_vessel_id ?? null;
+
       const stoKey = trimOrNull(row.sto_key);
       if (stoKey) {
         await query(
@@ -110,6 +123,7 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
             vessel_code = COALESCE(NULLIF(TRIM(s.vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(s.vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(s.vessel_owner), ''), $4),
+            master_vessel_id = COALESCE($5, s.master_vessel_id),
             updated_at = CURRENT_TIMESTAMP
           FROM contracts c
           LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
@@ -118,8 +132,9 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
             AND (
               s.vessel_code IS NULL OR TRIM(s.vessel_code) = ''
               OR s.vessel_name IS NULL OR TRIM(s.vessel_name) = ''
+              OR ($5 IS NOT NULL AND s.master_vessel_id IS NULL)
             )`,
-          [stoKey, vesselCode, vesselName, trimOrNull(row.vessel_owner)],
+          [stoKey, vesselCode, vesselName, trimOrNull(row.vessel_owner), masterVesselId],
         );
       } else if (shipmentId) {
         await query(
@@ -127,13 +142,15 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
             vessel_code = COALESCE(NULLIF(TRIM(vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(vessel_owner), ''), $4),
+            master_vessel_id = COALESCE($5, master_vessel_id),
             updated_at = CURRENT_TIMESTAMP
           WHERE id = $1::uuid
             AND (
               vessel_code IS NULL OR TRIM(vessel_code) = ''
               OR vessel_name IS NULL OR TRIM(vessel_name) = ''
+              OR ($5 IS NOT NULL AND master_vessel_id IS NULL)
             )`,
-          [shipmentId, vesselCode, vesselName, trimOrNull(row.vessel_owner)],
+          [shipmentId, vesselCode, vesselName, trimOrNull(row.vessel_owner), masterVesselId],
         );
       }
     } catch (error) {

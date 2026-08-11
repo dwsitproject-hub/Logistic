@@ -42,6 +42,7 @@ import {
   resolveShipmentDisplayStoNumber,
 } from '@/lib/shipmentStoDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveLoadingPortDisplayFromRow, resolveKlipPortInputValue } from '@/lib/loadingPortDisplay'
@@ -2042,11 +2043,11 @@ export function EditShipmentModal({
                   value={vesselName}
                 />
                 {[
-                  ['Vessel Code', vesselMeta.vessel_code],
+                  ['Vessel Code', formatVesselCodeDisplay(vesselMeta.vessel_code)],
                   ['Vessel Owner', vesselMeta.vessel_owner],
                   ['Vessel Capacity (MT)', vesselMeta.vessel_capacity],
                   ['Vessel Draft', vesselMeta.vessel_draft],
-                  ['Hull Type', vesselMeta.vessel_hull_type],
+                  ['Vessel Type', vesselMeta.vessel_hull_type],
                   ['Charter Type', vesselMeta.charter_type],
                   ['Discharge Port', vesselMeta.port_of_discharge],
                   ['Plant / Site', plantSiteName],

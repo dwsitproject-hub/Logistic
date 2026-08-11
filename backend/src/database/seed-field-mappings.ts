@@ -58,7 +58,7 @@ const FIELD_MAPPINGS: FieldMapping[] = [
   { sapFieldName: 'Vessel_Draft', displayName: 'Vessel Draft', fieldType: 'number', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 4 },
   { sapFieldName: 'Vessel_LOA', displayName: 'Vessel LOA', fieldType: 'number', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 5 },
   { sapFieldName: 'Vessel_Capacity', displayName: 'Vessel Capacity', fieldType: 'number', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 6 },
-  { sapFieldName: 'Vessel_Hull_Type', displayName: 'Vessel Hull Type', fieldType: 'text', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 7 },
+  { sapFieldName: 'Vessel_Hull_Type', displayName: 'Vessel Type', fieldType: 'text', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 7 },
   { sapFieldName: 'Vessel_Registration_Year', displayName: 'Vessel Registration Year', fieldType: 'number', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 8 },
   { sapFieldName: 'Charter_Type', displayName: 'Charter Type (VC/TC/Mix)', fieldType: 'text', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 9 },
   { sapFieldName: 'Voyage_Number', displayName: 'Voyage No.', fieldType: 'text', userRole: 'LOGISTICS_SHIPPING', isRequired: false, isEditable: true, colorCode: '#0080FF', sortOrder: 10 },

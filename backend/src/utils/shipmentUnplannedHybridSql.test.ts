@@ -3,6 +3,7 @@ import {
   buildUnplannedContractBacklogCountQuery,
   buildUnplannedContractBacklogPageQuery,
   buildUnplannedContractBacklogTableCountCte,
+  buildUnplannedExecutionVesselNamesQuery,
   appendContractScopeToolbarFilters,
   appendUnplannedContractBacklogGlobalSearch,
   unplannedContractBacklogBaseWhereSql,
@@ -23,6 +24,13 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).not.toMatch(/=\s*'T'/);
   });
 
+  it('uses FOB Type V scoped SAP closed check for contract backlog', () => {
+    const sql = unplannedContractBacklogBaseWhereSql('c', 'l');
+    expect(sql).toContain("<> 'FOB'");
+    expect(sql).toContain("= 'V'");
+    expect(sql).toContain('NOT (');
+  });
+
   it('builds contract backlog count query with contract qty in the same scan', () => {
     const text = buildUnplannedContractBacklogCountQuery('AND c.contract_date >= $1', '');
     expect(text).toContain('unplanned_contract_backlog');
@@ -39,6 +47,18 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('AS outstanding_quantity');
     expect(text).toContain('c.quantity_ordered AS contract_qty');
     expect(text).not.toContain('NULL::text AS contract_ext_no');
+  });
+
+  it('applies server sort on contract backlog page query', () => {
+    const text = buildUnplannedContractBacklogPageQuery(
+      '',
+      '',
+      20,
+      0,
+      'po_numbers',
+      'ASC',
+    );
+    expect(text).toContain('c.po_number ASC');
   });
 
   it('builds summary table count CTE', () => {
@@ -104,8 +124,19 @@ describe('buildAllHybridContractBacklogQuery', () => {
     expect(text).toContain('UNPLANNED');
     expect(text).toContain('PREPLANNED');
     expect(text).toContain('pre_planned_group_id');
-    expect(text).toContain('ORDER BY contract_date DESC');
+    expect(text).toContain('ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC');
     expect(text).toContain('LIMIT 20 OFFSET 0');
+  });
+
+  it('buildUnplannedExecutionVesselNamesQuery scopes to hybrid execution rows only', () => {
+    const text = buildUnplannedExecutionVesselNamesQuery(
+      'WITH shipment_base AS (SELECT 1)',
+      unplannedShipmentExecutionOuterSql(''),
+    );
+    expect(text).toContain('unplanned_vessel_names');
+    expect(text).toContain('is_contract_sap_closed');
+    expect(text).toContain('sap_presence');
+    expect(text).toContain("'CIF'");
   });
 });
 

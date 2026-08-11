@@ -18,6 +18,8 @@
     "cleanup:duplicate-trucking-op-id:confirm": "ts-node src/scripts/cleanupDuplicateTruckingByOperationId.ts --confirm",
     "cleanup:duplicate-trucking-per-contract": "ts-node src/scripts/cleanupDuplicateTruckingPerContract.ts",
     "cleanup:duplicate-trucking-per-contract:confirm": "ts-node src/scripts/cleanupDuplicateTruckingPerContract.ts --confirm",
+    "cleanup:duplicate-trucking-by-po": "ts-node src/scripts/cleanupDuplicateTruckingByPo.ts --all",
+    "cleanup:duplicate-trucking-by-po:apply": "ts-node src/scripts/cleanupDuplicateTruckingByPo.ts --all --apply",
     "audit:orphan-sto-lines": "ts-node src/scripts/auditOrphanStoLines.ts",
     "resync:vessel-ports-wrong-sto": "ts-node src/scripts/resyncVesselPortsWrongStoData.ts",
     "resync:vessel-ports-wrong-sto:confirm": "ts-node src/scripts/resyncVesselPortsWrongStoData.ts --confirm",

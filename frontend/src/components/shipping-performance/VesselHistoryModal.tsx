@@ -50,7 +50,8 @@ type MasterVesselProfile = {
   vessel_owner_group: string | null
   vessel_owner: string | null
   vessel_capacity_mt: number | null
-  hull_type: string | null
+  hull_type?: string | null
+  vessel_type?: string | null
   lambung_type: string | null
 }
 
@@ -514,7 +515,8 @@ export default function VesselHistoryModal({
           vessel_owner_group: exact.vessel_owner_group ?? null,
           vessel_owner: exact.vessel_owner ?? null,
           vessel_capacity_mt: parseMasterVesselCapacityMt(exact.vessel_capacity_mt),
-          hull_type: exact.hull_type ?? null,
+          vessel_type: exact.vessel_type ?? exact.hull_type ?? null,
+          hull_type: exact.vessel_type ?? exact.hull_type ?? null,
           lambung_type: exact.lambung_type ?? null,
         })
       }
@@ -567,7 +569,7 @@ export default function VesselHistoryModal({
           ? profile.vessel_capacity_mt.toLocaleString('en-US', { maximumFractionDigits: 2 })
           : '-',
     },
-    { label: 'Hull Type', value: displayLabel(profile?.hull_type) },
+    { label: 'Vessel Type', value: displayLabel(profile?.vessel_type ?? profile?.hull_type) },
     { label: 'Lambung Type', value: displayLabel(profile?.lambung_type) },
   ]
 

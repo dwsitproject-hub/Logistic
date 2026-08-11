@@ -42,6 +42,8 @@ describe('shipmentsPageFilterState', () => {
     expect(listKey.startsWith(globalKey)).toBe(true)
     expect(listKey).toContain('st:PLANNED')
     expect(listKey).toContain('p:2')
+    expect(listKey).toContain('sk:created_at')
+    expect(listKey).toContain('sd:desc')
   })
 
   it('togglePipelineStageFilter toggles active card modifier', () => {

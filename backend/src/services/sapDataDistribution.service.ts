@@ -6,6 +6,11 @@ import {
   resolveTruckingIncotermFromParsedData,
 } from '../utils/truckingIncotermScope';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
+import { isSapSeaStoLegForIncoterm, resolveSapStoTypeFromParsedData } from '../utils/sapSeaStoLeg';
+import {
+  resolveSapDistributionSeaLike,
+  shouldMaterializeSapShipment,
+} from '../utils/sapDistributionRouting';
 import { deriveShipmentStatus, sqlShipmentStatusRank } from '../utils/shipmentStatus';
 import {
   SQL_CONTRACT_IMPORT_STATUS,
@@ -211,7 +216,7 @@ export class SapDataDistributionService {
             supplier: parsedData.contract?.supplier,
             product: parsedData.contract?.product
           });
-          result.contractId = await this.upsertContract(client, parsedData.contract, userId);
+          result.contractId = await this.upsertContract(client, parsedData.contract, userId, parsedData);
           logger.info('Contract upserted successfully:', result.contractId);
         } catch (contractError) {
           logger.error('Failed to upsert contract:', contractError);
@@ -251,14 +256,19 @@ export class SapDataDistributionService {
         parsedData.shipment?.sto_no ||
         parsedData.shipment?.shipment_id
       );
-      // If mode is still unknown, infer SEA when we have STO/shipment identifiers but no explicit LAND
-      const assumeSea =
-        !isLand &&
-        !isSea &&
-        hasShipment &&
-        (hasVesselLike || hasStoInShipment);
-      
-      const seaLike = isSea || assumeSea;
+      const routingCtx = {
+        isLand,
+        isSea,
+        incotermLabel,
+        isTruckIncoterm,
+        hasShipment,
+        seaEligible,
+        hasVesselLike,
+        hasStoInShipment,
+        parsedData,
+      };
+      const { seaLike, assumeSea, landSeaStoLeg, cifCfrSeaLike } =
+        resolveSapDistributionSeaLike(routingCtx);
 
       logger.info('Routing decision based on SEA / LAND:', {
         sea_land_raw: seaLandRaw,
@@ -268,78 +278,22 @@ export class SapDataDistributionService {
         isLand,
         isSea: seaLike,
         hasShipmentData: hasShipment,
-        assumedSea: assumeSea
+        assumedSea: assumeSea,
+        landSeaStoLeg,
+        cifCfrSeaLike,
+        sapStoType: resolveSapStoTypeFromParsedData(parsedData),
       });
       
       // 2a. SEA: create/update shipment only when SAP row has at least one shipping anchor field
       // (STO No, ports, vessel, STO qty, qty delivery/receive, ATA milestones — see seaShipmentEligibility).
       // FRC/LCO incoterms route to trucking even when SAP Sea/Land is inconsistent.
-      if (seaLike && hasShipment && seaEligible && !isTruckIncoterm) {
-        try {
-          // Extract vessel data from shipment object (where it's actually stored)
-          const vesselIdentity = resolveSapVesselIdentity(
-            parsedData.shipment,
-            parsedData.vessel,
-            parsedData.raw,
-          );
-          const vesselData = {
-            vessel_name: vesselIdentity.vessel_name,
-            vessel_code: vesselIdentity.vessel_code,
-            vessel_owner: vesselIdentity.vessel_owner,
-            voyage_no: parsedData.shipment?.voyage_no,
-            vessel_draft: parsedData.shipment?.vessel_draft,
-            vessel_loa: parsedData.shipment?.vessel_loa,
-            vessel_capacity: parsedData.shipment?.vessel_capacity,
-            vessel_hull_type: parsedData.shipment?.vessel_hull_type,
-            vessel_registration_year:
-              parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
-            charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
-          };
-          
-          logger.info('Attempting to upsert shipment with data (SEA):', {
-            sto_no: parsedData.shipment?.sto_no,
-            vessel_name: vesselData.vessel_name,
-            contractId: result.contractId
-          });
-          const shipmentPayload = { ...(parsedData.shipment || {}) };
-          this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
-
-          const shipmentId = await this.upsertShipment(
-            client,
-            shipmentPayload,
-            result.contractId, // ensure we link shipment to whatever contract id we resolved
-            vesselData,
-            userId,
-            parsedData,
-          );
-          const shipmentUuid = this.toUuid(shipmentId);
-          if (!shipmentUuid) {
-            result.shipmentId = undefined;
-            logger.warn('Shipment upsert returned no UUID; skipping port sync and KLIP activity checks', {
-              contractId: result.contractId,
-              sto_no: parsedData.shipment?.sto_no,
-            });
-          } else {
-            result.shipmentId = shipmentUuid;
-            logger.info('Shipment upserted successfully:', result.shipmentId);
-
-            // Create or update vessel loading ports
-            await this.upsertVesselLoadingPorts(client, result.shipmentId, parsedData);
-            const klipProtectPorts = await hasKlipShipmentActivity(
-              client,
-              result.shipmentId,
-              result.contractId ?? undefined,
-            );
-            await denormalizeShipmentPortsFromSap(client, result.shipmentId, parsedData, {
-              protectKlip: klipProtectPorts,
-            });
-            logger.info('Vessel loading ports processed for shipment:', result.shipmentId);
-          }
-        } catch (shipmentError) {
-          logger.error('Failed to upsert shipment:', shipmentError);
-          logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
-          throw shipmentError;
-        }
+      if (shouldMaterializeSapShipment(routingCtx)) {
+        result.shipmentId = await this.createSeaShipmentFromParsedData(
+          client,
+          parsedData,
+          result.contractId,
+          userId,
+        );
       } else if (seaLike && hasShipment && !seaEligible) {
         logger.info('Skipping SEA shipment upsert: not eligible by anchor fields', {
           contractId: result.contractId,
@@ -446,12 +400,148 @@ export class SapDataDistributionService {
           result.contractId
         );
       }
+
+      if (!result.shipmentId && result.contractId) {
+        result.shipmentId = await this.ensureSeaShipmentIfEligible(
+          client,
+          parsedData,
+          result.contractId,
+          userId,
+        );
+      }
       
       return result;
       
     } catch (error) {
       logger.error('Data distribution failed', error);
       throw error;
+    }
+  }
+
+  /** Fallback after distribute when routing skipped shipment creation for an eligible SAP STO row. */
+  static async ensureSeaShipmentIfEligible(
+    client: PoolClient,
+    parsedData: any,
+    contractId: string | undefined,
+    userId?: string,
+  ): Promise<string | undefined> {
+    if (!contractId) return undefined;
+
+    const incotermLabel = resolveTruckingIncotermFromParsedData(parsedData);
+    if (isTruckingPageIncoterm(incotermLabel)) return undefined;
+    if (!isSeaSapRowEligibleForShipmentCreation(parsedData)) return undefined;
+    if (!isSapSeaStoLegForIncoterm(parsedData, incotermLabel)) return undefined;
+    if (incotermLabel === 'FOB' && resolveSapStoTypeFromParsedData(parsedData) === 'T') {
+      return undefined;
+    }
+    if (!this.hasShipmentData(parsedData.shipment)) return undefined;
+
+    const seaLandRaw = await this.resolveTransportModeRaw(client, contractId, parsedData.contract);
+    const modeLabel = this.parseTransportModeLabel(seaLandRaw);
+    const isLand = modeLabel === 'LAND';
+    const isSea = modeLabel === 'SEA';
+    const hasShipment = this.hasShipmentData(parsedData.shipment);
+    const seaEligible = isSeaSapRowEligibleForShipmentCreation(parsedData);
+    const hasVesselLike =
+      !!(
+        parsedData.shipment?.vessel_name ||
+        parsedData.shipment?.vessel_code ||
+        parsedData.shipment?.voyage_no ||
+        parsedData.shipment?.vessel_owner ||
+        parsedData.shipment?.vessel_loading_port_1 ||
+        parsedData.shipment?.vessel_discharge_port
+      );
+    const hasStoInShipment = !!(
+      parsedData.shipment?.sto_no ||
+      parsedData.shipment?.shipment_id
+    );
+    const routingCtx = {
+      isLand,
+      isSea,
+      incotermLabel,
+      isTruckIncoterm: false,
+      hasShipment,
+      seaEligible,
+      hasVesselLike,
+      hasStoInShipment,
+      parsedData,
+    };
+
+    if (!shouldMaterializeSapShipment(routingCtx)) return undefined;
+
+    return this.createSeaShipmentFromParsedData(client, parsedData, contractId, userId);
+  }
+
+  private static async createSeaShipmentFromParsedData(
+    client: PoolClient,
+    parsedData: any,
+    contractId: string | undefined,
+    userId?: string,
+  ): Promise<string | undefined> {
+    if (!contractId) return undefined;
+
+    try {
+      const vesselIdentity = resolveSapVesselIdentity(
+        parsedData.shipment,
+        parsedData.vessel,
+        parsedData.raw,
+      );
+      const vesselData = {
+        vessel_name: vesselIdentity.vessel_name,
+        vessel_code: vesselIdentity.vessel_code,
+        vessel_owner: vesselIdentity.vessel_owner,
+        voyage_no: parsedData.shipment?.voyage_no,
+        vessel_draft: parsedData.shipment?.vessel_draft,
+        vessel_loa: parsedData.shipment?.vessel_loa,
+        vessel_capacity: parsedData.shipment?.vessel_capacity,
+        vessel_hull_type: parsedData.shipment?.vessel_hull_type,
+        vessel_registration_year:
+          parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
+        charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
+      };
+
+      logger.info('Attempting to upsert shipment with data (SEA):', {
+        sto_no: parsedData.shipment?.sto_no,
+        vessel_name: vesselData.vessel_name,
+        contractId,
+      });
+      const shipmentPayload = { ...(parsedData.shipment || {}) };
+      this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
+
+      const shipmentId = await this.upsertShipment(
+        client,
+        shipmentPayload,
+        contractId,
+        vesselData,
+        userId,
+        parsedData,
+      );
+      const shipmentUuid = this.toUuid(shipmentId);
+      if (!shipmentUuid) {
+        logger.warn('Shipment upsert returned no UUID; skipping port sync and KLIP activity checks', {
+          contractId,
+          sto_no: parsedData.shipment?.sto_no,
+        });
+        return undefined;
+      }
+
+      logger.info('Shipment upserted successfully:', shipmentUuid);
+
+      await this.upsertVesselLoadingPorts(client, shipmentUuid, parsedData);
+      const klipProtectPorts = await hasKlipShipmentActivity(
+        client,
+        shipmentUuid,
+        contractId,
+      );
+      await denormalizeShipmentPortsFromSap(client, shipmentUuid, parsedData, {
+        protectKlip: klipProtectPorts,
+      });
+      logger.info('Vessel loading ports processed for shipment:', shipmentUuid);
+      return shipmentUuid;
+    } catch (shipmentError) {
+      logger.error('Failed to upsert shipment:', shipmentError);
+      logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
+      throw shipmentError;
     }
   }
   
@@ -511,7 +601,8 @@ export class SapDataDistributionService {
   private static async upsertContract(
     client: PoolClient,
     contractData: any,
-    userId?: string
+    userId?: string,
+    parsedData?: Record<string, unknown>,
   ): Promise<string> {
     const contractNumber = contractData.contract_no != null ? String(contractData.contract_no).trim() || null : null;
     const poNumber = normalizePoNumber(contractData.po_no);
@@ -681,6 +772,10 @@ export class SapDataDistributionService {
     // Persist each STO as a separate row in contract_stos to support multiple STOs per contract.
     const stoNo = contractData.sto_no != null ? String(contractData.sto_no).trim() || null : null;
     if (stoNo) {
+      const stoType =
+        String(contractData.sto_type ?? '').trim().toUpperCase() ||
+        resolveSapStoTypeFromParsedData(parsedData ?? { contract: contractData, raw: contractData?.raw }) ||
+        null;
       await client.query(
         `INSERT INTO contract_stos (contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -695,7 +790,7 @@ export class SapDataDistributionService {
           contractUuid,
           stoNo,
           this.parseNumber(contractData.sto_quantity),
-          contractData.sto_type || null,
+          stoType || null,
           contractData.sto_item || null,
           contractData.sto_classification || contractData.po_classification || null,
           contractData.plant_code || null

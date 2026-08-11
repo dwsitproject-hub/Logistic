@@ -10,6 +10,9 @@ import {
   shipmentListDisplayStoNumberExpr,
   shipmentResolvedStoTypeExpr,
   shipmentSapStoKeyExpr,
+  sqlIsSapSeaStoRowExpr,
+  sqlIsSapSeaStoRowForIncotermExpr,
+  contractHasFobSeaEligibleStoExistsSql,
 } from './shipmentStoTypeSql';
 
 describe('shipmentStoTypeSql', () => {
@@ -69,10 +72,33 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('NOT (');
   });
 
-  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm only (no STO Type T filter)', () => {
+  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes FOB Type T', () => {
     const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
-    expect(sql).not.toMatch(/=\s*'T'/);
-    expect(sql).not.toContain(' AND ');
+    expect(sql).toContain("= 'FOB'");
+    expect(sql).toContain("= 'T'");
+    expect(sql).toContain('AND NOT');
+  });
+
+  it('sqlIsSapSeaStoRowExpr matches Type V or non-T rows with vessel name', () => {
+    const sql = sqlIsSapSeaStoRowExpr('spd');
+    expect(sql).toContain("= 'V'");
+    expect(sql).toContain("IS DISTINCT FROM 'T'");
+    expect(sql).toContain('Vessel Name');
+  });
+
+  it('sqlIsSapSeaStoRowForIncotermExpr passes CIF/CFR and gates FOB to sea leg', () => {
+    const sql = sqlIsSapSeaStoRowForIncotermExpr('spd', 'c');
+    expect(sql).toContain("IN ('CIF', 'CFR')");
+    expect(sql).toContain("'FOB'");
+    expect(sql).toContain("= 'V'");
+  });
+
+  it('contractHasFobSeaEligibleStoExistsSql checks FOB Type V SPD rows', () => {
+    const sql = contractHasFobSeaEligibleStoExistsSql('c');
+    expect(sql).toContain('EXISTS');
+    expect(sql).toContain("= 'FOB'");
+    expect(sql).toContain("= 'V'");
+    expect(sql).toContain('spd_fob');
   });
 });

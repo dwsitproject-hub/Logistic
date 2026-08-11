@@ -63,5 +63,23 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(ctx.shipmentCtx.cacheKey).toContain(':unplanned-hybrid');
       expect(ctx.shipmentCtx.outerSql).not.toBe(baseInput.toolbarOuterSql);
     });
+
+    it('defaults server sort to created_at DESC on shipment context', () => {
+      const ctx = buildShipmentUnplannedHybridListContext(baseInput);
+      expect(ctx.shipmentCtx.sortKey).toBe('created_at');
+      expect(ctx.shipmentCtx.sortDir).toBe('DESC');
+    });
+
+    it('passes custom sort to shipment context', () => {
+      const ctx = buildShipmentUnplannedHybridListContext({
+        ...baseInput,
+        sortKey: 'vessel_name',
+        sortDir: 'ASC',
+        tableStatusFilter: 'UNPLANNED',
+      });
+      expect(ctx.shipmentCtx.sortKey).toBe('vessel_name');
+      expect(ctx.shipmentCtx.sortDir).toBe('ASC');
+      expect(ctx.shipmentCtx.tableStatusFilter).toBe('UNPLANNED');
+    });
   });
 });

@@ -6,7 +6,9 @@
  * Oil Loss vessel segment: MIX + STO Type 'V' — see oilLossEligibility.ts.
  */
 
+import { sqlSapVesselNameFromSpdJsonb } from './sapVesselFields';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
+import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 
 /** Normalized STO Type from sap_processed_data JSON. */
 export const sapStoTypeNormalizedExpr = (spdAlias = 'spd'): string => `
@@ -156,13 +158,58 @@ export function buildShipmentExcludeStoTypeTSql(
 }
 
 /**
- * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm only (STO Type ignored).
- * spdAlias/shipmentAlias params kept for call-site compatibility.
+ * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm.
+ * FOB Type T (truck leg) is excluded; CIF/CFR remain incoterm-only.
  */
 export function buildShipmentPageSeaRowScopeSql(
   contractAlias = 'c',
-  _spdAlias = 'l',
-  _shipmentAlias = 's',
+  spdAlias = 'l',
+  shipmentAlias = 's',
 ): string {
-  return buildShipmentPageSeaIncotermScopeSql(contractAlias);
+  const incScope = buildShipmentPageSeaIncotermScopeSql(contractAlias);
+  const inc = contractEffectiveIncotermExpr(contractAlias);
+  const fobTruckLeg = `(
+    (${inc}) = 'FOB'
+    AND ${shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias)} = 'T'
+  )`;
+  return `(${incScope}) AND NOT (${fobTruckLeg})`;
+}
+
+/** SQL: SAP row is FOB sea leg (Type V, or non-T with vessel name). */
+export function sqlIsSapSeaStoRowExpr(spdAlias = 'spd'): string {
+  const stoType = sapStoTypeNormalizedExpr(spdAlias);
+  const vessel = sqlSapVesselNameFromSpdJsonb(`${spdAlias}.data`);
+  return `(
+    ${stoType} = 'V'
+    OR (
+      ${stoType} IS DISTINCT FROM 'T'
+      AND ${stoType} <> 'V'
+      AND ${vessel} IS NOT NULL
+    )
+  )`;
+}
+
+/** CIF/CFR pass by incoterm; FOB requires sea-leg STO row. */
+export function sqlIsSapSeaStoRowForIncotermExpr(
+  spdAlias = 'spd',
+  contractAlias = 'c',
+): string {
+  const inc = contractEffectiveIncotermExpr(contractAlias);
+  return `(
+    (${inc}) IN ('CIF', 'CFR')
+    OR ((${inc}) = 'FOB' AND ${sqlIsSapSeaStoRowExpr(spdAlias)})
+  )`;
+}
+
+/** True when contract has at least one FOB Type V (or vessel) SAP STO row. */
+export function contractHasFobSeaEligibleStoExistsSql(contractAlias = 'c'): string {
+  return `EXISTS (
+    SELECT 1
+    FROM sap_processed_data spd_fob
+    WHERE TRIM(spd_fob.contract_number) = TRIM(${contractAlias}.contract_id::text)
+      AND TRIM(COALESCE(spd_fob.po_number, '')) = TRIM(COALESCE(${contractAlias}.po_number, ''))
+      AND ${sapStoNumberKeyExpr('spd_fob')} IS NOT NULL
+      AND UPPER(TRIM(COALESCE(${contractAlias}.incoterm, ''))) = 'FOB'
+      AND ${sqlIsSapSeaStoRowExpr('spd_fob')}
+  )`;
 }

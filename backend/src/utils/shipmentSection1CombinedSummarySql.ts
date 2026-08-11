@@ -6,11 +6,12 @@ import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import { shipmentListSpdAggCtes } from './shipmentListSapAggSql';
 import { shipmentListPageQtySelectSql } from './shipmentListQtySql';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
+import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
 import {
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineUnplannedRowPredicate,
   shipmentPagePipelineVesselNamesSelectSql,
-  shipmentPipelineVesselKeyExpr,
+  shipmentPipelineEnrichedDisplayVesselKeyExpr,
 } from './shipmentPagePipelineSql';
 import {
   parseShipmentStatusContractQtyFromExecutionRow,
@@ -95,13 +96,15 @@ export interface ShipmentSection1CombinedSummaryQueryOpts {
   summaryEnrichedFrom: string;
 }
 
-/** Pipeline summary + status-card contract/OS qty in one SPD-joined scan. */
-export function buildShipmentSection1CombinedSummaryQuery(
-  opts: ShipmentSection1CombinedSummaryQueryOpts,
-): string {
+function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSummaryQueryOpts): string {
   const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('f');
   const qtySelect = shipmentListPageQtySelectSql('f');
   const spdAggCtes = shipmentListSpdAggCtes(false);
+  const masterJoin = sqlMasterVesselLateralJoin(
+    'COALESCE(f.vessel_code, sl.vessel_code_sap)',
+    'COALESCE(f.vessel_name, sl.vessel_name_sap)',
+    'mv',
+  );
 
   return `${opts.shipmentBaseCteSql}
       ${opts.unplannedBacklogCountCteSql}
@@ -121,17 +124,44 @@ export function buildShipmentSection1CombinedSummaryQuery(
           f.*,
           ${buildShipmentSummaryEtaEnrichmentSelect('f')},
           (${unplannedPred}) AS is_unplanned_execution,
-          ${qtySelect}
+          ${qtySelect},
+          sl.vessel_name_sap,
+          sl.vessel_code_sap,
+          mv.vessel_name_master
         FROM ${opts.summaryEnrichedFrom} f
         LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(f.sto_key::text)
         LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(f.sto_key::text)
         LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(f.sto_key::text)
-      )
+        ${masterJoin}
+      )`;
+}
+
+/** Live vessel-name arrays for pipeline cards (master + SAP display, toolbar scope). */
+export function buildPipelineCardVesselNamesQuery(
+  opts: ShipmentSection1CombinedSummaryQueryOpts,
+): string {
+  const displayVessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
+  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
+  return `${buildShipmentSection1SummaryCteBlock(opts)}
+      SELECT
+        ${shipmentPagePipelineVesselNamesSelectSql(displayVessel)},
+        ARRAY_AGG(DISTINCT ${displayVessel}) FILTER (WHERE ${unplannedPred} AND ${displayVessel} IS NOT NULL) AS unplanned_vessel_names
+      FROM enriched e`;
+}
+
+/** Pipeline summary + status-card contract/OS qty in one SPD-joined scan. */
+export function buildShipmentSection1CombinedSummaryQuery(
+  opts: ShipmentSection1CombinedSummaryQueryOpts,
+): string {
+  const displayVessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
+  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
+
+  return `${buildShipmentSection1SummaryCteBlock(opts)}
       SELECT
         COUNT(*)::bigint AS total_count,
         ${shipmentPagePipelineSummarySelectSql()},
-        ${shipmentPagePipelineVesselNamesSelectSql()},
-        ARRAY_AGG(DISTINCT ${shipmentPipelineVesselKeyExpr('e.vessel_name')}) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')} AND ${shipmentPipelineVesselKeyExpr('e.vessel_name')} IS NOT NULL) AS unplanned_vessel_names,
+        ${shipmentPagePipelineVesselNamesSelectSql(displayVessel)},
+        ARRAY_AGG(DISTINCT ${displayVessel}) FILTER (WHERE ${unplannedPred} AND ${displayVessel} IS NOT NULL) AS unplanned_vessel_names,
         (SELECT backlog_count FROM unplanned_contract_backlog_table)::bigint AS unplanned_contract_backlog_count,
         (SELECT preplanned_group_count FROM preplanned_contract_table)::bigint AS preplanned_count,
         (SELECT preplanned_contract_count FROM preplanned_contract_table)::bigint AS preplanned_contract_count,

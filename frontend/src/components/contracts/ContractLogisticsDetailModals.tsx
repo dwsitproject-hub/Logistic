@@ -6,6 +6,7 @@ import { X, Pencil } from 'lucide-react'
 import api from '@/lib/api'
 import { formatDateDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatQtyMtFromKg } from '@/lib/utils'
+import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 
 type TruckingOperation = {
@@ -427,7 +428,7 @@ export function ContractShipmentDetailModal({
                       <Field label="Status" value={selected.status} />
                       <Field label="Contracts" value={selected.contract_numbers} />
                       <Field label="Vessel" value={selected.vessel_name} />
-                      <Field label="Vessel code" value={selected.vessel_code} />
+                      <Field label="Vessel code" value={formatVesselCodeDisplay(selected.vessel_code)} />
                       <Field label="Voyage" value={selected.voyage_no} />
                       <Field label="Vessel owner" value={selected.vessel_owner} />
                       <Field label="Port of loading" value={selected.port_of_loading} />

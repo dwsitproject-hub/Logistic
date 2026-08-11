@@ -3,6 +3,7 @@ import {
   hasCompleteSapVesselIdentity,
   resolveSapVesselIdentity,
   resolveShipmentDisplayVesselName,
+  sqlShipmentDisplayVesselName,
 } from './sapVesselFields';
 
 describe('resolveSapVesselIdentity', () => {
@@ -24,15 +25,55 @@ describe('resolveSapVesselIdentity', () => {
 });
 
 describe('resolveShipmentDisplayVesselName', () => {
-  it('prefers SAP vessel name over KLIP user input', () => {
-    expect(resolveShipmentDisplayVesselName('MV SAP', 'MV KLIP')).toBe('MV SAP');
+  it('prefers master vessel name over SAP and KLIP', () => {
+    expect(resolveShipmentDisplayVesselName('BG. ANDALAN 02', 'MV SAP', 'MV KLIP')).toBe(
+      'BG. ANDALAN 02',
+    );
   });
 
-  it('falls back to KLIP when SAP vessel name is null', () => {
-    expect(resolveShipmentDisplayVesselName(null, 'MV KLIP')).toBe('MV KLIP');
+  it('falls back to SAP when master is missing', () => {
+    expect(resolveShipmentDisplayVesselName(null, 'MV SAP', 'MV KLIP')).toBe('MV SAP');
   });
 
-  it('uses SAP vessel name when only name is present (no code required for display)', () => {
-    expect(resolveShipmentDisplayVesselName('MV ONLY SAP', '')).toBe('MV ONLY SAP');
+  it('falls back to KLIP stored name when master and SAP are missing', () => {
+    expect(resolveShipmentDisplayVesselName(null, null, 'MV KLIP')).toBe('MV KLIP');
+  });
+
+  it('uses SAP when only SAP name is present', () => {
+    expect(resolveShipmentDisplayVesselName('', 'MV ONLY SAP', '')).toBe('MV ONLY SAP');
+  });
+
+  it('canonicalizes SAP tug/barge compound to BG segment', () => {
+    expect(
+      resolveShipmentDisplayVesselName(
+        'TB. AS MARINA 9 / BG. AS MARINA 12',
+        'TB. AS MARINA 9 / BG. AS MARINA 12',
+        'TB. AS MARINA 9 / BG. AS MARINA 12',
+      ),
+    ).toBe('BG. AS MARINA 12');
+  });
+
+  it('prefers clean master name over SAP compound', () => {
+    expect(
+      resolveShipmentDisplayVesselName(
+        'BG. AS MARINA 12',
+        'TB. AS MARINA 9 / BG. AS MARINA 12',
+        null,
+      ),
+    ).toBe('BG. AS MARINA 12');
+  });
+});
+
+describe('sqlShipmentDisplayVesselName', () => {
+  it('builds COALESCE master, sap, klip SQL', () => {
+    expect(sqlShipmentDisplayVesselName('mv.vessel_name', 'sa.vessel_name_sap', 's.vessel_name')).toContain(
+      'mv.vessel_name',
+    );
+    expect(sqlShipmentDisplayVesselName('mv.vessel_name', 'sa.vessel_name_sap', 's.vessel_name')).toContain(
+      'sa.vessel_name_sap',
+    );
+    expect(sqlShipmentDisplayVesselName('mv.vessel_name', 'sa.vessel_name_sap', 's.vessel_name')).toContain(
+      's.vessel_name',
+    );
   });
 });

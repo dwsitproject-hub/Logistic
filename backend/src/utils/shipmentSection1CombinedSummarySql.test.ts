@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildShipmentSection1CombinedSummaryQuery,
+  buildPipelineCardVesselNamesQuery,
   buildShipmentSummaryEtaEnrichmentSelect,
   parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow,
 } from './shipmentSection1CombinedSummarySql';
@@ -21,6 +22,21 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('planned_count');
     expect(sql).toContain('loading_no_eta');
     expect(sql.match(/LEFT JOIN sto_metrics sm/g)?.length).toBe(1);
+    expect(sql).toContain('vessel_name_master');
+    expect(sql).toContain('vessel_name_sap');
+  });
+
+  it('buildPipelineCardVesselNamesQuery uses master + SAP display vessel key', () => {
+    const sql = buildPipelineCardVesselNamesQuery({
+      shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
+      unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
+      toolbarOuterSql: '',
+      summaryScopeCte: '',
+      summaryEnrichedFrom: 'filtered_shipments',
+    });
+    expect(sql).toContain('unplanned_vessel_names');
+    expect(sql).toContain('vessel_name_master');
+    expect(sql).not.toContain('total_count');
   });
 
   it('defines a shipment_page CTE so the spliced-in SAP-agg CTEs (shipment_page_contracts, spd_keyed, perf_sto_keys) resolve', () => {

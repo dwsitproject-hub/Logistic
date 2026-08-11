@@ -7,6 +7,8 @@ import {
   shipmentHasAnyLoadingPortAtaExpr,
   shipmentPagePipelineStageExpr,
   shipmentPagePipelineUnplannedRowPredicate,
+  shipmentPipelineDisplayVesselKeyExpr,
+  shipmentPipelineEnrichedDisplayVesselKeyExpr,
 } from './shipmentPagePipelineSql';
 
 describe('shipmentPagePipelineSql', () => {
@@ -59,6 +61,18 @@ describe('shipmentPagePipelineSql', () => {
     expect(unplanned.sql).toContain("'FOB'");
     expect(unplanned.sql).toContain("'CFR'");
     expect(unplanned.params).toEqual([]);
+  });
+
+  it('builds display vessel key from master, SAP, and KLIP fallbacks', () => {
+    const key = shipmentPipelineDisplayVesselKeyExpr(
+      'mv.vessel_name_master',
+      'sl.vessel_name_sap',
+      's.vessel_name',
+    );
+    expect(key).toContain('mv.vessel_name_master');
+    expect(key).toContain('sl.vessel_name_sap');
+    expect(key).toContain('s.vessel_name');
+    expect(shipmentPipelineEnrichedDisplayVesselKeyExpr('e')).toContain('e.vessel_name_master');
   });
 
   it('limits unplanned open-contracts CTE to CIF/FOB/CFR', () => {

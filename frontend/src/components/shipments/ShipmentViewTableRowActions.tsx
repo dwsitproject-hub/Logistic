@@ -25,6 +25,7 @@ export interface ShipmentViewTableRowActionsProps {
   onViewShipment: () => void
   onCancelShipment?: () => void
   cancelShipmentLoading?: boolean
+  primaryActionLoading?: boolean
   onViewDocs: () => void
 }
 
@@ -39,6 +40,7 @@ export function ShipmentViewTableRowActions({
   onViewShipment,
   onCancelShipment,
   cancelShipmentLoading = false,
+  primaryActionLoading = false,
   onViewDocs,
 }: ShipmentViewTableRowActionsProps) {
   const primary = resolveShipmentTablePrimaryAction(shipment.status)
@@ -56,10 +58,15 @@ export function ShipmentViewTableRowActions({
               variant="outline"
               size="icon"
               onClick={onAddShipment}
+              disabled={primaryActionLoading}
               className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
               aria-label="Add shipment"
             >
-              <Ship className="h-4 w-4" />
+              {primaryActionLoading ? (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700" />
+              ) : (
+                <Ship className="h-4 w-4" />
+              )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">Add shipment</TooltipContent>
@@ -75,10 +82,15 @@ export function ShipmentViewTableRowActions({
               variant="outline"
               size="icon"
               onClick={onViewShipment}
+              disabled={primaryActionLoading}
               className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
               aria-label="View shipment"
             >
-              <Ship className="h-4 w-4" />
+              {primaryActionLoading ? (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700" />
+              ) : (
+                <Ship className="h-4 w-4" />
+              )}
             </Button>
           </TooltipTrigger>
           <TooltipContent side="top">View shipment</TooltipContent>
@@ -93,13 +105,18 @@ export function ShipmentViewTableRowActions({
             variant="outline"
             size="icon"
             onClick={onEditShipment}
+            disabled={primaryActionLoading}
             className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
             aria-label="Edit shipment"
           >
-            <span className="relative inline-flex h-4 w-4 items-center justify-center">
-              <Ship className="h-4 w-4" />
-              <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
-            </span>
+            {primaryActionLoading ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue-300 border-t-blue-700" />
+            ) : (
+              <span className="relative inline-flex h-4 w-4 items-center justify-center">
+                <Ship className="h-4 w-4" />
+                <Pencil className="absolute -bottom-0.5 -right-1 h-2.5 w-2.5 rounded-[1px] bg-white" />
+              </span>
+            )}
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top">Edit shipment</TooltipContent>

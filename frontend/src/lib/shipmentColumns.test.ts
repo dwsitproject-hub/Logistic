@@ -13,8 +13,8 @@ import {
 } from './shipmentColumns'
 
 describe('shipmentColumns', () => {
-  it('uses v9 default visible order (status then grouping suggestion first)', () => {
-    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v9')
+  it('uses v10 default visible order (status then grouping suggestion first)', () => {
+    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v10')
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.slice(0, 5)).toEqual([
       'status',
       'pre_planned_group',
@@ -28,14 +28,17 @@ describe('shipmentColumns', () => {
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('sto_quantity')
   })
 
-  it('omits Grouping Suggestion from defaults unless Unplanned/Preplanned filter is active', () => {
+  it('omits Grouping Suggestion from defaults unless Preplanned filter is active', () => {
     const allIds = [...SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS, 'contract_date']
-    expect(isShipmentGroupingSuggestionColumnEligible('UNPLANNED')).toBe(true)
+    expect(isShipmentGroupingSuggestionColumnEligible('UNPLANNED')).toBe(false)
     expect(isShipmentGroupingSuggestionColumnEligible('PREPLANNED')).toBe(true)
     expect(isShipmentGroupingSuggestionColumnEligible('ALL')).toBe(false)
     expect(isShipmentGroupingSuggestionColumnEligible('PLANNED')).toBe(false)
 
-    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'UNPLANNED')).toContain(
+    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'UNPLANNED')).not.toContain(
+      SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
+    )
+    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'PREPLANNED')).toContain(
       SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
     )
     expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'ALL')).not.toContain(
@@ -47,6 +50,9 @@ describe('shipmentColumns', () => {
       false,
     )
     expect(filterShipmentVisibleColumnIdsForStage(visible, 'UNPLANNED').has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(
+      false,
+    )
+    expect(filterShipmentVisibleColumnIdsForStage(visible, 'PREPLANNED').has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(
       true,
     )
   })

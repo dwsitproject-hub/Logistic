@@ -11,11 +11,13 @@ import {
 import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './shipmentAtaOverrideSql';
 import { shipmentEffectiveStatusExpr, sqlShipmentGroupStatusFloorAgg } from './shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
+import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
+import { SHIPMENT_LIST_SPD_AGG_CTES_FULL } from './shipmentListSapAggSql';
 import {
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineUnplannedRowPredicate,
   shipmentPageExcludeB2bChildCond,
-  shipmentPipelineVesselKeyExpr,
+  shipmentPipelineEnrichedDisplayVesselKeyExpr,
 } from './shipmentPagePipelineSql';
 import {
   buildUnplannedContractBacklogLatestSpdCte,
@@ -102,6 +104,7 @@ function buildShipmentDailyBaseCteSql(): string {
           -- behind it is withdrawn, so a partially-cancelled STO still counts in the circles.
           MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence,
           MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
+          MAX(NULLIF(TRIM(s.vessel_code), '')) AS vessel_code,
           MAX(s.created_at) AS created_at,
           MAX(${plantSite}) AS plant_site,
           MAX(s.eta_arrival) AS eta_arrival,
@@ -342,12 +345,21 @@ export function buildShipmentVesselStageDailyInsertSql(): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
   const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
-  const vessel = shipmentPipelineVesselKeyExpr('e.vessel_name');
+  const vessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
+  const masterJoin = sqlMasterVesselLateralJoin(
+    'COALESCE(f.vessel_code, sl.vessel_code_sap)',
+    'COALESCE(f.vessel_name, sl.vessel_name_sap)',
+    'mv',
+  );
   return `
     INSERT INTO shipment_pipeline_vessel_stage_daily (
       group_plant, contract_date, product, incoterm, stage, vessel_key
     )
     ${base},
+    shipment_page AS (
+      SELECT * FROM shipment_base
+    ),
+    ${SHIPMENT_LIST_SPD_AGG_CTES_FULL},
     enriched AS (
       SELECT
         f.*,
@@ -355,8 +367,13 @@ export function buildShipmentVesselStageDailyInsertSql(): string {
         COALESCE(f.plant_site, 'Blank') AS group_plant,
         COALESCE(f.contract_date, ${NULL_CONTRACT_DATE})::date AS contract_date_key,
         ${sqlPipelineProductKey('f.product')} AS product_key,
-        ${sqlPipelineIncotermKey('f.incoterm')} AS incoterm_key
+        ${sqlPipelineIncotermKey('f.incoterm')} AS incoterm_key,
+        sl.vessel_name_sap,
+        sl.vessel_code_sap,
+        mv.vessel_name_master
       FROM shipment_base f
+      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(f.sto_key::text)
+      ${masterJoin}
     )
     SELECT DISTINCT
       e.group_plant,

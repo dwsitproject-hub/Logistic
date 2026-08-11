@@ -1,3 +1,13 @@
+export type PrefilledVesselSnapshot = {
+  vesselName?: string
+  vesselCode?: string
+  vesselOwner?: string
+  vesselCapacity?: number | null
+  charterType?: string
+  portOfLoading?: string
+  portOfDischarge?: string
+}
+
 export type ShipmentPoOption = {
   /** Unique selection key — contracts.id (PO line) in contract-scoped mode, contract_id in global mode */
   key: string

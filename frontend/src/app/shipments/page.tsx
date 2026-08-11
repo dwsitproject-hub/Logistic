@@ -78,10 +78,6 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
-  compareSapStoListRowPriority,
-  shouldPrioritizeSapStoRows,
-} from '@/lib/listSapStoPriority'
-import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -965,6 +961,7 @@ function ShipmentsPageContent() {
   const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
   const [vesselWillFreeList, setVesselWillFreeList] = useState<VesselWillFreeListRow[]>([])
   const [vesselIdleLoading, setVesselIdleLoading] = useState(false)
+  const [vesselIdleError, setVesselIdleError] = useState(false)
   const [vesselIdleModalOpen, setVesselIdleModalOpen] = useState(false)
   const [vesselHistoryModalOpen, setVesselHistoryModalOpen] = useState(false)
   const [selectedVesselForHistory, setSelectedVesselForHistory] =
@@ -1284,10 +1281,10 @@ function ShipmentsPageContent() {
         ...globalFilterScope,
         pipelineStage: statusFilter,
         page,
-        sortKey: '',
-        sortDir: '',
+        sortKey,
+        sortDir,
       }),
-    [globalFilterScope, statusFilter, page],
+    [globalFilterScope, statusFilter, page, sortKey, sortDir],
   )
 
   // Desktop table horizontal scroll sync (top + bottom)
@@ -1357,6 +1354,7 @@ function ShipmentsPageContent() {
 
   const fetchVesselIdle = useCallback(async () => {
     setVesselIdleLoading(true)
+    setVesselIdleError(false)
     try {
       const res = await api.get('/shipments/vessel-idle')
       const vessels = (res.data?.data?.vessels ?? []) as VesselIdleListRow[]
@@ -1366,6 +1364,7 @@ function ShipmentsPageContent() {
       setVesselIdleCount(Number(res.data?.data?.count ?? vessels.length))
     } catch (error) {
       console.error('Failed to fetch vessel idle list:', error)
+      setVesselIdleError(true)
     } finally {
       setVesselIdleLoading(false)
     }
@@ -1642,6 +1641,8 @@ function ShipmentsPageContent() {
       if (selectedGroupPlants.length > 0) {
         selectedGroupPlants.forEach((p) => params.append('plant', p))
       }
+      params.append('sortKey', sortKey)
+      params.append('sortDir', sortDir)
 
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
@@ -4543,32 +4544,8 @@ function ShipmentsPageContent() {
     })
   }
 
-  const sortedShipments = useMemo(() => {
-    const col = compactColumns.find(c => c.id === sortKey)
-    const base = shipments
-    const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
-    if (!col?.sortable || !col.getSortValue) {
-      if (!prioritizeSapSto) return base
-      return [...base].sort((a, b) => compareSapStoListRowPriority(a, b))
-    }
-
-    const sorted = [...base].sort((a, b) => {
-      if (prioritizeSapSto) {
-        const stoCmp = compareSapStoListRowPriority(a, b)
-        if (stoCmp !== 0) return stoCmp
-      }
-      const aVal = col.getSortValue!(a)
-      const bVal = col.getSortValue!(b)
-      const dirMul = sortDir === 'asc' ? 1 : -1
-
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return (aVal - bVal) * dirMul
-      }
-      return String(aVal).localeCompare(String(bVal)) * dirMul
-    })
-
-    return sorted
-  }, [compactColumns, shipments, sortDir, sortKey, statusFilter])
+  /** Server-side sort — preserve API row order (STO priority + ORDER BY in SQL). */
+  const sortedShipments = useMemo(() => shipments, [shipments])
 
   const paginatedShipments = sortedShipments
 
@@ -5639,6 +5616,7 @@ function ShipmentsPageContent() {
             <VesselIdleInsightChip
               count={vesselIdleCount}
               loading={vesselIdleLoading}
+              error={vesselIdleError}
               onClick={handleVesselIdleClick}
             />
             {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (

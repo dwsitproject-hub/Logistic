@@ -1,13 +1,20 @@
 'use client'
 
 import { useMemo } from 'react'
-import { Loader2, Plus, Ship, X } from 'lucide-react'
+import { Loader2, Ship, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 
 export interface VesselIdleListRow {
   vessel_code: string
   vessel_name: string
+  /** Vessel owner */
   company: string | null
+  /** Owner group */
+  company_group: string | null
+  /** Master vessel terms (V/C | T/C) */
+  terms: string | null
   capacity_mt: number | null
   most_loading_port: string | null
   most_discharge_port: string | null
@@ -17,7 +24,7 @@ export interface VesselWillFreeListRow extends VesselIdleListRow {
   etc_at_discharge: string
 }
 
-const PRIORITY_COMPANY = 'LMI GROUP'
+const PRIORITY_COMPANY_GROUP = 'LMI GROUP'
 
 type VesselIdleModalProps = {
   open: boolean
@@ -26,7 +33,7 @@ type VesselIdleModalProps = {
   willFree: VesselWillFreeListRow[]
   onClose: () => void
   onVesselNameClick: (vesselName: string) => void
-  onAddShipment?: () => void
+  onAddShipment?: (row: VesselIdleListRow) => void
   canAddShipment?: boolean
 }
 
@@ -36,19 +43,19 @@ function displayText(value: string | null | undefined): string {
   return text.toUpperCase()
 }
 
-function normalizeCompanyKey(company: string | null | undefined): string {
-  return String(company ?? '').trim().toUpperCase()
+function normalizeCompanyGroupKey(companyGroup: string | null | undefined): string {
+  return String(companyGroup ?? '').trim().toUpperCase()
 }
 
 export function compareVesselIdleRows(a: VesselIdleListRow, b: VesselIdleListRow): number {
-  const companyA = normalizeCompanyKey(a.company)
-  const companyB = normalizeCompanyKey(b.company)
-  const aIsPriority = companyA === PRIORITY_COMPANY
-  const bIsPriority = companyB === PRIORITY_COMPANY
+  const groupA = normalizeCompanyGroupKey(a.company_group)
+  const groupB = normalizeCompanyGroupKey(b.company_group)
+  const aIsPriority = groupA === PRIORITY_COMPANY_GROUP
+  const bIsPriority = groupB === PRIORITY_COMPANY_GROUP
   if (aIsPriority !== bIsPriority) return aIsPriority ? -1 : 1
 
-  const companyCmp = companyA.localeCompare(companyB)
-  if (companyCmp !== 0) return companyCmp
+  const groupCmp = groupA.localeCompare(groupB)
+  if (groupCmp !== 0) return groupCmp
 
   return String(a.vessel_name ?? '')
     .trim()
@@ -86,19 +93,28 @@ function VesselTable({
   rows,
   showEtc,
   onVesselNameClick,
+  onAddShipment,
+  canAddShipment,
 }: {
   rows: Array<VesselIdleListRow | VesselWillFreeListRow>
   showEtc?: boolean
   onVesselNameClick: (vesselName: string) => void
+  onAddShipment?: (row: VesselIdleListRow) => void
+  canAddShipment?: boolean
 }) {
+  const addDisabledReason = canAddShipment
+    ? null
+    : 'Create or Edit permission on Shipments is required'
+
   return (
     <div className="max-h-[min(40vh,320px)] overflow-auto rounded-lg border border-gray-200">
-      <table className="w-full min-w-[720px] text-sm">
+      <table className="w-full min-w-[860px] text-sm">
         <thead className="sticky top-0 z-[1] bg-gray-100">
           <tr>
             <th className="px-3 py-2 text-left font-medium text-gray-600">Vessel Code</th>
             <th className="px-3 py-2 text-left font-medium text-gray-600">Vessel Name</th>
             <th className="px-3 py-2 text-left font-medium text-gray-600">Company</th>
+            <th className="px-3 py-2 text-left font-medium text-gray-600">Company Group</th>
             {showEtc ? (
               <>
                 <th className="px-3 py-2 text-left font-medium text-gray-600">ETC at Discharge</th>
@@ -106,6 +122,9 @@ function VesselTable({
               </>
             ) : null}
             <th className="px-3 py-2 text-right font-medium text-gray-600">Capacity</th>
+            {onAddShipment ? (
+              <th className="px-3 py-2 text-right font-medium text-gray-600">Actions</th>
+            ) : null}
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
@@ -117,7 +136,7 @@ function VesselTable({
             const days = showEtc ? daysUntil(etcIso) : null
             return (
               <tr key={rowKey} className="hover:bg-gray-50">
-                <td className="whitespace-nowrap px-3 py-2 uppercase">{displayText(row.vessel_code)}</td>
+                <td className="whitespace-nowrap px-3 py-2 uppercase">{formatVesselCodeDisplay(row.vessel_code)}</td>
                 <td className="whitespace-nowrap px-3 py-2 uppercase">
                   {vesselNameDisplay === '-' ? (
                     <span className="text-gray-400">-</span>
@@ -132,6 +151,7 @@ function VesselTable({
                   )}
                 </td>
                 <td className="whitespace-nowrap px-3 py-2 uppercase">{displayText(row.company)}</td>
+                <td className="whitespace-nowrap px-3 py-2 uppercase">{displayText(row.company_group)}</td>
                 {showEtc ? (
                   <>
                     <td className="whitespace-nowrap px-3 py-2">{formatShortDate(etcIso)}</td>
@@ -143,6 +163,32 @@ function VesselTable({
                 <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">
                   {formatCapacityMt(row.capacity_mt)}
                 </td>
+                {onAddShipment ? (
+                  <td className="whitespace-nowrap px-3 py-2 text-right">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            disabled={!canAddShipment}
+                            onClick={() => onAddShipment(row)}
+                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-50 disabled:text-gray-400"
+                            aria-label="Add shipment"
+                          >
+                            <Ship className="h-4 w-4" />
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        {canAddShipment
+                          ? 'Add shipment with this vessel'
+                          : addDisabledReason}
+                      </TooltipContent>
+                    </Tooltip>
+                  </td>
+                ) : null}
               </tr>
             )
           })}
@@ -182,27 +228,9 @@ export function VesselIdleModal({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {onAddShipment ? (
-              <Button
-                type="button"
-                size="sm"
-                onClick={onAddShipment}
-                disabled={!canAddShipment}
-                title={
-                  canAddShipment
-                    ? 'Add a new shipment (one PO at a time)'
-                    : 'Create or Edit permission on Shipments is required'
-                }
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Add New Shipment
-              </Button>
-            ) : null}
-            <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
-              <X className="h-5 w-5" />
-            </Button>
-          </div>
+          <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+            <X className="h-5 w-5" />
+          </Button>
         </div>
 
         <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-4">
@@ -225,7 +253,12 @@ export function VesselIdleModal({
                     No idle vessels found in master data.
                   </div>
                 ) : (
-                  <VesselTable rows={sortedIdle} onVesselNameClick={onVesselNameClick} />
+                  <VesselTable
+                    rows={sortedIdle}
+                    onVesselNameClick={onVesselNameClick}
+                    onAddShipment={onAddShipment}
+                    canAddShipment={canAddShipment}
+                  />
                 )}
               </section>
 
@@ -241,7 +274,13 @@ export function VesselIdleModal({
                     No vessels expected to free within the next 7 days.
                   </div>
                 ) : (
-                  <VesselTable rows={sortedWillFree} showEtc onVesselNameClick={onVesselNameClick} />
+                  <VesselTable
+                    rows={sortedWillFree}
+                    showEtc
+                    onVesselNameClick={onVesselNameClick}
+                    onAddShipment={onAddShipment}
+                    canAddShipment={canAddShipment}
+                  />
                 )}
               </section>
             </>

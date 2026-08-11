@@ -48,4 +48,22 @@ describe('shipmentListPorts', () => {
       }),
     ).toBe('Jakarta')
   })
+
+  it('skips generic KLIP placeholders and uses real shipment discharge port (STO 1586004914 pattern)', () => {
+    expect(
+      resolveShipmentListDischargePorts({
+        discharge_ports_klip: 'Discharge Port',
+        port_of_discharge: 'PORT TANJUNG PRIOK',
+      }),
+    ).toBe('PORT TANJUNG PRIOK')
+  })
+
+  it('skips generic loading placeholder and falls back to empty when no real port', () => {
+    expect(
+      resolveShipmentListLoadingPorts({
+        loading_ports_klip: 'Loading Port 1',
+        port_of_loading: 'Loading Port 1',
+      }),
+    ).toBe('')
+  })
 })

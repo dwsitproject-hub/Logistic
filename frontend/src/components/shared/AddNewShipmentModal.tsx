@@ -46,6 +46,7 @@ import {
 } from '@/components/PermissionsContext'
 import type {
   AddNewShipmentSubmitPayload,
+  PrefilledVesselSnapshot,
   ShipmentPoOption,
   StoSapPreview,
 } from '@/components/shared/addNewShipmentTypes'
@@ -74,6 +75,8 @@ import {
   VESSEL_MODAL_PANEL_CLASS,
   VESSEL_MODAL_STEP_STRIP_CLASS,
 } from '@/lib/vesselModalUi'
+import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
+import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -341,6 +344,27 @@ const emptyShipment = () => ({
   portOfDischarge: '',
 })
 
+function applyPrefilledVesselToForm(
+  base: ReturnType<typeof emptyShipment>,
+  prefilled: PrefilledVesselSnapshot | null | undefined,
+): ReturnType<typeof emptyShipment> {
+  if (!prefilled) return base
+  const capacity =
+    prefilled.vesselCapacity != null && Number.isFinite(Number(prefilled.vesselCapacity))
+      ? String(prefilled.vesselCapacity)
+      : ''
+  return {
+    ...base,
+    vesselName: prefilled.vesselName?.trim() || base.vesselName,
+    vesselCode: prefilled.vesselCode?.trim() || base.vesselCode,
+    vesselOwner: prefilled.vesselOwner?.trim() || base.vesselOwner,
+    vesselCapacity: capacity || base.vesselCapacity,
+    charterType: prefilled.charterType?.trim() || base.charterType,
+    portOfLoading: prefilled.portOfLoading?.trim() || base.portOfLoading,
+    portOfDischarge: prefilled.portOfDischarge?.trim() || base.portOfDischarge,
+  }
+}
+
 function formatNumber(num: number | string) {
   if (num === null || num === undefined || num === '') return '-'
   const number = typeof num === 'string' ? parseFloat(num) : num
@@ -392,6 +416,8 @@ export type AddNewShipmentModalProps = {
   onShipmentChanged?: () => void
   /** When accepting a pre-planned group, link group on shipment create. */
   prePlannedGroupId?: string | null
+  /** Vessel fields pre-filled when opening from Vessel Idle row action. */
+  prefilledVessel?: PrefilledVesselSnapshot | null
 }
 
 export function AddNewShipmentModal({
@@ -412,6 +438,7 @@ export function AddNewShipmentModal({
   stacked = false,
   onShipmentChanged,
   prePlannedGroupId = null,
+  prefilledVessel = null,
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
@@ -524,11 +551,12 @@ export function AddNewShipmentModal({
 
   const [vesselSuggestions, setVesselSuggestions] = useState<
     Array<{
-      vessel_code: string
+      vessel_code: string | null
       vessel_name: string
       vessel_capacity_mt: number | null
       vessel_owner: string | null
-      hull_type: string | null
+      vessel_type?: string | null
+      hull_type?: string | null
     }>
   >([])
   const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
@@ -911,19 +939,23 @@ export function AddNewShipmentModal({
   }
 
   const handleSelectVessel = (v: {
-    vessel_code: string
+    vessel_code: string | null
     vessel_name: string
     vessel_capacity_mt: number | null
     vessel_owner: string | null
-    hull_type: string | null
+    vessel_type?: string | null
+    hull_type?: string | null
+    terms?: string | null
   }) => {
+    const charterFromTerms = charterTypeFromMasterTerms(v.terms)
     setNewShipment((prev) => ({
       ...prev,
       vesselName: v.vessel_name,
       vesselCode: v.vessel_code ?? '',
       vesselOwner: v.vessel_owner ?? '',
       vesselCapacity: v.vessel_capacity_mt != null ? String(v.vessel_capacity_mt) : '',
-      vesselHullType: v.hull_type ?? '',
+      vesselHullType: v.vessel_type ?? v.hull_type ?? '',
+      charterType: charterFromTerms || prev.charterType,
     }))
     setShowVesselSuggestions(false)
     setVesselSuggestions([])
@@ -1878,6 +1910,8 @@ export function AddNewShipmentModal({
       plotShipmentId ?? '',
       isPlotMode ? '' : (poSource?.map((p) => p.key).join('|') ?? ''),
       prefilledStoNumber ?? '',
+      prefilledVessel?.vesselCode ?? '',
+      prefilledVessel?.vesselName ?? '',
     ].join(':')
     if (initSessionRef.current === sessionKey) return
 
@@ -1905,6 +1939,11 @@ export function AddNewShipmentModal({
 
     if (isInitialShell) resetForm()
 
+    if (!isEditMode && !isPlotMode && prefilledVessel) {
+      if (!isInitialShell) resetForm()
+      setNewShipment(applyPrefilledVesselToForm(emptyShipment(), prefilledVessel))
+    }
+
     if (poSource?.length) {
       applyStoLinkedPoOptionsToForm(poSource, {
         existingQtyByKey: contractQtyAssignedRef.current,
@@ -1919,6 +1958,7 @@ export function AddNewShipmentModal({
     isPlotMode,
     resolvedPrefilledPOs,
     prefilledStoNumber,
+    prefilledVessel,
     sapStoPreview?.port_of_discharge,
     sapStoPreview?.vessel_name,
     resetForm,
@@ -2969,16 +3009,16 @@ export function AddNewShipmentModal({
                     <div className={AUTOCOMPLETE_PANEL_CLASS}>
                       {vesselSuggestions.map((v) => (
                         <div
-                          key={v.vessel_code}
+                          key={`${v.vessel_name}-${v.vessel_code ?? 'pending'}`}
                           className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 transition-colors"
                           onMouseDown={() => handleSelectVessel(v)}
                         >
                           <div className="font-semibold text-sm text-gray-900">{v.vessel_name}</div>
                           <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
-                            <span className="font-mono">{v.vessel_code}</span>
+                            <span className="font-mono">{formatVesselCodeDisplay(v.vessel_code)}</span>
                             {v.vessel_owner && <><span className="text-gray-300">•</span><span>{v.vessel_owner}</span></>}
                             {v.vessel_capacity_mt != null && <><span className="text-gray-300">•</span><span className="text-cyan-600 font-medium">{formatNumber(v.vessel_capacity_mt)} MT</span></>}
-                            {v.hull_type && <><span className="text-gray-300">•</span><span>{v.hull_type}</span></>}
+                            {(v.vessel_type ?? v.hull_type) && <><span className="text-gray-300">•</span><span>{v.vessel_type ?? v.hull_type}</span></>}
                           </div>
                         </div>
                       ))}

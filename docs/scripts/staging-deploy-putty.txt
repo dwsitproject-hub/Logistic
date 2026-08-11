@@ -427,6 +427,36 @@ Catatan DB user:
       node -e "const{Pool}=require('pg');const p=new Pool({host:process.env.DB_HOST,port:+process.env.DB_PORT||5432,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD});p.query(\"SELECT filename,applied_at FROM schema_migrations WHERE filename='119_po_primary_identity.sql'\").then(r=>{console.log(r.rows);return p.end();})"
 
 ================================================================================
+Master Vessel — sync local DB → SIT (470 vessels + aliases)
+================================================================================
+Jalankan di laptop (export), lalu PuTTY backend .57 (import).
+
+----- A) Laptop (Windows) — export dari Docker local -----
+
+  cd D:\Project\Klip
+  powershell -ExecutionPolicy Bypass -File docs/scripts/export-master-vessel-local.ps1
+  # Output: tmp/master_vessel_local_to_sit.sql
+
+  scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/
+
+----- B) PuTTY → Backend 172.28.92.57 — deploy + migrate + import -----
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  docker compose -f docker-compose.backend.yml up -d --build
+  curl -s http://127.0.0.1:5001/health
+
+  bash docs/scripts/sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql
+  bash docs/scripts/sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql --apply
+
+----- C) Frontend .56 — rebuild -----
+
+  cd /opt/klip && git pull origin SIT
+  docker compose -f docker-compose.frontend.yml up -d --build
+
+Verifikasi: http://8.215.6.189/master-vessel (Ctrl+Shift+R)
+
+================================================================================
 Referensi
 ================================================================================
   docs/scripts/staging-deploy-backend.sh
