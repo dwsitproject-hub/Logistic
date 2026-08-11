@@ -26,6 +26,8 @@ DUMP_FILE=""
 OUT_DIR="${OUT_DIR:-/opt/klip/backups}"
 
 # After TRUNCATE master_vessels CASCADE only these domain tables were wiped (contracts/SAP/trucking remain).
+# NOT restored from backup (must rebuild via pipeline refresh): shipment_pipeline_daily_summary,
+# shipment_list_stage_snapshot, shipment_pipeline_vessel_stage_daily.
 WIPE_RECOVERY_TABLES=(
   shipments
   vessel_loading_ports
@@ -61,6 +63,8 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 COMPOSE=(docker compose -f docker-compose.backend.yml)
+# shellcheck source=docs/scripts/lib/refresh-pipeline-summary-staging.sh
+source "$ROOT/docs/scripts/lib/refresh-pipeline-summary-staging.sh"
 ENV_FILE="backend/.env"
 ROOT_ENV_FILE=".env"
 
@@ -346,8 +350,10 @@ if $REPROCESS_SAP; then
   fi
   reprocess_all_sap
   print_db_counts "Post-reprocess counts"
+  refresh_pipeline_summary_staging || true
+  print_shipment_pipeline_summary_counts_staging
   echo ""
-  echo "DONE (SAP reprocess). Verify /shipments in browser."
+  echo "DONE (SAP reprocess). Verify /shipments Section 1 in browser (Ctrl+Shift+R)."
   exit 0
 fi
 
@@ -418,9 +424,14 @@ try {
 " || true
 fi
 
+refresh_pipeline_summary_staging || true
+echo ""
+print_shipment_pipeline_summary_counts_staging
+
 echo ""
 echo "SUCCESS."
-echo "  Verify: http://8.215.6.189/shipments and /shipping-performance (Ctrl+Shift+R)"
+echo "  Verify: http://8.215.6.189/shipments Section 1 + /shipping-performance (Ctrl+Shift+R)"
+echo "  If Planned–Cancelled still 0: bash docs/scripts/refresh-pipeline-summary-staging.sh"
 echo ""
 echo "Optional — re-link master vessels (safe; uses DELETE not TRUNCATE CASCADE):"
 echo "  bash docs/scripts/sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql --apply"

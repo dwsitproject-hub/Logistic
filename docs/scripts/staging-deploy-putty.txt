@@ -230,6 +230,20 @@ Script di atas memanggil run-dedupe-trucking-by-po-staging.sh --all:
   # Backup
   bash docs/scripts/dump-sit-transactional-data.sh
 
+----- E) Restore shipments setelah TRUNCATE CASCADE (master vessel accident) -----
+
+  # List backup (shipments>0):
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --list
+
+  # Restore hanya tabel kosong (shipments, ports, …) — recommended:
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply
+
+  # Script otomatis refresh pipeline summary (Section 1 Planned–Cancelled cards).
+  # Jika card masih 0 setelah restore:
+  bash docs/scripts/refresh-pipeline-summary-staging.sh
+  # atau:
+  docker compose -f docker-compose.backend.yml exec -T backend npm run pipeline-summary:refresh:prod
+
   # Pre-flight SQL (read-only, via psql client di host .57):
   # Load DB_* dari backend container, lalu:
   # PGPASSWORD=... psql -h 172.28.92.60 -p 5442 -U postgres -d klip_db \

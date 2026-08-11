@@ -36,6 +36,8 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 COMPOSE=(docker compose -f docker-compose.backend.yml)
+# shellcheck source=docs/scripts/lib/refresh-pipeline-summary-staging.sh
+source "$ROOT/docs/scripts/lib/refresh-pipeline-summary-staging.sh"
 
 if [[ -z "$FILE" ]]; then
   echo "ERROR: --file <path-to-sql> required" >&2
@@ -177,4 +179,8 @@ const p = new Pool({
 "
 
 echo ""
-echo "SUCCESS. Verify /master-vessel in browser (Ctrl+Shift+R)."
+refresh_pipeline_summary_staging || true
+print_shipment_pipeline_summary_counts_staging
+
+echo ""
+echo "SUCCESS. Verify /master-vessel and /shipments Section 1 (Ctrl+Shift+R)."
