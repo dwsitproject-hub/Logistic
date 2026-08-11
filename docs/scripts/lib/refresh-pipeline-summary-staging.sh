@@ -63,3 +63,29 @@ const p = new Pool({
 })().catch((e) => { console.error(e); process.exit(1); });
 " 2>/dev/null || echo "    (count check skipped — backend unavailable)"
 }
+
+print_trucking_pipeline_summary_counts_staging() {
+  "${COMPOSE[@]:-docker compose -f docker-compose.backend.yml}" exec -T backend node -e "
+const { Pool } = require('pg');
+const p = new Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT || 5432),
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+});
+(async () => {
+  const r = await p.query(\`
+    SELECT
+      (SELECT COUNT(*)::int FROM trucking_operations) AS trucking_operations,
+      (SELECT COUNT(*)::int FROM trucking_operations WHERE COALESCE(status,'') = 'COMPLETED') AS ops_status_completed,
+      (SELECT COUNT(*)::int FROM trucking_operations WHERE COALESCE(status,'') = 'CANCELLED') AS ops_cancelled,
+      (SELECT COALESCE(SUM(completed_count), 0)::int FROM trucking_pipeline_daily_summary) AS pipeline_completed,
+      (SELECT COALESCE(SUM(total_count), 0)::int FROM trucking_pipeline_daily_summary) AS pipeline_total,
+      (SELECT is_stale FROM pipeline_summary_refresh_meta WHERE module = 'trucking') AS trucking_meta_stale
+  \`);
+  console.log(JSON.stringify(r.rows[0], null, 2));
+  await p.end();
+})().catch((e) => { console.error(e); process.exit(1); });
+" 2>/dev/null || echo "    (trucking count check skipped — backend unavailable)"
+}

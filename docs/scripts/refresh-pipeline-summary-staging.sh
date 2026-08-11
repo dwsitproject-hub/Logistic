@@ -17,5 +17,7 @@ echo "=== KLIP pipeline daily summary refresh (SIT) ==="
 refresh_pipeline_summary_staging
 echo ""
 print_shipment_pipeline_summary_counts_staging
+print_trucking_pipeline_summary_counts_staging
 echo ""
 echo "Verify: http://8.215.6.189/shipments Section 1 (Ctrl+Shift+R)"
+echo "Verify: http://8.215.6.189/trucking Section 1 (Ctrl+Shift+R)"

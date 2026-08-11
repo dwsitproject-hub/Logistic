@@ -244,6 +244,30 @@ Script di atas memanggil run-dedupe-trucking-by-po-staging.sh --all:
   # atau:
   docker compose -f docker-compose.backend.yml exec -T backend npm run pipeline-summary:refresh:prod
 
+----- F) Trucking Section 1 COMPLETED / Total anomali -----
+
+  # Diagnose: bandingkan backup counts vs live DB + pipeline summary
+  bash docs/scripts/diag-trucking-summary-staging.sh
+  bash docs/scripts/diag-trucking-summary-staging.sh /opt/klip/backups/klip_sit_txn_20260811_164207.dump
+
+  # Jika backup trucking_operations >> live (wipe-recovery skip trucking saat restore shipments):
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \
+    /opt/klip/backups/klip_sit_txn_20260811_164207.dump \
+    --include-trucking --truncate-trucking-first --apply
+
+  # Bandingkan backup sebelum dedupe jika perlu (163607, 20260805_*):
+  grep trucking_operations /opt/klip/backups/klip_sit_txn_*_counts.txt | tail -5
+
+  # Jika counts OK tapi COMPLETED rendah karena dedupe (banyak CANCELLED):
+  ls -lt /opt/klip/tmp/trucking-po-dedupe-audit-*.csv 2>/dev/null | head -3
+  # Opsional bersihkan loser CANCELLED dari view (tidak restore COMPLETED count):
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+
+  # Jika pipeline_completed=0 tapi banyak COMPLETED ops:
+  bash docs/scripts/refresh-pipeline-summary-staging.sh
+
+  # Verifikasi browser: http://8.215.6.189/trucking (Ctrl+Shift+R)
+
   # Pre-flight SQL (read-only, via psql client di host .57):
   # Load DB_* dari backend container, lalu:
   # PGPASSWORD=... psql -h 172.28.92.60 -p 5442 -U postgres -d klip_db \

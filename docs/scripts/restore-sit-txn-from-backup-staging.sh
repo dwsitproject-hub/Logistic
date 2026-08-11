@@ -12,6 +12,7 @@
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh /opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS.dump --apply
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh ... --apply --full   # all tables (usually fails if DB intact)
+#   bash docs/scripts/restore-sit-txn-from-backup-staging.sh ... --include-trucking --truncate-trucking-first --apply
 #   bash docs/scripts/restore-sit-txn-from-backup-staging.sh --reprocess-sap --apply   # no backup (slow)
 #
 # Prereq: postgresql-client on host (apt-get install -y postgresql-client) for pg_restore/psql
@@ -21,9 +22,19 @@ APPLY=false
 LIST_ONLY=false
 USE_LATEST=false
 REPROCESS_SAP=false
+INCLUDE_TRUCKING=false
+TRUNCATE_TRUCKING_FIRST=false
 RESTORE_MODE="wipe-recovery"
 DUMP_FILE=""
 OUT_DIR="${OUT_DIR:-/opt/klip/backups}"
+
+# Child-first order; pg_restore uses --disable-triggers so FK order is relaxed.
+TRUCKING_RESTORE_TABLES=(
+  trucking_wb_imports
+  trucking_realizations
+  trucking_daily_actuals
+  trucking_operations
+)
 
 # After TRUNCATE master_vessels CASCADE only these domain tables were wiped (contracts/SAP/trucking remain).
 # NOT restored from backup (must rebuild via pipeline refresh): shipment_pipeline_daily_summary,
@@ -46,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     --reprocess-sap) REPROCESS_SAP=true; shift ;;
     --full) RESTORE_MODE="full"; shift ;;
     --wipe-recovery) RESTORE_MODE="wipe-recovery"; shift ;;
+    --include-trucking) INCLUDE_TRUCKING=true; shift ;;
+    --truncate-trucking-first) TRUNCATE_TRUCKING_FIRST=true; shift ;;
     -h|--help)
       sed -n '2,22p' "$0"
       exit 0
@@ -235,10 +248,30 @@ resolve_wipe_recovery_tables() {
       echo "    ? $t (skip — table missing or unreadable)"
     fi
   done
-  if [[ ${#_out[@]} -eq 0 ]]; then
+  if [[ ${#_out[@]} -eq 0 && "$INCLUDE_TRUCKING" != true ]]; then
     echo "ERROR: no empty wipe-recovery tables to restore (shipments already populated?)" >&2
+    echo "  Use --include-trucking to force restore trucking domain from backup." >&2
     exit 1
   fi
+}
+
+append_trucking_restore_tables() {
+  local -n _args=$1
+  local t
+  echo ""
+  echo "==> Include trucking domain (--include-trucking)"
+  for t in "${TRUCKING_RESTORE_TABLES[@]}"; do
+    _args+=(-t "$t")
+    echo "    + $t"
+  done
+}
+
+truncate_trucking_tables() {
+  echo ""
+  echo "==> Truncate trucking domain (--truncate-trucking-first)"
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -c \
+    "TRUNCATE trucking_daily_actuals, trucking_realizations, trucking_operations CASCADE;"
+  echo "    trucking_daily_actuals, trucking_realizations, trucking_operations truncated"
 }
 
 restore_from_dump() {
@@ -262,9 +295,17 @@ restore_from_dump() {
       for t in "${restore_tables[@]}"; do
         table_args+=(-t "$t")
       done
+      if [[ "$INCLUDE_TRUCKING" == true ]]; then
+        append_trucking_restore_tables table_args
+      fi
     else
       echo ""
       echo "==> Full mode (all tables in backup — fails if contracts/SAP rows already exist)"
+    fi
+
+    if [[ ${#table_args[@]} -eq 0 ]]; then
+      echo "ERROR: no tables selected for restore" >&2
+      exit 1
     fi
 
     echo ""
@@ -333,7 +374,13 @@ echo "=== KLIP SIT restore transactional data ==="
 echo "    repo:   $ROOT"
 echo "    target: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
 echo "    restore: $RESTORE_MODE (default wipe-recovery = shipments/ports only if empty)"
+echo "    trucking: $([[ "$INCLUDE_TRUCKING" == true ]] && echo include + $([[ "$TRUNCATE_TRUCKING_FIRST" == true ]] && echo truncate-first || echo keep-existing-unless-truncated) || echo skip)"
 echo "    mode:   $([[ "$APPLY" == true ]] && echo APPLY || echo PREVIEW)"
+
+if [[ "$TRUNCATE_TRUCKING_FIRST" == true && "$INCLUDE_TRUCKING" != true ]]; then
+  echo "ERROR: --truncate-trucking-first requires --include-trucking" >&2
+  exit 1
+fi
 
 if $LIST_ONLY; then
   list_backups
@@ -391,10 +438,20 @@ if ! $APPLY; then
   echo "Preview only. To restore (wipe-recovery — recommended after master vessel CASCADE):"
   echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \"$DUMP_FILE\" --apply"
   echo "Full restore (only if DB was empty): add --full"
+  echo "Trucking COMPLETED low — restore trucking from backup:"
+  echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \"$DUMP_FILE\" --include-trucking --truncate-trucking-first --apply"
   if $USE_LATEST; then
     echo "  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply"
   fi
   exit 0
+fi
+
+if [[ "$TRUNCATE_TRUCKING_FIRST" == true ]]; then
+  echo ""
+  echo "WARN: --truncate-trucking-first will DELETE all trucking_operations / daily_actuals / realizations." >&2
+  echo "      Press Ctrl+C within 5s to abort..." >&2
+  sleep 5
+  truncate_trucking_tables
 fi
 
 current_shipments="$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT COUNT(*)::int FROM shipments" || echo 0)"
@@ -427,11 +484,14 @@ fi
 refresh_pipeline_summary_staging || true
 echo ""
 print_shipment_pipeline_summary_counts_staging
+print_trucking_pipeline_summary_counts_staging
 
 echo ""
 echo "SUCCESS."
 echo "  Verify: http://8.215.6.189/shipments Section 1 + /shipping-performance (Ctrl+Shift+R)"
+echo "  Verify: http://8.215.6.189/trucking Section 1 COMPLETED/Total (Ctrl+Shift+R)"
 echo "  If Planned–Cancelled still 0: bash docs/scripts/refresh-pipeline-summary-staging.sh"
+echo "  If trucking COMPLETED still low: bash docs/scripts/diag-trucking-summary-staging.sh"
 echo ""
 echo "Optional — re-link master vessels (safe; uses DELETE not TRUNCATE CASCADE):"
 echo "  bash docs/scripts/sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql --apply"
