@@ -99,6 +99,7 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
     SELECT DISTINCT ON (COALESCE(NULLIF(TRIM(spd.contract_number), ''), NULLIF(TRIM(spd.sto_number), '')))
       spd.contract_number,
       spd.sto_number,
+      spd.created_at,
       COALESCE(
         spd.data->'raw'->>'Trucking Last Receive Date',
         spd.data->>'Trucking Last Receive Date',
@@ -118,6 +119,7 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
     SELECT
       contract_number,
       sto_number,
+      created_at,
       CASE
         WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
         WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
@@ -134,20 +136,17 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
       END AS start_receive_date
     FROM latest_sap
   ),
-  upserted AS (
-    INSERT INTO trucking_realizations (
-      trucking_operation_id,
-      realization_start_date,
-      realization_end_date,
-      source,
-      sap_synced_at
-    )
-    SELECT
-      t.id,
+  matched AS (
+    /*
+     * One row per trucking operation, newest SAP row wins.
+     * An operation can match parsed twice (once by contract number, once by STO),
+     * and INSERT .. ON CONFLICT rejects a statement that touches the same conflict
+     * key twice ("cannot affect row a second time"), so collapse the match here.
+     */
+    SELECT DISTINCT ON (t.id)
+      t.id AS trucking_operation_id,
       p.start_receive_date,
-      p.last_receive_date,
-      'sap',
-      CURRENT_TIMESTAMP
+      p.last_receive_date
     FROM trucking_operations t
     INNER JOIN contracts c ON t.contract_id = c.id
     INNER JOIN parsed p ON (
@@ -158,6 +157,23 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
       )
     )
     WHERE (p.start_receive_date IS NOT NULL OR p.last_receive_date IS NOT NULL)
+    ORDER BY t.id, p.created_at DESC NULLS LAST
+  ),
+  upserted AS (
+    INSERT INTO trucking_realizations (
+      trucking_operation_id,
+      realization_start_date,
+      realization_end_date,
+      source,
+      sap_synced_at
+    )
+    SELECT
+      m.trucking_operation_id,
+      m.start_receive_date,
+      m.last_receive_date,
+      'sap',
+      CURRENT_TIMESTAMP
+    FROM matched m
     ON CONFLICT (trucking_operation_id) DO UPDATE SET
       realization_start_date = COALESCE(trucking_realizations.realization_start_date, EXCLUDED.realization_start_date),
       realization_end_date = COALESCE(trucking_realizations.realization_end_date, EXCLUDED.realization_end_date),
