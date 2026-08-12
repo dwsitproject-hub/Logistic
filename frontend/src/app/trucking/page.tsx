@@ -1132,6 +1132,7 @@ function TruckingPageContent() {
     }>
     operationFailures: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
     operationWarnings?: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+    operationDeduped?: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
     originalFilename?: string
   } | null>(null)
 
@@ -1595,6 +1596,7 @@ function TruckingPageContent() {
           rowParseFailures: data.rowParseFailures ?? [],
           operationFailures: data.operationFailures ?? [],
           operationWarnings: data.operationWarnings ?? [],
+          operationDeduped: data.operationDeduped ?? [],
           originalFilename: file.name,
         })
         setWbUploadOpen(true)
@@ -4076,6 +4078,24 @@ function TruckingPageContent() {
                         <li key={`wb-of-${i}`} className="text-gray-800">
                           <span className="font-semibold">PO {f.po_number}</span>
                           {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.operationDeduped?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-emerald-900 mb-2">
+                      Auto-deduped (KLIP)
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Duplicate sibling operation(s) were merged into the keeper and hidden from the Trucking list.
+                      They are not counted in the Cancelled status card.
+                    </p>
+                    <ul className="max-h-40 overflow-auto rounded border border-emerald-200 bg-emerald-50 text-xs space-y-2 p-2">
+                      {wbUploadSummary.operationDeduped?.map((f, i) => (
+                        <li key={`wb-dedupe-${i}`} className="text-emerald-950">
+                          <span className="font-semibold">PO {f.po_number}</span>: {f.reason}
                         </li>
                       ))}
                     </ul>

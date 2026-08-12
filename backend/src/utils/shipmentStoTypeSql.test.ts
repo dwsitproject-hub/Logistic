@@ -3,12 +3,17 @@ import {
   buildShipmentExcludeStoTypeTSql,
   buildShipmentPageSeaRowScopeSql,
   buildShipmentSeaMixTransportSql,
+  contractHasSeaVesselStoOnContractSql,
+  contractSeaVesselStoNumberPickExpr,
   isSyntheticShipmentOperationKeySql,
   sapStoNumberKeyExpr,
   sapStoTypeNormalizedExpr,
   shipmentListStoKeyExpr,
   shipmentListDisplayStoNumberExpr,
+  shipmentListSeaStoKeyExpr,
+  shipmentListSeaDisplayStoNumberExpr,
   shipmentResolvedStoTypeExpr,
+  shipmentResolvedStoTypeForNumberExpr,
   shipmentSapStoKeyExpr,
   sqlIsSapSeaStoRowExpr,
   sqlIsSapSeaStoRowForIncotermExpr,
@@ -62,8 +67,15 @@ describe('shipmentStoTypeSql', () => {
   it('resolves STO Type from contract_stos and SAP fallback', () => {
     const sql = shipmentResolvedStoTypeExpr('c', 'l', 's');
     expect(sql).toContain('contract_stos');
-    expect(sql).toContain('l.effective_sto');
-    expect(sql).toContain("spd_sto_type.data->'raw'->>'STO Type'");
+    expect(sql).toContain("spd_sto_num.data->'raw'->>'STO Type'");
+    expect(sql).toContain('c.sto_number');
+  });
+
+  it('shipmentResolvedStoTypeForNumberExpr binds a specific STO param', () => {
+    const sql = shipmentResolvedStoTypeForNumberExpr('c', '$7::text');
+    expect(sql).toContain('$7::text');
+    expect(sql).toContain('contract_stos');
+    expect(sql).toContain('spd_sto_num');
   });
 
   it('buildShipmentExcludeStoTypeTSql excludes STO Type T', () => {
@@ -72,12 +84,43 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('NOT (');
   });
 
-  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes FOB Type T', () => {
+  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes FOB truck-only legs', () => {
     const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
     expect(sql).toContain("= 'FOB'");
     expect(sql).toContain("= 'T'");
     expect(sql).toContain('AND NOT');
+    expect(sql).toContain('vessel_name');
+    expect(sql).toContain(contractHasSeaVesselStoOnContractSql('c'));
+  });
+
+  it('buildShipmentPageSeaRowScopeSql uses selected STO param for FOB type when provided', () => {
+    const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's', { selectedStoParamIndex: 5 });
+    expect(sql).toContain('$5::text');
+    expect(sql).toContain('spd_sto_num');
+  });
+
+  it('contractHasSeaVesselStoOnContractSql picks Type V from contract_stos or SAP', () => {
+    const pick = contractSeaVesselStoNumberPickExpr('c');
+    const sql = contractHasSeaVesselStoOnContractSql('c');
+    expect(pick).toContain("= 'V'");
+    expect(pick).toContain('contract_stos');
+    expect(pick).toContain('sap_processed_data');
+    expect(sql).toContain(pick.trim());
+  });
+
+  it('shipmentListSeaStoKeyExpr prefers Type V STO for FOB vessel rows', () => {
+    const sql = shipmentListSeaStoKeyExpr('c', 'l', 's');
+    expect(sql).toContain("= 'FOB'");
+    expect(sql).toContain('vessel_name');
+    expect(sql).toContain(contractSeaVesselStoNumberPickExpr('c').trim());
+    expect(sql).toContain(shipmentListStoKeyExpr('c', 'l', 's').trim());
+  });
+
+  it('shipmentListSeaDisplayStoNumberExpr wraps sea sto key', () => {
+    const sql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's');
+    expect(sql).toContain('NULLIF(TRIM');
+    expect(sql).toContain("= 'FOB'");
   });
 
   it('sqlIsSapSeaStoRowExpr matches Type V or non-T rows with vessel name', () => {

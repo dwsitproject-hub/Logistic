@@ -13,6 +13,7 @@ import {
   sqlTruckingSourceIsInterco,
   sqlTruckingSourceIsThirdParty,
 } from './truckingOutstandingQtySummarySql';
+import { sqlTruckingOpIsListVisibleSql } from './truckingOperationUniqueness';
 
 /** Negative gain/loss % at or below this value is flagged (Land). */
 export const TRUCKING_LOSS_ABOVE_THRESHOLD_PCT = -0.5;
@@ -203,6 +204,7 @@ export function buildTruckingLossAboveThresholdQuery(
     INNER JOIN contracts c ON c.id = t.contract_id
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
     WHERE ${openWhere}
+      AND ${sqlTruckingOpIsListVisibleSql('t')}
       AND COALESCE(t.status, '') <> 'CANCELLED'
       AND t.gain_loss_percentage IS NOT NULL
       AND t.gain_loss_percentage::numeric <= ${threshold}

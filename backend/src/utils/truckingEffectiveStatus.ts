@@ -6,6 +6,7 @@ import {
   sqlTruckingPipelineIsCompletedExpr,
   sqlTruckingOutstandingWithinToleranceExpr,
 } from './truckingQuantitySql';
+import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
 export type TruckingEffectiveStatus =
   | 'UNPLANNED'
@@ -184,5 +185,5 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
   FROM upserted u
   INNER JOIN contracts c ON c.id = t.contract_id
   WHERE t.id = u.trucking_operation_id
-    AND t.status <> 'CANCELLED'
+    AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
 `;

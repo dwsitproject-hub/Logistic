@@ -98,3 +98,42 @@ export function buildShipmentContractBacklogOrderBy(
   }
   return `${field} ${sortDir} NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
 }
+
+/**
+ * ORDER BY when sorting a contract-backlog CTE result (e.g. all_contract_backlog).
+ * Column names match unplannedContractBacklogRowSelectSql output — no `c` alias.
+ */
+export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string> = {
+  created_at: 'created_at',
+  vessel_name: 'contract_date',
+  sto_number: 'contract_number',
+  shipment_id: 'contract_number',
+  contract_numbers: 'contract_number',
+  contract_number: 'contract_number',
+  po_numbers: 'po_numbers',
+  status: 'status',
+  plant_site: 'plant_site',
+  supplier: 'supplier',
+  suppliers: 'supplier',
+  product: 'product',
+  products: 'product',
+  incoterm: 'incoterm',
+  contract_date: 'contract_date',
+  charter_type: 'contract_number',
+  operation_id: 'contract_number',
+  delivery_start_date: 'delivery_start_date',
+  delivery_end_date: 'delivery_end_date',
+};
+
+export function buildShipmentContractBacklogOuterOrderBy(
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+): string {
+  const field =
+    SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey] ??
+    SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS.created_at;
+  if (sortKey === 'created_at' || !SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey]) {
+    return `contract_date ${sortDir} NULLS LAST, contract_number ASC`;
+  }
+  return `${field} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_number ASC`;
+}

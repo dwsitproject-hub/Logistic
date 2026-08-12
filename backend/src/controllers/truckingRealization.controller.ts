@@ -608,6 +608,7 @@ export const bulkUploadWbRekap = async (req: AuthRequest, res: Response) => {
         rowParseFailures: result.rowParseFailures,
         operationFailures: result.operationFailures,
         operationWarnings: result.operationWarnings,
+        operationDeduped: result.operationDeduped,
       },
     });
   } catch (err) {

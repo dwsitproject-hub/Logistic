@@ -36,6 +36,7 @@ import {
   isTruckingPageIncoterm,
   truckingPageListScopeWhereSql,
 } from '../utils/truckingIncotermScope';
+import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
 import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
 import { listTruckingDailyActuals } from '../services/truckingRealization.service';
@@ -317,6 +318,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
        LEFT JOIN shipments s ON t.shipment_id = s.id
        ${TRUCKING_REALIZATIONS_JOIN}
        WHERE t.id = $1
+         AND t.deduped_at IS NULL
          ${truckingPageListScopeWhereSql}`,
       [id]
     );
@@ -1151,6 +1153,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
           AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
           AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
         )
+        ${truckingListExcludeDedupedWhereSql}
         ${truckingPageListScopeWhereSql}
         AND
         COALESCE(

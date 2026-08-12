@@ -12,6 +12,7 @@ import {
 } from './pipelineDailySummaryToolbarScope';
 import { contractExtNoSubquery } from './portDisplaySql';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
+import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
 const CB_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
@@ -75,7 +76,7 @@ export function truckingUnplannedContractBacklogBaseWhereSql(
       SELECT 1
       FROM trucking_operations t_ns
       WHERE t_ns.contract_id = ${contractAlias}.id
-        AND COALESCE(t_ns.status, '') <> 'CANCELLED'
+        AND ${sqlTruckingOpIsActiveForMatchingSql('t_ns')}
     )`;
 }
 

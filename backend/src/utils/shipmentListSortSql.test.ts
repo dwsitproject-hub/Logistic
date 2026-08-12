@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildShipmentContractBacklogOrderBy,
+  buildShipmentContractBacklogOuterOrderBy,
   buildShipmentListPageOrderBy,
   parseShipmentListSort,
   SHIPMENT_LIST_SORT_COLUMNS,
@@ -58,6 +59,18 @@ describe('shipmentListSortSql', () => {
     it('sorts contract backlog by po_numbers when requested', () => {
       const orderBy = buildShipmentContractBacklogOrderBy('po_numbers', 'ASC');
       expect(orderBy).toContain('c.po_number ASC');
+    });
+  });
+
+  describe('buildShipmentContractBacklogOuterOrderBy', () => {
+    it('uses output column names without contracts alias', () => {
+      expect(buildShipmentContractBacklogOuterOrderBy('created_at', 'DESC')).toBe(
+        'contract_date DESC NULLS LAST, contract_number ASC',
+      );
+      expect(buildShipmentContractBacklogOuterOrderBy('vessel_name', 'DESC')).toContain(
+        'contract_date DESC',
+      );
+      expect(buildShipmentContractBacklogOuterOrderBy('vessel_name', 'DESC')).not.toContain('c.');
     });
   });
 });

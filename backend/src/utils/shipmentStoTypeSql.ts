@@ -112,6 +112,34 @@ export function buildShipmentSeaMixTransportSql(contractAlias = 'c'): string {
   return `UPPER(COALESCE(NULLIF(TRIM(${contractAlias}.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')`;
 }
 
+/** Resolved STO Type for a specific STO number on a contract (contract_stos, then SAP JSON). */
+export function shipmentResolvedStoTypeForNumberExpr(
+  contractAlias = 'c',
+  stoNumberParamSql: string,
+): string {
+  return `UPPER(TRIM(COALESCE(
+    (
+      SELECT cs.sto_type
+      FROM contract_stos cs
+      WHERE cs.contract_id = ${contractAlias}.id
+        AND NULLIF(TRIM(cs.sto_number::text), '') IS NOT NULL
+        AND TRIM(cs.sto_number::text) = TRIM(${stoNumberParamSql})
+      ORDER BY cs.updated_at DESC NULLS LAST
+      LIMIT 1
+    ),
+    (
+      SELECT ${sapStoTypeNormalizedExpr('spd_sto_num')}
+      FROM sap_processed_data spd_sto_num
+      WHERE NULLIF(TRIM(${stoNumberParamSql}), '') IS NOT NULL
+        AND TRIM(${sapStoNumberKeyExpr('spd_sto_num')}) = TRIM(${stoNumberParamSql})
+        AND TRIM(spd_sto_num.contract_number) = TRIM(${contractAlias}.contract_id::text)
+      ORDER BY spd_sto_num.created_at DESC NULLS LAST
+      LIMIT 1
+    ),
+    ''
+  )))`;
+}
+
 /** Resolved STO Type for a shipment row (contract_stos, then SAP JSON). Requires `l` = latest_spd_contract. */
 export function shipmentResolvedStoTypeExpr(
   contractAlias = 'c',
@@ -119,30 +147,68 @@ export function shipmentResolvedStoTypeExpr(
   shipmentAlias = 's',
 ): string {
   const stoKey = shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias);
-  return `UPPER(TRIM(COALESCE(
-    (
-      SELECT cs.sto_type
-      FROM contract_stos cs
-      WHERE cs.contract_id = ${contractAlias}.id
-        AND NULLIF(TRIM(cs.sto_number::text), '') IS NOT NULL
-        AND TRIM(cs.sto_number::text) = TRIM((${stoKey})::text)
-      ORDER BY cs.updated_at DESC NULLS LAST
-      LIMIT 1
-    ),
-    (
-      SELECT ${sapStoTypeNormalizedExpr('spd_sto_type')}
-      FROM sap_processed_data spd_sto_type
-      WHERE NULLIF(TRIM((${stoKey})::text), '') IS NOT NULL
-        AND TRIM(${sapStoNumberKeyExpr('spd_sto_type')}) = TRIM((${stoKey})::text)
-        AND (
-          NULLIF(TRIM(spd_sto_type.contract_number), '') IS NULL
-          OR TRIM(spd_sto_type.contract_number) = TRIM(${contractAlias}.contract_id::text)
+  return shipmentResolvedStoTypeForNumberExpr(contractAlias, `(${stoKey})::text`);
+}
+
+/** Pick the Type V (vessel) STO number on a contract when present. */
+export function contractSeaVesselStoNumberPickExpr(contractAlias = 'c'): string {
+  return `(
+    SELECT TRIM(cs.sto_number::text)
+    FROM contract_stos cs
+    WHERE cs.contract_id = ${contractAlias}.id
+      AND NULLIF(TRIM(cs.sto_number::text), '') IS NOT NULL
+      AND (
+        UPPER(TRIM(COALESCE(cs.sto_type, ''))) = 'V'
+        OR EXISTS (
+          SELECT 1
+          FROM sap_processed_data spd_cs
+          WHERE TRIM(spd_cs.contract_number) = TRIM(${contractAlias}.contract_id::text)
+            AND TRIM(${sapStoNumberKeyExpr('spd_cs')}) = TRIM(cs.sto_number::text)
+            AND ${sapStoTypeNormalizedExpr('spd_cs')} = 'V'
         )
-      ORDER BY spd_sto_type.created_at DESC NULLS LAST
-      LIMIT 1
-    ),
-    ''
-  )))`;
+      )
+    ORDER BY cs.updated_at DESC NULLS LAST
+    LIMIT 1
+  )`;
+}
+
+/** True when contract has at least one Type V (vessel) STO line. */
+export function contractHasSeaVesselStoOnContractSql(contractAlias = 'c'): string {
+  const pick = contractSeaVesselStoNumberPickExpr(contractAlias);
+  return `(${pick}) IS NOT NULL`;
+}
+
+/**
+ * List grouping key — for FOB mixed V+T POs with vessel execution, prefer Type V STO.
+ * CIF/CFR and non-vessel rows fall back to shipmentListStoKeyExpr.
+ */
+export function shipmentListSeaStoKeyExpr(
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+): string {
+  const inc = contractEffectiveIncotermExpr(contractAlias);
+  const baseKey = shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias);
+  const seaStoPick = contractSeaVesselStoNumberPickExpr(contractAlias);
+  return `COALESCE(
+    CASE
+      WHEN (${inc}) = 'FOB'
+        AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NOT NULL
+        AND (${seaStoPick}) IS NOT NULL
+      THEN (${seaStoPick})
+      ELSE NULL
+    END,
+    ${baseKey}
+  )`;
+}
+
+/** Display STO for list UI — mirrors shipmentListSeaStoKeyExpr formatting. */
+export function shipmentListSeaDisplayStoNumberExpr(
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+): string {
+  return `NULLIF(TRIM((${shipmentListSeaStoKeyExpr(contractAlias, spdAlias, shipmentAlias)})::text), '')`;
 }
 
 /**
@@ -157,20 +223,37 @@ export function buildShipmentExcludeStoTypeTSql(
   return `NOT (${shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias)} = 'T')`;
 }
 
+export interface ShipmentPageSeaRowScopeOptions {
+  /** When set, FOB Type T check resolves against this bound STO param (search / ?sto=). */
+  selectedStoParamIndex?: number;
+}
+
 /**
  * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm.
- * FOB Type T (truck leg) is excluded; CIF/CFR remain incoterm-only.
+ * FOB-only: exclude truck-only legs (Type T with no vessel / no Type V sibling on PO).
+ * CIF/CFR remain incoterm-only.
  */
 export function buildShipmentPageSeaRowScopeSql(
   contractAlias = 'c',
   spdAlias = 'l',
   shipmentAlias = 's',
+  options?: ShipmentPageSeaRowScopeOptions,
 ): string {
   const incScope = buildShipmentPageSeaIncotermScopeSql(contractAlias);
   const inc = contractEffectiveIncotermExpr(contractAlias);
+  const resolvedTypeExpr =
+    options?.selectedStoParamIndex != null
+      ? shipmentResolvedStoTypeForNumberExpr(
+          contractAlias,
+          `$${options.selectedStoParamIndex}::text`,
+        )
+      : shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias);
+  const hasSeaVesselSto = contractHasSeaVesselStoOnContractSql(contractAlias);
   const fobTruckLeg = `(
     (${inc}) = 'FOB'
-    AND ${shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias)} = 'T'
+    AND ${resolvedTypeExpr} = 'T'
+    AND NOT (${hasSeaVesselSto})
+    AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NULL
   )`;
   return `(${incScope}) AND NOT (${fobTruckLeg})`;
 }

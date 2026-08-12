@@ -1,6 +1,9 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
-import { SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE } from '../utils/truckingOperationUniqueness';
+import {
+  SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE,
+  sqlTruckingOpIsActiveForMatchingSql,
+} from '../utils/truckingOperationUniqueness';
 import { syncTruckingQuantityDeliveredFromDailyActuals } from './truckingRealization.service';
 import { invalidateTruckingListCache } from './truckingList.service';
 import { PipelineDailySummaryService } from './pipelineDailySummary.service';
@@ -16,12 +19,23 @@ export interface TruckingDedupeRankedRow {
   rn: number;
 }
 
+export type TruckingDedupeMode = 'cancel' | 'soft_dedupe';
+
 export interface TruckingDedupeOptions {
   /**
    * Skip async pipeline refresh after cancel.
    * Use for batch scripts that refresh once after COMMIT (avoids pool timeout storms).
    */
   skipPipelineRefresh?: boolean;
+  /** cancel = legacy CANCELLED status; soft_dedupe = KLIP hygiene (hidden, not Cancelled card). */
+  mode?: TruckingDedupeMode;
+  dedupedReason?: string;
+}
+
+export interface TruckingDedupeResult {
+  keeperId: string | null;
+  cancelledIds: string[];
+  dedupedIds: string[];
 }
 
 /** Coalesce concurrent refresh requests into one in-flight + one trailing run. */
@@ -100,13 +114,16 @@ async function mergeDailyActualsIntoKeeper(
 
 /**
  * Keep one active trucking op per contract (WB-complete keeper).
- * Merges loser daily actuals into keeper, then cancels losers.
+ * Merges loser daily actuals into keeper, then cancels or soft-dedupes losers.
  */
 export async function dedupeActiveTruckingOpsForContract(
   client: PoolClient,
   contractUuid: string,
   options?: TruckingDedupeOptions,
-): Promise<{ keeperId: string | null; cancelledIds: string[] }> {
+): Promise<TruckingDedupeResult> {
+  const mode: TruckingDedupeMode = options?.mode ?? 'cancel';
+  const dedupedReason = String(options?.dedupedReason ?? 'manual_dedupe').trim() || 'manual_dedupe';
+
   const ranked = await client.query<TruckingDedupeRankedRow>(
     `WITH ranked AS (
        SELECT
@@ -135,7 +152,7 @@ export async function dedupeActiveTruckingOpsForContract(
        FROM trucking_operations t
        INNER JOIN contracts c ON c.id = t.contract_id
        WHERE t.contract_id = $1::uuid
-         AND COALESCE(t.status, '') <> 'CANCELLED'
+         AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
      )
      SELECT * FROM ranked
      ORDER BY rn`,
@@ -143,43 +160,65 @@ export async function dedupeActiveTruckingOpsForContract(
   );
 
   if (ranked.rows.length <= 1) {
-    return { keeperId: ranked.rows[0]?.id ?? null, cancelledIds: [] };
+    return { keeperId: ranked.rows[0]?.id ?? null, cancelledIds: [], dedupedIds: [] };
   }
 
   const keeper = ranked.rows.find((r) => Number(r.rn) === 1)!;
   const losers = ranked.rows.filter((r) => Number(r.rn) > 1);
   const cancelledIds: string[] = [];
+  const dedupedIds: string[] = [];
 
   for (const loser of losers) {
     const merged = await mergeDailyActualsIntoKeeper(client, keeper.id, loser.id);
-    await client.query(
-      `UPDATE trucking_operations
-       SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1::uuid`,
-      [loser.id],
-    );
-    cancelledIds.push(loser.id);
-    logger.info('dedupeActiveTruckingOpsForContract: cancelled duplicate', {
-      contractUuid,
-      keeperId: keeper.id,
-      loserId: loser.id,
-      mergedActualRows: merged,
-      keeperWbDates: keeper.wb_dates,
-      loserWbDates: loser.wb_dates,
-    });
+    if (mode === 'soft_dedupe') {
+      await client.query(
+        `UPDATE trucking_operations
+         SET deduped_at = CURRENT_TIMESTAMP,
+             deduped_into_operation_id = $2::uuid,
+             deduped_reason = $3::text,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1::uuid`,
+        [loser.id, keeper.id, dedupedReason],
+      );
+      dedupedIds.push(loser.id);
+      logger.info('dedupeActiveTruckingOpsForContract: soft-deduped duplicate', {
+        contractUuid,
+        keeperId: keeper.id,
+        loserId: loser.id,
+        dedupedReason,
+        mergedActualRows: merged,
+        keeperWbDates: keeper.wb_dates,
+        loserWbDates: loser.wb_dates,
+      });
+    } else {
+      await client.query(
+        `UPDATE trucking_operations
+         SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1::uuid`,
+        [loser.id],
+      );
+      cancelledIds.push(loser.id);
+      logger.info('dedupeActiveTruckingOpsForContract: cancelled duplicate', {
+        contractUuid,
+        keeperId: keeper.id,
+        loserId: loser.id,
+        mergedActualRows: merged,
+        keeperWbDates: keeper.wb_dates,
+        loserWbDates: loser.wb_dates,
+      });
+    }
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(client, keeper.id);
 
-  if (cancelledIds.length > 0) {
-    // Status cards + CANCELLED list use daily summary / stage snapshot — force rebuild.
+  if (cancelledIds.length > 0 || dedupedIds.length > 0) {
     invalidateTruckingListCache();
     if (!options?.skipPipelineRefresh) {
       scheduleTruckingPipelineRefresh();
     }
   }
 
-  return { keeperId: keeper.id, cancelledIds };
+  return { keeperId: keeper.id, cancelledIds, dedupedIds };
 }
 
 /**
@@ -189,9 +228,9 @@ export async function dedupeActiveTruckingOpsForPo(
   client: PoolClient,
   poNumber: string,
   options?: TruckingDedupeOptions,
-): Promise<{ keeperId: string | null; cancelledIds: string[]; contractUuid: string | null }> {
+): Promise<TruckingDedupeResult & { contractUuid: string | null }> {
   const po = String(poNumber ?? '').trim();
-  if (!po) return { keeperId: null, cancelledIds: [], contractUuid: null };
+  if (!po) return { keeperId: null, cancelledIds: [], dedupedIds: [], contractUuid: null };
 
   const contracts = await client.query<{ id: string }>(
     `SELECT id FROM contracts
@@ -200,10 +239,8 @@ export async function dedupeActiveTruckingOpsForPo(
     [po],
   );
   const contractUuid = contracts.rows[0]?.id ?? null;
-  if (!contractUuid) return { keeperId: null, cancelledIds: [], contractUuid: null };
+  if (!contractUuid) return { keeperId: null, cancelledIds: [], dedupedIds: [], contractUuid: null };
 
-  // Also collapse ops that somehow still sit on sibling contract rows for same PO
-  // (should be rare after PO unique index). Point them to the survivor first.
   await client.query(
     `UPDATE trucking_operations t
      SET contract_id = $1::uuid, updated_at = CURRENT_TIMESTAMP
@@ -211,7 +248,7 @@ export async function dedupeActiveTruckingOpsForPo(
      WHERE t.contract_id = c.id
        AND TRIM(COALESCE(c.po_number::text, '')) = TRIM($2::text)
        AND t.contract_id <> $1::uuid
-       AND COALESCE(t.status, '') <> 'CANCELLED'`,
+       AND ${sqlTruckingOpIsActiveForMatchingSql('t')}`,
     [contractUuid, po],
   );
 
@@ -236,7 +273,7 @@ export async function listDuplicateTruckingByPo(
        FROM trucking_operations t
        INNER JOIN contracts c ON c.id = t.contract_id
        WHERE t.contract_id IS NOT NULL
-         AND COALESCE(t.status, '') <> 'CANCELLED'
+         AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND NULLIF(TRIM(COALESCE(c.po_number::text, '')), '') IS NOT NULL
          ${filterSql}
        GROUP BY TRIM(COALESCE(c.po_number::text, ''))
@@ -269,7 +306,7 @@ export async function listDuplicateTruckingByPo(
        FROM trucking_operations t
        INNER JOIN contracts c ON c.id = t.contract_id
        INNER JOIN dup_pos d ON d.po_norm = TRIM(COALESCE(c.po_number::text, ''))
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
      )
      SELECT * FROM ranked
      ORDER BY po_number, rn`,

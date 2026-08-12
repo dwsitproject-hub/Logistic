@@ -130,8 +130,8 @@ import { resolveShipmentPlanQtyAssignmentTargets } from '../utils/shipmentPlanQt
 import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import {
   buildShipmentPageSeaRowScopeSql,
-  shipmentListStoKeyExpr,
-  shipmentListDisplayStoNumberExpr,
+  shipmentListSeaStoKeyExpr,
+  shipmentListSeaDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
 import {
   buildShipmentListAtaSelectSql,
@@ -532,8 +532,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           -- Get ETA dates from shipments or vessel_loading_ports
           MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,`;
 
-    const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
-    const listStoDisplaySql = shipmentListDisplayStoNumberExpr('c', 'l', 's');
+    const listStoKeySql = shipmentListSeaStoKeyExpr('c', 'l', 's');
+    const listStoDisplaySql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's');
 
     /** Grouped STO key on shipment_base rows (safe for scalar subqueries in the outer enrich CTE). */
     const groupedStoFromRow = `NULLIF(TRIM(g.sto_key::text), '')`;
@@ -623,17 +623,21 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    /** Shipments page scope: CIF/FOB/CFR; FOB Type T excluded (truck leg). */
+    /** Shipments page scope: CIF/FOB/CFR; FOB truck-only legs excluded (see buildShipmentPageSeaRowScopeSql). */
     const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
-    const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
+    const exactStoKey = stoIsSet
+      ? String(sto).trim()
+      : isExactStoGlobalSearch(globalSearch)
+        ? globalSearch.trim()
+        : null;
     /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
 
     /** Pre-filter for relevant_contract_numbers — no `l` join yet (incoterm only). */
     const relevantContractWhereParts: string[] = [seaIncotermScopeCond];
-    /** shipment_base_core / ranked_sto — `l` is joined; full sea row scope. */
-    const shipmentBaseWhereParts: string[] = [seaRowScopeCond];
+    /** shipment_base_core / ranked_sto — `l` is joined; sea row scope appended after param index known. */
+    const shipmentBaseWhereParts: string[] = [];
     /** Contract-only scope (date/plant/contract) reused by Unplanned open-contract count. */
     const contractScopeParts: string[] = [];
     const coreParams: any[] = [];
@@ -703,15 +707,20 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       cp = contractToolbarFilter.nextIndex;
     }
 
-    const exactStoKey = stoIsSet
-      ? String(sto).trim()
-      : isExactStoGlobalSearch(globalSearch)
-        ? globalSearch.trim()
-        : null;
+    let exactStoParamIndex: number | null = null;
     if (exactStoKey) {
-      shipmentBaseWhereParts.push(buildExactNumericGlobalSearchInnerSql(listStoKeySql, cp));
+      exactStoParamIndex = cp;
       coreParams.push(exactStoKey);
       cp += 1;
+    }
+
+    const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's', {
+      ...(exactStoParamIndex != null ? { selectedStoParamIndex: exactStoParamIndex } : {}),
+    });
+    shipmentBaseWhereParts.unshift(seaRowScopeCond);
+
+    if (exactStoKey && exactStoParamIndex != null) {
+      shipmentBaseWhereParts.push(buildExactNumericGlobalSearchInnerSql(listStoKeySql, exactStoParamIndex));
     }
 
     const relevantContractWhereSql = relevantContractWhereParts.join(' AND ');
@@ -1282,7 +1291,7 @@ ${contractMetaSelectCore}
         sortDir: listSortDir,
       });
 
-      if (isAllHybridListRequest(status)) {
+      if (isAllHybridListRequest(status) && !exactStoKey) {
         const hybrid = await resolveAllHybridShipmentsList(
           req,
           buildShipmentAllHybridListContext({

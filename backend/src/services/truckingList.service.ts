@@ -22,6 +22,7 @@ import {
   normalizeTruckingPagePipelineStageParam,
 } from '../utils/truckingPagePipelineSql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
+import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
@@ -692,6 +693,7 @@ export function buildTruckingListQuery(
         ${buildTruckingListSelectClause(skipSapJoin)}
       ${buildTruckingListFromClause(skipSapJoin)}
       WHERE 1=1
+        ${truckingListExcludeDedupedWhereSql}
         ${truckingListB2bExcludeSql(skipSapJoin)}
         ${truckingPageListScopeWhereSql}
     `;

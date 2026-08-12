@@ -810,8 +810,8 @@ function resolvePortsModalQuantityDelivered(
   shipment: Shipment | null,
   contractDetails?: PortsModalContractDetail[],
 ): string {
-  const kg = resolvePortsModalQuantityDeliveredKg(shipmentInfo, shipment, contractDetails)
-  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+  const kg = resolvePortsModalQuantityDeliveredKg(shipmentInfo, shipment, contractDetails) ?? 0
+  return formatQuantityKgDisplay(kg)
 }
 
 function resolvePortsModalQuantityReceive(
@@ -819,8 +819,8 @@ function resolvePortsModalQuantityReceive(
   shipment: Shipment | null,
   contractDetails?: PortsModalContractDetail[],
 ): string {
-  const kg = resolvePortsModalQuantityReceiveKg(shipmentInfo, shipment, contractDetails)
-  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+  const kg = resolvePortsModalQuantityReceiveKg(shipmentInfo, shipment, contractDetails) ?? 0
+  return formatQuantityKgDisplay(kg)
 }
 
 function ShipmentDetailReadOnlyField({
@@ -3934,7 +3934,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s) ?? 0, SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -3948,7 +3948,7 @@ function ShipmentsPageContent() {
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s) ?? 0, SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4609,9 +4609,11 @@ function ShipmentsPageContent() {
             </span>
           )
         }
+        const displayKg =
+          col.id === 'quantity_delivered' || col.id === 'quantity_receive' ? (kg ?? 0) : kg
         return (
           <span className="text-sm break-words tabular-nums">
-            {formatSapQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            {formatSapQtyMtDisplay(displayKg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
           </span>
         )
       }

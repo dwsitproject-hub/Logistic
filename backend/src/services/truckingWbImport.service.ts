@@ -26,8 +26,13 @@ import {
 import {
   findActiveTruckingOpsByContractId,
   SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE,
+  sqlTruckingOpIsActiveForMatchingSql,
 } from '../utils/truckingOperationUniqueness';
 import { invalidateTruckingListCache } from './truckingList.service';
+import {
+  dedupeActiveTruckingOpsForPo,
+  scheduleTruckingPipelineRefresh,
+} from './truckingDedupe.service';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -65,6 +70,7 @@ export type WbImportApplyResult = {
   rowParseFailures: WbRekapParseFailure[];
   operationFailures: WbImportOperationFailure[];
   operationWarnings: WbImportOperationFailure[];
+  operationDeduped: WbImportOperationFailure[];
 };
 
 type TruckingOpForWbRow = {
@@ -126,7 +132,7 @@ async function findTruckingOpsByPoForWbImportBatch(
        TRIM(COALESCE(c.po_number::text, '')) AS po_number
      FROM trucking_operations t
      INNER JOIN contracts c ON c.id = t.contract_id
-     WHERE COALESCE(t.status, '') <> 'CANCELLED'
+     WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
        AND TRIM(COALESCE(c.po_number::text, '')) = ANY($1::text[])
        AND ${incotermExpr} IN ('FRC', 'LCO')
      ORDER BY
@@ -261,7 +267,7 @@ async function batchFetchAnyStatusOpsCounts(
     `SELECT
        TRIM(COALESCE(c.po_number::text, '')) AS po_number,
        COUNT(*)::text AS total,
-       COUNT(*) FILTER (WHERE COALESCE(t.status, '') <> 'CANCELLED')::text AS active
+       COUNT(*) FILTER (WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')})::text AS active
      FROM trucking_operations t
      INNER JOIN contracts c ON c.id = t.contract_id
      WHERE TRIM(COALESCE(c.po_number::text, '')) = ANY($1::text[])
@@ -319,17 +325,15 @@ function formatOpLabel(o: TruckingOpForWbRow): string {
   return `${id}${prod}`;
 }
 
-function formatWbMultipleOpsSiblingWarning(
+function formatWbAutoDedupeInfo(
   poNumber: string,
   keeper: TruckingOpForWbRow,
   siblings: TruckingOpForWbRow[],
 ): string {
   const siblingLabels = siblings.map(formatOpLabel).join(', ');
   return (
-    `Multiple FRC/LCO trucking operations share PO "${poNumber}". ` +
-    `WB actual applied to keeper ${formatOpLabel(keeper)}. ` +
-    `Cancel or dedupe sibling operation(s): ${siblingLabels}. ` +
-    `Common cause: a later Daily Planning upload created a new operation while an older one is still active.`
+    `PO "${poNumber}": merged duplicate operation(s) ${siblingLabels} into keeper ` +
+    `${formatOpLabel(keeper)} (KLIP soft dedupe — hidden from list, not Cancelled).`
   );
 }
 
@@ -695,20 +699,16 @@ async function applyResolvedRow(
   wbImportId: string,
   operationFailures: WbImportOperationFailure[],
   operationWarnings: WbImportOperationFailure[],
+  posNeedingDedupe: Set<string>,
+  duplicateKeeperByPo: Map<string, TruckingOpForWbRow>,
+  duplicateSiblingsByPo: Map<string, TruckingOpForWbRow[]>,
 ): Promise<{ updated: boolean; upserted: number; operationId?: string }> {
   let targetOps = ops;
   if (ops.length > 1) {
     const { keeper, siblings } = await pickWbImportKeeperOp(db, ops);
-    operationWarnings.push({
-      po_number: poNumber,
-      sto_numbers: row.stoNumbers,
-      progress_date: row.progressDateIso,
-      reason: formatWbMultipleOpsSiblingWarning(poNumber, keeper, siblings),
-      operation_ids: [
-        String(keeper.operation_id ?? keeper.id),
-        ...siblings.map((o) => String(o.operation_id ?? o.id)),
-      ],
-    });
+    posNeedingDedupe.add(poNumber);
+    duplicateKeeperByPo.set(poNumber, keeper);
+    duplicateSiblingsByPo.set(poNumber, siblings);
     targetOps = [keeper];
   }
 
@@ -808,11 +808,16 @@ export async function processWbRekapWorkbookUpload(args: {
 
   const operationFailures: WbImportOperationFailure[] = [];
   const operationWarnings: WbImportOperationFailure[] = [];
+  const operationDeduped: WbImportOperationFailure[] = [];
   let rowsUpserted = 0;
   // operationId -> earliest applied progress date (for the one-time promote-to-IN_PROGRESS call).
   const touchedOps = new Map<string, string>();
   let autoCreatedAny = false;
+  const posNeedingDedupe = new Set<string>();
+  const duplicateKeeperByPo = new Map<string, TruckingOpForWbRow>();
+  const duplicateSiblingsByPo = new Map<string, TruckingOpForWbRow[]>();
 
+  let dedupedAny = false;
   const client = await getClient();
   try {
     await client.query('BEGIN');
@@ -884,6 +889,9 @@ export async function processWbRekapWorkbookUpload(args: {
         importId,
         operationFailures,
         operationWarnings,
+        posNeedingDedupe,
+        duplicateKeeperByPo,
+        duplicateSiblingsByPo,
       );
       if (result.updated && result.operationId) {
         rowsUpserted += result.upserted;
@@ -901,6 +909,29 @@ export async function processWbRekapWorkbookUpload(args: {
       await promoteOperationToInProgress(client, operationId, earliestDate);
     }
 
+    for (const po of posNeedingDedupe) {
+      const dedupeResult = await dedupeActiveTruckingOpsForPo(client, po, {
+        mode: 'soft_dedupe',
+        dedupedReason: 'wb_import_auto',
+        skipPipelineRefresh: true,
+      });
+      if ((dedupeResult.dedupedIds?.length ?? 0) > 0) {
+        dedupedAny = true;
+        const keeper = duplicateKeeperByPo.get(po);
+        const siblings = duplicateSiblingsByPo.get(po) ?? [];
+        if (keeper) {
+          operationDeduped.push({
+            po_number: po,
+            reason: formatWbAutoDedupeInfo(po, keeper, siblings),
+            operation_ids: [
+              String(keeper.operation_id ?? keeper.id),
+              ...siblings.map((o) => String(o.operation_id ?? o.id)),
+            ],
+          });
+        }
+      }
+    }
+
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
@@ -909,8 +940,11 @@ export async function processWbRekapWorkbookUpload(args: {
     client.release();
   }
 
-  if (autoCreatedAny) {
+  if (autoCreatedAny || dedupedAny) {
     invalidateTruckingListCache();
+  }
+  if (dedupedAny) {
+    scheduleTruckingPipelineRefresh();
   }
 
   const operationsUpdated = touchedOps.size;
@@ -970,6 +1004,7 @@ export async function processWbRekapWorkbookUpload(args: {
     rowParseFailures: userFacingRowParseFailures,
     operationFailures,
     operationWarnings,
+    operationDeduped,
   };
 }
 

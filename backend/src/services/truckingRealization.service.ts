@@ -1,5 +1,6 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
+import { sqlTruckingOpIsActiveForMatchingSql } from '../utils/truckingOperationUniqueness';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -158,7 +159,7 @@ async function listActiveTruckingOpsByPo(
     `SELECT t.id, t.operation_id
      FROM trucking_operations t
      LEFT JOIN contracts c ON t.contract_id = c.id
-     WHERE COALESCE(t.status, '') <> 'CANCELLED'
+     WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
        AND LOWER(TRIM(COALESCE(c.po_number::text, ''))) = LOWER(TRIM($1))
      ORDER BY t.updated_at DESC NULLS LAST, t.id ASC`,
     [poNumber],
@@ -183,7 +184,7 @@ async function findTruckingOpByExtAndPo(
        ORDER BY spd.created_at DESC NULLS LAST
        LIMIT 1
      ) spd ON true
-     WHERE COALESCE(t.status, '') <> 'CANCELLED'
+     WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
        AND (
          LOWER(TRIM(COALESCE(c.contract_id::text, ''))) = LOWER(TRIM($1))
          OR LOWER(TRIM(COALESCE(spd.contract_ext_no, ''))) = LOWER(TRIM($1))
@@ -238,7 +239,7 @@ export async function resolveTruckingOperationByExtNoAndPo(
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1
        ) spd ON true
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND (
            LOWER(TRIM(COALESCE(c.contract_id::text, ''))) = LOWER(TRIM($1))
            OR LOWER(TRIM(COALESCE(spd.contract_ext_no, ''))) = LOWER(TRIM($1))

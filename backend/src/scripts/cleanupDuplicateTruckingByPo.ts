@@ -21,6 +21,7 @@ async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
   const all = args.includes('--all');
+  const soft = args.includes('--soft');
   const poIdx = args.indexOf('--po');
   const poFilter =
     poIdx >= 0 && args[poIdx + 1] && !args[poIdx + 1].startsWith('--')
@@ -96,18 +97,33 @@ async function main() {
     console.log(`Audit CSV: ${auditFile}`);
 
     if (!apply) {
-      console.log('\nDry-run only. Re-run with --apply to merge WB actuals and cancel losers.');
+      console.log(
+        `\nDry-run only. Re-run with --apply to merge WB actuals and ${soft ? 'soft-dedupe' : 'cancel'} losers.`,
+      );
       return;
     }
 
     const pos = [...new Set(keepers.map((k) => String(k.po_number ?? '').trim()).filter(Boolean))];
     await client.query('BEGIN');
-    const results: Array<{ po: string; keeperId: string | null; cancelledIds: string[] }> = [];
+    const results: Array<{
+      po: string;
+      keeperId: string | null;
+      cancelledIds: string[];
+      dedupedIds: string[];
+    }> = [];
     for (const po of pos) {
-      // Defer pipeline refresh to after COMMIT + client.release (avoids pool timeout storm).
-      const r = await dedupeActiveTruckingOpsForPo(client, po, { skipPipelineRefresh: true });
-      results.push({ po, keeperId: r.keeperId, cancelledIds: r.cancelledIds });
-      if (r.cancelledIds.length > 0) cancelledAny = true;
+      const r = await dedupeActiveTruckingOpsForPo(client, po, {
+        skipPipelineRefresh: true,
+        mode: soft ? 'soft_dedupe' : 'cancel',
+        dedupedReason: soft ? 'manual_script_soft' : undefined,
+      });
+      results.push({
+        po,
+        keeperId: r.keeperId,
+        cancelledIds: r.cancelledIds,
+        dedupedIds: r.dedupedIds,
+      });
+      if (r.cancelledIds.length > 0 || r.dedupedIds.length > 0) cancelledAny = true;
     }
     await client.query('COMMIT');
     console.log(JSON.stringify({ applied: results }, null, 2));

@@ -26,6 +26,27 @@ export function isActiveTruckingStatus(status: unknown): boolean {
   return String(status ?? '').toUpperCase() !== 'CANCELLED';
 }
 
+/** KLIP soft-dedupe losers are hidden from list and matching (not the Cancelled card). */
+export function sqlTruckingOpExcludeDedupedSql(truckingAlias = 't'): string {
+  return `${truckingAlias}.deduped_at IS NULL`;
+}
+
+/** Operational rows eligible for WB / planning / duplicate guards. */
+export function sqlTruckingOpIsActiveForMatchingSql(truckingAlias = 't'): string {
+  return `(
+    COALESCE(${truckingAlias}.status, '') <> 'CANCELLED'
+    AND ${sqlTruckingOpExcludeDedupedSql(truckingAlias)}
+  )`;
+}
+
+/** Visible in trucking list and pipeline summaries (excludes soft-deduped; Cancelled shown only on card filter). */
+export function sqlTruckingOpIsListVisibleSql(truckingAlias = 't'): string {
+  return sqlTruckingOpExcludeDedupedSql(truckingAlias);
+}
+
+/** Append to trucking list / pipeline base WHERE (alias `t`). */
+export const truckingListExcludeDedupedWhereSql = `AND ${sqlTruckingOpIsListVisibleSql('t')}`;
+
 export function formatDuplicateTruckingMessage(ops: Pick<ActiveTruckingOpRow, 'operation_id' | 'id'>[]): string {
   const labels = ops.map((o) => (o.operation_id && String(o.operation_id).trim()) || o.id);
   return `Contract already has trucking operation(s): ${labels.join(', ')}. Edit the existing operation or cancel it before creating a new one.`;
@@ -49,7 +70,7 @@ export async function findActiveTruckingOpsByContractId(contractUuid: string): P
      FROM trucking_operations t
      LEFT JOIN contracts c ON c.id = t.contract_id
      WHERE t.contract_id = $1::uuid
-       AND COALESCE(t.status, '') <> 'CANCELLED'
+       AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
      ORDER BY t.created_at ASC, t.id ASC`,
     [contractUuid],
   );
@@ -209,7 +230,7 @@ export async function findTruckingOpForUnplannedPlanningUpload(args: {
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1
        ) ext ON true
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND (${matchSql})
      )
      SELECT *
@@ -303,7 +324,7 @@ export async function findTruckingOpForPlannedPlanningUpload(args: {
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1
        ) ext ON true
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND UPPER(COALESCE(t.status, '')) IN ('PLANNED', 'IN_PROGRESS')
          AND (${matchSql})
      )

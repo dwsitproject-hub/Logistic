@@ -20,7 +20,10 @@ import {
 } from './shipmentIncotermScope';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
 
-import { buildShipmentContractBacklogOrderBy } from './shipmentListSortSql';
+import {
+  buildShipmentContractBacklogOrderBy,
+  buildShipmentContractBacklogOuterOrderBy,
+} from './shipmentListSortSql';
 
 export { buildShipmentPageUnplannedOpenContractsCte };
 
@@ -429,7 +432,7 @@ export function buildAllHybridContractBacklogPageQuery(
       WHERE ${preplannedWhere}
     )
     SELECT * FROM all_contract_backlog
-    ORDER BY ${buildShipmentContractBacklogOrderBy(sortKey, sortDir)}
+    ORDER BY ${buildShipmentContractBacklogOuterOrderBy(sortKey, sortDir)}
     LIMIT ${limit} OFFSET ${offset}`;
 }
 

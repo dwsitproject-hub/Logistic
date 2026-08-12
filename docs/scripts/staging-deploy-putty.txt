@@ -273,6 +273,21 @@ Script di atas memanggil run-dedupe-trucking-by-po-staging.sh --all:
 
   # Verifikasi browser: http://8.215.6.189/trucking (Ctrl+Shift+R)
 
+----- G) Backup DB transaksi SIT → restore ke local -----
+
+  Panduan lengkap: docs/scripts/dump-sit-txn-for-local-putty.txt
+
+  # PuTTY → backend .57 — dump dari DB .60:
+  cd /opt/klip
+  bash docs/scripts/dump-sit-transactional-data.sh
+  ls -lt /opt/klip/backups/klip_sit_txn_*.dump | head -1
+
+  # Copy ke laptop: WinSCP /opt/klip/backups/ → D:\Project\Klip\docs\
+
+  # Laptop — restore local Docker:
+  # powershell -File docs\scripts\restore-sit-txn-dump-local.ps1 -DumpPath "D:\Project\Klip\docs\klip_sit_txn_....dump"
+  # docker compose exec -T backend npm run pipeline-summary:refresh:prod
+
   # Pre-flight SQL (read-only, via psql client di host .57):
   # Load DB_* dari backend container, lalu:
   # PGPASSWORD=... psql -h 172.28.92.60 -p 5442 -U postgres -d klip_db \

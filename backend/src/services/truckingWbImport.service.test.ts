@@ -31,11 +31,17 @@ vi.mock('./truckingList.service', () => ({
   invalidateTruckingListCache: vi.fn(),
 }));
 
+vi.mock('./truckingDedupe.service', () => ({
+  dedupeActiveTruckingOpsForPo: vi.fn(),
+  scheduleTruckingPipelineRefresh: vi.fn(),
+}));
+
 import { getClient, query } from '../database/connection';
 import { syncTruckingQuantityDeliveredFromDailyActuals } from '../services/truckingRealization.service';
 import { allocateNextSyntheticSequence } from '../utils/operationId';
 import { findActiveTruckingOpsByContractId } from '../utils/truckingOperationUniqueness';
 import { invalidateTruckingListCache } from './truckingList.service';
+import { dedupeActiveTruckingOpsForPo } from './truckingDedupe.service';
 import { processWbRekapWorkbookUpload } from './truckingWbImport.service';
 import type { WbRekapWorkbookSheet } from '../utils/truckingWbRekapUpload';
 
@@ -87,7 +93,7 @@ function fakeClientHandler(scenario: Scenario, calls: { text: string; params: un
       }
       return { rows };
     }
-    if (t.includes("COUNT(*) FILTER (WHERE COALESCE(t.status, '') <> 'CANCELLED')")) {
+    if (t.includes('COUNT(*) FILTER') && t.includes('AS active')) {
       const poList = (params[0] as string[]) ?? [];
       const rows: Row[] = [];
       for (const po of poList) {
@@ -111,6 +117,12 @@ function fakeClientHandler(scenario: Scenario, calls: { text: string; params: un
 }
 
 function setupScenario(scenario: Scenario) {
+  vi.mocked(dedupeActiveTruckingOpsForPo).mockImplementation(async (_client, po) => ({
+    keeperId: 'op-1',
+    cancelledIds: [],
+    dedupedIds: ['op-2'],
+    contractUuid: `contract-${po}`,
+  }));
   const calls: { text: string; params: unknown[] }[] = [];
   const client = {
     query: fakeClientHandler(scenario, calls),
@@ -593,7 +605,7 @@ describe('processWbRekapWorkbookUpload', () => {
     expect(allocateNextSyntheticSequence).not.toHaveBeenCalled();
   });
 
-  it('warns and applies WB to keeper when more than one active op shares the PO', async () => {
+  it('auto-dedupes soft and applies WB to keeper when more than one active op shares the PO', async () => {
     const scenario = buildScenario({
       opsByPo: {
         '1001029784': [
@@ -612,11 +624,15 @@ describe('processWbRekapWorkbookUpload', () => {
 
     expect(result.operationFailures).toEqual([]);
     expect(result.rowsUpserted).toBe(1);
-    expect(result.operationWarnings).toHaveLength(1);
-    expect(result.operationWarnings[0]?.reason).toMatch(/Multiple FRC\/LCO trucking operations share PO/);
-    expect(result.operationWarnings[0]?.reason).toMatch(/WB actual applied to keeper/);
-    expect(result.operationWarnings[0]?.reason).toMatch(/Cancel or dedupe sibling/);
-    expect(result.operationWarnings[0]?.reason).toMatch(/Daily Planning upload/);
+    expect(result.operationWarnings).toEqual([]);
+    expect(result.operationDeduped).toHaveLength(1);
+    expect(result.operationDeduped[0]?.reason).toMatch(/merged duplicate operation/);
+    expect(result.operationDeduped[0]?.reason).toMatch(/KLIP soft dedupe/);
+    expect(dedupeActiveTruckingOpsForPo).toHaveBeenCalledWith(
+      expect.anything(),
+      '1001029784',
+      expect.objectContaining({ mode: 'soft_dedupe', dedupedReason: 'wb_import_auto' }),
+    );
   });
 
   it('prefers non-COMPLETED op when PO has completed and active siblings', async () => {

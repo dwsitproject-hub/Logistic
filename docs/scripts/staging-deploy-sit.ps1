@@ -76,15 +76,18 @@ if ($Upload) {
   if (-not (Test-Path $Pscp)) {
     throw "pscp not found: $Pscp (install PuTTY)"
   }
-  if (-not $keyPath) {
-    throw "No .ppk key found. Set -Key or place key at $env:USERPROFILE\.ssh\id_rsa.ppk"
-  }
   Write-Host ""
-  Write-Host "==> Upload master vessel SQL via pscp" -ForegroundColor Cyan
-  Write-Host "    key: $keyPath"
-  & $Pscp -batch -i $keyPath $exportFile "${User}@${StagingHost}:/opt/klip/tmp/"
+  Write-Host "==> Upload master vessel SQL via pscp (PuTTY session -load)" -ForegroundColor Cyan
+  $pscpArgs = @("-load", "172.28.92.57", $exportFile, "${User}@${StagingHost}:/opt/klip/tmp/")
+  if ($keyPath) {
+    Write-Host "    key: $keyPath"
+    $pscpArgs = @("-batch", "-i", $keyPath, $exportFile, "${User}@${StagingHost}:/opt/klip/tmp/")
+  } else {
+    Write-Host "    session: 172.28.92.57 (proxy/Pageant/GSSAPI from saved PuTTY config)"
+  }
+  & $Pscp @pscpArgs
   if ($LASTEXITCODE -ne 0) {
-    throw "pscp failed (exit $LASTEXITCODE). Connect VPN, confirm PuTTY key, ensure tmp/ exists on server."
+    throw "pscp failed (exit $LASTEXITCODE). Try WinSCP (import PuTTY session) or run pscp without -batch."
   }
   Write-Host "Upload OK." -ForegroundColor Green
 }
@@ -94,14 +97,15 @@ $checklist = @(
   "========================================"
   "STEP 1 - Upload master vessel SQL to backend (.57)"
   "========================================"
-  "  SIT server uses PuTTY key auth (password scp will fail)."
-  "  Run from D:\Project\Klip:"
-  "  $pscpCmd"
+  "  OpenSSH scp/password will FAIL. Use saved PuTTY session (proxy + Pageant/GSSAPI):"
+  "  & `"C:\Program Files\PuTTY\pscp.exe`" -load `"172.28.92.57`" tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/"
   ""
-  "  Or auto-upload:"
+  "  (Remove -batch if Pageant needs interactive auth. Ensure Pageant is running if you use agent keys.)"
+  ""
+  "  Easiest: WinSCP -> New Session -> Tools -> Import PuTTY session `"172.28.92.57`" -> upload to /opt/klip/tmp/"
+  ""
+  "  Or auto-upload (uses -load session):"
   "  powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1 -SkipExport -Upload"
-  ""
-  "  Alternative: WinSCP -> host $StagingHost, user $User, key .ppk -> /opt/klip/tmp/"
   ""
   "========================================"
   "STEP 2 - PuTTY backend $StagingHost"

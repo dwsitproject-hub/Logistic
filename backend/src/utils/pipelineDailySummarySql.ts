@@ -8,6 +8,7 @@ import {
   sqlPipelineProductKey,
 } from './pipelineDailySummaryToolbarScope';
 import { truckingPageListScopeWhereSql } from './truckingIncotermScope';
+import { truckingListExcludeDedupedWhereSql } from './truckingOperationUniqueness';
 import {
   buildTruckingListFromClause,
   buildTruckingListSelectClause,
@@ -24,6 +25,7 @@ function buildTruckingExecutionSourceSql(): string {
         ${buildTruckingListSelectClause(false)}
       ${buildTruckingListFromClause(false)}
       WHERE 1=1
+        ${truckingListExcludeDedupedWhereSql}
         ${truckingListB2bExcludeSql(false)}
         ${truckingPageListScopeWhereSql}
     `;
