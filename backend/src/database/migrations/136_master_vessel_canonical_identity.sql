@@ -1,6 +1,15 @@
 -- Canonical vessel identity: normalized name + code aliases
 -- Merges duplicate OFFICIAL rows by normalized_vessel_name before unique index.
 
+-- Defensive: this migration filters on code_status, which 135 is responsible for adding.
+-- Databases where 135 was recorded BEFORE those lines were added to that file still lack the
+-- column - the runner tracks migrations by filename, so an edited migration never re-applies.
+-- Observed on SIT and on a fresh ApsaraDB restore (2026-08-12): schema_migrations listed 135 as
+-- applied while master_vessels had no code_status, so this migration aborted with 42703 and the
+-- backend crash-looped on startup. IF NOT EXISTS makes it a no-op where 135 did its job.
+ALTER TABLE master_vessels
+  ADD COLUMN IF NOT EXISTS code_status VARCHAR(20) NOT NULL DEFAULT 'OFFICIAL';
+
 ALTER TABLE master_vessels
   ADD COLUMN IF NOT EXISTS normalized_vessel_name VARCHAR(255);
 
