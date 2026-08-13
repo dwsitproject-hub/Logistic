@@ -42,10 +42,22 @@ describe('shipmentListSortSql', () => {
       expect(orderBy).toBe(
         buildListOrderByWithSapStoPriority(
           'fs.sto_number',
-          `${SHIPMENT_LIST_SORT_COLUMNS.vessel_name} ASC NULLS LAST, fs.created_at DESC`,
+          `${SHIPMENT_LIST_SORT_COLUMNS.vessel_name} ASC NULLS LAST, fs.created_at DESC, fs.id ASC`,
           'UNPLANNED',
         ),
       );
+    });
+
+    it('ends every sort in a unique key so tied rows cannot reshuffle between plans', () => {
+      // created_at is not unique - a bulk SAP load stamps thousands of rows with the same
+      // microsecond - so without a final unique key the query plan, not the data, decides which
+      // of the tied rows lands on page 1. Restoring this database into PostgreSQL 18 returned
+      // the same rows with a different page 1 for exactly this reason.
+      for (const sortKey of Object.keys(SHIPMENT_LIST_SORT_COLUMNS)) {
+        for (const sortDir of ['ASC', 'DESC'] as const) {
+          expect(buildShipmentListPageOrderBy(sortKey, sortDir)).toContain('fs.id ASC');
+        }
+      }
     });
   });
 

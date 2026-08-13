@@ -81,7 +81,24 @@ export function buildShipmentListPageOrderBy(
   const sortExpr = withRowPrefix(field, rowPrefix);
   const createdAtExpr = withRowPrefix('fs.created_at', rowPrefix);
   const stoExpr = withRowPrefix('fs.sto_number', rowPrefix);
-  const primaryOrder = `${sortExpr} ${sortDir} NULLS LAST, ${createdAtExpr} DESC`;
+  /*
+   * `id` is the final, unique tie-break.
+   *
+   * Without it the ordering was `<sort field> NULLS LAST, created_at DESC` - and created_at is
+   * far from unique, because bulk SAP loads stamp thousands of rows with the same microsecond.
+   * Which of the tied rows landed on page 1 was therefore decided by the query plan, not by the
+   * data, so any plan change silently reshuffles the page.
+   *
+   * Measured, not theorised: restoring this database into PostgreSQL 18 returned the same 591
+   * rows with zero field differences, but a DIFFERENT 25 rows on page 1 - purely because the
+   * newer planner ordered the ties differently. Trucking, which already had this tie-break, was
+   * byte-identical across the same test.
+   *
+   * The contract-backlog builders below already end in contract_id / contract_number for the
+   * same reason; this brings the execution rows in line.
+   */
+  const idExpr = withRowPrefix('fs.id', rowPrefix);
+  const primaryOrder = `${sortExpr} ${sortDir} NULLS LAST, ${createdAtExpr} DESC, ${idExpr} ASC`;
   return buildListOrderByWithSapStoPriority(stoExpr, primaryOrder, tableStatusFilter);
 }
 
