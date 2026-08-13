@@ -44,7 +44,11 @@ else
 fi
 
 echo "==> Rebuild and restart backend stack"
-docker compose "${COMPOSE_ARGS[@]}" up -d --build
+if [[ -f "${APP_DIR}/docker-compose.backend.remote-db.yml" ]]; then
+  docker compose "${COMPOSE_ARGS[@]}" up -d --build backend
+else
+  docker compose "${COMPOSE_ARGS[@]}" up -d --build
+fi
 
 echo "==> Container status"
 docker compose "${COMPOSE_ARGS[@]}" ps

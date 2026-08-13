@@ -9,10 +9,13 @@
 #   DB_NAME=klip_db
 #   DB_USER=postgres
 #   DB_PASSWORD=<from secrets, not committed>
+#
+# `depends_on: {}` does NOT clear the base file's postgres dependency (Compose merges maps).
+# `!reset` is required; otherwise: service "backend" depends on undefined service "postgres".
 
 services:
   backend:
-    depends_on: {}
+    depends_on: !reset []
     environment:
       DB_HOST: ${DB_HOST:-pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com}
       DB_PORT: ${DB_PORT:-5432}
