@@ -5,7 +5,7 @@
 #
 # DB access (host → SIT backend 172.28.92.57):
 #   Prefer the SAME DB as the running backend container (printenv DB_*),
-#   e.g. 172.28.92.60:5442 — NOT the leftover local klip-postgres unless
+#   e.g. Aliyun RDS :5432 — NOT the leftover local klip-postgres unless
 #   the backend itself still points at klip-postgres/postgres.
 #
 # Usage (PuTTY → backend 172.28.92.57, from /opt/klip):
@@ -96,17 +96,17 @@ ENV_DB_PORT="${DB_PORT:-}"
 load_keys_from_backend_container
 
 # When backend container reports Docker DNS (postgres/klip-postgres), host psql must use
-# the external DB from .env (SIT: 172.28.92.60:5442), not local klip-postgres.
+# the external DB from .env (SIT: Aliyun RDS :5432), not local klip-postgres.
 if is_docker_dns_db_host "${DB_HOST:-}"; then
   if [[ -n "$ENV_DB_HOST" ]] && ! is_docker_dns_db_host "$ENV_DB_HOST"; then
     DB_HOST="$ENV_DB_HOST"
-    DB_PORT="${ENV_DB_PORT:-5442}"
+    DB_PORT="${ENV_DB_PORT:-5432}"
   else
-    DB_HOST="${DB_HOST:-172.28.92.60}"
-    DB_PORT="${DB_PORT:-5442}"
+    DB_HOST="${DB_HOST:-pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com}"
+    DB_PORT="${DB_PORT:-5432}"
     if is_docker_dns_db_host "$DB_HOST"; then
-      DB_HOST="172.28.92.60"
-      DB_PORT="5442"
+      DB_HOST="pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com"
+      DB_PORT="5432"
     fi
   fi
 fi
@@ -234,7 +234,7 @@ if ! $APPLY; then
   echo ""
   echo "Review counts above (rule_a_active_keeper + rule_b_orphan_no_wb = would_delete)."
   echo "CANCELLED with WB but no keeper are kept (cancelled_kept_has_wb_no_keeper)."
-  echo "Header db: must match backend (e.g. 172.28.92.60:5442), not empty local klip-postgres."
+  echo "Header db: must match backend (Aliyun RDS :5432), not empty local klip-postgres."
   echo "To hard-delete eligible rows:"
   echo "  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply"
   exit 0

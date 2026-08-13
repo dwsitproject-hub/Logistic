@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Spot-check FRC/LCO Delivery/Receive: Open+WB vs Cancelled inflate vs SAP Close.
-# Usage (PuTTY .57 → app DB .60:5442):
+# Usage (PuTTY .57 → SIT Aliyun RDS :5432):
 #   export PGPASSWORD="$(docker exec klip-backend printenv DB_PASSWORD)"
 #   bash docs/scripts/audit-trucking-wb-qty-open-close.sh
 #   # or: PO=1001030830 bash docs/scripts/audit-trucking-wb-qty-open-close.sh
@@ -11,8 +11,8 @@ DB_HOST="${DB_HOST:-$(docker exec klip-backend printenv DB_HOST 2>/dev/null || t
 DB_PORT="${DB_PORT:-$(docker exec klip-backend printenv DB_PORT 2>/dev/null || true)}"
 DB_NAME="${DB_NAME:-$(docker exec klip-backend printenv DB_NAME 2>/dev/null || echo klip_db)}"
 DB_USER="${DB_USER:-$(docker exec klip-backend printenv DB_USER 2>/dev/null || echo postgres)}"
-DB_HOST="${DB_HOST:-172.28.92.60}"
-DB_PORT="${DB_PORT:-5442}"
+DB_HOST="${DB_HOST:-pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com}"
+DB_PORT="${DB_PORT:-5432}"
 
 if [[ -z "${PGPASSWORD:-}" ]]; then
   PGPASSWORD="$(docker exec klip-backend printenv DB_PASSWORD)"

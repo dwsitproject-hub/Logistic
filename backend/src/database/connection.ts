@@ -15,7 +15,7 @@ export function assertProductionDbHost(): void {
 
   const msg =
     `Production DB_HOST=${process.env.DB_HOST} points at co-located Postgres. ` +
-    'SIT must use the dedicated DB server (e.g. 172.28.92.60:5442). ' +
+    'SIT must use the dedicated remote DB (Aliyun RDS). ' +
     'Writes to klip-postgres on the BE host create a fork that requires manual migration.';
 
   logger.error(msg);
@@ -44,8 +44,8 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   // Time allowed to acquire a pool slot AND finish the TCP + auth handshake.
   // 2s was written when Postgres was a container on the same Docker network
-  // (sub-millisecond). On staging the DB is a separate VM (DB_HOST=172.28.92.60,
-  // DB_PORT=5442), where a network hop plus any pool contention exceeds 2s and the
+  // (sub-millisecond). On SIT the DB is Aliyun RDS (remote hostname :5432),
+  // where a network hop plus any pool contention exceeds 2s and the
   // request fails with "Connection terminated due to connection timeout" - observed
   // on staging 2026-07-31. Env-overridable so a slow link can be tuned without a
   // code change; the default is generous rather than tight because the failure mode

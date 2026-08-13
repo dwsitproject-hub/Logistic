@@ -1,18 +1,21 @@
-# Backend-only stack when DB runs on a separate server (172.28.92.60:5442).
+# Backend-only stack when DB is remote (SIT Aliyun RDS).
 # Use this overlay on the BE host so misconfig cannot silently write to co-located klip-postgres.
 #
 #   docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
 #
-# Requires /opt/klip/.env (or backend/.env):
-#   DB_HOST=172.28.92.60
-#   DB_PORT=5442
+# Prefer /opt/klip/.env (Compose interpolates ${DB_HOST} from this file, not backend/.env alone):
+#   DB_HOST=pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com
+#   DB_PORT=5432
+#   DB_NAME=klip_db
+#   DB_USER=postgres
+#   DB_PASSWORD=<from secrets, not committed>
 
 services:
   backend:
     depends_on: {}
     environment:
-      DB_HOST: ${DB_HOST:-172.28.92.60}
-      DB_PORT: ${DB_PORT:-5442}
+      DB_HOST: ${DB_HOST:-pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com}
+      DB_PORT: ${DB_PORT:-5432}
 
   postgres:
     profiles:

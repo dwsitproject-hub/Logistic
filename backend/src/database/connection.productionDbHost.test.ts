@@ -24,7 +24,7 @@ describe('assertProductionDbHost', () => {
 
   it('loads in production when DB_HOST is remote', async () => {
     process.env.NODE_ENV = 'production';
-    process.env.DB_HOST = '172.28.92.60';
+    process.env.DB_HOST = 'pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com';
     process.env.KLIP_FAIL_ON_LOCAL_DB = 'true';
     process.env.DB_PASSWORD = 'test';
 

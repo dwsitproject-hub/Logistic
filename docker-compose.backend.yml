@@ -1,8 +1,8 @@
 # Backend server stack: PostgreSQL + Backend API
 # Run on backend server (e.g. 172.28.92.57): docker compose -f docker-compose.backend.yml up -d
 #
-# **SIT production:** DB is on 172.28.92.60:5442 — use the remote-db overlay so the
-# co-located postgres service is never started:
+# **SIT production:** DB is Aliyun RDS (see docker-compose.backend.remote-db.yml).
+# Use the remote-db overlay so the co-located postgres service is never started:
 #   docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
 # Set KLIP_FAIL_ON_LOCAL_DB=true in backend/.env to refuse start if DB_HOST=klip-postgres.
 #
@@ -57,7 +57,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5001
-      # DB host: default in-stack postgres; SIT uses remote DB via /opt/klip/.env (172.28.92.60:5442)
+      # DB host: default in-stack postgres; SIT overlay sets Aliyun RDS via /opt/klip/.env
       DB_HOST: ${DB_HOST:-klip-postgres}
       DB_PORT: ${DB_PORT:-5432}
       # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env

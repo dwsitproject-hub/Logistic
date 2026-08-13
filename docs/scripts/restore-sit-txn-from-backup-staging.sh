@@ -133,14 +133,14 @@ if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/n
   fi
 fi
 
-DB_HOST="${DB_HOST:-172.28.92.60}"
-DB_PORT="${DB_PORT:-5442}"
+DB_HOST="${DB_HOST:-pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com}"
+DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-klip_db}"
 DB_USER="${DB_USER:-klip_user}"
 
 if is_docker_dns_db_host "$DB_HOST"; then
-  DB_HOST="172.28.92.60"
-  DB_PORT="5442"
+  DB_HOST="pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com"
+  DB_PORT="5432"
 fi
 
 if [[ -z "${DB_PASSWORD:-}" ]]; then

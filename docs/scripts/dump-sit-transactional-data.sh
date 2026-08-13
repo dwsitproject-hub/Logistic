@@ -8,7 +8,7 @@
 #   FORMAT=plain bash docs/scripts/dump-sit-transactional-data.sh   # .sql instead of .dump
 #
 # DB resolution (same rules as run-cleanup-trucking-dedupe-losers-staging.sh):
-#   - Prefer host-reachable DB from /opt/klip/.env or backend/.env (e.g. 172.28.92.60:5442)
+#   - Prefer host-reachable DB from /opt/klip/.env or backend/.env (SIT Aliyun RDS :5432)
 #   - Ignore Docker-only hostnames (postgres, klip-postgres) when running pg_dump on the host
 #   - Fallback: pg_dump via docker exec klip-postgres when local stack holds data
 set -euo pipefail
@@ -68,7 +68,7 @@ is_docker_dns_db_host() {
   esac
 }
 
-# 1) Host-reachable targets from env files (SIT: 172.28.92.60:5442)
+# 1) Host-reachable targets from env files (SIT Aliyun RDS :5432)
 load_keys_from_file "$ENV_FILE" DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD POSTGRES_PORT
 load_keys_from_file "$ROOT_ENV_FILE" DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD POSTGRES_PORT
 
@@ -96,15 +96,15 @@ DB_USER="${DB_USER:-postgres}"
 POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 
 if is_docker_dns_db_host "$HOST_DB_HOST"; then
-  HOST_DB_HOST="${HOST_DB_HOST:-172.28.92.60}"
-  HOST_DB_PORT="${HOST_DB_PORT:-5442}"
+  HOST_DB_HOST="${HOST_DB_HOST:-pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com}"
+  HOST_DB_PORT="${HOST_DB_PORT:-5432}"
   if is_docker_dns_db_host "$HOST_DB_HOST"; then
-    HOST_DB_HOST="172.28.92.60"
-    HOST_DB_PORT="5442"
+    HOST_DB_HOST="pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com"
+    HOST_DB_PORT="5432"
   fi
 fi
 
-HOST_DB_PORT="${HOST_DB_PORT:-5442}"
+HOST_DB_PORT="${HOST_DB_PORT:-5432}"
 
 if [[ -z "${DB_PASSWORD:-}" ]]; then
   echo "ERROR: DB_PASSWORD empty (set in backend/.env or klip-backend env)" >&2
@@ -147,8 +147,8 @@ resolve_dump_target() {
   echo "ERROR: cannot connect to DB for dump." >&2
   echo "  Tried host: $DB_USER@$HOST_DB_HOST:$HOST_DB_PORT/$DB_NAME" >&2
   echo "  Container DB_HOST=$CONTAINER_DB_HOST (Docker DNS names are not reachable from PuTTY host)" >&2
-  echo "  Fix: set DB_HOST=172.28.92.60 DB_PORT=5442 in /opt/klip/.env" >&2
-  echo "  Or: apt-get install -y postgresql-client && nc -vz 172.28.92.60 5442" >&2
+  echo "  Fix: set DB_HOST=<Aliyun RDS> DB_PORT=5432 in /opt/klip/.env" >&2
+  echo "  Or: apt-get install -y postgresql-client && nc -vz pgm-d9jx9o06qae8gf3h.pgsql.ap-southeast-5.rds.aliyuncs.com 5432" >&2
   exit 1
 }
 
