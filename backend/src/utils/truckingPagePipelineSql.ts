@@ -59,10 +59,11 @@ export function sqlTruckingPageUnplannedPredicate(
   truckingAlias = 't',
   outstandingQtyExpr?: string,
   grClosedExpr?: string,
+  sapAlias?: string,
 ): string {
   const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)})`;
   const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)})`;
-  const noStartReceive = `${sqlRealizationStartDate(contractAlias)} IS NULL`;
+  const noStartReceive = `${sqlRealizationStartDate(contractAlias, sapAlias)} IS NULL`;
   return `(
     ${contractOpen}
     AND NOT (${sqlTruckingPageHasEtaOrPlanning(truckingAlias)})
@@ -89,9 +90,14 @@ export function sqlTruckingPagePipelineStageExpr(
   stoExpr?: string,
   outstandingQtyExpr?: string,
   grClosedExpr?: string,
+  /**
+   * Alias of {@link sqlTruckingSapDatesLateral} when the caller joins it. Omit and the SAP receive
+   * date falls back to the correlated subquery, which this expression evaluates twice.
+   */
+  sapAlias?: string,
 ): string {
   const stoCheck = stoExpr ?? `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
-  const realizationStart = sqlRealizationStartDate(contractAlias);
+  const realizationStart = sqlRealizationStartDate(contractAlias, sapAlias);
   const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
   const notCompleted = `NOT (${isCompleted})`;
   const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)})`;
@@ -105,7 +111,7 @@ export function sqlTruckingPagePipelineStageExpr(
       AND ${sqlTruckingPageHasEtaOrPlanning('t')}
       AND ${notCompleted}
       THEN 'PLANNED'
-    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr, grClosedExpr)} THEN 'UNPLANNED'
+    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr, grClosedExpr, sapAlias)} THEN 'UNPLANNED'
     ELSE CASE
       WHEN ${sqlTruckingPageHasEtaOrPlanning('t')} THEN 'PLANNED'
       ELSE 'UNPLANNED'

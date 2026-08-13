@@ -339,6 +339,69 @@ export function sqlSapTruckingLastReceiveDate(contractAlias = 'c'): string {
   );
 }
 
+/**
+ * One-lookup replacement for the per-row SAP receive-date subqueries on the Trucking list.
+ *
+ * Every one of those lookups selects the SAME sap_processed_data row - identical WHERE, identical
+ * ORDER BY, identical LIMIT 1 - and differs only in which JSON key it reads. Written as correlated
+ * subqueries the list evaluates that row selection six times per output row (start and last, each
+ * used twice in the select list, plus twice more inside the pipeline-stage CASE), every time
+ * repeating an index scan, a sort and a JSONB extraction.
+ *
+ * Measured on staging 2026-08-13: the Trucking list query sat at 23-27s under concurrent page
+ * loads with the RDS instance pinned at 100% CPU and 12-14M tuples/sec returned, while the same
+ * subquery in isolation ran in 314ms. The cost was repetition, not the plan - storage and memory
+ * were near-idle throughout.
+ *
+ * Joining this LATERAL once and reading both values off it collapses the six lookups into one.
+ * Verified value-identical against staging before the rewrite landed: 6642 trucking rows, zero
+ * differences on both the start and the last receive value.
+ *
+ * Join AFTER `contracts c`; read with {@link sqlSapTruckingStartReceiveDateFromLateral} and
+ * {@link sqlSapTruckingLastReceiveDateFromLateral}.
+ */
+export function sqlTruckingSapDatesLateral(contractAlias = 'c', alias = 'sapd'): string {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT
+          ${sqlSapTruckingRawValCoalesce(['Trucking Start Receive Date'], 'trucking_start_receive_date')} AS start_val,
+          ${sqlSapTruckingRawValCoalesce(['Trucking Last Receive Date'], 'trucking_last_receive_date')} AS last_val
+        FROM sap_processed_data spd
+        WHERE (
+          spd.contract_number = ${contractAlias}.contract_id
+          OR (
+            NULLIF(TRIM(${contractAlias}.sto_number::text), '') IS NOT NULL
+            AND spd.sto_number = NULLIF(TRIM(${contractAlias}.sto_number::text), '')
+          )
+        )
+        ORDER BY spd.created_at DESC NULLS LAST
+        LIMIT 1
+      ) ${alias} ON TRUE`;
+}
+
+/**
+ * Same value the correlated form yielded: the raw string counts only when present and at least 6
+ * characters long. The original expressed that as a WHERE on the subquery - failing it returned no
+ * row, so the scalar subquery evaluated to NULL - which is what the ELSE branch reproduces.
+ */
+function sqlSapTruckingDateFromLateralVal(valExpr: string): string {
+  return `(CASE
+    WHEN ${valExpr} IS NOT NULL AND length(trim(${valExpr})) >= 6
+    THEN ${sqlParseSapDateValue(valExpr)}
+    ELSE NULL
+  END)`;
+}
+
+/** SAP Trucking Start Receive Date (AV) read off {@link sqlTruckingSapDatesLateral}. */
+export function sqlSapTruckingStartReceiveDateFromLateral(alias = 'sapd'): string {
+  return sqlSapTruckingDateFromLateralVal(`${alias}.start_val`);
+}
+
+/** SAP Trucking Last Receive Date (AW) read off {@link sqlTruckingSapDatesLateral}. */
+export function sqlSapTruckingLastReceiveDateFromLateral(alias = 'sapd'): string {
+  return sqlSapTruckingDateFromLateralVal(`${alias}.last_val`);
+}
+
 /** COALESCE(t.trucking_start_date, SAP Trucking Start Receive Date) */
 export function sqlEffectiveTruckingStartDate(contractAlias = 'c'): string {
   return `COALESCE(

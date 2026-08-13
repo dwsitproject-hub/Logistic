@@ -7,12 +7,19 @@ import {
 } from './truckingRealizationSql';
 import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
+import { sqlTruckingSapDatesLateral } from './truckingSapDates';
 import {
   sqlTruckingListBaseOutstandingQtyExpr,
   sqlTruckingListResolvedDeliveryQtyExpr,
   sqlTruckingListResolvedReceiveQtyExpr,
   sqlTruckingQuantitySentCoalesce,
 } from './truckingQuantitySql';
+
+/**
+ * Alias of the SAP receive-date LATERAL on the hydrate list query. The select clause and the
+ * FROM clause must agree on it, so both read this constant rather than repeating the string.
+ */
+const TRUCKING_LIST_SAP_DATES_ALIAS = 'sapd';
 
 /** Contract numbers on grouped STO / operation (no SAP). */
 export const TRUCKING_LIST_CONTRACT_NUMBER_CASE = `
@@ -203,10 +210,10 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.daily_deliverables,
         t.trucking_start_date AS planning_start_date,
         t.trucking_completion_date AS planning_end_date,
-        ${sqlRealizationStartDate('c')} AS realization_start_date,
-        ${sqlRealizationEndDate('c')} AS realization_end_date,
-        ${sqlRealizationStartDate('c')} AS trucking_start_date,
-        ${sqlRealizationEndDate('c')} AS trucking_completion_date,
+        ${sqlRealizationStartDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS realization_start_date,
+        ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS realization_end_date,
+        ${sqlRealizationStartDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS trucking_start_date,
+        ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS trucking_completion_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
@@ -222,6 +229,9 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`,
+          undefined,
+          undefined,
+          TRUCKING_LIST_SAP_DATES_ALIAS,
         )} AS status,
         t.created_at,
         t.updated_at,
@@ -252,11 +262,15 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
 export function buildTruckingListFromClause(skipSapJoin: boolean): string {
   const stoJoin = skipSapJoin ? '' : TRUCKING_LIST_STO_LATERAL;
   const b2bJoin = skipSapJoin ? '' : TRUCKING_LIST_B2B_LATERAL;
+  // Resolves both SAP receive dates once per row for the select clause below, which otherwise
+  // repeats that identical lookup six times per row as correlated subqueries.
+  const sapDatesJoin = skipSapJoin ? '' : sqlTruckingSapDatesLateral('c', TRUCKING_LIST_SAP_DATES_ALIAS);
   return `
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}
       ${b2bJoin}
-      ${stoJoin}`;
+      ${stoJoin}
+      ${sapDatesJoin}`;
 }

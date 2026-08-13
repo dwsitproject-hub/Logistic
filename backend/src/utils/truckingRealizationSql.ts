@@ -1,6 +1,8 @@
 import {
   sqlSapTruckingLastReceiveDate,
+  sqlSapTruckingLastReceiveDateFromLateral,
   sqlSapTruckingStartReceiveDate,
+  sqlSapTruckingStartReceiveDateFromLateral,
 } from './truckingSapDates';
 
 /** LEFT JOIN for trucking list / detail queries. */
@@ -11,9 +13,13 @@ export const TRUCKING_REALIZATIONS_JOIN = `
  * Start Receive Date for list / pipeline / detail:
  * SAP Trucking Start Receive (AV) first; if null → WB/extension realization; if null → op start (legacy WB).
  */
-export function sqlRealizationStartDate(contractAlias = 'c'): string {
+export function sqlRealizationStartDate(contractAlias = 'c', sapAlias?: string): string {
   return `COALESCE(
-    ${sqlSapTruckingStartReceiveDate(contractAlias)},
+    ${
+      sapAlias
+        ? sqlSapTruckingStartReceiveDateFromLateral(sapAlias)
+        : sqlSapTruckingStartReceiveDate(contractAlias)
+    },
     tr.realization_start_date,
     t.trucking_start_date
   )`;
@@ -22,10 +28,14 @@ export function sqlRealizationStartDate(contractAlias = 'c'): string {
 /**
  * Realization end (ATA): extension row, then SAP AW — never planning columns on trucking_operations.
  */
-export function sqlRealizationEndDate(contractAlias = 'c'): string {
+export function sqlRealizationEndDate(contractAlias = 'c', sapAlias?: string): string {
   return `COALESCE(
     tr.realization_end_date,
-    ${sqlSapTruckingLastReceiveDate(contractAlias)}
+    ${
+      sapAlias
+        ? sqlSapTruckingLastReceiveDateFromLateral(sapAlias)
+        : sqlSapTruckingLastReceiveDate(contractAlias)
+    }
   )`;
 }
 
