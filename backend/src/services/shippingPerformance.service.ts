@@ -1,6 +1,5 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
-import { SHIPMENT_STATUS_RANK } from '../utils/shipmentStatus';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
   sapSpdDischargePortTextExpr,
@@ -22,7 +21,6 @@ import {
 import { SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
 import {
   aggregateImportStatusForStoGroup,
-  isContractDeliveryClosed,
   sqlContractImportStatusForStoExpr,
   sqlIsContractSapClosedForStoExpr,
 } from '../utils/contractDeliveryStatus';
@@ -217,41 +215,8 @@ function mergeTcVesselMetricFields(rows: Record<string, unknown>[]): Record<stri
 }
 
 /**
- * Least-advanced *persisted* DB status among active members (Shipments group_status_floor).
- * CANCELLED is skipped; returns null when no active status or only one distinct active status
- * is not required here — callers check distinct count separately.
- */
-function leastAdvancedPersistedStatus(rows: Record<string, unknown>[]): string | null {
-  let best: string | null = null;
-  let bestRank = Number.POSITIVE_INFINITY;
-  for (const row of rows) {
-    const status = String(row.status ?? '').trim().toUpperCase();
-    if (!status) continue;
-    const rank = SHIPMENT_STATUS_RANK[status];
-    if (rank === undefined || rank < 0) continue;
-    if (rank < bestRank) {
-      bestRank = rank;
-      best = status;
-    }
-  }
-  return best;
-}
-
-function countDistinctActivePersistedStatuses(rows: Record<string, unknown>[]): number {
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const status = String(row.status ?? '').trim().toUpperCase();
-    if (!status) continue;
-    const rank = SHIPMENT_STATUS_RANK[status];
-    if (rank === undefined || rank < 0) continue;
-    seen.add(status);
-  }
-  return seen.size;
-}
-
-/**
- * Merge STO members like Shipments list: MAX milestones → derive once;
- * floor to least-advanced persisted DB status only when members disagree.
+ * Merge STO members like Shipments list: MAX milestones → derive once.
+ * Voyage ATA (not stale sibling DB status) drives the grouped status.
  */
 export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
   const pick = rows.reduce((best, row) =>
@@ -304,23 +269,6 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
   };
 
   const derived = deriveShippingPerfRowStatus(merged);
-  const mixedDb = countDistinctActivePersistedStatuses(rows) > 1;
-  const floor = leastAdvancedPersistedStatus(rows);
-  const sapClosed = isContractDeliveryClosed(String(merged.import_status ?? ''));
-  if (mixedDb && floor && !sapClosed) {
-    const floorRank = SHIPMENT_STATUS_RANK[floor];
-    const derivedRank = SHIPMENT_STATUS_RANK[String(derived).trim().toUpperCase()];
-    if (
-      floorRank !== undefined &&
-      derivedRank !== undefined &&
-      floorRank >= 0 &&
-      floorRank < derivedRank
-    ) {
-      merged.status = floor;
-      Object.assign(merged, computeShippingPerfDeltaFields(merged));
-      return merged;
-    }
-  }
   merged.status = derived;
   Object.assign(merged, computeShippingPerfDeltaFields(merged));
   return merged;

@@ -1,8 +1,7 @@
 import { query } from '../database/connection';
 import { invalidateRegisteredListCaches } from '../utils/listCacheRegistry';
 import { AuthRequest } from '../middleware/auth';
-import logger from '../utils/logger';
-import { deriveShipmentStatus, SHIPMENT_STATUS_RANK } from '../utils/shipmentStatus';
+import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import {
   isPipelineDailySummaryEligible,
   loadShipmentSummaryFromDaily,
@@ -10,7 +9,7 @@ import {
   toPipelineDailySummaryScope,
   type PipelineDailySummaryFilterInput,
 } from './pipelineDailySummary.service';
-import { parseColumnFiltersQuery } from '../utils/shipmentListFilters';
+import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/shipmentListFilters';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
@@ -19,7 +18,12 @@ import {
   shipmentListQtyMoveCteFromPage,
 } from '../utils/shipmentOutstandingQtySql';
 import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
-import { buildShipmentListPageOrderBy } from '../utils/shipmentListSortSql';
+import {
+  buildShipmentListEnrichedPageOrderBy,
+  buildShipmentListEnrichedCteBody,
+  buildShipmentListPageOrderBy,
+  shipmentListSortUsesEnrichedPath,
+} from '../utils/shipmentListSortSql';
 import {
   mergeShipmentVesselFromSapRow,
   queueShipmentVesselSapBackfill,
@@ -31,6 +35,7 @@ import {
   buildShipmentOutstandingQtyExecutionAggregateQuery,
   mergeShipmentOutstandingQtySummaries,
   parseShipmentOutstandingQtySummaryRow,
+  reconcileShipmentOutstandingQtySummary,
   type ShipmentOutstandingQtySummary,
 } from '../utils/shipmentOutstandingQtySummarySql';
 import {
@@ -42,12 +47,13 @@ import {
   buildShipmentStatusCardQtyExecutionAggregateQuery,
   mergeShipmentStatusCardQtyParts,
   parseShipmentStatusContractQtyFromExecutionRow,
-  parseShipmentStatusOutstandingQtyFromSqlRow,
+  parseShipmentStatusOutstandingQtyFromExecutionRow,
   type ShipmentStatusCardQtyBundle,
   type ShipmentStatusContractQtyKg,
   type ShipmentStatusOutstandingQtyKg,
 } from '../utils/shipmentStatusCardQtySql';
 import {
+  overlayShipmentDailySummaryLiveStageCounts,
   parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow,
 } from '../utils/shipmentSection1CombinedSummarySql';
 import {
@@ -60,6 +66,7 @@ import {
   parseShipmentAttentionInsights,
   type ShipmentAttentionInsightsRow,
 } from '../utils/shipmentAttentionInsightsSql';
+import logger from '../utils/logger';
 
 /**
  * Shipments compact list API:
@@ -87,6 +94,10 @@ export interface ShipmentListQueryContext {
   usesStoKeyPaging?: boolean;
   /** Active pipeline stage filter for table ordering (UNPLANNED / PLANNED STO priority). */
   tableStatusFilter?: string;
+  /** Full-scan base CTE for live filtered count when snapshot STO paging is active. */
+  countShipmentBaseCteSql?: string;
+  /** When true, pagination total comes from live filtered_shipments count (not snapshot). */
+  useLiveStatusFilteredCount?: boolean;
   sortKey?: string;
   sortDir?: 'ASC' | 'DESC';
 }
@@ -108,7 +119,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v33';
+const CACHE_VERSION = 'shipment-list-v35';
 const MAX_CACHE_ENTRIES = 80;
 const OUTSTANDING_QTY_CACHE = new Map<
   string,
@@ -207,12 +218,123 @@ export function buildShipmentListCacheKey(input: {
   return `${CACHE_VERSION}:${JSON.stringify(norm)}`;
 }
 
-function resolvePageOrderBy(ctx: ShipmentListQueryContext): string {
-  return buildShipmentListPageOrderBy(
-    ctx.sortKey ?? 'created_at',
-    ctx.sortDir ?? 'DESC',
-    ctx.tableStatusFilter,
+/**
+ * Full SAP/qty enrich-before-sort is correct but O(n) on the filtered set.
+ * Only enable it when the request opts into SAP (`skipSapJoin=false`). Shell
+ * requests keep a fast ORDER BY on KLIP/base columns so ALL-view qty sort
+ * cannot time out at 45s.
+ */
+function shouldUseEnrichedSortPath(ctx: ShipmentListQueryContext): boolean {
+  return (
+    !ctx.skipSapJoin && shipmentListSortUsesEnrichedPath(ctx.sortKey ?? 'created_at')
   );
+}
+
+function resolvePageOrderBy(ctx: ShipmentListQueryContext): string {
+  const sortKey = ctx.sortKey ?? 'created_at';
+  const sortDir = ctx.sortDir ?? 'DESC';
+  if (shouldUseEnrichedSortPath(ctx)) {
+    return buildShipmentListEnrichedPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter);
+  }
+  return buildShipmentListPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter);
+}
+
+function buildShipmentListPageCore(
+  ctx: ShipmentListQueryContext,
+  limit: number,
+  offset: number,
+  options: { inlineCount: boolean },
+): { text: string; params: unknown[] } {
+  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
+  const limitIdx = baseParams.length + 1;
+  const offsetIdx = baseParams.length + 2;
+  const pageOrderBy = resolvePageOrderBy(ctx);
+  const useEnrichedSort = shouldUseEnrichedSortPath(ctx);
+
+  if (useEnrichedSort) {
+    const enrichScope = 'list_enrich_scope';
+    const spdAggCtes = shipmentListSpdAggCtes(false, enrichScope);
+    const enrichedCte = buildShipmentListEnrichedCteBody(
+      shipmentListPageQtySelectSql('fs'),
+    );
+    const countSuffix = options.inlineCount
+      ? `,\n          (SELECT COUNT(*)::bigint FROM filtered_shipments) AS __filter_total`
+      : '';
+    const shipmentPageCte = ctx.usesStoKeyPaging
+      ? `shipment_page AS (
+        SELECT le.*${countSuffix}
+        FROM list_enriched le
+        ORDER BY ${pageOrderBy}
+      )`
+      : `shipment_page AS (
+        SELECT
+          le.*${countSuffix}
+        FROM list_enriched le
+        ORDER BY ${pageOrderBy}
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      )`;
+    const text = `${ctx.shipmentBaseCteSql},
+      filtered_shipments AS (
+        SELECT sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${ctx.outerSql}
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
+      ),
+      ${enrichScope} AS (
+        SELECT * FROM filtered_shipments
+      ),
+      ${shipmentListQtyMoveCteFromPage(enrichScope)},
+      ${spdAggCtes},
+      ${enrichedCte},
+      ${shipmentPageCte}
+      ${LIST_PAGE_SELECT_ENRICHED}`;
+    return {
+      text,
+      params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset],
+    };
+  }
+
+  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
+  const shipmentPageCte = ctx.usesStoKeyPaging
+    ? `shipment_page AS (
+        SELECT
+          fs.*,
+          (SELECT COUNT(*)::bigint FROM ranked_sto) AS __filter_total
+        FROM filtered_shipments fs
+        ORDER BY ${pageOrderBy}
+      )`
+    : options.inlineCount
+      ? `shipment_page AS (
+        SELECT
+          fs.*,
+          (SELECT COUNT(*)::bigint FROM filtered_shipments) AS __filter_total
+        FROM filtered_shipments fs
+        ORDER BY ${pageOrderBy}
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      )`
+      : `shipment_page AS (
+        SELECT fs.*
+        FROM filtered_shipments fs
+        ORDER BY ${pageOrderBy}
+        LIMIT $${limitIdx} OFFSET $${offsetIdx}
+      )`;
+
+  const text = `${ctx.shipmentBaseCteSql},
+      filtered_shipments AS (
+        SELECT sb.*
+        FROM shipment_base sb
+        WHERE 1=1 ${ctx.outerSql}
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
+      ),
+      ${shipmentPageCte},
+      ${shipmentListQtyMoveCteFromPage()},
+      ${spdAggCtes}
+      ${LIST_PAGE_SELECT}`;
+
+  return {
+    text,
+    params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset],
+  };
 }
 
 export function buildShipmentListCountCacheKey(filterCacheKey: string): string {
@@ -224,8 +346,7 @@ export function buildShipmentSummaryCacheKey(filterCacheKey: string, scopeStatus
 }
 
 export function buildShipmentOutstandingQtyCacheKey(filterCacheKey: string): string {
-  // OS strip is always active-scope (Unplanned … before Completed), not per status card.
-  return `${filterCacheKey}:outstanding-qty:active`;
+  return `${filterCacheKey}:outstanding-qty:active:v4`;
 }
 
 export type { ShipmentOutstandingQtySummary };
@@ -236,7 +357,7 @@ export type {
 };
 
 export function buildShipmentStatusCardQtyCacheKey(filterCacheKey: string): string {
-  return `${filterCacheKey}:status-card-qty:v1`;
+  return `${filterCacheKey}:status-card-qty:v2`;
 }
 
 const STATUS_CARD_QTY_CACHE = new Map<
@@ -246,10 +367,13 @@ const STATUS_CARD_QTY_CACHE = new Map<
 const STATUS_CARD_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentStatusCardQtyBundle>>();
 const OUTSTANDING_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentOutstandingQtySummary>>();
 
-/** Backlog qty parts already computed by the Unplanned/Preplanned breakdown queries. */
+/** Backlog qty parts already computed by the Unplanned/Preplanned/Completed breakdown queries. */
 export interface ShipmentStatusCardQtyBacklogParts {
   unplannedBacklogContractQtyKg: number;
   preplannedContractQtyKg: number;
+  completedBacklogContractQtyKg?: number;
+  unplannedBacklogOutstandingQtyKg: number;
+  preplannedOutstandingQtyKg: number;
 }
 
 /**
@@ -263,6 +387,7 @@ export async function mergeShipmentStatusCardQtyFromCombinedSummaryRow(
   backlogParts: ShipmentStatusCardQtyBacklogParts,
 ): Promise<ShipmentStatusCardQtyBundle> {
   const executionPartial = parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow(summaryRow);
+  const outstandingExec = parseShipmentStatusOutstandingQtyFromExecutionRow(summaryRow);
   return mergeShipmentStatusCardQtyParts({
     execution: {
       unplannedExecution: executionPartial.statusContractQty.unplanned,
@@ -272,7 +397,10 @@ export async function mergeShipmentStatusCardQtyFromCombinedSummaryRow(
     },
     unplannedBacklogContractQtyKg: backlogParts.unplannedBacklogContractQtyKg,
     preplannedContractQtyKg: backlogParts.preplannedContractQtyKg,
-    outstanding: executionPartial.statusOutstandingQty,
+    completedBacklogContractQtyKg: backlogParts.completedBacklogContractQtyKg,
+    unplannedBacklogOutstandingQtyKg: backlogParts.unplannedBacklogOutstandingQtyKg,
+    preplannedOutstandingQtyKg: backlogParts.preplannedOutstandingQtyKg,
+    outstanding: outstandingExec,
   });
 }
 
@@ -318,13 +446,16 @@ export async function loadShipmentStatusCardQtyForRequest(
     const execution = parseShipmentStatusContractQtyFromExecutionRow(
       (execRes.rows[0] || {}) as Record<string, unknown>,
     );
-    const outstanding = parseShipmentStatusOutstandingQtyFromSqlRow(
+    const outstanding = parseShipmentStatusOutstandingQtyFromExecutionRow(
       (execRes.rows[0] || {}) as Record<string, unknown>,
     );
     const bundle = mergeShipmentStatusCardQtyParts({
       execution,
       unplannedBacklogContractQtyKg: backlogParts.unplannedBacklogContractQtyKg,
       preplannedContractQtyKg: backlogParts.preplannedContractQtyKg,
+      completedBacklogContractQtyKg: backlogParts.completedBacklogContractQtyKg,
+      unplannedBacklogOutstandingQtyKg: backlogParts.unplannedBacklogOutstandingQtyKg,
+      preplannedOutstandingQtyKg: backlogParts.preplannedOutstandingQtyKg,
       outstanding,
     });
     STATUS_CARD_QTY_CACHE.set(cacheKey, {
@@ -342,7 +473,7 @@ export async function loadShipmentStatusCardQtyForRequest(
 export { summaryRowHasCombinedStatusCardQty };
 
 /**
- * Outstanding Qty strip for Section 1 (FOB/CIF × Interco / 3rd Party).
+ * Outstanding Qty strip for Section 1 (FOB/CIF/CFR × Interco / 3rd Party).
  * Scoped by Global Filters only — static across status cards (active stages only).
  */
 export async function loadShipmentOutstandingQtyForRequest(
@@ -403,12 +534,16 @@ export async function loadShipmentOutstandingQtyForRequest(
       ),
     ]);
     const merged = mergeShipmentOutstandingQtySummaries(execution, backlog);
+    const summary = reconcileShipmentOutstandingQtySummary(
+      { ...merged, bucketsComplete: true },
+      merged.totalKg,
+    );
     OUTSTANDING_QTY_CACHE.set(cacheKey, {
-      summary: merged,
+      summary,
       expiresAt: Date.now() + CACHE_TTL_MS,
     });
     evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
-    return merged;
+    return summary;
   })().finally(() => OUTSTANDING_QTY_IN_FLIGHT.delete(cacheKey));
 
   OUTSTANDING_QTY_IN_FLIGHT.set(cacheKey, run);
@@ -503,6 +638,7 @@ export type ShipmentSummaryUnplannedBreakdown = {
   shipmentRows: number;
   totalTableRows: number;
   contractQtyKg: number;
+  outstandingQtyKg: number;
 };
 
 export type ShipmentSummaryPreplannedBreakdown = {
@@ -510,6 +646,14 @@ export type ShipmentSummaryPreplannedBreakdown = {
   groupCount: number;
   totalTableRows: number;
   contractQtyKg: number;
+  outstandingQtyKg: number;
+};
+
+export type ShipmentSummaryCompletedBreakdown = {
+  contractRows: number;
+  totalTableRows: number;
+  contractQtyKg: number;
+  outstandingQtyKg: number;
 };
 
 export type ShipmentSummaryLoadSource = 'cache' | 'daily' | 'live';
@@ -596,16 +740,20 @@ export async function loadShipmentSummaryBundle(
     cacheKey: string;
     loadUnplannedBreakdown: () => Promise<ShipmentSummaryUnplannedBreakdown>;
     loadPreplannedBreakdown?: () => Promise<ShipmentSummaryPreplannedBreakdown>;
-    /** When daily snapshot is used, overlay live vessel name arrays (master + SAP display). */
-    vesselNamesLiveQuery?: string;
-    /** Unplanned card vessels from hybrid execution rows (matches Unplanned table). */
-    loadUnplannedVesselNames?: () => Promise<string[]>;
+    loadCompletedBreakdown?: () => Promise<ShipmentSummaryCompletedBreakdown>;
+    /**
+     * Lightweight live stage-count SQL (no SPD / vessel joins). When daily is used,
+     * overlays planned/atLP/sailed/… counts so cards match the live table.
+     */
+    liveStageCountsQuery?: string;
+    liveStageCountsParams?: unknown[];
   },
 ): Promise<{
   summaryRow: Record<string, unknown>;
   totalCount: number;
   unplannedBreakdown: ShipmentSummaryUnplannedBreakdown;
   preplannedBreakdown: ShipmentSummaryPreplannedBreakdown;
+  completedBreakdown: ShipmentSummaryCompletedBreakdown;
   source: ShipmentSummaryLoadSource;
 }> {
   const emptyPreplanned: ShipmentSummaryPreplannedBreakdown = {
@@ -613,69 +761,68 @@ export async function loadShipmentSummaryBundle(
     groupCount: 0,
     totalTableRows: 0,
     contractQtyKg: 0,
+    outstandingQtyKg: 0,
+  };
+  const emptyCompleted: ShipmentSummaryCompletedBreakdown = {
+    contractRows: 0,
+    totalTableRows: 0,
+    contractQtyKg: 0,
+    outstandingQtyKg: 0,
   };
   const loadPreplanned = opts.loadPreplannedBreakdown ?? (async () => emptyPreplanned);
+  const loadCompleted = opts.loadCompletedBreakdown ?? (async () => emptyCompleted);
 
-  const finalizeSummaryRow = async (summaryRow: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    let row = summaryRow;
-    if (opts.vesselNamesLiveQuery) {
-      try {
-        const liveVessels = await query(opts.vesselNamesLiveQuery, opts.params);
-        const lv = (liveVessels.rows[0] || {}) as Record<string, unknown>;
-        row = {
-          ...row,
-          ...(opts.loadUnplannedVesselNames
-            ? {}
-            : {
-                unplanned_vessel_names:
-                  lv.unplanned_vessel_names ?? row.unplanned_vessel_names,
-              }),
-          planned_vessel_names: lv.planned_vessel_names ?? row.planned_vessel_names,
-          at_loading_port_vessel_names:
-            lv.at_loading_port_vessel_names ?? row.at_loading_port_vessel_names,
-          sailed_vessel_names: lv.sailed_vessel_names ?? row.sailed_vessel_names,
-          at_discharge_port_vessel_names:
-            lv.at_discharge_port_vessel_names ?? row.at_discharge_port_vessel_names,
-          completed_vessel_names: lv.completed_vessel_names ?? row.completed_vessel_names,
-          cancelled_vessel_names: lv.cancelled_vessel_names ?? row.cancelled_vessel_names,
-        };
-      } catch (err) {
-        logger.warn('Pipeline card live vessel names overlay failed; using daily snapshot', err);
-      }
-    }
-    if (opts.loadUnplannedVesselNames) {
-      try {
-        const unplannedNames = await opts.loadUnplannedVesselNames();
-        row = { ...row, unplanned_vessel_names: unplannedNames };
-      } catch (err) {
-        logger.warn('Unplanned hybrid vessel names overlay failed; using summary vessels', err);
-      }
-    }
-    return row;
-  };
+  /** Unplanned is PO-only — no execution vessels. Normalize without a second DB round-trip. */
+  const normalizeSummaryRow = (summaryRow: Record<string, unknown>): Record<string, unknown> => ({
+    ...summaryRow,
+    unplanned_vessel_names: Array.isArray(summaryRow.unplanned_vessel_names)
+      ? summaryRow.unplanned_vessel_names
+      : [],
+  });
 
   const filters = buildShipmentPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
     const fromDaily = await loadShipmentSummaryFromDaily(toPipelineDailySummaryScope(filters));
     if (fromDaily) {
-      const summaryRow = await finalizeSummaryRow(fromDaily.summaryRow);
+      let summaryRow = normalizeSummaryRow(fromDaily.summaryRow);
+      let totalCount = fromDaily.totalCount;
+      // Overlay live execution stage counts (cheap vs full vessel/SPD overlay) so badges
+      // match the live status-filtered table when the daily rollup is stale.
+      if (opts.liveStageCountsQuery) {
+        try {
+          const liveRes = await query(
+            opts.liveStageCountsQuery,
+            opts.liveStageCountsParams ?? opts.params,
+          );
+          const liveRow = (liveRes.rows[0] || {}) as Record<string, unknown>;
+          summaryRow = overlayShipmentDailySummaryLiveStageCounts(summaryRow, liveRow);
+          totalCount = Number(summaryRow.total_count ?? totalCount) || totalCount;
+        } catch (err) {
+          logger.warn(
+            'Shipment live stage-count overlay failed; using daily snapshot counts',
+            err,
+          );
+        }
+      }
       SUMMARY_CACHE.set(opts.cacheKey, {
         summaryRow,
-        totalCount: fromDaily.totalCount,
+        totalCount,
         expiresAt: Date.now() + CACHE_TTL_MS,
       });
       evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
       // Live hybrid counts for Unplanned + Preplanned cards — daily SUM can be stale or
       // diverge from the hybrid table (e.g. preplanned moves, execution rows).
-      const [unplannedBreakdown, preplannedBreakdown] = await Promise.all([
+      const [unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
         opts.loadUnplannedBreakdown(),
         loadPreplanned(),
+        loadCompleted(),
       ]);
       return {
         summaryRow,
-        totalCount: fromDaily.totalCount,
+        totalCount,
         unplannedBreakdown,
         preplannedBreakdown,
+        completedBreakdown,
         source: 'daily',
       };
     }
@@ -683,32 +830,42 @@ export async function loadShipmentSummaryBundle(
 
   const cached = SUMMARY_CACHE.get(opts.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
-    const [summaryRow, unplannedBreakdown, preplannedBreakdown] = await Promise.all([
-      finalizeSummaryRow(cached.summaryRow),
+    const [unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
       opts.loadUnplannedBreakdown(),
       loadPreplanned(),
+      loadCompleted(),
     ]);
     return {
-      summaryRow,
+      summaryRow: normalizeSummaryRow(cached.summaryRow),
       totalCount: cached.totalCount,
       unplannedBreakdown,
       preplannedBreakdown,
+      completedBreakdown,
       source: 'cache',
     };
   }
   if (cached) SUMMARY_CACHE.delete(opts.cacheKey);
 
-  const [loaded, unplannedBreakdown, preplannedBreakdown] = await Promise.all([
+  const [loaded, unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
     loadShipmentListSummary(opts.summaryCountQuery, opts.params, opts.cacheKey),
     opts.loadUnplannedBreakdown(),
     loadPreplanned(),
+    loadCompleted(),
   ]);
-  const summaryRow = await finalizeSummaryRow(loaded.summaryRow);
+  // Combined summary SQL already includes stage counts + vessel name arrays.
+  const summaryRow = normalizeSummaryRow(loaded.summaryRow);
+  SUMMARY_CACHE.set(opts.cacheKey, {
+    summaryRow,
+    totalCount: loaded.totalCount,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+  evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
   return {
     summaryRow,
     totalCount: loaded.totalCount,
     unplannedBreakdown,
     preplannedBreakdown,
+    completedBreakdown,
     source: 'live',
   };
 }
@@ -750,7 +907,7 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
   for (const row of rows) {
     if (String(row.row_kind ?? '').trim() === 'contract_backlog') {
       const statusUpper = String(row.status ?? '').trim().toUpperCase();
-      if (statusUpper !== 'PREPLANNED') {
+      if (statusUpper !== 'PREPLANNED' && statusUpper !== 'COMPLETED') {
         row.status = 'UNPLANNED';
       }
       continue;
@@ -778,13 +935,26 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       queueShipmentVesselSapBackfill(row);
     }
 
+    const displayedSto = resolveContractLogisticsStoNumber(row.sto_number);
+    row.sto_number = displayedSto === '-' ? null : displayedSto;
+
+    /**
+     * List SQL selects shipmentEffectiveStatusExpr (same ATA ladder as Section 1 cards).
+     * Prefer that over a second JS derive.
+     */
+    const sqlEffective = String(row.effective_status ?? '').trim();
+    if (sqlEffective) {
+      row.status = sqlEffective.toUpperCase();
+      delete (row as { effective_status?: unknown }).effective_status;
+      delete (row as { group_status_floor?: unknown }).group_status_floor;
+      delete (row as { group_active_status_count?: unknown }).group_active_status_count;
+      continue;
+    }
+
     if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
       row.status = 'CANCELLED';
       continue;
     }
-
-    const displayedSto = resolveContractLogisticsStoNumber(row.sto_number);
-    row.sto_number = displayedSto === '-' ? null : displayedSto;
 
     row.status = deriveShipmentStatus({
       eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
@@ -813,21 +983,6 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       quantity_delivered_sap: row.quantity_delivered_sap,
     });
 
-    // Multi-contract STO status floor (decision N-01 option b): milestone dates are
-    // MAX-merged across the group, so the derive above reflects the MOST advanced
-    // member. When members sit in different active stages, cap at the least-advanced
-    // one — an STO is not Completed until every contract under it is done.
-    // Mirrors the SQL floor in shipmentEffectiveStatusExpr (summary/filters).
-    // GR Close (STO-scoped) is authoritative — stale sibling DB statuses must not floor down.
-    const floor = String(row.group_status_floor ?? '').trim().toUpperCase();
-    const mixedStatuses = Number(row.group_active_status_count ?? 0) > 1;
-    if (mixedStatuses && floor && !row.is_contract_sap_closed) {
-      const floorRank = SHIPMENT_STATUS_RANK[floor];
-      const derivedRank = SHIPMENT_STATUS_RANK[String(row.status ?? '').trim().toUpperCase()];
-      if (floorRank !== undefined && derivedRank !== undefined && floorRank >= 0 && floorRank < derivedRank) {
-        row.status = floor;
-      }
-    }
     delete (row as { group_status_floor?: unknown }).group_status_floor;
     delete (row as { group_active_status_count?: unknown }).group_active_status_count;
   }
@@ -860,8 +1015,44 @@ const LIST_PAGE_SELECT = `
         sl.vessel_name_sap,
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
-        mv.vessel_name_master
+        mv.vessel_name_master,
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
       ${SHIPMENT_LIST_STO_JOIN_SQL}
+      ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
+
+/** Final SELECT when rows are pre-enriched in shipment_page (qty sort path). */
+const LIST_PAGE_SELECT_ENRICHED = `
+      SELECT
+        sp.*,
+        COALESCE(
+          NULLIF(TRIM(slpa.sap_loading_ports), ''),
+          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          NULLIF(TRIM(sp.port_of_loading), '')
+        ) AS loading_ports,
+        COALESCE(
+          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
+          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          NULLIF(TRIM(sp.port_of_discharge), '')
+        ) AS discharge_ports,
+        slpa.sap_loading_ports,
+        sdpa.sap_discharge_ports,
+        NULLIF(TRIM(slpa.sap_loading_ports), '') AS sap_vessel_loading_port_1,
+        NULLIF(TRIM(sdpa.sap_discharge_ports), '') AS sap_vessel_discharge_port,
+        COALESCE(sl.incoterm, sp.incoterm) AS incoterm,
+        COALESCE(sp.b2b_flag_resolved, sl.b2b_flag) AS b2b_flag,
+        sl.source_type AS source_type,
+        COALESCE(sp.contract_ext_no_resolved, sp.contract_ext_no) AS contract_ext_no_merged,
+        COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
+        sl.vessel_name_sap,
+        sl.vessel_code_sap,
+        sl.vessel_owner_sap,
+        mv.vessel_name_master,
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+      FROM shipment_page sp
+      LEFT JOIN sap_latest sl ON sl.sto_key::text = sp.sto_key::text
+      LEFT JOIN sap_loading_ports_agg slpa ON slpa.sto_key::text = sp.sto_key::text
+      LEFT JOIN sap_discharge_ports_agg sdpa ON sdpa.sto_key::text = sp.sto_key::text
+      LEFT JOIN po_numbers_agg pna ON pna.sto_key::text = sp.sto_key::text
       ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
 
 /** Single round-trip list query: page rows + __filter_total (C). */
@@ -870,41 +1061,7 @@ export function buildShipmentListPageQuery(
   limit: number,
   offset: number,
 ): { text: string; params: unknown[] } {
-  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
-  const limitIdx = baseParams.length + 1;
-  const offsetIdx = baseParams.length + 2;
-  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
-  const pageOrderBy = resolvePageOrderBy(ctx);
-
-  const shipmentPageCte = ctx.usesStoKeyPaging
-    ? `shipment_page AS (
-        SELECT
-          fs.*,
-          (SELECT COUNT(*)::bigint FROM ranked_sto) AS __filter_total
-        FROM filtered_shipments fs
-        ORDER BY ${pageOrderBy}
-      )`
-    : `shipment_page AS (
-        SELECT
-          fs.*,
-          (SELECT COUNT(*)::bigint FROM filtered_shipments) AS __filter_total
-        FROM filtered_shipments fs
-        ORDER BY ${pageOrderBy}
-        LIMIT $${limitIdx} OFFSET $${offsetIdx}
-      )`;
-
-  const text = `${ctx.shipmentBaseCteSql},
-      filtered_shipments AS (
-        SELECT sb.*
-        FROM shipment_base sb
-        WHERE 1=1 ${ctx.outerSql}
-      ),
-      ${shipmentPageCte},
-      ${shipmentListQtyMoveCteFromPage()},
-      ${spdAggCtes}
-      ${LIST_PAGE_SELECT}`;
-
-  return { text, params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset] };
+  return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: true });
 }
 
 /** Enriched page rows (SAP qty, contract ext no, outstanding) without __filter_total. */
@@ -913,29 +1070,25 @@ export function buildShipmentListEnrichedPageQuery(
   limit: number,
   offset: number,
 ): { text: string; params: unknown[] } {
-  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
-  const limitIdx = baseParams.length + 1;
-  const offsetIdx = baseParams.length + 2;
-  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
-  const pageOrderBy = resolvePageOrderBy(ctx);
+  return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: false });
+}
 
-  const text = `${ctx.shipmentBaseCteSql},
+/** Live COUNT on filtered_shipments with toolbar + status card filters (ignores STO snapshot paging). */
+export function buildShipmentListStatusFilteredCountQuery(
+  ctx: ShipmentListQueryContext,
+): { text: string; params: unknown[] } {
+  const base = ctx.countShipmentBaseCteSql ?? ctx.shipmentBaseCteSql;
+  return {
+    text: `${base},
       filtered_shipments AS (
         SELECT sb.*
         FROM shipment_base sb
         WHERE 1=1 ${ctx.outerSql}
-      ),
-      shipment_page AS (
-        SELECT fs.*
-        FROM filtered_shipments fs
-        ORDER BY ${pageOrderBy}
-        LIMIT $${limitIdx} OFFSET $${offsetIdx}
-      ),
-      ${shipmentListQtyMoveCteFromPage()},
-      ${spdAggCtes}
-      ${LIST_PAGE_SELECT}`;
-
-  return { text, params: [...baseParams, limit, offset] };
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
+      )
+      SELECT COUNT(*)::bigint AS c FROM filtered_shipments`,
+    params: [...ctx.innerParams, ...ctx.outerParams],
+  };
 }
 
 /** When the page query returns zero rows, total still needed for pagination UI. */
@@ -956,6 +1109,7 @@ export function buildShipmentListEmptyCountQuery(
         SELECT sb.*
         FROM shipment_base sb
         WHERE 1=1 ${ctx.outerSql}
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       )
       SELECT COUNT(*)::bigint AS c FROM filtered_shipments`,
     params: [...ctx.innerParams, ...ctx.outerParams],
@@ -990,37 +1144,7 @@ export function buildShipmentListPageQueryWithoutInlineCount(
   limit: number,
   offset: number,
 ): { text: string; params: unknown[] } {
-  const baseParams = [...ctx.innerParams, ...ctx.outerParams];
-  const limitIdx = baseParams.length + 1;
-  const offsetIdx = baseParams.length + 2;
-  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
-  const pageOrderBy = resolvePageOrderBy(ctx);
-
-  const shipmentPageCte = ctx.usesStoKeyPaging
-    ? `shipment_page AS (
-        SELECT fs.*
-        FROM filtered_shipments fs
-        ORDER BY ${pageOrderBy}
-      )`
-    : `shipment_page AS (
-        SELECT fs.*
-        FROM filtered_shipments fs
-        ORDER BY ${pageOrderBy}
-        LIMIT $${limitIdx} OFFSET $${offsetIdx}
-      )`;
-
-  const text = `${ctx.shipmentBaseCteSql},
-      filtered_shipments AS (
-        SELECT sb.*
-        FROM shipment_base sb
-        WHERE 1=1 ${ctx.outerSql}
-      ),
-      ${shipmentPageCte},
-      ${shipmentListQtyMoveCteFromPage()},
-      ${spdAggCtes}
-      ${LIST_PAGE_SELECT}`;
-
-  return { text, params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset] };
+  return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: false });
 }
 
 // The SAP-hydrated variant (skipSapJoin=false) is a background refresh that can run
@@ -1081,14 +1205,23 @@ async function runShipmentListPageQuery(
 
   const offset = (page - 1) * limit;
   const cachedTotal = getCachedFilteredTotal(ctx.filterCacheKey);
+  // Prefer a seeded/cached status-filtered total (e.g. stage-snapshot gate COUNT) so we do not
+  // re-scan filtered_shipments on every card page load.
+  const needsLiveCount =
+    Boolean(ctx.useLiveStatusFilteredCount && ctx.tableStatusFilter) && cachedTotal == null;
   const { text, params } =
-    cachedTotal != null
+    cachedTotal != null && !needsLiveCount
       ? buildShipmentListPageQueryWithoutInlineCount(ctx, limit, offset)
       : buildShipmentListPageQuery(ctx, limit, offset);
   const result = await query(text, params);
 
-  let total = cachedTotal ?? 0;
-  if (cachedTotal == null) {
+  let total = needsLiveCount ? 0 : (cachedTotal ?? 0);
+  if (needsLiveCount) {
+    const { text: countText, params: countParams } = buildShipmentListStatusFilteredCountQuery(ctx);
+    const countRes = await query(countText, countParams);
+    total = parseInt(String(countRes.rows[0]?.c ?? '0'), 10) || 0;
+    cacheFilteredTotal(ctx.filterCacheKey, total);
+  } else if (cachedTotal == null) {
     if (result.rows.length > 0) {
       const raw = (result.rows[0] as { __filter_total?: unknown }).__filter_total;
       total = parseInt(String(raw ?? '0'), 10) || 0;

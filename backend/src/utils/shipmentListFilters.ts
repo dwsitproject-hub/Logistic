@@ -505,15 +505,13 @@ export function shipmentHasDeliveryQtyExpr(alias: string): string {
  * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
  * Mirrors deriveShipmentStatus — granular ATA tiers for Shipments module.
  *
- * Multi-contract STO rule (decision N-01, option b — 2026-07-23): when the group's
- * member shipments sit in DIFFERENT active stages, the group is only as advanced as
- * its LEAST-advanced member — an STO is not "Completed" until every contract under it
- * is done. Milestone dates are MAX-merged across the group, so without this floor the
- * most-advanced member's dates silently promote the whole STO.
+ * One STO is one voyage: milestone dates are MAX-merged across PO/contract members, so
+ * AT Sailed / ATC Discharge on any shipment PO in the group drives the pipeline card.
+ * Persisted sibling `shipments.status` (often stale PLANNED) must not demote the voyage.
  */
 export function shipmentEffectiveStatusExpr(alias: string): string {
   const f = alias
-  const inner = `(
+  return `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
@@ -528,31 +526,27 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
       WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'ARRIVED_LP'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
       WHEN ${shipmentHasDeliveryQtyExpr(f)} THEN 'PLANNED'
-      ELSE 'UNPLANNED'
-    END
-  )`
-  return `(
-    CASE
-      WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS NOT TRUE
-       AND COALESCE(${f}.group_active_status_count, 0) > 1
-       AND ${f}.group_status_floor IS NOT NULL
-       AND ${sqlShipmentStatusRank(`${f}.group_status_floor`)} < ${sqlShipmentStatusRank(inner)}
-      THEN ${f}.group_status_floor
-      ELSE ${inner}
+      /* Open STO/shipment without ATA ladder = Planned (Unplanned card is PO backlog only). */
+      ELSE 'PLANNED'
     END
   )`
 }
 
-/** Aggregates for the multi-contract STO status floor — add to every GROUP BY base
- *  that shipmentEffectiveStatusExpr later reads (shipments list + pipeline snapshot). */
+/** Aggregates for mixed persisted statuses on grouped STO rows (diagnostic / shipping-perf).
+ *  Pipeline cards use MAX ATA via shipmentEffectiveStatusExpr, not this floor. */
 export function sqlShipmentGroupStatusFloorAgg(shipmentAlias = 's'): string {
   const s = shipmentAlias
   const active = `${s}.id IS NOT NULL
       AND NULLIF(TRIM(COALESCE(${s}.status, '')), '') IS NOT NULL
       AND UPPER(TRIM(${s}.status)) NOT IN ('CANCELLED', 'CANCELED')`
-  return `(array_agg(UPPER(TRIM(${s}.status)) ORDER BY ${sqlShipmentStatusRank(`${s}.status`)} ASC)
+  /** Legacy DB UNPLANNED on open STOs maps to PLANNED so multi-contract floor cannot demote. */
+  const normalizedStatus = `CASE
+      WHEN UPPER(TRIM(${s}.status)) = 'UNPLANNED' THEN 'PLANNED'
+      ELSE UPPER(TRIM(${s}.status))
+    END`
+  return `(array_agg(${normalizedStatus} ORDER BY ${sqlShipmentStatusRank(normalizedStatus)} ASC)
       FILTER (WHERE ${active}))[1] AS group_status_floor,
-    COUNT(DISTINCT UPPER(TRIM(${s}.status))) FILTER (WHERE ${active}) AS group_active_status_count`
+    COUNT(DISTINCT ${normalizedStatus}) FILTER (WHERE ${active}) AS group_active_status_count`
 }
 
 /** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */

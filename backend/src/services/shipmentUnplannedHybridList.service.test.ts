@@ -56,12 +56,12 @@ describe('shipmentUnplannedHybridList.service', () => {
   });
 
   describe('buildShipmentUnplannedHybridListContext', () => {
-    it('adds unplanned execution predicate to toolbar outer SQL', () => {
+    it('is PO backlog only (no unplanned execution predicate)', () => {
       const ctx = buildShipmentUnplannedHybridListContext(baseInput);
-      expect(ctx.shipmentCtx.outerSql).toContain('is_contract_sap_closed');
-      expect(ctx.shipmentCtx.outerSql).toContain('eta_arrival');
-      expect(ctx.shipmentCtx.cacheKey).toContain(':unplanned-hybrid');
-      expect(ctx.shipmentCtx.outerSql).not.toBe(baseInput.toolbarOuterSql);
+      expect(ctx.contractBacklogMode).toBe('unplanned');
+      expect(ctx.shipmentCtx.outerSql).toBe(baseInput.toolbarOuterSql);
+      expect(ctx.shipmentCtx.outerSql).not.toContain('eta_arrival');
+      expect(ctx.shipmentCtx.cacheKey).toContain(':unplanned-po-only');
     });
 
     it('defaults server sort to created_at DESC on shipment context', () => {

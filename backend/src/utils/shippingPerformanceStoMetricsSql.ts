@@ -260,8 +260,14 @@ export function buildShippingPerfStoMetricsCte(): string {
   return buildStoPoMetricsCte(SHIPPING_PERF_PERF_STO_KEYS_CTE);
 }
 
-export function buildShipmentListStoMetricsCte(): string {
-  return buildStoPoMetricsCte(SHIPMENT_LIST_PERF_STO_KEYS_CTE);
+export function buildShipmentListStoMetricsCte(pageCte = 'shipment_page'): string {
+  const perfStoKeysCte = `
+      perf_sto_keys AS (
+        SELECT DISTINCT TRIM(sto_key::text) AS sto_key
+        FROM ${pageCte}
+        WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != ''
+      )`;
+  return buildStoPoMetricsCte(perfStoKeysCte);
 }
 
 export { SHIPPING_PERF_STO_GROUP_KEY_EXPR };

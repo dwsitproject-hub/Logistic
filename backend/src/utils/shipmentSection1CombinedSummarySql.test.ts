@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildShipmentSection1CombinedSummaryQuery,
   buildPipelineCardVesselNamesQuery,
+  buildShipmentPipelineLiveStageCountsQuery,
   buildShipmentSummaryEtaEnrichmentSelect,
+  overlayShipmentDailySummaryLiveStageCounts,
   parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow,
 } from './shipmentSection1CombinedSummarySql';
 
@@ -18,6 +20,8 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('sto_metrics sm');
     expect(sql).toContain('sap_agg sa');
     expect(sql).toContain('unplanned_execution_contract_qty');
+    expect(sql).toContain('unplanned_execution_outstanding_qty');
+    expect(sql).toContain('planned_outstanding_qty');
     expect(sql).toContain('at_loading_port_outstanding_qty');
     expect(sql).toContain('planned_count');
     expect(sql).toContain('loading_no_eta');
@@ -26,7 +30,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('vessel_name_sap');
   });
 
-  it('buildPipelineCardVesselNamesQuery uses master + SAP display vessel key', () => {
+  it('buildPipelineCardVesselNamesQuery uses master + SAP display vessel key and live stage counts', () => {
     const sql = buildPipelineCardVesselNamesQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
@@ -36,7 +40,50 @@ describe('shipmentSection1CombinedSummarySql', () => {
     });
     expect(sql).toContain('unplanned_vessel_names');
     expect(sql).toContain('vessel_name_master');
+    expect(sql).toContain('planned_count');
+    expect(sql).toContain('sailed_count');
+    expect(sql).toContain('at_discharge_port_count');
+    expect(sql).toContain('completed_count');
     expect(sql).not.toContain('total_count');
+  });
+
+  it('buildShipmentPipelineLiveStageCountsQuery is counts-only (no SPD / vessel joins)', () => {
+    const sql = buildShipmentPipelineLiveStageCountsQuery({
+      shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+      toolbarOuterSql: " AND sb.plant_site = 'X'",
+    });
+    expect(sql).toContain('at_loading_port_count');
+    expect(sql).toContain('planned_count');
+    expect(sql).toContain('total_count');
+    expect(sql).toContain("sb.plant_site = 'X'");
+    expect(sql).not.toContain('sto_metrics');
+    expect(sql).not.toContain('vessel_name_master');
+    expect(sql).not.toContain('outstanding_quantity');
+  });
+
+  it('overlayShipmentDailySummaryLiveStageCounts patches stage counts and keeps daily vessels', () => {
+    const merged = overlayShipmentDailySummaryLiveStageCounts(
+      {
+        planned_count: 10,
+        at_loading_port_count: 0,
+        sailed_count: 2,
+        at_loading_port_vessel_names: ['OLD'],
+        eta_loading_delay: 5,
+      },
+      {
+        planned_count: 9,
+        at_loading_port_count: 1,
+        sailed_count: 2,
+        total_count: 100,
+        loading_port_arrived_count: 1,
+      },
+    );
+    expect(merged.at_loading_port_count).toBe(1);
+    expect(merged.planned_count).toBe(9);
+    expect(merged.total_count).toBe(100);
+    expect(merged.loading_port_arrived_count).toBe(1);
+    expect(merged.at_loading_port_vessel_names).toEqual(['OLD']);
+    expect(merged.eta_loading_delay).toBe(5);
   });
 
   it('defines a shipment_page CTE so the spliced-in SAP-agg CTEs (shipment_page_contracts, spd_keyed, perf_sto_keys) resolve', () => {
@@ -70,12 +117,16 @@ describe('shipmentSection1CombinedSummarySql', () => {
       planned_contract_qty: 2000,
       completed_contract_qty: '500',
       cancelled_contract_qty: null,
+      unplanned_execution_outstanding_qty: '400',
+      planned_outstanding_qty: '500',
       at_loading_port_outstanding_qty: '300',
       sailed_outstanding_qty: 100,
       at_discharge_port_outstanding_qty: '200',
     });
     expect(parsed.statusContractQty.planned).toBe(2000);
-    expect(parsed.statusContractQty.unplanned).toBe(1000);
+    expect(parsed.statusContractQty.unplanned).toBe(0);
+    expect(parsed.statusOutstandingQty.unplanned).toBe(0);
+    expect(parsed.statusOutstandingQty.planned).toBe(500);
     expect(parsed.statusOutstandingQty.atLoadingPort).toBe(300);
   });
 

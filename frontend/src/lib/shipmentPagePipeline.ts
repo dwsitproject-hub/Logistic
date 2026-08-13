@@ -64,8 +64,8 @@ export type ShipmentPagePipelineSummary = {
   }
   outstandingQty?: {
     totalKg: number
-    thirdParty: { fobKg: number; cifKg: number }
-    interco: { fobKg: number; cifKg: number }
+    thirdParty: { fobKg: number; cifKg: number; cfrKg: number }
+    interco: { fobKg: number; cifKg: number; cfrKg: number }
   }
 }
 
@@ -78,6 +78,9 @@ export type ShipmentPagePipelineContractQtyKg = {
 }
 
 export type ShipmentPagePipelineOutstandingQtyKg = {
+  unplanned: number
+  preplanned: number
+  planned: number
   atLoadingPort: number
   sailed: number
   atDischargePort: number
@@ -89,14 +92,14 @@ export type ShipmentPipelineCardQtyDisplay = {
 }
 
 const SHIPMENT_CONTRACT_QTY_STAGES = new Set<ShipmentPagePipelineStage>([
-  'UNPLANNED',
-  'PREPLANNED',
-  'PLANNED',
   'COMPLETED',
   'CANCELLED',
 ])
 
 const SHIPMENT_OUTSTANDING_QTY_STAGES = new Set<ShipmentPagePipelineStage>([
+  'UNPLANNED',
+  'PREPLANNED',
+  'PLANNED',
   'AT_LOADING_PORT',
   'SAILED',
   'AT_DISCHARGE_PORT',
@@ -109,24 +112,24 @@ export function pipelineCardQtyForStage(
 ): ShipmentPipelineCardQtyDisplay | null {
   if (SHIPMENT_CONTRACT_QTY_STAGES.has(stage)) {
     const kg =
-      stage === 'UNPLANNED'
-        ? Number(contractQty?.unplanned ?? 0)
-        : stage === 'PREPLANNED'
-          ? Number(contractQty?.preplanned ?? 0)
-          : stage === 'PLANNED'
-            ? Number(contractQty?.planned ?? 0)
-            : stage === 'COMPLETED'
-              ? Number(contractQty?.completed ?? 0)
-              : Number(contractQty?.cancelled ?? 0)
+      stage === 'COMPLETED'
+        ? Number(contractQty?.completed ?? 0)
+        : Number(contractQty?.cancelled ?? 0)
     return { label: 'Contract Qty', kg }
   }
   if (SHIPMENT_OUTSTANDING_QTY_STAGES.has(stage)) {
     const kg =
-      stage === 'AT_LOADING_PORT'
-        ? Number(outstandingQty?.atLoadingPort ?? 0)
-        : stage === 'SAILED'
-          ? Number(outstandingQty?.sailed ?? 0)
-          : Number(outstandingQty?.atDischargePort ?? 0)
+      stage === 'UNPLANNED'
+        ? Number(outstandingQty?.unplanned ?? 0)
+        : stage === 'PREPLANNED'
+          ? Number(outstandingQty?.preplanned ?? 0)
+          : stage === 'PLANNED'
+            ? Number(outstandingQty?.planned ?? 0)
+            : stage === 'AT_LOADING_PORT'
+              ? Number(outstandingQty?.atLoadingPort ?? 0)
+              : stage === 'SAILED'
+                ? Number(outstandingQty?.sailed ?? 0)
+                : Number(outstandingQty?.atDischargePort ?? 0)
     return { label: 'Outstanding Qty', kg }
   }
   return null
@@ -150,7 +153,7 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     textColor: 'text-slate-800',
     badgeColor: 'bg-slate-600',
     tooltip:
-      'Rows in the Unplanned view table: open contracts without a shipment record, plus unplanned STO/shipment execution groups (no ETA and no port milestones yet). The badge count matches the table row total.',
+      'Open contracts (PO) without a shipment record yet. The badge count matches the Unplanned table row total (PO backlog only).',
   },
   {
     status: 'PREPLANNED',
@@ -167,7 +170,8 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     color: 'bg-blue-100',
     textColor: 'text-blue-800',
     badgeColor: 'bg-blue-600',
-    tooltip: 'Shipments (STO/Operation ID) with ETA entered and not yet Completed or Cancelled.',
+    tooltip:
+      'Shipments (STO/Operation ID) that are open and not yet at loading/sailed/discharge stages — including rows with or without ETA. Badge matches the Planned table.',
   },
   {
     status: 'AT_LOADING_PORT',
@@ -203,7 +207,8 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     color: 'bg-green-100',
     textColor: 'text-green-800',
     badgeColor: 'bg-green-600',
-    tooltip: 'Shipment complete — cargo received at destination or contract closed in SAP.',
+    tooltip:
+      'Shipment complete (cargo received at destination or SAP Close), or a PO with no shipment whose remaining outstanding qty is 1 MT or less.',
   },
   {
     status: 'CANCELLED',

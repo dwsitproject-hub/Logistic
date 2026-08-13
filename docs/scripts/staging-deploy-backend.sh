@@ -20,6 +20,10 @@ git checkout "${BRANCH}"
 git pull origin "${BRANCH}"
 
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+if [[ -f "${APP_DIR}/docker-compose.backend.remote-db.yml" ]]; then
+  COMPOSE_ARGS+=(-f docker-compose.backend.remote-db.yml)
+  echo "==> Remote DB overlay (172.28.92.60:5442) — will not start co-located klip-postgres"
+fi
 if [[ "${KLIP_UPLOAD_USE_SYNOLOGY:-0}" == "1" ]]; then
   if [[ -f "${APP_DIR}/docker-compose.backend.synology.yml" ]]; then
     COMPOSE_ARGS+=(-f docker-compose.backend.synology.yml)

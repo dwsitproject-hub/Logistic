@@ -12,7 +12,8 @@ export type VesselAliasSource =
   | 'klip_sheet'
   | 'manual'
   | 'db_existing'
-  | 'merge_script';
+  | 'merge_script'
+  | 'excel_cleanup';
 
 export interface ResolveMasterVesselInput {
   vessel_code?: string | null;

@@ -56,10 +56,7 @@ describe('shipmentPagePipelineSql', () => {
     expect(sailed.params).toEqual(['SAILED']);
 
     const unplanned = appendShipmentPipelineStageFilter('UNPLANNED', 3);
-    expect(unplanned.sql).toContain('is_contract_sap_closed');
-    expect(unplanned.sql).toContain("'CIF'");
-    expect(unplanned.sql).toContain("'FOB'");
-    expect(unplanned.sql).toContain("'CFR'");
+    expect(unplanned.sql).toBe(' AND FALSE');
     expect(unplanned.params).toEqual([]);
   });
 

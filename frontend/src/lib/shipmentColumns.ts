@@ -63,7 +63,7 @@ export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 100,
   contract_ext_no: 120,
   po_numbers: 72,
-  pre_planned_group: 80,
+  pre_planned_group: 168,
   sto_quantity: 96,
   quantity_delivered: 96,
   quantity_receive: 96,
@@ -111,14 +111,14 @@ export function shipmentDefaultVisibleColumnIds(allIds: string[]): string[] {
   return SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
 }
 
-/** Grouping Suggestion is only eligible when the pipeline stage filter is Preplanned. */
+/** Grouping Suggestion is eligible on Unplanned (Accept/Dismiss) and Preplanned (Revert). */
 export function isShipmentGroupingSuggestionColumnEligible(
   pipelineStage: ShipmentsPipelineStageFilter,
 ): boolean {
-  return pipelineStage === 'PREPLANNED'
+  return pipelineStage === 'UNPLANNED' || pipelineStage === 'PREPLANNED'
 }
 
-/** Default visible set — omits Grouping Suggestion unless Preplanned is active. */
+/** Default visible set — omits Grouping Suggestion unless Unplanned or Preplanned is active. */
 export function shipmentDefaultVisibleColumnIdsForStage(
   allIds: string[],
   pipelineStage: ShipmentsPipelineStageFilter,

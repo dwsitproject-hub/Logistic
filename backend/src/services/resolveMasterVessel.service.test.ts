@@ -26,5 +26,6 @@ describe('masterVesselCanonicalSql', () => {
     );
     expect(sqlResolveMasterVesselIdFromShipment('s')).toContain('master_vessel_code_aliases');
     expect(sqlVesselCanonicalShipmentMatch('mv', 's')).toContain('normalized_vessel_name');
+    expect(sqlResolveMasterVesselIdFromShipment('s')).toContain('normalize_vessel_name');
   });
 });

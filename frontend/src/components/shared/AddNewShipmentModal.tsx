@@ -54,6 +54,7 @@ import {
   fetchStoLinkedPurchaseOrderOptions,
   fetchStoSapPreview,
   resolvePlotStoLookupKey,
+  resolveShipmentPlanQtyMaxMt,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -206,22 +207,6 @@ const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
 function sliceIsoDate(value: string | null | undefined): string {
   if (!value) return ''
   return String(value).slice(0, 10)
-}
-
-function resolveShipmentPlanQtyMaxMt(
-  contractData: Record<string, unknown> | null | undefined,
-  hasSap: boolean,
-): number {
-  if (!contractData) return 0
-  if (hasSap) {
-    const budgetKg = Number(
-      contractData.outstanding_quantity_planning_budget ??
-        contractData.outstanding_quantity_planning ??
-        0,
-    )
-    if (budgetKg > 0) return budgetKg / 1000
-  }
-  return (Number(contractData.outstanding_quantity) || 0) / 1000
 }
 
 const ETA_DELIVERY_START_BUFFER_DAYS = 60
@@ -985,8 +970,8 @@ export function AddNewShipmentModal({
       if (!isStoQtyOsValidationEnabled(contractId)) continue
       const assignedMt = parseFloat(String(contractQtyAssigned[contractId] ?? '')) || 0
       const contractData = contractValidations[contractId]?.contractData
-      const maxPlanMt = resolveShipmentPlanQtyMaxMt(contractData, hasSapSto)
-      if (maxPlanMt > 0 && assignedMt > maxPlanMt) {
+      const maxPlanMt = resolveShipmentPlanQtyMaxMt(contractData)
+      if (assignedMt > 0 && assignedMt > maxPlanMt + 1e-9) {
         next[contractId] = { assignedMt, outstandingMt: maxPlanMt }
       }
     }
@@ -994,7 +979,6 @@ export function AddNewShipmentModal({
   }, [
     contractQtyAssigned,
     contractValidations,
-    hasSapSto,
     isStoQtyOsValidationEnabled,
     newShipment.contractNumbers,
   ])
@@ -2231,8 +2215,8 @@ export function AddNewShipmentModal({
       const { assignedMt, outstandingMt } = contractQtyAssignedExceedsOutstanding[first]
       showNotification(
         'warning',
-        `Assigned qty exceeds max plan qty for ${first}`,
-        `Assigned ${formatNumber(assignedMt)} MT, but max Shipment Plan Qty is ${formatNumber(outstandingMt)} MT.`,
+        `Assigned qty exceeds OS Qty (Actual) for ${first}`,
+        `Assigned ${formatNumber(assignedMt)} MT, but remaining OS Qty (Actual) is ${formatNumber(outstandingMt)} MT.`,
       )
       return
     }
@@ -2719,7 +2703,7 @@ export function AddNewShipmentModal({
                               Boolean(exceed) || Boolean(formErrors.contractQty && validation?.exists)
                             const contractQtyMt = (Number(data?.quantity_ordered) || 0) / 1000
                             const outstandingQtyMt = (Number(data?.outstanding_quantity) || 0) / 1000
-                            const maxPlanQtyMt = resolveShipmentPlanQtyMaxMt(data, hasSapSto)
+                            const maxPlanQtyMt = resolveShipmentPlanQtyMaxMt(data)
                             return (
                               <TableRow
                                 key={contractId}

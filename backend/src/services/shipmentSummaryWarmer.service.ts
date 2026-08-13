@@ -17,6 +17,9 @@
  * does. That matters: it populates the same cache entries a browser hits, through the identical
  * code path, so there is no second implementation to drift out of sync. Nothing is computed
  * differently - the only difference is that it happens before a user asks.
+ *
+ * After default YTD warm, we also warm a few high-traffic plant×product toolbar scopes so the
+ * common "filter to CPO / Bontang" path is not a full cold miss.
  */
 
 import type { Response } from 'express';
@@ -66,7 +69,7 @@ function createDiscardingResponse(): Response {
   return res as unknown as Response;
 }
 
-function buildSyntheticRequest(extraQuery: Record<string, string>): AuthRequest {
+function buildSyntheticRequest(extraQuery: Record<string, string | string[]>): AuthRequest {
   const { dateFrom, dateTo } = defaultShipmentsDateRange();
   return {
     // Must match the query the browser sends on a default load, or we warm a key nobody reads.
@@ -85,7 +88,7 @@ function buildSyntheticRequest(extraQuery: Record<string, string>): AuthRequest 
   } as unknown as AuthRequest;
 }
 
-async function warmOne(label: string, extraQuery: Record<string, string>): Promise<void> {
+async function warmOne(label: string, extraQuery: Record<string, string | string[]>): Promise<void> {
   try {
     await getShipments(buildSyntheticRequest(extraQuery), createDiscardingResponse());
   } catch (error) {
@@ -94,12 +97,57 @@ async function warmOne(label: string, extraQuery: Record<string, string>): Promi
   }
 }
 
-/** Section 1 status cards (the 16.8s call). */
+function productColumnFilters(products: string[]): string {
+  return JSON.stringify({
+    product: { type: 'multi', values: products, includeBlank: false },
+  });
+}
+
+/** High-traffic toolbar scopes (same shape as browser: plant[] + columnFilters.product). */
+export const SHIPMENT_WARM_TOOLBAR_SCOPES: ReadonlyArray<{
+  label: string;
+  plants?: string[];
+  products?: string[];
+}> = [
+  { label: 'default YTD' },
+  { label: 'CPO', products: ['CPO'] },
+  { label: 'Bontang', plants: ['Bontang'] },
+  { label: 'CPO×Bontang', plants: ['Bontang'], products: ['CPO'] },
+];
+
+function scopeToExtraQuery(scope: {
+  plants?: string[];
+  products?: string[];
+}): Record<string, string | string[]> {
+  const extra: Record<string, string | string[]> = {};
+  if (scope.plants && scope.plants.length > 0) {
+    extra.plant = scope.plants.length === 1 ? scope.plants[0]! : scope.plants;
+  }
+  if (scope.products && scope.products.length > 0) {
+    extra.columnFilters = productColumnFilters(scope.products);
+  }
+  return extra;
+}
+
+/** Section 1 status cards (the 16.8s call) — default YTD only. */
 export function startShipmentSummaryCacheWarmer(): Promise<void> {
   return warmOne('summary', { summaryOnly: 'true' });
 }
 
-/** Outstanding Qty strip (the 8.3s call). */
+/** Outstanding Qty strip (the 8.3s call) — default YTD only. */
 export function startShipmentOutstandingQtyCacheWarmer(): Promise<void> {
   return warmOne('outstanding qty', { outstandingQtyOnly: 'true' });
+}
+
+/**
+ * Warm summaryOnly + outstandingQtyOnly for top plant×product scopes after the default warm.
+ * Runs sequentially so we do not stampede the DB pool at boot.
+ */
+export async function startShipmentScopedToolbarCacheWarmer(): Promise<void> {
+  for (const scope of SHIPMENT_WARM_TOOLBAR_SCOPES) {
+    if (!scope.plants?.length && !scope.products?.length) continue;
+    const extra = scopeToExtraQuery(scope);
+    await warmOne(`summary (${scope.label})`, { ...extra, summaryOnly: 'true' });
+    await warmOne(`outstanding qty (${scope.label})`, { ...extra, outstandingQtyOnly: 'true' });
+  }
 }

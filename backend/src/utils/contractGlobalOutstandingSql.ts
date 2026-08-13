@@ -139,7 +139,7 @@ function shipmentKlipOverlayCte(filter: QtyMoveContractFilter): string {
           FROM contracts c
           ${joinScope}
           INNER JOIN shipments s ON s.contract_id = c.id
-          WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF')
+          WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF', 'CFR')
             AND NOT (${grClosed})
             AND COALESCE(s.status, '') <> 'CANCELLED'
             ${contractFilter}

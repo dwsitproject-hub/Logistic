@@ -58,7 +58,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty, shipmentPlanQtyExceedsOsActual } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -1145,7 +1145,9 @@ export function EditShipmentModal({
           sid = String(first.id)
         }
 
-        const payloadRes = await api.get(`/shipments/${sid}/edit-payload`)
+        const payloadRes = await api.get(`/shipments/${sid}/edit-payload`, {
+          params: preferredStoNumber?.trim() ? { sto: preferredStoNumber.trim() } : undefined,
+        })
         const payload = payloadRes.data?.data as {
           shipment?: Record<string, unknown>
           editContext?: ShipmentEditContextData | null
@@ -1182,10 +1184,9 @@ export function EditShipmentModal({
         setEditContext(editContext)
         setSelectedAddPoOption(null)
 
-        // Show the STO the user actually clicked in the list (preferredStoNumber = the row's
-        // sto_key). The list keys a shipment by its numeric shipment_id when that differs from
-        // the contract's sto_number, but the edit-payload derives sto_number from the contract —
-        // so without this the modal would show a different STO than the clicked row.
+        // Display the list STO (preferredStoNumber = row sto_key). Payload also receives
+        // that STO so SAP delivered/receive/OS are scoped to the Type V sea leg, not the
+        // Type T shipment_id sibling on FOB mixed POs.
         const preferredDisplaySto = resolveShipmentDisplayStoNumber(preferredStoNumber)
         const displaySto =
           preferredDisplaySto !== '-'
@@ -1589,6 +1590,18 @@ export function EditShipmentModal({
     setNotification(null)
     try {
       if (!isLimitedViewSave && !planQtyReadOnly && detailRows.length > 0) {
+        const overOs = detailRows.find((row) => {
+          const planKg = planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
+          return shipmentPlanQtyExceedsOsActual(planKg, row.outstanding_qty_actual)
+        })
+        if (overOs) {
+          setSaving(false)
+          setNotification({
+            type: 'error',
+            message: `Shipment Plan Qty for ${overOs.contract_number} exceeds OS Qty (Actual)`,
+          })
+          return
+        }
         await batchSaveShipmentPoPlanQty({
           shipmentId,
           rows: detailRows.map((row) => ({
@@ -2287,7 +2300,7 @@ export function EditShipmentModal({
 
                 {editContext?.has_sap_sto && !readOnly && (
                   <p className="text-xs italic text-gray-500">
-                    SAP STO shipment — Shipment Plan Qty saves to KLIP planning. PO can still be added when global OS Qty (Plan) &gt; 0.
+                    SAP STO shipment — Shipment Plan Qty saves to KLIP planning. PO can still be added when OS Qty (Actual) &gt; 0.
                   </p>
                 )}
 
@@ -2295,7 +2308,7 @@ export function EditShipmentModal({
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="text-xs font-semibold text-gray-700">Add PO to shipment</label>
-                      <span className="text-[10px] text-gray-500">Global OS Qty (Plan) &gt; 0</span>
+                      <span className="text-[10px] text-gray-500">OS Qty (Actual) &gt; 0</span>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                       <div className="min-w-0 flex-1">
@@ -2355,7 +2368,7 @@ export function EditShipmentModal({
                           </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="KLIP plan on this STO">Shipment Plan Qty</span>
+                          <span title="KLIP plan on this STO — capped by OS Qty (Actual)">Shipment Plan Qty</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           Delivered Qty (Klip)

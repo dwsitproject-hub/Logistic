@@ -92,6 +92,13 @@ describe('shipmentListSapAggSql', () => {
     expect(sapLatest.slice(0, sapLatest.indexOf('ORDER BY'))).not.toContain('contract_reference_po');
   });
 
+  it('reads SAP source_type and incoterm from contract JSON and raw Excel columns', () => {
+    const full = shipmentListSpdAggCtes(false);
+    expect(full).toContain("sk.data->'raw'->>'Source'");
+    expect(full).toContain("sk.data->'raw'->>'Source_Type'");
+    expect(full).toContain("sk.data->'raw'->>'Incoterm'");
+  });
+
   it('exposes spd_id in both the stub and full CTEs so the shapes stay compatible', () => {
     expect(shipmentListSpdAggCtes(true)).toContain('spd_id');
     expect(shipmentListSpdAggCtes(false)).toContain('spd_id');

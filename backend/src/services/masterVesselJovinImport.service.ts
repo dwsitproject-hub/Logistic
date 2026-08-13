@@ -8,6 +8,10 @@ import {
 } from '../utils/masterVesselCodeResolve';
 import { isMissingVesselCode, normalizeVesselName, uppercaseText } from '../utils/vesselNameNormalize';
 import { resolveMasterVessel } from './resolveMasterVessel.service';
+import {
+  runMasterVesselCleanup,
+  type MasterVesselCleanupStats,
+} from './masterVesselCleanup.service';
 
 export interface JovinImportStats {
   totalJovinRows: number;
@@ -22,6 +26,7 @@ export interface JovinImportStats {
   skippedEmptyName: number;
   klipSapMismatchWarnings: Array<{ vesselName: string; klipCode: string; sapCode: string }>;
   needsCodeReview: Array<{ vesselName: string; internalCode: string }>;
+  cleanup: MasterVesselCleanupStats | null;
   dryRun: boolean;
 }
 
@@ -222,8 +227,11 @@ export async function importMasterVesselJovinFromBuffer(
     skippedEmptyName: 0,
     klipSapMismatchWarnings: [],
     needsCodeReview: [],
+    cleanup: null,
     dryRun,
   };
+
+  const goldenNames = new Map<string, string>();
 
   for (const klipNorm of klipMap.keys()) {
     const klipCode = klipMap.get(klipNorm)!;
@@ -285,11 +293,22 @@ export async function importMasterVesselJovinFromBuffer(
       continue;
     }
 
+    const goldenNorm = normalizeVesselName(payload.vessel_name);
+    if (goldenNorm && !goldenNames.has(goldenNorm)) {
+      goldenNames.set(goldenNorm, payload.vessel_name);
+    }
+
     const action = await upsertJovinPayload(payload, workingDbByNorm, dryRun, options.client);
     if (action === 'inserted') stats.inserted += 1;
     else if (action === 'updated' || action === 'alias_added') stats.updated += 1;
     else if (action === 'promoted') stats.promoted += 1;
   }
+
+  stats.cleanup = await runMasterVesselCleanup({
+    dryRun,
+    client: options.client,
+    goldenNames,
+  });
 
   return stats;
 }

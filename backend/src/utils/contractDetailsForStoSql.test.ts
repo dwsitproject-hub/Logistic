@@ -10,6 +10,7 @@ describe('sqlSiblingShipmentKlipQtyExpr', () => {
     expect(delivered).toContain('quantity_delivered_klip');
     expect(delivered).toContain('operation_id');
     expect(delivered).toContain('shipment_id');
+    expect(delivered).toContain('contract_stos');
     expect(delivered).toContain('pl.contract_number');
     const receive = sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'receive');
     expect(receive).toContain('actual_vessel_qty_receive');

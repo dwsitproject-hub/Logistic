@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeHybridListPageSlices } from './hybridListPageSlices';
+import { hybridListUsesGlobalMergeSort } from './shipmentListSortSql';
 
 describe('computeHybridListPageSlices', () => {
   it('returns execution rows first on page 1', () => {
@@ -44,5 +45,16 @@ describe('computeHybridListPageSlices', () => {
       contractLimit: 20,
       contractOffset: 0,
     });
+  });
+});
+
+describe('hybridListUsesGlobalMergeSort', () => {
+  it('keeps execution-first paging for default created_at', () => {
+    expect(hybridListUsesGlobalMergeSort('created_at')).toBe(false);
+  });
+
+  it('uses global merge for contract_date but not heavy qty sorts', () => {
+    expect(hybridListUsesGlobalMergeSort('contract_date')).toBe(true);
+    expect(hybridListUsesGlobalMergeSort('outstanding_quantity')).toBe(false);
   });
 });

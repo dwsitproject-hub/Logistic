@@ -12,6 +12,7 @@ import {
   SHIPMENT_LIST_SAP_PORTS_AGG_STUB,
 } from './shipmentListPortsSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+import { sqlSapIncotermFromJsonb, sqlSapSourceTypeFromJsonb } from './sapSourceTypeSql';
 
 export const SHIPMENT_LIST_STO_METRICS_STUB = `
       sto_metrics AS (
@@ -213,9 +214,9 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
       sap_latest AS (
         SELECT DISTINCT ON (sk.sto_key)
           sk.sto_key,
-          COALESCE(sk.data->'contract'->>'incoterm', sk.data->>'Incoterm') AS incoterm,
+          ${sqlSapIncotermFromJsonb('sk.data')} AS incoterm,
           COALESCE(sk.data->'contract'->>'contract_type', sk.data->>'B2B Flag', sk.data->>'Contract Type') AS b2b_flag,
-          COALESCE(sk.data->'contract'->>'source_type', sk.data->>'Source') AS source_type,
+          ${sqlSapSourceTypeFromJsonb('sk.data')} AS source_type,
           vp.vessel_name_sap,
           vp.vessel_code_sap,
           vp.vessel_owner_sap
@@ -253,9 +254,10 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           sk.spd_id DESC
       )`;
 
-export function shipmentListSpdAggCtes(skipSapJoin: boolean): string {
+export function shipmentListSpdAggCtes(skipSapJoin: boolean, pageCte = 'shipment_page'): string {
   if (skipSapJoin) return SHIPMENT_LIST_SPD_AGG_CTES_STUB;
-  return `${SHIPMENT_LIST_SPD_AGG_CTES_FULL},
-      ${buildShipmentListStoMetricsCte()},
+  const spdFull = SHIPMENT_LIST_SPD_AGG_CTES_FULL.replace(/\bshipment_page\b/g, pageCte);
+  return `${spdFull},
+      ${buildShipmentListStoMetricsCte(pageCte)},
       ${SHIPMENT_LIST_SAP_PORTS_AGG_CTES}`;
 }

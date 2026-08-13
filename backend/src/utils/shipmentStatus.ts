@@ -84,7 +84,7 @@ export type ShipmentMilestones = {
   ata_complete_discharge?: unknown;
   /** SAP import status or contracts.status — Close/Completed without ATA still resolves COMPLETED. */
   contract_import_status?: unknown;
-  /** Delivery qty signals (kg) — any > 0 can promote UNPLANNED → PLANNED when ATA are all null. */
+  /** Delivery qty signals (kg) — any > 0 keeps open STO in PLANNED when ATA are all null. */
   quantity_delivered?: unknown;
   quantity_delivered_klip?: unknown;
   quantity_delivered_sap?: unknown;
@@ -182,7 +182,8 @@ export function normalizeShipmentDetailStatus(raw: string | null | undefined): S
 /**
  * Derive SEA shipment status from milestones (latest ATA stage wins).
  * Maps 1:1 with summary breakdown tiers on the Shipments page.
- * Delivery Qty (SAP/KLIP) with no ATA promotes to PLANNED (same as ETA-only planning).
+ * Open STO without ATA ladder is PLANNED (Unplanned card = PO backlog only).
+ * Delivery Qty / ETA with no ATA also resolve to PLANNED.
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
@@ -197,12 +198,13 @@ export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus 
   if (hasDate(m.ata_arrival_at_loading_port)) return 'ARRIVED_LP';
   if (hasAnyEtaMilestone(m)) return 'PLANNED';
   if (!hasAnyAtaMilestone(m) && hasDeliveryQtySignal(m)) return 'PLANNED';
-  return 'UNPLANNED';
+  return 'PLANNED';
 }
 
 /** Monotonic rank for SAP upsert — higher = further along execution ladder. */
 export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
-  UNPLANNED: 0,
+  /** Same rank as PLANNED — Unplanned card is PO-only; STO UNPLANNED is legacy alias. */
+  UNPLANNED: 1,
   PLANNED: 1,
   IN_PROGRESS: 2,
   ARRIVED_LP: 2,
@@ -224,7 +226,7 @@ export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
 export function sqlShipmentStatusRank(expr = 'status'): string {
   return `
 CASE UPPER(TRIM(COALESCE(${expr}, '')))
-  WHEN 'UNPLANNED' THEN 0
+  WHEN 'UNPLANNED' THEN 1
   WHEN 'PLANNED' THEN 1
   WHEN 'IN_PROGRESS' THEN 2
   WHEN 'ARRIVED_LP' THEN 2
@@ -238,7 +240,7 @@ CASE UPPER(TRIM(COALESCE(${expr}, '')))
   WHEN 'BERTHED_DP' THEN 8
   WHEN 'UNLOADING' THEN 9
   WHEN 'COMPLETED' THEN 10
-  ELSE 0
+  ELSE 1
 END`;
 }
 
@@ -249,7 +251,7 @@ export const SQL_SHIPMENT_STATUS_RANK = sqlShipmentStatusRank('status');
 export const SHIPMENT_PERSISTABLE_AUTO_STATUSES: readonly ShipmentAutoStatus[] =
   SHIPMENT_AUTO_STATUSES.filter((s) => s !== 'CANCELLED');
 
-/** @deprecated Use deriveShipmentStatus — ATA stages only (no ETA → UNPLANNED). */
+/** @deprecated Use deriveShipmentStatus — ATA stages only (no ETA → PLANNED). */
 export function deriveShipmentStatusFromAta(
   m: Pick<
     ShipmentMilestones,
@@ -267,7 +269,7 @@ export function deriveShipmentStatusFromAta(
   return deriveShipmentStatus(m);
 }
 
-/** @deprecated Use deriveShipmentStatus — ETA-only rows resolve to PLANNED / UNPLANNED. */
+/** @deprecated Use deriveShipmentStatus — ETA-only / open STO rows resolve to PLANNED. */
 export function deriveShipmentStatusFromEta(
   m: Pick<
     ShipmentMilestones,

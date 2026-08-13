@@ -58,6 +58,9 @@ else
 fi
 
 COMPOSE=(docker compose -f docker-compose.backend.yml)
+if [[ -f "$ROOT/docker-compose.backend.remote-db.yml" ]]; then
+  COMPOSE+=(-f docker-compose.backend.remote-db.yml)
+fi
 
 echo ""
 echo "==> DB migrations (incl. master vessel 135/136)"

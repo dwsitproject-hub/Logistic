@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
 
 describe('mergeShipmentVesselFromSapRow', () => {
@@ -60,5 +62,14 @@ describe('mergeShipmentVesselFromSapRow', () => {
     };
     expect(mergeShipmentVesselFromSapRow(row)).toBe(false);
     expect(row.vessel_name).toBe('MV ONLY NAME');
+  });
+});
+
+describe('edit payload vessel overlay', () => {
+  it('resolves Master Vessel name onto the Edit Shipment payload', () => {
+    const src = readFileSync(resolve(__dirname, 'shipmentEditPayload.service.ts'), 'utf8');
+    expect(src).toContain('mergeShipmentVesselFromSapRow');
+    expect(src).toContain('vessel_name_master');
+    expect(src).toContain('s.master_vessel_id');
   });
 });

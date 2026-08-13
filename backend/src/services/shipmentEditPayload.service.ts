@@ -33,6 +33,17 @@ import { resolveShipmentEditContext, type ShipmentEditContext } from './shipment
 import { resolveSapLoadingPortNameMapForShipment } from './vesselLoadingPortsFromSap.service';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
+import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
+import { sqlMasterVesselLateralJoin } from '../utils/masterVesselDisplaySql';
+import { sqlSapVesselNameFromSpdJsonb } from '../utils/sapVesselFields';
+
+const SPD_EFFECTIVE_STO = `NULLIF(TRIM(COALESCE(
+      spd.sto_number::text,
+      spd.data->'raw'->>'STO No.',
+      spd.data->'raw'->>'STO Number',
+      spd.data->'shipment'->>'sto_no',
+      spd.data->'contract'->>'sto_no'
+    )), '')`;
 
 const SHIPMENT_BY_ID_SQL = `
   SELECT
@@ -58,22 +69,48 @@ const SHIPMENT_BY_ID_SQL = `
         THEN NULLIF(TRIM(s.shipment_id::text), '')
         ELSE NULL
       END
-    ) AS sto_number
+    ) AS sto_number,
+    sap_sto.vessel_name_sap,
+    sap_sto.vessel_code_sap,
+    sap_sto.vessel_owner_sap,
+    mv.vessel_name_master
   FROM shipments s
   LEFT JOIN contracts c ON s.contract_id = c.id
   LEFT JOIN LATERAL (
-    SELECT NULLIF(TRIM(COALESCE(
-      spd.sto_number::text,
-      spd.data->'raw'->>'STO No.',
-      spd.data->'raw'->>'STO Number',
-      spd.data->'shipment'->>'sto_no',
-      spd.data->'contract'->>'sto_no'
-    )), '') AS effective_sto
+    SELECT
+      ${SPD_EFFECTIVE_STO} AS effective_sto,
+      ${sqlSapVesselNameFromSpdJsonb('spd.data')} AS vessel_name_sap,
+      NULLIF(TRIM(COALESCE(
+        spd.data->'shipment'->>'vessel_code',
+        spd.data->'vessel'->>'vessel_code',
+        spd.data->'raw'->>'Vessel Code',
+        spd.data->'raw'->>'vessel code'
+      )), '') AS vessel_code_sap,
+      NULLIF(TRIM(COALESCE(
+        spd.data->'shipment'->>'vessel_owner',
+        spd.data->'vessel'->>'vessel_owner',
+        spd.data->'raw'->>'Vessel Owner',
+        spd.data->'raw'->>'Vessel Company',
+        spd.data->'raw'->>'vessel owner'
+      )), '') AS vessel_owner_sap
     FROM sap_processed_data spd
     WHERE spd.contract_number = c.contract_id
-    ORDER BY spd.created_at DESC NULLS LAST
+       OR ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
+            c.sto_number::text, s.operation_id, s.shipment_id::text
+          ))
+    ORDER BY
+      CASE WHEN ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
+        c.sto_number::text, s.operation_id, s.shipment_id::text
+      )) THEN 0 ELSE 1 END,
+      spd.created_at DESC NULLS LAST
     LIMIT 1
   ) sap_sto ON TRUE
+  ${sqlMasterVesselLateralJoin(
+    'COALESCE(s.vessel_code, sap_sto.vessel_code_sap)',
+    'COALESCE(s.vessel_name, sap_sto.vessel_name_sap)',
+    'mv',
+    's.master_vessel_id',
+  )}
   WHERE s.id = $1::uuid
   LIMIT 1`;
 
@@ -301,18 +338,21 @@ async function loadContractDetailsForEdit(
  */
 export async function resolveShipmentEditPayload(
   shipmentUuid: string,
+  preferredSto?: string | null,
 ): Promise<ShipmentEditPayload | null> {
-  return ttlMemo(`shipmentEditPayload:${shipmentUuid}`, 0, () =>
-    resolveShipmentEditPayloadUncached(shipmentUuid),
+  const stoKey = String(preferredSto ?? '').trim();
+  return ttlMemo(`shipmentEditPayload:${shipmentUuid}:${stoKey}`, 0, () =>
+    resolveShipmentEditPayloadUncached(shipmentUuid, stoKey || null),
   );
 }
 
 async function resolveShipmentEditPayloadUncached(
   shipmentUuid: string,
+  preferredSto?: string | null,
 ): Promise<ShipmentEditPayload | null> {
   const [shipmentRes, editContext, portsBundle] = await Promise.all([
     query(SHIPMENT_BY_ID_SQL, [shipmentUuid]),
-    resolveShipmentEditContext(shipmentUuid),
+    resolveShipmentEditContext(shipmentUuid, preferredSto),
     loadPortsAndInfo(shipmentUuid),
   ]);
 
@@ -325,8 +365,11 @@ async function resolveShipmentEditPayloadUncached(
     ? await loadContractDetailsForEdit(lookupKey, editContext.contract_numbers ?? '')
     : [];
 
+  const shipment = shipmentRes.rows[0] as Record<string, unknown>;
+  mergeShipmentVesselFromSapRow(shipment);
+
   return {
-    shipment: shipmentRes.rows[0] as Record<string, unknown>,
+    shipment,
     editContext,
     ports: portsBundle.ports,
     shipmentInfo: portsBundle.shipmentInfo,

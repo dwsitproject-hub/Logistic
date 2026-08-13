@@ -5,8 +5,9 @@ import { AuthRequest } from '../middleware/auth';
 import {
   getShipmentAtaOverrideByShipmentId,
   mapOverrideRowToApi,
-  upsertShipmentAtaOverride,
 } from '../services/shipmentAtaOverride.service';
+import { upsertShipmentAtaOverrideForStoGroup } from '../services/shipmentAtaStoFanOut.service';
+import { invalidateShipmentsListCache } from '../services/shipmentList.service';
 import {
   SHIPMENT_ATA_API_FIELDS,
   type ShipmentAtaOverridePayload,
@@ -94,7 +95,8 @@ export const updateShipmentAtaOverride = async (req: AuthRequest, res: Response)
       return res.status(400).json({ success: false, error: { message: 'No ATA fields provided' } });
     }
 
-    const row = await upsertShipmentAtaOverride(query, id, payload, req.user?.id ?? null);
+    const row = await upsertShipmentAtaOverrideForStoGroup(id, payload, req.user?.id ?? null);
+    invalidateShipmentsListCache();
 
     return res.json({
       success: true,

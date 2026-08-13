@@ -75,6 +75,7 @@ import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
@@ -159,7 +160,10 @@ import {
   sumGroupQtyKgForColumn,
   type PrePlannedTableGroup,
 } from '@/lib/prePlannedGroupTableRows'
-import { ShipmentOutstandingQtySummary } from '@/components/shipments/ShipmentOutstandingQtySummary'
+import {
+  ShipmentOutstandingQtySummary,
+  reconcileOutstandingQtyStripForDisplay,
+} from '@/components/shipments/ShipmentOutstandingQtySummary'
 import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
 import { VesselIdleModal, type VesselIdleListRow, type VesselWillFreeListRow } from '@/components/shipments/VesselIdleModal'
 import VesselHistoryModal, {
@@ -935,8 +939,12 @@ function ShipmentsPageContent() {
     }
     outstandingQty?: {
       totalKg: number
-      thirdParty: { fobKg: number; cifKg: number }
-      interco: { fobKg: number; cifKg: number }
+      thirdParty: { fobKg: number; cifKg: number; cfrKg: number }
+      interco: { fobKg: number; cifKg: number; cfrKg: number }
+      /** True when summaryOnly included full FOB/CIF/CFR × source buckets. */
+      bucketsComplete?: boolean
+      /** Residual so 3rd+Interco+Other = total; helper only. */
+      otherKg?: number
     }
     statusContractQty?: Partial<ShipmentPagePipelineContractQtyKg>
     statusOutstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg>
@@ -955,7 +963,7 @@ function ShipmentsPageContent() {
     etaDischarge?: Record<string, number>
   } | null>(null)
   const [summaryFetching, setSummaryFetching] = useState(false)
-  /** Outstanding Qty strip — separate from status-card summaryOnly (slow SQL). */
+  /** Outstanding Qty strip — usually arrives with summaryOnly (bucketsComplete). */
   const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
   const [vesselIdleCount, setVesselIdleCount] = useState(0)
   const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
@@ -995,9 +1003,16 @@ function ShipmentsPageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
   } = useUserScopeFilterDefaults('shipments')
+  /** Debounce Product / Group Plant so multi-select does not fire a cold fetch per click. */
+  const debouncedSelectedProducts = useDebouncedValue(selectedProducts, 400)
+  const debouncedSelectedGroupPlants = useDebouncedValue(selectedGroupPlants, 400)
   const scopeSummaryRequestKey = useMemo(
-    () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
-    [selectedProducts, selectedGroupPlants],
+    () =>
+      JSON.stringify({
+        p: [...debouncedSelectedProducts].sort(),
+        g: [...debouncedSelectedGroupPlants].sort(),
+      }),
+    [debouncedSelectedProducts, debouncedSelectedGroupPlants],
   )
 
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
@@ -1240,9 +1255,9 @@ function ShipmentsPageContent() {
       dateTo,
       searchTerm,
       selectedIncoterms,
-      selectedProducts,
+      selectedProducts: debouncedSelectedProducts,
       selectedSuppliers,
-      selectedGroupPlants,
+      selectedGroupPlants: debouncedSelectedGroupPlants,
       lateIndicatorFilter,
       charterTypeFilter,
       viewOption,
@@ -1250,7 +1265,7 @@ function ShipmentsPageContent() {
       columnFiltersJson: JSON.stringify(
         appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
           selectedIncoterms,
-          selectedProducts,
+          selectedProducts: debouncedSelectedProducts,
           selectedSuppliers,
         }),
       ),
@@ -1263,9 +1278,9 @@ function ShipmentsPageContent() {
       dateTo,
       searchTerm,
       selectedIncoterms,
-      selectedProducts,
+      debouncedSelectedProducts,
       selectedSuppliers,
-      selectedGroupPlants,
+      debouncedSelectedGroupPlants,
       lateIndicatorFilter,
       charterTypeFilter,
       viewOption,
@@ -1578,7 +1593,24 @@ function ShipmentsPageContent() {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
       params.append('compact', 'true')
-      params.append('skipSapJoin', 'true')
+      // Qty/SAP sort on ALL/Unplanned enriches the full filtered set and can exceed 45s.
+      // Use full SAP sort only on smaller execution-stage cards; shell uses KLIP proxies.
+      const qtySortKeys = new Set([
+        'quantity_delivered',
+        'quantity_receive',
+        'outstanding_quantity',
+        'outstanding_qty_planning',
+        'contract_qty',
+        'sto_quantity',
+      ])
+      const stageUpper = String(statusFilter ?? 'ALL').trim().toUpperCase()
+      const smallStageForQtySort =
+        stageUpper !== '' &&
+        stageUpper !== 'ALL' &&
+        stageUpper !== 'UNPLANNED' &&
+        stageUpper !== 'PREPLANNED'
+      const useAccurateQtySort = qtySortKeys.has(sortKey) && smallStageForQtySort
+      params.append('skipSapJoin', useAccurateQtySort ? 'false' : 'true')
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
       const isUnplannedHybridList = statusFilter === 'UNPLANNED'
@@ -1606,7 +1638,7 @@ function ShipmentsPageContent() {
       }
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
-        selectedProducts,
+        selectedProducts: debouncedSelectedProducts,
         selectedSuppliers,
       })
       const cfKeys = Object.keys(mergedColumnFilters)
@@ -1638,8 +1670,8 @@ function ShipmentsPageContent() {
       if (contractParam) {
         params.append('contract', contractParam)
       }
-      if (selectedGroupPlants.length > 0) {
-        selectedGroupPlants.forEach((p) => params.append('plant', p))
+      if (debouncedSelectedGroupPlants.length > 0) {
+        debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
       }
       params.append('sortKey', sortKey)
       params.append('sortDir', sortDir)
@@ -1685,20 +1717,82 @@ function ShipmentsPageContent() {
         if (envelope?.data?.summary) {
           setShipmentsSection1Summary((prev) => {
             const next = { ...envelope.data!.summary! }
-            // summaryOnly no longer includes OS — keep prior OS until outstandingQtyOnly lands.
+            // Card-aligned total may arrive with summary; keep prior bucket breakdown until
+            // outstandingQtyOnly (or summary bucketsComplete) fills 3rd Party / Interco × FOB/CIF/CFR.
             if (next.outstandingQty == null && prev?.outstandingQty != null) {
               next.outstandingQty = prev.outstandingQty
+            } else if (
+              next.outstandingQty != null &&
+              prev?.outstandingQty != null &&
+              next.outstandingQty.bucketsComplete !== true &&
+              (next.outstandingQty.thirdParty?.fobKg ?? 0) === 0 &&
+              (next.outstandingQty.thirdParty?.cifKg ?? 0) === 0 &&
+              (next.outstandingQty.thirdParty?.cfrKg ?? 0) === 0 &&
+              (next.outstandingQty.interco?.fobKg ?? 0) === 0 &&
+              (next.outstandingQty.interco?.cifKg ?? 0) === 0 &&
+              (next.outstandingQty.interco?.cfrKg ?? 0) === 0
+            ) {
+              next.outstandingQty = {
+                ...next.outstandingQty,
+                thirdParty: prev.outstandingQty.thirdParty,
+                interco: prev.outstandingQty.interco,
+              }
+            }
+            // Defense in depth: strip Total = status-card OS sum; Other residual in helper only.
+            const cardOs = next.statusOutstandingQty ?? prev?.statusOutstandingQty
+            if (next.outstandingQty != null && cardOs != null) {
+              const cardTotalKg =
+                Number(cardOs.unplanned ?? 0) +
+                Number(cardOs.preplanned ?? 0) +
+                Number(cardOs.planned ?? 0) +
+                Number(cardOs.atLoadingPort ?? 0) +
+                Number(cardOs.sailed ?? 0) +
+                Number(cardOs.atDischargePort ?? 0)
+              next.outstandingQty = reconcileOutstandingQtyStripForDisplay(
+                next.outstandingQty,
+                cardTotalKg,
+              )
+            } else if (next.outstandingQty != null) {
+              next.outstandingQty = reconcileOutstandingQtyStripForDisplay(next.outstandingQty)
             }
             return next
           })
           setSummaryFetching(false)
           section1SummaryForceNextFetchRef.current = false
+          // Full OS buckets arrive with summaryOnly; stop spinner when complete.
+          if (
+            envelope.data.summary.outstandingQty != null &&
+            envelope.data.summary.outstandingQty.bucketsComplete === true
+          ) {
+            setOutstandingQtyFetching(false)
+          } else if (envelope.data.summary.outstandingQty != null) {
+            // Progressive card-total only — dedicated OS request may still be in flight.
+          }
         }
         if (envelope?.data?.outstandingQty) {
-          setShipmentsSection1Summary((prev) => ({
-            ...(prev ?? {}),
-            outstandingQty: envelope.data!.outstandingQty!,
-          }))
+          setShipmentsSection1Summary((prev) => {
+            const incoming = envelope.data!.outstandingQty!
+            const cardOs = prev?.statusOutstandingQty
+            const cardTotalKg =
+              cardOs != null
+                ? Number(cardOs.unplanned ?? 0) +
+                  Number(cardOs.preplanned ?? 0) +
+                  Number(cardOs.planned ?? 0) +
+                  Number(cardOs.atLoadingPort ?? 0) +
+                  Number(cardOs.sailed ?? 0) +
+                  Number(cardOs.atDischargePort ?? 0)
+                : null
+            return {
+              ...(prev ?? {}),
+              outstandingQty: reconcileOutstandingQtyStripForDisplay(
+                {
+                  ...incoming,
+                  bucketsComplete: incoming.bucketsComplete ?? true,
+                },
+                cardTotalKg,
+              ),
+            }
+          })
           setOutstandingQtyFetching(false)
         }
         const breakdown =
@@ -1753,9 +1847,15 @@ function ShipmentsPageContent() {
         }
       }
 
-      // Section 1 summary in parallel with list shell — do not defer behind idle/list completion
-      // (first-load zeros were caused by requestIdleCallback + listGen races dropping summaryOnly).
-      const summaryPromise = cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+      // Section 1 cards (summaryOnly) — progressive: card counts/OS totals without waiting for strip buckets.
+      // OS FOB/CIF/CFR × 3rd/Interco loads in parallel via outstandingQtyOnly and merges when ready.
+      if (
+        forceOsRefresh ||
+        shipmentsSection1Summary?.outstandingQty?.bucketsComplete !== true
+      ) {
+        setOutstandingQtyFetching(true)
+      }
+      void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
         force: summaryForce,
         onRevalidate: (fresh) => {
           if (listGen !== listFetchGenRef.current) return
@@ -1773,16 +1873,16 @@ function ShipmentsPageContent() {
           }
         })
 
-      // Outstanding Qty — separate request so slow OS SQL does not block status cards.
-      // Always active-scope total (ignore status card); skip network when only status card changed.
-      if (forceOsRefresh || shipmentsSection1Summary?.outstandingQty == null) {
+      const needsOsStripFetch =
+        forceOsRefresh ||
+        shipmentsSection1Summary?.outstandingQty?.bucketsComplete !== true
+      if (needsOsStripFetch) {
         const osParams = new URLSearchParams(summaryParams.toString())
         osParams.delete('summaryOnly')
         osParams.delete('osStatus')
         osParams.set('outstandingQtyOnly', 'true')
         const osUrl = `/shipments?${osParams.toString()}`
         const osCacheKey = buildCacheKey('GET', osUrl)
-        if (!forceOsRefresh) setOutstandingQtyFetching(true)
         void cachedGet(osCacheKey, () => api.get(osUrl).then((r) => r.data), {
           force: forceOsRefresh,
           onRevalidate: (fresh) => {
@@ -1803,7 +1903,7 @@ function ShipmentsPageContent() {
         setOutstandingQtyFetching(false)
       }
 
-      const LIST_SHELL_TIMEOUT_MS = 45_000
+      const LIST_SHELL_TIMEOUT_MS = useAccurateQtySort ? 90_000 : 45_000
 
       const { data: listEnvelope } = await cachedGet(
         listCacheKey,
@@ -1911,9 +2011,6 @@ function ShipmentsPageContent() {
       } else {
         setTimeout(scheduleHydrate, 250)
       }
-
-      // Keep summary promise referenced so tooling/linters know it is intentional fire-and-forget.
-      void summaryPromise
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch shipments:', error)
@@ -3011,6 +3108,9 @@ function ShipmentsPageContent() {
     const q = shipmentsSection1Summary?.statusOutstandingQty
     if (!q) return {}
     return {
+      unplanned: Number(q.unplanned ?? 0),
+      preplanned: Number(q.preplanned ?? 0),
+      planned: Number(q.planned ?? 0),
       atLoadingPort: Number(q.atLoadingPort ?? 0),
       sailed: Number(q.sailed ?? 0),
       atDischargePort: Number(q.atDischargePort ?? 0),
@@ -6310,8 +6410,8 @@ function ShipmentsPageContent() {
                       {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
                         <>
                           {' · '}
-                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} contract and{' '}
-                          {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO without ETA)
+                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')}{' '}
+                          {unplannedTableBreakdown.contractRows === 1 ? 'PO' : 'POs'} without shipment)
                         </>
                       ) : null}
                       {statusFilter === 'PREPLANNED' ? (
@@ -6611,6 +6711,9 @@ function ShipmentsPageContent() {
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No shipments found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
+                              {!searchTerm && totalCount > 0 && page === 1 && (
+                                <p className="text-sm mt-2 text-amber-700">Count may be updating — try refreshing the page.</p>
+                              )}
                             </td>
                           </tr>
                         ) : (() => {

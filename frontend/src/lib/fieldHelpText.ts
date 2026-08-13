@@ -97,7 +97,7 @@ export const FIELD_HELP = {
   shipmentTcShortageMt: `R4 oil loss (MT): (Qty Receive − Qty Delivery) ÷ 1,000. Quantities are summed across all PO lines on this shipment (KLIP qty preferred, else SAP). Negative = loss; positive = gain. Shows — when delivery ≤ 0 or receive is missing.`,
 
   /** Shipments page — ETA Loading / Discharge status cards (grouped by STO). */
-  shipmentEtaLoadingScope: `Counts grouped STOs in loading phase only (Unplanned, Planned, In Progress, Loading). Completed and Cancelled are excluded. One count per STO group.`,
+  shipmentEtaLoadingScope: `Counts grouped STOs in loading phase only (Planned, In Progress, Loading). Completed and Cancelled are excluded. One count per STO group.`,
   shipmentEtaDischargeScope: `Counts grouped STOs in discharge phase only (In Transit, Arrived, Unloading). Completed and Cancelled are excluded. One count per STO group.`,
   shipmentEtaDayDiff: `Day diff = ETA calendar date − today (midnight to midnight). When several ETA milestones exist, bucket priority is: Delay → D → D-2 → >7D (gaps of 3–7 days are not shown on any card).`,
 

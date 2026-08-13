@@ -22,8 +22,8 @@ describe('deriveShipmentStatus', () => {
     ).toBe('COMPLETED');
   });
 
-  it('returns UNPLANNED when no ETA, ATA, delivery qty, or closed contract', () => {
-    expect(deriveShipmentStatus({})).toBe('UNPLANNED');
+  it('returns PLANNED when no ETA, ATA, delivery qty, or closed contract (STO open)', () => {
+    expect(deriveShipmentStatus({})).toBe('PLANNED');
   });
 
   it('returns PLANNED when Delivery Qty present and all ATA are null', () => {

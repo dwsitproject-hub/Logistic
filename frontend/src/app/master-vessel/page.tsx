@@ -26,6 +26,28 @@ interface MasterVessel extends MasterVesselFormData {
   id: string
 }
 
+interface JovinImportCleanupSummary {
+  mergedGroups: number
+  aliasesAdded: number
+  deletedRows: number
+  sapAliasesLinked: number
+  namesUpdated: number
+  shipmentsRelinked: number
+  merged?: Array<{
+    survivorName: string
+    survivorCode: string
+    absorbedCodes: string[]
+  }>
+  reviewQueue?: Array<{
+    nameA: string
+    nameB: string
+    codeA: string
+    codeB: string
+    similarity: number
+    reason: string
+  }>
+}
+
 interface JovinImportSummary {
   totalJovinRows: number
   resolvedFromKlip: number
@@ -36,6 +58,7 @@ interface JovinImportSummary {
   promoted: number
   pendingOfficialCount: number
   dryRun: boolean
+  cleanup?: JovinImportCleanupSummary | null
 }
 
 const VESSELS_PER_PAGE = 20
@@ -219,14 +242,16 @@ export default function MasterVesselPage() {
     const file = e.target.files?.[0]
     if (!file) return
     try {
-      const dryRun = !confirm('Apply import to database?\n\nOK = Apply\nCancel = Dry-run preview only')
+      const apply = confirm(
+        'Apply import to database?\n\nOK = Apply (import + vessel-code cleanup)\nCancel = Dry-run preview only',
+      )
       const formData = new FormData()
       formData.append('file', file)
-      const res = await api.post(`/master-vessels/import-jovin?dryRun=${dryRun ? 'false' : 'true'}`, formData, {
+      const res = await api.post(`/master-vessels/import-jovin?dryRun=${apply ? 'false' : 'true'}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setImportSummary(res.data?.data ?? null)
-      if (!dryRun) {
+      if (apply) {
         void fetchVessels(currentPage)
       }
     } catch (err) {
@@ -361,6 +386,31 @@ export default function MasterVesselPage() {
               <p>Resolved from SAP: {importSummary.resolvedFromSap}</p>
               <p>Pending official code: {importSummary.pendingOfficialCount}</p>
               <p>Inserted: {importSummary.inserted} · Updated: {importSummary.updated} · Promoted: {importSummary.promoted}</p>
+              {importSummary.cleanup ? (
+                <div className="pt-2 space-y-1">
+                  <p className="font-medium">Vessel identity cleanup</p>
+                  <p>
+                    Merged groups: {importSummary.cleanup.mergedGroups} · SAP aliases linked:{' '}
+                    {importSummary.cleanup.sapAliasesLinked} · Shipments relinked:{' '}
+                    {importSummary.cleanup.shipmentsRelinked}
+                  </p>
+                  {importSummary.cleanup.merged && importSummary.cleanup.merged.length > 0 ? (
+                    <ul className="list-disc pl-5 text-xs">
+                      {importSummary.cleanup.merged.slice(0, 8).map((g) => (
+                        <li key={`${g.survivorCode}-${g.survivorName}`}>
+                          {g.survivorName} ({g.survivorCode}) ← {g.absorbedCodes.join(', ')}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {importSummary.cleanup.reviewQueue && importSummary.cleanup.reviewQueue.length > 0 ? (
+                    <p className="text-amber-700">
+                      Review queue (not auto-merged): {importSummary.cleanup.reviewQueue.length} similar-name
+                      pairs
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         )}

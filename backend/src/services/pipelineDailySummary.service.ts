@@ -26,7 +26,7 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 /** v10: import status any-Open wins (blank GR no longer falls back to contracts.status per row). */
 export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 11; // exclude SAP-withdrawn contracts from totals
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
-export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 5; // exclude SAP-withdrawn contracts from totals
+export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 8; // Completed card: PO backlog remaining OS ≤ 1 MT
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;
@@ -598,16 +598,21 @@ export async function loadShipmentSummaryFromDaily(
   const vesselRow = (vesselRes.rows[0] ?? {}) as Record<string, unknown>;
 
   const contractRows = Number(row.unplanned_contract_backlog_count || 0);
-  const shipmentRows = Number(row.unplanned_shipment_execution_count || 0);
   const preplannedRows = Number(row.preplanned_count || 0);
 
   return {
-    summaryRow: { ...row, ...vesselRow },
+    summaryRow: {
+      ...row,
+      ...vesselRow,
+      /** Unplanned vessels are PO-only (none); clear stale UNPLANNED stage facts. */
+      unplanned_vessel_names: [],
+      unplanned_shipment_execution_count: 0,
+    },
     totalCount: Number(row.total_count || 0),
     unplannedBreakdown: {
       contractRows,
-      shipmentRows,
-      totalTableRows: contractRows + shipmentRows,
+      shipmentRows: 0,
+      totalTableRows: contractRows,
     },
     preplannedBreakdown: {
       contractRows: preplannedRows,

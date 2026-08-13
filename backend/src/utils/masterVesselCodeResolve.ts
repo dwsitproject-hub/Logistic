@@ -113,10 +113,10 @@ export const SQL_SAP_VESSEL_CODE_MAP = `
     upper(trim(vcode)) AS vessel_code
   FROM (
     SELECT
-      upper(regexp_replace(regexp_replace(trim(COALESCE(
+      normalize_vessel_name(COALESCE(
         NULLIF(trim(data->'shipment'->>'vessel_name'), ''),
         NULLIF(trim(data->'raw'->>'Vessel Name'), '')
-      )), '^BG\\.\\s*', '', 'i'), '^MT\\.\\s*', '', 'i')) AS norm_name,
+      )) AS norm_name,
       COALESCE(
         NULLIF(trim(data->'shipment'->>'vessel_code'), ''),
         NULLIF(trim(data->'raw'->>'Vessel Code'), '')
@@ -162,7 +162,8 @@ export async function promoteProvisionalVesselByName(
   const find = await run(
     `SELECT id, vessel_code, code_status
      FROM master_vessels
-     WHERE upper(regexp_replace(regexp_replace(trim(vessel_name), '^BG\\.\\s*', '', 'i'), '^MT\\.\\s*', '', 'i')) = $1
+     WHERE normalize_vessel_name(vessel_name) = $1
+        OR normalized_vessel_name = $1
      ORDER BY CASE WHEN code_status = 'PROVISIONAL' THEN 0 ELSE 1 END, updated_at DESC
      LIMIT 1`,
     [norm],

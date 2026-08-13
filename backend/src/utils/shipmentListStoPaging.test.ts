@@ -192,7 +192,7 @@ describe('shipmentListStoPaging', () => {
       colFilters: {},
     };
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'PLANNED' })).toBe(true);
-    expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'COMPLETED' })).toBe(true);
+    expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'COMPLETED' })).toBe(false);
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'ALL' })).toBe(false);
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'UNPLANNED' })).toBe(false);
     // Non-toolbar filters force the live path.

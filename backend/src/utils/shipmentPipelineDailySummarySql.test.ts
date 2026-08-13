@@ -6,5 +6,6 @@ describe('buildShipmentStageSnapshotInsertSql', () => {
     const sql = buildShipmentStageSnapshotInsertSql();
     expect(sql).toContain('quantity_delivered');
     expect(sql).toContain('quantity_delivered_klip');
+    expect(sql).toContain('master_vessel_id');
   });
 });

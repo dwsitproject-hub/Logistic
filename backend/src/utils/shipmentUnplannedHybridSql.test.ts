@@ -37,16 +37,27 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('latest_spd_contract');
     expect(text).toContain('COUNT(*)::bigint AS c');
     expect(text).toContain('AS contract_qty_kg');
+    expect(text).toContain('AS outstanding_qty_kg');
+    expect(text).toContain('LEFT JOIN qty_move qm');
+    expect(text).toContain('> 1000');
   });
 
   it('builds contract backlog page query with contract ext no and outstanding qty', () => {
     const text = buildUnplannedContractBacklogPageQuery('AND c.contract_date >= $1', '', 20, 0);
     expect(text).toContain('qty_move');
     expect(text).toContain('contract_ext_no_raw');
+    expect(text).toContain('source_type_raw');
     expect(text).toContain('Contract Ext No');
     expect(text).toContain('AS outstanding_quantity');
     expect(text).toContain('c.quantity_ordered AS contract_qty');
     expect(text).not.toContain('NULL::text AS contract_ext_no');
+    expect(text).toContain('AS quantity_receive');
+    expect(text).toContain('AS quantity_delivered_sap');
+    expect(text).toContain('qm.quantity_receive');
+    expect(text).toContain('qm.quantity_delivery');
+    expect(text).not.toContain('0::numeric AS quantity_delivered');
+    expect(text).not.toContain('NULL::numeric AS quantity_receive');
+    expect(text).not.toContain('NULL::numeric AS quantity_delivered_sap');
   });
 
   it('applies server sort on contract backlog page query', () => {
@@ -116,6 +127,8 @@ describe('buildAllHybridContractBacklogQuery', () => {
     expect(text).toContain('unplanned_contract_backlog');
     expect(text).toContain('preplanned_contract_backlog');
     expect(text).toContain('all_contract_backlog');
+    expect(text).toContain('AS outstanding_qty_kg');
+    expect(text).not.toContain('qty_move');
   });
 
   it('pages flat contract rows with both UNPLANNED and PREPLANNED statuses', async () => {
@@ -123,9 +136,23 @@ describe('buildAllHybridContractBacklogQuery', () => {
     const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0);
     expect(text).toContain('UNPLANNED');
     expect(text).toContain('PREPLANNED');
+    expect(text).toContain('COMPLETED');
+    expect(text).toContain('<= 1000');
     expect(text).toContain('pre_planned_group_id');
-    expect(text).toContain('ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC');
+    expect(text).toContain('paged_contracts');
+    expect(text).toContain('ORDER BY contract_date DESC NULLS LAST, contract_number ASC');
     expect(text).toContain('LIMIT 20 OFFSET 0');
+    expect(text).toContain('qm.quantity_receive');
+    expect(text).toContain('qm.quantity_delivery');
+    expect(text).not.toContain('0::numeric AS quantity_delivered');
+    expect(text).not.toContain('NULL::numeric AS quantity_receive');
+  });
+
+  it('scopes qty_move to paged contracts for contract_date sort', async () => {
+    const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'contract_date', 'ASC');
+    expect(text).toContain('paged_contracts');
+    expect(text).toContain("SELECT contract_id FROM paged_contracts");
   });
 
   it('buildUnplannedExecutionVesselNamesQuery scopes to hybrid execution rows only', () => {
@@ -148,5 +175,26 @@ describe('buildPreplannedContractsPageQuery', () => {
     expect(text).toContain('pre_planned_group_id');
     expect(text).toContain('GROUP BY pre_planned_group_id');
     expect(text).not.toMatch(/preplanned_contracts[\s\S]*LIMIT 20 OFFSET 0[\s\S]*SELECT \* FROM preplanned_contracts/);
+  });
+});
+
+describe('completed contract backlog OS gate', () => {
+  it('keeps Unplanned page rows with remaining OS above 1 MT', async () => {
+    const { buildUnplannedContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildUnplannedContractBacklogPageQuery('', '', 20, 0);
+    expect(text).toContain('> 1000');
+  });
+
+  it('selects Completed backlog as COMPLETED when remaining OS is 1 MT or less', async () => {
+    const {
+      buildCompletedContractBacklogCountQuery,
+      buildCompletedContractBacklogPageQuery,
+    } = await import('./shipmentUnplannedHybridSql');
+    const countSql = buildCompletedContractBacklogCountQuery('', '');
+    expect(countSql).toContain('completed_contract_backlog');
+    expect(countSql).toContain('<= 1000');
+    const pageSql = buildCompletedContractBacklogPageQuery('', '', 20, 0);
+    expect(pageSql).toContain("'COMPLETED'::text");
+    expect(pageSql).toContain('<= 1000');
   });
 });

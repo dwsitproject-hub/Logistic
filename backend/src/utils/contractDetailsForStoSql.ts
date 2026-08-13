@@ -124,6 +124,12 @@ export function sqlSiblingShipmentKlipQtyExpr(
             AND (
               TRIM(COALESCE(s.operation_id::text, '')) = TRIM($1::text)
               OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($1::text)
+              OR EXISTS (
+                SELECT 1
+                FROM contract_stos cs
+                WHERE cs.contract_id = c.id
+                  AND TRIM(cs.sto_number::text) = TRIM($1::text)
+              )
             )
           ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
           LIMIT 1

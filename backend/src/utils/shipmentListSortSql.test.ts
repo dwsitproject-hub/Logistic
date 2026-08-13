@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   buildShipmentContractBacklogOrderBy,
   buildShipmentContractBacklogOuterOrderBy,
+  buildShipmentListEnrichedCteBody,
+  buildShipmentListEnrichedPageOrderBy,
   buildShipmentListPageOrderBy,
   parseShipmentListSort,
+  sortShipmentListRows,
+  SHIPMENT_LIST_ENRICHED_SORT_KEYS,
   SHIPMENT_LIST_SORT_COLUMNS,
+  shipmentListSortUsesEnrichedPath,
 } from './shipmentListSortSql';
 import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
 
@@ -24,8 +29,38 @@ describe('shipmentListSortSql', () => {
       });
     });
 
+    it('accepts enriched-only qty sort keys', () => {
+      expect(parseShipmentListSort('outstanding_quantity', 'asc').sortKey).toBe(
+        'outstanding_quantity',
+      );
+      expect(parseShipmentListSort('quantity_receive', 'desc').sortKey).toBe('quantity_receive');
+    });
+
+    it('accepts frontend delivery date aliases', () => {
+      expect(parseShipmentListSort('delivery_start', 'asc').sortKey).toBe('delivery_start');
+      expect(parseShipmentListSort('delivery_end', 'asc').sortKey).toBe('delivery_end');
+    });
+
     it('falls back for unknown sort keys', () => {
       expect(parseShipmentListSort('not_a_column', 'desc').sortKey).toBe('created_at');
+      expect(parseShipmentListSort('pre_planned_group', 'desc').sortKey).toBe('created_at');
+    });
+  });
+
+  describe('shipmentListSortUsesEnrichedPath', () => {
+    it('flags SAP/qty columns that need enriched sort', () => {
+      expect(shipmentListSortUsesEnrichedPath('outstanding_quantity')).toBe(true);
+      expect(shipmentListSortUsesEnrichedPath('quantity_delivered')).toBe(true);
+      expect(shipmentListSortUsesEnrichedPath('quantity_receive')).toBe(true);
+      expect(shipmentListSortUsesEnrichedPath('contract_qty')).toBe(true);
+      expect(shipmentListSortUsesEnrichedPath('loading_port')).toBe(true);
+      expect(shipmentListSortUsesEnrichedPath('vessel_name')).toBe(false);
+    });
+
+    it('ENRICHED_SORT_KEYS match usesEnrichedPath', () => {
+      for (const key of SHIPMENT_LIST_ENRICHED_SORT_KEYS) {
+        expect(shipmentListSortUsesEnrichedPath(key)).toBe(true);
+      }
     });
   });
 
@@ -59,6 +94,50 @@ describe('shipmentListSortSql', () => {
         }
       }
     });
+
+    it('skips STO priority when sorting by contract_date', () => {
+      const orderBy = buildShipmentListPageOrderBy('contract_date', 'ASC', 'UNPLANNED');
+      expect(orderBy).toBe('fs.contract_date ASC NULLS LAST, fs.created_at DESC, fs.id ASC');
+      expect(orderBy).not.toContain('CASE');
+    });
+  });
+
+  describe('buildShipmentListEnrichedPageOrderBy', () => {
+    it('sorts outstanding qty on enriched column', () => {
+      const orderBy = buildShipmentListEnrichedPageOrderBy('outstanding_quantity', 'DESC');
+      expect(orderBy).toContain('le.outstanding_quantity DESC');
+    });
+
+    it('sorts delivery qty on KLIP/SAP resolved column', () => {
+      const orderBy = buildShipmentListEnrichedPageOrderBy('quantity_delivered', 'ASC');
+      expect(orderBy).toContain('le.resolved_quantity_delivered ASC');
+    });
+
+    it('sorts receive qty on resolved receive column', () => {
+      const orderBy = buildShipmentListEnrichedPageOrderBy('quantity_receive', 'ASC');
+      expect(orderBy).toContain('le.resolved_quantity_receive ASC');
+    });
+  });
+
+  describe('shell qty sort columns', () => {
+    it('orders delivery/receive by KLIP proxies without enriched path', () => {
+      const delivery = buildShipmentListPageOrderBy('quantity_delivered', 'DESC');
+      expect(delivery).toContain('quantity_delivered_klip');
+      expect(delivery).not.toContain('list_enriched');
+      const receive = buildShipmentListPageOrderBy('quantity_receive', 'ASC');
+      expect(receive).toContain('actual_vessel_qty_receive');
+    });
+  });
+
+  describe('buildShipmentListEnrichedCteBody', () => {
+    it('includes resolved qty + port sort helpers', () => {
+      const sql = buildShipmentListEnrichedCteBody('1::numeric AS contract_qty');
+      expect(sql).toContain('list_enriched AS');
+      expect(sql).toContain('resolved_quantity_delivered');
+      expect(sql).toContain('resolved_quantity_receive');
+      expect(sql).toContain('loading_ports_sort');
+      expect(sql).toContain('contract_qty');
+    });
   });
 
   describe('buildShipmentContractBacklogOrderBy', () => {
@@ -72,6 +151,52 @@ describe('shipmentListSortSql', () => {
       const orderBy = buildShipmentContractBacklogOrderBy('po_numbers', 'ASC');
       expect(orderBy).toContain('c.po_number ASC');
     });
+
+    it('sorts contract backlog by outstanding_quantity output column', () => {
+      expect(buildShipmentContractBacklogOrderBy('outstanding_quantity', 'DESC')).toBe(
+        'outstanding_quantity DESC NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC',
+      );
+    });
+  });
+
+  describe('sortShipmentListRows', () => {
+    it('sorts merged hybrid rows by outstanding qty descending', () => {
+      const sorted = sortShipmentListRows(
+        [
+          { outstanding_quantity: 100, created_at: '2026-01-01' },
+          { outstanding_quantity: 5000, created_at: '2026-01-02' },
+          { outstanding_quantity: 250, created_at: '2026-01-03' },
+        ],
+        'outstanding_quantity',
+        'DESC',
+      );
+      expect(sorted.map((r) => r.outstanding_quantity)).toEqual([5000, 250, 100]);
+    });
+
+    it('sorts delivery qty using resolved column when present', () => {
+      const sorted = sortShipmentListRows(
+        [
+          { quantity_delivered: 10, resolved_quantity_delivered: 1000 },
+          { quantity_delivered: 9000, resolved_quantity_delivered: 200 },
+        ],
+        'quantity_delivered',
+        'DESC',
+      );
+      expect(sorted[0]?.resolved_quantity_delivered).toBe(1000);
+    });
+
+    it('sorts by contract_date chronologically (not string/numeric)', () => {
+      const sorted = sortShipmentListRows(
+        [
+          { contract_date: '2026-01-15', id: 'a' },
+          { contract_date: '2025-12-01', id: 'b' },
+          { contract_date: '2026-03-01', id: 'c' },
+        ],
+        'contract_date',
+        'ASC',
+      );
+      expect(sorted.map((r) => r.id)).toEqual(['b', 'a', 'c']);
+    });
   });
 
   describe('buildShipmentContractBacklogOuterOrderBy', () => {
@@ -83,6 +208,11 @@ describe('shipmentListSortSql', () => {
         'contract_date DESC',
       );
       expect(buildShipmentContractBacklogOuterOrderBy('vessel_name', 'DESC')).not.toContain('c.');
+    });
+
+    it('sorts backlog rows by outstanding_quantity output column', () => {
+      const orderBy = buildShipmentContractBacklogOuterOrderBy('outstanding_quantity', 'DESC');
+      expect(orderBy).toContain('outstanding_quantity DESC');
     });
   });
 });

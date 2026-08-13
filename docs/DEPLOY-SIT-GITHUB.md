@@ -88,9 +88,10 @@ cd /opt/klip
 git fetch origin
 git checkout SIT
 git pull origin SIT
-docker compose -f docker-compose.backend.yml up -d --build
-docker compose -f docker-compose.backend.yml ps
-docker compose -f docker-compose.backend.yml logs --tail=50 backend
+docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
+docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml ps
+docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml logs --tail=50 backend
+docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml exec -T backend printenv DB_HOST DB_PORT
 curl -s http://127.0.0.1:5001/health
 ```
 

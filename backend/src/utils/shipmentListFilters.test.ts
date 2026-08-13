@@ -95,11 +95,12 @@ describe('appendShipmentGlobalSearch', () => {
 });
 
 describe('shipmentEffectiveStatusExpr', () => {
-  it('skips group status floor when is_contract_sap_closed is TRUE', () => {
+  it('uses ATA ladder and GR Close without persisted group_status_floor demotion', () => {
     const sql = shipmentEffectiveStatusExpr('f');
     expect(sql).toContain('is_contract_sap_closed');
-    expect(sql).toContain('IS NOT TRUE');
-    expect(sql).toContain('group_status_floor');
+    expect(sql).toContain('ata_vessel_sailed_from_loading_port');
+    expect(sql).toContain('ata_vessel_complete_discharge');
+    expect(sql).not.toContain('group_status_floor');
   });
 });
 

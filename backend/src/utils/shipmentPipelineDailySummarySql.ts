@@ -15,7 +15,6 @@ import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
 import { SHIPMENT_LIST_SPD_AGG_CTES_FULL } from './shipmentListSapAggSql';
 import {
   shipmentPagePipelineSummarySelectSql,
-  shipmentPagePipelineUnplannedRowPredicate,
   shipmentPageExcludeB2bChildCond,
   shipmentPipelineEnrichedDisplayVesselKeyExpr,
 } from './shipmentPagePipelineSql';
@@ -97,14 +96,14 @@ function buildShipmentDailyBaseCteSql(): string {
           ${listStoKeySql} AS sto_key,
           ${sqlShipmentListPrimaryIdAgg(listStoKeySql, 'c', 'l', 's', 'cs_sto')} AS id,
           MAX(s.status) AS status,
-          -- Multi-contract STO status floor (decision N-01 option b) — must mirror the
-          -- shipments list base so circle counts match the table.
+          -- Mixed persisted statuses on multi-contract STOs (diagnostic). Cards use MAX ATA.
           ${sqlShipmentGroupStatusFloorAgg('s')},
           -- SAP presence for the STO. MIN keeps the group WITHDRAWN only when every contract
           -- behind it is withdrawn, so a partially-cancelled STO still counts in the circles.
           MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence,
           MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
           MAX(NULLIF(TRIM(s.vessel_code), '')) AS vessel_code,
+          (ARRAY_AGG(s.master_vessel_id) FILTER (WHERE s.master_vessel_id IS NOT NULL))[1] AS master_vessel_id,
           MAX(s.created_at) AS created_at,
           MAX(${plantSite}) AS plant_site,
           MAX(s.eta_arrival) AS eta_arrival,
@@ -158,7 +157,6 @@ function buildShipmentDailyBaseCteSql(): string {
 export function buildShipmentExecutionDailySummaryInsertSql(): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
-  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
   return `
     INSERT INTO shipment_pipeline_daily_summary (
       group_plant,
@@ -269,7 +267,7 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
       incoterm_key AS incoterm,
       COUNT(*)::bigint,
       ${shipmentPagePipelineSummarySelectSql().trim()},
-      COUNT(*) FILTER (WHERE ${unplannedPred})::bigint,
+      0::bigint,
       COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND loading_more_than_7d)::bigint,
       COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint,
       COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint,
@@ -285,10 +283,9 @@ export function buildShipmentExecutionDailySummaryInsertSql(): string {
 }
 
 /** Grouped pipeline-card stage for an enriched row alias (NULL when no stage applies). */
-function shipmentPipelineStageCaseSql(alias: string, unplannedPred: string): string {
+function shipmentPipelineStageCaseSql(alias: string): string {
   const e = alias;
   return `CASE
-        WHEN ${unplannedPred} THEN 'UNPLANNED'
         WHEN ${e}.effective_status = 'PLANNED' THEN 'PLANNED'
         WHEN ${e}.effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 'AT_LOADING_PORT'
         WHEN ${e}.effective_status = 'SAILED' THEN 'SAILED'
@@ -306,8 +303,7 @@ function shipmentPipelineStageCaseSql(alias: string, unplannedPred: string): str
 export function buildShipmentStageSnapshotInsertSql(): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
-  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
-  const stageCase = shipmentPipelineStageCaseSql('e', unplannedPred);
+  const stageCase = shipmentPipelineStageCaseSql('e');
   return `
     INSERT INTO shipment_list_stage_snapshot (
       sto_key, stage, group_plant, contract_date, product, incoterm, last_created_at
@@ -344,12 +340,13 @@ export function buildShipmentStageSnapshotInsertSql(): string {
 export function buildShipmentVesselStageDailyInsertSql(): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
-  const unplannedPred = shipmentPagePipelineUnplannedRowPredicate('e');
   const vessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
+  const stageCase = shipmentPipelineStageCaseSql('e');
   const masterJoin = sqlMasterVesselLateralJoin(
     'COALESCE(f.vessel_code, sl.vessel_code_sap)',
     'COALESCE(f.vessel_name, sl.vessel_name_sap)',
     'mv',
+    'f.master_vessel_id',
   );
   return `
     INSERT INTO shipment_pipeline_vessel_stage_daily (
@@ -380,31 +377,11 @@ export function buildShipmentVesselStageDailyInsertSql(): string {
       e.contract_date_key,
       e.product_key,
       e.incoterm_key,
-      CASE
-        WHEN ${unplannedPred} THEN 'UNPLANNED'
-        WHEN e.effective_status = 'PLANNED' THEN 'PLANNED'
-        WHEN e.effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 'AT_LOADING_PORT'
-        WHEN e.effective_status = 'SAILED' THEN 'SAILED'
-        WHEN e.effective_status IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 'AT_DISCHARGE_PORT'
-        WHEN e.effective_status = 'COMPLETED' THEN 'COMPLETED'
-        WHEN e.effective_status = 'CANCELLED' THEN 'CANCELLED'
-        ELSE NULL
-      END AS stage,
+      ${stageCase} AS stage,
       ${vessel} AS vessel_key
     FROM enriched e
     WHERE ${vessel} IS NOT NULL
-      AND (
-        CASE
-          WHEN ${unplannedPred} THEN 'UNPLANNED'
-          WHEN e.effective_status = 'PLANNED' THEN 'PLANNED'
-          WHEN e.effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 'AT_LOADING_PORT'
-          WHEN e.effective_status = 'SAILED' THEN 'SAILED'
-          WHEN e.effective_status IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 'AT_DISCHARGE_PORT'
-          WHEN e.effective_status = 'COMPLETED' THEN 'COMPLETED'
-          WHEN e.effective_status = 'CANCELLED' THEN 'CANCELLED'
-          ELSE NULL
-        END
-      ) IS NOT NULL`;
+      AND (${stageCase}) IS NOT NULL`;
 }
 
 /** UPSERT open contract backlog + preplanned counts grouped by group_plant + contract_date. */

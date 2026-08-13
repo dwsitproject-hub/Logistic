@@ -17,6 +17,7 @@ import logger from './utils/logger';
 import { runWarmupJobsSequentially } from './utils/startupWarmupQueue';
 import {
   startShipmentOutstandingQtyCacheWarmer,
+  startShipmentScopedToolbarCacheWarmer,
   startShipmentSummaryCacheWarmer,
 } from './services/shipmentSummaryWarmer.service';
 import { SchedulerService } from './services/scheduler.service';
@@ -296,6 +297,10 @@ if (process.env.NODE_ENV !== 'test') {
         { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
         { name: 'Shipments summary', run: () => startShipmentSummaryCacheWarmer() },
         { name: 'Shipments outstanding qty', run: () => startShipmentOutstandingQtyCacheWarmer() },
+        {
+          name: 'Shipments scoped toolbar (plant×product)',
+          run: () => startShipmentScopedToolbarCacheWarmer(),
+        },
         { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
         { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
       ],

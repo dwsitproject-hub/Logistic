@@ -219,7 +219,7 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     expect(rows[0]?.loading_ata_sailed).toBe('2026-07-18');
   });
 
-  it('floors to least-advanced persisted DB status when members disagree', () => {
+  it('uses voyage ATA when members disagree on persisted DB status', () => {
     const rows = aggregateShippingPerformanceRowsBySto([
       {
         id: 'a',
@@ -241,8 +241,7 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
       },
     ]);
     expect(rows).toHaveLength(1);
-    // Derived would be SAILED; mixed PLANNED+UNPLANNED floors to UNPLANNED.
-    expect(rows[0]?.status).toBe('UNPLANNED');
+    expect(rows[0]?.status).toBe('SAILED');
   });
 
   it('does not floor when GR Close even with mixed persisted DB statuses (STO 1016010610 pattern)', () => {
@@ -329,7 +328,7 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
       },
     ]);
     expect(merged.import_status).toBe('Open');
-    expect(merged.status).toBe('PLANNED');
+    expect(merged.status).toBe('SAILED');
   });
 
   it('override-only loading_ata_sailed on a single row → SAILED', () => {

@@ -4,6 +4,7 @@
 
 import { sqlIsContractSapClosedForShipmentBacklogExpr } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractOutstandingFromFields } from './sapIncotermMetrics';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
 import { contractExtNoSubquery } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
@@ -19,6 +20,7 @@ import {
   buildShipmentPageSeaIncotermScopeSql,
 } from './shipmentIncotermScope';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
+import { sqlSapSourceTypeFromJsonb } from './sapSourceTypeSql';
 
 import {
   buildShipmentContractBacklogOrderBy,
@@ -176,6 +178,38 @@ export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l')
     )`;
 }
 
+/** Remaining OS ≤ 1.0 MT (1000 kg) → Completed card (no shipment row). */
+export const BACKLOG_OS_COMPLETED_MAX_KG = 1000;
+
+/** Clamp-at-zero remaining OS from joined `qty_move qm` (same formula as Unplanned OS). */
+export function sqlBacklogRemainingOsJoinExpr(): string {
+  return sqlContractOutstandingFromFields({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    receiveExpr: 'qm.quantity_receive',
+    deliveryExpr: 'qm.quantity_delivery',
+    clampAtZero: true,
+  });
+}
+
+/** Still Unplanned/Preplanned: remaining OS > 1 MT (missing qty_move → remaining = contract qty). */
+export function sqlBacklogOsStillActiveSql(): string {
+  return `(${sqlBacklogRemainingOsJoinExpr()}) > ${BACKLOG_OS_COMPLETED_MAX_KG}`;
+}
+
+/** PO backlog Completed: remaining OS ≤ 1 MT (over-delivery clamps to 0). */
+export function sqlBacklogOsCompletedSql(): string {
+  return `(${sqlBacklogRemainingOsJoinExpr()}) <= ${BACKLOG_OS_COMPLETED_MAX_KG}`;
+}
+
+function sqlBacklogOsStillActiveCorrelated(outstandingExpr: string): string {
+  return `(${outstandingExpr}) > ${BACKLOG_OS_COMPLETED_MAX_KG}`;
+}
+
+function sqlBacklogOsCompletedCorrelated(outstandingExpr: string): string {
+  return `(${outstandingExpr}) <= ${BACKLOG_OS_COMPLETED_MAX_KG}`;
+}
+
 /** Shared WHERE for Unplanned contract backlog (excludes Preplanned / ACCEPTED-unlinked). */
 export function unplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
   return `
@@ -190,16 +224,36 @@ export function preplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAl
     AND ${contractInAcceptedUnlinkedPrePlannedGroupExistsSql(contractAlias)}`;
 }
 
+/** Open SEA PO without shipment — Unplanned + Preplanned members (Completed OS gate applied by caller). */
+export function completedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
+  return contractBacklogCoreWhereSql(contractAlias, spdAlias);
+}
+
 /** SELECT list aligned with shipment list row shape for contract backlog rows. */
+/** SAP qty_move scalars — same CTE as OS (`sqlContractGlobalOutstandingExpr`). */
+function qtyMoveScalarSql(
+  column: 'quantity_delivery' | 'quantity_receive',
+  contractNumberExpr = 'c.contract_id',
+): string {
+  return `(SELECT qm.${column} FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`;
+}
+
 export function unplannedContractBacklogRowSelectSql(
   outstandingExpr: string,
-  statusLiteral: 'UNPLANNED' | 'PREPLANNED' = 'UNPLANNED',
+  statusLiteral: 'UNPLANNED' | 'PREPLANNED' | 'COMPLETED' = 'UNPLANNED',
+  options?: { promoteLowOsToCompleted?: boolean },
 ): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   const contractExtNoExpr = `COALESCE(
     NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')}
   )`;
+  const sapDelivery = qtyMoveScalarSql('quantity_delivery');
+  const sapReceive = qtyMoveScalarSql('quantity_receive');
+  const statusSql =
+    options?.promoteLowOsToCompleted && statusLiteral !== 'COMPLETED'
+      ? `CASE WHEN (${outstandingExpr}) <= ${BACKLOG_OS_COMPLETED_MAX_KG} THEN 'COMPLETED' ELSE '${statusLiteral}' END`
+      : `'${statusLiteral}'::text`;
   return `
     c.id::text AS id,
     'contract_backlog'::text AS row_kind,
@@ -231,13 +285,13 @@ export function unplannedContractBacklogRowSelectSql(
     NULL::date AS shipment_date,
     NULL::date AS arrival_date,
     0::numeric AS quantity_shipped,
-    0::numeric AS quantity_delivered,
+    ${sapDelivery} AS quantity_delivered,
     NULL::numeric AS quantity_delivered_klip,
     0::numeric AS inbound_weight,
     0::numeric AS outbound_weight,
     0::numeric AS gain_loss_percentage,
     0::numeric AS gain_loss_amount,
-    '${statusLiteral}'::text AS status,
+    ${statusSql} AS status,
     FALSE AS is_contract_sap_closed,
     c.created_at AS created_at,
     c.id::text AS contract_row_id,
@@ -265,11 +319,11 @@ export function unplannedContractBacklogRowSelectSql(
     NULL::date AS ata_vessel_complete_discharge,
     c.quantity_ordered AS contract_qty,
     NULL::numeric AS sto_quantity,
-    NULL::numeric AS quantity_receive,
-    NULL::numeric AS quantity_delivered_sap,
+    ${sapReceive} AS quantity_receive,
+    ${sapDelivery} AS quantity_delivered_sap,
     NULL::numeric AS planning_qty,
-    NULL::numeric AS outstanding_qty_planning,
-    ${outstandingExpr} AS outstanding_quantity`;
+    (${outstandingExpr})::numeric AS outstanding_qty_planning,
+    (${outstandingExpr}) AS outstanding_quantity`;
 }
 
 export function buildUnplannedContractBacklogLatestSpdCte(): string {
@@ -301,6 +355,7 @@ export function buildUnplannedContractBacklogLatestSpdCte(): string {
             spd.data->'raw'->>'Contract Ext No',
             spd.data->>'Contract Ext No'
           ) AS contract_ext_no_raw,
+          ${sqlSapSourceTypeFromJsonb('spd.data')} AS source_type_raw,
           spd.created_at
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
@@ -309,26 +364,46 @@ export function buildUnplannedContractBacklogLatestSpdCte(): string {
 }
 
 /**
- * Backlog count + contract qty (kg) in one scan — was 2 separate queries against the same
- * filtered contract set (count-only + qty-only), now merged to avoid a redundant scan.
+ * Backlog count + contract qty + outstanding qty (kg) in one scan.
  */
 export function buildUnplannedContractBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
 ): string {
-  return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
-    unplanned_contract_backlog AS (
-      SELECT c.id, c.quantity_ordered
+  const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  /** JOIN-based OS (same formula as correlated qty_move expr used on page rows). */
+  const outstandingExpr = sqlContractOutstandingFromFields({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    receiveExpr: 'qm.quantity_receive',
+    deliveryExpr: 'qm.quantity_delivery',
+    clampAtZero: true,
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${unplannedContractBacklogBaseWhereSql('c', 'l')}
-        ${contractScopeSql}
-        ${toolbarSql}
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    unplanned_contract_backlog AS (
+      SELECT
+        c.id,
+        c.quantity_ordered,
+        (${outstandingExpr})::numeric AS outstanding_qty
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+        AND ${sqlBacklogOsStillActiveSql()}
     )
     SELECT
       COUNT(*)::bigint AS c,
-      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
+      COALESCE(SUM(COALESCE(outstanding_qty, 0)), 0)::numeric AS outstanding_qty_kg
     FROM unplanned_contract_backlog`;
 }
 
@@ -342,6 +417,10 @@ export function buildAllHybridContractBacklogCountQuery(
 ): string {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  /**
+   * Hot path for ALL hybrid list — keep this free of qty_move.
+   * Card Unplanned OS uses buildUnplannedContractBacklogCountQuery (scoped) instead.
+   */
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     unplanned_contract_backlog AS (
@@ -369,8 +448,13 @@ export function buildAllHybridContractBacklogCountQuery(
     )
     SELECT
       COUNT(*)::bigint AS c,
-      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
+      0::numeric AS outstanding_qty_kg
     FROM all_contract_backlog`;
+}
+
+function backlogPageSortNeedsOutstanding(sortKey: string): boolean {
+  return sortKey === 'outstanding_quantity' || sortKey === 'outstanding_qty_planning';
 }
 
 export function buildAllHybridContractBacklogPageQuery(
@@ -388,6 +472,101 @@ export function buildAllHybridContractBacklogPageQuery(
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
+  const unplannedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED', {
+    promoteLowOsToCompleted: true,
+  });
+  const preplannedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'PREPLANNED', {
+    promoteLowOsToCompleted: true,
+  });
+  const outerOrder = buildShipmentContractBacklogOuterOrderBy(sortKey, sortDir);
+
+  /**
+   * Page ids first (cheap), then qty_move only for those contracts.
+   * OS-column sort still needs full qty_move before LIMIT.
+   */
+  if (!backlogPageSortNeedsOutstanding(sortKey)) {
+    return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    all_contract_candidates AS (
+      SELECT
+        c.id AS contract_uuid,
+        c.contract_id AS contract_number,
+        c.contract_date,
+        c.created_at,
+        c.po_number AS po_numbers,
+        c.plant_code AS plant_site,
+        c.supplier,
+        c.product,
+        c.incoterm,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        c.quantity_ordered AS contract_qty,
+        c.contract_id,
+        'UNPLANNED'::text AS backlog_status,
+        NULL::text AS pre_planned_group_id,
+        NULL::text AS pre_planned_group_code
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${unplannedWhere}
+      UNION ALL
+      SELECT
+        c.id AS contract_uuid,
+        c.contract_id AS contract_number,
+        c.contract_date,
+        c.created_at,
+        c.po_number AS po_numbers,
+        c.plant_code AS plant_site,
+        c.supplier,
+        c.product,
+        c.incoterm,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        c.quantity_ordered AS contract_qty,
+        c.contract_id,
+        'PREPLANNED'::text AS backlog_status,
+        pg.id::text AS pre_planned_group_id,
+        pg.group_code AS pre_planned_group_code
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      INNER JOIN pre_planned_group_members pgm
+        ON pgm.contract_id = c.id AND pgm.released_at IS NULL
+      INNER JOIN pre_planned_groups pg
+        ON pg.id = pgm.group_id
+       AND pg.status = 'ACCEPTED'
+       AND pg.shipment_id IS NULL
+      WHERE ${preplannedWhere}
+    ),
+    paged_contracts AS (
+      SELECT *
+      FROM all_contract_candidates
+      ORDER BY ${outerOrder}
+      LIMIT ${limit} OFFSET ${offset}
+    ),
+    ${buildQtyMoveCte({
+      kind: 'in_subquery',
+      subquery: 'SELECT contract_id FROM paged_contracts',
+    })},
+    all_contract_backlog AS (
+      SELECT ${unplannedSelect},
+        pc.pre_planned_group_id,
+        pc.pre_planned_group_code
+      FROM paged_contracts pc
+      INNER JOIN contracts c ON c.id = pc.contract_uuid
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE pc.backlog_status = 'UNPLANNED'
+      UNION ALL
+      SELECT ${preplannedSelect},
+        pc.pre_planned_group_id,
+        pc.pre_planned_group_code
+      FROM paged_contracts pc
+      INNER JOIN contracts c ON c.id = pc.contract_uuid
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE pc.backlog_status = 'PREPLANNED'
+    )
+    SELECT * FROM all_contract_backlog
+    ORDER BY ${outerOrder}`;
+  }
+
   const qtyMoveCte = buildQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
@@ -405,8 +584,6 @@ export function buildAllHybridContractBacklogPageQuery(
                  AND pg.shipment_id IS NULL
              ))`,
   });
-  const unplannedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED');
-  const preplannedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'PREPLANNED');
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
@@ -432,7 +609,7 @@ export function buildAllHybridContractBacklogPageQuery(
       WHERE ${preplannedWhere}
     )
     SELECT * FROM all_contract_backlog
-    ORDER BY ${buildShipmentContractBacklogOuterOrderBy(sortKey, sortDir)}
+    ORDER BY ${outerOrder}
     LIMIT ${limit} OFFSET ${offset}`;
 }
 
@@ -450,6 +627,7 @@ export function buildUnplannedContractBacklogPageQuery(
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
+  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
   const qtyMoveCte = buildQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
@@ -465,7 +643,8 @@ export function buildUnplannedContractBacklogPageQuery(
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}
-      ORDER BY ${buildShipmentContractBacklogOrderBy(sortKey, sortDir)}
+        AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
+      ORDER BY ${pageOrder}
       LIMIT ${limit} OFFSET ${offset}
     )
     SELECT * FROM unplanned_contract_backlog`;
@@ -475,12 +654,33 @@ export function buildPreplannedContractsCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
 ): string {
+  const backlogWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      INNER JOIN pre_planned_group_members pgm
+        ON pgm.contract_id = c.id AND pgm.released_at IS NULL
+      INNER JOIN pre_planned_groups pg
+        ON pg.id = pgm.group_id
+       AND pg.status = 'ACCEPTED'
+       AND pg.shipment_id IS NULL
+      WHERE ${backlogWhere}`,
+  });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
     preplanned_contracts AS (
       SELECT
         c.id AS contract_uuid,
         c.quantity_ordered,
+        (${outstandingExpr})::numeric AS outstanding_qty,
         (
           SELECT pg.id
           FROM pre_planned_group_members pgm
@@ -494,14 +694,14 @@ export function buildPreplannedContractsCountQuery(
         ) AS group_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${preplannedContractBacklogBaseWhereSql('c', 'l')}
-        ${contractScopeSql}
-        ${toolbarSql}
+      WHERE ${backlogWhere}
+        AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
     )
     SELECT
       COUNT(*)::bigint AS contract_count,
       COUNT(DISTINCT group_id)::bigint AS group_count,
-      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
+      COALESCE(SUM(COALESCE(outstanding_qty, 0)), 0)::numeric AS outstanding_qty_kg
     FROM preplanned_contracts`;
 }
 
@@ -547,6 +747,7 @@ export function buildPreplannedContractsPageQuery(
        AND pg.status = 'ACCEPTED'
        AND pg.shipment_id IS NULL
       WHERE ${backlogWhere}
+        AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
     ),
     preplanned_groups_page AS (
       SELECT pre_planned_group_id AS group_id
@@ -563,6 +764,83 @@ export function buildPreplannedContractsPageQuery(
     ORDER BY pc.pre_planned_group_code ASC NULLS LAST,
              pc.contract_date DESC NULLS LAST,
              pc.contract_number ASC`;
+}
+
+export function buildCompletedContractBacklogCountQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  const backlogWhere = `${completedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractOutstandingFromFields({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    receiveExpr: 'qm.quantity_receive',
+    deliveryExpr: 'qm.quantity_delivery',
+    clampAtZero: true,
+  });
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    completed_contract_backlog AS (
+      SELECT
+        c.id,
+        c.quantity_ordered,
+        (${outstandingExpr})::numeric AS outstanding_qty
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+        AND ${sqlBacklogOsCompletedSql()}
+    )
+    SELECT
+      COUNT(*)::bigint AS c,
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
+      COALESCE(SUM(COALESCE(outstanding_qty, 0)), 0)::numeric AS outstanding_qty_kg
+    FROM completed_contract_backlog`;
+}
+
+export function buildCompletedContractBacklogPageQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+  limit: number,
+  offset: number,
+  sortKey = 'created_at',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
+): string {
+  const backlogWhere = `${completedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    completed_contract_backlog AS (
+      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'COMPLETED')}
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+        AND ${sqlBacklogOsCompletedCorrelated(outstandingExpr)}
+      ORDER BY ${pageOrder}
+      LIMIT ${limit} OFFSET ${offset}
+    )
+    SELECT * FROM completed_contract_backlog`;
 }
 
 /** Shipment-side unplanned filter (toolbar + unplanned execution predicate). */

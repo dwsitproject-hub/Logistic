@@ -64,17 +64,24 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain("NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')");
   });
 
-  it('buildQtyMoveCte overlays SEA FOB/CIF qty from Open KLIP shipment actuals', () => {
+  it('buildQtyMoveCte overlays SEA FOB/CIF/CFR qty from Open KLIP shipment actuals', () => {
     const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
     expect(sql).toContain('shipment_klip_overlay');
     expect(sql).toContain('klip_delivery_kg');
     expect(sql).toContain('klip_receive_kg');
-    expect(sql).toContain("IN ('FOB', 'CIF')");
+    expect(sql).toContain("IN ('FOB', 'CIF', 'CFR')");
     expect(sql).toContain('quantity_delivered_klip');
     expect(sql).toContain('actual_vessel_qty_receive');
     expect(sql).toContain("COALESCE(s.status, '') <> 'CANCELLED'");
     expect(sql).toContain('sk.klip_delivery_kg');
     expect(sql).toContain('sk.klip_receive_kg');
+  });
+
+  it('buildQtyMoveCte prefers KLIP delivery/receive over SAP when Open overlay present', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg');
+    expect(sql).toContain('WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg');
+    expect(sql).toMatch(/shipment_klip_overlay[\s\S]*AND NOT \(/);
   });
 
   it('buildQtyMoveCte shipment overlay remains in in_subquery (snapshot refresh path)', () => {

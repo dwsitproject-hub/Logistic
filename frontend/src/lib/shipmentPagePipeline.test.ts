@@ -49,13 +49,24 @@ describe('shipmentPagePipeline', () => {
       cancelled: 500,
     }
     const outstandingQty = {
+      unplanned: 900,
+      preplanned: 1800,
+      planned: 2700,
       atLoadingPort: 1100,
       sailed: 2200,
       atDischargePort: 3300,
     }
     expect(pipelineCardQtyForStage('PLANNED', contractQty, outstandingQty)).toEqual({
+      label: 'Outstanding Qty',
+      kg: 2700,
+    })
+    expect(pipelineCardQtyForStage('UNPLANNED', contractQty, outstandingQty)).toEqual({
+      label: 'Outstanding Qty',
+      kg: 900,
+    })
+    expect(pipelineCardQtyForStage('COMPLETED', contractQty, outstandingQty)).toEqual({
       label: 'Contract Qty',
-      kg: 3000,
+      kg: 4000,
     })
     expect(pipelineCardQtyForStage('AT_LOADING_PORT', contractQty, outstandingQty)).toEqual({
       label: 'Outstanding Qty',
@@ -99,5 +110,11 @@ describe('shipmentPagePipeline', () => {
     })
     expect(text).toContain('Arrived: 2')
     expect(text).toContain('Completed Loading: 1')
+  })
+
+  it('Completed card tooltip includes PO backlog with remaining OS ≤ 1 MT', () => {
+    const completed = SHIPMENT_PAGE_PIPELINE_CARDS.find((c) => c.status === 'COMPLETED')
+    expect(completed?.tooltip).toMatch(/1 MT/i)
+    expect(completed?.tooltip).toMatch(/no shipment/i)
   })
 })

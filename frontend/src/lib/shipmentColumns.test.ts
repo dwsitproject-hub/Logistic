@@ -28,14 +28,14 @@ describe('shipmentColumns', () => {
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('sto_quantity')
   })
 
-  it('omits Grouping Suggestion from defaults unless Preplanned filter is active', () => {
+  it('shows Grouping Suggestion on Unplanned and Preplanned only', () => {
     const allIds = [...SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS, 'contract_date']
-    expect(isShipmentGroupingSuggestionColumnEligible('UNPLANNED')).toBe(false)
+    expect(isShipmentGroupingSuggestionColumnEligible('UNPLANNED')).toBe(true)
     expect(isShipmentGroupingSuggestionColumnEligible('PREPLANNED')).toBe(true)
     expect(isShipmentGroupingSuggestionColumnEligible('ALL')).toBe(false)
     expect(isShipmentGroupingSuggestionColumnEligible('PLANNED')).toBe(false)
 
-    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'UNPLANNED')).not.toContain(
+    expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'UNPLANNED')).toContain(
       SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
     )
     expect(shipmentDefaultVisibleColumnIdsForStage(allIds, 'PREPLANNED')).toContain(
@@ -50,7 +50,7 @@ describe('shipmentColumns', () => {
       false,
     )
     expect(filterShipmentVisibleColumnIdsForStage(visible, 'UNPLANNED').has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(
-      false,
+      true,
     )
     expect(filterShipmentVisibleColumnIdsForStage(visible, 'PREPLANNED').has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(
       true,

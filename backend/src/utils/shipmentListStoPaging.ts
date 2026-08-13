@@ -144,7 +144,7 @@ export function buildResolvedStoKeyPageCtes(stoKeys: string[]): string {
  */
 export function canUseShipmentStageSnapshotPaging(input: ShipmentStoPagingFilterInput): boolean {
   const status = String(input.status ?? 'ALL').trim().toUpperCase();
-  if (!status || status === 'ALL' || status === 'UNPLANNED') return false;
+  if (!status || status === 'ALL' || status === 'UNPLANNED' || status === 'COMPLETED') return false;
   return canUseShipmentStoKeyPaging({ ...input, status: 'ALL' });
 }
 

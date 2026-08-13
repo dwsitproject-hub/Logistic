@@ -3,6 +3,7 @@ import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserSto
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import {
   buildSeaContractsQtyMoveCte,
+  PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR,
   PO_GLOBAL_OUTSTANDING_PLANNING_EXPR,
 } from '../utils/contractPoGlobalMetricsSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
@@ -29,8 +30,9 @@ const PO_LINE_SELECT_FIELDS = `
     ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
     ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
-    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity_planning,
-    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity
+    ${PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR} AS outstanding_quantity,
+    ${PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR} AS outstanding_quantity_actual,
+    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity_planning
 `;
 
 function buildPoLineByRowIdSql(): string {
@@ -65,7 +67,7 @@ function buildGlobalAvailablePoLinesSql(): string {
     )
     SELECT *
     FROM candidates
-    WHERE COALESCE(outstanding_quantity_planning, 0)::numeric > 0
+    WHERE COALESCE(outstanding_quantity, 0)::numeric > 0
     ORDER BY COALESCE(po_number, contract_id), contract_id
     LIMIT $2::int
   `;
@@ -73,6 +75,30 @@ function buildGlobalAvailablePoLinesSql(): string {
 
 export function poLineKey(contractNumber: string, poNumber: string | null | undefined): string {
   return `${String(contractNumber).trim().toLowerCase()}::${String(poNumber ?? '').trim().toLowerCase()}`;
+}
+
+/** True when a positive Shipment Plan Qty exceeds remaining OS Actual (kg). Zero plan qty is always allowed. */
+export function shipmentPlanQtyExceedsOsActual(planQtyKg: number, osActualKg: number): boolean {
+  if (!Number.isFinite(planQtyKg) || planQtyKg <= 0) return false;
+  const cap = Number.isFinite(osActualKg) ? osActualKg : 0;
+  return planQtyKg > cap + 1e-6;
+}
+
+/** Exact PO-line key, then unique contract match if the client omitted / mismatched PO. */
+export function lookupPoLineMetricKg(
+  byKey: Map<string, number>,
+  contractNumber: string,
+  poNumber: string | null | undefined,
+): number {
+  const exact = byKey.get(poLineKey(contractNumber, poNumber));
+  if (exact != null) return exact;
+  const prefix = `${String(contractNumber).trim().toLowerCase()}::`;
+  const matches: number[] = [];
+  for (const [key, kg] of byKey) {
+    if (key.startsWith(prefix)) matches.push(kg);
+  }
+  if (matches.length === 1) return matches[0];
+  return 0;
 }
 
 export async function upsertPoQtyAssignment(
@@ -168,8 +194,8 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   for (const row of lines.rows as Array<Record<string, unknown>>) {
     const rowId = String(row.contract_row_id ?? '');
     if (!rowId || seenRowIds.has(rowId)) continue;
-    const outstandingPlan = Number(row.outstanding_quantity_planning ?? row.outstanding_quantity ?? 0);
-    if (!Number.isFinite(outstandingPlan) || outstandingPlan <= 0) continue;
+    const outstandingActual = Number(row.outstanding_quantity_actual ?? row.outstanding_quantity ?? 0);
+    if (!Number.isFinite(outstandingActual) || outstandingActual <= 0) continue;
     const key = poLineKey(String(row.contract_id ?? ''), row.po_number as string | null);
     if (existingKeys.has(key)) continue;
     seenRowIds.add(rowId);
@@ -246,15 +272,17 @@ export async function attachPurchaseOrderToShipment(args: {
 
   const contractNumber = String(poLine.contract_id ?? '').trim();
   const poNumber = poLine.po_number != null ? String(poLine.po_number).trim() : null;
-  const outstandingPlanKg = Number(poLine.outstanding_quantity_planning ?? poLine.outstanding_quantity ?? 0);
-  if (!Number.isFinite(outstandingPlanKg) || outstandingPlanKg <= 0) {
-    return { ok: false, status: 400, message: 'This PO has no outstanding planning quantity remaining' };
+  const outstandingActualKg = Number(
+    poLine.outstanding_quantity_actual ?? poLine.outstanding_quantity ?? 0,
+  );
+  if (!Number.isFinite(outstandingActualKg) || outstandingActualKg <= 0) {
+    return { ok: false, status: 400, message: 'This PO has no outstanding actual quantity remaining' };
   }
-  if (qtyKg > outstandingPlanKg + 1e-6) {
+  if (shipmentPlanQtyExceedsOsActual(qtyKg, outstandingActualKg)) {
     return {
       ok: false,
       status: 400,
-      message: `Shipment Plan Qty exceeds global OS Qty (Plan) (${Math.round(outstandingPlanKg)} kg)`,
+      message: `Shipment Plan Qty exceeds OS Qty (Actual) (${Math.round(outstandingActualKg)} kg)`,
     };
   }
 
@@ -460,7 +488,7 @@ export async function batchSaveShipmentPoPlanQty(args: {
   const budgetByKey = new Map<string, number>();
   for (const row of detailsRes.rows as Array<Record<string, unknown>>) {
     const key = poLineKey(String(row.contract_number ?? ''), row.po_number as string | null);
-    budgetByKey.set(key, Number(row.outstanding_qty_planning_budget ?? row.outstanding_qty_planning ?? 0));
+    budgetByKey.set(key, Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0));
   }
 
   for (const row of args.rows) {
@@ -472,12 +500,12 @@ export async function batchSaveShipmentPoPlanQty(args: {
       return { ok: false, status: 400, message: `Invalid Shipment Plan Qty for ${contractNumber}` };
     }
 
-    const budget = budgetByKey.get(poLineKey(contractNumber, poNumber)) ?? 0;
-    if (qtyKg > budget + 1e-6) {
+    const osActualKg = lookupPoLineMetricKg(budgetByKey, contractNumber, poNumber);
+    if (shipmentPlanQtyExceedsOsActual(qtyKg, osActualKg)) {
       return {
         ok: false,
         status: 400,
-        message: `Shipment Plan Qty for ${contractNumber} exceeds OS Qty (Plan)`,
+        message: `Shipment Plan Qty for ${contractNumber} exceeds OS Qty (Actual)`,
       };
     }
 

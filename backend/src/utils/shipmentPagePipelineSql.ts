@@ -10,7 +10,7 @@ import {
   SHIPMENT_AT_LOADING_PORT_STATUSES,
   SHIPMENT_SAILED_STATUSES,
 } from './shipmentStatus';
-import { buildShipmentPageSeaIncotermColumnSql, buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
+import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 
 /** Pipeline stage keys used by GET /shipments?status=… (Shipments page only). */
 export const SHIPMENT_PAGE_PIPELINE_STAGES = [
@@ -135,7 +135,10 @@ export function shipmentPagePipelineStageExpr(alias: string): string {
   )`;
 }
 
-/** Table filter for Unplanned card — open STO row without ETA/ATA and without Delivery Qty. */
+/**
+ * @deprecated Unplanned card is PO backlog only; STO open rows resolve to PLANNED.
+ * Kept for legacy attention SQL / tests that still reference the old execution slice.
+ */
 export function shipmentPagePipelineUnplannedRowPredicate(alias: string): string {
   const f = alias;
   return `(
@@ -280,16 +283,8 @@ export function appendShipmentPipelineStageFilter(
     return { sql: '', params: [], nextIndex: startIndex };
   }
 
-  if (stage === 'UNPLANNED') {
-    return {
-      sql: ` AND ${shipmentPagePipelineUnplannedRowPredicate('sb')} AND ${buildShipmentPageSeaIncotermColumnSql('sb.incoterm')}`,
-      params: [],
-      nextIndex: startIndex,
-    };
-  }
-
-  // Preplanned contracts have no shipment rows; dedicated list resolver handles them.
-  if (stage === 'PREPLANNED') {
+  // Unplanned / Preplanned have no shipment rows; dedicated list resolvers handle them.
+  if (stage === 'UNPLANNED' || stage === 'PREPLANNED') {
     return {
       sql: ' AND FALSE',
       params: [],
