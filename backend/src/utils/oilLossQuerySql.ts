@@ -5,6 +5,7 @@ import {
 } from './oilLossEligibility';
 import { sqlContractImportStatusIsClosedExpr } from './contractDeliveryStatus';
 import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
+import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { buildUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import {
@@ -194,9 +195,14 @@ export function buildOilLossWithQtyCtes(): string {
         ct.contract_date AS contract_date_db,
         ct.plant_code AS contract_plant_code,
         ct.company_name AS contract_company_name,
+        b2b_end.unload_location AS b2b_ending_unload,
         COALESCE(tr_sto.trucking_owner, tr_ct.trucking_owner) AS trucking_owner_db,
         COALESCE(tr_sto.loading_location, tr_ct.loading_location) AS loading_location_db,
-        COALESCE(tr_sto.unloading_location, tr_ct.unloading_location) AS unloading_location_db,
+        COALESCE(
+          NULLIF(TRIM(b2b_end.unload_location), ''),
+          tr_sto.unloading_location,
+          tr_ct.unloading_location
+        ) AS unloading_location_db,
         COALESCE(
           NULLIF(TRIM(pbc.group_plant), ''),
           NULLIF(TRIM(pbco.group_plant), ''),
@@ -208,6 +214,7 @@ export function buildOilLossWithQtyCtes(): string {
       LEFT JOIN contracts_latest ct
         ON NULLIF(TRIM(p.contract_number), '') IS NOT NULL
        AND ct.contract_id = TRIM(p.contract_number)
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: "COALESCE(NULLIF(TRIM(p.po_number), ''), '')" })}
       LEFT JOIN shipments_by_sto sh_sto
         ON NULLIF(TRIM(p.sto_key), '') IS NOT NULL
        AND sh_sto.sto_key = TRIM(p.sto_key)
@@ -221,11 +228,11 @@ export function buildOilLossWithQtyCtes(): string {
         ON NULLIF(TRIM(p.contract_number), '') IS NOT NULL
        AND tr_ct.contract_id = TRIM(p.contract_number)
       LEFT JOIN plants_by_code_company pbc
-        ON pbc.plant_code_key = TRIM(UPPER(COALESCE(ct.plant_code, '')))
-       AND pbc.company_name_key = TRIM(UPPER(COALESCE(ct.company_name, '')))
-       AND NULLIF(TRIM(ct.company_name), '') IS NOT NULL
+        ON pbc.plant_code_key = TRIM(UPPER(COALESCE(b2b_end.plant_code, ct.plant_code, '')))
+       AND pbc.company_name_key = TRIM(UPPER(COALESCE(b2b_end.company_name, ct.company_name, '')))
+       AND NULLIF(TRIM(COALESCE(b2b_end.company_name, ct.company_name)), '') IS NOT NULL
       LEFT JOIN plants_by_code pbco
-        ON pbco.plant_code_key = TRIM(UPPER(COALESCE(ct.plant_code, '')))
+        ON pbco.plant_code_key = TRIM(UPPER(COALESCE(b2b_end.plant_code, ct.plant_code, '')))
     ),
     with_qty_base AS (
       SELECT
@@ -264,7 +271,7 @@ export function buildOilLossMainSql(): string {
       buyer,
       product,
       group_name,
-      plant_site,
+      COALESCE(NULLIF(TRIM(b2b_ending_unload), ''), plant_site) AS plant_site,
       COALESCE(NULLIF(TRIM(vessel_name_raw), ''), '') AS vessel_name,
       COALESCE(
         TO_CHAR(contract_date_db, 'YYYY-MM-DD'),
@@ -277,6 +284,7 @@ export function buildOilLossMainSql(): string {
       ${OIL_LOSS_TRANSPORTER_EXPR}                AS transporter,
       COALESCE(NULLIF(loading_location_db, ''), NULLIF(loading_location_raw, ''), '') AS loading_location,
       COALESCE(
+        NULLIF(TRIM(b2b_ending_unload), ''),
         NULLIF(unloading_location_db, ''),
         NULLIF(unloading_location_raw, ''),
         plant_site,

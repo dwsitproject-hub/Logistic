@@ -17,6 +17,7 @@ import {
   parseShipmentStatusOutstandingQtyFromExecutionRow,
   type ShipmentStatusCardQtyBundle,
 } from './shipmentStatusCardQtySql';
+import { sqlShipmentExecutionOsPerContractCtes } from './shipmentOutstandingQtySummarySql';
 
 const LOADING_STATUS_GROUP =
   "effective_status IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING')";
@@ -126,13 +127,16 @@ function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSumm
           ${qtySelect},
           sl.vessel_name_sap,
           sl.vessel_code_sap,
-          mv.vessel_name_master
+          mv.vessel_name_master,
+          COALESCE(f.contract_source_type, sl.source_type) AS os_source_type,
+          COALESCE(NULLIF(TRIM(f.incoterm::text), ''), NULLIF(TRIM(sl.incoterm::text), ''), '') AS os_incoterm
         FROM ${opts.summaryEnrichedFrom} f
         LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(f.sto_key::text)
         LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(f.sto_key::text)
         LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(f.sto_key::text)
         ${masterJoin}
-      )`;
+      ),
+      ${sqlShipmentExecutionOsPerContractCtes('enriched')}`;
 }
 
 /**
@@ -153,15 +157,22 @@ export function buildPipelineCardVesselNamesQuery(
 }
 
 /**
- * Lightweight live stage counts only (no SPD qty joins, no vessel master).
- * Overlay onto daily summary so At Loading Port / Sailed / etc. badges match the live table
- * when the daily rollup is stale, without reintroducing the full vessel overlay scan.
+ * Live stage counts + distinct vessel names (master join, no SPD qty).
+ * Overlay onto daily summary so At Loading Port / Sailed / etc. badges and vessel
+ * lists match the live table when the daily rollup is stale.
  */
 export function buildShipmentPipelineLiveStageCountsQuery(opts: {
   shipmentBaseCteSql: string;
   toolbarOuterSql: string;
 }): string {
   const eff = shipmentEffectiveStatusExpr('f');
+  const masterJoin = sqlMasterVesselLateralJoin(
+    'f.vessel_code',
+    'f.vessel_name',
+    'mv',
+    'f.master_vessel_id',
+  );
+  const displayVessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
   return `${opts.shipmentBaseCteSql}
       , filtered_shipments AS (
         SELECT sb.*
@@ -171,40 +182,61 @@ export function buildShipmentPipelineLiveStageCountsQuery(opts: {
       )
       , with_status AS (
         SELECT
-          ${eff} AS effective_status
+          f.*,
+          ${eff} AS effective_status,
+          mv.vessel_name_master,
+          NULL::text AS vessel_name_sap
         FROM filtered_shipments f
+        ${masterJoin}
       )
       SELECT
         COUNT(*)::bigint AS total_count,
-        ${shipmentPagePipelineSummarySelectSql()}
-      FROM with_status`;
+        ${shipmentPagePipelineSummarySelectSql()},
+        ${shipmentPagePipelineVesselNamesSelectSql(displayVessel)},
+        ARRAY[]::text[] AS unplanned_vessel_names
+      FROM with_status e`;
 }
 
-/** Merge live execution stage counts onto a daily summary row (ETA / vessels stay daily). */
+const LIVE_STAGE_COUNT_KEYS = [
+  'total_count',
+  'planned_count',
+  'at_loading_port_count',
+  'sailed_count',
+  'at_discharge_port_count',
+  'completed_count',
+  'cancelled_count',
+  'loading_port_arrived_count',
+  'loading_port_berthed_count',
+  'loading_port_loading_count',
+  'loading_port_completed_loading_count',
+  'discharge_port_arrived_count',
+  'discharge_port_berthed_count',
+  'discharge_port_unloading_count',
+] as const;
+
+const LIVE_STAGE_VESSEL_KEYS = [
+  'planned_vessel_names',
+  'at_loading_port_vessel_names',
+  'sailed_vessel_names',
+  'at_discharge_port_vessel_names',
+  'completed_vessel_names',
+  'cancelled_vessel_names',
+] as const;
+
+/** Merge live execution stage counts and vessel-name arrays onto a daily summary row. */
 export function overlayShipmentDailySummaryLiveStageCounts(
   dailyRow: Record<string, unknown>,
   liveRow: Record<string, unknown> | null | undefined,
 ): Record<string, unknown> {
   if (!liveRow) return dailyRow;
-  const countKeys = [
-    'total_count',
-    'planned_count',
-    'at_loading_port_count',
-    'sailed_count',
-    'at_discharge_port_count',
-    'completed_count',
-    'cancelled_count',
-    'loading_port_arrived_count',
-    'loading_port_berthed_count',
-    'loading_port_loading_count',
-    'loading_port_completed_loading_count',
-    'discharge_port_arrived_count',
-    'discharge_port_berthed_count',
-    'discharge_port_unloading_count',
-  ] as const;
   const out: Record<string, unknown> = { ...dailyRow };
-  for (const key of countKeys) {
+  for (const key of LIVE_STAGE_COUNT_KEYS) {
     if (liveRow[key] != null) out[key] = liveRow[key];
+  }
+  for (const key of LIVE_STAGE_VESSEL_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(liveRow, key)) {
+      out[key] = Array.isArray(liveRow[key]) ? liveRow[key] : [];
+    }
   }
   return out;
 }
@@ -240,10 +272,10 @@ export function buildShipmentSection1CombinedSummaryQuery(
         COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
         COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty,
         COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_outstanding_qty,
-        COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
-        COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}), 0)::numeric AS at_loading_port_outstanding_qty,
-        COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'SAILED'), 0)::numeric AS sailed_outstanding_qty,
-        COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${DISCHARGE_STATUS_GROUP}), 0)::numeric AS at_discharge_port_outstanding_qty
+        COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED') FROM execution_os), 0)::numeric AS planned_outstanding_qty,
+        COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_loading_port_outstanding_qty,
+        COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'SAILED') FROM execution_os), 0)::numeric AS sailed_outstanding_qty,
+        COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${DISCHARGE_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_discharge_port_outstanding_qty
       FROM enriched e`;
 }
 

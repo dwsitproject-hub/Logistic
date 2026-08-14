@@ -17,6 +17,12 @@ export async function submitAddNewShipmentPayload(
       eta_discharge_complete: payload.eta_discharge_complete,
     }
     if (payload.vessel_name !== undefined) body.vessel_name = payload.vessel_name
+    if (payload.vessel_code !== undefined) body.vessel_code = payload.vessel_code
+    if (payload.vessel_owner !== undefined) body.vessel_owner = payload.vessel_owner
+    if (payload.vessel_capacity !== undefined) body.vessel_capacity = payload.vessel_capacity
+    if (payload.vessel_hull_type !== undefined) body.vessel_hull_type = payload.vessel_hull_type
+    if (payload.charter_type !== undefined) body.charter_type = payload.charter_type
+    if (payload.master_vessel_id !== undefined) body.master_vessel_id = payload.master_vessel_id
     if (payload.quantity_delivered !== undefined) body.quantity_delivered = payload.quantity_delivered
     if (payload.actual_vessel_qty_receive !== undefined) {
       body.actual_vessel_qty_receive = payload.actual_vessel_qty_receive

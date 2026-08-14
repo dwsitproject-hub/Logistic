@@ -14,6 +14,10 @@ import {
   sqlTruckingListResolvedReceiveQtyExpr,
   sqlTruckingQuantitySentCoalesce,
 } from './truckingQuantitySql';
+import {
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from './b2bOriginEndingSql';
 
 /**
  * Alias of the SAP receive-date LATERAL on the hydrate list query. The select clause and the
@@ -146,7 +150,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.contract_id,
         t.location,
         t.loading_location,
-        t.unloading_location,
+        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
         t.daily_deliverables,
@@ -204,7 +208,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.contract_id,
         t.location,
         t.loading_location,
-        t.unloading_location,
+        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
         t.daily_deliverables,
@@ -265,12 +269,14 @@ export function buildTruckingListFromClause(skipSapJoin: boolean): string {
   // Resolves both SAP receive dates once per row for the select clause below, which otherwise
   // repeats that identical lookup six times per row as correlated subqueries.
   const sapDatesJoin = skipSapJoin ? '' : sqlTruckingSapDatesLateral('c', TRUCKING_LIST_SAP_DATES_ALIAS);
+  const b2bEndingJoin = sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' });
   return `
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}
       ${b2bJoin}
+      ${b2bEndingJoin}
       ${stoJoin}
       ${sapDatesJoin}`;
 }

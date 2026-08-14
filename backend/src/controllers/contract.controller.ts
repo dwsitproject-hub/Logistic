@@ -21,9 +21,9 @@ import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
 import {
-  resolveContractActualQtySubtractedTs,
   sqlContractOutstandingSignedExpr,
   sqlIncotermQuantityDeliveryCase,
+  sqlQtyMoveJoinIncotermDelivery,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
@@ -48,11 +48,17 @@ import {
   isContractIncludedInPerfDrilldownTreeWithComputed,
   isContractPerfOnTimeTradeCycle,
   runLatePerformance,
+  resolveOpenPerfOutstandingQtyKg,
   sqlEffectiveDeliveryEndPresent,
   sqlEffectiveDeliveryEndDateExpr,
   parseCommaSeparatedQuery,
 } from '../services/latePerformance.service';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import {
+  sqlB2bEndingPlantCodeAgg,
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
 import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { toSapDisplayNumber } from '../utils/sapDisplayNumber';
@@ -291,7 +297,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           MAX(c.contract_type) AS contract_type,
           MAX(c.logistics_classification) AS logistics_classification,
           MAX(c.po_classification) AS po_classification,
-          MAX(c.plant_code) AS plant_code,
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           MAX(c.created_at) AS created_at,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
@@ -313,6 +319,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1
@@ -411,7 +418,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         contractQtyExpr: 'base.quantity_ordered',
         incotermExpr: 'base.incoterm',
         receiveExpr: 'base.quantity_receive',
-        deliveryExpr: 'base.quantity_delivery_sap',
+        deliveryExpr: 'base.quantity_delivery',
       })}) > 0`;
     }
 
@@ -465,7 +472,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       contractQtyExpr: 'quantity_ordered',
       incotermExpr: 'incoterm',
       receiveExpr: 'quantity_receive',
-      deliveryExpr: 'quantity_delivery_sap',
+      deliveryExpr: 'quantity_delivery',
     });
     const allowedSort: Record<string, string> = {
       contract_date: 'contract_date::date',
@@ -506,7 +513,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       contractQtyExpr: 'quantity_ordered',
       incotermExpr: 'incoterm',
       receiveExpr: 'quantity_receive',
-      deliveryExpr: 'quantity_delivery_sap',
+      deliveryExpr: 'quantity_delivery',
     })})`;
 
     // Schedulable = due-end present + known status + cycle Completion Date
@@ -1040,7 +1047,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
-          MAX(c.plant_code) AS plant_code,
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
           MAX(c.company_name) AS company_name,
           -- Align with GET /contracts: incoterm-aware SAP import status (GR PO vs GR STO).
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
@@ -1055,6 +1062,17 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
+          MAX(${sqlContractOutstandingSignedExpr({
+            contractQtyExpr: 'c.quantity_ordered',
+            incotermExpr: 'c.incoterm',
+            receiveExpr: 'qm.quantity_receive',
+            deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
+              'c.incoterm',
+              'qm',
+              sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+            ),
+          })}) AS outstanding_quantity,
           -- ETA Trucking Completion = last Daily Planning date
           (
             SELECT MAX(
@@ -1118,6 +1136,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1
@@ -1473,12 +1492,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       }
 
       const _qtyOrdered = Number(row.quantity_ordered || 0);
-      const _subtracted = resolveContractActualQtySubtractedTs(
-        row.incoterm,
-        row.quantity_receive,
-        row.quantity_delivery,
-      );
-      const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+      const _outstandingQty = isOpen
+        ? resolveOpenPerfOutstandingQtyKg(row)
+        : _qtyOrdered;
 
       const cargoReady = row.cargo_readiness_date;
       let logCycle: number | null = null;
@@ -1805,7 +1821,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           MAX(c.supplier) AS supplier,
           MAX(c.buyer) AS buyer,
           MAX(c.group_name) AS group_name,
-          MAX(c.plant_code) AS plant_code,
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
           MAX(c.company_name) AS company_name,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.contract_date) AS contract_date,
@@ -1816,6 +1832,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         ${rowWhereSql}
         GROUP BY c.contract_id
       ),
@@ -2587,7 +2604,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         t.trucking_owner,
         c.contract_id AS contract_number,
         t.loading_location,
-        t.unloading_location,
+        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         c.quantity_ordered AS contract_qty,
         COALESCE(NULLIF((
           SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered')})
@@ -2679,6 +2696,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         ) AS eta_trucking_completion_date
       FROM trucking_operations t
       INNER JOIN contracts c ON t.contract_id = c.id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       ${TRUCKING_REALIZATIONS_JOIN}
       WHERE c.id = $1
         AND (

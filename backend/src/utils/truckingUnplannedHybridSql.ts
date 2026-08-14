@@ -7,12 +7,26 @@ import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlo
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
 import {
+  sqlB2bEndingCompanyExpr,
+  sqlB2bEndingPlantCodeExpr,
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from './b2bOriginEndingSql';
+import {
   sqlPipelineIncotermKey,
   sqlPipelineProductKey,
 } from './pipelineDailySummaryToolbarScope';
 import { contractExtNoSubquery } from './portDisplaySql';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
+
+const TRUCKING_UNPLANNED_B2B_END_JOIN = sqlB2bOriginEndingChildLateralJoin({
+  originPoExpr: 'c.po_number',
+});
+const TRUCKING_UNPLANNED_GROUP_PLANT = groupPlantExpr(
+  sqlB2bEndingPlantCodeExpr('c.plant_code'),
+  sqlB2bEndingCompanyExpr('c.company_name'),
+);
 
 const CB_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
@@ -92,7 +106,7 @@ export function truckingUnplannedContractBacklogRowSelectSql(outstandingExpr: st
     NULL::text AS operation_id,
     NULL::text AS location,
     NULL::text AS loading_location,
-    NULL::text AS unloading_location,
+    ${sqlB2bEndingUnloadExpr('NULL::text')} AS unloading_location,
     NULL::text AS trucking_owner,
     NULL::date AS cargo_readiness_date,
     NULL::jsonb AS daily_deliverables,
@@ -154,7 +168,7 @@ export function appendTruckingUnplannedBacklogGlobalSearch(
       OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.product::text, '') ILIKE ${likeExpr}
       OR COALESCE(${contractExtNoSubquery('c.contract_id', 'c.po_number')}::text, '') ILIKE ${likeExpr}
-      OR COALESCE(${groupPlantExpr('c.plant_code', 'c.company_name')}::text, '') ILIKE ${likeExpr}
+      OR COALESCE(${TRUCKING_UNPLANNED_GROUP_PLANT}::text, '') ILIKE ${likeExpr}
     )`;
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 };
 }
@@ -235,8 +249,11 @@ export function buildTruckingUnplannedContractToolbarScope(input: {
   const plantFilter = appendGroupPlantFilter(
     input.plants,
     cp,
-    groupPlantExpr('c.plant_code', 'c.company_name'),
-    'c.plant_code',
+    groupPlantExpr(
+      sqlB2bEndingPlantCodeExpr('c.plant_code'),
+      sqlB2bEndingCompanyExpr('c.company_name'),
+    ),
+    sqlB2bEndingPlantCodeExpr('c.plant_code'),
   );
   if (plantFilter.sql) {
     parts.push(plantFilter.sql.replace(/^ AND /, ''));
@@ -259,6 +276,7 @@ export function buildTruckingUnplannedBacklogCountQuery(
       SELECT c.id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
         ${contractScopeSql}
         ${toolbarSql}
@@ -277,6 +295,7 @@ export function buildTruckingUnplannedBacklogContractQtyQuery(
       SELECT c.quantity_ordered
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
         ${contractScopeSql}
         ${toolbarSql}
@@ -302,6 +321,7 @@ export function buildTruckingUnplannedBacklogPageQuery(
     subquery: `SELECT c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}`,
   });
   return `
@@ -311,6 +331,7 @@ export function buildTruckingUnplannedBacklogPageQuery(
       SELECT ${truckingUnplannedContractBacklogRowSelectSql(outstandingExpr)}
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}
       ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC
       LIMIT ${limit} OFFSET ${offset}
@@ -337,6 +358,7 @@ export function buildTruckingUnplannedBacklogIdsWithOsQuery(
     subquery: `SELECT c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}`,
   });
   return `
@@ -345,6 +367,7 @@ export function buildTruckingUnplannedBacklogIdsWithOsQuery(
     SELECT c.id
     FROM contracts c
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+    ${TRUCKING_UNPLANNED_B2B_END_JOIN}
     WHERE ${backlogWhere}
       AND (${outstandingExpr}) > 0
     ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC`;
@@ -359,7 +382,7 @@ export function buildTruckingUnplannedBacklogSummaryCountQuery(
 
 /** Daily refresh — open contract backlog grouped by group_plant + contract_date. */
 export function buildTruckingUnplannedBacklogDailySummarySql(): string {
-  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plant = TRUCKING_UNPLANNED_GROUP_PLANT;
   return `
     INSERT INTO trucking_pipeline_daily_summary (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
@@ -372,6 +395,7 @@ export function buildTruckingUnplannedBacklogDailySummarySql(): string {
         COUNT(*)::bigint AS unplanned_contract_backlog
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
       GROUP BY 1, 2, 3, 4
     )

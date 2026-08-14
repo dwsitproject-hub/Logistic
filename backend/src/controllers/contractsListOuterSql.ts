@@ -10,7 +10,7 @@ const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   contractQtyExpr: 'base.quantity_ordered',
   incotermExpr: 'base.incoterm',
   receiveExpr: 'base.quantity_receive',
-  deliveryExpr: 'base.quantity_delivery_sap',
+  deliveryExpr: 'base.quantity_delivery',
 });
 
 export type ContractsListOuterSqlOptions = {

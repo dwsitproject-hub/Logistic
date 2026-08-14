@@ -4,7 +4,10 @@
  */
 
 import { wrapTruckingListQueryWithStoExpansion } from './truckingListStoExpandSql';
-import { sqlTruckingOutstandingQtyAggregateSelect } from './truckingOutstandingQtySummarySql';
+import {
+  sqlTruckingOutstandingQtyAggregateSelect,
+  sqlTruckingStripLineQtyExpr,
+} from './truckingOutstandingQtySummarySql';
 
 export interface TruckingStatusSummaryCombinedBuiltQuery {
   preOuterQuery: string;
@@ -17,16 +20,25 @@ export interface TruckingStatusSummaryCombinedBuiltQuery {
 export interface TruckingStatusSummaryCombinedOptions {
   /** When false, skip row-count aggregates (daily summary already supplies counts). */
   includeCounts?: boolean;
+  /**
+   * Live expansion only for GR-Open POs. GR-Close contract qty comes from the daily
+   * snapshot (WB cannot change those rows). Completed via OS-tolerance stays live.
+   */
+  grOpenOnly?: boolean;
 }
 
 function buildTruckingExpandedFilteredCte(
   built: TruckingStatusSummaryCombinedBuiltQuery,
+  opts: TruckingStatusSummaryCombinedOptions = {},
 ): string {
   const innerSql = `${built.preOuterQuery}${built.outerSql}`;
   const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
     selectOutstanding: true,
     skipSapJoin: false,
   });
+  const grOpenFilter = opts.grOpenOnly
+    ? 'AND COALESCE(trucking_source.is_contract_sap_closed, FALSE) = FALSE'
+    : '';
   return `
     filtered AS (
       SELECT
@@ -43,13 +55,16 @@ function buildTruckingExpandedFilteredCte(
         ${expanded}
       ) trucking_source
       WHERE COALESCE(trucking_source.sap_presence, 'PRESENT') = 'PRESENT'
+        ${grOpenFilter}
     ),
     per_contract AS (
       SELECT
         status,
         contract_number,
         MAX(COALESCE(contract_qty, 0))::numeric AS contract_qty,
-        MAX(COALESCE(outstanding_quantity, 0))::numeric AS outstanding_quantity
+        GREATEST(0, MAX(COALESCE(outstanding_quantity, 0)))::numeric AS outstanding_quantity,
+        MAX(NULLIF(TRIM(COALESCE(source_type::text, '')), '')) AS source_type,
+        MAX(NULLIF(TRIM(COALESCE(incoterm::text, '')), '')) AS incoterm
       FROM filtered
       WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
       GROUP BY status, contract_number
@@ -78,21 +93,22 @@ function buildTruckingExpandedFilteredCte(
     ),
     status_outstanding AS (
       SELECT
+        COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric AS unplanned_outstanding_qty,
         COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
         COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_outstanding_qty
       FROM per_contract
-      WHERE status IN ('PLANNED', 'IN_PROGRESS')
+      WHERE status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
     ),
     os_execution AS (
       SELECT
         ${sqlTruckingOutstandingQtyAggregateSelect(
-          'outstanding_quantity',
+          sqlTruckingStripLineQtyExpr('status', 'contract_qty', 'outstanding_quantity'),
           'source_type',
           'incoterm',
-        )}
-      FROM filtered
+        )},
+        COALESCE(SUM(${sqlTruckingStripLineQtyExpr('status', 'contract_qty', 'outstanding_quantity')}), 0)::numeric AS card_total_kg
+      FROM per_contract
       WHERE status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
-        AND UPPER(TRIM(COALESCE(incoterm, ''))) IN ('FRC', 'LCO')
     )`;
 }
 
@@ -102,7 +118,7 @@ export function buildTruckingStatusSummaryCombinedQuery(
   opts: TruckingStatusSummaryCombinedOptions = {},
 ): { text: string; params: unknown[] } {
   const includeCounts = opts.includeCounts !== false;
-  const cteBlock = buildTruckingExpandedFilteredCte(built);
+  const cteBlock = buildTruckingExpandedFilteredCte(built, opts);
 
   const countSelect = includeCounts
     ? `sc.total_count,
@@ -127,12 +143,14 @@ export function buildTruckingStatusSummaryCombinedQuery(
       cq.in_progress_contract_qty,
       cq.completed_contract_qty,
       cq.cancelled_contract_qty,
+      so.unplanned_outstanding_qty,
       so.planned_outstanding_qty,
       so.in_progress_outstanding_qty,
       oe.third_party_frc_kg,
       oe.third_party_lco_kg,
       oe.interco_frc_kg,
-      oe.interco_lco_kg
+      oe.interco_lco_kg,
+      oe.card_total_kg
     FROM contract_qty cq
     CROSS JOIN status_outstanding so
     CROSS JOIN os_execution oe

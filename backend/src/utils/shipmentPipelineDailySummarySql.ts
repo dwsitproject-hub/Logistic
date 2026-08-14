@@ -12,6 +12,7 @@ import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './sh
 import { shipmentEffectiveStatusExpr, sqlShipmentGroupStatusFloorAgg } from './shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
 import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
+import { sqlLatestNonBlankAgg } from './sapVesselFields';
 import { SHIPMENT_LIST_SPD_AGG_CTES_FULL } from './shipmentListSapAggSql';
 import {
   shipmentPagePipelineSummarySelectSql,
@@ -101,9 +102,9 @@ function buildShipmentDailyBaseCteSql(): string {
           -- SAP presence for the STO. MIN keeps the group WITHDRAWN only when every contract
           -- behind it is withdrawn, so a partially-cancelled STO still counts in the circles.
           MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence,
-          MAX(NULLIF(TRIM(s.vessel_name), '')) AS vessel_name,
-          MAX(NULLIF(TRIM(s.vessel_code), '')) AS vessel_code,
-          (ARRAY_AGG(s.master_vessel_id) FILTER (WHERE s.master_vessel_id IS NOT NULL))[1] AS master_vessel_id,
+          ${sqlLatestNonBlankAgg('s.vessel_name')} AS vessel_name,
+          ${sqlLatestNonBlankAgg('s.vessel_code')} AS vessel_code,
+          ${sqlLatestNonBlankAgg('s.master_vessel_id')} AS master_vessel_id,
           MAX(s.created_at) AS created_at,
           MAX(${plantSite}) AS plant_site,
           MAX(s.eta_arrival) AS eta_arrival,

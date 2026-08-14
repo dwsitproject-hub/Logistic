@@ -1,14 +1,20 @@
+import { isGenericKlipPortPlaceholder } from '@/lib/shippingPerformancePorts'
+
 /**
  * Loading / discharge port labels in Edit Shipment modal.
- * Priority: SAP (human-readable) → KLIP input → "—".
- * Numeric SAP codes (e.g. 67.30) are treated as invalid port names.
+ * Priority: SAP (human-readable) → KLIP input → "-".
+ * Numeric SAP codes (e.g. 67.30) and generic KLIP placeholders ("Loading Port 1")
+ * are treated as invalid port names.
  */
+
+export const EMPTY_PORT_DISPLAY = '-'
 
 export function isValidHumanPortName(value: unknown): boolean {
   if (value === null || value === undefined) return false
   const text = String(value).trim()
   if (!text || text === '0.00') return false
   if (/^\d+(\.\d+)?$/.test(text)) return false
+  if (isGenericKlipPortPlaceholder(text)) return false
   return true
 }
 
@@ -22,7 +28,7 @@ export function resolveLoadingPortDisplayLabel(opts: {
   if (isValidHumanPortName(opts.klipPortName)) {
     return String(opts.klipPortName).trim()
   }
-  return '—'
+  return EMPTY_PORT_DISPLAY
 }
 
 export function resolveKlipPortInputValue(value: unknown): string {
@@ -35,7 +41,9 @@ export function resolveLoadingPortDisplayFromRow(
   sequence?: number,
 ): string {
   const isDischarge = Boolean(portRow?.is_discharge_port)
-  const seq = sequence ?? (portRow?.is_discharge_port ? undefined : 1)
+  const rawSeq = sequence ?? (portRow?.is_discharge_port ? undefined : 1)
+  const seqNum = Number(rawSeq)
+  const seq = seqNum === 2 || seqNum === 3 ? seqNum : isDischarge ? undefined : 1
   const sapFromInfo =
     !isDischarge && seq != null && shipmentInfo
       ? shipmentInfo[`sap_vessel_loading_port_${seq}`]

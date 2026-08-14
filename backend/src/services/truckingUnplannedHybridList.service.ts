@@ -63,7 +63,7 @@ export async function countTruckingUnplannedHybridBreakdown(
     `${ctx.executionBuilt.preOuterQuery}${ctx.executionBuilt.outerSql}`,
     {
       selectOutstanding: false,
-      skipSapJoin: ctx.executionBuilt.skipSapJoin,
+      skipSapJoin: true,
       useStageSnapshot: ctx.executionBuilt.useStageSnapshot === true,
     },
   );
@@ -130,6 +130,8 @@ export async function resolveTruckingUnplannedHybridList(
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
   const offset = (pageNum - 1) * limitNum;
 
+  const hydrateOnly =
+    String((req.query as { hydrateOnly?: string }).hydrateOnly || '').toLowerCase() === 'true';
   const breakdown = await countTruckingUnplannedHybridBreakdown(ctx);
   const { executionRows } = breakdown;
 
@@ -140,7 +142,9 @@ export async function resolveTruckingUnplannedHybridList(
   });
 
   const [contractPage, executionPage] = await Promise.all([
-    fetchContractBacklogPage(ctx, slices.contractLimit, slices.contractOffset),
+    hydrateOnly
+      ? Promise.resolve([] as TruckingListRow[])
+      : fetchContractBacklogPage(ctx, slices.contractLimit, slices.contractOffset),
     fetchExecutionPage(ctx, slices.executionLimit, slices.executionOffset),
   ]);
 

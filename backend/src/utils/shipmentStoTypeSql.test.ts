@@ -84,14 +84,14 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('NOT (');
   });
 
-  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes FOB truck-only legs', () => {
+  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes all FOB Type T legs', () => {
     const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
     expect(sql).toContain("= 'FOB'");
     expect(sql).toContain("= 'T'");
     expect(sql).toContain('AND NOT');
-    expect(sql).toContain('vessel_name');
-    expect(sql).toContain(contractHasSeaVesselStoOnContractSql('c'));
+    expect(sql).not.toContain('vessel_name');
+    expect(sql).not.toContain(contractHasSeaVesselStoOnContractSql('c'));
   });
 
   it('buildShipmentPageSeaRowScopeSql uses selected STO param for FOB type when provided', () => {

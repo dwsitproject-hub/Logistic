@@ -111,6 +111,7 @@ export function shipmentHasAnyDischargePortAtaExpr(alias: string): string {
     ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL
     OR ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL
     OR ${f}.ata_vessel_start_discharging IS NOT NULL
+    OR ${f}.ata_vessel_complete_discharge IS NOT NULL
   )`;
 }
 
@@ -124,7 +125,6 @@ export function shipmentPagePipelineStageExpr(alias: string): string {
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
       WHEN ${shipmentHasAnyDischargePortAtaExpr(f)} THEN 'AT_DISCHARGE_PORT'
       WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'SAILED'
       WHEN ${shipmentHasAnyLoadingPortAtaExpr(f)} THEN 'AT_LOADING_PORT'
@@ -230,14 +230,14 @@ export function shipmentPagePipelineSummarySelectSql(): string {
         COUNT(*) FILTER (WHERE ${eff} = 'UNLOADING')::bigint AS discharge_port_unloading_count`;
 }
 
-import { sqlShipmentDisplayVesselName } from './sapVesselFields';
+import { sqlShipmentDisplayVesselName, sqlShipmentListDisplayVesselName } from './sapVesselFields';
 
 /** Normalized non-blank vessel identity used for distinct-vessel counts. */
 export function shipmentPipelineVesselKeyExpr(vesselNameExpr = 'vessel_name'): string {
   return `NULLIF(UPPER(TRIM(COALESCE(${vesselNameExpr}, ''))), '')`;
 }
 
-/** Master → SAP → KLIP display name key (matches shipments list vessel column). */
+/** Master → SAP → KLIP display name key (legacy / shipping-perf Master-first). */
 export function shipmentPipelineDisplayVesselKeyExpr(
   masterExpr: string,
   sapExpr: string,
@@ -246,12 +246,25 @@ export function shipmentPipelineDisplayVesselKeyExpr(
   return `NULLIF(UPPER(TRIM(${sqlShipmentDisplayVesselName(masterExpr, sapExpr, klipExpr)})), '')`;
 }
 
+/**
+ * List / card vessel key — Open+KLIP → KLIP; Open empty → SAP then Master; Close → Master then SAP.
+ */
+export function shipmentPipelineListDisplayVesselKeyExpr(
+  masterExpr: string,
+  sapExpr: string,
+  klipExpr: string,
+  closedExpr: string,
+): string {
+  return `NULLIF(UPPER(TRIM(${sqlShipmentListDisplayVesselName(masterExpr, sapExpr, klipExpr, closedExpr)})), '')`;
+}
+
 /** Display vessel key on enriched summary rows (master lateral + sap_latest). */
 export function shipmentPipelineEnrichedDisplayVesselKeyExpr(alias = 'e'): string {
-  return shipmentPipelineDisplayVesselKeyExpr(
+  return shipmentPipelineListDisplayVesselKeyExpr(
     `${alias}.vessel_name_master`,
     `${alias}.vessel_name_sap`,
     `${alias}.vessel_name`,
+    `${alias}.is_contract_sap_closed`,
   );
 }
 
@@ -265,12 +278,12 @@ export function shipmentPagePipelineVesselNamesSelectSql(vesselKeyExpr: string):
   const loadingGroup = `${eff} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING')`;
   const dischargeGroup = `${eff} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING')`;
   return `
-        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'PLANNED' AND ${vessel} IS NOT NULL) AS planned_vessel_names,
-        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${loadingGroup} AND ${vessel} IS NOT NULL) AS at_loading_port_vessel_names,
-        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'SAILED' AND ${vessel} IS NOT NULL) AS sailed_vessel_names,
-        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${dischargeGroup} AND ${vessel} IS NOT NULL) AS at_discharge_port_vessel_names,
-        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'COMPLETED' AND ${vessel} IS NOT NULL) AS completed_vessel_names,
-        ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'CANCELLED' AND ${vessel} IS NOT NULL) AS cancelled_vessel_names`;
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'PLANNED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS planned_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${loadingGroup} AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS at_loading_port_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'SAILED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS sailed_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${dischargeGroup} AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS at_discharge_port_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'COMPLETED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS completed_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'CANCELLED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS cancelled_vessel_names`;
 }
 
 /** Filter list rows by pipeline card — maps grouped cards to detail effective statuses. */

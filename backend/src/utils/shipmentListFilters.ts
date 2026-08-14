@@ -3,6 +3,7 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { sqlIsFobTypeTStoNumberExpr } from './shipmentStoTypeSql'
 import {
   LEGACY_SHIPMENT_STATUS_ALIASES,
   SHIPMENT_AUTO_STATUSES,
@@ -171,6 +172,7 @@ export function buildExactNumericGlobalSearchInnerSql(
           FROM contract_stos cs_search
           WHERE cs_search.contract_id = c.id
             AND TRIM(cs_search.sto_number::text) = TRIM(${p}::text)
+            AND NOT ${sqlIsFobTypeTStoNumberExpr('c', `${p}::text`)}
         )
         /*
          * PO / contract numbers of the OTHER contracts on the same STO.
@@ -507,7 +509,8 @@ export function shipmentHasDeliveryQtyExpr(alias: string): string {
  *
  * One STO is one voyage: milestone dates are MAX-merged across PO/contract members, so
  * AT Sailed / ATC Discharge on any shipment PO in the group drives the pipeline card.
- * Persisted sibling `shipments.status` (often stale PLANNED) must not demote the voyage.
+ * Completed is GR Close only (FOB/LCO = GR STO, CIF/CFR = GR PO) — ATA discharge with
+ * GR still Open stays UNLOADING. Persisted sibling `shipments.status` must not demote.
  */
 export function shipmentEffectiveStatusExpr(alias: string): string {
   const f = alias
@@ -515,7 +518,7 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
+      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'UNLOADING'
       WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
       WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
       WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'

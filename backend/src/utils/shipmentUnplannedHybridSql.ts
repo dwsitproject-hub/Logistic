@@ -4,9 +4,9 @@
 
 import { sqlIsContractSapClosedForShipmentBacklogExpr } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
-import { sqlContractOutstandingFromFields } from './sapIncotermMetrics';
+import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
-import { contractExtNoSubquery } from './portDisplaySql';
+import { contractExtNoSubquery, resolvedPlantCodeSql } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import {
   buildShipmentPageUnplannedOpenContractsCte,
@@ -187,7 +187,7 @@ export function sqlBacklogRemainingOsJoinExpr(): string {
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     receiveExpr: 'qm.quantity_receive',
-    deliveryExpr: 'qm.quantity_delivery',
+    deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
 }
@@ -243,7 +243,8 @@ export function unplannedContractBacklogRowSelectSql(
   statusLiteral: 'UNPLANNED' | 'PREPLANNED' | 'COMPLETED' = 'UNPLANNED',
   options?: { promoteLowOsToCompleted?: boolean },
 ): string {
-  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  const plantCode = resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code');
+  const plant = groupPlantExpr(plantCode, 'c.company_name');
   const contractExtNoExpr = `COALESCE(
     NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')}
@@ -272,6 +273,7 @@ export function unplannedContractBacklogRowSelectSql(
     c.product AS products,
     c.group_name AS group_name,
     c.group_name AS group_names,
+    ${plantCode} AS plant_code,
     ${plant} AS plant_site,
     c.incoterm AS incoterm,
     c.contract_date AS contract_date,
@@ -376,7 +378,7 @@ export function buildUnplannedContractBacklogCountQuery(
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     receiveExpr: 'qm.quantity_receive',
-    deliveryExpr: 'qm.quantity_delivery',
+    deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
   const qtyMoveCte = buildQtyMoveCte({
@@ -502,6 +504,7 @@ export function buildAllHybridContractBacklogPageQuery(
         c.delivery_end_date,
         c.quantity_ordered AS contract_qty,
         c.contract_id,
+        'UNPLANNED'::text AS status,
         'UNPLANNED'::text AS backlog_status,
         NULL::text AS pre_planned_group_id,
         NULL::text AS pre_planned_group_code
@@ -523,6 +526,7 @@ export function buildAllHybridContractBacklogPageQuery(
         c.delivery_end_date,
         c.quantity_ordered AS contract_qty,
         c.contract_id,
+        'PREPLANNED'::text AS status,
         'PREPLANNED'::text AS backlog_status,
         pg.id::text AS pre_planned_group_id,
         pg.group_code AS pre_planned_group_code
@@ -775,7 +779,7 @@ export function buildCompletedContractBacklogCountQuery(
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     receiveExpr: 'qm.quantity_receive',
-    deliveryExpr: 'qm.quantity_delivery',
+    deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
   const qtyMoveCte = buildQtyMoveCte({

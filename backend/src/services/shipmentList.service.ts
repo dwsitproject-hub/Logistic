@@ -742,8 +742,8 @@ export async function loadShipmentSummaryBundle(
     loadPreplannedBreakdown?: () => Promise<ShipmentSummaryPreplannedBreakdown>;
     loadCompletedBreakdown?: () => Promise<ShipmentSummaryCompletedBreakdown>;
     /**
-     * Lightweight live stage-count SQL (no SPD / vessel joins). When daily is used,
-     * overlays planned/atLP/sailed/… counts so cards match the live table.
+     * Lightweight live stage-count + vessel-name SQL (master join, no SPD qty). When daily
+     * is used, overlays planned/atLP/sailed/… counts and vessel lists so cards match the table.
      */
     liveStageCountsQuery?: string;
     liveStageCountsParams?: unknown[];
@@ -786,8 +786,8 @@ export async function loadShipmentSummaryBundle(
     if (fromDaily) {
       let summaryRow = normalizeSummaryRow(fromDaily.summaryRow);
       let totalCount = fromDaily.totalCount;
-      // Overlay live execution stage counts (cheap vs full vessel/SPD overlay) so badges
-      // match the live status-filtered table when the daily rollup is stale.
+      // Overlay live execution stage counts + vessel names so cards match the
+      // live status-filtered table when the daily rollup is stale.
       if (opts.liveStageCountsQuery) {
         try {
           const liveRes = await query(

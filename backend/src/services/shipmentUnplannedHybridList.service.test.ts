@@ -1,9 +1,13 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildShipmentAllHybridListContext,
   buildShipmentUnplannedHybridListContext,
   isAllHybridListRequest,
   isUnplannedHybridListRequest,
+  shouldResolveAllHybridShipmentsList,
+  shouldResolveCompletedHybridShipmentsList,
 } from './shipmentUnplannedHybridList.service';
 
 describe('shipmentUnplannedHybridList.service', () => {
@@ -30,6 +34,22 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(isAllHybridListRequest('UNPLANNED')).toBe(false);
       expect(isAllHybridListRequest('PLANNED')).toBe(false);
       expect(isAllHybridListRequest('PREPLANNED')).toBe(false);
+    });
+  });
+
+  describe('shouldResolveAllHybridShipmentsList', () => {
+    it('stays on ALL hybrid for 10-digit PO/STO search so Unplanned backlog remains visible', () => {
+      expect(shouldResolveAllHybridShipmentsList('ALL')).toBe(true);
+      expect(shouldResolveAllHybridShipmentsList('')).toBe(true);
+      expect(shouldResolveAllHybridShipmentsList('UNPLANNED')).toBe(false);
+      expect(shouldResolveAllHybridShipmentsList('PLANNED')).toBe(false);
+    });
+  });
+
+  describe('shouldResolveCompletedHybridShipmentsList', () => {
+    it('keeps Completed hybrid for 10-digit PO/STO search', () => {
+      expect(shouldResolveCompletedHybridShipmentsList('COMPLETED')).toBe(true);
+      expect(shouldResolveCompletedHybridShipmentsList('ALL')).toBe(false);
     });
   });
 
@@ -80,6 +100,20 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(ctx.shipmentCtx.sortKey).toBe('vessel_name');
       expect(ctx.shipmentCtx.sortDir).toBe('ASC');
       expect(ctx.shipmentCtx.tableStatusFilter).toBe('UNPLANNED');
+    });
+  });
+
+  describe('getShipments ALL/Completed hybrid gates', () => {
+    it('does not skip hybrid when 10-digit PO/STO search sets exactStoKey', () => {
+      const src = readFileSync(
+        join(__dirname, '../controllers/shipment.controller.ts'),
+        'utf8',
+      );
+      expect(src).toContain('if (shouldResolveAllHybridShipmentsList(status))');
+      expect(src).toContain('if (shouldResolveCompletedHybridShipmentsList(status))');
+      expect(src).not.toMatch(/shouldResolveAllHybridShipmentsList\(status\)\s*&&\s*!exactStoKey/);
+      expect(src).not.toMatch(/shouldResolveCompletedHybridShipmentsList\(status\)\s*&&\s*!exactStoKey/);
+      expect(src).not.toMatch(/isAllHybridListRequest\(status\)\s*&&\s*!exactStoKey/);
     });
   });
 });

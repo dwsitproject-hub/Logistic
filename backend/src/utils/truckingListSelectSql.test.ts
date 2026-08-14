@@ -49,6 +49,16 @@ describe('truckingListSelectSql', () => {
     expect(sql).toContain('sapd.last_val');
   });
 
+  it('joins B2B ending-child plant/unload overlay', () => {
+    const from = buildTruckingListFromClause(false);
+    expect(from).toContain('b2b_end');
+    expect(from).toContain("->>'Truck Discharge Location'");
+    expect(from).toContain("->>'Contract Reff PO Ini'");
+    const sql = buildTruckingListSelectClause(false);
+    expect(sql).toContain('b2b_end.unload_location');
+    expect(sql).toContain('t.unloading_location');
+  });
+
   it('joins the SAP date LATERAL after contracts so it can correlate on c', () => {
     const from = buildTruckingListFromClause(false);
     expect(from).toContain(') sapd ON TRUE');

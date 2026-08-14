@@ -30,12 +30,13 @@ import {
 import { groupPlantExpr } from '../utils/groupPlantSql';
 import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
-import { resolveSapLoadingPortNameMapForShipment } from './vesselLoadingPortsFromSap.service';
+import { resolveSapLoadingPortNameMapForShipment, sapLoadingPortSequenceKey } from './vesselLoadingPortsFromSap.service';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
 import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
 import { sqlMasterVesselLateralJoin } from '../utils/masterVesselDisplaySql';
 import { sqlSapVesselNameFromSpdJsonb } from '../utils/sapVesselFields';
+import { sqlIsContractSapClosedForStoExpr } from '../utils/contractDeliveryStatus';
 
 const SPD_EFFECTIVE_STO = `NULLIF(TRIM(COALESCE(
       spd.sto_number::text,
@@ -73,7 +74,16 @@ const SHIPMENT_BY_ID_SQL = `
     sap_sto.vessel_name_sap,
     sap_sto.vessel_code_sap,
     sap_sto.vessel_owner_sap,
-    mv.vessel_name_master
+    mv.vessel_name_master,
+    ${sqlIsContractSapClosedForStoExpr(
+      'c',
+      `COALESCE(
+        NULLIF(TRIM(c.sto_number::text), ''),
+        sap_sto.effective_sto,
+        NULLIF(TRIM(s.operation_id::text), ''),
+        s.id::text
+      )`,
+    )} AS is_contract_sap_closed
   FROM shipments s
   LEFT JOIN contracts c ON s.contract_id = c.id
   LEFT JOIN LATERAL (
@@ -170,7 +180,10 @@ export interface ShipmentEditPayload {
   contractDetails: Record<string, unknown>[];
 }
 
-async function loadPortsAndInfo(shipmentUuid: string): Promise<{
+async function loadPortsAndInfo(
+  shipmentUuid: string,
+  preferredSto?: string | null,
+): Promise<{
   ports: Record<string, unknown>[];
   shipmentInfo: Record<string, unknown> | null;
 }> {
@@ -190,7 +203,7 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
        ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
       [groupShipmentIds],
     ),
-    resolveSapLoadingPortNameMapForShipment(shipmentUuid),
+    resolveSapLoadingPortNameMapForShipment(shipmentUuid, preferredSto),
   ]);
 
   // Group expansion above returns the same physical port once per group member; collapse those
@@ -202,7 +215,7 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
 
   const ports = dedupedPortRows.map((port) => {
     const isDischarge = Boolean(port.is_discharge_port);
-    const sequence = Number(port.port_sequence ?? 0);
+    const sequence = sapLoadingPortSequenceKey(port.port_sequence);
     const sapPortName = isDischarge
       ? sapPortNames.discharge
       : sapPortNames.bySequence.get(sequence) ?? null;
@@ -353,7 +366,7 @@ async function resolveShipmentEditPayloadUncached(
   const [shipmentRes, editContext, portsBundle] = await Promise.all([
     query(SHIPMENT_BY_ID_SQL, [shipmentUuid]),
     resolveShipmentEditContext(shipmentUuid, preferredSto),
-    loadPortsAndInfo(shipmentUuid),
+    loadPortsAndInfo(shipmentUuid, preferredSto),
   ]);
 
   if (shipmentRes.rows.length === 0 || !editContext) {
@@ -366,7 +379,7 @@ async function resolveShipmentEditPayloadUncached(
     : [];
 
   const shipment = shipmentRes.rows[0] as Record<string, unknown>;
-  mergeShipmentVesselFromSapRow(shipment);
+  mergeShipmentVesselFromSapRow(shipment, { overlayDisplayName: false });
 
   return {
     shipment,

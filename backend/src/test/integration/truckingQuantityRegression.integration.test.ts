@@ -1,8 +1,12 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import app from '../../server';
+import { query } from '../../database/connection';
+import { clearTruckingListMemoryCaches } from '../../services/truckingList.service';
+import { TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION } from '../../services/pipelineDailySummary.service';
 import {
   seedTruckingQtyFixtures,
+  TRUCKING_QTY_CONTRACT_DATE,
   TRUCKING_QTY_DATE_FROM,
   TRUCKING_QTY_DATE_TO,
   TRUCKING_QTY_EXPECTED,
@@ -33,6 +37,10 @@ async function login(email: string, password: string): Promise<string> {
 
 beforeAll(async () => {
   await seedTruckingQtyFixtures();
+  await query(
+    `UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = 'trucking'`,
+  );
+  clearTruckingListMemoryCaches();
   token = await login('admin@klip.com', 'admin123');
 }, 60000);
 
@@ -69,7 +77,7 @@ describe('Integration: Trucking quantity regression — summary endpoint (STO ex
 
     const summary = res.body.data.summary as {
       statusContractQty: { planned: number; completed: number };
-      statusOutstandingQty: { planned: number; inProgress: number };
+      statusOutstandingQty: { unplanned: number; planned: number; inProgress: number };
       outstandingQty: {
         totalKg: number;
         thirdParty: { frcKg: number; lcoKg: number };
@@ -88,6 +96,9 @@ describe('Integration: Trucking quantity regression — summary endpoint (STO ex
     );
     expect(Number(summary.statusOutstandingQty.inProgress)).toBe(
       TRUCKING_QTY_SUMMARY_TOTALS.inProgressOutstandingQtyKg,
+    );
+    expect(Number(summary.statusOutstandingQty.unplanned)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.unplannedOutstandingQtyKg,
     );
     expect(Number(summary.outstandingQty.totalKg)).toBe(TRUCKING_QTY_SUMMARY_TOTALS.outstandingQty.totalKg);
     expect(Number(summary.outstandingQty.thirdParty.frcKg)).toBe(
@@ -125,5 +136,95 @@ describe('Integration: Trucking quantity regression — summary endpoint (STO ex
         isActiveStage ? expected.outstandingQuantity : 0,
       );
     }
+  });
+});
+
+describe('Integration: Trucking quantity regression — GR-Close snapshot + GR-Open live hybrid', () => {
+  async function seedGrClosedSnapshotRow(): Promise<void> {
+    await query(
+      `DELETE FROM trucking_pipeline_daily_summary
+        WHERE contract_date BETWEEN $1::date AND $2::date`,
+      [TRUCKING_QTY_DATE_FROM, TRUCKING_QTY_DATE_TO],
+    );
+    await query(
+      `INSERT INTO trucking_pipeline_daily_summary (
+         group_plant, contract_date, product, incoterm,
+         total_count, unplanned_execution_count, planned_count, in_progress_count,
+         loading_count, in_transit_count, unloading_count, completed_count, cancelled_count,
+         unplanned_contract_backlog,
+         completed_gr_closed_contract_qty, cancelled_gr_closed_contract_qty
+       ) VALUES (
+         'Blank', $1::date, 'CPO', 'LCO',
+         8, 0, 5, 0,
+         0, 0, 0, 2, 0,
+         0,
+         600000, 0
+       )`,
+      [TRUCKING_QTY_CONTRACT_DATE],
+    );
+    await query(
+      `UPDATE pipeline_summary_refresh_meta
+          SET is_stale = FALSE, logic_version = $1, refreshed_at = NOW()
+        WHERE module = 'trucking'`,
+      [TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION],
+    );
+    clearTruckingListMemoryCaches();
+  }
+
+  afterAll(async () => {
+    await query(
+      `DELETE FROM trucking_pipeline_daily_summary
+        WHERE contract_date BETWEEN $1::date AND $2::date`,
+      [TRUCKING_QTY_DATE_FROM, TRUCKING_QTY_DATE_TO],
+    );
+    await query(
+      `UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = 'trucking'`,
+    );
+    clearTruckingListMemoryCaches();
+  });
+
+  it('hybrid summaryOnly matches live delivery/receive/OS totals (no double-count of GR-Close qty)', async () => {
+    await seedGrClosedSnapshotRow();
+    const res = await request(app)
+      .get(
+        `/api/trucking?summaryOnly=true&limit=1&page=1&sortKey=supplier&sortDir=asc&dateFrom=${TRUCKING_QTY_DATE_FROM}&dateTo=${TRUCKING_QTY_DATE_TO}`,
+      )
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    const summary = res.body.data.summary as {
+      statusContractQty: { planned: number; completed: number };
+      statusOutstandingQty: { unplanned: number; planned: number; inProgress: number };
+      outstandingQty: {
+        totalKg: number;
+        thirdParty: { frcKg: number; lcoKg: number };
+        interco: { frcKg: number; lcoKg: number };
+      };
+    };
+
+    expect(Number(summary.statusContractQty.planned)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.plannedContractQtyKg,
+    );
+    expect(Number(summary.statusContractQty.completed)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.completedContractQtyKg,
+    );
+    expect(Number(summary.statusOutstandingQty.planned)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.plannedOutstandingQtyKg,
+    );
+    expect(Number(summary.statusOutstandingQty.inProgress)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.inProgressOutstandingQtyKg,
+    );
+    expect(Number(summary.statusOutstandingQty.unplanned)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.unplannedOutstandingQtyKg,
+    );
+    expect(Number(summary.outstandingQty.totalKg)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.outstandingQty.totalKg,
+    );
+    expect(Number(summary.outstandingQty.thirdParty.frcKg)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.outstandingQty.thirdParty.frcKg,
+    );
+    expect(Number(summary.outstandingQty.thirdParty.lcoKg)).toBe(
+      TRUCKING_QTY_SUMMARY_TOTALS.outstandingQty.thirdParty.lcoKg,
+    );
   });
 });

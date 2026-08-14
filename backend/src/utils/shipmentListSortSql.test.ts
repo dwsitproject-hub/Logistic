@@ -157,6 +157,13 @@ describe('shipmentListSortSql', () => {
         'outstanding_quantity DESC NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC',
       );
     });
+
+    it('does not ORDER BY a string literal when sortKey is status', () => {
+      const orderBy = buildShipmentContractBacklogOrderBy('status', 'ASC');
+      expect(orderBy).not.toMatch(/'UNPLANNED'/);
+      expect(orderBy).not.toMatch(/ORDER BY\s+'/);
+      expect(orderBy).toBe('c.contract_date ASC NULLS LAST, c.contract_id ASC');
+    });
   });
 
   describe('sortShipmentListRows', () => {
@@ -213,6 +220,13 @@ describe('shipmentListSortSql', () => {
     it('sorts backlog rows by outstanding_quantity output column', () => {
       const orderBy = buildShipmentContractBacklogOuterOrderBy('outstanding_quantity', 'DESC');
       expect(orderBy).toContain('outstanding_quantity DESC');
+    });
+
+    it('orders ALL-hybrid backlog by status column, not a string literal', () => {
+      const orderBy = buildShipmentContractBacklogOuterOrderBy('status', 'ASC');
+      expect(orderBy).toContain('status ASC');
+      expect(orderBy).not.toMatch(/'UNPLANNED'/);
+      expect(orderBy).not.toMatch(/^\d+/);
     });
   });
 });

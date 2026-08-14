@@ -72,6 +72,12 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('c.po_number ASC');
   });
 
+  it('accepts sortKey=status without ORDER BY string literal or missing column', () => {
+    const text = buildUnplannedContractBacklogPageQuery('', '', 20, 0, 'status', 'ASC');
+    expect(text).not.toMatch(/ORDER BY[\s\S]{0,80}'UNPLANNED'/);
+    expect(text).toContain('c.contract_date ASC NULLS LAST, c.contract_id ASC');
+  });
+
   it('builds summary table count CTE', () => {
     const cte = buildUnplannedContractBacklogTableCountCte('AND 1=1');
     expect(cte).toContain('unplanned_contract_backlog_table');
@@ -146,6 +152,8 @@ describe('buildAllHybridContractBacklogQuery', () => {
     expect(text).toContain('qm.quantity_delivery');
     expect(text).not.toContain('0::numeric AS quantity_delivered');
     expect(text).not.toContain('NULL::numeric AS quantity_receive');
+    expect(text).toContain('AS plant_code');
+    expect(text).toContain("spd.data->'raw'->>'Plant Code'");
   });
 
   it('scopes qty_move to paged contracts for contract_date sort', async () => {
@@ -153,6 +161,15 @@ describe('buildAllHybridContractBacklogQuery', () => {
     const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'contract_date', 'ASC');
     expect(text).toContain('paged_contracts');
     expect(text).toContain("SELECT contract_id FROM paged_contracts");
+  });
+
+  it('projects status on ALL-hybrid candidates so sortKey=status is valid SQL', async () => {
+    const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'status', 'ASC');
+    expect(text).toContain("'UNPLANNED'::text AS status");
+    expect(text).toContain("'PREPLANNED'::text AS status");
+    expect(text).toContain('ORDER BY status ASC NULLS LAST');
+    expect(text).not.toMatch(/ORDER BY[\s\S]{0,80}'UNPLANNED'/);
   });
 
   it('buildUnplannedExecutionVesselNamesQuery scopes to hybrid execution rows only', () => {

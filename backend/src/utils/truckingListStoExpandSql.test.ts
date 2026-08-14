@@ -29,6 +29,7 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toContain("data->'contract'->>'sto_quantity'");
     expect(sql).toContain('INNER JOIN contracts c ON c.id = e.contract_id');
     expect(sql).toContain('INNER JOIN trucking_operations t ON t.id = e.id');
+    expect(sql).toContain('is_contract_sap_closed');
     expect(sql).not.toMatch(/\be\.status\b/);
   });
 
@@ -40,6 +41,7 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toContain('NULL::numeric AS quantity_delivered');
     expect(sql).toContain('NULL::numeric AS quantity_receive');
     expect(sql).toContain('NULL::numeric AS outstanding_quantity');
+    expect(sql).toContain('FALSE AS is_contract_sap_closed');
     expect(sql).toContain('e.outstanding_quantity');
     expect(sql).not.toMatch(/FROM sap_processed_data spd\s+WHERE spd\.contract_number = e\.contract_number/);
   });

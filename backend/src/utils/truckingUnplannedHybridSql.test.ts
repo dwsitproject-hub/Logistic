@@ -22,6 +22,7 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain("'contract_backlog'");
     expect(sql).toContain('NULL::text AS operation_id');
     expect(sql).toContain('NULL::text AS sto_number');
+    expect(sql).toContain('unload_location');
     expect(sql).toContain("'UNPLANNED'");
   });
 

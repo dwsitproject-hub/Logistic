@@ -5,6 +5,7 @@
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
 import { TRUCKING_LIST_CONTRACT_EXT_NO_FULL } from './truckingListSelectSql'
+import { sqlB2bEndingUnloadExpr } from './b2bOriginEndingSql'
 import {
   sqlTruckingListBaseOutstandingQtyExpr,
   sqlTruckingListResolvedDeliveryQtyExpr,
@@ -54,7 +55,7 @@ function truckCol(grClosedExpr?: string): Record<string, string> {
     status: sqlTruckingPagePipelineStageExpr('c', undefined, undefined, grClosedExpr),
   location: 't.location',
   loading_location: 't.loading_location',
-  unloading_location: 't.unloading_location',
+  unloading_location: sqlB2bEndingUnloadExpr('t.unloading_location'),
   trucking_owner: 't.trucking_owner',
   supplier: 'c.supplier',
   product: 'c.product',

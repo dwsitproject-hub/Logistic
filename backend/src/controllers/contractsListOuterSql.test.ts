@@ -20,4 +20,10 @@ describe('buildContractsListOuterSql', () => {
     expect(sql).not.toContain('trucking_count');
     expect(sql).not.toContain('document_count');
   });
+
+  it('outstanding uses incoterm Quantity Delivery, not vessel-first quantity_delivery_sap', () => {
+    const sql = buildContractsListOuterSql(false, { compact: true });
+    expect(sql).toContain("IN ('LCO', 'FOB') THEN base.quantity_delivery");
+    expect(sql).not.toContain('quantity_delivery_sap');
+  });
 });

@@ -1,7 +1,9 @@
 'use client'
 
+import { useMemo } from 'react'
 import { Loader2, Truck } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import { FieldHelp } from '@/components/FieldHelp'
 import { cn, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 
 export interface TruckingOutstandingQtyBucket {
@@ -13,12 +15,41 @@ export interface TruckingOutstandingQtySummaryData {
   totalKg: number
   thirdParty: TruckingOutstandingQtyBucket
   interco: TruckingOutstandingQtyBucket
+  otherKg?: number
 }
 
 export const EMPTY_TRUCKING_OUTSTANDING_QTY_SUMMARY: TruckingOutstandingQtySummaryData = {
   totalKg: 0,
   thirdParty: { frcKg: 0, lcoKg: 0 },
   interco: { frcKg: 0, lcoKg: 0 },
+  otherKg: 0,
+}
+
+function sumClassifiedBucketsKg(data: TruckingOutstandingQtySummaryData): number {
+  return (
+    (data.thirdParty?.frcKg ?? 0) +
+    (data.thirdParty?.lcoKg ?? 0) +
+    (data.interco?.frcKg ?? 0) +
+    (data.interco?.lcoKg ?? 0)
+  )
+}
+
+export function buildTruckingOutstandingQtyStripHelpText(
+  data: TruckingOutstandingQtySummaryData | null | undefined,
+): string {
+  const lines = [
+    'Total equals Unplanned Outstanding Qty plus Planned Outstanding Qty on the status cards (over-delivery is floored at 0). Planned includes In Progress.',
+    '3rd Party and Interco are that same mix, sliced by source (3rd Party / Interco-Inhouse) and incoterm (FRC / LCO).',
+  ]
+  const otherKg = Number(data?.otherKg ?? 0) || 0
+  if (otherKg > 0) {
+    lines.push(
+      `Other ${formatOutstandingQtyMtFromKg(otherKg, { maxFractionDigits: 0 })} does not classify as 3rd Party or Interco × FRC/LCO (blank/other source or incoterm) — not shown as a column. 3rd Party + Interco + Other = Total.`,
+    )
+  } else {
+    lines.push('When every tonne classifies as 3rd Party or Interco × FRC/LCO, Other is 0.')
+  }
+  return lines.join('\n\n')
 }
 
 type TruckingOutstandingQtySummaryProps = {
@@ -55,14 +86,22 @@ function BucketColumn({
 }
 
 /**
- * Toolbar-scoped Outstanding Qty strip (FRC/LCO × Interco / 3rd Party).
- * Static across status-card clicks (Unplanned / Planned / In Progress total).
+ * Toolbar-scoped Outstanding Qty strip.
+ * Total = Unplanned OS + Planned/In Progress OS (clamped at 0).
  */
 export function TruckingOutstandingQtySummary({
   loading = false,
   data,
 }: TruckingOutstandingQtySummaryProps) {
   const summary = data ?? EMPTY_TRUCKING_OUTSTANDING_QTY_SUMMARY
+  const helpText = useMemo(
+    () =>
+      buildTruckingOutstandingQtyStripHelpText({
+        ...summary,
+        otherKg: summary.otherKg ?? Math.max(0, summary.totalKg - sumClassifiedBucketsKg(summary)),
+      }),
+    [summary],
+  )
 
   return (
     <Card>
@@ -80,6 +119,7 @@ export function TruckingOutstandingQtySummary({
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
                 <span>Outstanding Qty</span>
+                <FieldHelp text={helpText} />
                 {loading ? (
                   <Loader2
                     className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600"
@@ -96,7 +136,7 @@ export function TruckingOutstandingQtySummary({
                 {formatOutstandingQtyMtFromKg(summary.totalKg, { maxFractionDigits: 0 })}
               </div>
               <p className="mt-1 text-[11px] leading-snug text-gray-500">
-                FRC + LCO · after WB · Unplanned / Planned / In Progress
+                Unplanned OS + Planned OS
               </p>
             </div>
           </div>

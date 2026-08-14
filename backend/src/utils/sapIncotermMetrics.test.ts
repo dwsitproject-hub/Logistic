@@ -11,6 +11,7 @@ import {
   sqlIncotermImportStatusFromJson,
   sqlIncotermOutstandingCase,
   sqlIncotermQuantityDeliveryCase,
+  sqlQtyMoveJoinIncotermDelivery,
   sqlUatQuantityDeliveryCase,
   usesGrPoStatus,
   usesTruckingQuantityDelivery,
@@ -95,14 +96,15 @@ describe('sapIncotermMetrics', () => {
     expect(sql).not.toContain('GREATEST(0');
   });
 
-  it('sqlContractOutstandingSignedExpr uses SAP delivery not incoterm matrix', () => {
+  it('sqlContractOutstandingSignedExpr uses incoterm Quantity Delivery (not vessel-first SAP COALESCE)', () => {
     const sql = sqlContractOutstandingSignedExpr({
       contractQtyExpr: 'base.quantity_ordered',
       incotermExpr: 'base.incoterm',
       receiveExpr: 'base.quantity_receive',
-      deliveryExpr: 'base.quantity_delivery_sap',
+      deliveryExpr: 'base.quantity_delivery',
     });
-    expect(sql).toContain('base.quantity_delivery_sap');
+    expect(sql).toContain('base.quantity_delivery');
+    expect(sql).not.toContain('quantity_delivery_sap');
     expect(sql).not.toContain('GREATEST(0');
   });
 
@@ -125,5 +127,13 @@ describe('sapIncotermMetrics', () => {
     expect(stoIdx).toBeGreaterThan(-1);
     expect(stoContractIdx).toBeGreaterThan(-1);
     expect(stoIdx).toBeLessThan(stoContractIdx);
+  });
+
+  it('sqlQtyMoveJoinIncotermDelivery uses trucking/vessel columns not vessel-first COALESCE', () => {
+    const sql = sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode');
+    expect(sql).toContain('qm.quantity_delivery_trucking');
+    expect(sql).toContain('qm.quantity_delivery_vessel');
+    expect(sql).not.toContain('qm.quantity_delivery)');
+    expect(sql).not.toContain('qm.quantity_delivery,');
   });
 });

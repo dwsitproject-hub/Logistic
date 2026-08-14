@@ -104,6 +104,7 @@ export const TRUCKING_QTY_SUMMARY_TOTALS = {
   completedContractQtyKg: 600000,
   plannedOutstandingQtyKg: 265000,
   inProgressOutstandingQtyKg: 0,
+  unplannedOutstandingQtyKg: 0,
   outstandingQty: {
     totalKg: 265000,
     thirdParty: { frcKg: 55000, lcoKg: 210000 },

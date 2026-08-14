@@ -940,7 +940,7 @@ export async function processWbRekapWorkbookUpload(args: {
     client.release();
   }
 
-  if (autoCreatedAny || dedupedAny) {
+  if (autoCreatedAny || dedupedAny || rowsUpserted > 0 || touchedOps.size > 0) {
     invalidateTruckingListCache();
   }
   if (dedupedAny) {

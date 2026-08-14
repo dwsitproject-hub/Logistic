@@ -264,6 +264,25 @@ export function sqlIncotermOutstandingCase(opts: {
   )`;
 }
 
+/**
+ * qty_move join delivery for LCO/FOB outstanding.
+ * Use trucking vs vessel by incoterm — not `qm.quantity_delivery`
+ * (vessel-first COALESCE), which hides a larger trucking total when any STO
+ * has generic SAP "Quantity Delivery" parsed as vessel.
+ */
+export function sqlQtyMoveJoinIncotermDelivery(
+  incotermExpr: string,
+  qmAlias = 'qm',
+  transportExpr?: string,
+): string {
+  return sqlIncotermQuantityDeliveryCase(
+    incotermExpr,
+    `${qmAlias}.quantity_delivery_trucking`,
+    `${qmAlias}.quantity_delivery_vessel`,
+    transportExpr,
+  );
+}
+
 /** qty_move subquery delivery for a contract number expression. */
 export function sqlQtyMoveIncotermDelivery(
   incotermExpr: string,

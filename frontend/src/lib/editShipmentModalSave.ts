@@ -143,6 +143,12 @@ export type SaveEditShipmentInput = {
   shipmentId: string
   vesselName: string
   originalVesselName: string
+  vesselCode?: string
+  vesselOwner?: string
+  vesselCapacity?: string
+  vesselHullType?: string
+  charterType?: string
+  masterVesselId?: string | null
   sfalQty: number | null
   sfbdQty: number | null
   originalSfalQty: number | null
@@ -256,6 +262,21 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
 
   if (input.vesselName.trim() && input.vesselName.trim() !== input.originalVesselName.trim()) {
     updateBody.vessel_name = input.vesselName.trim()
+    const code = input.vesselCode?.trim()
+    if (code) updateBody.vessel_code = code
+    const owner = input.vesselOwner?.trim()
+    if (owner) updateBody.vessel_owner = owner
+    const hull = input.vesselHullType?.trim()
+    if (hull) updateBody.vessel_hull_type = hull
+    const charter = input.charterType?.trim()
+    if (charter) updateBody.charter_type = charter
+    const capRaw = input.vesselCapacity?.trim()
+    if (capRaw) {
+      const cap = Number(capRaw)
+      if (Number.isFinite(cap)) updateBody.vessel_capacity = cap
+    }
+    const masterId = input.masterVesselId?.trim()
+    if (masterId) updateBody.master_vessel_id = masterId
   }
   // KLIP Delivered/Receive are persisted per PO via /po-klip-qty (not summed onto this row).
   if (!quantityValuesEqual(input.sfalQty, input.originalSfalQty)) updateBody.sfal_qty = input.sfalQty

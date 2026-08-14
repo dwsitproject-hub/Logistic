@@ -19,7 +19,9 @@ import {
 } from '../utils/contractDeliveryStatus';
 import {
   resolveContractActualQtySubtractedTs,
+  sqlContractOutstandingSignedExpr,
   sqlIncotermQuantityDeliveryCase,
+  sqlQtyMoveJoinIncotermDelivery,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
 import {
@@ -31,6 +33,11 @@ import {
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 } from '../utils/truckingQuantitySql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
+import {
+  sqlB2bEndingPlantCodeAgg,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
+import { sqlContractInActiveLogisticsOpenOsExpr } from '../utils/contractLogisticsOpenOsSql';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -284,7 +291,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.source_type) AS source_type,
           MAX(c.status) AS status,
-          MAX(c.plant_code) AS plant_code,
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
           MAX(c.company_name) AS company_name,
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -299,6 +306,16 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
           (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
+          MAX(${sqlContractOutstandingSignedExpr({
+            contractQtyExpr: 'c.quantity_ordered',
+            incotermExpr: 'c.incoterm',
+            receiveExpr: 'qm.quantity_receive',
+            deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
+              'c.incoterm',
+              'qm',
+              sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+            ),
+          })}) AS outstanding_quantity,
           -- ETA Trucking Completion = last Daily Planning date
           (
             SELECT MAX(t.last_daily_deliverable_date)
@@ -357,6 +374,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1
@@ -368,7 +386,12 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           NULLIF(TRIM(pnc.group_plant), ''),
           NULLIF(TRIM(pna.group_plant), ''),
           'Blank'
-        ) AS plant_site
+        ) AS plant_site,
+        (${sqlContractInActiveLogisticsOpenOsExpr({
+          contractUuidExpr: 'base.id',
+          contractNumberExpr: 'base.contract_id',
+          incotermExpr: 'base.incoterm',
+        })}) AS in_logistics_open_os
       FROM base
       LEFT JOIN LATERAL (
         SELECT mp.group_plant, mp.plant_name
@@ -739,10 +762,27 @@ export function resolveLandOutstandingKgForCycleCompletion(row: any): number | n
   const subtracted = resolveContractActualQtySubtractedTs(
     row?.incoterm,
     row?.quantity_receive,
-    row?.quantity_delivery_sap ?? row?.quantity_delivery,
+    row?.quantity_delivery ?? row?.quantity_delivery_sap,
   );
   if (!Number.isFinite(subtracted)) return null;
   return ordered - subtracted;
+}
+
+/**
+ * Open Contract Performance qty (Section 1 Open card + Section 2 drilldown).
+ * Same qty_move OS as Contracts/Trucking/Shipments lists, floored at 0 so
+ * over-delivery does not shrink Open / drilldown totals.
+ */
+export function resolveOpenPerfOutstandingQtyKg(row: any): number {
+  const signed = resolveLandOutstandingKgForCycleCompletion(row);
+  if (signed == null || !Number.isFinite(signed)) return 0;
+  return Math.max(0, signed);
+}
+
+/** SAP Open contract that still sits on Shipments or Trucking active OS strips. */
+export function isContractInLogisticsOpenOs(row: any): boolean {
+  const v = row?.in_logistics_open_os;
+  return v === true || v === 't' || v === 'true' || v === 1 || v === '1';
 }
 
 /**
@@ -1041,8 +1081,13 @@ export function aggregateLatePerformanceRows(
 ) {
   const includeSummary = part === 'summary' || part === 'all';
   const includeTree = part === 'tree' || part === 'all';
-  const includeRowInTree = (row: any) =>
-    includeTree && rowMatchesContractPerfStatusFilter(row, filters.statusNorm);
+  const includeRowInTree = (row: any) => {
+    if (!includeTree || !rowMatchesContractPerfStatusFilter(row, filters.statusNorm)) return false;
+    const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+    const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
+    if (isOpen && !isContractInLogisticsOpenOs(row)) return false;
+    return true;
+  };
   const todayMid = new Date();
   todayMid.setHours(0, 0, 0, 0);
 
@@ -1184,12 +1229,8 @@ export function aggregateLatePerformanceRows(
         continue;
       }
       const _qtyOrderedNoDue = Number(row.quantity_ordered || 0);
-      const _subtractedNoDue = resolveContractActualQtySubtractedTs(
-        row.incoterm,
-        row.quantity_receive,
-        row.quantity_delivery_sap ?? row.quantity_delivery,
-      );
-      const _outstandingQtyNoDue = Math.max(0, _qtyOrderedNoDue - _subtractedNoDue);
+      const _outstandingQtyNoDue =
+        isOpenNoDue && isContractInLogisticsOpenOs(row) ? resolveOpenPerfOutstandingQtyKg(row) : 0;
       const _qtyForPerfNoDue = isClosedNoDue ? _qtyOrderedNoDue : _outstandingQtyNoDue;
       if (includeSummary) {
         if (isOpenNoDue) openStatusOutstandingQty += _outstandingQtyNoDue;
@@ -1272,13 +1313,9 @@ export function aggregateLatePerformanceRows(
       isOpen && !hasCalendarDate(resolveOpenStandardEta(row, transport));
 
     const _qtyOrdered = Number(row.quantity_ordered || 0);
-    const _subtracted = resolveContractActualQtySubtractedTs(
-      row.incoterm,
-      row.quantity_receive,
-      row.quantity_delivery_sap ?? row.quantity_delivery,
-    );
-    const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
-    /** Open Section 1/2: outstanding qty. Close Section 1/2: total contract qty (quantity_ordered). */
+    const _outstandingQty =
+      isOpen && isContractInLogisticsOpenOs(row) ? resolveOpenPerfOutstandingQtyKg(row) : 0;
+    /** Open Section 1/2: logistics-strip OS (qty_move, floor 0). Close: total contract qty. */
     const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 
     // Section 1 status cards — includes schedulable + unscheduled (no due end / no completion).

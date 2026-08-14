@@ -1048,8 +1048,9 @@ function ContractPerfDrilldownSectionHelp({
         </p>
         {summaryCardStatus === 'Open' ? (
           <p className="text-gray-500">
-            Open contracts without due date delivery end are excluded from Section 1 and Section 2. Sum On Time +
-            Late qty should match Section 1 Open outstanding.
+            Open qty = Shipments strip (FOB/CIF/CFR) + Trucking strip (FRC/LCO) for contracts still
+            on the active pipeline. Pipeline Completed/Cancelled is excluded even if SAP is still Open.
+            On Time + Late + Unscheduled should match Section 1 Open outstanding.
           </p>
         ) : null}
       </TooltipContent>
@@ -4055,7 +4056,10 @@ function ContractsPageContent() {
                     />
                   }
                 >
-                  <div className="text-sm text-gray-500 mb-1">Outstanding Qty (MT)</div>
+                  <div className="text-sm text-gray-500 mb-1 flex items-center gap-1">
+                    Outstanding Qty (MT)
+                    <FieldHelp text={FIELD_HELP.contractPerfOutstandingQty} />
+                  </div>
                   <div className="text-xl font-bold text-gray-900 mb-3">
                     {formatContractPerfOutstandingMt(statusCardSummary.openOutstandingQty)}
                   </div>

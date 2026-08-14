@@ -25,7 +25,7 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(isTruckingOsStatusOutsideActiveScope(null)).toBe(false)
   })
 
-  it('page KPI path (osStatus null) aggregates all active stages without per-card filter', () => {
+  it('page KPI path (osStatus null) aggregates mixed card qty at PO grain', () => {
     const built = {
       preOuterQuery: 'WHERE 1=1',
       outerSql: '',
@@ -34,7 +34,10 @@ describe('truckingOutstandingQtySummarySql', () => {
     }
     const allActive = buildTruckingOutstandingQtyExecutionAggregateQuery(built, null)
     expect(allActive.text).toContain("IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')")
-    expect(allActive.text).not.toMatch(/tf\.status = \$/)
+    expect(allActive.text).toContain('per_contract')
+    expect(allActive.text).toContain('GREATEST(0')
+    expect(allActive.text).toContain('card_total_kg')
+    expect(allActive.text).not.toMatch(/pc\.status = \$/)
     expect(allActive.params).toEqual([])
   })
 
@@ -50,7 +53,7 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(planned.params).toEqual([])
 
     const inProg = buildTruckingOutstandingQtyExecutionAggregateQuery(built, 'IN_PROGRESS')
-    expect(inProg.text).toMatch(/tf\.status = \$1/)
+    expect(inProg.text).toMatch(/pc\.status = \$1/)
     expect(inProg.params).toEqual(['IN_PROGRESS'])
   })
 
@@ -61,24 +64,28 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(shouldIncludeTruckingUnplannedBacklogForOs('IN_PROGRESS')).toBe(false)
   })
 
-  it('parses and merges bucket rows', () => {
+  it('parses card_total_kg and keeps Other residual', () => {
     const a = parseTruckingOutstandingQtySummaryRow({
       third_party_frc_kg: 1000,
       third_party_lco_kg: 2000,
       interco_frc_kg: 3000,
       interco_lco_kg: 4000,
+      card_total_kg: 12000,
     })
-    expect(a.totalKg).toBe(10000)
+    expect(a.totalKg).toBe(12000)
+    expect(a.otherKg).toBe(2000)
     const b = parseTruckingOutstandingQtySummaryRow({
       third_party_frc_kg: 500,
       third_party_lco_kg: 0,
       interco_frc_kg: 0,
       interco_lco_kg: 250,
     })
+    expect(b.totalKg).toBe(750)
     const merged = mergeTruckingOutstandingQtySummaries(a, b)
     expect(merged.thirdParty.frcKg).toBe(1500)
     expect(merged.interco.lcoKg).toBe(4250)
-    expect(merged.totalKg).toBe(10750)
+    expect(merged.totalKg).toBe(12750)
+    expect(merged.otherKg).toBe(2000)
   })
 
   it('builds source_type predicates matching Contract Performance rules', () => {
@@ -94,6 +101,10 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(text).toContain('latest_spd_contract')
     expect(text).toContain('COUNT(*)::bigint AS c')
     expect(text).toContain('AS contract_qty_kg')
+    expect(text).toContain('AS card_total_kg')
+    expect(text).toContain('quantity_ordered')
+    expect(text).toContain('qty_move')
+    expect(text).toContain('outstanding_quantity')
     expect(text).toContain('third_party_frc_kg')
     expect(text).toContain('interco_lco_kg')
     // Single FROM/backlog scan — not three separate SELECTs like the deprecated helpers.

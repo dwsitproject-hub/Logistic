@@ -21,6 +21,7 @@ vi.mock('../utils/logger', () => ({
 }));
 
 import {
+  fanOutShipmentEtaToStoGroup,
   fanOutVesselLoadingPortAtaToStoGroup,
   upsertShipmentAtaOverrideForStoGroup,
 } from './shipmentAtaStoFanOut.service';
@@ -128,5 +129,36 @@ describe('fanOutVesselLoadingPortAtaToStoGroup', () => {
     });
     expect(touched).toBe(0);
     expect(queryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('fanOutShipmentEtaToStoGroup', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    resolveIdsMock.mockReset();
+  });
+
+  it('writes ETA onto every shipment PO and matching ports in the STO group', async () => {
+    resolveIdsMock.mockResolvedValue([ANCHOR, SIBLING]);
+    queryMock.mockResolvedValue({ rowCount: 2 });
+
+    const touched = await fanOutShipmentEtaToStoGroup(ANCHOR, {
+      eta_arrival: '2026-07-01',
+      eta_berthed: '2026-07-02',
+      eta_loading_start: '2026-07-03',
+      eta_loading_complete: '2026-07-04',
+      eta_sailed: '2026-07-05',
+      eta_discharge_arrival: '2026-07-10',
+      eta_discharge_berthed: '2026-07-11',
+      eta_discharge_start: '2026-07-12',
+      eta_discharge_complete: '2026-07-13',
+    });
+
+    expect(touched).toBe(2);
+    expect(queryMock).toHaveBeenCalledTimes(3);
+    const shipmentSql = String(queryMock.mock.calls[0][0]);
+    expect(shipmentSql).toContain('eta_arrival = $2::date');
+    expect(shipmentSql).toContain('WHERE id = ANY($1::uuid[])');
+    expect(queryMock.mock.calls[0][1][0]).toEqual([ANCHOR, SIBLING]);
   });
 });

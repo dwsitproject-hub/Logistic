@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -110,9 +110,14 @@ const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
 const TRUCKING_STATUS_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
   PLANNED: 'Planned',
-  IN_PROGRESS: 'In Progress',
+  IN_PROGRESS: 'Planned',
   COMPLETED: 'Completed',
   CANCELLED: 'Cancelled',
+}
+
+function normalizeTruckingSummaryStatusFilter(status: string): string {
+  const stage = String(status ?? '').trim().toUpperCase()
+  return stage === 'IN_PROGRESS' ? 'PLANNED' : stage
 }
 
 /** Parse API qty (kg) — handles numeric strings with commas. */
@@ -1906,7 +1911,7 @@ function TruckingPageContent() {
     // Read URL parameters
     const statusParam = searchParams.get('status')
     if (statusParam) {
-      setStatusFilter(statusParam)
+      setStatusFilter(normalizeTruckingSummaryStatusFilter(statusParam))
     }
     setPage(1)
     setHasMore(true)
@@ -2100,7 +2105,9 @@ function TruckingPageContent() {
         } else {
           setUnplannedBreakdown(null)
         }
-        const activeStage = String(fetchStatusFilter ?? '').trim().toUpperCase()
+        const activeStage = normalizeTruckingSummaryStatusFilter(
+          String(fetchStatusFilter ?? '').trim().toUpperCase(),
+        )
         if (activeStage && activeStage !== 'ALL') {
           const listTotal =
             activeStage === 'UNPLANNED'
@@ -2155,7 +2162,13 @@ function TruckingPageContent() {
       if (!forceOsRefresh && truckingSection1Summary?.outstandingQty != null) {
         setOutstandingQtyFetching(false)
       }
-      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      if (!summaryForce && isCacheFresh(summaryCacheKey)) {
+        const cachedSummary = peekCache<{ data?: { summary?: typeof truckingSection1Summary } }>(
+          summaryCacheKey,
+        )
+        if (cachedSummary) applySummaryEnvelope(cachedSummary)
+        else setSummaryFetching(false)
+      } else if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
         window.requestIdleCallback(() => scheduleSummaryFetches(), { timeout: 2000 })
       } else {
         setTimeout(scheduleSummaryFetches, 250)
@@ -2166,6 +2179,7 @@ function TruckingPageContent() {
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.delete('includeSummary')
         hydrateParams.set('skipSapJoin', 'false')
+        hydrateParams.set('hydrateOnly', 'true')
         const hydrateUrl = `/trucking?${hydrateParams.toString()}`
         const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
         void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
@@ -2194,7 +2208,9 @@ function TruckingPageContent() {
             if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
       }
-      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      if (listAlreadyFullSap) {
+        setQtyFieldsReady(true)
+      } else if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
         window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
       } else {
         setTimeout(scheduleHydrate, 250)
@@ -2658,7 +2674,10 @@ function TruckingPageContent() {
     beginTableScopeRefresh()
     setPage(1)
     setHasMore(true)
-    setStatusFilter((prev) => (prev === status ? 'ALL' : status))
+    const next = normalizeTruckingSummaryStatusFilter(status)
+    setStatusFilter((prev) =>
+      normalizeTruckingSummaryStatusFilter(prev) === next ? 'ALL' : next,
+    )
   }, [beginTableScopeRefresh])
 
   const truckingActiveFilterScopeLabel = useMemo(() => {
@@ -2806,9 +2825,8 @@ function TruckingPageContent() {
           s?.unplanned ??
           0,
       ),
-      // Planned card total = Planned + In Progress (same scope as Planned card list filter).
+      // Planned/In Progress card total = Planned + In Progress (same scope as list filter).
       PLANNED: plannedOnly + inProgressOnly,
-      IN_PROGRESS: inProgressOnly,
       COMPLETED: Number(s?.completed ?? 0),
       CANCELLED: Number(s?.cancelled ?? 0),
     }
@@ -2827,24 +2845,23 @@ function TruckingPageContent() {
     statusFilter,
   ])
 
-  /** Section 2 Contract Qty (kg) — Unplanned / Completed / Cancelled cards only. */
+  /** Section 2 Contract Qty (kg) — Completed / Cancelled cards only. */
   const truckingStatusCardContractQtys = useMemo(() => {
     const q = truckingSection1Summary?.statusContractQty
     return {
-      UNPLANNED: Number(q?.unplanned ?? 0),
       COMPLETED: Number(q?.completed ?? 0),
       CANCELLED: Number(q?.cancelled ?? 0),
     }
   }, [truckingSection1Summary?.statusContractQty])
 
-  /** Section 2 Outstanding Qty (kg) — Planned card = Planned + In Progress (mirrors counts). */
+  /** Section 2 Outstanding Qty (kg) — Unplanned + Planned card (Planned = Planned + In Progress). */
   const truckingStatusCardOutstandingQtys = useMemo(() => {
     const q = truckingSection1Summary?.statusOutstandingQty
     const plannedOnly = Number(q?.planned ?? 0)
     const inProgressOnly = Number(q?.inProgress ?? 0)
     return {
+      UNPLANNED: Number(q?.unplanned ?? 0),
       PLANNED: plannedOnly + inProgressOnly,
-      IN_PROGRESS: inProgressOnly,
     }
   }, [truckingSection1Summary?.statusOutstandingQty])
 
@@ -2981,7 +2998,7 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.status || '',
       render: (o) => (
-        <Badge className={getStatusColor(o.status)}>
+        <Badge className={getStatusColor(o.status)} title={truckingStatusLabel(o.status)}>
           {truckingStatusLabel(o.status)}
         </Badge>
       )
@@ -3679,19 +3696,18 @@ function TruckingPageContent() {
                   />
                 </div>
                 <select
-                  value={statusFilter}
+                  value={normalizeTruckingSummaryStatusFilter(statusFilter) || 'ALL'}
                   onChange={(e) => {
                     beginTableScopeRefresh()
                     setPage(1)
                     setHasMore(true)
-                    setStatusFilter(e.target.value)
+                    setStatusFilter(normalizeTruckingSummaryStatusFilter(e.target.value) || 'ALL')
                   }}
                   className="rounded-lg border px-4 py-2 text-sm"
                 >
                   <option value="ALL">All Status</option>
                   <option value="UNPLANNED">Unplanned</option>
                   <option value="PLANNED">Planned</option>
-                  <option value="IN_PROGRESS">In Progress</option>
                   <option value="COMPLETED">Completed</option>
                   <option value="CANCELLED">Cancelled</option>
                 </select>

@@ -55,6 +55,8 @@ describe('shipmentOutstandingQtySummarySql', () => {
       null,
     )
     expect(q.text).toContain('outstanding_quantity')
+    expect(q.text).toContain('execution_os')
+    expect(q.text).toContain('DISTINCT ON (contract_number)')
     expect(q.text).not.toContain('active_shipments')
     expect(q.text).toContain('card_total_kg')
     expect(q.text).toContain('is_unplanned_execution')

@@ -24,9 +24,9 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
 /** v7: COMPLETED when |OS Qty| displays as 0 MT (≤499 kg) even if GR PO/STO still Open. */
 /** v10: import status any-Open wins (blank GR no longer falls back to contracts.status per row). */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 11; // exclude SAP-withdrawn contracts from totals
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 12; // GR-Close contract qty on daily snapshot
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
-export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 8; // Completed card: PO backlog remaining OS ≤ 1 MT
+export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 11; // List vessel = latest KLIP edit when GR Open
 
 export interface PipelineDailySummaryScope {
   dateFrom?: string;
@@ -374,6 +374,9 @@ export async function loadTruckingSummaryFromDaily(
     executionRows: number;
     totalTableRows: number;
   };
+  /** Contract qty (kg) for GR-Close Completed POs — live summary adds GR-Open remainder. */
+  completedGrClosedContractQtyKg: number;
+  cancelledGrClosedContractQtyKg: number;
 } | null> {
   if (!(await isPipelineDailySummaryFresh('trucking'))) return null;
 
@@ -389,7 +392,9 @@ export async function loadTruckingSummaryFromDaily(
       COALESCE(SUM(unloading_count), 0)::bigint AS unloading_count,
       COALESCE(SUM(completed_count), 0)::bigint AS completed_count,
       COALESCE(SUM(cancelled_count), 0)::bigint AS cancelled_count,
-      COALESCE(SUM(unplanned_contract_backlog), 0)::bigint AS unplanned_contract_backlog
+      COALESCE(SUM(unplanned_contract_backlog), 0)::bigint AS unplanned_contract_backlog,
+      COALESCE(SUM(completed_gr_closed_contract_qty), 0)::numeric AS completed_gr_closed_contract_qty,
+      COALESCE(SUM(cancelled_gr_closed_contract_qty), 0)::numeric AS cancelled_gr_closed_contract_qty
     FROM trucking_pipeline_daily_summary
     ${sql}`,
     params,
@@ -418,6 +423,8 @@ export async function loadTruckingSummaryFromDaily(
       executionRows,
       totalTableRows,
     },
+    completedGrClosedContractQtyKg: Number(row.completed_gr_closed_contract_qty || 0) || 0,
+    cancelledGrClosedContractQtyKg: Number(row.cancelled_gr_closed_contract_qty || 0) || 0,
   };
 }
 

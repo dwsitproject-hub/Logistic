@@ -6,15 +6,15 @@ import {
 } from './shipmentStatus';
 
 describe('deriveShipmentStatus', () => {
-  it('returns COMPLETED when ATA complete discharge exists', () => {
+  it('returns UNLOADING when ATA complete discharge exists but GR is still Open', () => {
     expect(
       deriveShipmentStatus({
         ata_complete_discharge: '2026-01-15',
       }),
-    ).toBe('COMPLETED');
+    ).toBe('UNLOADING');
   });
 
-  it('returns COMPLETED for SAP Close contract without ATA', () => {
+  it('returns COMPLETED only for SAP GR Close, even without ATA', () => {
     expect(
       deriveShipmentStatus({
         contract_import_status: 'Close',
@@ -98,6 +98,18 @@ describe('deriveShipmentStatus', () => {
         ata_start_discharging: '2026-01-08',
       }),
     ).toBe('UNLOADING');
+    expect(
+      deriveShipmentStatus({
+        ata_complete_discharge: '2026-01-09',
+        contract_import_status: 'Open',
+      }),
+    ).toBe('UNLOADING');
+    expect(
+      deriveShipmentStatus({
+        ata_complete_discharge: '2026-01-09',
+        contract_import_status: 'Close',
+      }),
+    ).toBe('COMPLETED');
   });
 
   it('latest ATA milestone wins across phases', () => {

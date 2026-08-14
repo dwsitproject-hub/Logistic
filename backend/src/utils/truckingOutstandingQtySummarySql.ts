@@ -1,6 +1,9 @@
 /**
  * Trucking page — Outstanding Qty KPI strip (FRC/LCO × Interco / 3rd Party).
- * OS uses the same PO-grain outstanding_quantity as the view table (after WB).
+ *
+ * Strip total = Unplanned OS + Planned/In Progress OS (clamped at 0 per PO).
+ * Same numbers as the status cards. 3rd Party / Interco slice that mix
+ * by source × FRC/LCO; residual is otherKg.
  */
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
@@ -27,12 +30,15 @@ export interface TruckingOutstandingQtySummary {
   totalKg: number;
   thirdParty: TruckingOutstandingQtyBucketKg;
   interco: TruckingOutstandingQtyBucketKg;
+  /** Residual so 3rd+Interco+Other = total (blank/other source or non-FRC/LCO). */
+  otherKg?: number;
 }
 
 export const EMPTY_TRUCKING_OUTSTANDING_QTY_SUMMARY: TruckingOutstandingQtySummary = {
   totalKg: 0,
   thirdParty: { frcKg: 0, lcoKg: 0 },
   interco: { frcKg: 0, lcoKg: 0 },
+  otherKg: 0,
 };
 
 const ACTIVE_OS_STATUSES = new Set(['UNPLANNED', 'PLANNED', 'IN_PROGRESS']);
@@ -61,6 +67,22 @@ export function sqlTruckingIncotermIsFrc(expr: string): string {
 
 export function sqlTruckingIncotermIsLco(expr: string): string {
   return `UPPER(TRIM(COALESCE(${expr}, ''))) = 'LCO'`;
+}
+
+/**
+ * Strip / card-total line qty: Unplanned + Planned + In Progress use
+ * outstanding qty, floored at 0 so over-delivery does not shrink totals.
+ */
+export function sqlTruckingStripLineQtyExpr(
+  statusExpr: string,
+  _contractQtyExpr: string,
+  outstandingExpr: string,
+): string {
+  return `CASE
+    WHEN ${statusExpr} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
+      THEN GREATEST(0, COALESCE((${outstandingExpr})::numeric, 0))
+    ELSE 0
+  END`;
 }
 
 function sqlSumOutstandingBucket(
@@ -115,15 +137,38 @@ export function shouldIncludeTruckingUnplannedBacklogForOs(osStatus: string | nu
   return !osStatus || osStatus === 'UNPLANNED';
 }
 
+export function sumTruckingOutstandingQtyClassifiedBucketsKg(
+  summary: Pick<TruckingOutstandingQtySummary, 'thirdParty' | 'interco'>,
+): number {
+  return (
+    (Number(summary.thirdParty?.frcKg) || 0) +
+    (Number(summary.thirdParty?.lcoKg) || 0) +
+    (Number(summary.interco?.frcKg) || 0) +
+    (Number(summary.interco?.lcoKg) || 0)
+  );
+}
+
+export function reconcileTruckingOutstandingQtySummary(
+  strip: TruckingOutstandingQtySummary,
+  cardTotalKg?: number | null,
+): TruckingOutstandingQtySummary {
+  const classified = sumTruckingOutstandingQtyClassifiedBucketsKg(strip);
+  const totalKg =
+    cardTotalKg != null && Number.isFinite(Number(cardTotalKg))
+      ? Number(cardTotalKg) || 0
+      : Number(strip.totalKg) || 0;
+  return {
+    ...strip,
+    totalKg,
+    otherKg: Math.max(0, totalKg - classified),
+  };
+}
+
 export function parseTruckingOutstandingQtySummaryRow(
   row: Record<string, unknown> | undefined | null,
 ): TruckingOutstandingQtySummary {
   if (!row) {
-    return {
-      totalKg: 0,
-      thirdParty: { frcKg: 0, lcoKg: 0 },
-      interco: { frcKg: 0, lcoKg: 0 },
-    };
+    return { ...EMPTY_TRUCKING_OUTSTANDING_QTY_SUMMARY };
   }
   const thirdParty = {
     frcKg: Number(row.third_party_frc_kg ?? 0) || 0,
@@ -133,11 +178,15 @@ export function parseTruckingOutstandingQtySummaryRow(
     frcKg: Number(row.interco_frc_kg ?? 0) || 0,
     lcoKg: Number(row.interco_lco_kg ?? 0) || 0,
   };
-  return {
-    thirdParty,
-    interco,
-    totalKg: thirdParty.frcKg + thirdParty.lcoKg + interco.frcKg + interco.lcoKg,
-  };
+  const classified = thirdParty.frcKg + thirdParty.lcoKg + interco.frcKg + interco.lcoKg;
+  const cardTotalKg =
+    row.card_total_kg != null
+      ? Number(row.card_total_kg) || 0
+      : classified;
+  return reconcileTruckingOutstandingQtySummary(
+    { thirdParty, interco, totalKg: cardTotalKg },
+    cardTotalKg,
+  );
 }
 
 export function mergeTruckingOutstandingQtySummaries(
@@ -151,16 +200,16 @@ export function mergeTruckingOutstandingQtySummaries(
     interco.frcKg += part.interco.frcKg;
     interco.lcoKg += part.interco.lcoKg;
   }
-  return {
-    thirdParty,
-    interco,
-    totalKg: thirdParty.frcKg + thirdParty.lcoKg + interco.frcKg + interco.lcoKg,
-  };
+  const totalKg = parts.reduce((sum, part) => sum + (Number(part.totalKg) || 0), 0);
+  return reconcileTruckingOutstandingQtySummary(
+    { thirdParty, interco, totalKg },
+    totalKg,
+  );
 }
 
 /**
- * Aggregate OS from trucking execution rows (one row per operation / PO after expansion).
- * OS is already PO-level (Contract Qty − Σ Delivery/Receive across STOs), so SUM is safe.
+ * Aggregate strip qty from trucking execution rows at PO grain.
+ * Unplanned / Planned / In Progress = outstanding qty (clamped at 0).
  */
 export function buildTruckingOutstandingQtyExecutionAggregateQuery(
   built: TruckingOutstandingQtyBuiltQuery,
@@ -172,46 +221,53 @@ export function buildTruckingOutstandingQtyExecutionAggregateQuery(
     skipSapJoin: false,
   });
   const baseParams = [...built.innerParams, ...built.outerParams];
-  /** Planned card OS matches list filter: Planned + In Progress. */
+  /** Planned card matches list filter: Planned + In Progress. */
   const plannedCard = osStatus === 'PLANNED';
   const stageClause = !osStatus
     ? ''
     : plannedCard
-      ? ` AND tf.status IN ('PLANNED', 'IN_PROGRESS')`
-      : ` AND tf.status = $${baseParams.length + 1}`;
+      ? ` AND pc.status IN ('PLANNED', 'IN_PROGRESS')`
+      : ` AND pc.status = $${baseParams.length + 1}`;
   const params = !osStatus || plannedCard ? baseParams : [...baseParams, osStatus];
+  const lineQty = sqlTruckingStripLineQtyExpr(
+    'pc.status',
+    'pc.contract_qty',
+    'pc.outstanding_quantity',
+  );
 
   const text = `
     WITH trucking_filtered AS (
       SELECT * FROM (
         ${expanded}
       ) expanded_sub
+    ),
+    per_contract AS (
+      SELECT
+        tf.status,
+        tf.contract_number,
+        MAX(COALESCE(tf.contract_qty, 0))::numeric AS contract_qty,
+        GREATEST(0, MAX(COALESCE(tf.outstanding_quantity, 0)))::numeric AS outstanding_quantity,
+        MAX(NULLIF(TRIM(COALESCE(tf.source_type::text, '')), '')) AS source_type,
+        MAX(NULLIF(TRIM(COALESCE(tf.incoterm::text, '')), '')) AS incoterm
+      FROM trucking_filtered tf
+      WHERE NULLIF(TRIM(COALESCE(tf.contract_number::text, '')), '') IS NOT NULL
+        AND tf.status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
+      GROUP BY tf.status, tf.contract_number
     )
     SELECT
-      ${sqlTruckingOutstandingQtyAggregateSelect(
-        'tf.outstanding_quantity',
-        'tf.source_type',
-        'tf.incoterm',
-      )}
-    FROM trucking_filtered tf
-    WHERE tf.status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
-      AND UPPER(TRIM(COALESCE(tf.incoterm, ''))) IN ('FRC', 'LCO')
+      ${sqlTruckingOutstandingQtyAggregateSelect(lineQty, 'pc.source_type', 'pc.incoterm')},
+      COALESCE(SUM(${lineQty}), 0)::numeric AS card_total_kg
+    FROM per_contract pc
+    WHERE 1=1
       ${stageClause}`;
 
   return { text, params };
 }
 
-/**
- * Aggregate OS from open-contract unplanned backlog (no trucking op yet).
- * Caller supplies contractScopeSql / toolbarSql params separately.
- * @deprecated Use `buildTruckingUnplannedBacklogCombinedQuery` for the Section 1 Summary/OS
- * flow — it computes count + contract qty + this same OS aggregate in one scan instead of
- * three separate scans of the identical backlog set.
- */
-export function buildTruckingOutstandingQtyBacklogAggregateQuery(
+function buildTruckingUnplannedBacklogOsCtes(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): { backlogWhere: string; outstandingExpr: string; qtyMoveCte: string } {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
@@ -225,6 +281,21 @@ export function buildTruckingOutstandingQtyBacklogAggregateQuery(
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}`,
   });
+  return { backlogWhere, outstandingExpr, qtyMoveCte };
+}
+
+/**
+ * Aggregate Unplanned backlog at outstanding qty (no trucking op yet).
+ * @deprecated Use `buildTruckingUnplannedBacklogCombinedQuery`.
+ */
+export function buildTruckingOutstandingQtyBacklogAggregateQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  const { backlogWhere, outstandingExpr, qtyMoveCte } = buildTruckingUnplannedBacklogOsCtes(
+    contractScopeSql,
+    toolbarSql,
+  );
 
   return `
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
@@ -233,44 +304,33 @@ export function buildTruckingOutstandingQtyBacklogAggregateQuery(
       SELECT
         c.source_type,
         c.incoterm,
-        ${outstandingExpr} AS outstanding_quantity
+        (${outstandingExpr})::numeric AS outstanding_quantity
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}
-        AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'LCO')
     )
     SELECT
       ${sqlTruckingOutstandingQtyAggregateSelect(
         'br.outstanding_quantity',
         'br.source_type',
         'br.incoterm',
-      )}
+      )},
+      COALESCE(SUM(COALESCE(br.outstanding_quantity, 0)), 0)::numeric AS card_total_kg
     FROM backlog_rows br`;
 }
 
 /**
  * Section 1 Summary/OS backlog — single scan of the unplanned contract backlog for
- * COUNT + contract qty (kg) + OS bucket aggregates. Replaces 3 separate queries
- * (backlog count, backlog contract qty, backlog OS aggregate) that scanned the exact
- * same `contracts x latest_spd_contract` filtered set.
+ * COUNT + contract qty (kg) + strip buckets (Unplanned = outstanding qty, clamped at 0).
  */
 export function buildTruckingUnplannedBacklogCombinedQuery(
   contractScopeSql: string,
   toolbarSql: string,
 ): string {
-  const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
-  const outstandingExpr = sqlContractGlobalOutstandingExpr({
-    contractQtyExpr: 'c.quantity_ordered',
-    incotermExpr: 'c.incoterm',
-    contractNumberExpr: 'c.contract_id',
-  });
-  const qtyMoveCte = buildQtyMoveCte({
-    kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}`,
-  });
+  const { backlogWhere, outstandingExpr, qtyMoveCte } = buildTruckingUnplannedBacklogOsCtes(
+    contractScopeSql,
+    toolbarSql,
+  );
 
   return `
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
@@ -280,7 +340,7 @@ export function buildTruckingUnplannedBacklogCombinedQuery(
         c.quantity_ordered,
         c.source_type,
         c.incoterm,
-        ${outstandingExpr} AS outstanding_quantity
+        (${outstandingExpr})::numeric AS outstanding_quantity
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}
@@ -288,6 +348,7 @@ export function buildTruckingUnplannedBacklogCombinedQuery(
     SELECT
       COUNT(*)::bigint AS c,
       COALESCE(SUM(COALESCE(br.quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
+      COALESCE(SUM(COALESCE(br.outstanding_quantity, 0)), 0)::numeric AS card_total_kg,
       ${sqlTruckingOutstandingQtyAggregateSelect(
         'br.outstanding_quantity',
         'br.source_type',

@@ -107,7 +107,6 @@ export const SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS: Record<string, string> = {
   contract_numbers: 'c.contract_id',
   contract_number: 'c.contract_id',
   po_numbers: 'c.po_number',
-  status: `'UNPLANNED'`,
   plant_site: 'c.plant_code',
   supplier: 'c.supplier',
   suppliers: 'c.supplier',
@@ -289,21 +288,38 @@ export function buildShipmentListEnrichedCteBody(qtySelectSql: string): string {
     )`;
 }
 
+/** PostgreSQL rejects ORDER BY 'literal' ("non-integer constant in ORDER BY"). */
+function isUnsafeSqlOrderExpr(expr: string): boolean {
+  const trimmed = expr.trim();
+  if (!trimmed) return true;
+  if (/^\d+$/.test(trimmed)) return true;
+  return (
+    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  );
+}
+
+const BACKLOG_DEFAULT_ORDER = (sortDir: 'ASC' | 'DESC') =>
+  `c.contract_date ${sortDir} NULLS LAST, c.contract_id ASC`;
+
 /** ORDER BY for Unplanned / ALL hybrid contract backlog page queries. */
 export function buildShipmentContractBacklogOrderBy(
   sortKey: string,
   sortDir: 'ASC' | 'DESC',
 ): string {
-  if (sortKey === 'created_at' || !SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey]) {
-    return `c.contract_date ${sortDir} NULLS LAST, c.contract_id ASC`;
+  if (sortKey === 'created_at' || sortKey === 'status' || !SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey]) {
+    return BACKLOG_DEFAULT_ORDER(sortDir);
   }
   if (sortKey === 'outstanding_quantity' || sortKey === 'outstanding_qty_planning') {
     return `outstanding_quantity ${sortDir} NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
   }
   if (sortKey === 'quantity_delivered' || sortKey === 'quantity_receive') {
-    return `c.contract_date ${sortDir} NULLS LAST, c.contract_id ASC`;
+    return BACKLOG_DEFAULT_ORDER(sortDir);
   }
   const field = SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey];
+  if (isUnsafeSqlOrderExpr(field)) {
+    return BACKLOG_DEFAULT_ORDER(sortDir);
+  }
   return `${field} ${sortDir} NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
 }
 
@@ -445,12 +461,13 @@ export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string
   delivery_start: 'delivery_start_date',
   delivery_end: 'delivery_end_date',
   contract_qty: 'contract_qty',
-  quantity_delivered: '0',
-  quantity_receive: '0',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
   contract_ext_no: 'contract_ext_no',
 };
+
+const BACKLOG_OUTER_DEFAULT_ORDER = (sortDir: 'ASC' | 'DESC') =>
+  `contract_date ${sortDir} NULLS LAST, contract_number ASC`;
 
 export function buildShipmentContractBacklogOuterOrderBy(
   sortKey: string,
@@ -459,8 +476,14 @@ export function buildShipmentContractBacklogOuterOrderBy(
   const field =
     SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey] ??
     SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS.created_at;
-  if (sortKey === 'created_at' || !SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey]) {
-    return `contract_date ${sortDir} NULLS LAST, contract_number ASC`;
+  if (
+    sortKey === 'created_at' ||
+    sortKey === 'quantity_delivered' ||
+    sortKey === 'quantity_receive' ||
+    !SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey] ||
+    isUnsafeSqlOrderExpr(field)
+  ) {
+    return BACKLOG_OUTER_DEFAULT_ORDER(sortDir);
   }
   return `${field} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_number ASC`;
 }

@@ -223,6 +223,18 @@ export function buildShipmentExcludeStoTypeTSql(
   return `NOT (${shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias)} = 'T')`;
 }
 
+/** True when this STO number is a FOB trucking (Type T) leg — not a Shipments search hit. */
+export function sqlIsFobTypeTStoNumberExpr(
+  contractAlias: string,
+  stoNumberSql: string,
+): string {
+  const inc = contractEffectiveIncotermExpr(contractAlias);
+  return `(
+    (${inc}) = 'FOB'
+    AND ${shipmentResolvedStoTypeForNumberExpr(contractAlias, stoNumberSql)} = 'T'
+  )`;
+}
+
 export interface ShipmentPageSeaRowScopeOptions {
   /** When set, FOB Type T check resolves against this bound STO param (search / ?sto=). */
   selectedStoParamIndex?: number;
@@ -230,8 +242,8 @@ export interface ShipmentPageSeaRowScopeOptions {
 
 /**
  * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm.
- * FOB-only: exclude truck-only legs (Type T with no vessel / no Type V sibling on PO).
- * CIF/CFR remain incoterm-only.
+ * FOB Type T is a trucking leg — never a Shipments row (mixed V+T POs keep Type V only).
+ * CIF/CFR remain incoterm-only (Type T allowed).
  */
 export function buildShipmentPageSeaRowScopeSql(
   contractAlias = 'c',
@@ -248,14 +260,11 @@ export function buildShipmentPageSeaRowScopeSql(
           `$${options.selectedStoParamIndex}::text`,
         )
       : shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias);
-  const hasSeaVesselSto = contractHasSeaVesselStoOnContractSql(contractAlias);
-  const fobTruckLeg = `(
+  const fobTypeT = `(
     (${inc}) = 'FOB'
     AND ${resolvedTypeExpr} = 'T'
-    AND NOT (${hasSeaVesselSto})
-    AND NULLIF(TRIM(${shipmentAlias}.vessel_name), '') IS NULL
   )`;
-  return `(${incScope}) AND NOT (${fobTruckLeg})`;
+  return `(${incScope}) AND NOT (${fobTypeT})`;
 }
 
 /** SQL: SAP row is FOB sea leg (Type V, or non-T with vessel name). */

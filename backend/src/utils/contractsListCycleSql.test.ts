@@ -8,11 +8,11 @@ describe('sqlHasCycleCompletionDate', () => {
       contractQtyExpr: 'quantity_ordered',
       incotermExpr: 'incoterm',
       receiveExpr: 'quantity_receive',
-      deliveryExpr: 'quantity_delivery_sap',
+      deliveryExpr: 'quantity_delivery',
     });
     const sql = sqlHasCycleCompletionDate('transport_mode', `(${outstanding})`);
     expect(sql).toContain('quantity_ordered');
-    expect(sql).toContain('quantity_delivery_sap');
+    expect(sql).toContain('quantity_delivery');
     expect(sql).not.toMatch(/\boutstanding_quantity\b/);
   });
 });

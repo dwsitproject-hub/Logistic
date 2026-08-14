@@ -10,6 +10,8 @@ import {
   resolveCycleCompletionDate,
   resolveEffectiveDeliveryEnd,
   resolveOpenEffectiveCompletionEnd,
+  resolveOpenPerfOutstandingQtyKg,
+  isContractInLogisticsOpenOs,
   resolveSapDpCalendarDate,
   resolveSapPayoffCalendarDate,
 } from './latePerformance.service'
@@ -350,5 +352,60 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
     expect(
       isContractIncludedInPerfDrilldownTreeWithComputed(row, { lateOnTimeFilter: 'ON_TIME' }),
     ).toBe(true)
+  })
+})
+
+describe('resolveOpenPerfOutstandingQtyKg', () => {
+  it('prefers qty_move outstanding_quantity and floors over-delivery at 0', () => {
+    expect(
+      resolveOpenPerfOutstandingQtyKg({
+        outstanding_quantity: -12000,
+        quantity_ordered: 100000,
+        incoterm: 'FRC',
+        quantity_receive: 0,
+      }),
+    ).toBe(0)
+    expect(
+      resolveOpenPerfOutstandingQtyKg({
+        outstanding_quantity: 45000,
+        quantity_ordered: 100000,
+        incoterm: 'LCO',
+        quantity_delivery_sap: 0,
+      }),
+    ).toBe(45000)
+  })
+
+  it('falls back to contract qty minus incoterm fulfilled when outstanding_quantity is missing', () => {
+    expect(
+      resolveOpenPerfOutstandingQtyKg({
+        quantity_ordered: 100000,
+        incoterm: 'FRC',
+        quantity_receive: 25000,
+      }),
+    ).toBe(75000)
+    expect(
+      resolveOpenPerfOutstandingQtyKg({
+        quantity_ordered: 100000,
+        incoterm: 'FOB',
+        quantity_delivery_sap: 110000,
+      }),
+    ).toBe(0)
+    expect(
+      resolveOpenPerfOutstandingQtyKg({
+        quantity_ordered: 1500000,
+        incoterm: 'LCO',
+        quantity_delivery: 1168720,
+        quantity_delivery_sap: 89990,
+      }),
+    ).toBe(331280)
+  })
+})
+
+describe('isContractInLogisticsOpenOs', () => {
+  it('treats pg boolean true as in-strip', () => {
+    expect(isContractInLogisticsOpenOs({ in_logistics_open_os: true })).toBe(true)
+    expect(isContractInLogisticsOpenOs({ in_logistics_open_os: 't' })).toBe(true)
+    expect(isContractInLogisticsOpenOs({ in_logistics_open_os: false })).toBe(false)
+    expect(isContractInLogisticsOpenOs({})).toBe(false)
   })
 })

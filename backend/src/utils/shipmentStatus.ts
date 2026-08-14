@@ -182,12 +182,13 @@ export function normalizeShipmentDetailStatus(raw: string | null | undefined): S
 /**
  * Derive SEA shipment status from milestones (latest ATA stage wins).
  * Maps 1:1 with summary breakdown tiers on the Shipments page.
+ * Completed is GR Close only. ATA complete discharge with GR still Open is UNLOADING.
  * Open STO without ATA ladder is PLANNED (Unplanned card = PO backlog only).
  * Delivery Qty / ETA with no ATA also resolve to PLANNED.
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
-  if (hasDate(m.ata_complete_discharge)) return 'COMPLETED';
+  if (hasDate(m.ata_complete_discharge)) return 'UNLOADING';
   if (hasDate(m.ata_start_discharging)) return 'UNLOADING';
   if (hasDate(m.ata_berthed_at_discharge_port)) return 'BERTHED_DP';
   if (hasDate(m.ata_arrive_at_discharge_port)) return 'ARRIVED_DP';

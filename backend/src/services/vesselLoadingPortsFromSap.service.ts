@@ -2,6 +2,7 @@ import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
 import logger from '../utils/logger';
 import { isGenericKlipPortPlaceholder } from '../utils/portPlaceholder';
+import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
 
 type SapPortRow = Record<string, unknown>;
 
@@ -83,11 +84,19 @@ export interface SapLoadingPortNameMap {
   discharge: string | null;
 }
 
+/** Map a VLP port_sequence onto SAP Vessel Loading Port 1/2/3 (0 / NaN → 1). */
+export function sapLoadingPortSequenceKey(sequence: unknown): 1 | 2 | 3 {
+  const n = Number(sequence);
+  if (n === 2 || n === 3) return n;
+  return 1;
+}
+
 /** Resolve SAP loading/discharge port labels for a shipment group (all linked SAP rows). */
 export async function resolveSapLoadingPortNameMapForShipment(
   shipmentUuid: string,
+  preferredSto?: string | null,
 ): Promise<SapLoadingPortNameMap> {
-  const stoRows = await resolveAllSapParsedDataForSto(shipmentUuid);
+  const stoRows = await resolveAllSapParsedDataForSto(shipmentUuid, preferredSto);
   const bySequence = new Map<number, string>();
   let discharge: string | null = null;
   for (const row of stoRows) {
@@ -421,7 +430,10 @@ export function sapParsedDataHasMultipleLoadingPorts(parsedData: Record<string, 
 
 async function resolveAllSapParsedDataForSto(
   shipmentId: string,
+  preferredSto?: string | null,
 ): Promise<Array<{ data: Record<string, unknown> }>> {
+  const stoKey = sapStoNumberKeyExpr('spd');
+  const preferred = String(preferredSto ?? '').trim();
   const result = await query(
     `WITH ship AS (
        SELECT
@@ -439,16 +451,19 @@ async function resolveAllSapParsedDataForSto(
      SELECT spd.data
      FROM sap_processed_data spd
      CROSS JOIN ship sh
-     WHERE (
-       NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL AND (
-         TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
-         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
-         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
-         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.op_embedded_sto::text), '')
+     WHERE ${stoKey} IS NOT NULL
+       AND (
+         ${stoKey} = NULLIF(TRIM($2::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.sto_number::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.shipment_id::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.operation_id::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.op_embedded_sto::text), '')
        )
-     )
-     ORDER BY spd.contract_number ASC NULLS LAST, spd.updated_at DESC NULLS LAST`,
-    [shipmentId],
+     ORDER BY
+       CASE WHEN ${stoKey} = NULLIF(TRIM($2::text), '') THEN 0 ELSE 1 END,
+       spd.contract_number ASC NULLS LAST,
+       spd.updated_at DESC NULLS LAST`,
+    [shipmentId, preferred || null],
   );
   return result.rows
     .map((row) => row.data)

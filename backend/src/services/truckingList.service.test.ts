@@ -8,6 +8,8 @@ import {
   buildTruckingSummaryQuery,
   getCachedFilteredTotal,
   invalidateTruckingListCache,
+  mergeTruckingGrClosedSnapshotContractQty,
+  mergeTruckingUnplannedBacklogOs,
   mergeTruckingUnplannedBreakdownIntoSummary,
   parseTruckingStatusContractQtyFromSqlRow,
   parseTruckingStatusOutstandingQtyFromSqlRow,
@@ -126,10 +128,19 @@ describe('truckingList.service', () => {
 
   it('parseTruckingStatusOutstandingQtyFromSqlRow maps kg fields', () => {
     const qty = parseTruckingStatusOutstandingQtyFromSqlRow({
+      unplanned_outstanding_qty: '800',
       planned_outstanding_qty: '3000',
       in_progress_outstanding_qty: 1500,
     });
-    expect(qty).toEqual({ planned: 3000, inProgress: 1500 });
+    expect(qty).toEqual({ unplanned: 800, planned: 3000, inProgress: 1500 });
+  });
+
+  it('mergeTruckingUnplannedBacklogOs adds backlog OS onto the Unplanned card', () => {
+    const merged = mergeTruckingUnplannedBacklogOs(
+      { unplanned: 1000, planned: 2000, inProgress: 500 },
+      4000,
+    );
+    expect(merged).toEqual({ unplanned: 5000, planned: 2000, inProgress: 500 });
   });
 
   it('buildTruckingStatusOutstandingQtyQuery sums outstanding per status', () => {
@@ -139,7 +150,8 @@ describe('truckingList.service', () => {
     const built = buildTruckingListQuery(req, { omitStatusFilter: true });
     const { text } = buildTruckingStatusOutstandingQtyQuery(built);
     expect(text).toContain('outstanding_quantity');
-    expect(text).toContain("status IN ('PLANNED', 'IN_PROGRESS')");
+    expect(text).toContain("status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')");
+    expect(text).toContain('unplanned_outstanding_qty');
     expect(text).toContain('planned_outstanding_qty');
     expect(text).toContain('in_progress_outstanding_qty');
   });
@@ -155,6 +167,9 @@ describe('truckingList.service', () => {
     const statusOs = buildTruckingStatusOutstandingQtyQuery(built);
     expect(combined.text).toContain('unplanned_count');
     expect(combined.text).toContain('third_party_frc_kg');
+    expect(combined.text).toContain('card_total_kg');
+    expect(combined.text).toContain('GREATEST(0');
+    expect(combined.text).toContain("IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')");
     expect(combined.text.match(/per_contract AS/g)?.length).toBe(1);
     expect(
       summary.text.length + contractQty.text.length + statusOs.text.length,
@@ -210,5 +225,19 @@ describe('truckingList.service', () => {
     expect(text).toContain('paged_expansion AS');
     expect(text).not.toMatch(/trucking_page AS[\s\S]*LIMIT \$\d+/);
     expect(params).toHaveLength(built.innerParams.length + built.outerParams.length);
+  });
+
+  it('mergeTruckingGrClosedSnapshotContractQty adds GR-Close qty onto live GR-Open remainder', () => {
+    const merged = mergeTruckingGrClosedSnapshotContractQty(
+      { unplanned: 10, planned: 20, inProgress: 5, completed: 100, cancelled: 3 },
+      { completedGrClosedContractQtyKg: 600000, cancelledGrClosedContractQtyKg: 50 },
+    );
+    expect(merged).toEqual({
+      unplanned: 10,
+      planned: 20,
+      inProgress: 5,
+      completed: 600100,
+      cancelled: 53,
+    });
   });
 });

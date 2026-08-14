@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatPoPlantLabel,
   resolvePlotStoLookupKey,
+  resolvePoPlantCode,
   resolveShipmentPlanQtyMaxMt,
   shipmentPlanQtyExceedsOsActual,
 } from './addNewShipmentTypes'
 import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
+
+describe('formatPoPlantLabel', () => {
+  it('uses plant code and ignores Group Plant Blank', () => {
+    expect(formatPoPlantLabel('9191000035', 'AM10')).toBe('9191000035 - AM10')
+    expect(formatPoPlantLabel('9191000035', 'Blank')).toBe('9191000035')
+    expect(formatPoPlantLabel('9191000035', '')).toBe('9191000035')
+    expect(resolvePoPlantCode({ plant_code: 'AM10' })).toBe('AM10')
+    expect(resolvePoPlantCode({ plant_code: '' })).toBe('')
+    expect(resolvePoPlantCode({ plant_code: 'Blank' })).toBe('')
+  })
+})
 
 describe('resolvePlotStoLookupKey', () => {
   it('prefers list STO over contract sto from getShipmentById', () => {

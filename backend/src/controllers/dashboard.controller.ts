@@ -9,6 +9,11 @@ import { ttlMemo } from '../utils/ttlMemo';
 import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
+import { sqlB2bOriginEndingUnloadSubquery } from '../utils/b2bOriginEndingSql';
+import {
+  sqlIncotermQuantityDeliveryCase,
+  sqlTransportModeFromContractAndJson,
+} from '../utils/sapIncotermMetrics';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -329,12 +334,22 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
           MAX(c.quantity_ordered) AS contract_quantity,
           MAX(COALESCE(c.contract_value, 0)) AS contract_value,
           MAX(COALESCE(c.incoterm, '')) AS incoterm,
-          COALESCE(MAX(qm.quantity_delivery), 0) AS quantity_delivery,
+          COALESCE(MAX(${sqlIncotermQuantityDeliveryCase(
+            'c.incoterm',
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'NULL::jsonb'),
+          )}), 0) AS quantity_delivery,
           COALESCE(MAX(qm.quantity_receive), 0) AS quantity_receive,
           COALESCE(
             CASE
               WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN MAX(qm.quantity_receive)
-              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN MAX(qm.quantity_delivery)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN MAX(${sqlIncotermQuantityDeliveryCase(
+                'c.incoterm',
+                'qm.quantity_delivery_trucking',
+                'qm.quantity_delivery_vessel',
+                sqlTransportModeFromContractAndJson('c.transport_mode', 'NULL::jsonb'),
+              )})
               ELSE MAX(sa.total_sto_quantity)
             END,
             0
@@ -1196,7 +1211,7 @@ export const getDashboardOverview = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -1539,7 +1554,7 @@ export const getDashboardOverview = async (req: AuthRequest, res: Response) => {
                 SELECT COALESCE(
                   CASE
                     WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                      SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                      SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                       FROM trucking_operations t
                       WHERE t.contract_id = c.id
                       ORDER BY t.created_at DESC NULLS LAST
@@ -1849,7 +1864,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2077,7 +2092,7 @@ export const getTruckingOperationsByStatus = async (req: AuthRequest, res: Respo
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2213,7 +2228,7 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                   AND COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), '')) IS NOT NULL
@@ -2235,7 +2250,7 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
               ELSE NULL
             END,
             (
-              SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+              SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
               FROM trucking_operations t
               WHERE t.contract_id = c.id
                 AND COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), '')) IS NOT NULL
@@ -2329,7 +2344,7 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2663,7 +2678,7 @@ export const getContractQuantityByProductIncotermPlantSource = async (req: AuthR
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2888,7 +2903,7 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -3060,7 +3075,7 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -3877,7 +3892,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST

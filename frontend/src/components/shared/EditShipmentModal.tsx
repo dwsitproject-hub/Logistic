@@ -35,7 +35,12 @@ import {
   Download,
   X,
 } from 'lucide-react'
-import api from '@/lib/api'
+import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
+import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
+import {
+  hasKlipVesselNameOverride,
+  shipmentVesselPrimaryName,
+} from '@/lib/shipmentVesselCompare'
 import { invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import {
   resolveShipmentApiLookupKey,
@@ -43,7 +48,8 @@ import {
 } from '@/lib/shipmentStoDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
-import { formatQtyMtFromKg } from '@/lib/utils'
+import api from '@/lib/api'
+import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveLoadingPortDisplayFromRow, resolveKlipPortInputValue } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
@@ -767,6 +773,8 @@ export function EditShipmentModal({
 
   const [vesselName, setVesselName] = useState('')
   const [originalVesselName, setOriginalVesselName] = useState('')
+  const [sapVesselName, setSapVesselName] = useState('')
+  const [pendingMasterVessel, setPendingMasterVessel] = useState<MasterVesselOption | null>(null)
   const [vesselMeta, setVesselMeta] = useState<Record<string, string>>({})
   const [operationId, setOperationId] = useState('')
   const [stoNumber, setStoNumber] = useState('')
@@ -853,6 +861,23 @@ export function EditShipmentModal({
     !readOnly &&
     Boolean(shipmentId) &&
     editContext?.can_add_po === true
+
+  const applyMasterVessel = useCallback((v: MasterVesselOption) => {
+    const charterFromTerms = charterTypeFromMasterTerms(v.terms)
+    setVesselName(String(v.vessel_name ?? '').trim())
+    setPendingMasterVessel(v)
+    setVesselMeta((prev) => ({
+      ...prev,
+      vessel_code: v.vessel_code ?? '',
+      vessel_owner: v.vessel_owner ?? '',
+      vessel_capacity: v.vessel_capacity_mt != null ? String(v.vessel_capacity_mt) : prev.vessel_capacity,
+      vessel_hull_type: String(v.vessel_type ?? v.hull_type ?? prev.vessel_hull_type ?? ''),
+      charter_type: charterFromTerms || prev.charter_type,
+    }))
+  }, [])
+
+  const vesselOverride = hasKlipVesselNameOverride(vesselName, sapVesselName)
+  const vesselMismatch = hasKlipSapMismatch(vesselName, sapVesselName, 'text')
 
   const planQtyReadOnly = false
 
@@ -1014,6 +1039,8 @@ export function EditShipmentModal({
     setShipmentId(null)
     setVesselName('')
     setOriginalVesselName('')
+    setSapVesselName('')
+    setPendingMasterVessel(null)
     setVesselMeta({})
     setDetailRows([])
     setPlanQtyEdits({})
@@ -1234,9 +1261,13 @@ export function EditShipmentModal({
         )
         setQtyEdits({})
 
-        const vn = String(row.vessel_name ?? '')
-        setVesselName(vn)
-        setOriginalVesselName(vn)
+        const klipVn = String(row.vessel_name_klip ?? row.vessel_name ?? '').trim()
+        const sapVn = String(row.vessel_name_sap ?? '').trim()
+        const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn)
+        setSapVesselName(sapVn)
+        setVesselName(primaryVn)
+        setOriginalVesselName(primaryVn)
+        setPendingMasterVessel(null)
         setVesselMeta({
           vessel_code: String(row.vessel_code ?? ''),
           vessel_owner: String(row.vessel_owner ?? ''),
@@ -1617,6 +1648,12 @@ export function EditShipmentModal({
         shipmentId,
         vesselName,
         originalVesselName,
+        vesselCode: vesselMeta.vessel_code,
+        vesselOwner: vesselMeta.vessel_owner,
+        vesselCapacity: vesselMeta.vessel_capacity,
+        vesselHullType: vesselMeta.vessel_hull_type,
+        charterType: vesselMeta.charter_type,
+        masterVesselId: pendingMasterVessel?.id ?? null,
         sfalQty,
         sfbdQty,
         originalSfalQty,
@@ -1708,6 +1745,16 @@ export function EditShipmentModal({
         kind: 'update',
         shipmentId,
         vessel_name: vesselName.trim() !== originalVesselName.trim() ? vesselName.trim() : undefined,
+        ...(vesselName.trim() !== originalVesselName.trim()
+          ? {
+              vessel_code: vesselMeta.vessel_code || undefined,
+              vessel_owner: vesselMeta.vessel_owner || undefined,
+              vessel_capacity: vesselMeta.vessel_capacity || undefined,
+              vessel_hull_type: vesselMeta.vessel_hull_type || undefined,
+              charter_type: vesselMeta.charter_type || undefined,
+              master_vessel_id: pendingMasterVessel?.id ?? undefined,
+            }
+          : {}),
         ...(qtyUserEdited && qtyTotals.quantity_delivered !== null
           ? { quantity_delivered: qtyTotals.quantity_delivered }
           : {}),
@@ -2050,11 +2097,55 @@ export function EditShipmentModal({
                 {step1Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
-                <ReadOnlyInfoField
-                  className="md:col-span-2 lg:col-span-3"
-                  label="Vessel Name"
-                  value={vesselName}
-                />
+                <div
+                  className={cn(
+                    'md:col-span-2 lg:col-span-3',
+                    vesselMismatch && 'border-l-2 border-amber-400 pl-2',
+                  )}
+                >
+                  <div className="mb-1 flex items-center gap-2">
+                    <label className="block text-xs font-medium text-gray-600">Vessel Name</label>
+                    {sapVesselName ? <KlipSapCompareLegend className="ml-auto" /> : null}
+                  </div>
+                  {canModifyCoreSections ? (
+                    <MasterVesselCombobox
+                      value={vesselName}
+                      onSelect={applyMasterVessel}
+                      placeholder="Search and select from Master Vessel"
+                    />
+                  ) : (
+                    <div className="flex min-h-8 items-center gap-2 text-sm font-medium text-gray-900">
+                      <span>{formatInfoDisplayValue(vesselName)}</span>
+                      {vesselOverride ? (
+                        <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+                          KLIP
+                        </span>
+                      ) : sapVesselName ? (
+                        <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600">
+                          SAP
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                  {canModifyCoreSections && vesselOverride ? (
+                    <span className="mt-1 inline-flex rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+                      KLIP
+                    </span>
+                  ) : null}
+                  {canModifyCoreSections && !vesselOverride && sapVesselName ? (
+                    <span className="mt-1 inline-flex rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600">
+                      SAP
+                    </span>
+                  ) : null}
+                  {vesselOverride && sapVesselName ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
+                      <span>SAP {sapVesselName}</span>
+                      <span className="rounded-full bg-gray-100 px-1.5 py-0.5 font-medium text-gray-600">
+                        SAP
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
                 {[
                   ['Vessel Code', formatVesselCodeDisplay(vesselMeta.vessel_code)],
                   ['Vessel Owner', vesselMeta.vessel_owner],
@@ -2062,7 +2153,16 @@ export function EditShipmentModal({
                   ['Vessel Draft', vesselMeta.vessel_draft],
                   ['Vessel Type', vesselMeta.vessel_hull_type],
                   ['Charter Type', vesselMeta.charter_type],
-                  ['Discharge Port', vesselMeta.port_of_discharge],
+                  [
+                    'Discharge Port',
+                    resolveLoadingPortDisplayFromRow(
+                      dischargePortRow ?? {
+                        is_discharge_port: true,
+                        port_name: vesselMeta.port_of_discharge,
+                      },
+                      shipmentInfo,
+                    ),
+                  ],
                   ['Plant / Site', plantSiteName],
                 ].map(([label, value]) => (
                   <ReadOnlyInfoField key={String(label)} label={String(label)} value={value} />
@@ -2601,13 +2701,12 @@ export function EditShipmentModal({
                                 port_sequence (each contract's shipment numbers its own ports from 1),
                                 so match the exact row by portId — not by sequence, which would
                                 collide and always resolve to the first port. */}
-                            {resolveKlipPortInputValue(block.loadingPort) ||
-                              resolveLoadingPortDisplayFromRow(
-                                loadingPortRows.find((p) => p.id === block.portId) ??
-                                  loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
-                                shipmentInfo,
-                                block.portSequence,
-                              )}
+                            {resolveLoadingPortDisplayFromRow(
+                              loadingPortRows.find((p) => p.id === block.portId) ??
+                                loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
+                              shipmentInfo,
+                              block.portSequence,
+                            )}
                           </span>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -2738,7 +2837,14 @@ export function EditShipmentModal({
                       <Badge variant="outline" className="text-[10px]">
                         Previous Estimation (historical)
                       </Badge>
-                      <span className="text-xs text-gray-500">{block.loadingPort || '—'}</span>
+                      <span className="text-xs text-gray-500">
+                        {resolveLoadingPortDisplayFromRow(
+                          loadingPortRows.find((p) => p.id === block.portId) ??
+                            loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
+                          shipmentInfo,
+                          block.portSequence,
+                        )}
+                      </span>
                     </div>
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
                       {ETA_FIELD_ROWS.map(({ key, label }) => (

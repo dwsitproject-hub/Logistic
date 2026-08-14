@@ -27,11 +27,14 @@ describe('shipmentPagePipelineSql', () => {
     expect(sql).toContain('PLANNED');
     expect(sql).toContain('COMPLETED');
     expect(sql).toContain('CANCELLED');
+    expect(sql).toContain('is_contract_sap_closed');
+    expect(sql).not.toMatch(/ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'/);
   });
 
   it('uses loading and discharge ATA helpers', () => {
     expect(shipmentHasAnyLoadingPortAtaExpr('f')).toContain('ata_vessel_arrival_at_loading_port');
     expect(shipmentHasAnyDischargePortAtaExpr('f')).toContain('ata_vessel_start_discharging');
+    expect(shipmentHasAnyDischargePortAtaExpr('f')).toContain('ata_vessel_complete_discharge');
   });
 
   it('filters unplanned rows without ETA, ATA, or Delivery Qty', () => {
@@ -70,6 +73,7 @@ describe('shipmentPagePipelineSql', () => {
     expect(key).toContain('sl.vessel_name_sap');
     expect(key).toContain('s.vessel_name');
     expect(shipmentPipelineEnrichedDisplayVesselKeyExpr('e')).toContain('e.vessel_name_master');
+    expect(shipmentPipelineEnrichedDisplayVesselKeyExpr('e')).toContain('e.is_contract_sap_closed');
   });
 
   it('limits unplanned open-contracts CTE to CIF/FOB/CFR', () => {

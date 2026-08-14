@@ -50,9 +50,10 @@ import {
   countPreplannedContracts,
   countUnplannedHybridBreakdown,
   isAllHybridListRequest,
-  isCompletedHybridListRequest,
   isPreplannedListRequest,
   isUnplannedHybridListRequest,
+  shouldResolveAllHybridShipmentsList,
+  shouldResolveCompletedHybridShipmentsList,
   resolveAllHybridShipmentsList,
   resolveCompletedHybridShipmentsList,
   resolvePreplannedContractsList,
@@ -180,7 +181,9 @@ import {
   resolveStoGroupShipmentIds,
   sqlShipmentOrStoKeyMatchWhere,
 } from '../utils/shipmentStoGroupMembersSql';
-import { fanOutVesselLoadingPortAtaToStoGroup } from '../services/shipmentAtaStoFanOut.service';
+import { fanOutVesselLoadingPortAtaToStoGroup, fanOutShipmentEtaToStoGroup, fanOutShipmentLoadingEtaToStoGroup } from '../services/shipmentAtaStoFanOut.service';
+import { fanOutVesselIdentityToStoGroup, hasVesselIdentityUpdate } from '../services/shipmentVesselFromSap.service';
+import { sqlLatestNonBlankAgg } from '../utils/sapVesselFields';
 import {
   SQL_CONTRACT_IMPORT_STATUS,
   getContractImportStatusForShipment,
@@ -665,7 +668,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    /** Shipments page scope: CIF/FOB/CFR; FOB truck-only legs excluded (see buildShipmentPageSeaRowScopeSql). */
+    /** Shipments page scope: CIF/FOB/CFR; FOB Type T (trucking) legs excluded. */
     const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
     const exactStoKey = stoIsSet
@@ -834,9 +837,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
-          MAX(NULLIF(TRIM(s.vessel_name), '')) as vessel_name,
-          MAX(NULLIF(TRIM(s.vessel_code), '')) as vessel_code,
-          (ARRAY_AGG(s.master_vessel_id) FILTER (WHERE s.master_vessel_id IS NOT NULL))[1] AS master_vessel_id,
+          ${sqlLatestNonBlankAgg('s.vessel_name')} as vessel_name,
+          ${sqlLatestNonBlankAgg('s.vessel_code')} as vessel_code,
+          ${sqlLatestNonBlankAgg('s.master_vessel_id')} AS master_vessel_id,
           MAX(s.voyage_no) as voyage_no,
           MAX(s.vessel_owner) as vessel_owner,
           MAX(s.vessel_draft) as vessel_draft,
@@ -1260,7 +1263,7 @@ ${contractMetaSelectCore}
       summaryScopeCte,
       summaryEnrichedFrom,
     });
-    /** Live stage counts for daily overlay — shell enrich (same ATA ladder as list), no SPD. */
+    /** Live stage counts + vessel names for daily overlay (same ATA ladder as list). */
     const liveStageCountsQuery = buildShipmentPipelineLiveStageCountsQuery({
       shipmentBaseCteSql: shipmentBaseCteSqlSummary,
       toolbarOuterSql: section1SummaryFilterSql,
@@ -1396,7 +1399,8 @@ ${contractMetaSelectCore}
         sortDir: listSortDir,
       });
 
-      if (isAllHybridListRequest(status) && !exactStoKey) {
+      // Keep ALL hybrid even for 10-digit PO/STO search — Unplanned backlog has no shipments row.
+      if (shouldResolveAllHybridShipmentsList(status)) {
         const hybrid = await resolveAllHybridShipmentsList(
           req,
           buildShipmentAllHybridListContext({
@@ -1599,7 +1603,7 @@ ${contractMetaSelectCore}
         });
       }
 
-      if (isCompletedHybridListRequest(status) && !exactStoKey) {
+      if (shouldResolveCompletedHybridShipmentsList(status)) {
         const hybrid = await resolveCompletedHybridShipmentsList(
           req,
           buildShipmentCompletedHybridListContext({
@@ -2583,6 +2587,12 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    if (updateData.master_vessel_id) {
+      updateFields.push(`master_vessel_id = $${paramIndex}::uuid`);
+      updateValues.push(updateData.master_vessel_id);
+      paramIndex++;
+    }
+
     if (updateData.voyage_no) {
       updateFields.push(`voyage_no = $${paramIndex}`);
       updateValues.push(updateData.voyage_no);
@@ -2872,43 +2882,32 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     }
 
     if (etaFieldsUpdated) {
-      await query(
-        `UPDATE vessel_loading_ports SET
-          eta_vessel_arrival = $2,
-          eta_vessel_berthed_at_loading_port = $3,
-          eta_loading_start = $4,
-          eta_loading_completed = $5,
-          eta_vessel_sailed = $6,
-          updated_at = CURRENT_TIMESTAMP
-         WHERE shipment_id = $1 AND port_sequence = 1 AND COALESCE(is_discharge_port, false) = false`,
-        [
-          shipmentId,
-          updated.eta_arrival,
-          updated.eta_berthed,
-          updated.eta_loading_start,
-          updated.eta_loading_complete,
-          updated.eta_sailed,
-        ],
-      );
-      await query(
-        `UPDATE vessel_loading_ports SET
-          eta_vessel_arrive_at_discharge_port = $2,
-          eta_vessel_berthed_at_discharge_port = $3,
-          eta_vessel_start_discharging = $4,
-          eta_vessel_complete_discharge = $5,
-          updated_at = CURRENT_TIMESTAMP
-         WHERE shipment_id = $1 AND COALESCE(is_discharge_port, false) = true`,
-        [
-          shipmentId,
-          updated.eta_discharge_arrival,
-          updated.eta_discharge_berthed,
-          updated.eta_discharge_start,
-          updated.eta_discharge_complete,
-        ],
-      );
+      await fanOutShipmentEtaToStoGroup(shipmentId, {
+        eta_arrival: updated.eta_arrival ?? null,
+        eta_berthed: updated.eta_berthed ?? null,
+        eta_loading_start: updated.eta_loading_start ?? null,
+        eta_loading_complete: updated.eta_loading_complete ?? null,
+        eta_sailed: updated.eta_sailed ?? null,
+        eta_discharge_arrival: updated.eta_discharge_arrival ?? null,
+        eta_discharge_berthed: updated.eta_discharge_berthed ?? null,
+        eta_discharge_start: updated.eta_discharge_start ?? null,
+        eta_discharge_complete: updated.eta_discharge_complete ?? null,
+      });
     }
 
     logger.info('Shipment updated:', { id, updatedFields: updateFields.length, autoStatus });
+
+    if (hasVesselIdentityUpdate(updateData)) {
+      await fanOutVesselIdentityToStoGroup(shipmentId, {
+        vessel_name: updated.vessel_name ?? null,
+        vessel_code: updated.vessel_code ?? null,
+        vessel_owner: updated.vessel_owner ?? null,
+        vessel_capacity: updated.vessel_capacity ?? null,
+        vessel_hull_type: updated.vessel_hull_type ?? null,
+        charter_type: updated.charter_type ?? null,
+        master_vessel_id: updated.master_vessel_id ?? null,
+      });
+    }
 
     invalidateShipmentsListCache();
     invalidateShippingPerformanceRowCache();
@@ -3660,13 +3659,13 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
 
       const updated = result.rows[0];
       if (updated.port_sequence === 1 && !updated.is_discharge_port) {
-        await query(
-          `UPDATE shipments SET
-            eta_arrival = $2, eta_berthed = $3, eta_loading_start = $4, eta_loading_complete = $5, eta_sailed = $6,
-            updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
-        );
+        await fanOutShipmentLoadingEtaToStoGroup(actualShipmentId, {
+          eta_arrival: eta_vessel_arrival_n,
+          eta_berthed: eta_vessel_berthed_at_loading_port_n,
+          eta_loading_start: eta_loading_start_n,
+          eta_loading_complete: eta_loading_completed_n,
+          eta_sailed: eta_vessel_sailed_n,
+        });
       }
 
       await fanOutVesselLoadingPortAtaToStoGroup({
@@ -3737,13 +3736,13 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
 
       const inserted = result.rows[0];
       if (inserted.port_sequence === 1 && !inserted.is_discharge_port) {
-        await query(
-          `UPDATE shipments SET
-            eta_arrival = $2, eta_berthed = $3, eta_loading_start = $4, eta_loading_complete = $5, eta_sailed = $6,
-            updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
-        );
+        await fanOutShipmentLoadingEtaToStoGroup(actualShipmentId, {
+          eta_arrival: eta_vessel_arrival_n,
+          eta_berthed: eta_vessel_berthed_at_loading_port_n,
+          eta_loading_start: eta_loading_start_n,
+          eta_loading_complete: eta_loading_completed_n,
+          eta_sailed: eta_vessel_sailed_n,
+        });
       }
 
       await fanOutVesselLoadingPortAtaToStoGroup({

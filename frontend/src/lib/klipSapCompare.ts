@@ -1,6 +1,6 @@
 import { formatDateDMY } from '@/lib/dateFormat'
 
-export type KlipSapCompareFormat = 'date' | 'number'
+export type KlipSapCompareFormat = 'date' | 'number' | 'text'
 
 function normalizeDate(value: unknown): string {
   if (value == null || value === '') return ''
@@ -16,10 +16,19 @@ function parseNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function normalizeText(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  return String(value).replace(/\r/g, '').trim()
+}
+
 export function formatKlipSapDisplayValue(
   value: unknown,
   format: KlipSapCompareFormat,
 ): string {
+  if (format === 'text') {
+    const text = normalizeText(value)
+    return text || '—'
+  }
   if (format === 'date') {
     const normalized = normalizeDate(value)
     return normalized ? formatDateDMY(normalized) : '—'
@@ -34,6 +43,12 @@ export function klipSapValuesEqual(
   sapValue: unknown,
   format: KlipSapCompareFormat,
 ): boolean {
+  if (format === 'text') {
+    const k = normalizeText(klipValue).toUpperCase()
+    const s = normalizeText(sapValue).toUpperCase()
+    if (!k && !s) return true
+    return k === s
+  }
   if (format === 'date') {
     const k = normalizeDate(klipValue)
     const s = normalizeDate(sapValue)
@@ -74,6 +89,7 @@ export function formatKlipSapDelta(
   sapValue: unknown,
   format: KlipSapCompareFormat,
 ): string | null {
+  if (format === 'text') return null
   return format === 'date'
     ? formatDateDelta(klipValue, sapValue)
     : formatNumberDelta(klipValue, sapValue)
@@ -85,9 +101,11 @@ export function hasKlipSapMismatch(
   format: KlipSapCompareFormat,
 ): boolean {
   const sapEmpty =
-    format === 'date'
-      ? !normalizeDate(sapValue)
-      : parseNumber(sapValue) == null
+    format === 'text'
+      ? !normalizeText(sapValue)
+      : format === 'date'
+        ? !normalizeDate(sapValue)
+        : parseNumber(sapValue) == null
   if (sapEmpty) return false
   return !klipSapValuesEqual(klipValue, sapValue, format)
 }

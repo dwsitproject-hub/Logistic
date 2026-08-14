@@ -62,7 +62,7 @@ const BASE_COL_SQL: Record<string, string> = {
     contractQtyExpr: 'base.quantity_ordered',
     incotermExpr: 'base.incoterm',
     receiveExpr: 'base.quantity_receive',
-    deliveryExpr: 'base.quantity_delivery_sap',
+    deliveryExpr: 'base.quantity_delivery',
   }),
   delivery_status: `COALESCE(base.import_status, base.status::text, '')`,
 }

@@ -11,6 +11,7 @@ import {
 } from '../utils/sapMasterV2UatFormat';
 import { SapDataDistributionService } from './sapDataDistribution.service';
 import { invalidateShipmentsListCache } from './shipmentList.service';
+import { invalidateTruckingListCache } from './truckingList.service';
 import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 import { normalizePoNumber } from '../utils/contractPoIdentity';
 import { applyAbsenceForImport, evaluateImportTrust } from './sapAbsenceTracking.service';
@@ -487,6 +488,7 @@ export class SapMasterV2ImportService {
       if (processedRecords > 0) {
         invalidateShipmentsListCache();
         invalidateShippingPerformanceRowCache();
+        invalidateTruckingListCache();
         setImmediate(() => {
           import('./contractQtyMoveSnapshot.service')
             .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())

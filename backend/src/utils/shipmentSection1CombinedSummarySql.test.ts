@@ -22,6 +22,8 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('unplanned_execution_contract_qty');
     expect(sql).toContain('unplanned_execution_outstanding_qty');
     expect(sql).toContain('planned_outstanding_qty');
+    expect(sql).toContain('execution_os');
+    expect(sql).toContain('DISTINCT ON (contract_number)');
     expect(sql).toContain('at_loading_port_outstanding_qty');
     expect(sql).toContain('planned_count');
     expect(sql).toContain('loading_no_eta');
@@ -47,7 +49,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).not.toContain('total_count');
   });
 
-  it('buildShipmentPipelineLiveStageCountsQuery is counts-only (no SPD / vessel joins)', () => {
+  it('buildShipmentPipelineLiveStageCountsQuery includes live vessel names without SPD qty joins', () => {
     const sql = buildShipmentPipelineLiveStageCountsQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
       toolbarOuterSql: " AND sb.plant_site = 'X'",
@@ -56,18 +58,21 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('planned_count');
     expect(sql).toContain('total_count');
     expect(sql).toContain("sb.plant_site = 'X'");
+    expect(sql).toContain('at_loading_port_vessel_names');
+    expect(sql).toContain('vessel_name_master');
+    expect(sql).toContain('is_contract_sap_closed');
     expect(sql).not.toContain('sto_metrics');
-    expect(sql).not.toContain('vessel_name_master');
     expect(sql).not.toContain('outstanding_quantity');
   });
 
-  it('overlayShipmentDailySummaryLiveStageCounts patches stage counts and keeps daily vessels', () => {
+  it('overlayShipmentDailySummaryLiveStageCounts patches stage counts and live vessel names', () => {
     const merged = overlayShipmentDailySummaryLiveStageCounts(
       {
         planned_count: 10,
         at_loading_port_count: 0,
         sailed_count: 2,
         at_loading_port_vessel_names: ['OLD'],
+        planned_vessel_names: ['DAILY PLANNED'],
         eta_loading_delay: 5,
       },
       {
@@ -76,13 +81,16 @@ describe('shipmentSection1CombinedSummarySql', () => {
         sailed_count: 2,
         total_count: 100,
         loading_port_arrived_count: 1,
+        at_loading_port_vessel_names: ['LIVE A', 'LIVE B'],
+        planned_vessel_names: [],
       },
     );
     expect(merged.at_loading_port_count).toBe(1);
     expect(merged.planned_count).toBe(9);
     expect(merged.total_count).toBe(100);
     expect(merged.loading_port_arrived_count).toBe(1);
-    expect(merged.at_loading_port_vessel_names).toEqual(['OLD']);
+    expect(merged.at_loading_port_vessel_names).toEqual(['LIVE A', 'LIVE B']);
+    expect(merged.planned_vessel_names).toEqual([]);
     expect(merged.eta_loading_delay).toBe(5);
   });
 

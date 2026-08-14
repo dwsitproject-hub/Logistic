@@ -32,10 +32,12 @@ describe('contractGlobalOutstandingSql', () => {
     });
     expect(sql).toContain('qty_move');
     expect(sql).toContain('quantity_receive');
-    expect(sql).toContain('quantity_delivery');
+    expect(sql).toContain('quantity_delivery_trucking');
+    expect(sql).toContain('quantity_delivery_vessel');
     expect(sql).toContain("'FRC', 'CIF', 'CFR'");
     expect(sql).toContain("'LCO', 'FOB'");
     expect(sql).toContain('GREATEST');
+    expect(sql).not.toMatch(/SELECT qm\.quantity_delivery FROM qty_move/);
   });
 
   it('qty_move quantity_delivery ignores zero vessel so trucking qty is not masked', () => {

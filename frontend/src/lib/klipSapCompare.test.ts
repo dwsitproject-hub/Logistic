@@ -27,4 +27,11 @@ describe('klipSapCompare', () => {
     expect(hasKlipSapMismatch('2026-07-05', '', 'date')).toBe(false)
     expect(hasKlipSapMismatch(0.5, null, 'number')).toBe(false)
   })
+
+  it('compares text vessel names case-insensitively', () => {
+    expect(klipSapValuesEqual('Vessel B', 'vessel b', 'text')).toBe(true)
+    expect(hasKlipSapMismatch('Vessel B', 'Vessel A', 'text')).toBe(true)
+    expect(hasKlipSapMismatch('Vessel B', '', 'text')).toBe(false)
+    expect(formatKlipSapDelta('Vessel B', 'Vessel A', 'text')).toBeNull()
+  })
 })

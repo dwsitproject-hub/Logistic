@@ -6,8 +6,8 @@
  * incoterm (FOB / CIF / CFR) filters on that OS.
  */
 
-import { buildQtyMoveCte } from './contractGlobalOutstandingSql';
-import { sqlContractOutstandingFromFields } from './sapIncotermMetrics';
+import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import { shipmentListSpdAggCtes } from './shipmentListSapAggSql';
@@ -201,6 +201,67 @@ export function sqlShipmentOutstandingActiveStagePredicate(alias: string): strin
   )`;
 }
 
+/** Furthest active pipeline stage wins when one PO sits on multiple STOs. */
+export function sqlShipmentActiveStageRankExpr(effectiveStatusExpr: string): string {
+  return `CASE
+    WHEN ${effectiveStatusExpr} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 5
+    WHEN ${effectiveStatusExpr} = 'SAILED' THEN 4
+    WHEN ${effectiveStatusExpr} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 3
+    WHEN ${effectiveStatusExpr} = 'PLANNED' THEN 2
+    ELSE 1
+  END`;
+}
+
+/**
+ * Collapse execution OS to one row per contract (qty_move, floor 0).
+ * Enriched rows must expose contract_numbers, effective_status, os_source_type, os_incoterm.
+ */
+export function sqlShipmentExecutionOsPerContractCtes(enrichedAlias = 'enriched'): string {
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: `(SELECT c.quantity_ordered FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1)`,
+    incotermExpr: `COALESCE(NULLIF(TRIM(r.os_incoterm), ''), (SELECT c.incoterm FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1), '')`,
+    contractNumberExpr: 'r.contract_number',
+  });
+  return `
+    execution_os_contracts AS (
+      SELECT
+        TRIM(cn) AS contract_number,
+        ${enrichedAlias}.effective_status,
+        ${enrichedAlias}.os_source_type,
+        ${enrichedAlias}.os_incoterm,
+        ${sqlShipmentActiveStageRankExpr(`${enrichedAlias}.effective_status`)} AS stage_rank
+      FROM ${enrichedAlias}
+      CROSS JOIN LATERAL unnest(
+        regexp_split_to_array(COALESCE(${enrichedAlias}.contract_numbers::text, ''), E'\\\\s*,\\\\s*')
+      ) AS cn
+      WHERE NULLIF(TRIM(cn), '') IS NOT NULL
+        AND ${enrichedAlias}.effective_status IN (
+          'PLANNED',
+          'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING',
+          'SAILED',
+          'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING'
+        )
+    ),
+    execution_os_ranked AS (
+      SELECT DISTINCT ON (contract_number)
+        contract_number,
+        effective_status,
+        os_source_type,
+        os_incoterm
+      FROM execution_os_contracts
+      ORDER BY contract_number, stage_rank DESC
+    ),
+    execution_os AS (
+      SELECT
+        r.contract_number,
+        r.effective_status,
+        r.os_source_type AS source_type,
+        r.os_incoterm AS incoterm,
+        (${outstandingExpr})::numeric AS outstanding_quantity
+      FROM execution_os_ranked r
+    )`;
+}
+
 function bucketKgFromRow(
   row: Record<string, unknown>,
   prefix: 'third_party' | 'interco',
@@ -311,7 +372,8 @@ export function alignShipmentOutstandingQtyTotalToCardSum(
 }
 
 /**
- * Aggregate OS from active shipment execution rows (toolbar-scoped) using row-level outstanding_quantity.
+ * Aggregate OS from active shipment execution rows (toolbar-scoped) at contract grain
+ * (qty_move, one PO once — furthest active stage wins).
  */
 export function buildShipmentOutstandingQtyExecutionAggregateQuery(
   shipmentBaseCteSql: string,
@@ -352,25 +414,29 @@ export function buildShipmentOutstandingQtyExecutionAggregateQuery(
         ${eff} AS effective_status,
         FALSE AS is_unplanned_execution,
         ${sourceExpr} AS source_type,
+        ${sourceExpr} AS os_source_type,
         ${incotermExpr} AS incoterm,
+        ${incotermExpr} AS os_incoterm,
+        sp.contract_numbers,
         ${qtySelect}
       FROM shipment_page sp
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
       LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
-    )
+    ),
+    ${sqlShipmentExecutionOsPerContractCtes('enriched')}
     SELECT
       ${sqlShipmentOutstandingQtyAggregateSelect(
-        'enriched.outstanding_quantity',
-        'enriched.source_type',
-        'enriched.incoterm',
+        'execution_os.outstanding_quantity',
+        'execution_os.source_type',
+        'execution_os.incoterm',
       )},
       ${sqlShipmentOutstandingQtyCardExecutionTotalSelect(
-        'enriched.outstanding_quantity',
-        'enriched.effective_status',
-        'enriched.is_unplanned_execution',
+        'execution_os.outstanding_quantity',
+        'execution_os.effective_status',
+        'FALSE',
       )}
-    FROM enriched`;
+    FROM execution_os`;
 
   return { text, params };
 }
@@ -390,7 +456,7 @@ export function buildShipmentOutstandingQtyBacklogAggregateQuery(
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     receiveExpr: 'qm.quantity_receive',
-    deliveryExpr: 'qm.quantity_delivery',
+    deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
   const sourceExpr = sqlCoalesceSourceType('c.source_type', 'l.source_type_raw');

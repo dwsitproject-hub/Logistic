@@ -27,8 +27,8 @@ export const FIELD_HELP = {
 
   dpCycle: `Completion Date vs DP Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
 
-  /** Contract Performance — concise header tooltips (view table + contract detail modal). */
-  contractPerfOutstandingQty: `Contract Qty vs SAP Receive/Delivery by incoterm. Over-delivery: +MT (green). Remaining outstanding: MT (black).`,
+  /** Contract Performance — view table signed OS; Open card + drilldown use max(0, same qty_move OS). Over-delivery: +MT (green) in the table. Remaining outstanding: MT (black). */
+  contractPerfOutstandingQty: `Open card + Section 2 drilldown = Shipments OS (FOB/CIF/CFR, Unplanned–At DP) + Trucking OS (FRC/LCO, Unplanned+Planned+In Progress), qty_move floored at 0. SAP Open but pipeline Completed/Cancelled is excluded. Table column is signed (over-delivery +MT green).`,
   contractPerfTradeCycle: `Completion Date vs Due Date Delivery End. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
   contractPerfDpCycle: `Completion Date vs DP Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
   contractPerfCashCycle: `Completion Date vs Payoff Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
@@ -40,7 +40,7 @@ export const FIELD_HELP = {
 
   receivedQty: `FRC: GR PO Open + WB → Netto EUP; LCO: GR STO Open + WB → Netto EUP (same as Trucking Received Qty). SEA Open with KLIP receive: actual vessel receive. GR Close uses SAP Quantity Receive. Otherwise SAP Quantity Receive.`,
 
-  outstandingQtyMt: `Contract Qty minus fulfilled SAP quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (SAP). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
+  outstandingQtyMt: `Contract Qty minus fulfilled quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (same UAT trucking/vessel matrix as the Quantity Delivery column). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
   shipmentOutstandingQtyMt: `Contract Qty minus fulfilled Delivery/Receive by Open/Close rules (same as Shipments View Table): GR Close → SAP; Open → KLIP vessel/delivery then SAP. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
@@ -67,9 +67,9 @@ export const FIELD_HELP = {
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
-  truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total.`,
-  truckingStatusPlanned: `Open contract with ETA or Daily Planning, plus In Progress rows. Card total = Planned + In Progress. List filter on this card shows both statuses.`,
-  truckingStatusInProgress: `Trucking shipment (STO/Operation) with Daily Planning and a valid Trucking Start Receive Date (SAP AV). Stays In Progress until GR PO/STO is Close, or until Outstanding Qty is within tolerance while GR is still Open.`,
+  truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total. Qty on this card is Outstanding Qty (floored at 0), same formula as Planned.`,
+  truckingStatusPlanned: `Open contract with ETA or Daily Planning, plus In Progress (Start Receive). The card and table badge are labeled Planned; totals and list filter still include both Planned and In Progress. Qty on this card is Outstanding Qty (after WB).`,
+  truckingStatusInProgress: `Included in the Planned card. Trucking shipment (STO/Operation) with a valid Trucking Start Receive Date (SAP AV). Stays In Progress until GR PO/STO is Close, or until Outstanding Qty is within tolerance while GR is still Open.`,
   truckingStatusCompleted: `Trucking shipment (STO/Operation) is Complete when GR PO Status (FRC/CIF) or GR STO Status (LCO/FOB) is Close — no OS Qty check required. Alternatively, when GR is still Open, Complete applies if Outstanding Qty is within tolerance (kg, after WB actual qty when uploaded). Trucking Last Receive Date is informational only.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
   truckingOutstandingQtyMt: `Outstanding Qty by incoterm for the PO: FRC = Contract Qty − Σ Received Qty across all STOs on the PO; LCO = Contract Qty − Σ Delivered Qty across all STOs on the PO. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —.`,

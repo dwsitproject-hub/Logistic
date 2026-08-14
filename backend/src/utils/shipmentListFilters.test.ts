@@ -39,6 +39,13 @@ describe('buildExactNumericGlobalSearchInnerSql', () => {
     expect(sql).toContain('cs_search.contract_id = c.id');
   });
 
+  it('does not treat FOB Type T sibling STOs as a Shipments search hit', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
+    expect(sql).toContain("= 'FOB'");
+    expect(sql).toContain("= 'T'");
+    expect(sql).toContain('spd_sto_num');
+  });
+
   /*
    * The list groups by STO and several contracts can share one STO, so the row's PO column
    * aggregates across all of them. Without this branch a PO could be printed on the row and
@@ -100,6 +107,8 @@ describe('shipmentEffectiveStatusExpr', () => {
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('ata_vessel_sailed_from_loading_port');
     expect(sql).toContain('ata_vessel_complete_discharge');
+    expect(sql).toMatch(/is_contract_sap_closed[\s\S]*THEN 'COMPLETED'/);
+    expect(sql).toMatch(/ata_vessel_complete_discharge IS NOT NULL THEN 'UNLOADING'/);
     expect(sql).not.toContain('group_status_floor');
   });
 });

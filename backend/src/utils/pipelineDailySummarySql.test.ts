@@ -10,6 +10,11 @@ describe('pipelineDailySummarySql', () => {
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain("FILTER (WHERE status = 'IN_PROGRESS')");
     expect(sql).toContain('sap_processed_data');
+    expect(sql).toContain('cancelled_count = EXCLUDED.cancelled_count');
+    expect(sql).toContain('completed_gr_closed_contract_qty');
+    expect(sql).toContain('cancelled_gr_closed_contract_qty');
+    expect(sql).toContain('is_contract_sap_closed');
+    expect(sql).toContain('BOOL_OR(is_contract_sap_closed)');
     expect(sql).toContain('ON CONFLICT (group_plant, contract_date, product, incoterm)');
     expect(sql).not.toContain('buildTruckingListSelectClause(true)');
   });

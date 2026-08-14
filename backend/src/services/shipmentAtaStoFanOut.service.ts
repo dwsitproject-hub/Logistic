@@ -15,6 +15,141 @@ export type VesselLoadingPortAtaFields = {
   ata_vessel_sailed: string | null;
 };
 
+export type ShipmentEtaFanOut = {
+  eta_arrival: string | null;
+  eta_berthed: string | null;
+  eta_loading_start: string | null;
+  eta_loading_complete: string | null;
+  eta_sailed: string | null;
+  eta_discharge_arrival: string | null;
+  eta_discharge_berthed: string | null;
+  eta_discharge_start: string | null;
+  eta_discharge_complete: string | null;
+};
+
+/**
+ * Same rule as ATA: ETA on one STO voyage applies to every SEA shipment PO
+ * in the grouping, plus matching loading (seq 1) and discharge port rows.
+ */
+export async function fanOutShipmentEtaToStoGroup(
+  anchorShipmentId: string,
+  eta: ShipmentEtaFanOut,
+): Promise<number> {
+  const memberIds = await resolveStoGroupShipmentIds(anchorShipmentId);
+  const ids = memberIds.length > 0 ? memberIds : [anchorShipmentId];
+
+  await query(
+    `UPDATE shipments SET
+       eta_arrival = $2::date,
+       eta_berthed = $3::date,
+       eta_loading_start = $4::date,
+       eta_loading_complete = $5::date,
+       eta_sailed = $6::date,
+       eta_discharge_arrival = $7::date,
+       eta_discharge_berthed = $8::date,
+       eta_discharge_start = $9::date,
+       eta_discharge_complete = $10::date,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = ANY($1::uuid[])`,
+    [
+      ids,
+      eta.eta_arrival,
+      eta.eta_berthed,
+      eta.eta_loading_start,
+      eta.eta_loading_complete,
+      eta.eta_sailed,
+      eta.eta_discharge_arrival,
+      eta.eta_discharge_berthed,
+      eta.eta_discharge_start,
+      eta.eta_discharge_complete,
+    ],
+  );
+
+  await query(
+    `UPDATE vessel_loading_ports SET
+       eta_vessel_arrival = $2::timestamp,
+       eta_vessel_berthed_at_loading_port = $3::timestamp,
+       eta_vessel_berthed = $3::timestamp,
+       eta_loading_start = $4::timestamp,
+       eta_loading_completed = $5::timestamp,
+       eta_vessel_sailed = $6::timestamp,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE shipment_id = ANY($1::uuid[])
+       AND port_sequence = 1
+       AND COALESCE(is_discharge_port, false) = false`,
+    [
+      ids,
+      eta.eta_arrival,
+      eta.eta_berthed,
+      eta.eta_loading_start,
+      eta.eta_loading_complete,
+      eta.eta_sailed,
+    ],
+  );
+
+  await query(
+    `UPDATE vessel_loading_ports SET
+       eta_vessel_arrive_at_discharge_port = $2::timestamp,
+       eta_vessel_berthed_at_discharge_port = $3::timestamp,
+       eta_vessel_start_discharging = $4::timestamp,
+       eta_vessel_complete_discharge = $5::timestamp,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE shipment_id = ANY($1::uuid[])
+       AND COALESCE(is_discharge_port, false) = true`,
+    [
+      ids,
+      eta.eta_discharge_arrival,
+      eta.eta_discharge_berthed,
+      eta.eta_discharge_start,
+      eta.eta_discharge_complete,
+    ],
+  );
+
+  if (ids.length > 1) {
+    logger.info('Fanned ETA out to STO group shipment POs', {
+      anchorShipmentId,
+      memberCount: ids.length,
+    });
+  }
+  return ids.length;
+}
+
+/**
+ * Loading-port seq 1 ETA: copy onto every STO group shipment row (not discharge dates).
+ */
+export async function fanOutShipmentLoadingEtaToStoGroup(
+  anchorShipmentId: string,
+  eta: {
+    eta_arrival: string | null;
+    eta_berthed: string | null;
+    eta_loading_start: string | null;
+    eta_loading_complete: string | null;
+    eta_sailed: string | null;
+  },
+): Promise<number> {
+  const memberIds = await resolveStoGroupShipmentIds(anchorShipmentId);
+  const ids = memberIds.length > 0 ? memberIds : [anchorShipmentId];
+  await query(
+    `UPDATE shipments SET
+       eta_arrival = $2::date,
+       eta_berthed = $3::date,
+       eta_loading_start = $4::date,
+       eta_loading_complete = $5::date,
+       eta_sailed = $6::date,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = ANY($1::uuid[])`,
+    [
+      ids,
+      eta.eta_arrival,
+      eta.eta_berthed,
+      eta.eta_loading_start,
+      eta.eta_loading_complete,
+      eta.eta_sailed,
+    ],
+  );
+  return ids.length;
+}
+
 /**
  * KLIP ATA on one STO voyage applies to every SEA shipment PO in the grouping
  * (`shipments` rows only — trucking operations are out of scope).

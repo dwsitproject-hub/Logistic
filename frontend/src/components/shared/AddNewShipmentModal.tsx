@@ -13,6 +13,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
+import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
 import {
   AlertCircle,
   AlertTriangle,
@@ -53,7 +54,9 @@ import type {
 import {
   fetchStoLinkedPurchaseOrderOptions,
   fetchStoSapPreview,
+  formatPoPlantLabel,
   resolvePlotStoLookupKey,
+  resolvePoPlantCode,
   resolveShipmentPlanQtyMaxMt,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
@@ -76,7 +79,6 @@ import {
   VESSEL_MODAL_PANEL_CLASS,
   VESSEL_MODAL_STEP_STRIP_CLASS,
 } from '@/lib/vesselModalUi'
-import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
 
 type EtaDetailFields = {
@@ -534,19 +536,8 @@ export function AddNewShipmentModal({
     return availablePOs.filter((po) => !added.has(po.key))
   }, [isContractScoped, availablePOs, newShipment.contractNumbers])
 
-  const [vesselSuggestions, setVesselSuggestions] = useState<
-    Array<{
-      vessel_code: string | null
-      vessel_name: string
-      vessel_capacity_mt: number | null
-      vessel_owner: string | null
-      vessel_type?: string | null
-      hull_type?: string | null
-    }>
-  >([])
-  const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
+  const [vesselPickedFromMaster, setVesselPickedFromMaster] = useState(false)
   const [mappedPlantSiteName, setMappedPlantSiteName] = useState('')
-  const vesselSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
@@ -808,11 +799,15 @@ export function AddNewShipmentModal({
   const getPoLabel = useCallback(
     (selectionKey: string) => {
       const scoped = availablePoByKey.get(selectionKey)
-      if (scoped) return scoped.label
+      if (scoped) {
+        return formatPoPlantLabel(
+          String(scoped.poNumber || scoped.contractId || selectionKey),
+          scoped.plantCode,
+        )
+      }
       const data = contractValidations[selectionKey]?.contractData
-      const poNumber = (data?.po_number || selectionKey) as string
-      const plantCode = String(data?.plant_code ?? '').trim()
-      return plantCode ? `${poNumber} - ${plantCode}` : poNumber
+      const poNumber = String(data?.po_number || selectionKey)
+      return formatPoPlantLabel(poNumber, resolvePoPlantCode(data ?? {}))
     },
     [availablePoByKey, contractValidations],
   )
@@ -902,36 +897,7 @@ export function AddNewShipmentModal({
     setEtaDetails((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)))
   }
 
-  const fetchVesselSuggestions = async (search: string) => {
-    if (!search || search.trim().length < 2) {
-      setVesselSuggestions([])
-      return
-    }
-    try {
-      const res = await api.get('/master-vessels', { params: { search: search.trim(), limit: 20 } })
-      const items = res.data?.data?.items ?? []
-      setVesselSuggestions(items)
-      setShowVesselSuggestions(true)
-    } catch {
-      setVesselSuggestions([])
-    }
-  }
-
-  const handleVesselNameChange = (value: string) => {
-    setNewShipment((prev) => ({ ...prev, vesselName: value }))
-    if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
-    vesselSearchTimeoutRef.current = setTimeout(() => fetchVesselSuggestions(value), 300)
-  }
-
-  const handleSelectVessel = (v: {
-    vessel_code: string | null
-    vessel_name: string
-    vessel_capacity_mt: number | null
-    vessel_owner: string | null
-    vessel_type?: string | null
-    hull_type?: string | null
-    terms?: string | null
-  }) => {
+  const applyMasterVessel = useCallback((v: MasterVesselOption) => {
     const charterFromTerms = charterTypeFromMasterTerms(v.terms)
     setNewShipment((prev) => ({
       ...prev,
@@ -942,9 +908,31 @@ export function AddNewShipmentModal({
       vesselHullType: v.vessel_type ?? v.hull_type ?? '',
       charterType: charterFromTerms || prev.charterType,
     }))
-    setShowVesselSuggestions(false)
-    setVesselSuggestions([])
-  }
+    setVesselPickedFromMaster(true)
+    setFormErrors((prev) => {
+      const next = { ...prev }
+      delete next.vesselName
+      return next
+    })
+  }, [])
+
+  const trySelectMasterVesselByName = useCallback(
+    async (name: string): Promise<boolean> => {
+      const wanted = name.trim().toUpperCase()
+      if (wanted.length < 2) return false
+      try {
+        const res = await api.get('/master-vessels', { params: { search: name.trim(), limit: 20 } })
+        const items = (res.data?.data?.items ?? []) as MasterVesselOption[]
+        const match = items.find((item) => String(item.vessel_name ?? '').trim().toUpperCase() === wanted)
+        if (!match) return false
+        applyMasterVessel(match)
+        return true
+      } catch {
+        return false
+      }
+    },
+    [applyMasterVessel],
+  )
 
   const vesselCapacityNum = newShipment.vesselCapacity ? parseFloat(String(newShipment.vesselCapacity)) : null
   const contractQtyAssignedSum = useMemo(() => {
@@ -1264,15 +1252,18 @@ export function AddNewShipmentModal({
         vesselResult.suggested_discharge_port?.trim() || newShipment.portOfDischarge.trim()
       )
       const vesselName = (vesselResult.suggested_vessel_name || '').trim()
-
       setNewShipment((prev) => ({
         ...prev,
-        vesselName: vesselName || prev.vesselName,
         charterType: vesselResult.suggested_charter_type || prev.charterType,
         portOfDischarge: dischargePort || prev.portOfDischarge,
         portOfLoading: loadingPort || prev.portOfLoading,
       }))
-      clearFieldError('vesselName')
+      if (vesselName) {
+        const matched = await trySelectMasterVesselByName(vesselName)
+        if (!matched) {
+          setVesselPickedFromMaster(false)
+        }
+      }
       clearFieldError('charterType')
       clearFieldError('portOfDischarge')
 
@@ -1384,6 +1375,7 @@ export function AddNewShipmentModal({
     resolveAiPlannerDimensions,
     resolvePrimaryContractData,
     showNotification,
+    trySelectMasterVesselByName,
     updateEtaDetailBlock,
   ])
 
@@ -1461,8 +1453,7 @@ export function AddNewShipmentModal({
     setContractSearchTerm('')
     setContractSuggestions([])
     setShowContractSuggestions(false)
-    setVesselSuggestions([])
-    setShowVesselSuggestions(false)
+    setVesselPickedFromMaster(false)
     setMappedPlantSiteName('')
     setAiAppliedPatternContext(null)
     setFormErrors({})
@@ -1642,7 +1633,6 @@ export function AddNewShipmentModal({
           ? prev.operationId
           : prev.operationId || generateOperationId(uniquePrefilled[0].contractId),
         stoNumber: String(prefilledStoNumber ?? prev.stoNumber ?? '').trim() || prev.stoNumber,
-        vesselName: prev.vesselName.trim() || sapStoPreview?.vessel_name || '',
         portOfDischarge: prev.portOfDischarge.trim() || sapStoPreview?.port_of_discharge || '',
       }))
       setEtaDetails([createShipmentEtaDetail([...keys])])
@@ -1775,7 +1765,6 @@ export function AddNewShipmentModal({
           vesselName:
             String(shipment.vessel_name ?? row.vessel_name ?? '').trim() ||
             prev.vesselName.trim() ||
-            preview.vessel_name ||
             '',
           vesselCode: String(shipment.vessel_code ?? row.vessel_code ?? prev.vesselCode),
           vesselOwner: String(shipment.vessel_owner ?? row.vessel_owner ?? prev.vesselOwner),
@@ -1796,6 +1785,11 @@ export function AddNewShipmentModal({
           buildEtaDetailsFromGroupLoadingPorts(contractIds, shipment, row, loadingPorts),
         )
         setEditShipmentId(null)
+        const plotVessel = String(shipment.vessel_name ?? row.vessel_name ?? '').trim()
+        if (plotVessel) {
+          const matched = await trySelectMasterVesselByName(plotVessel)
+          if (!matched) setVesselPickedFromMaster(false)
+        }
       } catch (error) {
         console.error('Failed to load shipment for plot:', error)
         showNotification('error', 'Failed to load shipment details')
@@ -1810,6 +1804,7 @@ export function AddNewShipmentModal({
       prefilledContractNumbers,
       prefilledStoNumber,
       showNotification,
+      trySelectMasterVesselByName,
     ],
   )
 
@@ -1853,7 +1848,6 @@ export function AddNewShipmentModal({
           setNewShipment((prev) => ({
             ...prev,
             stoNumber: sto,
-            vesselName: prev.vesselName.trim() || preview.vessel_name || '',
             portOfDischarge: prev.portOfDischarge.trim() || preview.port_of_discharge || '',
           }))
         }
@@ -2051,7 +2045,9 @@ export function AddNewShipmentModal({
         ? 'Shipment Qty must be filled for at least one PO'
         : 'Contract Qty assign to STO must be filled for at least one contract'
     if (transportMode === 'sea' || transportMode === 'mixed') {
-      if (!newShipment.vesselName.trim()) errors.vesselName = 'Vessel Name is required for Sea contracts'
+      if (!newShipment.vesselName.trim() || !vesselPickedFromMaster) {
+        errors.vesselName = 'Select a vessel from Master Vessel'
+      }
       if (!newShipment.charterType) errors.charterType = 'Charter Type is required for Sea contracts'
       if (!newShipment.portOfDischarge.trim()) errors.portOfDischarge = 'Discharge Port is required for Sea contracts'
     }
@@ -2293,8 +2289,7 @@ export function AddNewShipmentModal({
     }
   }
 
-  const vesselDropdownOpen = showVesselSuggestions && vesselSuggestions.length > 0
-  const section2DropdownOpen = vesselDropdownOpen
+  const section2DropdownOpen = false
 
   const step1Done = newShipment.contractNumbers.length > 0 && newShipment.contractNumbers.every((id) => contractValidations[id]?.exists)
   const step2Done = Boolean(newShipment.vesselName.trim() || selectedTransportMode === 'land')
@@ -2970,44 +2965,20 @@ export function AddNewShipmentModal({
                 </div>
               )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-visible">
-                <div
-                  className={`relative overflow-visible ${vesselDropdownOpen ? 'z-[100]' : 'z-0'}`}
-                >
+                <div className="relative z-0 overflow-visible">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Vessel Name
                     {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                       <span className="text-red-500"> *</span>
                     )}
                   </label>
-                  <Input
+                  <MasterVesselCombobox
                     value={newShipment.vesselName}
-                    onChange={(e) => { handleVesselNameChange(e.target.value); clearFieldError('vesselName') }}
-                    onFocus={() => !isEditMode && newShipment.vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
-                    placeholder="Type to search vessel name (from Master Vessel)"
-                    readOnly={isEditMode}
+                    onSelect={applyMasterVessel}
+                    placeholder="Search and select from Master Vessel"
                     disabled={isEditMode}
                     className={`${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.vesselName ? 'border-red-500' : ''}`}
                   />
-                  {vesselDropdownOpen && (
-                    <div className={AUTOCOMPLETE_PANEL_CLASS}>
-                      {vesselSuggestions.map((v) => (
-                        <div
-                          key={`${v.vessel_name}-${v.vessel_code ?? 'pending'}`}
-                          className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 transition-colors"
-                          onMouseDown={() => handleSelectVessel(v)}
-                        >
-                          <div className="font-semibold text-sm text-gray-900">{v.vessel_name}</div>
-                          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
-                            <span className="font-mono">{formatVesselCodeDisplay(v.vessel_code)}</span>
-                            {v.vessel_owner && <><span className="text-gray-300">•</span><span>{v.vessel_owner}</span></>}
-                            {v.vessel_capacity_mt != null && <><span className="text-gray-300">•</span><span className="text-cyan-600 font-medium">{formatNumber(v.vessel_capacity_mt)} MT</span></>}
-                            {(v.vessel_type ?? v.hull_type) && <><span className="text-gray-300">•</span><span>{v.vessel_type ?? v.hull_type}</span></>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                   {formErrors.vesselName && (
                     <p className="text-xs mt-1 text-red-600">{formErrors.vesselName}</p>
                   )}

@@ -397,7 +397,8 @@ export function buildTruckingListExpansionSql(
         ${selectOutstanding ? `${qty.outstanding} AS outstanding_quantity` : 'e.outstanding_quantity'},
         e.estimated_km,
         e.contract_ext_no,
-        e.contract_import_status${filterTotalCol}
+        e.contract_import_status,
+        ${skipSapJoin ? 'FALSE' : TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr} AS is_contract_sap_closed${filterTotalCol}
       FROM expanded e
       INNER JOIN contracts c ON c.id = e.contract_id
       INNER JOIN trucking_operations t ON t.id = e.id${

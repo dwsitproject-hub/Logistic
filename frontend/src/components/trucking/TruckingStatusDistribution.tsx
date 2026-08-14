@@ -35,13 +35,6 @@ const TRUCKING_STATUS_CARDS: ReadonlyArray<{
     tooltip: FIELD_HELP.truckingStatusPlanned,
   },
   {
-    status: 'IN_PROGRESS',
-    label: 'In Progress',
-    color: 'bg-yellow-100',
-    textColor: 'text-yellow-800',
-    tooltip: FIELD_HELP.truckingStatusInProgress,
-  },
-  {
     status: 'COMPLETED',
     label: 'Completed',
     color: 'bg-green-100',
@@ -61,14 +54,14 @@ export interface TruckingStatusDistributionProps {
   loading: boolean
   statusFilter: string
   counts: Partial<Record<TruckingStatusCardKey, number>>
-  /** Contract quantity_ordered sums in kg — Unplanned / Completed / Cancelled cards. */
+  /** Contract quantity_ordered sums in kg — Completed / Cancelled cards. */
   contractQtys?: Partial<Record<TruckingStatusCardKey, number>>
-  /** Outstanding quantity sums in kg — Planned / In Progress cards. */
+  /** Outstanding quantity sums in kg — Unplanned and Planned/In Progress cards. */
   outstandingQtys?: Partial<Record<TruckingStatusCardKey, number>>
   onStageClick: (status: TruckingStatusCardKey) => void
 }
 
-const OUTSTANDING_QTY_CARDS = new Set<TruckingStatusCardKey>(['PLANNED', 'IN_PROGRESS'])
+const OUTSTANDING_QTY_CARDS = new Set<TruckingStatusCardKey>(['UNPLANNED', 'PLANNED'])
 
 /**
  * Rectangle status cards aligned with Shipments Summary Status styling.
@@ -83,7 +76,10 @@ export function TruckingStatusDistribution({
   onStageClick,
 }: TruckingStatusDistributionProps) {
   const renderCard = (card: (typeof TRUCKING_STATUS_CARDS)[number]) => {
-    const isActive = statusFilter === card.status
+    const isPlannedInProgressCard = card.status === 'PLANNED'
+    const isActive = isPlannedInProgressCard
+      ? statusFilter === 'PLANNED' || statusFilter === 'IN_PROGRESS'
+      : statusFilter === card.status
     const count = Number(counts[card.status] ?? 0)
     const usesOutstanding = OUTSTANDING_QTY_CARDS.has(card.status)
     const qtyKg = usesOutstanding
@@ -103,7 +99,7 @@ export function TruckingStatusDistribution({
         onClick={() => {
           if (!loading) onStageClick(card.status)
         }}
-        className={`relative flex min-h-[6.75rem] w-36 flex-col justify-center md:w-40 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all ${
+        className={`relative flex min-h-[6.75rem] w-36 flex-col justify-center md:w-44 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all ${
           loading ? 'cursor-wait opacity-70' : 'cursor-pointer hover:shadow-md hover:-translate-y-0.5'
         } ${card.color} ${
           isActive ? 'ring-2 ring-blue-500 ring-offset-2 shadow-md' : ''

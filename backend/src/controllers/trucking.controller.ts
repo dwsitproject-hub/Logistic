@@ -17,6 +17,12 @@ import {
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import {
+  sqlB2bEndingCompanyExpr,
+  sqlB2bEndingPlantCodeExpr,
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
 import { appendTruckingPipelineStageFilter } from '../utils/truckingPagePipelineSql';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
@@ -775,6 +781,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           )
           SELECT
             COALESCE(
+              NULLIF(TRIM(l.data->'raw'->>'Truck Discharge Location'), ''),
               NULLIF(TRIM(c.company_name), ''),
               NULLIF(TRIM(l.data->'raw'->>'Buyer'), ''),
               NULLIF(TRIM(l.data->>'Buyer'), ''),
@@ -1005,7 +1012,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
       idx += 1;
     }
     if (unloadingLocation && String(unloadingLocation).trim() !== '') {
-      extraWhere += ` AND t.unloading_location ILIKE $${idx}`;
+      extraWhere += ` AND ${sqlB2bEndingUnloadExpr('t.unloading_location')} ILIKE $${idx}`;
       params.push(`%${String(unloadingLocation).trim()}%`);
       idx += 1;
     }
@@ -1037,8 +1044,8 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     const groupPlantFilter = appendGroupPlantFilter(
       plants,
       idx,
-      groupPlantExpr('c.plant_code', 'c.company_name'),
-      'c.plant_code',
+      groupPlantExpr(sqlB2bEndingPlantCodeExpr('c.plant_code'), sqlB2bEndingCompanyExpr('c.company_name')),
+      sqlB2bEndingPlantCodeExpr('c.plant_code'),
     );
     extraWhere += groupPlantFilter.sql;
     params.push(...groupPlantFilter.params);
@@ -1115,7 +1122,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
         c.source_type,
         ${ltSpotSql} AS lt_spot,
         t.loading_location,
-        t.unloading_location,
+        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         t.trucking_owner,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
@@ -1146,6 +1153,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
       LEFT JOIN contracts c ON t.contract_id = c.id
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       WHERE
         NOT (

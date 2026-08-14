@@ -1,6 +1,11 @@
 import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { hasCompleteSapVesselIdentity, resolveShipmentDisplayVesselName } from '../utils/sapVesselFields';
+import {
+  hasCompleteSapVesselIdentity,
+  parseContractSapClosedFlag,
+  resolveShipmentDisplayVesselName,
+} from '../utils/sapVesselFields';
+import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import { resolveMasterVessel } from './resolveMasterVessel.service';
 
@@ -39,23 +44,29 @@ function pumpBackfillQueue(): void {
 }
 
 /**
- * When shipment row lacks vessel but SAP has both code + name, expose SAP values on the row.
- * Display vessel name: Master Vessel KLIP name first, then SAP, then stored shipment input.
- * Returns true when SAP has a complete vessel identity (code + name) for optional DB backfill.
+ * Attach SAP / master vessel identity without dropping source fields.
+ * Display overlay (list): Open + KLIP filled → KLIP; GR Close → Master/SAP first.
  */
-export function mergeShipmentVesselFromSapRow(row: ShipmentVesselRow): boolean {
+export function mergeShipmentVesselFromSapRow(
+  row: ShipmentVesselRow,
+  options?: { overlayDisplayName?: boolean },
+): boolean {
   const sapName = trimOrNull(row.vessel_name_sap);
   const sapCode = trimOrNull(row.vessel_code_sap);
   const sapOwner = trimOrNull(row.vessel_owner_sap);
   const masterName = trimOrNull(row.vessel_name_master);
   const klipName = trimOrNull(row.vessel_name);
-  delete (row as { vessel_name_sap?: unknown }).vessel_name_sap;
-  delete (row as { vessel_code_sap?: unknown }).vessel_code_sap;
-  delete (row as { vessel_owner_sap?: unknown }).vessel_owner_sap;
-  delete (row as { vessel_name_master?: unknown }).vessel_name_master;
+  row.vessel_name_klip = klipName;
+  if (sapName) row.vessel_name_sap = sapName;
+  if (masterName) row.vessel_name_master = masterName;
 
-  const displayName = resolveShipmentDisplayVesselName(masterName, sapName, klipName);
-  if (displayName) row.vessel_name = displayName;
+  const overlay = options?.overlayDisplayName !== false;
+  if (overlay) {
+    const displayName = resolveShipmentDisplayVesselName(masterName, sapName, klipName, {
+      contractSapClosed: parseContractSapClosedFlag(row.is_contract_sap_closed),
+    });
+    if (displayName) row.vessel_name = displayName;
+  }
 
   if (sapCode && !trimOrNull(row.vessel_code)) row.vessel_code = sapCode;
   if (sapOwner && !trimOrNull(row.vessel_owner)) row.vessel_owner = sapOwner;
@@ -160,4 +171,80 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
 
   backfillQueue.push({ dedupeKey, run });
   pumpBackfillQueue();
+}
+
+export interface ShipmentVesselIdentityFanOut {
+  vessel_name: string | null;
+  vessel_code: string | null;
+  vessel_owner: string | null;
+  vessel_capacity: unknown;
+  vessel_hull_type: string | null;
+  charter_type: string | null;
+  master_vessel_id: string | null;
+}
+
+const VESSEL_IDENTITY_KEYS = [
+  'vessel_name',
+  'vessel_code',
+  'vessel_owner',
+  'vessel_capacity',
+  'vessel_hull_type',
+  'charter_type',
+  'master_vessel_id',
+] as const;
+
+/** True when Edit Shipment sent any voyage-level vessel identity field. */
+export function hasVesselIdentityUpdate(updateData: Record<string, unknown>): boolean {
+  return VESSEL_IDENTITY_KEYS.some((key) => {
+    if (!Object.prototype.hasOwnProperty.call(updateData, key)) return false;
+    const value = updateData[key];
+    if (value === undefined || value === null) return false;
+    if (typeof value === 'string' && value.trim() === '') return false;
+    return true;
+  });
+}
+
+/**
+ * Same rule as ATA/ETA: vessel identity is voyage-level. Persist onto every SEA
+ * shipment PO in the STO group (including the row the user saved).
+ */
+export async function fanOutVesselIdentityToStoGroup(
+  anchorShipmentId: string,
+  vessel: ShipmentVesselIdentityFanOut,
+): Promise<number> {
+  const memberIds = await resolveStoGroupShipmentIds(anchorShipmentId);
+  const ids = memberIds.length > 0 ? memberIds : [anchorShipmentId];
+
+  const result = await query(
+    `UPDATE shipments SET
+       vessel_name = $1,
+       vessel_code = $2,
+       vessel_owner = $3,
+       vessel_capacity = $4::numeric,
+       vessel_hull_type = $5,
+       charter_type = $6,
+       master_vessel_id = $7::uuid,
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = ANY($8::uuid[])`,
+    [
+      vessel.vessel_name,
+      vessel.vessel_code,
+      vessel.vessel_owner,
+      vessel.vessel_capacity ?? null,
+      vessel.vessel_hull_type,
+      vessel.charter_type,
+      vessel.master_vessel_id,
+      ids,
+    ],
+  );
+
+  const touched = result.rowCount ?? 0;
+  if (ids.length > 1) {
+    logger.info('Fanned vessel identity out to STO group shipment POs', {
+      anchorShipmentId,
+      memberCount: ids.length,
+      rowsTouched: touched,
+    });
+  }
+  return touched;
 }

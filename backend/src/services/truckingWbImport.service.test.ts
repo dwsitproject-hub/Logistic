@@ -180,6 +180,7 @@ describe('processWbRekapWorkbookUpload', () => {
     expect(result.status).toBe('completed');
     expect(syncTruckingQuantityDeliveredFromDailyActuals).toHaveBeenCalledTimes(1);
     expect(syncTruckingQuantityDeliveredFromDailyActuals).toHaveBeenCalledWith(expect.anything(), 'op-1');
+    expect(invalidateTruckingListCache).toHaveBeenCalledTimes(1);
   });
 
   it('runs sync + promote exactly once per touched operation even with many date rows', async () => {

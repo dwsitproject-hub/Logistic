@@ -25,6 +25,7 @@ import {
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { shipmentListHydrateVesselName } from '@/lib/shipmentVesselCompare'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import {
@@ -38,6 +39,8 @@ import {
 } from '@/lib/prePlannedGroups'
 import {
   enrichShipmentPoOptions,
+  formatPoPlantLabel,
+  resolvePoPlantCode,
   type ShipmentPoOption,
 } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
@@ -251,6 +254,10 @@ interface Shipment {
   contract_id: string
   contract_number: string
   vessel_name: string
+  /** Stored KLIP name before Master/SAP overlay (list hydrate). */
+  vessel_name_klip?: string | null
+  vessel_name_sap?: string | null
+  vessel_name_master?: string | null
   vessel_code: string
   vessel_owner: string
   vessel_draft: number | null
@@ -264,6 +271,8 @@ interface Shipment {
   port_of_loading: string
   port_of_discharge: string
   plant_site: string // Group Plant (resolved from master_plants via contract plant_code)
+  /** SAP / contracts plant code (e.g. AM10) — used in Add New PO labels. */
+  plant_code?: string | null
   quantity_shipped: number
   quantity_delivered: number
   /** Explicit KLIP Delivery Qty (kg) from Shipment Qty / manual edit; independent of SAP. */
@@ -593,7 +602,10 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       incoterm: match.incoterm ?? row.incoterm,
       b2b_flag: match.b2b_flag ?? row.b2b_flag,
       source_type: match.source_type ?? row.source_type,
-      vessel_name: match.vessel_name?.trim() ? match.vessel_name : row.vessel_name,
+      vessel_name: shipmentListHydrateVesselName(row.vessel_name, match, row.is_contract_sap_closed),
+      vessel_name_klip: match.vessel_name_klip ?? row.vessel_name_klip,
+      vessel_name_sap: match.vessel_name_sap ?? row.vessel_name_sap,
+      vessel_name_master: match.vessel_name_master ?? row.vessel_name_master,
       vessel_code: match.vessel_code?.trim() ? match.vessel_code : row.vessel_code,
       vessel_owner: match.vessel_owner?.trim() ? match.vessel_owner : row.vessel_owner,
     }
@@ -2295,13 +2307,9 @@ function ShipmentsPageContent() {
   const contractBacklogRowToPoOption = (shipment: Shipment): ShipmentPoOption => {
     const contractId = String(shipment.contract_number || shipment.contract_numbers || '').trim()
     const poNumber = String(shipment.po_numbers ?? '').split(',')[0]?.trim() || null
-    const plantCode = shipment.plant_site ? String(shipment.plant_site).trim() : null
+    const plantCode = resolvePoPlantCode({ plant_code: shipment.plant_code })
     const key = String(shipment.contract_row_id || shipment.id || `${contractId}::${poNumber ?? ''}`).trim()
-    const label = poNumber
-      ? plantCode
-        ? `${poNumber} - ${plantCode}`
-        : poNumber
-      : contractId
+    const label = formatPoPlantLabel(poNumber || contractId, plantCode)
     return {
       key,
       contractId,

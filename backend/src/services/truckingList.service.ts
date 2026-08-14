@@ -4,6 +4,7 @@ import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
 import logger from '../utils/logger';
 import { runQueriesInBatches } from '../utils/runQueriesInBatches';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { sqlB2bEndingCompanyExpr, sqlB2bEndingPlantCodeExpr, sqlB2bEndingUnloadExpr } from '../utils/b2bOriginEndingSql';
 import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
@@ -92,6 +93,7 @@ export interface TruckingStatusContractQtyKg {
 }
 
 export interface TruckingStatusOutstandingQtyKg {
+  unplanned: number;
   planned: number;
   inProgress: number;
 }
@@ -112,7 +114,7 @@ export interface TruckingListResponseData {
     };
     /** Sum of contract quantity_ordered (kg), one contract once per status bucket. */
     statusContractQty?: TruckingStatusContractQtyKg;
-    /** Sum of outstanding_quantity (kg) for Planned / In Progress cards. */
+    /** Sum of outstanding_quantity (kg) for Unplanned / Planned / In Progress cards. */
     statusOutstandingQty?: TruckingStatusOutstandingQtyKg;
     unplannedTable?: {
       contractRows: number;
@@ -155,7 +157,7 @@ const UNPLANNED_BACKLOG_CACHE = new Map<
   }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v38';
+const CACHE_VERSION = 'trucking-list-v41';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -299,8 +301,7 @@ function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
 
 /**
  * Section 1 Summary/OS backlog — count + contract qty (kg) + OS bucket aggregates in one
- * scan of the unplanned contract backlog. Was 3 separate queries (count, contract qty, OS
- * aggregate) all filtering the exact same `contracts x latest_spd_contract` set.
+ * scan of the unplanned contract backlog. Strip/card OS uses outstanding qty (clamped at 0).
  */
 async function loadTruckingUnplannedBacklogCombinedForRequest(
   req: AuthRequest,
@@ -358,14 +359,29 @@ function parseTruckingCombinedSummaryRow(
   return { summary, statusContractQty, statusOutstandingQty, osExecution };
 }
 
+export function mergeTruckingGrClosedSnapshotContractQty(
+  live: TruckingStatusContractQtyKg,
+  snapshot: {
+    completedGrClosedContractQtyKg: number;
+    cancelledGrClosedContractQtyKg: number;
+  },
+): TruckingStatusContractQtyKg {
+  return {
+    ...live,
+    completed: live.completed + (Number(snapshot.completedGrClosedContractQtyKg) || 0),
+    cancelled: live.cancelled + (Number(snapshot.cancelledGrClosedContractQtyKg) || 0),
+  };
+}
+
 /** Single STO expansion for counts + card qty + card OS + strip OS (execution). */
 async function loadTruckingCombinedSummaryExecution(
   built: TruckingListBuiltQuery,
-  opts: { includeCounts: boolean },
+  opts: { includeCounts: boolean; grOpenOnly?: boolean },
 ): Promise<ReturnType<typeof parseTruckingCombinedSummaryRow>> {
   const qtyBuilt: TruckingListBuiltQuery = { ...built, skipSapJoin: false };
   const q = buildTruckingStatusSummaryCombinedQuery(qtyBuilt, {
     includeCounts: opts.includeCounts,
+    grOpenOnly: opts.grOpenOnly === true,
   });
   const res = await query(q.text, q.params);
   return parseTruckingCombinedSummaryRow((res.rows[0] || {}) as Record<string, unknown>, opts);
@@ -399,13 +415,17 @@ export function startTruckingListCacheWarmer(): void {
   void resolveTruckingListForRequest(req).catch(() => {});
 }
 
-export function invalidateTruckingListCache(): void {
+export function clearTruckingListMemoryCaches(): void {
   TRUCKING_RESPONSE_CACHE.clear();
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
   MERGED_SUMMARY_CACHE.clear();
   UNPLANNED_BACKLOG_CACHE.clear();
+}
+
+export function invalidateTruckingListCache(): void {
+  clearTruckingListMemoryCaches();
   markPipelineDailySummaryStale(['trucking']).catch(() => {});
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
@@ -618,8 +638,22 @@ export function parseTruckingStatusOutstandingQtyFromSqlRow(
   row: Record<string, unknown>,
 ): TruckingStatusOutstandingQtyKg {
   return {
+    unplanned: Number(row.unplanned_outstanding_qty || 0) || 0,
     planned: Number(row.planned_outstanding_qty || 0) || 0,
     inProgress: Number(row.in_progress_outstanding_qty || 0) || 0,
+  };
+}
+
+/** Add Unplanned backlog OS (no trucking op yet) onto the Unplanned card total. */
+export function mergeTruckingUnplannedBacklogOs(
+  statusOutstandingQty: TruckingStatusOutstandingQtyKg,
+  backlogOsTotalKg: number,
+): TruckingStatusOutstandingQtyKg {
+  return {
+    unplanned:
+      (Number(statusOutstandingQty.unplanned) || 0) + (Number(backlogOsTotalKg) || 0),
+    planned: Number(statusOutstandingQty.planned) || 0,
+    inProgress: Number(statusOutstandingQty.inProgress) || 0,
   };
 }
 
@@ -729,7 +763,7 @@ export function buildTruckingListQuery(
   }
 
   if (unloadingLocation) {
-    queryText += ` AND t.unloading_location ILIKE $${paramIndex}`;
+    queryText += ` AND ${sqlB2bEndingUnloadExpr('t.unloading_location')} ILIKE $${paramIndex}`;
     queryParams.push(`%${unloadingLocation}%`);
     paramIndex += 1;
   }
@@ -779,8 +813,8 @@ export function buildTruckingListQuery(
   const groupPlantFilter = appendGroupPlantFilter(
     plants,
     paramIndex,
-    groupPlantExpr('c.plant_code', 'c.company_name'),
-    'c.plant_code',
+    groupPlantExpr(sqlB2bEndingPlantCodeExpr('c.plant_code'), sqlB2bEndingCompanyExpr('c.company_name')),
+    sqlB2bEndingPlantCodeExpr('c.plant_code'),
   );
   queryText += groupPlantFilter.sql;
   queryParams.push(...groupPlantFilter.params);
@@ -896,7 +930,8 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
 
-/** Live contract-qty-only aggregate (used when status counts come from daily summary). */
+/** Live contract-qty-only aggregate (used when status counts come from daily summary).
+ * @deprecated Replaced by `buildTruckingStatusSummaryCombinedQuery` at runtime. */
 export function buildTruckingStatusContractQtyQuery(
   built: TruckingListBuiltQuery,
 ): { text: string; params: unknown[] } {
@@ -931,7 +966,8 @@ export function buildTruckingStatusContractQtyQuery(
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
 
-/** Live outstanding-qty aggregate for Planned / In Progress status cards. */
+/** Live outstanding-qty aggregate for Planned / In Progress status cards.
+ * @deprecated Replaced by `buildTruckingStatusSummaryCombinedQuery` at runtime. */
 export function buildTruckingStatusOutstandingQtyQuery(
   built: TruckingListBuiltQuery,
 ): { text: string; params: unknown[] } {
@@ -954,12 +990,13 @@ export function buildTruckingStatusOutstandingQtyQuery(
           MAX(COALESCE(outstanding_quantity, 0))::numeric AS outstanding_quantity
         FROM filtered
         WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
-          AND status IN ('PLANNED', 'IN_PROGRESS')
+          AND status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
         GROUP BY status, contract_number
       )
       SELECT
-        COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
-        COALESCE(SUM(outstanding_quantity) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_outstanding_qty
+        COALESCE(SUM(GREATEST(0, outstanding_quantity)) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric AS unplanned_outstanding_qty,
+        COALESCE(SUM(GREATEST(0, outstanding_quantity)) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
+        COALESCE(SUM(GREATEST(0, outstanding_quantity)) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_outstanding_qty
       FROM per_contract`;
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
@@ -1277,16 +1314,25 @@ async function runTruckingListSummaryWithBacklog(
   }
 
   const [combined, backlog] = await Promise.all([
-    loadTruckingCombinedSummaryExecution(built, { includeCounts: !fromDaily }),
+    loadTruckingCombinedSummaryExecution(built, {
+      includeCounts: !fromDaily,
+      grOpenOnly: Boolean(fromDaily),
+    }),
     loadTruckingUnplannedBacklogCombinedForRequest(req),
   ]);
   timingsMs.dbCombinedSummary = performance.now() - tCombined0;
 
-  const statusContractQty: TruckingStatusContractQtyKg = {
+  const liveContractQty: TruckingStatusContractQtyKg = {
     ...combined.statusContractQty,
     unplanned: combined.statusContractQty.unplanned + backlog.contractQtyKg,
   };
-  const statusOutstandingQty = combined.statusOutstandingQty;
+  const statusContractQty = fromDaily
+    ? mergeTruckingGrClosedSnapshotContractQty(liveContractQty, fromDaily)
+    : liveContractQty;
+  const statusOutstandingQty = mergeTruckingUnplannedBacklogOs(
+    combined.statusOutstandingQty,
+    backlog.osBacklog.totalKg,
+  );
   const outstandingQty = mergeTruckingOutstandingQtySummaries(combined.osExecution, backlog.osBacklog);
 
   if (fromDaily) {
@@ -1296,8 +1342,13 @@ async function runTruckingListSummaryWithBacklog(
           return undefined;
         })
       : undefined;
+    const dailyPublic = {
+      total: fromDaily.total,
+      status: fromDaily.status,
+      unplannedTable: fromDaily.unplannedTable,
+    };
     const merged: NonNullable<TruckingListResponseData['summary']> = {
-      ...fromDaily,
+      ...dailyPublic,
       outstandingQty,
       statusContractQty,
       statusOutstandingQty,
@@ -1396,6 +1447,7 @@ async function runTruckingListPageQuery(
   limit: number,
   stageFilter?: string | null,
 ): Promise<{ rows: TruckingListRow[]; total: number }> {
+  const liveLoadStartedAt = Date.now();
   const offset = (page - 1) * limit;
   const cachedTotal = getCachedFilteredTotal(built.filterCacheKey);
   const { text, params } =
@@ -1422,11 +1474,15 @@ async function runTruckingListPageQuery(
   evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
   // Remember how to re-run this exact load so the background warmer can refresh it
   // ahead of expiry / after invalidation. `built` is a plain built query context.
-  PAGE_KEEP_WARM.register(built.cacheKey, async () => {
-    PAGE_CACHE.delete(built.cacheKey);
-    COUNT_CACHE.delete(built.filterCacheKey);
-    await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter);
-  });
+  PAGE_KEEP_WARM.register(
+    built.cacheKey,
+    async () => {
+      PAGE_CACHE.delete(built.cacheKey);
+      COUNT_CACHE.delete(built.filterCacheKey);
+      await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter);
+    },
+    Date.now() - liveLoadStartedAt,
+  );
   return { rows, total };
 }
 
@@ -1449,6 +1505,7 @@ async function loadTruckingStageSnapshotPage(
   }
   if (cached) PAGE_CACHE.delete(built.cacheKey);
 
+  const liveLoadStartedAt = Date.now();
   const snapshotPage = await loadTruckingStagePageFromSnapshot(
     scope,
     stage,
@@ -1492,11 +1549,15 @@ async function loadTruckingStageSnapshotPage(
   cacheFilteredTotal(built.filterCacheKey, total);
   PAGE_CACHE.set(built.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
   evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
-  PAGE_KEEP_WARM.register(built.cacheKey, async () => {
-    PAGE_CACHE.delete(built.cacheKey);
-    COUNT_CACHE.delete(built.filterCacheKey);
-    await loadTruckingStageSnapshotPage(built, scope, stage, sortDir, page, limit);
-  });
+  PAGE_KEEP_WARM.register(
+    built.cacheKey,
+    async () => {
+      PAGE_CACHE.delete(built.cacheKey);
+      COUNT_CACHE.delete(built.filterCacheKey);
+      await loadTruckingStageSnapshotPage(built, scope, stage, sortDir, page, limit);
+    },
+    Date.now() - liveLoadStartedAt,
+  );
   return { rows, total };
 }
 

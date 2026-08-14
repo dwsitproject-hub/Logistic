@@ -53,7 +53,9 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
       in_transit_count,
       unloading_count,
       completed_count,
-      cancelled_count
+      cancelled_count,
+      completed_gr_closed_contract_qty,
+      cancelled_gr_closed_contract_qty
     )
     WITH execution_rows AS (
       SELECT
@@ -62,29 +64,81 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
         ${sqlPipelineProductKey('c.product')} AS product,
         ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
         src.status,
-        src.status_db
+        src.status_db,
+        src.contract_number,
+        src.contract_qty,
+        COALESCE(src.is_contract_sap_closed, FALSE) AS is_contract_sap_closed
       FROM (${expanded}) src
       INNER JOIN contracts c ON c.id = src.contract_id
       -- Snapshot feeds the status circles only. Operations whose PO SAP cancelled or deleted
       -- must not count towards them; the trucking list still shows the rows.
       WHERE COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'
+    ),
+    per_contract AS (
+      SELECT
+        group_plant,
+        contract_date,
+        product,
+        incoterm,
+        status,
+        contract_number,
+        MAX(COALESCE(contract_qty, 0))::numeric AS contract_qty,
+        BOOL_OR(is_contract_sap_closed) AS is_gr_closed
+      FROM execution_rows
+      WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+      GROUP BY group_plant, contract_date, product, incoterm, status, contract_number
+    ),
+    qty AS (
+      SELECT
+        group_plant,
+        contract_date,
+        product,
+        incoterm,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'COMPLETED' AND is_gr_closed), 0)::numeric AS completed_gr_closed_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'CANCELLED' AND is_gr_closed), 0)::numeric AS cancelled_gr_closed_contract_qty
+      FROM per_contract
+      GROUP BY group_plant, contract_date, product, incoterm
+    ),
+    counts AS (
+      SELECT
+        group_plant,
+        contract_date,
+        product,
+        incoterm,
+        COUNT(*)::bigint AS total_count,
+        COUNT(*) FILTER (WHERE status = 'UNPLANNED')::bigint AS unplanned_execution_count,
+        COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint AS planned_count,
+        COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint AS in_progress_count,
+        COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint AS loading_count,
+        COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint AS in_transit_count,
+        COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint AS completed_count,
+        COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count
+      FROM execution_rows
+      GROUP BY group_plant, contract_date, product, incoterm
     )
     SELECT
-      group_plant,
-      contract_date,
-      product,
-      incoterm,
-      COUNT(*)::bigint,
-      COUNT(*) FILTER (WHERE status = 'UNPLANNED')::bigint,
-      COUNT(*) FILTER (WHERE status = 'PLANNED')::bigint,
-      COUNT(*) FILTER (WHERE status = 'IN_PROGRESS')::bigint,
-      COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint,
-      COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint,
-      COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint,
-      COUNT(*) FILTER (WHERE status = 'COMPLETED')::bigint,
-      COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint
-    FROM execution_rows
-    GROUP BY group_plant, contract_date, product, incoterm
+      c.group_plant,
+      c.contract_date,
+      c.product,
+      c.incoterm,
+      c.total_count,
+      c.unplanned_execution_count,
+      c.planned_count,
+      c.in_progress_count,
+      c.loading_count,
+      c.in_transit_count,
+      c.unloading_count,
+      c.completed_count,
+      c.cancelled_count,
+      COALESCE(q.completed_gr_closed_contract_qty, 0),
+      COALESCE(q.cancelled_gr_closed_contract_qty, 0)
+    FROM counts c
+    LEFT JOIN qty q
+      ON q.group_plant = c.group_plant
+     AND q.contract_date = c.contract_date
+     AND q.product = c.product
+     AND q.incoterm = c.incoterm
     ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
       total_count = EXCLUDED.total_count,
       unplanned_execution_count = EXCLUDED.unplanned_execution_count,
@@ -94,7 +148,9 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
       in_transit_count = EXCLUDED.in_transit_count,
       unloading_count = EXCLUDED.unloading_count,
       completed_count = EXCLUDED.completed_count,
-      cancelled_count = EXCLUDED.cancelled_count`;
+      cancelled_count = EXCLUDED.cancelled_count,
+      completed_gr_closed_contract_qty = EXCLUDED.completed_gr_closed_contract_qty,
+      cancelled_gr_closed_contract_qty = EXCLUDED.cancelled_gr_closed_contract_qty`;
 }
 
 export function buildTruckingBacklogDailySummaryUpsertSql(): string {

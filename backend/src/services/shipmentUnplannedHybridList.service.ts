@@ -612,6 +612,19 @@ export function isCompletedHybridListRequest(status: unknown): boolean {
   return String(status ?? '').trim().toUpperCase() === 'COMPLETED';
 }
 
+/**
+ * ALL table merges execution + Unplanned/Preplanned/Completed-OS backlog.
+ * Keep this true for 10-digit PO/STO search — otherwise Unplanned POs vanish from ALL.
+ */
+export function shouldResolveAllHybridShipmentsList(status: unknown): boolean {
+  return isAllHybridListRequest(status);
+}
+
+/** Completed card also includes PO backlog with remaining OS ≤ 1 MT (no shipment row). */
+export function shouldResolveCompletedHybridShipmentsList(status: unknown): boolean {
+  return isCompletedHybridListRequest(status);
+}
+
 export function isPreplannedListRequest(status: unknown): boolean {
   return String(status ?? '').trim().toUpperCase() === 'PREPLANNED';
 }

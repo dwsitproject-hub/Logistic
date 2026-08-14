@@ -81,17 +81,68 @@ export function resolveSapVesselIdentity(
   };
 }
 
-/** View-table vessel: Master Vessel KLIP name first, then SAP, then stored shipment input. */
+export function canonicalVesselName(value: unknown): string | null {
+  const raw = pickSapText(value);
+  return raw ? resolveCanonicalVesselDisplayName(raw) : null;
+}
+
+/** True when KLIP stored a vessel name that differs from SAP (user override). */
+export function hasKlipVesselNameOverride(
+  vesselNameKlip: unknown,
+  vesselNameSap: unknown,
+): boolean {
+  const klip = canonicalVesselName(vesselNameKlip);
+  if (!klip) return false;
+  const sap = canonicalVesselName(vesselNameSap);
+  if (!sap) return true;
+  return klip !== sap;
+}
+
+/** pg boolean / 't'/'f' / import-status strings — avoid Boolean('false') === true. */
+export function parseContractSapClosedFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  if (!s || s === 'false' || s === 'f' || s === '0' || s === 'no' || s === 'open') return false;
+  return s === 'true' || s === 't' || s === '1' || s === 'yes' || s === 'close' || s === 'closed';
+}
+
+/**
+ * Latest non-blank value in a grouped STO (user edit wins).
+ * Lexicographic MAX() kept the old SAP name when sibling POs still had it.
+ */
+export function sqlLatestNonBlankAgg(expr: string, updatedAtExpr = 's.updated_at'): string {
+  return `(ARRAY_AGG(${expr} ORDER BY ${updatedAtExpr} DESC NULLS LAST) FILTER (WHERE NULLIF(TRIM((${expr})::text), '') IS NOT NULL))[1]`;
+}
+
+export interface ShipmentDisplayVesselNameOptions {
+  /**
+   * GR Close (PO vs STO per incoterm). Closed → Master/SAP first.
+   * Open → non-empty KLIP input wins, then Master/SAP.
+   */
+  contractSapClosed?: boolean;
+}
+
+/**
+ * List / card vessel name.
+ * Open + KLIP filled → KLIP. Empty KLIP or GR Close → Master, then SAP, then KLIP.
+ */
 export function resolveShipmentDisplayVesselName(
   vesselNameMaster: unknown,
   vesselNameSap: unknown,
   vesselNameKlip: unknown,
+  options?: ShipmentDisplayVesselNameOptions,
 ): string | null {
-  const master = pickSapText(vesselNameMaster);
-  const sap = pickSapText(vesselNameSap);
-  const klip = pickSapText(vesselNameKlip);
-  const raw = master ?? sap ?? klip;
-  return raw ? resolveCanonicalVesselDisplayName(raw) : null;
+  const master = canonicalVesselName(vesselNameMaster);
+  const sap = canonicalVesselName(vesselNameSap);
+  const klip = canonicalVesselName(vesselNameKlip);
+  // Explicit Open (list overlay): KLIP if filled, else SAP then Master.
+  // No options → legacy Master-first (STO preview / shipping perf).
+  if (options && options.contractSapClosed !== true) {
+    if (klip) return klip;
+    return sap ?? master ?? klip;
+  }
+  return master ?? sap ?? klip;
 }
 
 export const sqlShipmentDisplayVesselName = (
@@ -103,6 +154,32 @@ export const sqlShipmentDisplayVesselName = (
   NULLIF(TRIM(${sapExpr}), ''),
   NULLIF(TRIM(${klipExpr}), '')
 )`;
+
+/**
+ * List / pipeline-card display name — matches resolveShipmentDisplayVesselName
+ * when contractSapClosed is passed (Open: KLIP, else SAP then Master; Close: Master then SAP).
+ */
+export const sqlShipmentListDisplayVesselName = (
+  masterExpr: string,
+  sapExpr: string,
+  klipExpr: string,
+  closedExpr: string,
+): string => `(CASE
+  WHEN COALESCE(${closedExpr}, FALSE) IS NOT TRUE
+    AND NULLIF(TRIM(${klipExpr}), '') IS NOT NULL
+    THEN NULLIF(TRIM(${klipExpr}), '')
+  WHEN COALESCE(${closedExpr}, FALSE) IS NOT TRUE
+    THEN COALESCE(
+      NULLIF(TRIM(${sapExpr}), ''),
+      NULLIF(TRIM(${masterExpr}), ''),
+      NULLIF(TRIM(${klipExpr}), '')
+    )
+  ELSE COALESCE(
+    NULLIF(TRIM(${masterExpr}), ''),
+    NULLIF(TRIM(${sapExpr}), ''),
+    NULLIF(TRIM(${klipExpr}), '')
+  )
+END)`;
 
 export function hasCompleteSapVesselIdentity(identity: SapVesselIdentity): boolean {
   return Boolean(identity.vessel_code && identity.vessel_name);

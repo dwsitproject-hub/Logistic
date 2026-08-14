@@ -7,6 +7,7 @@ import {
   resolvePrimarySapDischargePortText,
   resolvePrimarySapLoadingPortText,
   resolveSapLoadingPortTextBySequence,
+  sapLoadingPortSequenceKey,
   sapParsedDataHasMultipleLoadingPorts,
 } from './vesselLoadingPortsFromSap.service';
 
@@ -80,7 +81,7 @@ describe('vesselLoadingPortsFromSap.service', () => {
     ).toBe('PORT TANJUNG PRIOK');
   });
 
-  it('rejects numeric port names and falls back to Loading Port N label in SAP build', () => {
+  it('rejects numeric port names and skips invalid loading-port sequences', () => {
     expect(isValidHumanPortName('67.30')).toBe(false);
     expect(isValidHumanPortName('Ketapang')).toBe(true);
     expect(
@@ -98,7 +99,8 @@ describe('vesselLoadingPortsFromSap.service', () => {
       },
     });
     const loading2 = ports.find((p) => p.port_sequence === 2 && !p.is_discharge_port);
-    expect(loading2?.port_name).toBe('Loading Port 2');
+    expect(loading2).toBeUndefined();
+    expect(ports.find((p) => p.port_sequence === 1 && !p.is_discharge_port)?.port_name).toBe('Ketapang');
   });
 
   it('ignores Vessel LOA numeric leak in vessel_loading_port_1 when extracting names', () => {
@@ -114,6 +116,20 @@ describe('vesselLoadingPortsFromSap.service', () => {
     const src = readFileSync(resolve(__dirname, 'vesselLoadingPortsFromSap.service.ts'), 'utf8');
     expect(src).toContain('op_embedded_sto');
     expect(src).toContain('^OP-([0-9]+)');
+  });
+
+  it('resolves edit SAP ports by list sto_key including JSON STO No.', () => {
+    const src = readFileSync(resolve(__dirname, 'vesselLoadingPortsFromSap.service.ts'), 'utf8');
+    expect(src).toContain('sapStoNumberKeyExpr');
+    expect(src).toContain('NULLIF(TRIM($2::text), \'\')');
+  });
+
+  it('maps missing/zero VLP sequence onto SAP loading port 1', () => {
+    expect(sapLoadingPortSequenceKey(0)).toBe(1);
+    expect(sapLoadingPortSequenceKey(null)).toBe(1);
+    expect(sapLoadingPortSequenceKey(1)).toBe(1);
+    expect(sapLoadingPortSequenceKey(2)).toBe(2);
+    expect(sapLoadingPortSequenceKey(3)).toBe(3);
   });
 
   it('sync cancels numeric junk ports (source asserts cancel helper exists)', () => {

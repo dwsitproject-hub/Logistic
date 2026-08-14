@@ -395,8 +395,10 @@ export function sqlContractGlobalOutstandingExpr(opts: {
 }): string {
   const { contractQtyExpr, incotermExpr, contractNumberExpr } = opts;
   const qmReceive = `(SELECT qm.quantity_receive FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`;
-  const qmDelivery = `(SELECT qm.quantity_delivery FROM qty_move qm WHERE qm.contract_number = ${contractNumberExpr})`;
-  // Align with Contracts list: CIF/FRC/CFR → Quantity Receive; LCO/FOB → Quantity Delivery.
+  // Incoterm Quantity Delivery (trucking vs vessel). Transport from contracts only —
+  // do not correlate sap_processed_data here (this expr is used in list/OS membership).
+  const transportExpr = `(SELECT UPPER(TRIM(COALESCE(c.transport_mode, ''))) FROM contracts c WHERE c.contract_id = ${contractNumberExpr} LIMIT 1)`;
+  const qmDelivery = sqlQtyMoveIncotermDelivery(incotermExpr, contractNumberExpr, transportExpr);
   return sqlContractOutstandingFromFields({
     contractQtyExpr,
     incotermExpr,

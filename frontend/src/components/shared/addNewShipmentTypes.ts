@@ -18,6 +18,27 @@ export type ShipmentPoOption = {
   contractData?: Record<string, unknown>
 }
 
+/** Plant codes like AM10 — never Group Plant "Blank". */
+export function isUsablePlantCode(value: unknown): boolean {
+  const code = String(value ?? '').trim()
+  if (!code) return false
+  return code.toLowerCase() !== 'blank'
+}
+
+export function resolvePoPlantCode(row: {
+  plant_code?: unknown
+  plantCode?: unknown
+}): string {
+  const fromCode = row.plant_code ?? row.plantCode
+  return isUsablePlantCode(fromCode) ? String(fromCode).trim() : ''
+}
+
+export function formatPoPlantLabel(poNumber: string, plantCode?: string | null): string {
+  const po = String(poNumber ?? '').trim()
+  const plant = isUsablePlantCode(plantCode) ? String(plantCode).trim() : ''
+  return plant ? `${po} - ${plant}` : po
+}
+
 export type EtaDetailApiPayload = {
   port_of_loading: string | null
   eta_arrival: string | null
@@ -57,6 +78,12 @@ export type UpdateShipmentFormPayload = {
   kind: 'update'
   shipmentId: string
   vessel_name?: string | null
+  vessel_code?: string | null
+  vessel_owner?: string | null
+  vessel_capacity?: string | number | null
+  vessel_hull_type?: string | null
+  charter_type?: string | null
+  master_vessel_id?: string | null
   quantity_delivered?: number | null
   actual_vessel_qty_receive?: number | null
   sfal_qty?: number | null
@@ -83,17 +110,8 @@ export function mapPurchaseOrderToPoOption(row: Record<string, unknown>): Shipme
   const contractId = String(row.contract_id ?? '').trim()
   const poNumber = row.po_number != null ? String(row.po_number).trim() : ''
   const key = String(row.contract_row_id ?? row.id ?? `${contractId}::${poNumber}`).trim()
-  const plantCode =
-    row.plant_code != null
-      ? String(row.plant_code).trim()
-      : row.plant_site != null
-        ? String(row.plant_site).trim()
-        : ''
-  const label = poNumber
-    ? plantCode
-      ? `${poNumber} - ${plantCode}`
-      : poNumber
-    : contractId
+  const plantCode = resolvePoPlantCode(row)
+  const label = poNumber ? formatPoPlantLabel(poNumber, plantCode) : contractId
   return {
     key,
     contractId,
@@ -127,12 +145,13 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
   const contractId = String(detail.contract_number ?? detail.contract_id ?? '').trim()
   const poNumber = detail.po_number != null ? String(detail.po_number).trim() : ''
   const key = `${contractId}::${poNumber || contractId}`
-  const label = poNumber || contractId
+  const plantCode = resolvePoPlantCode(detail)
+  const label = formatPoPlantLabel(poNumber || contractId, plantCode)
   return {
     key,
     contractId,
     poNumber: poNumber || null,
-    plantCode: null,
+    plantCode: plantCode || null,
     label,
     contractData: {
       contract_id: contractId,
@@ -153,6 +172,7 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
       incoterm: detail.incoterm,
       supplier: detail.supplier,
       product: detail.product,
+      plant_code: plantCode || null,
     },
   }
 }
@@ -165,13 +185,19 @@ function coalescePoField(preferred: unknown, fallback: unknown): unknown {
 function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOption): ShipmentPoOption {
   const baseData = base.contractData ?? {}
   const enrichedData = enriched.contractData ?? {}
+  const plantCode =
+    resolvePoPlantCode({
+      plantCode: coalescePoField(base.plantCode, enriched.plantCode) as string | undefined,
+      plant_code: coalescePoField(baseData.plant_code, enrichedData.plant_code),
+    }) || null
+  const poNumber = base.poNumber ?? enriched.poNumber
   return {
     ...enriched,
     key: base.key,
     contractId: base.contractId,
-    poNumber: base.poNumber ?? enriched.poNumber,
-    label: enriched.label || base.label,
-    plantCode: enriched.plantCode ?? base.plantCode,
+    poNumber,
+    plantCode,
+    label: formatPoPlantLabel(String(poNumber || base.contractId), plantCode),
     contractData: {
       ...enrichedData,
       ...baseData,
@@ -198,6 +224,7 @@ function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOptio
       delivery_end_date: coalescePoField(baseData.delivery_end_date, enrichedData.delivery_end_date),
       // Prefer a real transport_mode when STO prefill omitted it
       transport_mode: coalescePoField(baseData.transport_mode, enrichedData.transport_mode),
+      plant_code: plantCode,
     },
   }
 }
