@@ -8,11 +8,12 @@
  * SAP Open but pipeline Completed/Cancelled is excluded (population gap).
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapClosedExpr, sqlIsContractSapClosedForShipmentBacklogExpr } from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { SHIPMENT_PAGE_SEA_INCOTERMS } from './shipmentIncotermScope';
+import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
 import { BACKLOG_OS_COMPLETED_MAX_KG } from './shipmentUnplannedHybridSql';
-import { TRUCKING_PAGE_INCOTERMS } from './truckingIncotermScope';
+import { contractEffectiveIncotermExpr, TRUCKING_PAGE_INCOTERMS } from './truckingIncotermScope';
 import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 import { sqlTruckingPipelineIsCompletedExpr } from './truckingQuantitySql';
 
@@ -35,7 +36,7 @@ function sqlContractQtyMoveOsKg(contractNumberExpr: string, incotermExpr: string
   });
 }
 
-/** Non-cancelled shipment that is still on the active OS pipeline (not Completed). */
+/** Non-cancelled shipment still on the active OS pipeline (Completed = GR Close only). */
 function sqlHasActiveSeaShipment(contractUuidExpr: string): string {
   return `EXISTS (
     SELECT 1
@@ -44,16 +45,29 @@ function sqlHasActiveSeaShipment(contractUuidExpr: string): string {
     WHERE s.contract_id = ${contractUuidExpr}
       AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
       AND NOT (${sqlIsContractSapClosedExpr('sc')})
-      AND s.ata_discharge_complete IS NULL
   )`;
 }
 
-function sqlHasNonCancelledSeaShipment(contractUuidExpr: string): string {
+/** Any shipment row — Unplanned/Preplanned backlog requires none (including cancelled). */
+function sqlHasAnySeaShipment(contractUuidExpr: string): string {
   return `EXISTS (
     SELECT 1
     FROM shipments s
     WHERE s.contract_id = ${contractUuidExpr}
-      AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+  )`;
+}
+
+/**
+ * Same core as Unplanned + Preplanned shipment backlog (no shipment, no ETA, GR Open).
+ * Preplanned vs Unplanned both sit on the Shipments OS strip.
+ */
+function sqlHasSeaStripBacklog(contractUuidExpr: string): string {
+  return `EXISTS (
+    SELECT 1
+    FROM contracts c_sea
+    WHERE c_sea.id = ${contractUuidExpr}
+      AND NOT (${sqlIsContractSapClosedForShipmentBacklogExpr('c_sea')})
+      AND ${sqlContractHasNoRegisteredEtaExpr('c_sea')}
   )`;
 }
 
@@ -61,7 +75,7 @@ function sqlHasNonCancelledSeaShipment(contractUuidExpr: string): string {
 function sqlHasActiveLandTrucking(contractUuidExpr: string): string {
   const outstanding = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'tc.quantity_ordered',
-    incotermExpr: 'tc.incoterm',
+    incotermExpr: contractEffectiveIncotermExpr('tc'),
     contractNumberExpr: 'tc.contract_id',
   });
   return `EXISTS (
@@ -71,7 +85,7 @@ function sqlHasActiveLandTrucking(contractUuidExpr: string): string {
     WHERE t.contract_id = ${contractUuidExpr}
       AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
       AND NOT (${sqlTruckingPipelineIsCompletedExpr('tc', outstanding)})
-      AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('COMPLETED', 'COMPLETE')
+      AND UPPER(TRIM(COALESCE(t.status, ''))) IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
   )`;
 }
 
@@ -84,11 +98,23 @@ function sqlHasActiveLandTruckingOp(contractUuidExpr: string): string {
   )`;
 }
 
+/** Open FRC/LCO LAND/MIX with no active trucking op — same as Trucking Unplanned backlog. */
+function sqlHasLandStripBacklog(contractUuidExpr: string): string {
+  return `EXISTS (
+    SELECT 1
+    FROM contracts c_land
+    WHERE c_land.id = ${contractUuidExpr}
+      AND UPPER(COALESCE(NULLIF(TRIM(c_land.transport_mode::text), ''), 'LAND')) IN ('LAND', 'MIX')
+      AND NOT (${sqlIsContractSapClosedExpr('c_land')})
+  )`;
+}
+
 /**
  * True when this Open contract's outstanding qty should sit on CP Open
  * (same universe as Shipments strip + Trucking strip).
  *
  * Expects `qty_move` in scope (same CTE as Contracts / latePerformance).
+ * `incotermExpr` should be the effective incoterm (DB || latest SAP).
  */
 export function sqlContractInActiveLogisticsOpenOsExpr(opts: {
   contractUuidExpr: string;
@@ -102,7 +128,8 @@ export function sqlContractInActiveLogisticsOpenOsExpr(opts: {
     AND (
       ${sqlHasActiveSeaShipment(contractUuidExpr)}
       OR (
-        NOT ${sqlHasNonCancelledSeaShipment(contractUuidExpr)}
+        NOT ${sqlHasAnySeaShipment(contractUuidExpr)}
+        AND ${sqlHasSeaStripBacklog(contractUuidExpr)}
         AND (${osKg}) > ${BACKLOG_OS_COMPLETED_MAX_KG}
       )
     )
@@ -114,13 +141,7 @@ export function sqlContractInActiveLogisticsOpenOsExpr(opts: {
       ${sqlHasActiveLandTrucking(contractUuidExpr)}
       OR (
         NOT ${sqlHasActiveLandTruckingOp(contractUuidExpr)}
-        AND EXISTS (
-          SELECT 1
-          FROM contracts c_land
-          WHERE c_land.id = ${contractUuidExpr}
-            AND NOT (${sqlIsContractSapClosedExpr('c_land')})
-        )
-        AND (${osKg}) > 0
+        AND ${sqlHasLandStripBacklog(contractUuidExpr)}
       )
     )
   )`;

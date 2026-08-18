@@ -99,6 +99,12 @@ describe('shipmentListSapAggSql', () => {
     expect(full).toContain("sk.data->'raw'->>'Incoterm'");
   });
 
+  it('sums sap_agg delivery from Quantity Delivery Vessel/Trucking (same as modal)', () => {
+    const full = shipmentListSpdAggCtes(false);
+    expect(full).toContain('Quantity Delivery Vessel');
+    expect(full).toContain('Quantity Delivery Trucking');
+  });
+
   it('exposes spd_id in both the stub and full CTEs so the shapes stay compatible', () => {
     expect(shipmentListSpdAggCtes(true)).toContain('spd_id');
     expect(shipmentListSpdAggCtes(false)).toContain('spd_id');

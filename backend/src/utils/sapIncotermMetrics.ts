@@ -34,9 +34,9 @@ export function usesVesselQuantityDelivery(incoterm: unknown): boolean {
   return (INCOTERM_QTY_VESSEL as readonly string[]).includes(normalizeIncotermCode(incoterm));
 }
 
-/** Parse SAP numeric text/JSON field to numeric SQL expression. */
+/** Parse SAP numeric text/JSON field to numeric SQL expression. Blank Excel cells stay NULL. */
 export function sqlParseSapNumeric(coalesceExpr: string): string {
-  return `CAST(REPLACE(REPLACE(COALESCE(${coalesceExpr}), ',', ''), ' ', '') AS NUMERIC)`;
+  return `NULLIF(REPLACE(REPLACE(NULLIF(TRIM(COALESCE(${coalesceExpr}, '')), ''), ',', ''), ' ', ''), '')::numeric`;
 }
 
 /** Quantity Delivery Trucking from sap_processed_data row. */
@@ -58,6 +58,7 @@ export function sqlSapQtyVesselFromSpd(spdAlias = 'spd'): string {
     ${spdAlias}.data->'raw'->>'Quantity Delivered',
     ${spdAlias}.data->'raw'->>'Quantity Delivery',
     ${spdAlias}.data->'shipment'->>'quantity_delivery',
+    ${spdAlias}.data->'shipment'->>'quantity_delivered',
     ${spdAlias}.data->'contract'->>'quantity_delivery'
   `);
 }

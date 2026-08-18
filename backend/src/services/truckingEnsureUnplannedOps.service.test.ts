@@ -14,8 +14,8 @@ vi.mock('../utils/operationId', () => ({
   formatDDMMYYYY: vi.fn(() => '21072026'),
 }));
 
-vi.mock('../utils/truckingOperationUniqueness', () => ({
-  findActiveTruckingOpsByContractId: vi.fn(),
+vi.mock('../utils/truckingActiveOp', () => ({
+  getOrCreateActiveTruckingOp: vi.fn(),
 }));
 
 vi.mock('./truckingList.service', () => ({
@@ -23,11 +23,8 @@ vi.mock('./truckingList.service', () => ({
 }));
 
 import { query } from '../database/connection';
-import {
-  allocateNextSyntheticSequenceDefault,
-  buildSyntheticOperationId,
-} from '../utils/operationId';
-import { findActiveTruckingOpsByContractId } from '../utils/truckingOperationUniqueness';
+import { allocateNextSyntheticSequenceDefault } from '../utils/operationId';
+import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
 import { invalidateTruckingListCache } from './truckingList.service';
 import { ensureUnplannedTruckingOpsForRequest } from './truckingEnsureUnplannedOps.service';
 
@@ -36,11 +33,16 @@ describe('ensureUnplannedTruckingOpsForRequest', () => {
     vi.clearAllMocks();
   });
 
-  it('inserts UNPLANNED op with OP-LAND id for backlog contract without active op', async () => {
+  it('creates UNPLANNED op via getOrCreate for backlog contract without active op', async () => {
     const contractId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: contractId }], rowCount: 1 } as never);
-    vi.mocked(findActiveTruckingOpsByContractId).mockResolvedValueOnce([]);
     vi.mocked(allocateNextSyntheticSequenceDefault).mockResolvedValueOnce(7);
+    vi.mocked(getOrCreateActiveTruckingOp).mockImplementation(async (_db, _id, opts) => ({
+      id: 'op-new',
+      operation_id: opts?.allocateOperationId ? await opts.allocateOperationId() : 'OP-LAND-x',
+      status: 'UNPLANNED',
+      created: true,
+    }));
 
     const req = { query: {} } as AuthRequest;
     const result = await ensureUnplannedTruckingOpsForRequest(req);
@@ -48,17 +50,6 @@ describe('ensureUnplannedTruckingOpsForRequest', () => {
     expect(result.created).toBe(1);
     expect(result.operationIds).toEqual(['OP-LAND-210720260007']);
     expect(result.skippedActive).toBe(0);
-    expect(allocateNextSyntheticSequenceDefault).toHaveBeenCalledWith(
-      'trucking_operations',
-      'LAND',
-      '21072026',
-    );
-    expect(buildSyntheticOperationId).toHaveBeenCalledWith('LAND', '21072026', 7);
-    expect(query).toHaveBeenCalledTimes(2);
-    const insertCall = vi.mocked(query).mock.calls[1];
-    expect(String(insertCall[0])).toContain('INSERT INTO trucking_operations');
-    expect(String(insertCall[0])).toContain("'UNPLANNED'");
-    expect(insertCall[1]).toEqual([contractId, 'OP-LAND-210720260007']);
     expect(invalidateTruckingListCache).toHaveBeenCalled();
   });
 
@@ -70,16 +61,19 @@ describe('ensureUnplannedTruckingOpsForRequest', () => {
 
     expect(result.created).toBe(0);
     expect(result.operationIds).toEqual([]);
-    expect(allocateNextSyntheticSequenceDefault).not.toHaveBeenCalled();
+    expect(getOrCreateActiveTruckingOp).not.toHaveBeenCalled();
     expect(invalidateTruckingListCache).not.toHaveBeenCalled();
   });
 
   it('skips contract that already has an active trucking op', async () => {
     const contractId = '11111111-2222-3333-4444-555555555555';
     vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: contractId }], rowCount: 1 } as never);
-    vi.mocked(findActiveTruckingOpsByContractId).mockResolvedValueOnce([
-      { id: 'op-1', operation_id: 'OP-LAND-EXISTING', status: 'PLANNED' },
-    ] as never);
+    vi.mocked(getOrCreateActiveTruckingOp).mockResolvedValueOnce({
+      id: 'op-1',
+      operation_id: 'OP-LAND-EXISTING',
+      status: 'PLANNED',
+      created: false,
+    });
 
     const req = { query: {} } as AuthRequest;
     const result = await ensureUnplannedTruckingOpsForRequest(req);

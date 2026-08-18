@@ -24,7 +24,7 @@ export type PipelineSummaryModule = 'trucking' | 'shipment';
 /** Bump when trucking pipeline status SQL changes — forces daily summary refresh. */
 /** v7: COMPLETED when |OS Qty| displays as 0 MT (≤499 kg) even if GR PO/STO still Open. */
 /** v10: import status any-Open wins (blank GR no longer falls back to contracts.status per row). */
-export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 12; // GR-Close contract qty on daily snapshot
+export const TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION = 13; // Unplanned backlog daily grouping = origin plant
 /** Bump when shipmentEffectiveStatusExpr / daily base CTE shape changes (e.g. Delivery Qty → PLANNED). */
 export const SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION = 11; // List vessel = latest KLIP edit when GR Open
 

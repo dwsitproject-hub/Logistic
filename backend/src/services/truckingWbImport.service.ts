@@ -23,11 +23,8 @@ import {
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
-import {
-  findActiveTruckingOpsByContractId,
-  SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE,
-  sqlTruckingOpIsActiveForMatchingSql,
-} from '../utils/truckingOperationUniqueness';
+import { SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE, sqlTruckingOpIsActiveForMatchingSql } from '../utils/truckingOperationUniqueness';
+import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
 import { invalidateTruckingListCache } from './truckingList.service';
 import {
   dedupeActiveTruckingOpsForPo,
@@ -472,48 +469,31 @@ async function getOrCreateAutoUnplannedOp(
   const cached = cache.get(contractUuid);
   if (cached) return cached;
 
-  // Race guard against another request creating an op for this contract concurrently.
-  // Uses the pooled connection (not this transaction's client) — matches the existing
-  // truckingEnsureUnplannedOps.service precedent; within this batch, same-contract
-  // dedup is already handled by `cache` above.
-  const existingActive = await findActiveTruckingOpsByContractId(contractUuid);
-  if (existingActive.length > 0) {
-    const first = existingActive[0];
-    const resolvedOp: TruckingOpForWbRow = {
-      id: first.id,
-      operation_id: first.operation_id,
-      status: first.status,
-      incoterm,
-      product: null,
-    };
-    cache.set(contractUuid, resolvedOp);
-    return resolvedOp;
-  }
-
-  const dmy = formatDDMMYYYY(new Date());
-  const seq = await allocateNextSyntheticSequence(
-    (text: string, params?: unknown[]) => client.query(text, params),
-    'trucking_operations',
-    'LAND',
-    dmy,
+  const created = await getOrCreateActiveTruckingOp(
+    (text, params) => client.query(text, params),
+    contractUuid,
+    {
+      allocateOperationId: async () => {
+        const dmy = formatDDMMYYYY(new Date());
+        const seq = await allocateNextSyntheticSequence(
+          (text: string, params?: unknown[]) => client.query(text, params),
+          'trucking_operations',
+          'LAND',
+          dmy,
+        );
+        return buildSyntheticOperationId('LAND', dmy, seq);
+      },
+    },
   );
-  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
-  const insertRes = await client.query<{ id: string }>(
-    `INSERT INTO trucking_operations (
-       contract_id, operation_id, status, daily_deliverables
-     ) VALUES ($1::uuid, $2, 'UNPLANNED', '[]'::jsonb)
-     RETURNING id`,
-    [contractUuid, operationId],
-  );
-  const newOp: TruckingOpForWbRow = {
-    id: String(insertRes.rows[0]?.id),
-    operation_id: operationId,
-    status: 'UNPLANNED',
+  const resolvedOp: TruckingOpForWbRow = {
+    id: created.id,
+    operation_id: created.operation_id,
+    status: created.status,
     incoterm,
     product: null,
   };
-  cache.set(contractUuid, newOp);
-  return newOp;
+  cache.set(contractUuid, resolvedOp);
+  return resolvedOp;
 }
 
 async function upsertDailyActualWithWbImport(

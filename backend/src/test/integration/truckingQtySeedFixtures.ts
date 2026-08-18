@@ -58,6 +58,8 @@ export const TRUCKING_QTY_EXPECTED: Record<string, TruckingQtyExpected> = {
   'ITRK-F': { quantityDelivered: 450000, quantityReceive: 440000, outstandingQuantity: 50000 },
   'ITRK-G-FRC': { quantityDelivered: 50000, quantityReceive: 45000, outstandingQuantity: 55000 },
   'ITRK-G-LCO': { quantityDelivered: 50000, quantityReceive: 45000, outstandingQuantity: 50000 },
+  // Open + WB delivery only (receive null) → Delivery uses WB; Receive stays on SAP (not 0).
+  'ITRK-H': { quantityDelivered: 10000, quantityReceive: 49390, outstandingQuantity: 90000 },
 };
 
 /**
@@ -73,6 +75,7 @@ export const TRUCKING_QTY_EXPECTED_STAGE: Record<string, 'PLANNED' | 'COMPLETED'
   'ITRK-F': 'COMPLETED',
   'ITRK-G-FRC': 'PLANNED',
   'ITRK-G-LCO': 'PLANNED',
+  'ITRK-H': 'PLANNED',
 };
 
 export const TRUCKING_QTY_CONTRACT_QTY_KG: Record<string, number> = {
@@ -84,6 +87,7 @@ export const TRUCKING_QTY_CONTRACT_QTY_KG: Record<string, number> = {
   'ITRK-F': 500000,
   'ITRK-G-FRC': 100000,
   'ITRK-G-LCO': 100000,
+  'ITRK-H': 100000,
 };
 
 /**
@@ -92,22 +96,22 @@ export const TRUCKING_QTY_CONTRACT_QTY_KG: Record<string, number> = {
  * `TRUCKING_QTY_SUMMARY_EXPECTED` / `TRUCKING_QTY_CONTRACT_QTY_KG` over the PLANNED-stage POs
  * (A, B, C, D, G-FRC, G-LCO) and COMPLETED-stage POs (E, F) respectively.
  *
- * PLANNED contract qty: 100000 × 6 = 600000
- * PLANNED outstanding qty: 60000 + 30000 + 15000 + 55000 + 55000 + 50000 = 265000
+ * PLANNED contract qty: 100000 × 7 = 700000
+ * PLANNED outstanding qty: 60000 + 30000 + 15000 + 55000 + 55000 + 50000 + 90000 = 355000
  * COMPLETED contract qty: 100000 (E) + 500000 (F) = 600000
  * Outstanding Qty strip (3rd Party only, all fixtures use source_type = '3rd Party'):
- *   LCO: A(60000) + B(30000) + C(15000) + D(55000) + G-LCO(50000) = 210000
+ *   LCO: A(60000) + B(30000) + C(15000) + D(55000) + G-LCO(50000) + H(90000) = 300000
  *   FRC: G-FRC(55000)
  */
 export const TRUCKING_QTY_SUMMARY_TOTALS = {
-  plannedContractQtyKg: 600000,
+  plannedContractQtyKg: 700000,
   completedContractQtyKg: 600000,
-  plannedOutstandingQtyKg: 265000,
+  plannedOutstandingQtyKg: 355000,
   inProgressOutstandingQtyKg: 0,
   unplannedOutstandingQtyKg: 0,
   outstandingQty: {
-    totalKg: 265000,
-    thirdParty: { frcKg: 55000, lcoKg: 210000 },
+    totalKg: 355000,
+    thirdParty: { frcKg: 55000, lcoKg: 300000 },
     interco: { frcKg: 0, lcoKg: 0 },
   },
 };
@@ -133,6 +137,7 @@ const CONTRACTS: ContractSpec[] = [
   { contractId: 'ITRK-F', poNumber: 'ITRK-F-PO', incoterm: 'LCO', quantityOrderedKg: 500000 },
   { contractId: 'ITRK-G-FRC', poNumber: 'ITRK-G-FRC-PO', incoterm: 'FRC', quantityOrderedKg: 100000 },
   { contractId: 'ITRK-G-LCO', poNumber: 'ITRK-G-LCO-PO', incoterm: 'LCO', quantityOrderedKg: 100000 },
+  { contractId: 'ITRK-H', poNumber: 'ITRK-H-PO', incoterm: 'LCO', quantityOrderedKg: 100000 },
 ];
 
 async function cleanupTruckingQtyFixtures(): Promise<void> {
@@ -222,7 +227,7 @@ async function insertWbActual(params: {
   operationId: string;
   progressDate: string;
   deliveryKg: number;
-  receiveKg: number;
+  receiveKg: number | null;
 }): Promise<void> {
   await query(
     `INSERT INTO trucking_daily_actuals (
@@ -233,7 +238,7 @@ async function insertWbActual(params: {
 }
 
 /**
- * Seed the 8 ITRK-* fixtures (deterministic, safe to re-run). Returns contract UUID and
+ * Seed the 9 ITRK-* fixtures (deterministic, safe to re-run). Returns contract UUID and
  * trucking_operations UUID per contract_id key (e.g. `contractUuid['ITRK-A']`).
  */
 export async function seedTruckingQtyFixtures(): Promise<TruckingQtyFixtureIds> {
@@ -394,6 +399,25 @@ export async function seedTruckingQtyFixtures(): Promise<TruckingQtyFixtureIds> 
     receiveQty: '45000',
     importId,
     createdAtOffset: "interval '1 minute'",
+  });
+
+  // ITRK-H: GR Open + WB delivery only (receive still null) → list Receive must stay SAP, not 0.
+  await insertSpdRow({
+    contractId: 'ITRK-H',
+    poNumber: 'ITRK-H-PO',
+    stoNumber: 'STO-H1',
+    incoterm: 'LCO',
+    grStatus: 'Open',
+    deliveryQty: '40000',
+    receiveQty: '49390',
+    importId,
+    createdAtOffset: "interval '1 minute'",
+  });
+  await insertWbActual({
+    operationId: operationId['ITRK-H'],
+    progressDate: '2031-06-16',
+    deliveryKg: 10000,
+    receiveKg: null,
   });
 
   return { contractUuid, operationId };

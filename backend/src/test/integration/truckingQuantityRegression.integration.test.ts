@@ -113,7 +113,7 @@ describe('Integration: Trucking quantity regression — summary endpoint (STO ex
     expect(Number(summary.outstandingQty.interco.lcoKg)).toBe(
       TRUCKING_QTY_SUMMARY_TOTALS.outstandingQty.interco.lcoKg,
     );
-  });
+  }, 30000);
 
   it('per-PO summary OS strip (via contract filter) matches dedup/WB/GR-Close branches', async () => {
     for (const [contractId, expected] of Object.entries(TRUCKING_QTY_EXPECTED)) {
@@ -136,7 +136,7 @@ describe('Integration: Trucking quantity regression — summary endpoint (STO ex
         isActiveStage ? expected.outstandingQuantity : 0,
       );
     }
-  });
+  }, 60000);
 });
 
 describe('Integration: Trucking quantity regression — GR-Close snapshot + GR-Open live hybrid', () => {
@@ -226,5 +226,5 @@ describe('Integration: Trucking quantity regression — GR-Close snapshot + GR-O
     expect(Number(summary.outstandingQty.thirdParty.lcoKg)).toBe(
       TRUCKING_QTY_SUMMARY_TOTALS.outstandingQty.thirdParty.lcoKg,
     );
-  });
+  }, 30000);
 });

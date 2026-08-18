@@ -152,7 +152,7 @@ export function seedKlipQtyFromShipmentHeader(
  * Shipments list table — kg for display.
  * Open + KLIP qty present → quantity_delivered_klip
  * Open without KLIP → SAP fallback
- * Close → SAP
+ * Close → SAP; if SAP is missing, legacy then KLIP so the table is not blank
  * Legacy quantity_delivered is only a last-resort fallback when KLIP/SAP are both absent.
  */
 export function resolveShipmentListDeliveredKg(shipment: {
@@ -170,7 +170,9 @@ export function resolveShipmentListDeliveredKg(shipment: {
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
 
   if (closed) {
-    return sap ?? null
+    if (sap !== null) return sap
+    if (isMeaningfulManualShipmentQtyKg(legacy)) return legacy
+    return isMeaningfulManualShipmentQtyKg(klip) ? klip : null
   }
   if (isMeaningfulManualShipmentQtyKg(klip)) {
     return klip
@@ -182,7 +184,7 @@ export function resolveShipmentListDeliveredKg(shipment: {
 /**
  * Shipments list Receive Qty — kg for display.
  * Same Open/Close rules as Delivery (not "vessel only if higher than SAP"):
- * Close → SAP Quantity Receive
+ * Close → SAP Quantity Receive; if SAP is missing, vessel receive so the table is not blank
  * Open + meaningful actual_vessel_qty_receive (KLIP) → vessel receive
  * Open without KLIP → SAP; last resort vessel/manual
  */
@@ -196,7 +198,8 @@ export function resolveShipmentListReceiveKg(shipment: {
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
 
   if (closed) {
-    return sap ?? null
+    if (sap !== null) return sap
+    return isMeaningfulManualShipmentQtyKg(klip) ? klip : null
   }
   if (isMeaningfulManualShipmentQtyKg(klip)) {
     return klip

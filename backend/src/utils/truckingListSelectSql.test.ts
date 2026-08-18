@@ -49,14 +49,31 @@ describe('truckingListSelectSql', () => {
     expect(sql).toContain('sapd.last_val');
   });
 
-  it('joins B2B ending-child plant/unload overlay', () => {
+  it('hydrate overlays empty truck locations from SAP truck fields (not Supplier)', () => {
+    const sql = buildTruckingListSelectClause(false) + buildTruckingListFromClause(false);
+    expect(sql).toContain('b2b.sap_loading_location');
+    expect(sql).toContain('b2b.sap_discharge_location');
+    expect(sql).toContain("'Truck Loading Location'");
+    expect(sql).toContain("'Truck Discharge Location'");
+    expect(sql).not.toContain('spd.supplier_name');
+  });
+
+  it('shell mode does not overlay SAP truck locations via b2b alias', () => {
+    const sql = buildTruckingListSelectClause(true) + buildTruckingListFromClause(true);
+    expect(sql).not.toContain('b2b.sap_loading_location');
+    expect(sql).not.toContain('b2b.sap_discharge_location');
+    expect(sql).toContain('t.loading_location');
+  });
+
+  it('joins B2B ending-child plant/unload/buyer overlay', () => {
     const from = buildTruckingListFromClause(false);
     expect(from).toContain('b2b_end');
-    expect(from).toContain("->>'Truck Discharge Location'");
-    expect(from).toContain("->>'Contract Reff PO Ini'");
+    expect(from).toContain('b2b_ending_child_snapshot');
     const sql = buildTruckingListSelectClause(false);
     expect(sql).toContain('b2b_end.unload_location');
     expect(sql).toContain('t.unloading_location');
+    expect(sql).toContain('b2b_end.buyer');
+    expect(sql).toContain('c.buyer');
   });
 
   it('joins the SAP date LATERAL after contracts so it can correlate on c', () => {

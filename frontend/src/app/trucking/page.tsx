@@ -107,6 +107,9 @@ const TRUCKING_ACTIONS_COL_WIDTH = 140
 /** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
 const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
 
+/** Hide List | Daily Planning Deliverables toggle — set true to restore the calendar tab. */
+const TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED = false
+
 const TRUCKING_STATUS_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
   PLANNED: 'Planned',
@@ -389,6 +392,8 @@ function mergeTruckingSapFields(
       contract_qty: match.contract_qty ?? row.contract_qty,
       trucking_start_date: match.trucking_start_date ?? row.trucking_start_date,
       trucking_completion_date: match.trucking_completion_date ?? row.trucking_completion_date,
+      loading_location: String(match.loading_location ?? '').trim() || row.loading_location,
+      unloading_location: String(match.unloading_location ?? '').trim() || row.unloading_location,
     }
   })
 }
@@ -1218,6 +1223,7 @@ function TruckingPageContent() {
   const calendarDailyPlanningSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     // Load per-user saved daily planning view (best effort).
     let cancelled = false
     ;(async () => {
@@ -1243,12 +1249,14 @@ function TruckingPageContent() {
   }, [])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     try {
       localStorage.setItem('trucking.daily_planning.metaOrder.v1', JSON.stringify(calendarMetaOrderIds))
     } catch {}
   }, [calendarMetaOrderIds])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     if (typeof window === 'undefined') return
     if (calendarDailyPlanningSaveTimerRef.current) clearTimeout(calendarDailyPlanningSaveTimerRef.current)
     calendarDailyPlanningSaveTimerRef.current = setTimeout(() => {
@@ -1315,6 +1323,7 @@ function TruckingPageContent() {
   }
 
   const fetchCalendarRows = useCallback(async () => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     setCalendarLoading(true)
     try {
       const from = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)
@@ -1388,6 +1397,7 @@ function TruckingPageContent() {
   ])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     if (activeTab !== 'calendar') return
     if (!userScopeReady) return
     fetchCalendarRows()
@@ -1412,6 +1422,7 @@ function TruckingPageContent() {
   ])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     if (activeTab !== 'calendar') return
     const baseline = buildCalendarCellDrafts(calendarRows, calendarMonth)
     setCalendarSavedBaseline(baseline)
@@ -2178,6 +2189,7 @@ function TruckingPageContent() {
       const scheduleHydrate = () => {
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.delete('includeSummary')
+        hydrateParams.set('includeSummary', 'false')
         hydrateParams.set('skipSapJoin', 'false')
         hydrateParams.set('hydrateOnly', 'true')
         const hydrateUrl = `/trucking?${hydrateParams.toString()}`
@@ -3239,6 +3251,7 @@ function TruckingPageContent() {
     {
       id: 'buyer',
       label: 'Buyer',
+      formulaHelp: FIELD_HELP.b2bBuyer,
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.buyer || '',
@@ -3551,7 +3564,7 @@ function TruckingPageContent() {
     }
   }, [visibleColumns, sortedOperations, editingId])
 
-  const truckingViewToggle = (
+  const truckingViewToggle = TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED ? (
     <div className="inline-flex rounded-lg border bg-white p-1">
       <button
         type="button"
@@ -3568,7 +3581,7 @@ function TruckingPageContent() {
         Daily Planning Deliverables
       </button>
     </div>
-  )
+  ) : null
   const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
 
   return (
@@ -3801,7 +3814,7 @@ function TruckingPageContent() {
 
         {/* Section 3: Main View Table — calendar or list tab below */}
 
-        {activeTab === 'calendar' && (
+        {TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED && activeTab === 'calendar' && (
           <>
           <Card>
             <CardHeader className="space-y-3">
@@ -4329,49 +4342,16 @@ function TruckingPageContent() {
         </Dialog>
 
         {/* Trucking Operations List */}
-        {activeTab === 'list' && (
+        {(!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED || activeTab === 'list') && (
         <Card>
-          <CardHeader className="space-y-3">
-            <div>
-              <CardTitle className="flex items-center gap-2">
+          <CardHeader className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <CardTitle className="flex items-center gap-2 shrink-0">
                 All Trucking
                 {listFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
-              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
-                  {tableHeaderCount.noun}
-                </span>
-                <span className="text-gray-400" aria-hidden>
-                  ·
-                </span>
-                <span className="whitespace-nowrap tabular-nums">
-                  Page {page}/{totalPages}
-                  {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
-                    <>
-                      {' · '}
-                      ({unplannedTableBreakdown.executionRows.toLocaleString('en-US')} Contract and{' '}
-                      {unplannedTableBreakdown.contractRows.toLocaleString('en-US')} STO without Planning)
-                    </>
-                  ) : statusFilter !== 'UNPLANNED' ? (
-                    <> · {totalCount.toLocaleString('en-US')} rows</>
-                  ) : null}
-                </span>
-                {truckingActiveFilterScopeLabel ? (
-                  <>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap font-medium text-blue-700">
-                      {truckingActiveFilterScopeLabel}
-                    </span>
-                  </>
-                ) : null}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
                 <Tooltip>
@@ -4528,6 +4508,28 @@ function TruckingPageContent() {
                 )}
               </div>
             </div>
+            <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+              <span className="whitespace-nowrap tabular-nums text-gray-700">
+                <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                {tableHeaderCount.noun}
+              </span>
+              <span className="text-gray-400" aria-hidden>
+                ·
+              </span>
+              <span className="whitespace-nowrap tabular-nums">
+                Page {page}/{totalPages}
+              </span>
+              {truckingActiveFilterScopeLabel ? (
+                <>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap font-medium text-blue-700">
+                    {truckingActiveFilterScopeLabel}
+                  </span>
+                </>
+              ) : null}
+            </p>
           </CardHeader>
           <CardContent>
             {showCreateForm ? (

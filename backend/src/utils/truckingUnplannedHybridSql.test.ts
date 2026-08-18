@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTruckingUnplannedBacklogContractQtyQuery,
   buildTruckingUnplannedBacklogCountQuery,
+  buildTruckingUnplannedBacklogDailySummarySql,
   buildTruckingUnplannedBacklogIdsWithOsQuery,
   buildTruckingUnplannedBacklogPageQuery,
   buildTruckingUnplannedContractToolbarScope,
@@ -23,6 +24,7 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain('NULL::text AS operation_id');
     expect(sql).toContain('NULL::text AS sto_number');
     expect(sql).toContain('unload_location');
+    expect(sql).toContain('b2b_end.buyer');
     expect(sql).toContain("'UNPLANNED'");
   });
 
@@ -31,6 +33,7 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain('unplanned_trucking_backlog');
     expect(sql).toContain('COUNT(*)::bigint');
     expect(sql).toContain('c.contract_date >= $1');
+    expect(sql).toContain('b2b_ending_child_snapshot');
   });
 
   it('contract qty query sums quantity_ordered for backlog contracts', () => {
@@ -50,6 +53,18 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain('c.contract_date <= $2');
     expect(sql).not.toMatch(/AND\s*\)/);
     expect(sql).not.toMatch(/AND\s*$/);
+  });
+
+  it('toolbar plant filter uses origin contract plant, not B2B ending overlay', () => {
+    const { sql } = buildTruckingUnplannedContractToolbarScope({ plants: ['Bontang'] });
+    expect(sql).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(sql).toContain('c.plant_code');
+  });
+
+  it('daily backlog summary groups by origin contract plant', () => {
+    const sql = buildTruckingUnplannedBacklogDailySummarySql();
+    expect(sql).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(sql).toContain('c.plant_code');
   });
 
   it('ids+OS query selects contract UUID with outstanding qty > 0', () => {

@@ -29,7 +29,7 @@ const TRUCKING_STATUS_CARDS: ReadonlyArray<{
   },
   {
     status: 'PLANNED',
-    label: 'Planned',
+    label: 'Planned / In Progress',
     color: 'bg-blue-100',
     textColor: 'text-blue-800',
     tooltip: FIELD_HELP.truckingStatusPlanned,

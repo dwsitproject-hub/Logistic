@@ -16,6 +16,7 @@ describe('pipelineDailySummarySql', () => {
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('BOOL_OR(is_contract_sap_closed)');
     expect(sql).toContain('ON CONFLICT (group_plant, contract_date, product, incoterm)');
+    expect(sql).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
     expect(sql).not.toContain('buildTruckingListSelectClause(true)');
   });
 

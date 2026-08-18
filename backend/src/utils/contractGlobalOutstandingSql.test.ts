@@ -64,6 +64,8 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toMatch(/trucking_wb_overlay[\s\S]*AND NOT \(/);
     // Do not inflate Contracts qty with CANCELLED trucking ops' WB
     expect(sql).toContain("NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')");
+    expect(sql).toContain('w.wb_receive_qty_kg > 0');
+    expect(sql).toContain('w.wb_delivery_qty_kg > 0');
   });
 
   it('buildQtyMoveCte overlays SEA FOB/CIF/CFR qty from Open KLIP shipment actuals', () => {

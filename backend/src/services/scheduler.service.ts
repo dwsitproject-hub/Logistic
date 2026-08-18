@@ -213,6 +213,9 @@ export class SchedulerService {
           await import('./contractLatestSpdSnapshot.service').then(({ ContractLatestSpdSnapshotService }) =>
             ContractLatestSpdSnapshotService.refreshAll(),
           );
+          await import('./b2bEndingChildSnapshot.service').then(({ B2bEndingChildSnapshotService }) =>
+            B2bEndingChildSnapshotService.refreshAll(),
+          );
           result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
           break;
         case 'pre_planned_rebuild':
@@ -257,6 +260,9 @@ export class SchedulerService {
           .catch(() => {});
         import('./contractLatestSpdSnapshot.service')
           .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./b2bEndingChildSnapshot.service')
+          .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
           .catch(() => {});
       });
       

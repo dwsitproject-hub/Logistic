@@ -38,6 +38,28 @@ describe('truckingList.service', () => {
     expect(deferred.preOuterQuery).not.toContain(innerStage);
   });
 
+  it('originGroupPlant filters by contract plant, not B2B ending overlay', () => {
+    const req = {
+      query: { plant: 'Bontang', page: '1', limit: '20' },
+    } as Parameters<typeof buildTruckingListQuery>[0];
+
+    const overlay = buildTruckingListQuery(req);
+    const origin = buildTruckingListQuery(req, { originGroupPlant: true });
+    const unplannedHybrid = buildTruckingListQuery(
+      { query: { plant: 'Bontang', status: 'UNPLANNED', page: '1', limit: '20' } } as Parameters<
+        typeof buildTruckingListQuery
+      >[0],
+      { omitStatusFilter: true, originGroupPlant: true },
+    );
+
+    expect(overlay.preOuterQuery).toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(origin.preOuterQuery).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(unplannedHybrid.preOuterQuery).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(origin.filterCacheKey).toContain('originPlant=1');
+    expect(unplannedHybrid.filterCacheKey).toContain('originPlant=1');
+    expect(overlay.filterCacheKey).not.toContain('originPlant=1');
+  });
+
   it('buildTruckingSummaryFromRows mirrors SQL status partition counts', () => {
     const rows: TruckingListRow[] = [
       { status: 'PLANNED', status_db: 'PLANNED', trucking_start_date: null, trucking_completion_date: null },

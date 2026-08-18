@@ -51,6 +51,7 @@ type Scenario = {
   diagnosticsByPo: Record<string, Row>;
   anyStatusCountsByPo: Record<string, { total: number; active: number }>;
   insertedTruckingOps: Row[];
+  lockedActiveOps: Record<string, Row[]>;
 };
 
 function buildScenario(overrides: Partial<Scenario> = {}): Scenario {
@@ -60,6 +61,7 @@ function buildScenario(overrides: Partial<Scenario> = {}): Scenario {
     diagnosticsByPo: {},
     anyStatusCountsByPo: {},
     insertedTruckingOps: [],
+    lockedActiveOps: {},
     ...overrides,
   };
 }
@@ -102,11 +104,15 @@ function fakeClientHandler(scenario: Scenario, calls: { text: string; params: un
       }
       return { rows };
     }
+    if (t.includes('FOR UPDATE') && t.includes('trucking_operations')) {
+      const contractUuid = String(params[0] ?? '');
+      return { rows: scenario.lockedActiveOps[contractUuid] ?? [] };
+    }
     if (t.includes("VALUES ($1::uuid, $2, 'UNPLANNED', '[]'::jsonb)")) {
       const id = `new-op-${scenario.insertedTruckingOps.length + 1}`;
       const operationId = String(params[1]);
       scenario.insertedTruckingOps.push({ contractUuid: params[0], operationId, id });
-      return { rows: [{ id }] };
+      return { rows: [{ id, operation_id: operationId, status: 'UNPLANNED' }] };
     }
     if (t.includes('WHERE t.id = ANY($1::uuid[])') && t.includes('ORDER BY')) {
       const ids = (params[0] as string[]) ?? [];
@@ -588,11 +594,13 @@ describe('processWbRekapWorkbookUpload', () => {
           contract_type_norm: null,
         },
       },
+      lockedActiveOps: {
+        'contract-race': [
+          { id: 'op-race', operation_id: 'OP-LAND-RACE', status: 'PLANNED' },
+        ],
+      },
     });
     setupScenario(scenario);
-    vi.mocked(findActiveTruckingOpsByContractId).mockResolvedValue([
-      { id: 'op-race', operation_id: 'OP-LAND-RACE', status: 'PLANNED' },
-    ] as never);
 
     const result = await processWbRekapWorkbookUpload({
       originalFilename: 'wb.xlsx',

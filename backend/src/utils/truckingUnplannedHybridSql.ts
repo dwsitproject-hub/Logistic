@@ -7,8 +7,7 @@ import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlo
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
 import {
-  sqlB2bEndingCompanyExpr,
-  sqlB2bEndingPlantCodeExpr,
+  sqlB2bEndingBuyerExpr,
   sqlB2bEndingUnloadExpr,
   sqlB2bOriginEndingChildLateralJoin,
 } from './b2bOriginEndingSql';
@@ -20,19 +19,18 @@ import { contractExtNoSubquery } from './portDisplaySql';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
-const TRUCKING_UNPLANNED_B2B_END_JOIN = sqlB2bOriginEndingChildLateralJoin({
+export const TRUCKING_UNPLANNED_B2B_END_JOIN = sqlB2bOriginEndingChildLateralJoin({
   originPoExpr: 'c.po_number',
 });
-const TRUCKING_UNPLANNED_GROUP_PLANT = groupPlantExpr(
-  sqlB2bEndingPlantCodeExpr('c.plant_code'),
-  sqlB2bEndingCompanyExpr('c.company_name'),
-);
+
+/** Status cards + Unplanned hybrid: contract origin plant (same as pipeline daily snapshot). */
+const TRUCKING_UNPLANNED_GROUP_PLANT = groupPlantExpr('c.plant_code', 'c.company_name');
 
 const CB_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   supplier: 'c.supplier',
-  buyer: 'c.buyer',
+  buyer: sqlB2bEndingBuyerExpr('c.buyer'),
   product: 'c.product',
   group_name: 'c.group_name',
   incoterm: 'c.incoterm',
@@ -141,7 +139,7 @@ export function truckingUnplannedContractBacklogRowSelectSql(outstandingExpr: st
     c.delivery_start_date AS delivery_start_date,
     c.delivery_end_date AS delivery_end_date,
     c.supplier AS supplier,
-    c.buyer AS buyer,
+    ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
     c.product AS product,
     c.incoterm AS incoterm,
     c.group_name AS group_name,
@@ -249,11 +247,8 @@ export function buildTruckingUnplannedContractToolbarScope(input: {
   const plantFilter = appendGroupPlantFilter(
     input.plants,
     cp,
-    groupPlantExpr(
-      sqlB2bEndingPlantCodeExpr('c.plant_code'),
-      sqlB2bEndingCompanyExpr('c.company_name'),
-    ),
-    sqlB2bEndingPlantCodeExpr('c.plant_code'),
+    groupPlantExpr('c.plant_code', 'c.company_name'),
+    'c.plant_code',
   );
   if (plantFilter.sql) {
     parts.push(plantFilter.sql.replace(/^ AND /, ''));

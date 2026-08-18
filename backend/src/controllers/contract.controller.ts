@@ -55,6 +55,8 @@ import {
 } from '../services/latePerformance.service';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 import {
+  sqlB2bEndingBuyerAgg,
+  sqlB2bEndingCompanyAgg,
   sqlB2bEndingPlantCodeAgg,
   sqlB2bEndingUnloadExpr,
   sqlB2bOriginEndingChildLateralJoin,
@@ -277,11 +279,11 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           -- UI can badge the row; MIN keeps a group withdrawn only if all members are.
           MIN(c.sap_presence) AS sap_presence,
           MAX(c.sap_withdrawn_reason) AS sap_withdrawn_reason,
-          MAX(c.buyer) AS buyer,
+          ${sqlB2bEndingBuyerAgg()} AS buyer,
           MAX(c.supplier) AS supplier,
           MAX(c.group_name) AS group_name,
           MAX(c.product) AS product,
-          MAX(c.company_name) AS company_name,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.unit) AS unit,
           MAX(c.contract_date) AS contract_date,
@@ -1048,7 +1050,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
           ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
-          MAX(c.company_name) AS company_name,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
           -- Align with GET /contracts: incoterm-aware SAP import status (GR PO vs GR STO).
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -1773,6 +1775,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
 
     const plantArr = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
+    const useB2bEndingOverlay = plants.length > 0;
     const groupPlantFilter = appendGroupPlantFilter(
       plants,
       paramIndex,
@@ -1819,10 +1822,10 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           MAX(c.product) AS product,
           MAX(c.incoterm) AS incoterm,
           MAX(c.supplier) AS supplier,
-          MAX(c.buyer) AS buyer,
+          ${useB2bEndingOverlay ? sqlB2bEndingBuyerAgg() : 'MAX(c.buyer)'} AS buyer,
           MAX(c.group_name) AS group_name,
-          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
-          MAX(c.company_name) AS company_name,
+          ${useB2bEndingOverlay ? sqlB2bEndingPlantCodeAgg() : 'MAX(c.plant_code)'} AS plant_code,
+          ${useB2bEndingOverlay ? sqlB2bEndingCompanyAgg() : 'MAX(c.company_name)'} AS company_name,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.contract_date) AS contract_date,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
@@ -1832,7 +1835,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
           COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
         FROM contracts c
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+        ${useB2bEndingOverlay ? sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' }) : ''}
         ${rowWhereSql}
         GROUP BY c.contract_id
       ),

@@ -12,6 +12,7 @@ import {
   OIL_LOSS_SFAL_QTY_EXPR,
   OIL_LOSS_SFBD_QTY_EXPR,
   SAP_OIL_LOSS_IMPORT_STATUS_EXPR,
+  SAP_OIL_LOSS_QTY_CONTRACT_NUMERIC,
   SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC,
   SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC,
   SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC,
@@ -154,11 +155,7 @@ export function buildOilLossWithQtyCtes(): string {
         COALESCE(spd.data->'raw'->>'Status', '')                   AS status,
         ${SAP_OIL_LOSS_IMPORT_STATUS_EXPR}                        AS import_status,
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Incoterm'), ''), '') AS incoterm_raw,
-        REPLACE(REPLACE(COALESCE(
-          spd.data->'raw'->>'Contract Quantity\r\n(or PO Qty)',
-          spd.data->'raw'->>'Contract Quantity',
-          ''
-        ), ',', ''), ' ', '')::numeric                           AS qty_contract_raw,
+        ${SAP_OIL_LOSS_QTY_CONTRACT_NUMERIC}                      AS qty_contract_raw,
         ${SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC}                      AS qty_trucking,
         ${SAP_OIL_LOSS_QTY_VESSEL_NUMERIC}                        AS qty_vessel,
         ${SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC}               AS qty_delivery_legacy,
@@ -196,6 +193,7 @@ export function buildOilLossWithQtyCtes(): string {
         ct.plant_code AS contract_plant_code,
         ct.company_name AS contract_company_name,
         b2b_end.unload_location AS b2b_ending_unload,
+        b2b_end.buyer AS b2b_ending_buyer,
         COALESCE(tr_sto.trucking_owner, tr_ct.trucking_owner) AS trucking_owner_db,
         COALESCE(tr_sto.loading_location, tr_ct.loading_location) AS loading_location_db,
         COALESCE(
@@ -268,7 +266,7 @@ export function buildOilLossMainSql(): string {
       sto_number,
       po_number,
       supplier,
-      buyer,
+      COALESCE(NULLIF(TRIM(b2b_ending_buyer), ''), buyer) AS buyer,
       product,
       group_name,
       COALESCE(NULLIF(TRIM(b2b_ending_unload), ''), plant_site) AS plant_site,

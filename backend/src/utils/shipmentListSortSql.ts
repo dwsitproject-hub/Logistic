@@ -1,4 +1,5 @@
 import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
+import { sqlCoalesceNonZeroQty } from './shipmentListQtySql';
 import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
@@ -251,13 +252,13 @@ export function buildShipmentListEnrichedCteBody(qtySelectSql: string): string {
   const resolvedDelivery = sqlShipmentResolvedDeliveryKg(
     closedExpr,
     'fs.quantity_delivered_klip',
-    'COALESCE(sm.delivered_qty, sa.quantity_delivered_sap, 0)',
+    sqlCoalesceNonZeroQty('sm.delivered_qty', 'sa.quantity_delivered_sap'),
     'fs.quantity_delivered',
   );
   const resolvedReceive = sqlShipmentResolvedReceiveKg(
     closedExpr,
     'fs.actual_vessel_qty_receive',
-    'COALESCE(sm.received_qty, sa.quantity_receive, 0)',
+    sqlCoalesceNonZeroQty('sm.received_qty', 'sa.quantity_receive'),
   );
   return `
     list_enriched AS (

@@ -15,9 +15,14 @@ import {
   sqlTruckingQuantitySentCoalesce,
 } from './truckingQuantitySql';
 import {
+  sqlB2bEndingBuyerExpr,
   sqlB2bEndingUnloadExpr,
   sqlB2bOriginEndingChildLateralJoin,
 } from './b2bOriginEndingSql';
+import {
+  sapTruckingListDischargeLocationSql,
+  sapTruckingListLoadingLocationSql,
+} from './sapTruckingLoadingLocationSql';
 
 /**
  * Alias of the SAP receive-date LATERAL on the hydrate list query. The select clause and the
@@ -86,7 +91,9 @@ export const TRUCKING_LIST_B2B_LATERAL = `
             spd.data->>'Contract Reff PO Ini',
             spd.data->'raw'->>'Contract Reff PO Ini',
             spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw
+          ) AS contract_reference_po_raw,
+          ${sapTruckingListLoadingLocationSql} AS sap_loading_location,
+          ${sapTruckingListDischargeLocationSql} AS sap_discharge_location
         FROM sap_processed_data spd
         WHERE spd.contract_number = c.contract_id
         ORDER BY spd.created_at DESC NULLS LAST
@@ -191,7 +198,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.delivery_start_date,
         c.delivery_end_date,
         c.supplier,
-        c.buyer,
+        ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
         c.product,
         c.incoterm,
         c.group_name,
@@ -207,8 +214,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.operation_id,
         t.contract_id,
         t.location,
-        t.loading_location,
-        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
+        COALESCE(NULLIF(TRIM(t.loading_location), ''), b2b.sap_loading_location) AS loading_location,
+        ${sqlB2bEndingUnloadExpr(`COALESCE(NULLIF(TRIM(t.unloading_location), ''), b2b.sap_discharge_location)`)} AS unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
         t.daily_deliverables,
@@ -252,7 +259,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.delivery_start_date,
         c.delivery_end_date,
         c.supplier,
-        c.buyer,
+        ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
         c.product,
         c.incoterm,
         c.group_name,

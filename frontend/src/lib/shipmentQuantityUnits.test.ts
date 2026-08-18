@@ -67,6 +67,22 @@ describe('resolveShipmentListDeliveredKg', () => {
     ).toBe(4_002_486)
   })
 
+  it('Close with missing SAP falls back to legacy then KLIP so the table is not blank', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: 5_000_000,
+        quantity_delivered: 4_002_486,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(4_002_486)
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: 5_000_000,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(5_000_000)
+  })
+
   it('uses SAP when manual is 0 but SAP has delivery', () => {
     expect(
       resolveShipmentListDeliveredKg({
@@ -117,6 +133,15 @@ describe('resolveShipmentListReceiveKg', () => {
         is_contract_sap_closed: true,
       }),
     ).toBe(4_002_486)
+  })
+
+  it('Close with missing SAP receive falls back to vessel qty so the table is not blank', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 241_610,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(241_610)
   })
 
   it('GR Close STO 1016010610 pattern: hydrated SAP receive beats duplicate MNL KLIP row', () => {

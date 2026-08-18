@@ -25,6 +25,7 @@ import { PipelineDailySummaryService, isPipelineDailySummaryFresh } from './serv
 import { ContractQtyMoveSnapshotService, isContractQtyMoveSnapshotFresh } from './services/contractQtyMoveSnapshot.service';
 import { ContractStoAggSnapshotService, isContractStoAggSnapshotFresh } from './services/contractStoAggSnapshot.service';
 import { ContractLatestSpdSnapshotService, isContractLatestSpdSnapshotFresh } from './services/contractLatestSpdSnapshot.service';
+import { B2bEndingChildSnapshotService, isB2bEndingChildSnapshotFresh } from './services/b2bEndingChildSnapshot.service';
 import { ensureUserStoContractAssignmentsTable } from './database/ensureUserStoContractAssignments';
 import {
   startShippingPerformanceCacheWarmer,
@@ -265,6 +266,10 @@ if (process.env.NODE_ENV !== 'test') {
         if (!latestSpdSnapshotFresh) {
           logger.info('Contract latest_spd snapshot stale — refreshing in background');
           await ContractLatestSpdSnapshotService.refreshAll();
+        }
+        if (!(await isB2bEndingChildSnapshotFresh())) {
+          logger.info('B2B ending-child snapshot stale — refreshing in background');
+          await B2bEndingChildSnapshotService.refreshAll();
         }
       } catch (error) {
         logger.warn('Pipeline daily summary startup refresh skipped', { error });

@@ -10,6 +10,7 @@ import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlo
 import { normalizeTruckingPagePipelineStageParam } from './truckingPagePipelineSql';
 import {
   buildTruckingUnplannedBacklogLatestSpdCte,
+  TRUCKING_UNPLANNED_B2B_END_JOIN,
   truckingUnplannedContractBacklogBaseWhereSql,
 } from './truckingUnplannedHybridSql';
 import { wrapTruckingListQueryWithStoExpansion } from './truckingListStoExpandSql';
@@ -279,6 +280,7 @@ function buildTruckingUnplannedBacklogOsCtes(
     subquery: `SELECT c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}`,
   });
   return { backlogWhere, outstandingExpr, qtyMoveCte };
@@ -307,6 +309,7 @@ export function buildTruckingOutstandingQtyBacklogAggregateQuery(
         (${outstandingExpr})::numeric AS outstanding_quantity
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}
     )
     SELECT
@@ -343,6 +346,7 @@ export function buildTruckingUnplannedBacklogCombinedQuery(
         (${outstandingExpr})::numeric AS outstanding_quantity
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}
     )
     SELECT

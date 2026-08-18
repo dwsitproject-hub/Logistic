@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SQL_TRUCKING_KEEPER_PRIORITY_ORDER,
   compareTruckingWbCompleteKeepers,
   pickTruckingWbCompleteKeeper,
   truckingOperationIdIsAssigned,
   truckingStatusKeeperRank,
 } from './truckingOperationUniqueness';
+
+describe('SQL_TRUCKING_KEEPER_PRIORITY_ORDER', () => {
+  it('prefers rows that already have loading or unloading location', () => {
+    expect(SQL_TRUCKING_KEEPER_PRIORITY_ORDER).toContain('t.loading_location');
+    expect(SQL_TRUCKING_KEEPER_PRIORITY_ORDER).toContain('t.unloading_location');
+    const statusIdx = SQL_TRUCKING_KEEPER_PRIORITY_ORDER.indexOf('WHEN \'COMPLETED\'');
+    const locIdx = SQL_TRUCKING_KEEPER_PRIORITY_ORDER.indexOf('t.loading_location');
+    const ddIdx = SQL_TRUCKING_KEEPER_PRIORITY_ORDER.indexOf('daily_deliverables');
+    expect(statusIdx).toBeGreaterThanOrEqual(0);
+    expect(locIdx).toBeGreaterThan(statusIdx);
+    expect(ddIdx).toBeGreaterThan(locIdx);
+  });
+});
 
 describe('truckingOperationIdIsAssigned', () => {
   it('returns false for null, empty, or whitespace operation_id', () => {

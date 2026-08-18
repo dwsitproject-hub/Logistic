@@ -373,6 +373,11 @@ export const SQL_TRUCKING_KEEPER_PRIORITY_ORDER = `
     WHEN 'PLANNED' THEN 6
     ELSE 7
   END ASC,
+  CASE
+    WHEN NULLIF(TRIM(t.loading_location), '') IS NOT NULL
+      OR NULLIF(TRIM(t.unloading_location), '') IS NOT NULL
+    THEN 0 ELSE 1
+  END ASC,
   COALESCE(jsonb_array_length(t.daily_deliverables), 0) DESC,
   t.updated_at DESC NULLS LAST,
   t.created_at DESC,

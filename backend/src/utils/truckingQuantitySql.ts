@@ -305,9 +305,12 @@ export interface TruckingResolvedQtyOverrides {
 
 /**
  * Delivery Qty for list/STO expand:
- * - GR Open (LCO: GR STO / FRC: GR PO) + WB actuals → WB delivery sum
+ * - GR Open (LCO: GR STO / FRC: GR PO) + WB delivery kg > 0 → WB delivery sum
  * - GR Close → SAP (PO-level sum, latest row per STO)
  * - else → COALESCE(SAP, op/KLIP qty)
+ *
+ * WB delivery is used only when the Netto PKS sum is actually > 0. A daily-actuals
+ * row with null/0 delivery (e.g. receive-only upload) must not hide SAP.
  */
 export function sqlTruckingResolvedDeliveryQty(
   innerQtyExpr: string,
@@ -320,7 +323,7 @@ export function sqlTruckingResolvedDeliveryQty(
   const hasWb = overrides?.hasWbExpr ?? sqlTruckingHasDailyActualsExpr(operationIdExpr);
   const wbDelivery = overrides?.wbQtyExpr ?? sqlWbActualDeliverySumKg(operationIdExpr);
   return `CASE
-    WHEN (${hasWb}) AND NOT (${grClosed}) THEN ${wbDelivery}
+    WHEN (${hasWb}) AND NOT (${grClosed}) AND (${wbDelivery}) > 0 THEN ${wbDelivery}
     WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
     ELSE COALESCE(${sapQtyExpr}, ${innerQtyExpr}, 0)
   END`;
@@ -328,6 +331,10 @@ export function sqlTruckingResolvedDeliveryQty(
 
 /**
  * Receive Qty for list/STO expand — same Open/Close rules as Delivery, using WB receive sum.
+ *
+ * WB receive is used only when Netto EUP sum is actually > 0. A daily-actuals row with
+ * null/0 receive (delivery uploaded, EUP still empty) must fall back to SAP Quantity Receive
+ * — otherwise the view table shows 0 while Edit Trucking still shows the SAP value.
  */
 export function sqlTruckingResolvedReceiveQty(
   innerQtyExpr: string,
@@ -340,7 +347,7 @@ export function sqlTruckingResolvedReceiveQty(
   const hasWb = overrides?.hasWbExpr ?? sqlTruckingHasDailyActualsExpr(operationIdExpr);
   const wbReceive = overrides?.wbQtyExpr ?? sqlWbActualReceiveSumKg(operationIdExpr);
   return `CASE
-    WHEN (${hasWb}) AND NOT (${grClosed}) THEN ${wbReceive}
+    WHEN (${hasWb}) AND NOT (${grClosed}) AND (${wbReceive}) > 0 THEN ${wbReceive}
     WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
     ELSE COALESCE(${sapQtyExpr}, ${innerQtyExpr}, 0)
   END`;

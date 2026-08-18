@@ -147,13 +147,13 @@ export function sqlStoScopedDeliveredKgSql(opts: StoScopedQtySqlOpts): string {
     contractNumberExpr: opts.contractNumberExpr,
   });
   const poMatch = sqlStoPoMatchExpr(opts.poNumberExpr, 'spd');
-  return `COALESCE((
+  return `(
     SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', opts.contractQtyExpr)})
     FROM sap_processed_data spd
     WHERE spd.contract_number = ${opts.contractNumberExpr}
       AND ${stoMatch}
       AND ${poMatch}
-  ), 0)`;
+  )`;
 }
 
 /** STO + contract + PO scoped SAP receive qty (kg) — shared by modal details and list sto_metrics. */
@@ -162,14 +162,14 @@ export function sqlStoScopedReceiveKgSql(opts: StoScopedQtySqlOpts): string {
     contractNumberExpr: opts.contractNumberExpr,
   });
   const poMatch = sqlStoPoMatchExpr(opts.poNumberExpr, 'spd');
-  return `COALESCE((
+  return `(
     SELECT SUM(${sqlNormalizeSapStoQtyToKgSql(SPD_QTY_RECEIVE_RAW_NUM, opts.contractQtyExpr)})
     FROM sap_processed_data spd
     WHERE spd.contract_number = ${opts.contractNumberExpr}
       AND ${stoMatch}
       AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
       AND ${poMatch}
-  ), 0)`;
+  )`;
 }
 
 /** SAP STO Quantity numeric (kg) from a sap_processed_data row. */

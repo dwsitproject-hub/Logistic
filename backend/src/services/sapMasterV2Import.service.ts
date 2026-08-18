@@ -499,6 +499,9 @@ export class SapMasterV2ImportService {
           import('./contractLatestSpdSnapshot.service')
             .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
             .catch(() => {});
+          import('./b2bEndingChildSnapshot.service')
+            .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
+            .catch(() => {});
           import('./prePlannedGroup.service')
             .then(({ schedulePrePlannedRebuildIfEnabled }) =>
               schedulePrePlannedRebuildIfEnabled('sap-import'),

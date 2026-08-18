@@ -18,6 +18,7 @@ describe('buildOilLossMainSql', () => {
     expect(sql).toContain('qty_receive_resolved < qty_delivery_resolved');
     expect(sql).toContain('b2b_end');
     expect(sql).toContain('Truck Discharge Location');
+    expect(sql).toContain('b2b_ending_buyer');
     expect(sql).toContain('ABS');
   });
 
@@ -58,5 +59,13 @@ describe('oilLossSapSql UAT fields', () => {
   it('includes trucking and vessel SAP raw paths', () => {
     expect(SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC).toContain('Quantity Delivery Trucking');
     expect(SAP_OIL_LOSS_QTY_VESSEL_NUMERIC).toContain('Quantity Delivery Vessel');
+  });
+
+  it('casts SAP qty only when the cleaned cell is a single number', () => {
+    const sql = buildOilLossMainSql();
+    expect(SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC).toContain('^-?[0-9]+');
+    expect(SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC).toContain('ELSE NULL');
+    expect(sql).toContain('^-?[0-9]+');
+    expect(sql).not.toContain('^[0-9.]+$');
   });
 });

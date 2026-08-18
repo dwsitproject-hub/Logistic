@@ -43,8 +43,12 @@ import {
   buildShipmentKlipProtectedSetSql,
   buildTruckingKlipProtectedSetSql,
 } from '../utils/klipSapFieldMerge';
-import { sqlHasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
-import { SQL_TRUCKING_KEEPER_PRIORITY_ORDER } from '../utils/truckingOperationUniqueness';
+import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
+import {
+  allocateNextSyntheticSequence,
+  buildSyntheticOperationId,
+  formatDDMMYYYY,
+} from '../utils/operationId';
 import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
 import { normalizePoNumber } from '../utils/contractPoIdentity';
 
@@ -1618,37 +1622,38 @@ export class SapDataDistributionService {
 
     const truckingOwner = data.trucking_owner_at_starting_location;
 
-    // Reuse existing active trucking row on this contract (never insert duplicate SAP siblings).
+    // Reuse the one active trucking row on this contract (unique index + find-or-create).
     let targetTruckingId: string | null = null;
     if (contractUuid) {
-      const existingForContract = await client.query<{ id: string; trucking_owner: string | null }>(
-        `SELECT t.id, t.trucking_owner
-         FROM trucking_operations t
-         WHERE t.contract_id = $1::uuid
-           AND COALESCE(t.status, '') <> 'CANCELLED'
-         ORDER BY
-           CASE WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 0 ELSE 1 END,
-           ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}`,
-        [contractUuid],
+      const created = await getOrCreateActiveTruckingOp(
+        (text, params) => client.query(text, params),
+        contractUuid,
+        {
+          allocateOperationId: async () => {
+            const dmy = formatDDMMYYYY(new Date());
+            const seq = await allocateNextSyntheticSequence(
+              (text, params) => client.query(text, params),
+              'trucking_operations',
+              'LAND',
+              dmy,
+            );
+            return buildSyntheticOperationId('LAND', dmy, seq);
+          },
+        },
       );
-
-      if (existingForContract.rows.length > 0) {
-        const keeperRow = existingForContract.rows[0]!;
-        if (truckingOwner) {
-          let bestId = keeperRow.id;
-          let bestScore = 0;
-          for (const row of existingForContract.rows) {
-            const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
-            if (score > bestScore) {
-              bestScore = score;
-              bestId = row.id;
-            }
-          }
-          targetTruckingId = bestScore >= 0.8 ? bestId : keeperRow.id;
-        } else {
-          targetTruckingId = keeperRow.id;
-        }
-      }
+      targetTruckingId = created.id;
+    } else {
+      const existingForShipment = await client.query<{ id: string }>(
+        `SELECT t.id
+         FROM trucking_operations t
+         WHERE t.shipment_id = $1::uuid
+           AND COALESCE(t.status, '') <> 'CANCELLED'
+           AND t.deduped_at IS NULL
+         ORDER BY t.created_at ASC NULLS LAST, t.id ASC
+         LIMIT 1`,
+        [shipmentUuid],
+      );
+      targetTruckingId = existingForShipment.rows[0]?.id ?? null;
     }
 
     if (targetTruckingId) {

@@ -13,6 +13,7 @@ import {
 } from './shipmentListPortsSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { sqlSapIncotermFromJsonb, sqlSapSourceTypeFromJsonb } from './sapSourceTypeSql';
+import { sqlSapQtyDeliveredAnyFromSpd } from './contractLogisticsStoDetailSql';
 
 export const SHIPMENT_LIST_STO_METRICS_STUB = `
       sto_metrics AS (
@@ -180,17 +181,13 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           SUM(
             NULLIF(regexp_replace(COALESCE(
               NULLIF(TRIM(sk.data->'raw'->>'Quantity Receive'), ''),
-              NULLIF(TRIM(sk.data->'raw'->>'Qty Receive'), '')
+              NULLIF(TRIM(sk.data->'raw'->>'Qty Receive'), ''),
+              NULLIF(TRIM(sk.data->'shipment'->>'quantity_receive'), ''),
+              NULLIF(TRIM(sk.data->'contract'->>'quantity_receive'), '')
               , ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
           ) AS quantity_receive,
-          SUM(
-            NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(sk.data->'raw'->>'Quantity Delivered'), ''),
-              NULLIF(TRIM(sk.data->'raw'->>'Quantity Delivery'), '')
-              , ''
-            ), '[^0-9\\.-]', '', 'g'), '')::numeric
-          ) AS quantity_delivered_sap
+          SUM(${sqlSapQtyDeliveredAnyFromSpd('sk')}) AS quantity_delivered_sap
         FROM spd_keyed sk
         WHERE sk.sto_key IS NOT NULL
         GROUP BY sk.sto_key

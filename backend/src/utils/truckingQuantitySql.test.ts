@@ -70,7 +70,7 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('contract_stos');
   });
 
-  it('sqlTruckingResolvedDeliveryQty uses WB delivery sum when Open+WB', () => {
+  it('sqlTruckingResolvedDeliveryQty uses WB delivery sum when Open+WB delivery > 0', () => {
     const sql = sqlTruckingResolvedDeliveryQty(
       'e.quantity_delivered',
       'sap_per_sto',
@@ -80,11 +80,12 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('quantity_delivery_kg');
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('AND NOT (');
+    expect(sql).toContain(') > 0 THEN');
     expect(sql).not.toContain('NULLIF((sap_per_sto), 0)');
     expect(sql).toContain('sap_per_sto');
   });
 
-  it('sqlTruckingResolvedReceiveQty uses WB receive sum when Open+WB', () => {
+  it('sqlTruckingResolvedReceiveQty uses WB receive sum only when Open+WB receive > 0', () => {
     const sql = sqlTruckingResolvedReceiveQty(
       'e.quantity_receive',
       'sap_recv',
@@ -93,6 +94,18 @@ describe('truckingQuantitySql', () => {
     );
     expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain('sap_recv');
+    expect(sql).toContain(') > 0 THEN');
+  });
+
+  it('sqlTruckingResolvedReceiveQty keeps SAP when WB receive is empty (null/0)', () => {
+    const sql = sqlTruckingResolvedReceiveQty(
+      'COALESCE(t.quantity_delivered, 0)',
+      'sap_recv',
+      't.id',
+      'c',
+    );
+    expect(sql).toMatch(/AND NOT \(.*\) AND \(.*\) > 0 THEN/s);
+    expect(sql).toContain('ELSE COALESCE(sap_recv, COALESCE(t.quantity_delivered, 0), 0)');
   });
 
   it('sqlTruckingPreferWbResolvedQty delegates to resolved delivery (Open→WB)', () => {
@@ -126,9 +139,10 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('WHEN a.sto_count > 1 AND a.sum_adj >');
   });
 
-  it('sqlTruckingResolvedDeliveryQty keeps Open+WB before Close→SAP', () => {
+  it('sqlTruckingResolvedDeliveryQty keeps Open+WB (>0) before Close→SAP', () => {
     const sql = sqlTruckingResolvedDeliveryQty('e.quantity_delivered', 'sap_po', 'e.id', 'c');
     expect(sql).toContain('AND NOT (');
+    expect(sql).toContain(') > 0 THEN');
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('sap_po');
     expect(sql).toContain('BOOL_OR');

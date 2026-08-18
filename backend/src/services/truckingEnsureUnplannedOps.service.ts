@@ -10,7 +10,7 @@ import {
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
-import { findActiveTruckingOpsByContractId } from '../utils/truckingOperationUniqueness';
+import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
 import {
   appendTruckingUnplannedBacklogColumnFilters,
   appendTruckingUnplannedBacklogGlobalSearch,
@@ -70,24 +70,17 @@ export async function ensureUnplannedTruckingOpsForRequest(
 
   for (const row of backlog.rows) {
     const contractUuid = String(row.id);
-    const active = await findActiveTruckingOpsByContractId(contractUuid);
-    if (active.length > 0) {
+    const op = await getOrCreateActiveTruckingOp(query, contractUuid, {
+      allocateOperationId: async () => {
+        const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+        return buildSyntheticOperationId('LAND', dmy, seq);
+      },
+    });
+    if (!op.created) {
       skippedActive += 1;
       continue;
     }
-
-    const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
-    const operationId = buildSyntheticOperationId('LAND', dmy, seq);
-
-    await query(
-      `INSERT INTO trucking_operations (
-         contract_id, operation_id, status, daily_deliverables
-       ) VALUES (
-         $1::uuid, $2, 'UNPLANNED', '[]'::jsonb
-       )`,
-      [contractUuid, operationId],
-    );
-    operationIds.push(operationId);
+    if (op.operation_id) operationIds.push(op.operation_id);
   }
 
   if (operationIds.length > 0) {

@@ -109,5 +109,7 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(text).toContain('interco_lco_kg')
     // Single FROM/backlog scan — not three separate SELECTs like the deprecated helpers.
     expect(text.match(/FROM backlog_rows/g)?.length).toBe(1)
+    expect(text).toContain('b2b_end')
+    expect(text).toContain('b2b_ending_child_snapshot')
   })
 })

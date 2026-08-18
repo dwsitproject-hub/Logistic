@@ -33,11 +33,8 @@ import {
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 } from '../utils/truckingQuantitySql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
-import {
-  sqlB2bEndingPlantCodeAgg,
-  sqlB2bOriginEndingChildLateralJoin,
-} from '../utils/b2bOriginEndingSql';
 import { sqlContractInActiveLogisticsOpenOsExpr } from '../utils/contractLogisticsOpenOsSql';
+import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -286,12 +283,13 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           MAX(c.product) AS product,
           MAX(c.group_name) AS group_name,
           MAX(c.supplier) AS supplier,
-          MAX(c.incoterm) AS incoterm,
+          MAX(${contractEffectiveIncotermExpr('c')}) AS incoterm,
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.source_type) AS source_type,
           MAX(c.status) AS status,
-          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          -- Origin plant (same grain as Shipments/Trucking status cards + OS strips).
+          MAX(c.plant_code) AS plant_code,
           MAX(c.company_name) AS company_name,
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -299,7 +297,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           MAX(${sqlIncotermQuantityDeliveryCase(
-            'c.incoterm',
+            contractEffectiveIncotermExpr('c'),
             'qm.quantity_delivery_trucking',
             'qm.quantity_delivery_vessel',
             sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
@@ -308,10 +306,10 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
           MAX(${sqlContractOutstandingSignedExpr({
             contractQtyExpr: 'c.quantity_ordered',
-            incotermExpr: 'c.incoterm',
+            incotermExpr: contractEffectiveIncotermExpr('c'),
             receiveExpr: 'qm.quantity_receive',
             deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
-              'c.incoterm',
+              contractEffectiveIncotermExpr('c'),
               'qm',
               sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
             ),
@@ -374,7 +372,6 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1

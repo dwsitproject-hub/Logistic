@@ -18,6 +18,7 @@ import {
 } from '../utils/truckingListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
 import {
+  sqlB2bEndingBuyerExpr,
   sqlB2bEndingCompanyExpr,
   sqlB2bEndingPlantCodeExpr,
   sqlB2bEndingUnloadExpr,
@@ -72,6 +73,7 @@ import {
   resolveContractForUnplannedPlanningUpload,
   truckingOperationIdIsAssigned,
 } from '../utils/truckingOperationUniqueness';
+import { getOrCreateActiveTruckingOp, isPgUniqueViolation } from '../utils/truckingActiveOp';
 import {
   buildDailyDeliverablesFromKgEntries,
   collectEffectivePlanningClearDates,
@@ -307,7 +309,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
         ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_number,
         ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_numbers,
         c.supplier,
-        c.buyer,
+        ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
         c.product,
         c.group_name,
         c.quantity_ordered,
@@ -323,6 +325,7 @@ export const getTruckingOperationById = async (req: AuthRequest, res: Response) 
        LEFT JOIN contracts c ON t.contract_id = c.id
        LEFT JOIN shipments s ON t.shipment_id = s.id
        ${TRUCKING_REALIZATIONS_JOIN}
+       ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
        WHERE t.id = $1
          AND t.deduped_at IS NULL
          ${truckingPageListScopeWhereSql}`,
@@ -566,6 +569,15 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       message: 'Trucking operation created successfully',
     });
   } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          message:
+            'Contract already has an active trucking operation. Edit the existing operation or cancel it before creating a new one.',
+        },
+      });
+    }
     logger.error('Create trucking operation error:', error);
     return res.status(500).json({
       success: false,
@@ -636,7 +648,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_number,
         ${sqlTruckingPoAggregatedStoNumbersExpr('c')} AS sto_numbers,
         c.supplier,
-        c.buyer,
+        ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
         c.product,
         c.group_name,
         c.quantity_ordered,
@@ -674,6 +686,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         })} AS outstanding_quantity
       FROM matched c
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
       LEFT JOIN LATERAL (
         SELECT
@@ -716,6 +729,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
     // B2B origin (Contract Reff PO empty): Unloading Location = Buyer of child PO
     // (child rows whose Contract Reff PO Ini points at this origin PO).
     let b2bChildBuyer: string | null = null;
+    let b2bChildBuyerName: string | null = null;
     let isB2bOrigin = false;
     let stoActuals: Array<Record<string, unknown>> = [];
     try {
@@ -781,6 +795,11 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           )
           SELECT
             COALESCE(
+              NULLIF(TRIM(c.buyer), ''),
+              NULLIF(TRIM(l.data->'raw'->>'Buyer'), ''),
+              NULLIF(TRIM(l.data->>'Buyer'), '')
+            ) AS child_buyer_name,
+            COALESCE(
               NULLIF(TRIM(l.data->'raw'->>'Truck Discharge Location'), ''),
               NULLIF(TRIM(c.company_name), ''),
               NULLIF(TRIM(l.data->'raw'->>'Buyer'), ''),
@@ -802,6 +821,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
           [originPo],
         );
         b2bChildBuyer = String((childRes.rows[0] as { child_buyer?: string } | undefined)?.child_buyer ?? '').trim() || null;
+        b2bChildBuyerName = String((childRes.rows[0] as { child_buyer_name?: string } | undefined)?.child_buyer_name ?? '').trim() || null;
       }
     } catch (b2bErr) {
       logger.warn('B2B child buyer lookup failed during trucking contract validate', b2bErr);
@@ -812,6 +832,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       exists: true,
       data: {
         ...result.rows[0],
+        buyer: b2bChildBuyerName || String((result.rows[0] as { buyer?: string | null }).buyer ?? row.buyer ?? '').trim() || row.buyer,
         is_b2b_origin: isB2bOrigin,
         b2b_child_buyer: b2bChildBuyer,
         unloading_location_suggestion: b2bChildBuyer || String(row.buyer ?? '').trim() || null,
@@ -2055,35 +2076,34 @@ async function upsertTruckingDailyFromGroup(
     return false;
   }
 
-  const dmy = formatDDMMYYYY(new Date());
-  const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
-  const operationId = buildSyntheticOperationId('LAND', dmy, seq);
   const lastDdDate =
     dd.rows.length > 0
       ? dd.rows.reduce((mx: string, r: { date: string }) => (!mx || r.date > mx ? r.date : mx), '')
       : null;
 
+  const created = await getOrCreateActiveTruckingOp(query, contract.id, {
+    allocateOperationId: async () => {
+      const dmy = formatDDMMYYYY(new Date());
+      const seq = await allocateNextSyntheticSequenceDefault('trucking_operations', 'LAND', dmy);
+      return buildSyntheticOperationId('LAND', dmy, seq);
+    },
+  });
   await query(
-    `INSERT INTO trucking_operations (
-       contract_id, operation_id,
-       eta_delivery_start_date, eta_delivery_end_date,
-       status, daily_deliverables, last_daily_deliverable_date
-     ) VALUES (
-       $1::uuid, $2,
-       $3::date, $4::date,
-       $5, $6::jsonb, $7::date
-     )`,
-    [
-      contract.id,
-      operationId,
-      etaStart,
-      etaEnd,
-      'PLANNED',
-      JSON.stringify(dd.rows),
-      lastDdDate,
-    ],
+    `UPDATE trucking_operations
+     SET eta_delivery_start_date = COALESCE(eta_delivery_start_date, $2::date),
+         eta_delivery_end_date = COALESCE(eta_delivery_end_date, $3::date),
+         status = CASE
+           WHEN COALESCE(status, '') = 'CANCELLED' THEN status
+           WHEN COALESCE(status, '') IN ('IN_PROGRESS', 'COMPLETED') THEN status
+           ELSE 'PLANNED'
+         END,
+         daily_deliverables = $4::jsonb,
+         last_daily_deliverable_date = $5::date,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = $1::uuid`,
+    [created.id, etaStart, etaEnd, JSON.stringify(dd.rows), lastDdDate],
   );
-  return 'created';
+  return created.created ? 'created' : 'updated';
 }
 
 /** Daily planning XLSX (Unplanned + Planned): Status column informational; route by PO state. */
@@ -2598,21 +2618,29 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         continue;
       }
 
+      const created = await getOrCreateActiveTruckingOp(query, contractForCreate.id, {
+        allocateOperationId: async () => newOperationId,
+      });
       await query(
-        `INSERT INTO trucking_operations (
-           contract_id, operation_id,
-           eta_delivery_start_date, eta_delivery_end_date,
-           trucking_start_date, trucking_completion_date,
-           status, daily_deliverables, last_daily_deliverable_date
-         ) VALUES (
-           $1::uuid, $2,
-           $3::date, $4::date,
-           $5::date, $6::date,
-           'PLANNED', $7::jsonb, $8::date
-         )`,
+        `UPDATE trucking_operations
+         SET eta_delivery_start_date = COALESCE(eta_delivery_start_date, $2::date),
+             eta_delivery_end_date = COALESCE(eta_delivery_end_date, $3::date),
+             trucking_start_date = COALESCE(trucking_start_date, $4::date),
+             trucking_completion_date = GREATEST(
+               COALESCE(trucking_completion_date, $5::date),
+               $5::date
+             ),
+             status = CASE
+               WHEN COALESCE(status, '') = 'CANCELLED' THEN status
+               WHEN COALESCE(status, '') IN ('IN_PROGRESS', 'COMPLETED') THEN status
+               ELSE 'PLANNED'
+             END,
+             daily_deliverables = $6::jsonb,
+             last_daily_deliverable_date = $7::date,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1::uuid`,
         [
-          contractForCreate.id,
-          newOperationId,
+          created.id,
           etaStart,
           etaEnd,
           planningDates.startIso,
@@ -2621,7 +2649,8 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           lastDdDate,
         ],
       );
-      operationsCreated += 1;
+      operationsCreated += created.created ? 1 : 0;
+      operationsUpdated += created.created ? 0 : 1;
       succeededRows += inWindowEntries.filter((e) => e.qtyMt != null).length;
     }
 

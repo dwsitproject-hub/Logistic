@@ -695,7 +695,15 @@ export function mergeTruckingUnplannedBreakdownIntoSummary(
 
 export function buildTruckingListQuery(
   req: AuthRequest,
-  options?: { skipSapJoin?: boolean; omitStatusFilter?: boolean },
+  options?: {
+    skipSapJoin?: boolean;
+    omitStatusFilter?: boolean;
+    /**
+     * Status cards + status-click table use contract origin plant (same as
+     * trucking_pipeline_daily_summary / stage snapshot). Default list keeps B2B ending overlay.
+     */
+    originGroupPlant?: boolean;
+  },
 ): TruckingListBuiltQuery {
   const {
     status,
@@ -810,12 +818,20 @@ export function buildTruckingListQuery(
 
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const groupPlantFilter = appendGroupPlantFilter(
-    plants,
-    paramIndex,
-    groupPlantExpr(sqlB2bEndingPlantCodeExpr('c.plant_code'), sqlB2bEndingCompanyExpr('c.company_name')),
-    sqlB2bEndingPlantCodeExpr('c.plant_code'),
-  );
+  const originGroupPlant = options?.originGroupPlant === true;
+  const groupPlantFilter = originGroupPlant
+    ? appendGroupPlantFilter(
+        plants,
+        paramIndex,
+        groupPlantExpr('c.plant_code', 'c.company_name'),
+        'c.plant_code',
+      )
+    : appendGroupPlantFilter(
+        plants,
+        paramIndex,
+        groupPlantExpr(sqlB2bEndingPlantCodeExpr('c.plant_code'), sqlB2bEndingCompanyExpr('c.company_name')),
+        sqlB2bEndingPlantCodeExpr('c.plant_code'),
+      );
   queryText += groupPlantFilter.sql;
   queryParams.push(...groupPlantFilter.params);
   paramIndex = groupPlantFilter.nextIndex;
@@ -869,14 +885,16 @@ export function buildTruckingListQuery(
     sortDir: sortDirRaw,
   });
 
+  const originPlantKey = originGroupPlant ? ':originPlant=1' : '';
+
   return {
     preOuterQuery: queryText,
     outerSql,
     innerParams,
     outerParams,
     skipSapJoin,
-    cacheKey,
-    filterCacheKey,
+    cacheKey: `${cacheKey}${originPlantKey}`,
+    filterCacheKey: `${filterCacheKey}${originPlantKey}`,
   };
 }
 
@@ -1633,6 +1651,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
   const built = buildTruckingListQuery(req, {
     omitStatusFilter: true,
     ...(statusScopedList ? { skipSapJoin: false } : {}),
+    ...(statusScopedList || isUnplannedHybrid ? { originGroupPlant: true } : {}),
   });
   // Resolve row stages from the daily-refresh snapshot when it is fresh so status
   // clicks are served in ~2s from the same source as the circles; when stale, the
@@ -1685,6 +1704,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     ...buildTruckingListQuery(req, {
       skipSapJoin: false,
       omitStatusFilter: true,
+      originGroupPlant: true,
     }),
     useStageSnapshot,
   };

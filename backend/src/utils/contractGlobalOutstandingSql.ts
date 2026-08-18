@@ -74,9 +74,10 @@ function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): s
  * and receive (Netto EUP) sums across non-cancelled trucking ops. Close contracts
  * omitted so SAP wins. CANCELLED ops excluded so Contracts qty matches Trucking list.
  *
- * Gates align with Trucking list resolved qty (Open + has daily actuals):
+ * Gates align with Trucking list resolved qty (Open + WB column kg > 0):
  * - Incoterm via contractEffectiveIncotermExpr (DB || SAP), same as Trucking page scope
  * - No LAND% filter — Trucking page is FRC/LCO-scoped and resolves WB without transport_mode
+ * - Delivery overlay only when Netto PKS sum > 0; receive overlay only when Netto EUP sum > 0
  *
  * Expressions use sqlWbActualDeliverySumKg / sqlWbActualReceiveSumKg (catalog-scoped).
  */
@@ -279,7 +280,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
         SELECT
           COALESCE(s.contract_number, w.contract_number, sk.contract_number) AS contract_number,
           CASE
-            WHEN w.contract_number IS NOT NULL THEN w.wb_delivery_qty_kg
+            WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
             ELSE s.quantity_delivery_trucking
           END AS quantity_delivery_trucking,
           CASE
@@ -288,7 +289,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           END AS quantity_delivery_vessel,
           CASE
             WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
-            WHEN w.contract_number IS NOT NULL THEN w.wb_receive_qty_kg
+            WHEN w.wb_receive_qty_kg > 0 THEN w.wb_receive_qty_kg
             ELSE s.quantity_receive
           END AS quantity_receive,
           COALESCE(
@@ -301,7 +302,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
             ),
             NULLIF(
               CASE
-                WHEN w.contract_number IS NOT NULL THEN w.wb_delivery_qty_kg
+                WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
                 ELSE s.quantity_delivery_trucking
               END,
               0
