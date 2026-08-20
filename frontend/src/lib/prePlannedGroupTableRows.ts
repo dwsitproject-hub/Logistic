@@ -3,6 +3,7 @@ import { resolvePrePlannedGroupForRow } from '@/lib/prePlannedGroupTableSpans';
 import {
   resolveShipmentListDeliveredKg,
   resolveShipmentListReceiveKg,
+  shipmentListOutstandingKgForViewTable,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits';
 import { formatQtyMtFromKg } from '@/lib/utils';
@@ -28,6 +29,7 @@ export interface PrePlannedTableGroupMember {
   quantity_receive?: number | null;
   actual_vessel_qty_receive?: number | null;
   outstanding_quantity?: number | null;
+  incoterm?: string | null;
   is_contract_sap_closed?: boolean | null;
 }
 
@@ -160,7 +162,7 @@ export function sumGroupQtyKgForColumn<T extends PrePlannedTableGroupMember>(
     case 'quantity_receive':
       return sumGroupQtyKg(members, (m) => resolveShipmentListReceiveKg(m));
     case 'outstanding_quantity':
-      return sumGroupQtyKg(members, (m) => shipmentStoredQtyKg(m.outstanding_quantity));
+      return sumGroupQtyKg(members, (m) => shipmentListOutstandingKgForViewTable(m));
     default:
       return null;
   }

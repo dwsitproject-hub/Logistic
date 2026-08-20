@@ -147,38 +147,39 @@ export interface StoScopedQtySqlOpts {
   poNumberExpr: string;
 }
 
-/** STO + contract + PO scoped SAP delivery qty (kg) — shared by modal details and list sto_metrics. */
-export function sqlStoScopedDeliveredKgSql(opts: StoScopedQtySqlOpts): string {
+function sqlLatestStoScopedQtySql(opts: StoScopedQtySqlOpts, qtySelectSql: string, extraAndSql = ''): string {
   const stoMatch = sqlStoLookupKeyMatchExpr(opts.stoKeyExpr, 'spd', {
     contractNumberExpr: opts.contractNumberExpr,
   });
   const poMatch = sqlStoPoMatchExpr(opts.poNumberExpr, 'spd');
+  const extra = extraAndSql.trim() ? `\n      AND ${extraAndSql.trim()}` : '';
   return `(
-    SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', opts.contractQtyExpr)})
+    SELECT ${qtySelectSql}
     FROM sap_processed_data spd
     WHERE spd.contract_number = ${opts.contractNumberExpr}
       AND ${stoMatch}
-      AND ${poMatch}
+      AND ${poMatch}${extra}
+    ORDER BY spd.created_at DESC NULLS LAST, spd.id DESC
+    LIMIT 1
   )`;
 }
 
-/** STO + contract + PO scoped SAP receive qty (kg) — shared by modal details and list sto_metrics. */
+/** STO + contract + PO scoped SAP delivery qty (kg) — latest import row (not SUM of history). */
+export function sqlStoScopedDeliveredKgSql(opts: StoScopedQtySqlOpts): string {
+  return sqlLatestStoScopedQtySql(opts, sqlSapQtyDeliveredKgFromSpd('spd', opts.contractQtyExpr));
+}
+
+/** STO + contract + PO scoped SAP receive qty (kg) — latest import row with a receive value. */
 export function sqlStoScopedReceiveKgSql(opts: StoScopedQtySqlOpts): string {
-  const stoMatch = sqlStoLookupKeyMatchExpr(opts.stoKeyExpr, 'spd', {
-    contractNumberExpr: opts.contractNumberExpr,
-  });
-  const poMatch = sqlStoPoMatchExpr(opts.poNumberExpr, 'spd');
-  return `(
-    SELECT SUM(${sqlNormalizeSapStoQtyToKgSql(SPD_QTY_RECEIVE_RAW_NUM, opts.contractQtyExpr)})
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = ${opts.contractNumberExpr}
-      AND ${stoMatch}
-      AND NULLIF(TRIM(${sqlCoalesceSapRawQtyFields([
-        `spd.data->'raw'->>'Quantity Receive'`,
-        `spd.data->'raw'->>'Qty Receive'`,
-      ])}), '') IS NOT NULL
-      AND ${poMatch}
-  )`;
+  const hasReceive = `NULLIF(TRIM(${sqlCoalesceSapRawQtyFields([
+    `spd.data->'raw'->>'Quantity Receive'`,
+    `spd.data->'raw'->>'Qty Receive'`,
+  ])}), '') IS NOT NULL`;
+  return sqlLatestStoScopedQtySql(
+    opts,
+    sqlNormalizeSapStoQtyToKgSql(SPD_QTY_RECEIVE_RAW_NUM, opts.contractQtyExpr),
+    hasReceive,
+  );
 }
 
 /** SAP STO Quantity numeric (kg) from a sap_processed_data row. */

@@ -132,7 +132,7 @@ import {
 import {
   shipmentListQtyMoveCteFromPage,
 } from '../utils/shipmentOutstandingQtySql';
-import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
+import { shipmentListPageQtySelectSql, sqlGroupedMaybeCopiedQty } from '../utils/shipmentListQtySql';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import { ttlMemo } from '../utils/ttlMemo';
 import {
@@ -874,9 +874,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.eta_discharge_berthed) as eta_discharge_berthed,
           MAX(s.eta_discharge_start) as eta_discharge_start,
           MAX(s.eta_discharge_complete) as eta_discharge_complete,
-          COALESCE(SUM(s.quantity_shipped), 0) as quantity_shipped,
-          COALESCE(SUM(s.quantity_delivered), 0) as quantity_delivered,
-          COALESCE(SUM(s.quantity_delivered_klip), 0) as quantity_delivered_klip,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_shipped')}, 0) as quantity_shipped,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered')}, 0) as quantity_delivered,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered_klip')}, 0) as quantity_delivered_klip,
           COALESCE(SUM(s.inbound_weight), 0) as inbound_weight,
           COALESCE(SUM(s.outbound_weight), 0) as outbound_weight,
           COALESCE(AVG(s.gain_loss_percentage), 0) as gain_loss_percentage,
@@ -886,7 +886,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.vessel_oa_budget) as vessel_oa_budget,
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.bl_quantity) as bl_quantity,
-          COALESCE(SUM(s.actual_vessel_qty_receive), 0) as actual_vessel_qty_receive,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.actual_vessel_qty_receive')}, 0) as actual_vessel_qty_receive,
           MAX(s.sfal_qty) as sfal_qty,
           MAX(s.sfbd_qty) as sfbd_qty,
           MAX(s.fuel_consumption) as fuel_consumption,

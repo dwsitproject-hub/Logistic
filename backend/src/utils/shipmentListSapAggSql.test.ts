@@ -105,6 +105,14 @@ describe('shipmentListSapAggSql', () => {
     expect(full).toContain('Quantity Delivery Trucking');
   });
 
+  it('sums sap_agg from the latest SAP row per contract+PO, not every import', () => {
+    const full = shipmentListSpdAggCtes(false);
+    expect(full).toContain('sap_keyed_qty_latest AS (');
+    expect(full).toContain('FROM sap_keyed_qty_latest sk');
+    expect(full).toContain('spd.contract_number');
+    expect(full).toContain('spd.po_number');
+  });
+
   it('exposes spd_id in both the stub and full CTEs so the shapes stay compatible', () => {
     expect(shipmentListSpdAggCtes(true)).toContain('spd_id');
     expect(shipmentListSpdAggCtes(false)).toContain('spd_id');

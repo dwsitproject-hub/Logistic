@@ -80,4 +80,12 @@ describe('prePlannedGroupTableRows', () => {
     ];
     expect(sumGroupQtyKgForColumn(members, 'outstanding_quantity')).toBe(2_000_000);
   });
+
+  it('sumGroupQtyKgForColumn treats null Delivery as 0 outstanding when contract qty exists', () => {
+    const members = [
+      { id: '1', contract_qty: 1_000_000, incoterm: 'FOB', is_contract_sap_closed: true },
+      { id: '2', outstanding_quantity: 500_000 },
+    ];
+    expect(sumGroupQtyKgForColumn(members, 'outstanding_quantity')).toBe(1_500_000);
+  });
 });

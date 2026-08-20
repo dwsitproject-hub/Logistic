@@ -66,6 +66,7 @@ import {
   mergeShipmentQtyOverridesOnContractRows,
   preferHydratedQty,
   shipmentListDeliveredKgForViewTable,
+  shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
   resolveShipmentListStoKg,
   sapContractDetailQtyToKg,
@@ -3323,7 +3324,7 @@ function ShipmentsPageContent() {
       case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
       case 'contract_qty': return typeof s.contract_qty === 'number' ? s.contract_qty : null
       case 'outstanding_qty_planning': return typeof s.outstanding_qty_planning === 'number' ? s.outstanding_qty_planning : null
-      case 'outstanding_quantity': return typeof s.outstanding_quantity === 'number' ? s.outstanding_quantity : null
+      case 'outstanding_quantity': return shipmentListOutstandingKgForViewTable(s)
       case 'sfal_qty': return typeof s.sfal_qty === 'number' ? s.sfal_qty : null
       case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
       case 'fuel_consumption': return typeof s.fuel_consumption === 'number' ? s.fuel_consumption : null
@@ -4070,15 +4071,15 @@ function ShipmentsPageContent() {
       formulaHelp: FIELD_HELP.shipmentOutstandingQtyMt,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_quantity) ?? 0,
+      getSortValue: (s) => shipmentListOutstandingKgForViewTable(s) ?? 0,
       render: (s) => {
         if (!qtyFieldsReady) return <QtyLoadingDots />
-        const kg = shipmentStoredQtyKg(s.outstanding_quantity)
+        const kg = shipmentListOutstandingKgForViewTable(s)
         return (
           <span
             className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
           >
-            {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            {formatSapOutstandingQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
           </span>
         )
       }

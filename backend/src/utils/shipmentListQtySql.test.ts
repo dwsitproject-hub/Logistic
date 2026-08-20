@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   shipmentListPageQtySelectSql,
   shipmentListRowContractQtySql,
+  sqlCoalesceNonZeroChain,
   sqlCoalesceNonZeroQty,
-  sqlGreatestPositiveQty,
+  sqlGroupedMaybeCopiedQty,
   sqlShipmentListOutstandingKgExpr,
 } from './shipmentListQtySql';
 
@@ -15,12 +16,20 @@ describe('sqlCoalesceNonZeroQty', () => {
   });
 });
 
-describe('sqlGreatestPositiveQty', () => {
-  it('takes the largest non-zero among SAP, header SUM, and qty_move', () => {
-    const sql = sqlGreatestPositiveQty(['sm.delivered_qty', 'sp.quantity_delivered']);
-    expect(sql).toContain('GREATEST(');
-    expect(sql).toContain('sm.delivered_qty');
+describe('sqlCoalesceNonZeroChain', () => {
+  it('prefers sto_metrics before header SUM so copied vessel totals cannot inflate SAP', () => {
+    const sql = sqlCoalesceNonZeroChain(['sm.delivered_qty', 'sp.quantity_delivered']);
+    expect(sql).toContain('NULLIF((sm.delivered_qty)::numeric, 0)');
     expect(sql).toContain('sp.quantity_delivered');
+    expect(sql).not.toContain('GREATEST(');
+  });
+});
+
+describe('sqlGroupedMaybeCopiedQty', () => {
+  it('keeps MAX when every PO copied the same vessel qty', () => {
+    const sql = sqlGroupedMaybeCopiedQty('s.quantity_delivered');
+    expect(sql).toContain('THEN MAX(s.quantity_delivered)');
+    expect(sql).toContain('ELSE SUM(s.quantity_delivered)');
   });
 });
 
@@ -33,7 +42,7 @@ describe('shipmentListRowContractQtySql', () => {
 });
 
 describe('sqlShipmentListOutstandingKgExpr', () => {
-  it('returns NULL when contract qty or fulfilled qty is unknown', () => {
+  it('returns NULL only when contract qty is unknown; null fulfilled counts as 0', () => {
     const sql = sqlShipmentListOutstandingKgExpr({
       contractQtyExpr: 'po.contract_qty',
       incotermExpr: 'po.incoterm',
@@ -42,7 +51,8 @@ describe('sqlShipmentListOutstandingKgExpr', () => {
       clampAtZero: true,
     });
     expect(sql).toContain('WHEN po.contract_qty IS NULL THEN NULL');
-    expect(sql).toContain('THEN NULL');
+    expect(sql).toContain('COALESCE((CASE');
+    expect(sql).not.toContain('WHEN (CASE');
     expect(sql).toContain('GREATEST(0');
   });
 });
@@ -63,11 +73,11 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql.indexOf('quantity_delivered_klip')).toBeGreaterThan(-1);
   });
 
-  it('maps hydrated SAP qty from sto_metrics without letting 0 hide sap_agg or header SUM', () => {
+  it('maps hydrated SAP qty from sto_metrics first, then sap_agg, header, qty_move', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).toContain('sm.delivered_qty');
     expect(sql).toContain('sm.received_qty');
-    expect(sql).toContain('GREATEST(');
+    expect(sql).not.toContain('GREATEST(');
     expect(sql).toContain('quantity_delivered_sap');
     expect(sql).toContain('quantity_receive');
     expect(sql).toContain('quantity_delivery_vessel');

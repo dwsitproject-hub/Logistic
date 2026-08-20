@@ -202,6 +202,47 @@ export function shipmentListReceiveKgForViewTable(
   return resolveShipmentListReceiveKg(shipment) ?? 0
 }
 
+export function shipmentListFulfilledKgForViewTable(shipment: {
+  actual_vessel_qty_receive?: number | string | null
+  quantity_receive?: number | string | null
+  quantity_delivered_klip?: number | string | null
+  quantity_delivered?: number | string | null
+  total_quantity_delivered?: number | string | null
+  quantity_delivered_sap?: number | string | null
+  is_contract_sap_closed?: boolean | null
+  incoterm?: string | null
+}): number {
+  const inc = String(shipment.incoterm ?? '').trim().toUpperCase()
+  const receive = shipmentListReceiveKgForViewTable(shipment)
+  const delivery = shipmentListDeliveredKgForViewTable(shipment)
+  if (['FRC', 'CIF', 'CFR'].includes(inc)) return receive
+  if (['LCO', 'FOB'].includes(inc)) return delivery
+  return receive || delivery
+}
+
+/**
+ * View Table Outstanding Qty: Contract Qty − fulfilled (null Delivery/Receive = 0).
+ * Prefers API OS when present; otherwise computes so skip-SAP first paint is not "-".
+ */
+export function shipmentListOutstandingKgForViewTable(shipment: {
+  outstanding_quantity?: number | string | null
+  contract_qty?: number | string | null
+  actual_vessel_qty_receive?: number | string | null
+  quantity_receive?: number | string | null
+  quantity_delivered_klip?: number | string | null
+  quantity_delivered?: number | string | null
+  total_quantity_delivered?: number | string | null
+  quantity_delivered_sap?: number | string | null
+  is_contract_sap_closed?: boolean | null
+  incoterm?: string | null
+}): number | null {
+  const api = shipmentStoredQtyKg(shipment.outstanding_quantity)
+  if (api !== null) return api
+  const contract = shipmentStoredQtyKg(shipment.contract_qty)
+  if (contract === null) return null
+  return contract - shipmentListFulfilledKgForViewTable(shipment)
+}
+
 /**
  * Shipments list Receive Qty — kg for display.
  * Same Open/Close rules as Delivery (not "vessel only if higher than SAP"):
@@ -230,15 +271,15 @@ export function resolveShipmentListReceiveKg(shipment: {
   return klip ?? sap
 }
 
-/** Hydrate must not keep a shell 0 stub, nor replace a larger grouped header SUM with a partial SAP qty. */
+/** Prefer hydrated SAP; use the shell only when hydrate is null/0 (do not keep an inflated header SUM). */
 export function preferHydratedQty(
   hydrated: number | string | null | undefined,
   shell: number | string | null | undefined,
 ): number | undefined {
   const h = shipmentStoredQtyKg(hydrated)
   const s = shipmentStoredQtyKg(shell)
-  const positives = [h, s].filter((v): v is number => v !== null && v !== 0)
-  if (positives.length > 0) return Math.max(...positives)
+  if (h !== null && h !== 0) return h
+  if (s !== null && s !== 0) return s
   return h ?? s ?? undefined
 }
 

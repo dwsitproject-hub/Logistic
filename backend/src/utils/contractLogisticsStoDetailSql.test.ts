@@ -96,7 +96,8 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(sql).toContain('asp.contract_id');
     expect(sql).toContain('asp.po_number');
     expect(sql).toContain('Quantity Delivery Vessel');
-    expect(sql).toContain('SUM(');
+    expect(sql).toContain('LIMIT 1');
+    expect(sql).toContain('created_at DESC');
   });
 
   it('sqlStoScopedReceiveKgSql filters by STO key, contract, and PO', () => {
@@ -110,6 +111,7 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(sql).toContain('pl.contract_number');
     expect(sql).toContain('pl.po_number');
     expect(sql).toContain('Quantity Receive');
-    expect(sql).toContain('SUM(');
+    expect(sql).toContain('LIMIT 1');
+    expect(sql).toContain('created_at DESC');
   });
 });

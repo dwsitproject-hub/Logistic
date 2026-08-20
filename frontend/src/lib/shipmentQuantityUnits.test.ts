@@ -8,6 +8,7 @@ import {
   sapDeliveredOrReceiveMtToKg,
   seedKlipQtyFromShipmentHeader,
   shipmentListDeliveredKgForViewTable,
+  shipmentListOutstandingKgForViewTable,
   shipmentListReceiveKgForViewTable,
 } from './shipmentQuantityUnits'
 
@@ -35,9 +36,9 @@ describe('preferHydratedQty', () => {
     expect(preferHydratedQty(0, 3_002_849)).toBe(3_002_849)
   })
 
-  it('does not let a partial hydrated SAP hide a larger grouped header SUM', () => {
-    expect(preferHydratedQty(1_442_067, 1_634_343)).toBe(1_634_343)
-    expect(preferHydratedQty(4_000_000, 3_500_000)).toBe(4_000_000)
+  it('prefers hydrated SAP over an inflated grouped header SUM', () => {
+    expect(preferHydratedQty(2_500_035, 4_000_000)).toBe(2_500_035)
+    expect(preferHydratedQty(0, 4_000_000)).toBe(4_000_000)
   })
 })
 
@@ -219,6 +220,34 @@ describe('resolveShipmentListReceiveKg', () => {
         is_contract_sap_closed: false,
       }),
     ).toBe(0)
+  })
+})
+
+describe('shipmentListOutstandingKgForViewTable', () => {
+  it('uses Contract Qty when Delivery/Receive are null (FOB)', () => {
+    expect(
+      shipmentListOutstandingKgForViewTable({
+        contract_qty: 2_500_000,
+        incoterm: 'FOB',
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(2_500_000)
+  })
+
+  it('prefers API outstanding when present', () => {
+    expect(
+      shipmentListOutstandingKgForViewTable({
+        outstanding_quantity: 100_000,
+        contract_qty: 2_500_000,
+        incoterm: 'FOB',
+        quantity_delivered_sap: 2_400_000,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(100_000)
+  })
+
+  it('stays null when Contract Qty is missing', () => {
+    expect(shipmentListOutstandingKgForViewTable({ incoterm: 'FOB' })).toBeNull()
   })
 })
 

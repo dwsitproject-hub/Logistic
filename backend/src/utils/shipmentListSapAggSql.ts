@@ -33,7 +33,8 @@ export const SHIPMENT_LIST_STO_METRICS_STUB = `
 
 export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       spd_keyed AS (
-        SELECT NULL::text AS sto_key, NULL::timestamptz AS created_at, NULL::uuid AS spd_id, NULL::jsonb AS data
+        SELECT NULL::text AS sto_key, NULL::timestamptz AS created_at, NULL::uuid AS spd_id,
+          NULL::text AS contract_number, NULL::text AS po_number, NULL::jsonb AS data
         WHERE false
       ),
       contract_ext_agg AS (
@@ -108,6 +109,8 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           sp.sto_key,
           spd.created_at,
           spd.id AS spd_id,
+          spd.contract_number,
+          spd.po_number,
           spd.data
         FROM shipment_page sp
         INNER JOIN sap_processed_data spd
@@ -120,6 +123,8 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           spc.sto_key,
           spd.created_at,
           spd.id AS spd_id,
+          spd.contract_number,
+          spd.po_number,
           spd.data
         FROM shipment_page_contracts spc
         INNER JOIN sap_processed_data spd
@@ -167,6 +172,36 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
         WHERE q.v IS NOT NULL AND q.v != ''
         GROUP BY q.sto_key
       ),
+      sap_keyed_qty_latest AS (
+        SELECT DISTINCT ON (
+          sk.sto_key,
+          COALESCE(NULLIF(TRIM(sk.contract_number::text), ''), ''),
+          COALESCE(
+            NULLIF(TRIM(sk.po_number::text), ''),
+            NULLIF(TRIM(sk.data->'raw'->>'PO No'), ''),
+            NULLIF(TRIM(sk.data->'raw'->>'PO Number'), ''),
+            NULLIF(TRIM(sk.data->'raw'->>'PO No.'), ''),
+            NULLIF(TRIM(sk.data->'contract'->>'po_number'), ''),
+            ''
+          )
+        )
+          sk.*
+        FROM spd_keyed sk
+        WHERE sk.sto_key IS NOT NULL
+        ORDER BY
+          sk.sto_key,
+          COALESCE(NULLIF(TRIM(sk.contract_number::text), ''), ''),
+          COALESCE(
+            NULLIF(TRIM(sk.po_number::text), ''),
+            NULLIF(TRIM(sk.data->'raw'->>'PO No'), ''),
+            NULLIF(TRIM(sk.data->'raw'->>'PO Number'), ''),
+            NULLIF(TRIM(sk.data->'raw'->>'PO No.'), ''),
+            NULLIF(TRIM(sk.data->'contract'->>'po_number'), ''),
+            ''
+          ),
+          sk.created_at DESC NULLS LAST,
+          sk.spd_id DESC
+      ),
       sap_agg AS (
         SELECT
           sk.sto_key,
@@ -191,8 +226,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
           ) AS quantity_receive,
           SUM(${sqlSapQtyDeliveredAnyFromSpd('sk')}) AS quantity_delivered_sap
-        FROM spd_keyed sk
-        WHERE sk.sto_key IS NOT NULL
+        FROM sap_keyed_qty_latest sk
         GROUP BY sk.sto_key
       ),
       sap_vessel_pick AS (

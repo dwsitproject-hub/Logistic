@@ -68,6 +68,7 @@ export function sqlShipmentListFulfilledKgCase(
  * Outstanding (kg) = base qty − fulfilled.
  * Shipments / Shipping Perf OS uses Contract Qty as base (not STO Qty).
  * Fulfilled follows Open→KLIP / Close→SAP (same as Delivery/Receive columns).
+ * Missing Delivery/Receive (null) counts as 0 so View Table OS is numeric, not "-".
  */
 export function sqlShipmentListOutstandingKgExpr(opts: {
   contractQtyExpr: string;
@@ -81,12 +82,25 @@ export function sqlShipmentListOutstandingKgExpr(opts: {
     opts.receiveExpr,
     opts.deliveryExpr,
   );
-  const diff = `(${opts.contractQtyExpr}::numeric - (${fulfilled})::numeric)`;
+  const diff = `(${opts.contractQtyExpr}::numeric - COALESCE((${fulfilled})::numeric, 0))`;
   const body = opts.clampAtZero ? `GREATEST(0, ${diff})` : diff;
   return `CASE
     WHEN ${opts.contractQtyExpr} IS NULL THEN NULL
-    WHEN (${fulfilled}) IS NULL THEN NULL
     ELSE ${body}
+  END`;
+}
+
+/**
+ * Grouped View Table: if every PO copied the same vessel qty, keep MAX;
+ * if POs have different qtys, SUM.
+ */
+export function sqlGroupedMaybeCopiedQty(expr: string): string {
+  return `CASE
+    WHEN COUNT(*) FILTER (WHERE NULLIF((${expr})::numeric, 0) IS NOT NULL) <= 1
+      THEN MAX(${expr})
+    WHEN MIN(NULLIF((${expr})::numeric, 0)) IS NOT DISTINCT FROM MAX(NULLIF((${expr})::numeric, 0))
+      THEN MAX(${expr})
+    ELSE SUM(${expr})
   END`;
 }
 
@@ -95,13 +109,16 @@ export function sqlCoalesceNonZeroQty(preferredExpr: string, fallbackExpr: strin
   return `COALESCE(NULLIF((${preferredExpr})::numeric, 0), ${fallbackExpr})`;
 }
 
-/**
- * Multi-PO View Table: a partial sto_metrics/SAP value must not hide a larger
- * grouped shipment header SUM (or the reverse — take the best positive signal).
- */
-export function sqlGreatestPositiveQty(exprs: string[]): string {
-  const parts = exprs.map((e) => `COALESCE(NULLIF((${e})::numeric, 0), 0)`);
-  return `NULLIF(GREATEST(${parts.join(', ')}), 0)`;
+/** First non-zero wins (sto_metrics before grouped header SUM / qty_move). */
+export function sqlCoalesceNonZeroChain(exprs: string[]): string {
+  if (exprs.length === 0) {
+    return 'NULL::numeric';
+  }
+  let acc = exprs[exprs.length - 1];
+  for (let i = exprs.length - 2; i >= 0; i -= 1) {
+    acc = sqlCoalesceNonZeroQty(exprs[i], acc);
+  }
+  return acc;
 }
 
 function shipmentListRowQtyMoveScalarSql(spAlias: string, columnSql: string): string {
@@ -134,9 +151,9 @@ export function shipmentListRowQtyMoveReceiveSql(spAlias = 'sp'): string {
   return shipmentListRowQtyMoveScalarSql(spAlias, 'qm.quantity_receive');
 }
 
-/** sto_metrics → sap_agg → shipment header → qty_move (skip 0 stubs; keep the largest positive). */
+/** sto_metrics (per-PO SAP) → sap_agg → header → qty_move. Do not GREATEST with header SUM. */
 export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
-  return sqlGreatestPositiveQty([
+  return sqlCoalesceNonZeroChain([
     'sm.delivered_qty',
     'sa.quantity_delivered_sap',
     `${spAlias}.quantity_delivered`,
@@ -145,7 +162,7 @@ export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
 }
 
 export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
-  return sqlGreatestPositiveQty([
+  return sqlCoalesceNonZeroChain([
     'sm.received_qty',
     'sa.quantity_receive',
     `${spAlias}.actual_vessel_qty_receive`,
@@ -172,7 +189,7 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
     sapDelivery,
     `${spAlias}.quantity_delivered`,
   );
-  // Same fulfilled qty as Delivery/Receive columns (do not COALESCE stub NULL to 0).
+  // Same fulfilled qty as Delivery/Receive columns; null fulfilled → 0 (OS = contract qty).
   const listOutstandingFallback = sqlShipmentListOutstandingKgExpr({
     contractQtyExpr,
     incotermExpr,
