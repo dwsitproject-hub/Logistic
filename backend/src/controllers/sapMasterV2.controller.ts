@@ -3,6 +3,7 @@ import { SapMasterV2ImportService } from '../services/sapMasterV2Import.service'
 import logger from '../utils/logger';
 import * as path from 'path';
 import * as fs from 'fs';
+import { SQL_ACTIVE_SAP_IMPORT } from '../utils/sapImportInFlightSql';
 
 /** Safe fields only — raw pg errors can break JSON.stringify when nested/circular. */
 function sapImportHttpError(error: unknown): { message: string; code?: string; detail?: string } {
@@ -184,6 +185,30 @@ export const getImportStatus = async (req: Request, res: Response): Promise<void
     res.status(500).json({
       success: false,
       error: { message: error instanceof Error ? error.message : 'Unknown error' }
+    });
+  }
+};
+
+/**
+ * Lightweight in-flight import status for any authenticated user (trucking uploads, global banner).
+ */
+export const getActiveImport = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const pool = (await import('../database/connection')).default;
+    const result = await pool.query(SQL_ACTIVE_SAP_IMPORT);
+    const row = result.rows[0] ?? null;
+    res.json({
+      success: true,
+      data: {
+        active: row != null,
+        import: row,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get active SAP import', error);
+    res.status(500).json({
+      success: false,
+      error: { message: error instanceof Error ? error.message : 'Unknown error' },
     });
   }
 };

@@ -57,6 +57,12 @@ router.post(
 );
 
 router.get(
+  '/imports/active',
+  authenticateToken,
+  sapMasterV2Controller.getActiveImport,
+);
+
+router.get(
   '/imports',
   authenticateToken,
   authorizeSapImportsView,

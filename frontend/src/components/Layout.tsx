@@ -21,6 +21,7 @@ import { clearClientDataCache } from '@/lib/clientDataCache'
 import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 import { HeaderMissingEtaAlertBell } from '@/components/HeaderMissingEtaAlertBell'
+import { SapImportInFlightBanner } from '@/components/SapImportInFlightBanner'
 import { cn } from '@/lib/utils'
 
 type UserLite = {
@@ -109,7 +110,10 @@ function LayoutChrome({
           className="flex h-16 min-h-16 shrink-0 items-center border-b border-gray-200 bg-white px-6"
         >
           <div className="flex w-full min-w-0 items-center justify-between gap-4">
-            <h2 className="truncate text-xl font-semibold leading-snug text-gray-800">{pageTitle}</h2>
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              <h2 className="truncate text-xl font-semibold leading-snug text-gray-800">{pageTitle}</h2>
+              <SapImportInFlightBanner />
+            </div>
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
               {!isAdminRole(user.role) && <HeaderMissingEtaAlertBell />}
               <Tooltip>

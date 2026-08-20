@@ -1185,6 +1185,9 @@ function ShipmentsPageContent() {
   })
   const [uploadingId, setUploadingId] = useState<string>('')
   const listFetchGenRef = useRef(0)
+  const fetchShipmentsRef = useRef<
+    (forcedPage?: number, searchOverride?: string, options?: { force?: boolean }) => Promise<void>
+  >(async () => {})
 
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
@@ -1559,10 +1562,17 @@ function ShipmentsPageContent() {
   }, [])
 
   const applySearch = useCallback(() => {
+    const next = searchDraft.trim()
+    const sameScope = next === searchTerm.trim() && page === 1
     beginTableScopeRefresh()
     setPage(1)
     setSearchTerm(searchDraft)
-  }, [searchDraft, beginTableScopeRefresh])
+    // Identical search does not change listQueryKey, so the list effect will not re-run —
+    // force a refetch or View Table loading stays stuck after beginTableScopeRefresh.
+    if (sameScope) {
+      void fetchShipmentsRef.current(1, searchDraft, { force: true })
+    }
+  }, [searchDraft, searchTerm, page, beginTableScopeRefresh])
 
   const handlePipelineStageChange = useCallback((stage: ShipmentsPipelineStageFilter) => {
     beginTableScopeRefresh()
@@ -2056,6 +2066,7 @@ function ShipmentsPageContent() {
       }
     }
   }
+  fetchShipmentsRef.current = fetchShipments
 
   const shipIso = (d: Date) => {
     const yyyy = d.getFullYear()

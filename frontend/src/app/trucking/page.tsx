@@ -33,6 +33,11 @@ import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { useSapImportInFlight } from '@/hooks/useSapImportInFlight'
+import {
+  SAP_IMPORT_IN_PROGRESS_MESSAGE,
+  sapImportInProgressErrorMessage,
+} from '@/lib/sapImportInFlight'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
@@ -1011,6 +1016,7 @@ function CalendarDeliverablesTable({
 
 function TruckingPageContent() {
   const searchParams = useSearchParams()
+  const { active: sapImportActive } = useSapImportInFlight()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
   /** False until SAP hydrate (or status-scoped full-SAP list) — Delivery/Receive/OS show as —. */
   const [qtyFieldsReady, setQtyFieldsReady] = useState(false)
@@ -1560,6 +1566,10 @@ function TruckingPageContent() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sapImportActive) {
+      alert(SAP_IMPORT_IN_PROGRESS_MESSAGE)
+      return
+    }
     setPlanningUploading(true)
     try {
       const fd = new FormData()
@@ -1582,7 +1592,12 @@ function TruckingPageContent() {
       }
       await fetchCalendarRows()
     } catch (err: any) {
-      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+      alert(
+        sapImportInProgressErrorMessage(err) ||
+          err?.response?.data?.error?.message ||
+          err?.message ||
+          'Upload failed',
+      )
     } finally {
       setPlanningUploading(false)
     }
@@ -1592,6 +1607,10 @@ function TruckingPageContent() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sapImportActive) {
+      alert(SAP_IMPORT_IN_PROGRESS_MESSAGE)
+      return
+    }
     setWbUploading(true)
     try {
       const fd = new FormData()
@@ -1625,6 +1644,7 @@ function TruckingPageContent() {
       }
     } catch (err: unknown) {
       const message =
+        sapImportInProgressErrorMessage(err) ||
         (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
           ?.message ||
         (err as Error)?.message ||
@@ -2267,6 +2287,10 @@ function TruckingPageContent() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sapImportActive) {
+      alert(SAP_IMPORT_IN_PROGRESS_MESSAGE)
+      return
+    }
 
     setBulkCreateUploading(true)
     try {
@@ -2293,7 +2317,12 @@ function TruckingPageContent() {
       }
       await fetchTruckingOperations(1, undefined, { force: true })
     } catch (err: any) {
-      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+      alert(
+        sapImportInProgressErrorMessage(err) ||
+          err?.response?.data?.error?.message ||
+          err?.message ||
+          'Upload failed',
+      )
     } finally {
       setBulkCreateUploading(false)
     }
@@ -3583,6 +3612,7 @@ function TruckingPageContent() {
     </div>
   ) : null
   const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
+  const sapImportUploadBlockedTitle = SAP_IMPORT_IN_PROGRESS_MESSAGE
 
   return (
     <Layout>
@@ -3593,7 +3623,7 @@ function TruckingPageContent() {
           className="hidden"
           id="bulk-create-trucking-input"
           onChange={handleBulkCreateFileChange}
-          disabled={bulkCreateUploading}
+          disabled={bulkCreateUploading || sapImportActive}
         />
         <input
           type="file"
@@ -3601,7 +3631,7 @@ function TruckingPageContent() {
           className="hidden"
           id="wb-rekap-upload-input"
           onChange={handleWbRekapFileChange}
-          disabled={wbUploading}
+          disabled={wbUploading || sapImportActive}
         />
         {/* Header */}
         <div className="flex items-center justify-between">
@@ -3614,8 +3644,12 @@ function TruckingPageContent() {
               variant="outline"
               className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
               onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
-              disabled={wbUploading}
-              title="Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura"
+              disabled={wbUploading || sapImportActive}
+              title={
+                sapImportActive
+                  ? sapImportUploadBlockedTitle
+                  : 'Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
+              }
             >
               {wbUploading ? (
                 <>
@@ -3634,11 +3668,13 @@ function TruckingPageContent() {
               variant="outline"
               className="border-red-600 text-red-700 hover:bg-red-50 disabled:border-red-200 disabled:bg-red-50/40 disabled:text-red-300 disabled:opacity-100 disabled:pointer-events-none"
               onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-              disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching}
+              disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
               title={
-                dailyPlanningUploadEligible
-                  ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
-                  : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
+                sapImportActive
+                  ? sapImportUploadBlockedTitle
+                  : dailyPlanningUploadEligible
+                    ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
+                    : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
               }
             >
               {bulkCreateUploading ? (

@@ -3,6 +3,7 @@ import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
+import { sapImportInFlightGuard } from '../middleware/sapImportInFlightGuard';
 import {
   getTruckingRealization,
   updateTruckingRealization,
@@ -82,6 +83,7 @@ router.get('/bulk-create/template', downloadBulkCreateTruckingTemplate);
 router.post(
   '/bulk-create',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('CREATE', 'TRUCKING_OPERATION'),
   bulkCreateTruckingOperations,
 );
@@ -90,6 +92,7 @@ router.post(
 router.post(
   '/unplanned-planning/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadUnplannedPlanning,
 );
@@ -97,6 +100,7 @@ router.post(
 router.post(
   '/planned-planning/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadPlannedPlanning,
 );
@@ -104,6 +108,7 @@ router.post(
 router.post(
   '/daily-planning/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadCombinedDailyPlanning,
 );
@@ -122,6 +127,7 @@ router.get('/daily-planning-deliverables/template', downloadDailyPlanningDeliver
 router.post(
   '/daily-planning-deliverables/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadDailyPlanningDeliverables,
 );
@@ -132,6 +138,7 @@ router.get('/daily-actuals/template', downloadDailyActualsTemplate);
 router.post(
   '/daily-actuals/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadDailyActuals,
 );
@@ -139,6 +146,7 @@ router.post(
 router.post(
   '/wb-rekap/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadWbRekap,
 );
