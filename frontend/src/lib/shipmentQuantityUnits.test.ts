@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   mergeShipmentQtyOverridesOnContractRows,
+  preferHydratedQty,
   resolveShipmentListDeliveredKg,
   resolveShipmentListReceiveKg,
   sapContractDetailQtyToKg,
   sapDeliveredOrReceiveMtToKg,
   seedKlipQtyFromShipmentHeader,
+  shipmentListDeliveredKgForViewTable,
+  shipmentListReceiveKgForViewTable,
 } from './shipmentQuantityUnits'
 
 describe('sapDeliveredOrReceiveMtToKg', () => {
@@ -23,6 +26,13 @@ describe('sapContractDetailQtyToKg', () => {
 
   it('scales MT-scale values when much smaller than contract qty', () => {
     expect(sapContractDetailQtyToKg(500, 3_000_000)).toBe(500_000)
+  })
+})
+
+describe('preferHydratedQty', () => {
+  it('does not let a shell qty_move stub 0 hide hydrated SAP', () => {
+    expect(preferHydratedQty(3_002_849, 0)).toBe(3_002_849)
+    expect(preferHydratedQty(0, 3_002_849)).toBe(3_002_849)
   })
 })
 
@@ -83,6 +93,16 @@ describe('resolveShipmentListDeliveredKg', () => {
     ).toBe(5_000_000)
   })
 
+  it('Close ignores stub SAP 0 and uses shipment header (STO 1006018954)', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_sap: 0,
+        quantity_delivered: 3_002_849,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(3_002_849)
+  })
+
   it('uses SAP when manual is 0 but SAP has delivery', () => {
     expect(
       resolveShipmentListDeliveredKg({
@@ -101,6 +121,17 @@ describe('resolveShipmentListDeliveredKg', () => {
     expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 500_000 })).toBe(500_000)
     expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 0 })).toBe(0)
     expect(resolveShipmentListDeliveredKg({})).toBeNull()
+  })
+
+  it('View Table shows 0 when KLIP and SAP delivery qty are both null', () => {
+    expect(shipmentListDeliveredKgForViewTable({})).toBe(0)
+    expect(
+      shipmentListDeliveredKgForViewTable({
+        quantity_delivered_klip: null,
+        quantity_delivered_sap: null,
+        quantity_delivered: null,
+      }),
+    ).toBe(0)
   })
 })
 
@@ -144,6 +175,16 @@ describe('resolveShipmentListReceiveKg', () => {
     ).toBe(241_610)
   })
 
+  it('Close ignores stub SAP receive 0 and uses vessel header', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        quantity_receive: 0,
+        actual_vessel_qty_receive: 3_002_849,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(3_002_849)
+  })
+
   it('GR Close STO 1016010610 pattern: hydrated SAP receive beats duplicate MNL KLIP row', () => {
     expect(
       resolveShipmentListReceiveKg({
@@ -162,6 +203,17 @@ describe('resolveShipmentListReceiveKg', () => {
         is_contract_sap_closed: false,
       }),
     ).toBe(497_115)
+  })
+
+  it('View Table shows 0 when KLIP and SAP receive qty are both null', () => {
+    expect(shipmentListReceiveKgForViewTable({})).toBe(0)
+    expect(
+      shipmentListReceiveKgForViewTable({
+        actual_vessel_qty_receive: null,
+        quantity_receive: null,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(0)
   })
 })
 

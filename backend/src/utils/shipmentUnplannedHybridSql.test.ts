@@ -15,6 +15,9 @@ describe('shipmentUnplannedHybridSql', () => {
     const sql = unplannedContractBacklogBaseWhereSql('c', 'l');
     expect(sql).toContain('NOT EXISTS');
     expect(sql).toContain('s_ns.contract_id = c.id');
+    expect(sql).toContain('contract_stos');
+    expect(sql).toContain('cs_self.contract_id = c.id');
+    expect(sql).toContain('IS DISTINCT FROM');
   });
 
   it('limits contract backlog to CIF/FOB/CFR incoterms (not SEA/MIX or STO Type T)', () => {
@@ -161,6 +164,22 @@ describe('buildAllHybridContractBacklogQuery', () => {
     const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'contract_date', 'ASC');
     expect(text).toContain('paged_contracts');
     expect(text).toContain("SELECT contract_id FROM paged_contracts");
+  });
+
+  it('computes qty_move before LIMIT when sorting ALL-hybrid backlog by outstanding qty', async () => {
+    const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'outstanding_quantity', 'DESC');
+    expect(text).not.toContain('paged_contracts');
+    expect(text).toContain('qty_move');
+    expect(text).toContain('ORDER BY outstanding_quantity DESC');
+    expect(text).toContain('LIMIT 20 OFFSET 0');
+  });
+
+  it('computes qty_move before LIMIT when sorting ALL-hybrid backlog by delivery qty', async () => {
+    const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
+    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'quantity_delivered', 'DESC');
+    expect(text).not.toContain('paged_contracts');
+    expect(text).toContain('ORDER BY quantity_delivered DESC');
   });
 
   it('projects status on ALL-hybrid candidates so sortKey=status is valid SQL', async () => {

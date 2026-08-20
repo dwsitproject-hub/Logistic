@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, Flag, GripVertical, HelpCircle, Loader2, MessageSquare, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, HelpCircle, Loader2, MessageSquare, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { isAuthenticatedLocally } from '@/lib/authSession'
@@ -137,6 +137,12 @@ import {
   mergeContractPerfColumnOrder,
   orderContractPerformanceColumns,
 } from '@/lib/contractPerformanceColumns'
+import {
+  buildContractPerfExportMatrix,
+  contractPerfQtySortValue,
+  formatContractViewTableReceiveQtyMt,
+  type ContractPerfExportColumn,
+} from '@/lib/contractPerformanceExport'
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -411,22 +417,6 @@ const CONTRACTS_HIDDEN_COLUMN_IDS = new Set([
   'log_cycle_days',
   'trade_cycle_days',
   'contract_aging',
-])
-
-/**
- * Full calendar-date columns (raw ISO value from `getSortValue`) shown as DD/MM/YYYY on screen.
- * Used by Contract Performance's "Download Table" export so cell values match the UI format
- * instead of the raw ISO string. Excludes `month_delivery_end`, which is a month-only value.
- */
-const CONTRACT_PERF_EXPORT_DATE_COLUMN_IDS = new Set([
-  'contract_date',
-  'eta_vessel_completed_loading',
-  'eta_vessel_complete_discharge',
-  'delivery_start',
-  'delivery_end',
-  'last_planning_delivery_date',
-  'cargo_readiness_date',
-  'created_at',
 ])
 
 /** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
@@ -2406,40 +2396,6 @@ function ContractsPageContent() {
     return Number.isFinite(n) && n > 0
   }
 
-  const getShippingIconColor = (c: Contract) => {
-    const hasShipping =
-      countGt0(c.shipment_count) || countGt0(c.sto_count)
-    if (!hasShipping) return 'text-gray-400'
-    const statusRaw = getContractStatusRaw(c)
-    const isCompleted = ['COMPLETED', 'CLOSE', 'CLOSED'].includes(statusRaw)
-    return isCompleted ? 'text-blue-600' : 'text-green-600'
-  }
-  const getTruckingIconColor = (c: Contract) => {
-    const hasTrucking = countGt0(c.trucking_count)
-    if (!hasTrucking) return 'text-gray-400'
-    const statusRaw = getContractStatusRaw(c)
-    const isCompleted = ['COMPLETED', 'CLOSE', 'CLOSED'].includes(statusRaw)
-    return isCompleted ? 'text-blue-600' : 'text-green-600'
-  }
-
-  const transportIsLand = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'LAND'
-  const transportIsSea = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'SEA'
-  const transportIsMix = (c: Contract) => String(c.transport_mode || '').toUpperCase() === 'MIX'
-
-  const showUrgentFlag = (c: Contract): boolean => {
-    if (!c.delivery_start_date) return false
-    const daysUntilDelivery = Math.floor(
-      (new Date(c.delivery_start_date).getTime() - Date.now()) / 86400000
-    )
-    if (daysUntilDelivery > 14) return false
-    const noShipment = !countGt0(c.shipment_count) && !countGt0(c.sto_count)
-    const noTrucking = !countGt0(c.trucking_count)
-    if (transportIsSea(c)) return noShipment
-    if (transportIsLand(c)) return noTrucking
-    if (transportIsMix(c)) return noShipment || noTrucking
-    return noShipment && noTrucking
-  }
-
   const handleTruckIconClick = (contract: Contract) => {
     const hasTrucking = countGt0(contract.trucking_count)
     if (!hasTrucking) {
@@ -2837,17 +2793,9 @@ function ContractsPageContent() {
             label: 'Contract',
             defaultVisible: !isContractPerformance,
             sortable: true,
-            formulaHelp: isContractPerformance ? undefined : FIELD_HELP.contractUrgentFlag,
             getSortValue: (c: Contract) => c.contract_id || '',
             render: (c: Contract) => (
-              <div className="flex items-center gap-1">
-                <OperationalNowrapCell value={c.contract_id} fallback="-" />
-                {showUrgentFlag(c) && !isContractPerformance && (
-                  <span title="Urgent: delivery window ≤14 days and missing shipment/STO or trucking per transport mode (see column help)" className="shrink-0 inline-flex">
-                    <Flag className="h-3.5 w-3.5 text-red-500 fill-red-500" />
-                  </span>
-                )}
-              </div>
+              <OperationalNowrapCell value={c.contract_id} fallback="-" />
             ),
           },
           poNumberColumn,
@@ -3006,7 +2954,7 @@ function ContractsPageContent() {
       label: 'Contract Qty',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (c) => typeof c.quantity_ordered === 'number' ? c.quantity_ordered : 0,
+      getSortValue: (c) => contractPerfQtySortValue(c.quantity_ordered),
       render: (c) => (
         <span className="text-sm truncate">
           {formatSapQtyMtDisplay(c.quantity_ordered)}
@@ -3019,7 +2967,7 @@ function ContractsPageContent() {
       formulaHelp: FIELD_HELP.deliveryQty,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (c) => typeof c.quantity_delivery === 'number' ? c.quantity_delivery : 0,
+      getSortValue: (c) => contractPerfQtySortValue(c.quantity_delivery),
       render: (c) => (
         <span className="text-sm truncate">
           {formatSapQtyMtDisplay(c.quantity_delivery)}
@@ -3032,10 +2980,10 @@ function ContractsPageContent() {
       formulaHelp: FIELD_HELP.receivedQty,
       defaultVisible: false,
       sortable: true,
-      getSortValue: (c) => typeof c.quantity_receive === 'number' ? c.quantity_receive : 0,
+      getSortValue: (c) => contractPerfQtySortValue(c.quantity_receive),
       render: (c) => (
         <span className="text-sm truncate">
-          {formatSapQtyMtDisplay(c.quantity_receive)}
+          {formatContractViewTableReceiveQtyMt(c.quantity_receive)}
         </span>
       )
     },
@@ -3065,7 +3013,7 @@ function ContractsPageContent() {
       formulaHelp: isContractPerformance ? FIELD_HELP.contractPerfOutstandingQty : FIELD_HELP.outstandingQtyMt,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (c) => typeof c.outstanding_quantity === 'number' ? c.outstanding_quantity : 0,
+      getSortValue: (c) => contractPerfQtySortValue(c.outstanding_quantity),
       render: (c) => {
         if (c.outstanding_quantity == null) {
           return <span className="text-sm truncate text-gray-500">-</span>
@@ -3315,101 +3263,6 @@ function ContractsPageContent() {
   }, [isContractPerformance, formatMonthDeliveryEnd, formatShortDate])
 
   /**
-   * Contract Performance "Download Table" — exports every row matching the currently active
-   * filters (across all pages, not just the current 20-row page) with ALL columns (regardless of
-   * the Columns picker's visible/hidden state), as .xlsx. Mirrors Trucking's
-   * `downloadFilteredActualsTemplate` fetch-all-pages loop.
-   */
-  const resolveContractPerfExportValue = (column: CompactColumn, c: Contract): string | number => {
-    if (column.id === 'delivery_status') {
-      return formatContractDeliveryStatusLabel(c.import_status || c.status) || ''
-    }
-    if (column.id === 'status_overall') {
-      return resolveContractStatusDisplay(c) || ''
-    }
-    if (column.id === 'unusual_status') {
-      return column.getSortValue?.(c) === 1 ? 'Unusual' : 'Normal'
-    }
-    if (column.id === 'over_under_delivery_status') {
-      return formatSapDisplayValue(c.over_under_delivery_status)
-    }
-    if (column.id === 'lt_spot') {
-      return formatSapDisplayValue(c.lt_spot)
-    }
-    if (CONTRACT_PERF_EXPORT_DATE_COLUMN_IDS.has(column.id)) {
-      const raw = column.getSortValue ? column.getSortValue(c) : ''
-      return raw ? formatDateDMY(String(raw)) : ''
-    }
-    return column.getSortValue ? column.getSortValue(c) : ''
-  }
-
-  const downloadContractPerformanceTable = async () => {
-    if (!isContractPerformance || downloadingTable) return
-    setDownloadingTable(true)
-    try {
-      const exportPageSize = 500
-      const collected: Contract[] = []
-      let page = 1
-      let totalPages = 1
-      while (page <= totalPages) {
-        const params = buildContractPerfTableListParams({
-          scope: contractPerfSection3Scope,
-          section3Mode: section3FilterMode,
-          columnFilters,
-          lateOnTimeFilter,
-          perfDashMode,
-        })
-        params.set('page', String(page))
-        params.set('limit', String(exportPageSize))
-        const apiSortKey = resolveApiSortKey(sortKey)
-        if (apiSortKey) {
-          params.set('sortKey', apiSortKey)
-          params.set('sortDir', sortDir)
-        }
-        const response = await api.get(`/contracts?${params.toString()}`)
-        const envelope = response.data as {
-          data?: { contracts?: Contract[]; pagination?: { totalPages?: number } }
-        }
-        collected.push(...(envelope?.data?.contracts || []))
-        totalPages = Number(envelope?.data?.pagination?.totalPages || 1)
-        page += 1
-      }
-
-      if (collected.length === 0) {
-        alert('No contracts match the current filters.')
-        return
-      }
-
-      const header = compactColumns.map((col) => col.label)
-      const rows = collected.map((c) => compactColumns.map((col) => resolveContractPerfExportValue(col, c)))
-      const matrix = [header, ...rows]
-
-      const ws = XLSX.utils.aoa_to_sheet(matrix)
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'Contract Performance')
-      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-      const blob = new Blob([buf], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      })
-
-      const today = new Date().toISOString().slice(0, 10)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `contract-performance-${today}.xlsx`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('Failed to download Contract Performance table:', error)
-      alert('Failed to download table. Please try again.')
-    } finally {
-      setDownloadingTable(false)
-    }
-  }
-
-  /**
    * Same arrays as {@link defaultCompactVisibleColumnIds}; kept for reset + deps.
    */
   const defaultVisibleColumnIds = useMemo(
@@ -3621,6 +3474,86 @@ function ContractsPageContent() {
       .filter((c): c is CompactColumn => Boolean(c) && !visibleIds.has((c as CompactColumn).id))
     return [...visible, ...missing]
   }, [columnOrderIds, compactColumns, isContractPerformance, visibleColumnIds])
+
+  /**
+   * Contract Performance "Download Table" — every filtered row (all pages), but only
+   * columns the user currently has visible, in the same order as the table.
+   */
+  const downloadContractPerformanceTable = async () => {
+    if (!isContractPerformance || downloadingTable) return
+    setDownloadingTable(true)
+    try {
+      const exportColumns = visibleColumns
+      if (exportColumns.length === 0) {
+        alert('No visible columns to download. Enable at least one column in Columns.')
+        return
+      }
+
+      const exportPageSize = 500
+      const collected: Contract[] = []
+      let page = 1
+      let totalPages = 1
+      while (page <= totalPages) {
+        const params = buildContractPerfTableListParams({
+          scope: contractPerfSection3Scope,
+          section3Mode: section3FilterMode,
+          columnFilters,
+          lateOnTimeFilter,
+          perfDashMode,
+        })
+        params.set('page', String(page))
+        params.set('limit', String(exportPageSize))
+        const apiSortKey = resolveApiSortKey(sortKey)
+        if (apiSortKey) {
+          params.set('sortKey', apiSortKey)
+          params.set('sortDir', sortDir)
+        }
+        const response = await api.get(`/contracts?${params.toString()}`)
+        const envelope = response.data as {
+          data?: { contracts?: Contract[]; pagination?: { totalPages?: number } }
+        }
+        collected.push(...(envelope?.data?.contracts || []))
+        totalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        page += 1
+      }
+
+      if (collected.length === 0) {
+        alert('No contracts match the current filters.')
+        return
+      }
+
+      const matrix = buildContractPerfExportMatrix(
+        exportColumns as ContractPerfExportColumn[],
+        collected,
+        {
+          formatStatusOverall: (row) => resolveContractStatusDisplay(row as Contract),
+        },
+      )
+
+      const ws = XLSX.utils.aoa_to_sheet(matrix)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Contract Performance')
+      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+      const blob = new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+
+      const today = new Date().toISOString().slice(0, 10)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `contract-performance-${today}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Failed to download Contract Performance table:', error)
+      alert('Failed to download table. Please try again.')
+    } finally {
+      setDownloadingTable(false)
+    }
+  }
 
   const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
 

@@ -4,6 +4,8 @@ import {
   buildVesselLoadingPortsFromSapParsedData,
   extractLoadingPortNamesFromSapData,
   isValidHumanPortName,
+  mergeSapQualitySnapshot,
+  mergeSapSnapshot,
   resolvePrimarySapDischargePortText,
   resolvePrimarySapLoadingPortText,
   resolveSapLoadingPortTextBySequence,
@@ -130,6 +132,15 @@ describe('vesselLoadingPortsFromSap.service', () => {
     expect(sapLoadingPortSequenceKey(1)).toBe(1);
     expect(sapLoadingPortSequenceKey(2)).toBe(2);
     expect(sapLoadingPortSequenceKey(3)).toBe(3);
+  });
+
+  it('clears SAP snapshot when latest import is blank, including quality 0', () => {
+    expect(mergeSapSnapshot(null, '2026-01-01')).toBeNull();
+    expect(mergeSapSnapshot('', '2026-01-01')).toBeNull();
+    expect(mergeSapSnapshot('2026-02-01', '2026-01-01')).toBe('2026-02-01');
+    expect(mergeSapQualitySnapshot(0)).toBeNull();
+    expect(mergeSapQualitySnapshot('0.000')).toBeNull();
+    expect(mergeSapQualitySnapshot(0.25)).toBe(0.25);
   });
 
   it('sync cancels numeric junk ports (source asserts cancel helper exists)', () => {

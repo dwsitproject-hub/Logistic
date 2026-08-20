@@ -34,6 +34,7 @@ import {
 } from '../utils/truckingQuantitySql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
 import { sqlContractInActiveLogisticsOpenOsExpr } from '../utils/contractLogisticsOpenOsSql';
+import { sqlActiveSeaStoSiblingContractIdsCte } from '../utils/seaStoSiblingSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
@@ -276,6 +277,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
       ${contractsLatestSpdCte},
       ${contractsQtyMoveCte},
       ${contractsStoAggCte},
+      ${sqlActiveSeaStoSiblingContractIdsCte()},
       base AS (
         SELECT
           c.contract_id,
@@ -388,6 +390,8 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           contractUuidExpr: 'base.id',
           contractNumberExpr: 'base.contract_id',
           incotermExpr: 'base.incoterm',
+          sharesActiveSeaStoExpr:
+            'EXISTS (SELECT 1 FROM active_sea_sto_sibling_ids sib WHERE sib.contract_id = base.id)',
         })}) AS in_logistics_open_os
       FROM base
       LEFT JOIN LATERAL (

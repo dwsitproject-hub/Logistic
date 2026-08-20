@@ -170,15 +170,36 @@ export function resolveShipmentListDeliveredKg(shipment: {
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
 
   if (closed) {
-    if (sap !== null) return sap
+    if (isMeaningfulManualShipmentQtyKg(sap)) return sap
     if (isMeaningfulManualShipmentQtyKg(legacy)) return legacy
-    return isMeaningfulManualShipmentQtyKg(klip) ? klip : null
+    if (isMeaningfulManualShipmentQtyKg(klip)) return klip
+    return sap
   }
   if (isMeaningfulManualShipmentQtyKg(klip)) {
     return klip
   }
-  if (sap !== null) return sap
-  return legacy
+  if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+  return legacy ?? sap
+}
+
+/**
+ * Shipments View Table only: empty Delivery Qty (KLIP + SAP null) shows 0, same as Receive / OS.
+ * Edit/View Shipment modal must keep null → "—" via MtQtyReadOnly.
+ */
+export function shipmentListDeliveredKgForViewTable(
+  shipment: Parameters<typeof resolveShipmentListDeliveredKg>[0],
+): number {
+  return resolveShipmentListDeliveredKg(shipment) ?? 0
+}
+
+/**
+ * Shipments View Table only: empty Received Qty (KLIP + SAP null) shows 0.
+ * Edit/View Shipment modal must keep null → "—" via MtQtyReadOnly.
+ */
+export function shipmentListReceiveKgForViewTable(
+  shipment: Parameters<typeof resolveShipmentListReceiveKg>[0],
+): number {
+  return resolveShipmentListReceiveKg(shipment) ?? 0
 }
 
 /**
@@ -198,14 +219,27 @@ export function resolveShipmentListReceiveKg(shipment: {
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
 
   if (closed) {
-    if (sap !== null) return sap
-    return isMeaningfulManualShipmentQtyKg(klip) ? klip : null
+    if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+    if (isMeaningfulManualShipmentQtyKg(klip)) return klip
+    return sap
   }
   if (isMeaningfulManualShipmentQtyKg(klip)) {
     return klip
   }
-  if (sap !== null) return sap
-  return klip
+  if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+  return klip ?? sap
+}
+
+/** Hydrate must not keep a shell 0 that was a qty_move stub. */
+export function preferHydratedQty(
+  hydrated: number | string | null | undefined,
+  shell: number | string | null | undefined,
+): number | undefined {
+  const h = shipmentStoredQtyKg(hydrated)
+  if (h !== null && h !== 0) return h
+  const s = shipmentStoredQtyKg(shell)
+  if (s !== null && s !== 0) return s
+  return h ?? s ?? undefined
 }
 
 export function resolveShipmentListStoKg(shipment: {

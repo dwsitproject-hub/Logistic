@@ -2,8 +2,8 @@
 export const SHIPMENT_ATA_OVERRIDES_JOIN = `
   LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id`;
 
-/** SAP/base ATA from shipments + first loading/discharge port (no manual override). */
-export function sqlSapAtaArrivalLoading(
+/** Stored KLIP ATA (shipments + port) — not the SAP snapshot. */
+export function sqlKlipStoredAtaArrivalLoading(
   sAlias = 's',
   vlpAlias = 'vlp1',
   vlpCol = 'ata_vessel_arrival',
@@ -11,77 +11,121 @@ export function sqlSapAtaArrivalLoading(
   return `COALESCE(${sAlias}.ata_arrival, ${vlpAlias}.${vlpCol}::date)`;
 }
 
-export function sqlSapAtaBerthedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
+export function sqlKlipStoredAtaBerthedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
   return `COALESCE(${sAlias}.ata_berthed, ${vlpAlias}.ata_vessel_berthed::date)`;
 }
 
-export function sqlSapAtaStartLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
+export function sqlKlipStoredAtaStartLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
   return `COALESCE(${sAlias}.ata_loading_start, ${vlpAlias}.ata_loading_start::date)`;
 }
 
-export function sqlSapAtaCompletedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
+export function sqlKlipStoredAtaCompletedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
   return `COALESCE(${sAlias}.ata_loading_complete, ${vlpAlias}.ata_loading_completed::date)`;
 }
 
-export function sqlSapAtaSailedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
+export function sqlKlipStoredAtaSailedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
   return `COALESCE(${sAlias}.ata_sailed, ${vlpAlias}.ata_vessel_sailed::date)`;
 }
 
-export function sqlSapAtaArrivalDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
+export function sqlKlipStoredAtaArrivalDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
   return `COALESCE(${sAlias}.ata_discharge_arrival, ${vlpAlias}.ata_vessel_arrival::date)`;
 }
 
-export function sqlSapAtaBerthedDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
+export function sqlKlipStoredAtaBerthedDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
   return `COALESCE(${sAlias}.ata_discharge_berthed, ${vlpAlias}.ata_vessel_berthed::date)`;
 }
 
-export function sqlSapAtaStartDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
+export function sqlKlipStoredAtaStartDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
   return `COALESCE(${sAlias}.ata_discharge_start, ${vlpAlias}.ata_loading_start::date)`;
 }
 
-export function sqlSapAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
+export function sqlKlipStoredAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
   return `COALESCE(${sAlias}.ata_discharge_complete, ${vlpAlias}.ata_loading_completed::date)`;
 }
 
-/** Effective ATA: manual override first, then SAP/base chain. */
+/**
+ * SAP ATA snapshot only (`vessel_loading_ports.sap_ata_*`).
+ * Never COALESCE to KLIP stored ATA — empty SAP must stay NULL in the compare UI.
+ */
+export function sqlSapAtaArrivalLoading(
+  _sAlias = 's',
+  vlpAlias = 'vlp1',
+  _vlpCol = 'ata_vessel_arrival',
+): string {
+  return `${vlpAlias}.sap_ata_vessel_arrival`;
+}
+
+export function sqlSapAtaBerthedLoading(_sAlias = 's', vlpAlias = 'vlp1'): string {
+  return `${vlpAlias}.sap_ata_vessel_berthed`;
+}
+
+export function sqlSapAtaStartLoading(_sAlias = 's', vlpAlias = 'vlp1'): string {
+  return `${vlpAlias}.sap_ata_loading_start`;
+}
+
+export function sqlSapAtaCompletedLoading(_sAlias = 's', vlpAlias = 'vlp1'): string {
+  return `${vlpAlias}.sap_ata_loading_completed`;
+}
+
+export function sqlSapAtaSailedLoading(_sAlias = 's', vlpAlias = 'vlp1'): string {
+  return `${vlpAlias}.sap_ata_vessel_sailed`;
+}
+
+export function sqlSapAtaArrivalDischarge(_sAlias = 's', vlpAlias = 'vlpd'): string {
+  return `${vlpAlias}.sap_ata_vessel_arrival`;
+}
+
+export function sqlSapAtaBerthedDischarge(_sAlias = 's', vlpAlias = 'vlpd'): string {
+  return `${vlpAlias}.sap_ata_vessel_berthed`;
+}
+
+export function sqlSapAtaStartDischarge(_sAlias = 's', vlpAlias = 'vlpd'): string {
+  return `${vlpAlias}.sap_ata_loading_start`;
+}
+
+export function sqlSapAtaCompleteDischarge(_sAlias = 's', vlpAlias = 'vlpd'): string {
+  return `${vlpAlias}.sap_ata_loading_completed`;
+}
+
+/** Effective ATA: manual override first, then stored KLIP ATA (not SAP snapshot). */
 export function sqlEffectiveAtaArrivalLoading(
   sAlias = 's',
   vlpAlias = 'vlp1',
   vlpCol = 'ata_vessel_arrival',
 ): string {
-  return `COALESCE(sao.ata_arrival, ${sqlSapAtaArrivalLoading(sAlias, vlpAlias, vlpCol)})`;
+  return `COALESCE(sao.ata_arrival, ${sqlKlipStoredAtaArrivalLoading(sAlias, vlpAlias, vlpCol)})`;
 }
 
 export function sqlEffectiveAtaBerthedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
-  return `COALESCE(sao.ata_berthed, ${sqlSapAtaBerthedLoading(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_berthed, ${sqlKlipStoredAtaBerthedLoading(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaStartLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
-  return `COALESCE(sao.ata_loading_start, ${sqlSapAtaStartLoading(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_loading_start, ${sqlKlipStoredAtaStartLoading(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaCompletedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
-  return `COALESCE(sao.ata_loading_complete, ${sqlSapAtaCompletedLoading(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_loading_complete, ${sqlKlipStoredAtaCompletedLoading(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaSailedLoading(sAlias = 's', vlpAlias = 'vlp1'): string {
-  return `COALESCE(sao.ata_sailed, ${sqlSapAtaSailedLoading(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_sailed, ${sqlKlipStoredAtaSailedLoading(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaArrivalDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_arrival, ${sqlSapAtaArrivalDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_discharge_arrival, ${sqlKlipStoredAtaArrivalDischarge(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaBerthedDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_berthed, ${sqlSapAtaBerthedDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_discharge_berthed, ${sqlKlipStoredAtaBerthedDischarge(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaStartDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_start, ${sqlSapAtaStartDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_discharge_start, ${sqlKlipStoredAtaStartDischarge(sAlias, vlpAlias)})`;
 }
 
 export function sqlEffectiveAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'): string {
-  return `COALESCE(sao.ata_discharge_complete, ${sqlSapAtaCompleteDischarge(sAlias, vlpAlias)})`;
+  return `COALESCE(sao.ata_discharge_complete, ${sqlKlipStoredAtaCompleteDischarge(sAlias, vlpAlias)})`;
 }
 
 /** List query ATA select (uses vlp_l / vlp_d CTE aliases). */

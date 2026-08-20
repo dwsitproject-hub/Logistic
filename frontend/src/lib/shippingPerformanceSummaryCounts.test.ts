@@ -37,7 +37,7 @@ describe('shippingPerformanceSummaryCounts', () => {
     expect(isCountableShippingPerfVessel('MV ONE')).toBe(true)
   })
 
-  it('By Vessel grouping should only keep countable vessel names (Section 1 parity)', () => {
+  it('By Vessel grouping still lists countable vessel names only', () => {
     const rows = [
       { vessel_name: 'MV ONE' },
       { vessel_name: null },

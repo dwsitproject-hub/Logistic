@@ -94,7 +94,7 @@ import {
   sqlShipmentGroupStatusFloorAgg,
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
-import { parseShipmentListSort } from '../utils/shipmentListSortSql';
+import { parseShipmentListSort, shipmentListSortUsesEnrichedPath } from '../utils/shipmentListSortSql';
 import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
   buildRankedStoCtes,
@@ -528,11 +528,13 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const outstandingQtyOnly =
       String((req.query as any).outstandingQtyOnly || '').toLowerCase() === 'true';
     /** Skip heavy SAP table joins (compact list first paint; hydrate with a second request). */
-    const skipSapJoin =
+    const skipSapJoinRequested =
       compact &&
       String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true' &&
       !summaryOnly &&
       !outstandingQtyOnly;
+    /** Qty/port sorts must enrich before LIMIT or ORDER BY silently becomes created_at. */
+    const skipSapJoin = skipSapJoinRequested && !shipmentListSortUsesEnrichedPath(listSortKey);
 
     // Query shipments grouped by STO number or Operation ID:
     // - SAP shipments are grouped by contracts.sto_number

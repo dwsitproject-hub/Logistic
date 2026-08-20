@@ -125,18 +125,24 @@ export function shipmentListRowQtyMoveReceiveSql(spAlias = 'sp'): string {
   return shipmentListRowQtyMoveScalarSql(spAlias, 'qm.quantity_receive');
 }
 
-/** sto_metrics → sap_agg → qty_move (modal uses the same SAP fields via contract details). */
+/** sto_metrics → sap_agg → shipment header → qty_move (skip 0 stubs). */
 export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
   return sqlCoalesceNonZeroQty(
-    sqlCoalesceNonZeroQty('sm.delivered_qty', 'sa.quantity_delivered_sap'),
-    shipmentListRowQtyMoveDeliverySql(spAlias),
+    sqlCoalesceNonZeroQty(
+      sqlCoalesceNonZeroQty('sm.delivered_qty', 'sa.quantity_delivered_sap'),
+      `${spAlias}.quantity_delivered`,
+    ),
+    `NULLIF((${shipmentListRowQtyMoveDeliverySql(spAlias)})::numeric, 0)`,
   );
 }
 
 export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
   return sqlCoalesceNonZeroQty(
-    sqlCoalesceNonZeroQty('sm.received_qty', 'sa.quantity_receive'),
-    shipmentListRowQtyMoveReceiveSql(spAlias),
+    sqlCoalesceNonZeroQty(
+      sqlCoalesceNonZeroQty('sm.received_qty', 'sa.quantity_receive'),
+      `${spAlias}.actual_vessel_qty_receive`,
+    ),
+    `NULLIF((${shipmentListRowQtyMoveReceiveSql(spAlias)})::numeric, 0)`,
   );
 }
 

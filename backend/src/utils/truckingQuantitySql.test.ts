@@ -32,11 +32,12 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('Quantity Delivered via Trucking');
   });
 
-  it('sqlSapQtyDeliveryOnly does not coalesce trucking_operations column', () => {
+  it('sqlSapQtyDeliveryOnly skips SAP 0 placeholders so Quantity Delivery can win', () => {
     const sql = sqlSapQtyDeliveryOnly();
+    expect(sql).toContain("data->'raw'->>'Quantity Delivery Trucking'");
+    expect(sql).toContain("data->'raw'->>'Quantity Delivery'");
+    expect(sql).toContain('^-?0+(\\.0*)?$');
     expect(sql).not.toContain('t.quantity_delivered');
-    expect(sql).toContain('Quantity Delivery Trucking');
-    expect(sql).toContain('Quantity Delivered via Trucking');
   });
 
   it('sqlSapQtyReceiveOnly reads receive keys only', () => {
@@ -126,6 +127,8 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('max_qty');
     expect(sql).toContain('* 1.2');
     expect(sql).toContain('* 0.95');
+    expect(sql).toContain('cx.contract_id');
+    expect(sql).not.toContain('spd.contract_number = e.contract_number');
   });
 
   it('sqlTruckingPoLevelSapReceiveQty sums latest receive per STO with MT→kg normalize and dedup', () => {
@@ -154,6 +157,8 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('e.po_number');
     expect(sql).toContain('e.contract_qty');
     expect(sql).toContain('DISTINCT ON');
+    expect(sql).toContain('cx.contract_id');
+    expect(sql).not.toContain('e.contract_number');
   });
 
   it('sqlTruckingOutstandingWithinToleranceExpr allows residual band and over-delivery', () => {

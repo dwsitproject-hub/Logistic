@@ -13,6 +13,7 @@ import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql
 import { SHIPMENT_PAGE_SEA_INCOTERMS } from './shipmentIncotermScope';
 import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
 import { BACKLOG_OS_COMPLETED_MAX_KG } from './shipmentUnplannedHybridSql';
+import { sqlContractSharesNumericStoWithActiveSeaShipmentExpr } from './seaStoSiblingSql';
 import { contractEffectiveIncotermExpr, TRUCKING_PAGE_INCOTERMS } from './truckingIncotermScope';
 import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 import { sqlTruckingPipelineIsCompletedExpr } from './truckingQuantitySql';
@@ -37,14 +38,23 @@ function sqlContractQtyMoveOsKg(contractNumberExpr: string, incotermExpr: string
 }
 
 /** Non-cancelled shipment still on the active OS pipeline (Completed = GR Close only). */
-function sqlHasActiveSeaShipment(contractUuidExpr: string): string {
-  return `EXISTS (
-    SELECT 1
-    FROM shipments s
-    INNER JOIN contracts sc ON sc.id = s.contract_id
-    WHERE s.contract_id = ${contractUuidExpr}
-      AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
-      AND NOT (${sqlIsContractSapClosedExpr('sc')})
+function sqlHasActiveSeaShipment(
+  contractUuidExpr: string,
+  sharesActiveSeaStoExpr?: string,
+): string {
+  const sibling =
+    sharesActiveSeaStoExpr ??
+    sqlContractSharesNumericStoWithActiveSeaShipmentExpr(contractUuidExpr);
+  return `(
+    EXISTS (
+      SELECT 1
+      FROM shipments s
+      INNER JOIN contracts sc ON sc.id = s.contract_id
+      WHERE s.contract_id = ${contractUuidExpr}
+        AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+        AND NOT (${sqlIsContractSapClosedExpr('sc')})
+    )
+    OR ${sibling}
   )`;
 }
 
@@ -120,13 +130,15 @@ export function sqlContractInActiveLogisticsOpenOsExpr(opts: {
   contractUuidExpr: string;
   contractNumberExpr: string;
   incotermExpr: string;
+  /** Precomputed sibling predicate (e.g. `base.id IN (SELECT …)` from a once-built CTE). */
+  sharesActiveSeaStoExpr?: string;
 }): string {
-  const { contractUuidExpr, contractNumberExpr, incotermExpr } = opts;
+  const { contractUuidExpr, contractNumberExpr, incotermExpr, sharesActiveSeaStoExpr } = opts;
   const osKg = sqlContractQtyMoveOsKg(contractNumberExpr, incotermExpr);
   const seaActive = `(
     ${sqlIncotermIsSeaLogistics(incotermExpr)}
     AND (
-      ${sqlHasActiveSeaShipment(contractUuidExpr)}
+      ${sqlHasActiveSeaShipment(contractUuidExpr, sharesActiveSeaStoExpr)}
       OR (
         NOT ${sqlHasAnySeaShipment(contractUuidExpr)}
         AND ${sqlHasSeaStripBacklog(contractUuidExpr)}

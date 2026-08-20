@@ -2,6 +2,7 @@
 
 import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
 import { sqlSapQtyTruckingFromSpd, sqlSapQtyVesselFromSpd } from './sapIncotermMetrics';
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 
 export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
   spd.sto_number::text,
@@ -88,7 +89,9 @@ function sqlLatestSapDateField(rawKeys: string[]): string {
 }
 
 const QTY_NUM = (fields: string[]) =>
-  `NULLIF(regexp_replace(COALESCE(${fields.map((f) => `NULLIF(TRIM(spd.data->'raw'->>'${f.replace(/'/g, "''")}'), '')`).join(', ')}, ''), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+  `NULLIF(regexp_replace(COALESCE(${sqlCoalesceSapRawQtyFields(
+    fields.map((f) => `spd.data->'raw'->>'${f.replace(/'/g, "''")}'`),
+  )}, ''), '[^0-9\\.-]', '', 'g'), '')::numeric`;
 
 /** SAP delivery qty (kg): trucking fields first, then vessel — MT-scale values normalized via contract qty. */
 export function sqlSapQtyDeliveredAnyFromSpd(spdAlias = 'spd'): string {
@@ -120,7 +123,10 @@ export function sqlSpdPoNumberExpr(spdAlias = 'spd'): string {
 export const SPD_PO_NUMBER_SQL = sqlSpdPoNumberExpr('spd');
 
 const SPD_QTY_RECEIVE_RAW_NUM = `NULLIF(regexp_replace(COALESCE(
-  NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), ''),
+  ${sqlCoalesceSapRawQtyFields([
+    `spd.data->'raw'->>'Quantity Receive'`,
+    `spd.data->'raw'->>'Qty Receive'`,
+  ])},
   ''
 ), '[^0-9\\.-]', '', 'g'), '')::numeric`;
 
@@ -167,7 +173,10 @@ export function sqlStoScopedReceiveKgSql(opts: StoScopedQtySqlOpts): string {
     FROM sap_processed_data spd
     WHERE spd.contract_number = ${opts.contractNumberExpr}
       AND ${stoMatch}
-      AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
+      AND NULLIF(TRIM(${sqlCoalesceSapRawQtyFields([
+        `spd.data->'raw'->>'Quantity Receive'`,
+        `spd.data->'raw'->>'Qty Receive'`,
+      ])}), '') IS NOT NULL
       AND ${poMatch}
   )`;
 }
@@ -315,8 +324,10 @@ export function sqlSapQtyReceiveForStoKeyExpr(opts: {
   const stoKey = opts.stoKeyExpr;
   return `COALESCE((
     SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
+      ${sqlCoalesceSapRawQtyFields([
+        `spd.data->'raw'->>'Quantity Receive'`,
+        `spd.data->'raw'->>'Qty Receive'`,
+      ])},
       ''
     ), '[^0-9\\.-]', '', 'g'), '')::numeric)
     FROM sap_processed_data spd

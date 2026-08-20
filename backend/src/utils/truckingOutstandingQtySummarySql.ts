@@ -1,9 +1,10 @@
 /**
  * Trucking page — Outstanding Qty KPI strip (FRC/LCO × Interco / 3rd Party).
  *
- * Strip total = Unplanned OS + Planned/In Progress OS (clamped at 0 per PO).
- * Same numbers as the status cards. 3rd Party / Interco slice that mix
- * by source × FRC/LCO; residual is otherKg.
+ * Strip total = Unplanned OS + Planned/In Progress OS (clamped at 0, one row
+ * per contract_number — furthest active stage wins). Status cards still group
+ * by status × contract. 3rd Party / Interco slice that mix by source × FRC/LCO;
+ * residual is otherKg.
  */
 
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
@@ -68,6 +69,34 @@ export function sqlTruckingIncotermIsFrc(expr: string): string {
 
 export function sqlTruckingIncotermIsLco(expr: string): string {
   return `UPPER(TRIM(COALESCE(${expr}, ''))) = 'LCO'`;
+}
+
+/** Furthest active trucking stage wins when one PO sits on Unplanned and Planned/IP. */
+export function sqlTruckingOsActiveStageRankExpr(statusExpr: string): string {
+  return `CASE ${statusExpr}
+    WHEN 'IN_PROGRESS' THEN 3
+    WHEN 'PLANNED' THEN 2
+    WHEN 'UNPLANNED' THEN 1
+    ELSE 0
+  END`;
+}
+
+/**
+ * One OS row per contract_number for the strip KPI (status cards stay GROUP BY status).
+ */
+export function sqlTruckingOsPerContractSelect(opts: { fromSql: string; alias: string }): string {
+  const { fromSql, alias } = opts;
+  return `SELECT DISTINCT ON (TRIM(${alias}.contract_number::text))
+      ${alias}.status,
+      ${alias}.contract_number,
+      GREATEST(0, COALESCE(${alias}.outstanding_quantity, 0))::numeric AS outstanding_quantity,
+      NULLIF(TRIM(COALESCE(${alias}.source_type::text, '')), '') AS source_type,
+      NULLIF(TRIM(COALESCE(${alias}.incoterm::text, '')), '') AS incoterm
+    FROM ${fromSql}
+    WHERE NULLIF(TRIM(COALESCE(${alias}.contract_number::text, '')), '') IS NOT NULL
+      AND ${alias}.status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
+    ORDER BY TRIM(${alias}.contract_number::text),
+      ${sqlTruckingOsActiveStageRankExpr(`${alias}.status`)} DESC`;
 }
 
 /**
@@ -209,8 +238,10 @@ export function mergeTruckingOutstandingQtySummaries(
 }
 
 /**
- * Aggregate strip qty from trucking execution rows at PO grain.
+ * Aggregate strip qty from trucking execution rows at contract grain.
  * Unplanned / Planned / In Progress = outstanding qty (clamped at 0).
+ * One row per contract_number (furthest active stage) so OS is not doubled
+ * when the same PO sits on Unplanned and Planned/In Progress.
  */
 export function buildTruckingOutstandingQtyExecutionAggregateQuery(
   built: TruckingOutstandingQtyBuiltQuery,
@@ -243,17 +274,7 @@ export function buildTruckingOutstandingQtyExecutionAggregateQuery(
       ) expanded_sub
     ),
     per_contract AS (
-      SELECT
-        tf.status,
-        tf.contract_number,
-        MAX(COALESCE(tf.contract_qty, 0))::numeric AS contract_qty,
-        GREATEST(0, MAX(COALESCE(tf.outstanding_quantity, 0)))::numeric AS outstanding_quantity,
-        MAX(NULLIF(TRIM(COALESCE(tf.source_type::text, '')), '')) AS source_type,
-        MAX(NULLIF(TRIM(COALESCE(tf.incoterm::text, '')), '')) AS incoterm
-      FROM trucking_filtered tf
-      WHERE NULLIF(TRIM(COALESCE(tf.contract_number::text, '')), '') IS NOT NULL
-        AND tf.status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
-      GROUP BY tf.status, tf.contract_number
+      ${sqlTruckingOsPerContractSelect({ fromSql: 'trucking_filtered tf', alias: 'tf' })}
     )
     SELECT
       ${sqlTruckingOutstandingQtyAggregateSelect(lineQty, 'pc.source_type', 'pc.incoterm')},

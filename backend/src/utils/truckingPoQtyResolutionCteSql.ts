@@ -31,13 +31,13 @@ const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
 /**
  * Grouped translation of `sqlTruckingPoLevelSapQtyWithDedup`:
  * `latest_per_sto` -> `normalized` -> `metrics` -> `adj` -> final CASE,
- * computed once per distinct `(contract_id, contract_number, po_number)` key
+ * computed once per distinct `(contract_id, po_number)` key
  * found in `expandedRelation`, instead of once per output row.
  *
- * Matches the original row-match key exactly (`contract_number` string
- * equality, including the rare multi-contract STRING_AGG display value on
- * grouped LAND rows) by sourcing `contract_number` from the expanded rows
- * themselves rather than re-deriving it from `contracts`.
+ * Match SAP rows by the row's own contract number (`contracts.contract_id`),
+ * not the list display `e.contract_number`. That display is STRING_AGG'd when
+ * two LAND POs share an operation_id, so equality with sap_processed_data
+ * never hits and GR Close Delivery/Receive collapse to 0.
  */
 function buildSapPoDedupCte(opts: {
   cteName: string;
@@ -59,11 +59,9 @@ function buildSapPoDedupCte(opts: {
     ${cteName}_keys AS MATERIALIZED (
       SELECT DISTINCT
         e.contract_id AS contract_uuid,
-        e.contract_number,
         e.po_number
       FROM ${expandedRelation} e
       WHERE e.contract_id IS NOT NULL
-        AND NULLIF(TRIM(COALESCE(e.contract_number::text, '')), '') IS NOT NULL
     ),
     ${cteName}_latest AS MATERIALIZED (
       SELECT DISTINCT ON (k.contract_uuid, ${stoKey})
@@ -73,7 +71,7 @@ function buildSapPoDedupCte(opts: {
       FROM ${cteName}_keys k
       INNER JOIN contracts c ON c.id = k.contract_uuid
       INNER JOIN sap_processed_data spd
-        ON spd.contract_number = k.contract_number
+        ON spd.contract_number = c.contract_id
        AND ${match}
       WHERE ${rawPresent}
       ORDER BY k.contract_uuid, ${stoKey}, spd.created_at DESC NULLS LAST

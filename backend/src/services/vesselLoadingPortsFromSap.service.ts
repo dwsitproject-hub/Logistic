@@ -658,12 +658,12 @@ async function upsertVesselLoadingPortRow(
     current?.sap_ata_loading_completed,
   );
   const sapAtaSailed = mergeSapSnapshot(port.ata_vessel_sailed, current?.sap_ata_vessel_sailed);
-  const sapQualityFfa = mergeSapSnapshot(port.quality_ffa, current?.sap_quality_ffa);
-  const sapQualityMi = mergeSapSnapshot(port.quality_mi, current?.sap_quality_mi);
-  const sapQualityDobi = mergeSapSnapshot(port.quality_dobi, current?.sap_quality_dobi);
-  const sapQualityRed = mergeSapSnapshot(port.quality_red, current?.sap_quality_red);
-  const sapQualityDs = mergeSapSnapshot(port.quality_ds, current?.sap_quality_ds);
-  const sapQualityStone = mergeSapSnapshot(port.quality_stone, current?.sap_quality_stone);
+  const sapQualityFfa = mergeSapQualitySnapshot(port.quality_ffa);
+  const sapQualityMi = mergeSapQualitySnapshot(port.quality_mi);
+  const sapQualityDobi = mergeSapQualitySnapshot(port.quality_dobi);
+  const sapQualityRed = mergeSapQualitySnapshot(port.quality_red);
+  const sapQualityDs = mergeSapQualitySnapshot(port.quality_ds);
+  const sapQualityStone = mergeSapQualitySnapshot(port.quality_stone);
   const values = [
     port.port_name,
     port.port_sequence,
@@ -887,14 +887,23 @@ export function mergeSapPortQuality(incoming: unknown, current: unknown): unknow
   return incoming !== null && incoming !== undefined ? incoming : current ?? null;
 }
 
-/** SAP snapshot columns — refresh from import when incoming has a value; KLIP saves never touch these. */
-export function mergeSapSnapshot(incoming: unknown, current: unknown): unknown {
+/** Latest SAP import wins, including blank — snapshot must not keep a stale KLIP/previous value. */
+export function mergeSapSnapshot(incoming: unknown, _current: unknown): unknown {
   const hasIncoming =
     incoming !== null &&
     incoming !== undefined &&
     !(typeof incoming === 'string' && incoming.trim() === '');
-  if (!hasIncoming) return current ?? null;
+  if (!hasIncoming) return null;
   return incoming;
+}
+
+/** Quality snapshot: SAP 0.000 means absent, so store null (SAP chip shows —). */
+export function mergeSapQualitySnapshot(incoming: unknown): unknown {
+  const snap = mergeSapSnapshot(incoming, null);
+  if (snap == null) return null;
+  const n = Number(snap);
+  if (Number.isFinite(n) && n === 0) return null;
+  return snap;
 }
 
 /**

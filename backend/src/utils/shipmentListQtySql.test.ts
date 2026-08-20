@@ -60,5 +60,7 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql).toContain('quantity_receive');
     expect(sql).toContain('quantity_delivery_vessel');
     expect(sql).toContain('qm.quantity_receive');
+    expect(sql).toContain('sp.quantity_delivered');
+    expect(sql).toContain('sp.actual_vessel_qty_receive');
   });
 });

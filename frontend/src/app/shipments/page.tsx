@@ -64,8 +64,9 @@ import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import { shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
 import {
   mergeShipmentQtyOverridesOnContractRows,
-  resolveShipmentListDeliveredKg,
-  resolveShipmentListReceiveKg,
+  preferHydratedQty,
+  shipmentListDeliveredKgForViewTable,
+  shipmentListReceiveKgForViewTable,
   resolveShipmentListStoKg,
   sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
@@ -583,9 +584,9 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       contract_numbers: match.contract_numbers ?? row.contract_numbers,
       contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
       po_numbers: match.po_numbers ?? row.po_numbers,
-      sto_quantity: match.sto_quantity ?? row.sto_quantity,
-      quantity_receive: match.quantity_receive ?? row.quantity_receive,
-      quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
+      sto_quantity: preferHydratedQty(match.sto_quantity, row.sto_quantity),
+      quantity_receive: preferHydratedQty(match.quantity_receive, row.quantity_receive),
+      quantity_delivered_sap: preferHydratedQty(match.quantity_delivered_sap, row.quantity_delivered_sap),
       quantity_delivered_klip: match.quantity_delivered_klip ?? row.quantity_delivered_klip,
       is_contract_sap_closed: match.is_contract_sap_closed ?? row.is_contract_sap_closed,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
@@ -1605,23 +1606,21 @@ function ShipmentsPageContent() {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
       params.append('compact', 'true')
-      // Qty/SAP sort on ALL/Unplanned enriches the full filtered set and can exceed 45s.
-      // Use full SAP sort only on smaller execution-stage cards; shell uses KLIP proxies.
-      const qtySortKeys = new Set([
+      // Qty/SAP/port sorts must enrich before LIMIT so ORDER BY matches displayed values.
+      // Default skipSapJoin=true otherwise falls back to created_at (Contract Qty / OS look unsorted).
+      const accurateSortKeys = new Set([
         'quantity_delivered',
         'quantity_receive',
         'outstanding_quantity',
         'outstanding_qty_planning',
         'contract_qty',
         'sto_quantity',
+        'loading_port',
+        'discharge_port',
+        'b2b_flag',
+        'contract_ext_no',
       ])
-      const stageUpper = String(statusFilter ?? 'ALL').trim().toUpperCase()
-      const smallStageForQtySort =
-        stageUpper !== '' &&
-        stageUpper !== 'ALL' &&
-        stageUpper !== 'UNPLANNED' &&
-        stageUpper !== 'PREPLANNED'
-      const useAccurateQtySort = qtySortKeys.has(sortKey) && smallStageForQtySort
+      const useAccurateQtySort = accurateSortKeys.has(sortKey)
       params.append('skipSapJoin', useAccurateQtySort ? 'false' : 'true')
       params.append('limit', String(pageSize))
       params.append('page', String(effectivePage))
@@ -1933,7 +1932,7 @@ function ShipmentsPageContent() {
       applyListEnvelope(listEnvelope)
       // Show shell immediately; background revalidation may still refresh rows.
       setListFetching(false)
-      if (searchTrim.length >= 2) {
+      if (searchTrim.length >= 2 || useAccurateQtySort) {
         setQtyFieldsReady(true)
       }
 
@@ -1979,9 +1978,13 @@ function ShipmentsPageContent() {
         setSection2EtaSummary(null)
       }
 
-      // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
+      // SAP hydrate after table paint — skip when the list request already enriched for sort.
       const scheduleHydrate = () => {
         if (listGen !== listFetchGenRef.current) return
+        if (useAccurateQtySort) {
+          setQtyFieldsReady(true)
+          return
+        }
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.set('skipSapJoin', 'false')
         hydrateParams.set('includeSummary', 'false')
@@ -4038,11 +4041,11 @@ function ShipmentsPageContent() {
       label: 'Delivery Qty',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
+      getSortValue: (s) => shipmentListDeliveredKgForViewTable(s),
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(shipmentListDeliveredKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4052,11 +4055,11 @@ function ShipmentsPageContent() {
       label: 'Received Qty',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
+      getSortValue: (s) => shipmentListReceiveKgForViewTable(s),
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
           {qtyFieldsReady
-            ? formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            ? formatSapQtyMtDisplay(shipmentListReceiveKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
             : <QtyLoadingDots />}
         </span>
       )
@@ -4708,6 +4711,8 @@ function ShipmentsPageContent() {
           return <QtyLoadingDots />
         }
         const kg = sumGroupQtyKgForColumn(group.members, col.id)
+        const displayKg =
+          col.id === 'quantity_delivered' || col.id === 'quantity_receive' ? kg ?? 0 : kg
         if (col.id === 'outstanding_quantity') {
           return (
             <span
@@ -4719,7 +4724,7 @@ function ShipmentsPageContent() {
         }
         return (
           <span className="text-sm break-words tabular-nums">
-            {formatSapQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            {formatSapQtyMtDisplay(displayKg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
           </span>
         )
       }

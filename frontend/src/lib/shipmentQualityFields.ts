@@ -39,6 +39,13 @@ function parseQualityNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+/** SAP writes absent quality as 0.000 — treat that as empty so the SAP chip shows —, not 0. */
+function parseSapQualityNumber(value: unknown): number | null {
+  const parsed = parseQualityNumber(value)
+  if (parsed == null || parsed === 0) return null
+  return parsed
+}
+
 /** Resolve quality from port row with optional shipmentInfo fallback key prefix. */
 export function shipmentQualityFieldsFromPort(
   portRow: Record<string, unknown> | undefined,
@@ -77,11 +84,11 @@ export function qualitySapReferenceFromPort(
 ): ShipmentQualityFields {
   const out = emptyShipmentQualityFields()
   if (!portRow) return out
-  out.quality_ffa = parseQualityNumber(portRow.sap_quality_ffa)
-  out.quality_mi = parseQualityNumber(portRow.sap_quality_mi)
-  out.quality_dobi = parseQualityNumber(portRow.sap_quality_dobi)
-  out.quality_red = parseQualityNumber(portRow.sap_quality_red)
-  out.quality_ds = parseQualityNumber(portRow.sap_quality_ds)
-  out.quality_stone = parseQualityNumber(portRow.sap_quality_stone)
+  out.quality_ffa = parseSapQualityNumber(portRow.sap_quality_ffa)
+  out.quality_mi = parseSapQualityNumber(portRow.sap_quality_mi)
+  out.quality_dobi = parseSapQualityNumber(portRow.sap_quality_dobi)
+  out.quality_red = parseSapQualityNumber(portRow.sap_quality_red)
+  out.quality_ds = parseSapQualityNumber(portRow.sap_quality_ds)
+  out.quality_stone = parseSapQualityNumber(portRow.sap_quality_stone)
   return out
 }

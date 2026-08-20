@@ -219,15 +219,12 @@ export function buildShipmentListCacheKey(input: {
 }
 
 /**
- * Full SAP/qty enrich-before-sort is correct but O(n) on the filtered set.
- * Only enable it when the request opts into SAP (`skipSapJoin=false`). Shell
- * requests keep a fast ORDER BY on KLIP/base columns so ALL-view qty sort
- * cannot time out at 45s.
+ * Full SAP/qty enrich-before-sort matches displayed Contract Qty / OS / ports.
+ * Always use it for those columns, including compact skipSapJoin shells — otherwise
+ * ORDER BY falls back to created_at (or a KLIP proxy) and the table looks unsorted.
  */
 function shouldUseEnrichedSortPath(ctx: ShipmentListQueryContext): boolean {
-  return (
-    !ctx.skipSapJoin && shipmentListSortUsesEnrichedPath(ctx.sortKey ?? 'created_at')
-  );
+  return shipmentListSortUsesEnrichedPath(ctx.sortKey ?? 'created_at');
 }
 
 function resolvePageOrderBy(ctx: ShipmentListQueryContext): string {

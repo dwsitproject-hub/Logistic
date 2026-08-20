@@ -708,7 +708,7 @@
         <p><strong>6 ETA:</strong> loading arrival/berthed/completed + discharge arrival/berthed/completed (ETA).</p>
         <p><strong>Metrik kartu:</strong></p>
         <ul>
-          <li><strong>Total Vessels</strong> = <code>COUNT(DISTINCT vessel_name)</code> pada baris dalam kartu</li>
+          <li><strong>Total Vessels</strong> = jumlah shipment (1 per STO; jika STO kosong memakai KLIP <code>operation_id</code>), bukan <code>COUNT(DISTINCT vessel_name)</code>. Label UI tetap “Vessels”.</li>
           <li><strong>Contracts</strong> = jumlah kontrak unik yang eligible untuk kartu</li>
           <li><strong>Avg Load / Discharge / Total</strong> = rata-rata delta (1 desimal); baris null dikecualikan dari pembagi</li>
           <li>Kartu <em>On Going (no ETA)</em> hanya vessel + contract count (tanpa rata-rata cycle)</li>

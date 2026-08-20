@@ -192,7 +192,8 @@ describe('truckingList.service', () => {
     expect(combined.text).toContain('card_total_kg');
     expect(combined.text).toContain('GREATEST(0');
     expect(combined.text).toContain("IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')");
-    expect(combined.text.match(/per_contract AS/g)?.length).toBe(1);
+    expect(combined.text.match(/(?<!os_)per_contract AS/g)?.length).toBe(1);
+    expect(combined.text.match(/os_per_contract AS/g)?.length).toBe(1);
     expect(
       summary.text.length + contractQty.text.length + statusOs.text.length,
     ).toBeGreaterThan(combined.text.length);

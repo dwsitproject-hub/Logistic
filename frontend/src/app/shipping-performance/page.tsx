@@ -41,12 +41,10 @@ import {
   type ShippingSummaryMetricKey,
 } from '@/lib/shippingPerformanceLabels'
 import { resolveShippingPerfTotalDeltaDisplay } from '@/lib/shippingPerformanceTotalDelta'
-import { formatOperationalTableTextDisplay, formatSapGroupDisplayLabel, formatSapOutstandingQtyMtDisplay, formatVesselTableDisplay, isEmptySapDisplayValue } from '@/lib/sapDisplayValue'
+import { formatOperationalTableTextDisplay, formatSapGroupDisplayLabel, formatSapOutstandingQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import {
   addDistinctContractIds,
-  addDistinctShippingPerfVessel,
   countUniqueContractsFromField,
-  countUniqueShippingPerfVessels,
   isCountableShippingPerfVessel,
 } from '@/lib/shippingPerformanceSummaryCounts'
 import { outstandingQtyMtColorClass } from '@/lib/utils'
@@ -117,7 +115,9 @@ import {
   type PerformancePeriodKey,
 } from '@/lib/performancePeriodFilters'
 import {
+  addDistinctShippingPerfStoKey,
   applyShippingPerfCardFilter,
+  countUniqueShippingPerfStoKeys,
 } from '@/lib/shippingPerformanceCardFilter'
 
 interface ShippingPerformanceRow {
@@ -127,6 +127,7 @@ interface ShippingPerformanceRow {
   contract_ext_no?: string | null
   contract_number: string
   sto_number?: string | null
+  sto_key?: string | null
   operation_id?: string | null
   contract_date?: string | null
   incoterm?: string | null
@@ -418,7 +419,7 @@ function aggregateDeltaFields(
 function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
   const groups = new Map<string, ShippingPerformanceRow[]>()
   for (const row of rows) {
-    // Match Section 1 Total Vessels — exclude null / blank / Unknown placeholders.
+    // By Vessel table groups named ships only; unnamed STOs stay in All Shipments view.
     if (!isCountableShippingPerfVessel(row.vessel_name)) continue
     const key = normalizeVesselKey(row.vessel_name)
     const bucket = groups.get(key)
@@ -565,6 +566,7 @@ type LatePerfNode = {
   key: string
   /** Distinct contract count for this drilldown node (not shipment/row count). */
   count: number
+  /** Shipment (STO) count; UI label stays “Vessels”. */
   vesselCount: number
   children: LatePerfNode[]
 }
@@ -605,7 +607,8 @@ function normalizeVesselKey(value: unknown): string {
 }
 
 function countUniqueVessels(rows: ShippingPerformanceRow[]): number {
-  return countUniqueShippingPerfVessels(rows, normalizeVesselKey)
+  // “Vessels” on this page = shipment STOs (operation_id if STO is missing), not unique names.
+  return countUniqueShippingPerfStoKeys(rows)
 }
 
 function countUniqueContractsFromRows(rows: ShippingPerformanceRow[]): number {
@@ -751,12 +754,12 @@ function buildPerfDatasetBundle(
 function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): PerVesselPerfSummary {
   if (rows.length === 0) return { ...EMPTY_PER_VESSEL_SUMMARY }
 
-  const vessels = new Set<string>()
+  const stoKeys = new Set<string>()
   const contracts = new Set<string>()
   let totalQty = 0
 
   for (const row of rows) {
-    addDistinctShippingPerfVessel(vessels, row.vessel_name, normalizeVesselKey)
+    addDistinctShippingPerfStoKey(stoKeys, row)
     addDistinctContractIds(contracts, row.contract_number)
     totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0)
   }
@@ -765,7 +768,7 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
     avgMetric(rows, resolvePerfTableDataKey(logicalKey, mode))
 
   return {
-    vesselCount: vessels.size,
+    vesselCount: stoKeys.size,
     contractCount: contracts.size,
     totalQty,
     avgLoadingEtaEtr: avgDelta('loading_delta_eta_etr_days'),
@@ -777,13 +780,13 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
 }
 
 function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
-  type VesAcc = { contracts: Set<string>; vessels: Set<string> }
+  type VesAcc = { contracts: Set<string>; stoKeys: Set<string> }
   type VesMap = Map<string, VesAcc>
-  type IncAcc = { contracts: Set<string>; vessels: Set<string>; vesselsMap: VesMap }
+  type IncAcc = { contracts: Set<string>; stoKeys: Set<string>; vesselsMap: VesMap }
   type IncMap = Map<string, IncAcc>
-  type PlantAcc = { contracts: Set<string>; vessels: Set<string>; incoterms: IncMap }
+  type PlantAcc = { contracts: Set<string>; stoKeys: Set<string>; incoterms: IncMap }
   type PlantMap = Map<string, PlantAcc>
-  type ProdAcc = { contracts: Set<string>; vessels: Set<string>; plants: PlantMap }
+  type ProdAcc = { contracts: Set<string>; stoKeys: Set<string>; plants: PlantMap }
   type ProdMap = Map<string, ProdAcc>
   const root: ProdMap = new Map()
 
@@ -793,49 +796,48 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
     const inc = normalizeGroupKey(row.incoterm)
     const ves = normalizeVesselKey(row.vessel_name)
 
-    if (!root.has(prod)) root.set(prod, { contracts: new Set(), vessels: new Set(), plants: new Map() })
+    if (!root.has(prod)) root.set(prod, { contracts: new Set(), stoKeys: new Set(), plants: new Map() })
     const pN = root.get(prod)!
     addDistinctContract(pN.contracts, row)
-    addDistinctShippingPerfVessel(pN.vessels, row.vessel_name, normalizeVesselKey)
-    if (!pN.plants.has(plant)) pN.plants.set(plant, { contracts: new Set(), vessels: new Set(), incoterms: new Map() })
+    addDistinctShippingPerfStoKey(pN.stoKeys, row)
+    if (!pN.plants.has(plant)) pN.plants.set(plant, { contracts: new Set(), stoKeys: new Set(), incoterms: new Map() })
     const plN = pN.plants.get(plant)!
     addDistinctContract(plN.contracts, row)
-    addDistinctShippingPerfVessel(plN.vessels, row.vessel_name, normalizeVesselKey)
-    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { contracts: new Set(), vessels: new Set(), vesselsMap: new Map() })
+    addDistinctShippingPerfStoKey(plN.stoKeys, row)
+    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { contracts: new Set(), stoKeys: new Set(), vesselsMap: new Map() })
     const iN = plN.incoterms.get(inc)!
     addDistinctContract(iN.contracts, row)
-    addDistinctShippingPerfVessel(iN.vessels, row.vessel_name, normalizeVesselKey)
-    // Keep Unknown leaf for drilldown of null-vessel STOs; vesselCount on parents still excludes it.
+    addDistinctShippingPerfStoKey(iN.stoKeys, row)
     if (!iN.vesselsMap.has(ves)) {
-      iN.vesselsMap.set(ves, { contracts: new Set(), vessels: new Set() })
-      addDistinctShippingPerfVessel(iN.vesselsMap.get(ves)!.vessels, row.vessel_name, normalizeVesselKey)
+      iN.vesselsMap.set(ves, { contracts: new Set(), stoKeys: new Set() })
     }
     const vN = iN.vesselsMap.get(ves)!
     addDistinctContract(vN.contracts, row)
+    addDistinctShippingPerfStoKey(vN.stoKeys, row)
   }
 
-  const srtByVesselCount = <T,>(m: Map<string, T & { vessels: Set<string> }>) =>
-    [...m.entries()].sort((a, b) => b[1].vessels.size - a[1].vessels.size)
+  const srtByVesselCount = <T,>(m: Map<string, T & { stoKeys: Set<string> }>) =>
+    [...m.entries()].sort((a, b) => b[1].stoKeys.size - a[1].stoKeys.size)
 
   const srtVesselLeaves = (m: VesMap) =>
-    [...m.entries()].sort((a, b) => b[1].contracts.size - a[1].contracts.size)
+    [...m.entries()].sort((a, b) => b[1].stoKeys.size - a[1].stoKeys.size || b[1].contracts.size - a[1].contracts.size)
 
   return srtByVesselCount(root).map(([prod, pN]) => ({
     key: prod,
     count: pN.contracts.size,
-    vesselCount: pN.vessels.size,
+    vesselCount: pN.stoKeys.size,
     children: srtByVesselCount(pN.plants).map(([plant, plN]) => ({
       key: plant,
       count: plN.contracts.size,
-      vesselCount: plN.vessels.size,
+      vesselCount: plN.stoKeys.size,
       children: srtByVesselCount(plN.incoterms).map(([inc, iN]) => ({
         key: inc,
         count: iN.contracts.size,
-        vesselCount: iN.vessels.size,
+        vesselCount: iN.stoKeys.size,
         children: srtVesselLeaves(iN.vesselsMap).map(([ves, vN]) => ({
           key: ves,
           count: vN.contracts.size,
-          vesselCount: isEmptySapDisplayValue(ves) ? 0 : vN.vessels.size || 1,
+          vesselCount: vN.stoKeys.size,
           children: [],
         })),
       })),

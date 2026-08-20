@@ -1,12 +1,14 @@
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import {
   sqlWbActualDeliverySumKg,
   sqlWbActualReceiveSumKg,
 } from './truckingWbActualSumSql';
 
 export { sqlWbActualDeliverySumKg, sqlWbActualReceiveSumKg } from './truckingWbActualSumSql';
+export { sqlCoalesceSapRawQtyFields, sqlNullIfSapQtyPlaceholder } from './sapQtyPlaceholderSql';
 
 const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
 
@@ -47,26 +49,34 @@ export function sqlTruckingPoLevelSapRowMatch(
   )`;
 }
 
+export const SAP_DELIVERY_RAW_FIELDS = [
+  `spd.data->'raw'->>'Quantity Delivery Trucking'`,
+  `spd.data->'raw'->>'Quantity Delivered Trucking'`,
+  `spd.data->'raw'->>'Quantity Delivered via Trucking'`,
+  `spd.data->>'quantity_delivered_via_trucking'`,
+  `spd.data->'raw'->>'Quantity Delivered'`,
+  `spd.data->'raw'->>'Quantity Delivery'`,
+  `spd.data->'raw'->>'Qty Delivery'`,
+  `spd.data->'shipment'->>'quantity_delivery'`,
+  `spd.data->'contract'->>'quantity_delivery'`,
+] as const;
+
+export const SAP_RECEIVE_RAW_FIELDS = [
+  `spd.data->'raw'->>'Quantity Receive'`,
+  `spd.data->'raw'->>'Qty Receive'`,
+  `spd.data->'shipment'->>'quantity_receive'`,
+  `spd.data->'contract'->>'quantity_receive'`,
+] as const;
+
 /**
  * Exported (in addition to being used locally below) so
  * `truckingPoQtyResolutionCteSql.ts` can build the same raw-value matching
  * used by `sqlTruckingPoLevelSapQtyWithDedup`, but pre-aggregated via GROUP BY
  * across all contracts in one pass instead of once per outer row.
  */
-export const SAP_DELIVERY_RAW_COALESCE = `COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery Trucking'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered Trucking'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered via Trucking'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-      ''
-    )`;
+export const SAP_DELIVERY_RAW_COALESCE = sqlCoalesceSapRawQtyFields(SAP_DELIVERY_RAW_FIELDS);
 
-export const SAP_RECEIVE_RAW_COALESCE = `COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-      ''
-    )`;
+export const SAP_RECEIVE_RAW_COALESCE = sqlCoalesceSapRawQtyFields(SAP_RECEIVE_RAW_FIELDS);
 
 /**
  * Latest-per-STO SAP qty (kg) with Contracts-style multi-STO PO-level dedup:
@@ -135,8 +145,15 @@ function sqlTruckingPoLevelSapQtyWithDedup(
  * Used for trucking PO-grain list when GR is Close: Contract Qty − Σ Delivery.
  * Applies Contracts multi-STO PO-level duplicate dedup when Σ is inflated.
  */
+/** Business contract number for SAP joins — never the list STRING_AGG display. */
+export function sqlTruckingSapContractNumberFromUuid(
+  contractUuidExpr = 'e.contract_id',
+): string {
+  return `(SELECT cx.contract_id FROM contracts cx WHERE cx.id = ${contractUuidExpr})`;
+}
+
 export function sqlTruckingPoLevelSapDeliveryQty(
-  contractNumberExpr = 'e.contract_number',
+  contractNumberExpr = sqlTruckingSapContractNumberFromUuid(),
   contractUuidExpr = 'e.contract_id',
   poNumberExpr = 'e.po_number',
   contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
@@ -158,7 +175,7 @@ export function sqlTruckingPoLevelSapDeliveryQty(
  * Applies Contracts multi-STO PO-level duplicate dedup when Σ is inflated.
  */
 export function sqlTruckingPoLevelSapReceiveQty(
-  contractNumberExpr = 'e.contract_number',
+  contractNumberExpr = sqlTruckingSapContractNumberFromUuid(),
   contractUuidExpr = 'e.contract_id',
   poNumberExpr = 'e.po_number',
   contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
@@ -202,11 +219,11 @@ export function sqlNormalizeSapTruckingQtyToKg(
 
 const SAP_QTY_CAST = `CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)`;
 
-function sqlSapNumericSubquery(fieldCoalesce: string): string {
+function sqlSapNumericSubquery(fields: readonly string[]): string {
   return `(
     SELECT ${sqlNormalizeSapTruckingQtyToKg(SAP_QTY_CAST)}
     FROM (
-      SELECT COALESCE(${fieldCoalesce}) AS val
+      SELECT ${sqlCoalesceSapRawQtyFields(fields)} AS val
       FROM sap_processed_data spd
       WHERE spd.contract_number = c.contract_id
       ORDER BY spd.created_at DESC NULLS LAST
@@ -219,39 +236,30 @@ function sqlSapNumericSubquery(fieldCoalesce: string): string {
 /** Resolved quantity_sent with SAP fallback (kg). */
 export function sqlTruckingQuantitySentCoalesce(tableCol = 't.quantity_sent'): string {
   return `COALESCE(
-    ${tableCol},
-    ${sqlSapNumericSubquery(`
-      spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)',
-      spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan',
-      spd.data->'raw'->>'Quantity Sent via Trucking',
-      spd.data->'raw'->>'Quantity Sent',
-      spd.data->>'Quantity Sent'
-    `)}
+    NULLIF(${tableCol}, 0),
+    ${sqlSapNumericSubquery([
+      `spd.data->'raw'->>'Quantity Sent via Trucking (Based on Surat Jalan)'`,
+      `spd.data->>'quantity_sent_via_trucking_based_on_surat_jalan'`,
+      `spd.data->'raw'->>'Quantity Sent via Trucking'`,
+      `spd.data->'raw'->>'Quantity Sent'`,
+      `spd.data->>'Quantity Sent'`,
+    ])}
   )`;
 }
 
 /** Resolved quantity_delivered with SAP fallback (kg). */
 export function sqlTruckingQuantityDeliveredCoalesce(tableCol = 't.quantity_delivered'): string {
   return `COALESCE(
-    ${tableCol},
-    ${sqlSapNumericSubquery(`
-      spd.data->'raw'->>'Quantity Delivered via Trucking',
-      spd.data->>'quantity_delivered_via_trucking',
-      spd.data->'raw'->>'Qty Receive',
-      spd.data->'raw'->>'Quantity Receive'
-    `)}
+    NULLIF(${tableCol}, 0),
+    ${sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS)}
   )`;
 }
 
 /** Resolved quantity_receive with SAP fallback (kg). */
 export function sqlTruckingQuantityReceiveCoalesce(): string {
   return `COALESCE(
-    t.quantity_delivered,
-    ${sqlSapNumericSubquery(`
-      spd.data->'raw'->>'Qty Receive',
-      spd.data->'raw'->>'Quantity Receive',
-      spd.data->>'quantity_delivered_via_trucking'
-    `)}
+    NULLIF(t.quantity_delivered, 0),
+    ${sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS)}
   )`;
 }
 
@@ -260,15 +268,7 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
  * Null when SAP has no matching numeric field.
  */
 export function sqlSapQtyDeliveryOnly(): string {
-  return sqlSapNumericSubquery(`
-    spd.data->'raw'->>'Quantity Delivery Trucking',
-    spd.data->'raw'->>'Quantity Delivered Trucking',
-    spd.data->'raw'->>'Quantity Delivered via Trucking',
-    spd.data->>'quantity_delivered_via_trucking',
-    spd.data->'raw'->>'Quantity Delivered',
-    spd.data->'raw'->>'Quantity Delivery',
-    spd.data->'raw'->>'Qty Delivery'
-  `);
+  return sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS);
 }
 
 /**
@@ -276,10 +276,7 @@ export function sqlSapQtyDeliveryOnly(): string {
  * Null when SAP has no matching numeric field.
  */
 export function sqlSapQtyReceiveOnly(): string {
-  return sqlSapNumericSubquery(`
-    spd.data->'raw'->>'Quantity Receive',
-    spd.data->'raw'->>'Qty Receive'
-  `);
+  return sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS);
 }
 
 /** True when the trucking operation has at least one WB/daily actual row. */
@@ -487,7 +484,7 @@ export function sqlTruckingListBaseOutstandingQtyExpr(contractAlias = 'c'): stri
  * (Legacy name kept — list is now PO-grain, not per-STO-line.)
  */
 export function sqlTruckingExpandedStoLineQtyKgExpr(
-  contractNumberExpr = 'e.contract_number',
+  contractNumberExpr = sqlTruckingSapContractNumberFromUuid(),
   poNumberExpr = 'e.po_number',
   contractQtyExpr = 'e.contract_qty',
   _stoKeyExpr = 'e.sto_line_resolved',
@@ -501,7 +498,7 @@ export function sqlTruckingExpandedStoLineQtyKgExpr(
 
 /** @deprecated Prefer sqlTruckingExpandedStoLineQtyKgExpr (PO-grain). */
 export function sqlTruckingExpandedPerStoLineQtyKgExpr(
-  contractNumberExpr = 'e.contract_number',
+  contractNumberExpr = sqlTruckingSapContractNumberFromUuid(),
   poNumberExpr = 'e.po_number',
   contractQtyExpr = 'e.contract_qty',
   stoKeyExpr = 'e.sto_line_resolved',

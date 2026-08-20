@@ -8,6 +8,7 @@ import {
   sqlIncotermImportStatusFromJson,
   sqlUatQuantityDeliveryCase,
 } from './sapIncotermMetrics';
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 
 const sapRaw = (field: string) => `spd.data->'raw'->>'${field}'`;
 
@@ -36,32 +37,37 @@ export const SAP_OIL_LOSS_IMPORT_STATUS_EXPR = sqlIncotermImportStatusFromJson(
   SAP_OIL_LOSS_INCOTERM_RAW_EXPR,
 );
 
-/** Quantity Delivery Trucking — SAP UAT field. */
-export const SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC = sqlSafeSapNumericCast(`COALESCE(
-    spd.data->'raw'->>'Quantity Delivery Trucking',
-    spd.data->'raw'->>'Quantity Delivered Trucking',
-    spd.data->'raw'->>'Quantity Delivered via Trucking',
-    spd.data->>'quantity_delivered_via_trucking',
-    spd.data->'shipment'->>'quantity_delivery_trucking',
-    spd.data->'contract'->>'quantity_delivery_trucking',
-    ''
-  )`);
+/** Quantity Delivery Trucking — SAP UAT field. Skip "0" placeholders so Quantity Delivery can win. */
+export const SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC = sqlSafeSapNumericCast(
+  sqlCoalesceSapRawQtyFields([
+    `spd.data->'raw'->>'Quantity Delivery Trucking'`,
+    `spd.data->'raw'->>'Quantity Delivered Trucking'`,
+    `spd.data->'raw'->>'Quantity Delivered via Trucking'`,
+    `spd.data->>'quantity_delivered_via_trucking'`,
+    `spd.data->'shipment'->>'quantity_delivery_trucking'`,
+    `spd.data->'contract'->>'quantity_delivery_trucking'`,
+    `spd.data->'raw'->>'Quantity Delivery'`,
+  ]),
+);
 
 /** Quantity Delivery Vessel — SAP UAT field. */
-export const SAP_OIL_LOSS_QTY_VESSEL_NUMERIC = sqlSafeSapNumericCast(`COALESCE(
-    spd.data->'raw'->>'Quantity Delivery Vessel',
-    spd.data->'raw'->>'Quantity Delivered',
-    spd.data->'raw'->>'Quantity Delivery',
-    spd.data->'shipment'->>'quantity_delivery',
-    spd.data->'contract'->>'quantity_delivery',
-    ''
-  )`);
+export const SAP_OIL_LOSS_QTY_VESSEL_NUMERIC = sqlSafeSapNumericCast(
+  sqlCoalesceSapRawQtyFields([
+    `spd.data->'raw'->>'Quantity Delivery Vessel'`,
+    `spd.data->'raw'->>'Quantity Delivered'`,
+    `spd.data->'raw'->>'Quantity Delivery'`,
+    `spd.data->'shipment'->>'quantity_delivery'`,
+    `spd.data->'contract'->>'quantity_delivery'`,
+  ]),
+);
 
 /** Legacy generic delivery (pre-UAT SAP templates). */
 export const SAP_OIL_LOSS_QTY_DELIVERY_RAW = `COALESCE(
-  NULLIF(TRIM(${sapRaw('Quantity Delivered')}), ''),
-  NULLIF(TRIM(${sapRaw('Quantity Delivery')}), ''),
-  NULLIF(TRIM(${sapRaw('Qty Deliver')}), ''),
+  ${sqlCoalesceSapRawQtyFields([
+    sapRaw('Quantity Delivered'),
+    sapRaw('Quantity Delivery'),
+    sapRaw('Qty Deliver'),
+  ])},
   '0'
 )`;
 
@@ -71,8 +77,10 @@ export const SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC = sqlSafeSapNumericCast(
 
 /** Quantity Receive — SAP Data only (never shipments). */
 export const SAP_OIL_LOSS_QTY_RECEIVE_RAW = `COALESCE(
-  NULLIF(TRIM(${sapRaw('Quantity Receive')}), ''),
-  NULLIF(TRIM(${sapRaw('Qty Receive')}), ''),
+  ${sqlCoalesceSapRawQtyFields([
+    sapRaw('Quantity Receive'),
+    sapRaw('Qty Receive'),
+  ])},
   '0'
 )`;
 

@@ -127,6 +127,21 @@ describe('shipmentListSortSql', () => {
       const receive = buildShipmentListPageOrderBy('quantity_receive', 'ASC');
       expect(receive).toContain('actual_vessel_qty_receive');
     });
+
+    it('orders contract_qty by ordered quantity, not created_at', () => {
+      const orderBy = buildShipmentListPageOrderBy('contract_qty', 'DESC');
+      expect(orderBy).toContain('quantity_ordered');
+      expect(orderBy.startsWith('fs.created_at')).toBe(false);
+    });
+
+    it('orders loading/discharge port and contract ext on KLIP columns', () => {
+      expect(buildShipmentListPageOrderBy('loading_port', 'ASC')).toContain('loading_ports_klip');
+      expect(buildShipmentListPageOrderBy('discharge_port', 'ASC')).toContain('discharge_ports_klip');
+      expect(buildShipmentListPageOrderBy('contract_ext_no', 'ASC')).toContain('contract_ext_no');
+      expect(buildShipmentListPageOrderBy('loading_port', 'ASC').startsWith('fs.created_at')).toBe(
+        false,
+      );
+    });
   });
 
   describe('buildShipmentListEnrichedCteBody', () => {
@@ -155,6 +170,15 @@ describe('shipmentListSortSql', () => {
     it('sorts contract backlog by outstanding_quantity output column', () => {
       expect(buildShipmentContractBacklogOrderBy('outstanding_quantity', 'DESC')).toBe(
         'outstanding_quantity DESC NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC',
+      );
+    });
+
+    it('sorts contract backlog by delivery/receive select aliases', () => {
+      expect(buildShipmentContractBacklogOrderBy('quantity_delivered', 'DESC')).toContain(
+        'quantity_delivered DESC',
+      );
+      expect(buildShipmentContractBacklogOrderBy('quantity_receive', 'ASC')).toContain(
+        'quantity_receive ASC',
       );
     });
 
@@ -220,6 +244,15 @@ describe('shipmentListSortSql', () => {
     it('sorts backlog rows by outstanding_quantity output column', () => {
       const orderBy = buildShipmentContractBacklogOuterOrderBy('outstanding_quantity', 'DESC');
       expect(orderBy).toContain('outstanding_quantity DESC');
+    });
+
+    it('sorts backlog rows by delivery/receive output columns', () => {
+      expect(buildShipmentContractBacklogOuterOrderBy('quantity_delivered', 'DESC')).toContain(
+        'quantity_delivered DESC',
+      );
+      expect(buildShipmentContractBacklogOuterOrderBy('quantity_receive', 'ASC')).toContain(
+        'quantity_receive ASC',
+      );
     });
 
     it('orders ALL-hybrid backlog by status column, not a string literal', () => {

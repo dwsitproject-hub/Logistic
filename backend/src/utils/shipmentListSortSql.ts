@@ -1,5 +1,5 @@
 import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
-import { sqlCoalesceNonZeroQty } from './shipmentListQtySql';
+import { shipmentListRowContractQtySql, sqlCoalesceNonZeroQty } from './shipmentListQtySql';
 import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
@@ -69,6 +69,13 @@ export const SHIPMENT_LIST_SORT_COLUMNS: Record<string, string> = {
   ata_vessel_berthed_at_discharge_port: 'fs.ata_vessel_berthed_at_discharge_port',
   ata_vessel_start_discharging: 'fs.ata_vessel_start_discharging',
   late_indicator: 'fs.is_delayed',
+  // Shell fallbacks so skipSapJoin=true never silently ORDER BY created_at.
+  contract_qty: shipmentListRowContractQtySql('fs'),
+  loading_port:
+    "LOWER(COALESCE(NULLIF(TRIM(fs.loading_ports_klip), ''), NULLIF(TRIM(fs.port_of_loading), ''), ''))",
+  discharge_port:
+    "LOWER(COALESCE(NULLIF(TRIM(fs.discharge_ports_klip), ''), NULLIF(TRIM(fs.port_of_discharge), ''), ''))",
+  contract_ext_no: "LOWER(COALESCE(NULLIF(TRIM(fs.contract_ext_no::text), ''), ''))",
 };
 
 /** Sort keys that require SAP/qty enrichment before ORDER BY (match list column display). */
@@ -122,10 +129,15 @@ export const SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS: Record<string, string> = {
   delivery_start: 'c.delivery_start_date',
   delivery_end: 'c.delivery_end_date',
   contract_qty: 'c.quantity_ordered',
-  quantity_delivered: '0',
-  quantity_receive: '0',
+  quantity_delivered: 'quantity_delivered',
+  quantity_receive: 'quantity_receive',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
+  loading_port: 'c.contract_date',
+  discharge_port: 'c.contract_date',
+  sto_quantity: 'c.contract_date',
+  b2b_flag: 'c.contract_date',
+  contract_ext_no: 'c.contract_id',
 };
 
 export function parseShipmentListSort(
@@ -182,18 +194,10 @@ export const SHIPMENT_LIST_SKIP_STO_PRIORITY_SORT_KEYS = new Set<string>([
 
 /**
  * Hybrid ALL/Unplanned: merge-sort across execution + backlog (not execution-first paging).
- * Skip for qty sorts that need full backlog qty_move before LIMIT (too slow on ALL).
+ * Qty columns need this so page 1 is the global top-K, not execution-first then a local re-sort.
  */
 export function hybridListUsesGlobalMergeSort(sortKey: string): boolean {
   if (!sortKey || sortKey === 'created_at') return false;
-  if (
-    sortKey === 'outstanding_quantity' ||
-    sortKey === 'outstanding_qty_planning' ||
-    sortKey === 'quantity_delivered' ||
-    sortKey === 'quantity_receive'
-  ) {
-    return false;
-  }
   return true;
 }
 
@@ -313,9 +317,6 @@ export function buildShipmentContractBacklogOrderBy(
   }
   if (sortKey === 'outstanding_quantity' || sortKey === 'outstanding_qty_planning') {
     return `outstanding_quantity ${sortDir} NULLS LAST, c.contract_date DESC NULLS LAST, c.contract_id ASC`;
-  }
-  if (sortKey === 'quantity_delivered' || sortKey === 'quantity_receive') {
-    return BACKLOG_DEFAULT_ORDER(sortDir);
   }
   const field = SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS[sortKey];
   if (isUnsafeSqlOrderExpr(field)) {
@@ -462,6 +463,8 @@ export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string
   delivery_start: 'delivery_start_date',
   delivery_end: 'delivery_end_date',
   contract_qty: 'contract_qty',
+  quantity_delivered: 'quantity_delivered',
+  quantity_receive: 'quantity_receive',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
   contract_ext_no: 'contract_ext_no',
@@ -479,8 +482,6 @@ export function buildShipmentContractBacklogOuterOrderBy(
     SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS.created_at;
   if (
     sortKey === 'created_at' ||
-    sortKey === 'quantity_delivered' ||
-    sortKey === 'quantity_receive' ||
     !SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS[sortKey] ||
     isUnsafeSqlOrderExpr(field)
   ) {

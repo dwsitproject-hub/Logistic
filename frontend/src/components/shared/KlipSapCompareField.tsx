@@ -47,7 +47,6 @@ export function KlipSapCompareField({
   const mismatch = hasKlipSapMismatch(klipValue, sapValue, format)
   const delta = formatKlipSapDelta(klipValue, sapValue, format)
   const sapDisplay = formatKlipSapDisplayValue(sapValue, format)
-  const hasSap = sapDisplay !== '—'
 
   const labelClass = compact
     ? 'mb-1 block text-[10px] font-medium text-gray-600'
@@ -73,16 +72,14 @@ export function KlipSapCompareField({
           ) : null}
         </div>
       )}
-      {hasSap ? (
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
-          <span>SAP {sapDisplay}</span>
-          {delta ? (
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-              Δ {delta}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
+        <span>SAP {sapDisplay}</span>
+        {delta ? (
+          <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
+            Δ {delta}
+          </span>
+        ) : null}
+      </div>
     </div>
   )
 }

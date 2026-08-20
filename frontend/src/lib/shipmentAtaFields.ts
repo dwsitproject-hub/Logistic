@@ -70,6 +70,24 @@ export function loadingAtaSapFromPortRow(
   };
 }
 
+/** Discharge-port SAP ATA snapshot (same sap_ata_* columns on the discharge VLP row). */
+export function dischargeAtaSapFromPortRow(
+  portRow: Record<string, unknown> | undefined,
+): Pick<
+  ShipmentAtaFields,
+  | 'ata_vessel_arrive_at_discharge_port'
+  | 'ata_vessel_berthed_at_discharge_port'
+  | 'ata_vessel_start_discharging'
+  | 'ata_vessel_complete_discharge'
+> {
+  return {
+    ata_vessel_arrive_at_discharge_port: sliceIsoDate(portRow?.sap_ata_vessel_arrival),
+    ata_vessel_berthed_at_discharge_port: sliceIsoDate(portRow?.sap_ata_vessel_berthed),
+    ata_vessel_start_discharging: sliceIsoDate(portRow?.sap_ata_loading_start),
+    ata_vessel_complete_discharge: sliceIsoDate(portRow?.sap_ata_loading_completed),
+  };
+}
+
 export function buildAtaOverridePayload(
   current: ShipmentAtaFields,
   baseline: ShipmentAtaFields,

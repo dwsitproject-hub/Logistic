@@ -165,7 +165,11 @@ function buildQuantitySelects(skipSapJoin: boolean): {
       wbQtyExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.wbReceiveExpr,
     },
   );
-  const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr();
+  const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr(
+    'c.contract_id',
+    'e.po_number',
+    'e.contract_qty',
+  );
   // OS = Contract Qty − Σ Delivery (LCO) / Σ Receive (FRC) across all STOs on the PO.
   const outstanding = sqlTruckingOutstandingQtyByIncoterm(
     qtyDelivered,

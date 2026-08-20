@@ -10,6 +10,7 @@ export type ShippingPerfCardRow = {
   id?: string
   status?: string | null
   import_status?: string | null
+  sto_key?: string | null
   sto_number?: string | null
   operation_id?: string | null
   shipment_id?: string | null
@@ -115,8 +116,13 @@ export function applyShippingPerfCardFilter<T extends ShippingPerfCardRow>(
   return rows.filter((row) => shippingPerfRowMatchesCard(row, card))
 }
 
-/** Prefer STO identity for Section 1 counts; fall back to shipment/operation/id. */
+/**
+ * Vessel card/drilldown identity: one “vessel” = one shipment (STO).
+ * Prefer SQL sto_key / sto_number; if STO is missing use KLIP operation_id.
+ */
 export function shippingPerfRowStoKey(row: ShippingPerfCardRow): string {
+  const sqlKey = String(row.sto_key || '').trim()
+  if (sqlKey) return /^\d+$/.test(sqlKey) ? `sto:${sqlKey}` : `op:${sqlKey}`
   const sto = String(row.sto_number || '').trim()
   if (sto) return `sto:${sto}`
   const op = String(row.operation_id || '').trim()
@@ -127,11 +133,15 @@ export function shippingPerfRowStoKey(row: ShippingPerfCardRow): string {
   return id ? `id:${id}` : ''
 }
 
+export function addDistinctShippingPerfStoKey(keys: Set<string>, row: ShippingPerfCardRow): void {
+  const key = shippingPerfRowStoKey(row)
+  if (key) keys.add(key)
+}
+
 export function countUniqueShippingPerfStoKeys(rows: ShippingPerfCardRow[]): number {
   const keys = new Set<string>()
   for (const row of rows) {
-    const key = shippingPerfRowStoKey(row)
-    if (key) keys.add(key)
+    addDistinctShippingPerfStoKey(keys, row)
   }
   return keys.size
 }

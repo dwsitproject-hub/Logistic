@@ -14,6 +14,7 @@ import {
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { sqlSapIncotermFromJsonb, sqlSapSourceTypeFromJsonb } from './sapSourceTypeSql';
 import { sqlSapQtyDeliveredAnyFromSpd } from './contractLogisticsStoDetailSql';
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 
 export const SHIPMENT_LIST_STO_METRICS_STUB = `
       sto_metrics AS (
@@ -180,11 +181,13 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           ) AS sto_quantity,
           SUM(
             NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(sk.data->'raw'->>'Quantity Receive'), ''),
-              NULLIF(TRIM(sk.data->'raw'->>'Qty Receive'), ''),
-              NULLIF(TRIM(sk.data->'shipment'->>'quantity_receive'), ''),
-              NULLIF(TRIM(sk.data->'contract'->>'quantity_receive'), '')
-              , ''
+              ${sqlCoalesceSapRawQtyFields([
+                `sk.data->'raw'->>'Quantity Receive'`,
+                `sk.data->'raw'->>'Qty Receive'`,
+                `sk.data->'shipment'->>'quantity_receive'`,
+                `sk.data->'contract'->>'quantity_receive'`,
+              ])},
+              ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
           ) AS quantity_receive,
           SUM(${sqlSapQtyDeliveredAnyFromSpd('sk')}) AS quantity_delivered_sap

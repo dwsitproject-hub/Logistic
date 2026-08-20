@@ -703,14 +703,6 @@ function deltaField(mode: SummaryMode, etaField: string): string {
 }
 
 function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMode): PerVesselPerfSummary {
-  const byVessel = new Map<string, Record<string, unknown>[]>();
-  for (const row of rows) {
-    const vessel = String(row.vessel_name || '').trim() || 'Unknown';
-    const bucket = byVessel.get(vessel);
-    if (bucket) bucket.push(row);
-    else byVessel.set(vessel, [row]);
-  }
-
   let rowCount = 0;
   let totalQty = 0;
   let sumLoadingEtaEtr = 0;
@@ -720,26 +712,26 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
   let sumDischargeEtbEtc = 0;
   let sumTotalDelta = 0;
   const contracts = new Set<string>();
+  const stoKeys = new Set<string>();
 
-  for (const vesselRows of byVessel.values()) {
-    for (const row of vesselRows) {
-      rowCount += 1;
-      const contractNumber = String(row.contract_number || '').trim();
-      if (contractNumber) contracts.add(contractNumber);
-      totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
-      sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
-      sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
-      sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
-      sumDischargeEtaEtb += Number(row[deltaField(mode, 'discharge_delta_eta_etb_days')] ?? 0);
-      sumDischargeEtbEtc += Number(row[deltaField(mode, 'discharge_delta_etb_etc_days')] ?? 0);
-      sumTotalDelta += Number(row[mode === 'ata' ? 'ata_total_delta_days' : 'total_delta_days'] ?? 0);
-    }
+  for (const row of rows) {
+    rowCount += 1;
+    stoKeys.add(shippingPerfStoGroupKey(row));
+    const contractNumber = String(row.contract_number || '').trim();
+    if (contractNumber) contracts.add(contractNumber);
+    totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
+    sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
+    sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
+    sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
+    sumDischargeEtaEtb += Number(row[deltaField(mode, 'discharge_delta_eta_etb_days')] ?? 0);
+    sumDischargeEtbEtc += Number(row[deltaField(mode, 'discharge_delta_etb_etc_days')] ?? 0);
+    sumTotalDelta += Number(row[mode === 'ata' ? 'ata_total_delta_days' : 'total_delta_days'] ?? 0);
   }
 
   if (rowCount === 0) return { ...EMPTY_SUMMARY };
 
   return {
-    vesselCount: byVessel.size,
+    vesselCount: stoKeys.size,
     contractCount: contracts.size,
     totalQty,
     avgLoadingEtaEtr: sumLoadingEtaEtr / rowCount,

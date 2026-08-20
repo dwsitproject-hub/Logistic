@@ -94,4 +94,21 @@ describe('shippingPerfRowMatchesCard', () => {
     ]
     expect(countUniqueShippingPerfStoKeys(rows)).toBe(2)
   })
+
+  it('counts two STOs on the same vessel name as two vessels', () => {
+    const rows = [
+      row({ id: '1', sto_number: '1001', shipment_id: '1001' }),
+      row({ id: '2', sto_number: '1002', shipment_id: '1002' }),
+    ]
+    expect(countUniqueShippingPerfStoKeys(rows)).toBe(2)
+  })
+
+  it('falls back to KLIP operation_id when STO is missing', () => {
+    const rows = [
+      row({ id: '1', sto_number: null, sto_key: null, operation_id: 'OP-LAND-1', shipment_id: 'MNL-1' }),
+      row({ id: '2', sto_number: '', sto_key: '', operation_id: 'OP-LAND-1', shipment_id: 'MNL-2' }),
+      row({ id: '3', sto_number: null, sto_key: null, operation_id: 'OP-LAND-2', shipment_id: 'MNL-3' }),
+    ]
+    expect(countUniqueShippingPerfStoKeys(rows)).toBe(2)
+  })
 })

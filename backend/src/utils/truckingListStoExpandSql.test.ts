@@ -28,6 +28,9 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain("data->'contract'->>'sto_quantity'");
     expect(sql).toContain('INNER JOIN contracts c ON c.id = e.contract_id');
+    expect(sql).toContain('spd.contract_number = c.contract_id');
+    expect(sql).not.toContain('spd.contract_number = k.contract_number');
+    expect(sql).not.toContain('spd.contract_number = e.contract_number');
     expect(sql).toContain('INNER JOIN trucking_operations t ON t.id = e.id');
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).not.toMatch(/\be\.status\b/);

@@ -62,6 +62,47 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('sp.master_vessel_id');
     expect(q.text).toContain('vessel_name_master');
   });
+
+  it('enriches before ORDER BY for contract_qty even when skipSapJoin is true', () => {
+    const q = buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-qty',
+        filterCacheKey: 'fk-qty',
+        sortKey: 'contract_qty',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toContain('list_enriched AS');
+    expect(q.text).toContain('le.contract_qty DESC');
+  });
+
+  it('enriches before ORDER BY for outstanding_quantity even when skipSapJoin is true', () => {
+    const q = buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-os',
+        filterCacheKey: 'fk-os',
+        sortKey: 'outstanding_quantity',
+        sortDir: 'ASC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toContain('list_enriched AS');
+    expect(q.text).toContain('le.outstanding_quantity ASC');
+    expect(q.text).not.toMatch(/ORDER BY\s+fs\.created_at ASC/);
+  });
 });
 
 describe('normalizeShipmentListRows', () => {

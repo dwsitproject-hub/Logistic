@@ -13,6 +13,7 @@ import {
   getOperationalColumnLayout,
   type OperationalColumnLayout,
 } from '@/lib/operationalTableLayout'
+import { formatContractViewTableReceiveQtyMt } from '@/lib/contractPerformanceExport'
 import {
   formatSapOutstandingQtyMtDisplay,
   formatSapQtyMtDisplay,
@@ -283,7 +284,7 @@ export function contractPerfCellTooltipText(
     case 'delivery_qty':
       return formatSapQtyMtDisplay(row.quantity_delivery)
     case 'received_qty':
-      return formatSapQtyMtDisplay(row.quantity_receive)
+      return formatContractViewTableReceiveQtyMt(row.quantity_receive)
     case 'outstanding_qty_mt':
       return formatSapOutstandingQtyMtDisplay(row.outstanding_quantity)
     default:

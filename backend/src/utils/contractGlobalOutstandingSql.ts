@@ -13,6 +13,7 @@ import {
   sqlSapQtyTruckingFromSpd,
   sqlSapQtyVesselFromSpd,
 } from './sapIncotermMetrics';
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 import {
   sqlWbActualDeliverySumKg,
@@ -164,10 +165,10 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
             spd.sto_number,
             ${qtyTrucking} AS quantity_delivery_trucking,
             ${qtyVessel} AS quantity_delivery_vessel,
-            ${sqlParseSapNumeric(`
-              spd.data->'raw'->>'Quantity Receive',
-              spd.data->'raw'->>'Qty Receive'
-            `)} AS quantity_receive
+            ${sqlParseSapNumeric(sqlCoalesceSapRawQtyFields([
+              `spd.data->'raw'->>'Quantity Receive'`,
+              `spd.data->'raw'->>'Qty Receive'`,
+            ]))} AS quantity_receive
           FROM sap_processed_data spd
           ${join}
           WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
@@ -180,10 +181,10 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
             spd.contract_number,
             ${qtyTrucking} AS quantity_delivery_trucking,
             ${qtyVessel} AS quantity_delivery_vessel,
-            ${sqlParseSapNumeric(`
-              spd.data->'raw'->>'Quantity Receive',
-              spd.data->'raw'->>'Qty Receive'
-            `)} AS quantity_receive
+            ${sqlParseSapNumeric(sqlCoalesceSapRawQtyFields([
+              `spd.data->'raw'->>'Quantity Receive'`,
+              `spd.data->'raw'->>'Qty Receive'`,
+            ]))} AS quantity_receive
           FROM sap_processed_data spd
           ${join}
           WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''

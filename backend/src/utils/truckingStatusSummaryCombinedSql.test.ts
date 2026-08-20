@@ -12,8 +12,10 @@ describe('truckingStatusSummaryCombinedSql', () => {
 
   it('buildTruckingStatusSummaryCombinedQuery uses one STO expansion', () => {
     const { text } = buildTruckingStatusSummaryCombinedQuery(built);
-    expect(text.match(/per_contract AS/g)?.length).toBe(1);
+    expect(text.match(/(?<!os_)per_contract AS/g)?.length).toBe(1);
+    expect(text.match(/os_per_contract AS/g)?.length).toBe(1);
     expect(text.match(/os_execution AS/g)?.length).toBe(1);
+    expect(text).toContain('DISTINCT ON');
     expect(text).toContain('unplanned_contract_qty');
     expect(text).toContain('unplanned_outstanding_qty');
     expect(text).toContain('planned_outstanding_qty');

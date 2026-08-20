@@ -53,8 +53,11 @@ describe('hybridListUsesGlobalMergeSort', () => {
     expect(hybridListUsesGlobalMergeSort('created_at')).toBe(false);
   });
 
-  it('uses global merge for contract_date but not heavy qty sorts', () => {
+    it('uses global merge for column sorts including qty', () => {
     expect(hybridListUsesGlobalMergeSort('contract_date')).toBe(true);
-    expect(hybridListUsesGlobalMergeSort('outstanding_quantity')).toBe(false);
+    expect(hybridListUsesGlobalMergeSort('contract_qty')).toBe(true);
+    expect(hybridListUsesGlobalMergeSort('outstanding_quantity')).toBe(true);
+    expect(hybridListUsesGlobalMergeSort('quantity_delivered')).toBe(true);
+    expect(hybridListUsesGlobalMergeSort('quantity_receive')).toBe(true);
   });
 });

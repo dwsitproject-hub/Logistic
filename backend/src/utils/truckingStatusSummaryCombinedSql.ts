@@ -1,10 +1,12 @@
 /**
  * Trucking Section 1 — single STO expansion for status counts, status-card qty,
  * status-card OS, and Outstanding Qty strip (execution rows).
+ * Strip OS is one row per contract_number; card OS stays GROUP BY status × contract.
  */
 
 import { wrapTruckingListQueryWithStoExpansion } from './truckingListStoExpandSql';
 import {
+  sqlTruckingOsPerContractSelect,
   sqlTruckingOutstandingQtyAggregateSelect,
   sqlTruckingStripLineQtyExpr,
 } from './truckingOutstandingQtySummarySql';
@@ -99,6 +101,9 @@ function buildTruckingExpandedFilteredCte(
       FROM per_contract
       WHERE status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
     ),
+    os_per_contract AS (
+      ${sqlTruckingOsPerContractSelect({ fromSql: 'per_contract', alias: 'per_contract' })}
+    ),
     os_execution AS (
       SELECT
         ${sqlTruckingOutstandingQtyAggregateSelect(
@@ -107,8 +112,7 @@ function buildTruckingExpandedFilteredCte(
           'incoterm',
         )},
         COALESCE(SUM(${sqlTruckingStripLineQtyExpr('status', 'contract_qty', 'outstanding_quantity')}), 0)::numeric AS card_total_kg
-      FROM per_contract
-      WHERE status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
+      FROM os_per_contract
     )`;
 }
 

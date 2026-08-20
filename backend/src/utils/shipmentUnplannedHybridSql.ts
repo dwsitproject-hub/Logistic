@@ -21,6 +21,7 @@ import {
 } from './shipmentIncotermScope';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
 import { sqlSapSourceTypeFromJsonb } from './sapSourceTypeSql';
+import { sqlContractSharesNumericStoWithActiveSeaShipmentExpr } from './seaStoSiblingSql';
 
 import {
   buildShipmentContractBacklogOrderBy,
@@ -175,7 +176,8 @@ export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l')
     AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}
     AND NOT EXISTS (
       SELECT 1 FROM shipments s_ns WHERE s_ns.contract_id = ${contractAlias}.id
-    )`;
+    )
+    AND NOT (${sqlContractSharesNumericStoWithActiveSeaShipmentExpr(`${contractAlias}.id`)})`;
 }
 
 /** Remaining OS ≤ 1.0 MT (1000 kg) → Completed card (no shipment row). */
@@ -455,8 +457,13 @@ export function buildAllHybridContractBacklogCountQuery(
     FROM all_contract_backlog`;
 }
 
-function backlogPageSortNeedsOutstanding(sortKey: string): boolean {
-  return sortKey === 'outstanding_quantity' || sortKey === 'outstanding_qty_planning';
+function backlogPageSortNeedsQtyMove(sortKey: string): boolean {
+  return (
+    sortKey === 'outstanding_quantity' ||
+    sortKey === 'outstanding_qty_planning' ||
+    sortKey === 'quantity_delivered' ||
+    sortKey === 'quantity_receive'
+  );
 }
 
 export function buildAllHybridContractBacklogPageQuery(
@@ -486,7 +493,7 @@ export function buildAllHybridContractBacklogPageQuery(
    * Page ids first (cheap), then qty_move only for those contracts.
    * OS-column sort still needs full qty_move before LIMIT.
    */
-  if (!backlogPageSortNeedsOutstanding(sortKey)) {
+  if (!backlogPageSortNeedsQtyMove(sortKey)) {
     return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     all_contract_candidates AS (
@@ -504,6 +511,7 @@ export function buildAllHybridContractBacklogPageQuery(
         c.delivery_end_date,
         c.quantity_ordered AS contract_qty,
         c.contract_id,
+        COALESCE(NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''), '') AS contract_ext_no,
         'UNPLANNED'::text AS status,
         'UNPLANNED'::text AS backlog_status,
         NULL::text AS pre_planned_group_id,
@@ -526,6 +534,7 @@ export function buildAllHybridContractBacklogPageQuery(
         c.delivery_end_date,
         c.quantity_ordered AS contract_qty,
         c.contract_id,
+        COALESCE(NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''), '') AS contract_ext_no,
         'PREPLANNED'::text AS status,
         'PREPLANNED'::text AS backlog_status,
         pg.id::text AS pre_planned_group_id,

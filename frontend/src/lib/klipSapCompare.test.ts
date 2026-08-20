@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatDateDelta,
   formatKlipSapDelta,
+  formatKlipSapDisplayValue,
   formatNumberDelta,
   hasKlipSapMismatch,
   klipSapValuesEqual,
@@ -26,6 +27,13 @@ describe('klipSapCompare', () => {
   it('treats empty SAP as no mismatch highlight', () => {
     expect(hasKlipSapMismatch('2026-07-05', '', 'date')).toBe(false)
     expect(hasKlipSapMismatch(0.5, null, 'number')).toBe(false)
+  })
+
+  it('formats empty SAP as em dash without falling back to KLIP', () => {
+    expect(formatKlipSapDisplayValue(null, 'date')).toBe('—')
+    expect(formatKlipSapDisplayValue('', 'text')).toBe('—')
+    expect(formatKlipSapDisplayValue(null, 'number')).toBe('—')
+    expect(formatKlipSapDisplayValue('Ketapang', 'text')).toBe('Ketapang')
   })
 
   it('compares text vessel names case-insensitively', () => {

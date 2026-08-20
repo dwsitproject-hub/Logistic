@@ -1,8 +1,10 @@
 import {
   isValidHumanPortName,
   resolveKlipPortInputValue,
+  resolveKlipPortNameFromRow,
   resolveLoadingPortDisplayFromRow,
   resolveLoadingPortDisplayLabel,
+  resolveSapPortNameFromRow,
 } from './loadingPortDisplay'
 
 describe('loadingPortDisplay', () => {
@@ -136,5 +138,30 @@ describe('loadingPortDisplay', () => {
         1,
       ),
     ).toBe('-')
+  })
+
+  it('keeps SAP and KLIP port names independent (SAP empty stays empty)', () => {
+    expect(
+      resolveSapPortNameFromRow(
+        { port_name: 'Ketapang', sap_port_name: null },
+        { vessel_loading_port_1: 'Dumai' },
+        1,
+      ),
+    ).toBe('')
+
+    expect(
+      resolveKlipPortNameFromRow(
+        { port_name: 'Ketapang', sap_port_name: null },
+        { vessel_loading_port_1: 'Dumai' },
+        1,
+      ),
+    ).toBe('Ketapang')
+
+    expect(
+      resolveSapPortNameFromRow(
+        { port_name: 'KLIP Dumai', is_discharge_port: true, sap_port_name: null },
+        { vessel_discharge_port_1: 'KLIP Dumai' },
+      ),
+    ).toBe('')
   })
 })

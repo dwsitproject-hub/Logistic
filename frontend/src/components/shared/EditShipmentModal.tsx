@@ -51,7 +51,7 @@ import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
-import { resolveLoadingPortDisplayFromRow, resolveKlipPortInputValue } from '@/lib/loadingPortDisplay'
+import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
   seedKlipQtyFromShipmentHeader,
@@ -126,6 +126,7 @@ import {
 import {
   ataFieldsFromShipmentInfo,
   ataSapReferenceFromShipmentInfo,
+  dischargeAtaSapFromPortRow,
   emptyAtaFields,
   loadingAtaSapFromPortRow,
   type ShipmentAtaApiField,
@@ -399,6 +400,35 @@ function ReadOnlyInfoField({
       >
         {formatInfoDisplayValue(value)}
       </div>
+    </div>
+  )
+}
+
+function ModalPortKlipSapLabel({
+  portRow,
+  shipmentInfo,
+  sequence,
+}: {
+  portRow:
+    | { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown }
+    | null
+    | undefined
+  shipmentInfo?: Record<string, unknown> | null
+  sequence?: number
+}) {
+  const klip = resolveKlipPortNameFromRow(portRow, shipmentInfo, sequence)
+  const sap = resolveSapPortNameFromRow(portRow, shipmentInfo, sequence)
+  return (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+        <span>{klip || '—'}</span>
+        {klip ? (
+          <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+            KLIP
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-0.5 text-[10px] text-gray-500">SAP {sap || '—'}</div>
     </div>
   )
 }
@@ -774,6 +804,8 @@ export function EditShipmentModal({
   const [vesselName, setVesselName] = useState('')
   const [originalVesselName, setOriginalVesselName] = useState('')
   const [sapVesselName, setSapVesselName] = useState('')
+  const [sapVesselCode, setSapVesselCode] = useState('')
+  const [sapVesselOwner, setSapVesselOwner] = useState('')
   const [pendingMasterVessel, setPendingMasterVessel] = useState<MasterVesselOption | null>(null)
   const [vesselMeta, setVesselMeta] = useState<Record<string, string>>({})
   const [operationId, setOperationId] = useState('')
@@ -1040,6 +1072,8 @@ export function EditShipmentModal({
     setVesselName('')
     setOriginalVesselName('')
     setSapVesselName('')
+    setSapVesselCode('')
+    setSapVesselOwner('')
     setPendingMasterVessel(null)
     setVesselMeta({})
     setDetailRows([])
@@ -1265,6 +1299,8 @@ export function EditShipmentModal({
         const sapVn = String(row.vessel_name_sap ?? '').trim()
         const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn)
         setSapVesselName(sapVn)
+        setSapVesselCode(String(row.vessel_code_sap ?? '').trim())
+        setSapVesselOwner(String(row.vessel_owner_sap ?? '').trim())
         setVesselName(primaryVn)
         setOriginalVesselName(primaryVn)
         setPendingMasterVessel(null)
@@ -1904,6 +1940,9 @@ export function EditShipmentModal({
     portRow?: LoadingPortRef,
   ): string => {
     if (key.includes('discharg')) {
+      const fromDisc = dischargeAtaSapFromPortRow(portRow as Record<string, unknown> | undefined)
+      const fromPort = fromDisc[key as keyof typeof fromDisc]
+      if (fromPort) return fromPort
       return ataSapReference[key] ?? ''
     }
     const portSap = loadingAtaSapFromPortRow(portRow as Record<string, unknown> | undefined)
@@ -2105,7 +2144,7 @@ export function EditShipmentModal({
                 >
                   <div className="mb-1 flex items-center gap-2">
                     <label className="block text-xs font-medium text-gray-600">Vessel Name</label>
-                    {sapVesselName ? <KlipSapCompareLegend className="ml-auto" /> : null}
+                    <KlipSapCompareLegend className="ml-auto" />
                   </div>
                   {canModifyCoreSections ? (
                     <MasterVesselCombobox
@@ -2116,15 +2155,9 @@ export function EditShipmentModal({
                   ) : (
                     <div className="flex min-h-8 items-center gap-2 text-sm font-medium text-gray-900">
                       <span>{formatInfoDisplayValue(vesselName)}</span>
-                      {vesselOverride ? (
-                        <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
-                          KLIP
-                        </span>
-                      ) : sapVesselName ? (
-                        <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600">
-                          SAP
-                        </span>
-                      ) : null}
+                      <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+                        KLIP
+                      </span>
                     </div>
                   )}
                   {canModifyCoreSections && vesselOverride ? (
@@ -2132,41 +2165,57 @@ export function EditShipmentModal({
                       KLIP
                     </span>
                   ) : null}
-                  {canModifyCoreSections && !vesselOverride && sapVesselName ? (
-                    <span className="mt-1 inline-flex rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600">
-                      SAP
-                    </span>
-                  ) : null}
-                  {vesselOverride && sapVesselName ? (
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
-                      <span>SAP {sapVesselName}</span>
-                      <span className="rounded-full bg-gray-100 px-1.5 py-0.5 font-medium text-gray-600">
-                        SAP
-                      </span>
-                    </div>
-                  ) : null}
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
+                    <span>SAP {sapVesselName.trim() || '—'}</span>
+                  </div>
                 </div>
+                <KlipSapCompareField
+                  label="Vessel Code"
+                  klipValue={
+                    formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(vesselMeta.vessel_code)
+                  }
+                  sapValue={
+                    formatVesselCodeDisplay(sapVesselCode) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(sapVesselCode)
+                  }
+                  format="text"
+                  compact
+                />
+                <KlipSapCompareField
+                  label="Vessel Owner"
+                  klipValue={vesselMeta.vessel_owner}
+                  sapValue={sapVesselOwner}
+                  format="text"
+                  compact
+                />
                 {[
-                  ['Vessel Code', formatVesselCodeDisplay(vesselMeta.vessel_code)],
-                  ['Vessel Owner', vesselMeta.vessel_owner],
                   ['Vessel Capacity (MT)', vesselMeta.vessel_capacity],
                   ['Vessel Draft', vesselMeta.vessel_draft],
                   ['Vessel Type', vesselMeta.vessel_hull_type],
                   ['Charter Type', vesselMeta.charter_type],
-                  [
-                    'Discharge Port',
-                    resolveLoadingPortDisplayFromRow(
-                      dischargePortRow ?? {
-                        is_discharge_port: true,
-                        port_name: vesselMeta.port_of_discharge,
-                      },
-                      shipmentInfo,
-                    ),
-                  ],
                   ['Plant / Site', plantSiteName],
                 ].map(([label, value]) => (
                   <ReadOnlyInfoField key={String(label)} label={String(label)} value={value} />
                 ))}
+                <KlipSapCompareField
+                  label="Discharge Port"
+                  klipValue={resolveKlipPortNameFromRow(
+                    dischargePortRow ?? {
+                      is_discharge_port: true,
+                      port_name: vesselMeta.port_of_discharge,
+                    },
+                    shipmentInfo,
+                  )}
+                  sapValue={resolveSapPortNameFromRow(
+                    dischargePortRow ?? { is_discharge_port: true },
+                    shipmentInfo,
+                  )}
+                  format="text"
+                  compact
+                />
               </div>
 
               {isTcCharter && (
@@ -2701,12 +2750,14 @@ export function EditShipmentModal({
                                 port_sequence (each contract's shipment numbers its own ports from 1),
                                 so match the exact row by portId — not by sequence, which would
                                 collide and always resolve to the first port. */}
-                            {resolveLoadingPortDisplayFromRow(
-                              loadingPortRows.find((p) => p.id === block.portId) ??
-                                loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
-                              shipmentInfo,
-                              block.portSequence,
-                            )}
+                            <ModalPortKlipSapLabel
+                              portRow={
+                                loadingPortRows.find((p) => p.id === block.portId) ??
+                                loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence)
+                              }
+                              shipmentInfo={shipmentInfo}
+                              sequence={block.portSequence}
+                            />
                           </span>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -2795,11 +2846,11 @@ export function EditShipmentModal({
                           />
                         ) : (
                           <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                            {resolveLoadingPortDisplayFromRow(
-                              loadingPortRows[0],
-                              shipmentInfo,
-                              loadingPortRows[0]?.port_sequence ?? 1,
-                            )}
+                            <ModalPortKlipSapLabel
+                              portRow={loadingPortRows[0]}
+                              shipmentInfo={shipmentInfo}
+                              sequence={loadingPortRows[0]?.port_sequence ?? 1}
+                            />
                           </div>
                         )}
                       </div>
@@ -2838,12 +2889,14 @@ export function EditShipmentModal({
                         Previous Estimation (historical)
                       </Badge>
                       <span className="text-xs text-gray-500">
-                        {resolveLoadingPortDisplayFromRow(
-                          loadingPortRows.find((p) => p.id === block.portId) ??
-                            loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence),
-                          shipmentInfo,
-                          block.portSequence,
-                        )}
+                        <ModalPortKlipSapLabel
+                          portRow={
+                            loadingPortRows.find((p) => p.id === block.portId) ??
+                            loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence)
+                          }
+                          shipmentInfo={shipmentInfo}
+                          sequence={block.portSequence}
+                        />
                       </span>
                     </div>
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
@@ -2915,11 +2968,11 @@ export function EditShipmentModal({
                               Loading Port {portRow.port_sequence ?? 1}
                             </Badge>
                             <span className="text-xs text-gray-600">
-                              {resolveLoadingPortDisplayFromRow(
-                                portRow,
-                                shipmentInfo,
-                                portRow.port_sequence ?? 1,
-                              )}
+                              <ModalPortKlipSapLabel
+                                portRow={portRow}
+                                shipmentInfo={shipmentInfo}
+                                sequence={portRow.port_sequence ?? 1}
+                              />
                             </span>
                           </div>
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -2934,6 +2987,7 @@ export function EditShipmentModal({
                                   sapValue={sapVal}
                                   format="date"
                                   compact
+                                  showOverrideBadge={Boolean(klipVal && klipVal !== (sapVal || ''))}
                                   hidden={
                                     showAtaDifferencesOnly &&
                                     !hasKlipSapMismatch(klipVal, sapVal, 'date')
@@ -2962,12 +3016,18 @@ export function EditShipmentModal({
                       )
                     })}
                     <div className="rounded-lg border border-emerald-100 bg-white p-3">
-                      <p className="mb-3 text-[10px] font-medium text-gray-600">Discharge Port</p>
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <p className="text-[10px] font-medium text-gray-600">Discharge Port</p>
+                        <ModalPortKlipSapLabel
+                          portRow={dischargePortRow ?? { is_discharge_port: true }}
+                          shipmentInfo={shipmentInfo}
+                        />
+                      </div>
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                         {DISCHARGE_ATA_FIELD_ROWS.map(({ key, label }) => {
                           const sapRef = resolveAtaSapReference(key, dischargePortRow)
                           const klipVal = ataFields[key]
-                          const hasOverride = Boolean(klipVal && sapRef && klipVal !== sapRef)
+                          const hasOverride = Boolean(klipVal && klipVal !== (sapRef || ''))
                           return (
                             <KlipSapCompareField
                               key={key}
@@ -3003,7 +3063,7 @@ export function EditShipmentModal({
                       const loadingPortRow = loadingPortRows[0]
                       const sapRef = resolveAtaSapReference(key, loadingPortRow)
                       const klipVal = ataFields[key]
-                      const hasOverride = Boolean(klipVal && sapRef && klipVal !== sapRef)
+                      const hasOverride = Boolean(klipVal && klipVal !== (sapRef || ''))
                       return (
                         <KlipSapCompareField
                           key={key}
@@ -3087,11 +3147,11 @@ export function EditShipmentModal({
                       <span className="text-[10px] font-medium text-gray-600">Quality at Loading</span>
                       {isMultiPortLoading ? (
                         <span className="text-xs text-gray-600">
-                          {resolveLoadingPortDisplayFromRow(
-                            portRow,
-                            shipmentInfo,
-                            portRow.port_sequence ?? 1,
-                          )}
+                          <ModalPortKlipSapLabel
+                            portRow={portRow}
+                            shipmentInfo={shipmentInfo}
+                            sequence={portRow.port_sequence ?? 1}
+                          />
                         </span>
                       ) : null}
                     </div>
@@ -3131,7 +3191,13 @@ export function EditShipmentModal({
                   </div>
                 )})}
                 <div className="rounded-lg border border-violet-100 bg-white p-3">
-                  <p className="mb-3 text-[10px] font-medium text-gray-600">Quality at Discharge</p>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <p className="text-[10px] font-medium text-gray-600">Quality at Discharge</p>
+                    <ModalPortKlipSapLabel
+                      portRow={dischargePortRow ?? { is_discharge_port: true }}
+                      shipmentInfo={shipmentInfo}
+                    />
+                  </div>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                     {QUALITY_METRICS.map(({ portKey, label }) => {
                       const fieldKey = portKey as keyof ShipmentQualityFields
