@@ -5,6 +5,7 @@ import {
   formatActiveDuration,
 } from '../utils/userActivityTime';
 import { toActivityDateOnly } from '../utils/userActivityDate';
+import { parseEventAtInput } from '../utils/strictDateInput';
 
 export type UserActivityEventType = 'CLICK' | 'CREATE' | 'UPDATE' | 'EDIT' | 'VIEW';
 
@@ -44,6 +45,16 @@ export async function ingestUserActivityEvents(
 
   for (const ev of capped) {
     if (!VALID_EVENT_TYPES.has(ev.eventType)) continue;
+    const eventAtParsed = parseEventAtInput(ev.eventAt);
+    if (eventAtParsed.kind === 'invalid') {
+      logger.warn('Skipping user activity event with invalid eventAt', {
+        userId,
+        eventType: ev.eventType,
+        eventAt: ev.eventAt,
+      });
+      continue;
+    }
+    const eventAtBind = eventAtParsed.kind === 'ok' ? eventAtParsed.value : null;
     try {
       await query(
         `INSERT INTO user_activity_events (
@@ -57,7 +68,7 @@ export async function ingestUserActivityEvents(
           truncate(ev.entityType, 100),
           truncate(ev.entityId, 255),
           ev.metadata ? JSON.stringify(ev.metadata) : null,
-          ev.eventAt ?? null,
+          eventAtBind,
         ],
       );
       inserted += 1;

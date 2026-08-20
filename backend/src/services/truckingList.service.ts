@@ -27,6 +27,7 @@ import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUn
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
+import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import {
   buildTruckingExpansionKeyOrderBy,
   canUseTruckingStoKeyPaging,
@@ -710,14 +711,16 @@ export function buildTruckingListQuery(
     location,
     loadingLocation,
     unloadingLocation,
-    dateFrom,
-    dateTo,
     sto,
     contract,
     plant,
     page = 1,
     limit = 20,
   } = req.query;
+  const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+    dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+    dateTo: (req.query as { dateTo?: unknown }).dateTo,
+  });
   const skipSapJoin =
     options?.skipSapJoin ??
     String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true';

@@ -7,6 +7,7 @@ import {
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
+import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
@@ -121,10 +122,12 @@ export function parseLatePerformanceFilters(
     status,
     supplier,
     buyer,
-    dateFrom,
-    dateTo,
     companyCode,
   } = req.query as any;
+  const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+    dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+    dateTo: (req.query as { dateTo?: unknown }).dateTo,
+  });
 
   const scope = String((req.query as any).scope ?? 'ytd').toLowerCase();
   const debug =

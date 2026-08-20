@@ -34,6 +34,11 @@ describe('preferHydratedQty', () => {
     expect(preferHydratedQty(3_002_849, 0)).toBe(3_002_849)
     expect(preferHydratedQty(0, 3_002_849)).toBe(3_002_849)
   })
+
+  it('does not let a partial hydrated SAP hide a larger grouped header SUM', () => {
+    expect(preferHydratedQty(1_442_067, 1_634_343)).toBe(1_634_343)
+    expect(preferHydratedQty(4_000_000, 3_500_000)).toBe(4_000_000)
+  })
 })
 
 describe('resolveShipmentListDeliveredKg', () => {

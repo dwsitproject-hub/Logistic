@@ -230,15 +230,15 @@ export function resolveShipmentListReceiveKg(shipment: {
   return klip ?? sap
 }
 
-/** Hydrate must not keep a shell 0 that was a qty_move stub. */
+/** Hydrate must not keep a shell 0 stub, nor replace a larger grouped header SUM with a partial SAP qty. */
 export function preferHydratedQty(
   hydrated: number | string | null | undefined,
   shell: number | string | null | undefined,
 ): number | undefined {
   const h = shipmentStoredQtyKg(hydrated)
-  if (h !== null && h !== 0) return h
   const s = shipmentStoredQtyKg(shell)
-  if (s !== null && s !== 0) return s
+  const positives = [h, s].filter((v): v is number => v !== null && v !== 0)
+  if (positives.length > 0) return Math.max(...positives)
   return h ?? s ?? undefined
 }
 

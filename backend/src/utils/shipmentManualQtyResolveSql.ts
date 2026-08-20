@@ -2,7 +2,8 @@
  * SQL qty resolution aligned with frontend
  * resolveShipmentListDeliveredKg / resolveShipmentListReceiveKg.
  *
- * Close → SAP; Open + meaningful KLIP → KLIP; else SAP (legacy last resort for delivery).
+ * Close → SAP; if SAP is missing/stub 0 → legacy header then KLIP (so OS matches View Table).
+ * Open + meaningful KLIP → KLIP; else SAP (legacy last resort for delivery).
  */
 
 /** Meaningful KLIP/manual qty: non-null and > 0. */
@@ -25,7 +26,12 @@ export function sqlShipmentResolvedDeliveryKg(
     ? `NULLIF(${legacyExpr}::numeric, 0)`
     : 'NULL::numeric';
   return `CASE
-    WHEN COALESCE((${closedExpr}), FALSE) IS TRUE THEN ${sap}
+    WHEN COALESCE((${closedExpr}), FALSE) IS TRUE THEN
+      CASE
+        WHEN ${sap} IS NOT NULL THEN ${sap}
+        WHEN ${legacy} IS NOT NULL THEN ${legacy}
+        ELSE ${klip}
+      END
     WHEN ${sqlMeaningfulQtyKg(klipExpr)} THEN ${klip}
     WHEN ${sap} IS NOT NULL THEN ${sap}
     ELSE ${legacy}
@@ -43,7 +49,11 @@ export function sqlShipmentResolvedReceiveKg(
   const sap = `NULLIF(${sapExpr}::numeric, 0)`;
   const klip = `NULLIF(${klipReceiveExpr}::numeric, 0)`;
   return `CASE
-    WHEN COALESCE((${closedExpr}), FALSE) IS TRUE THEN ${sap}
+    WHEN COALESCE((${closedExpr}), FALSE) IS TRUE THEN
+      CASE
+        WHEN ${sap} IS NOT NULL THEN ${sap}
+        ELSE ${klip}
+      END
     WHEN ${sqlMeaningfulQtyKg(klipReceiveExpr)} THEN ${klip}
     WHEN ${sap} IS NOT NULL THEN ${sap}
     ELSE ${klip}

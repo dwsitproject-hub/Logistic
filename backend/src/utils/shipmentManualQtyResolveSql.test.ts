@@ -9,7 +9,7 @@ import {
 } from './shipmentManualQtyResolveSql';
 
 describe('sqlShipmentResolvedDeliveryKg', () => {
-  it('Close uses SAP; Open prefers KLIP then SAP', () => {
+  it('Close uses SAP then header/KLIP fallback; Open prefers KLIP then SAP', () => {
     const sql = sqlShipmentResolvedDeliveryKg(
       'c.closed',
       's.quantity_delivered_klip',
@@ -20,6 +20,7 @@ describe('sqlShipmentResolvedDeliveryKg', () => {
     expect(sql).toContain('s.quantity_delivered_klip');
     expect(sql).toContain('sa.quantity_delivered_sap');
     expect(sql).toContain('s.quantity_delivered');
+    expect(sql).toMatch(/IS TRUE THEN[\s\S]*quantity_delivered_sap[\s\S]*quantity_delivered/);
     expect(sql).not.toContain('ABS');
   });
 });

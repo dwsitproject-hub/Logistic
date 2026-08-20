@@ -4,6 +4,10 @@ import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
+import {
+  InvalidDateInputError,
+  parseOptionalStrictDateRange,
+} from '../utils/strictDateInput';
 import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
 import { runShippingPerformance, invalidateShippingPerformanceRowCache } from '../services/shippingPerformance.service';
 import {
@@ -502,7 +506,11 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
   const timingsMs: Record<string, number> = {};
   const tReq0 = performance.now();
   try {
-    const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
+    const { status, vessel, port, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
     const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
@@ -878,7 +886,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.vessel_oa_budget) as vessel_oa_budget,
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.bl_quantity) as bl_quantity,
-          MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
+          COALESCE(SUM(s.actual_vessel_qty_receive), 0) as actual_vessel_qty_receive,
           MAX(s.sfal_qty) as sfal_qty,
           MAX(s.sfbd_qty) as sfbd_qty,
           MAX(s.fuel_consumption) as fuel_consumption,
@@ -2086,6 +2094,9 @@ ${contractMetaSelectCore}
       },
     });
   } catch (error: any) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get shipments error:', error);
     const errorMessage = error.message || 'Failed to fetch shipments';
     const errorDetail = error.detail || error.toString();

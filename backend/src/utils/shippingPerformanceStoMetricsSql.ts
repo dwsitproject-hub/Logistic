@@ -223,16 +223,18 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
               contractQtyExpr: 'SUM(po.contract_qty)',
               // Dominant / any incoterm on the STO — FOB/LCO use delivery; FRC/CIF use receive
               incotermExpr: `(ARRAY_AGG(po.incoterm ORDER BY po.contract_id))[1]`,
-              receiveExpr: `COALESCE((${sqlShipmentResolvedReceiveKg(
+              receiveExpr: sqlShipmentResolvedReceiveKg(
                 'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
-                'COALESCE(MAX(sk.klip_receive_kg), 0)',
-                'COALESCE(SUM(po.receive_kg), 0)',
-              )}), 0)`,
-              deliveryExpr: `COALESCE((${sqlShipmentResolvedDeliveryKg(
+                // klip_* already SUM'd per STO; MAX avoids multiplying by PO lines
+                'MAX(sk.klip_receive_kg)',
+                'SUM(po.receive_kg)',
+              ),
+              deliveryExpr: sqlShipmentResolvedDeliveryKg(
                 'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
-                'COALESCE(MAX(sk.klip_delivery_kg), 0)',
-                'COALESCE(SUM(po.delivery_kg), 0)',
-              )}), 0)`,
+                'MAX(sk.klip_delivery_kg)',
+                'SUM(po.delivery_kg)',
+                'MAX(sk.klip_delivery_kg)',
+              ),
               clampAtZero: false,
             })}
           )::numeric AS outstanding_qty_actual,

@@ -1,4 +1,23 @@
 /** @type {import('next').NextConfig} */
+
+/**
+ * UI security headers (VA Medium: CSP + anti-clickjacking).
+ * API responses already get Helmet headers from the Express backend.
+ * Keep CSP permissive enough for Next.js App Router (inline styles/scripts).
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+  "object-src 'none'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "connect-src 'self' http: https: ws: wss:",
+].join('; ')
+
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone', // Enable standalone output for Docker
@@ -22,6 +41,19 @@ const nextConfig = {
     return [
       { source: '/api/:path*', destination: `${base}/api/:path*` },
       { source: '/auth/:path*', destination: `${base}/auth/:path*` },
+    ]
+  },
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'no-referrer' },
+          { key: 'Content-Security-Policy', value: CONTENT_SECURITY_POLICY },
+        ],
+      },
     ]
   },
 }

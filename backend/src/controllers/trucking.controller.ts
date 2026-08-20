@@ -5,6 +5,11 @@ import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocati
 import { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 import {
+  InvalidDateInputError,
+  parseOptionalStrictDateOnly,
+  parseOptionalStrictDateRange,
+} from '../utils/strictDateInput';
+import {
   prepareAuthoritativePlanningMerge,
   normalizeAndValidateDailyDeliverables,
   parseDailyDeliverableQuantity,
@@ -265,6 +270,9 @@ export const getTruckingOperations = async (req: AuthRequest, res: Response) => 
       data,
     });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get trucking operations error:', error);
     const message =
       error instanceof Error
@@ -993,8 +1001,8 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
 export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res: Response) => {
   try {
     await ensureMissingTruckingOperationIdsIfNeeded();
-    const from = String((req.query as any).from || '').slice(0, 10);
-    const to = String((req.query as any).to || '').slice(0, 10);
+    const from = parseOptionalStrictDateOnly((req.query as { from?: unknown }).from, 'from');
+    const to = parseOptionalStrictDateOnly((req.query as { to?: unknown }).to, 'to');
     if (!from || !to) {
       return res.status(400).json({ success: false, error: { message: 'from and to are required (YYYY-MM-DD)' } });
     }
@@ -1005,8 +1013,10 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     const status = (req.query as any).status as string | undefined;
     const loadingLocation = (req.query as any).loadingLocation as string | undefined;
     const unloadingLocation = (req.query as any).unloadingLocation as string | undefined;
-    const dateFrom = (req.query as any).dateFrom as string | undefined;
-    const dateTo = (req.query as any).dateTo as string | undefined;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
     const sto = (req.query as any).sto as string | undefined;
     const contract = (req.query as any).contract as string | undefined;
     const plant = (req.query as any).plant;
@@ -1039,14 +1049,14 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     }
     // Dashboard baseline filters by CONTRACT DATE (YTD). Keep calendar filters aligned:
     // dateFrom/dateTo apply to contracts.contract_date (not trucking_start_date).
-    if (dateFrom && String(dateFrom).trim() !== '') {
+    if (dateFrom) {
       extraWhere += ` AND c.contract_date >= $${idx}::date`;
-      params.push(String(dateFrom).trim());
+      params.push(dateFrom);
       idx += 1;
     }
-    if (dateTo && String(dateTo).trim() !== '') {
+    if (dateTo) {
       extraWhere += ` AND c.contract_date <= $${idx}::date`;
-      params.push(String(dateTo).trim());
+      params.push(dateTo);
       idx += 1;
     }
     if (sto && String(sto).trim() !== '') {
@@ -1205,6 +1215,9 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
 
     return res.json({ success: true, data: result.rows });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get trucking daily deliverables calendar error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load daily planning deliverables' } });
   }

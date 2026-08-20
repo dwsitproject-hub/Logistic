@@ -95,6 +95,15 @@ export function sqlCoalesceNonZeroQty(preferredExpr: string, fallbackExpr: strin
   return `COALESCE(NULLIF((${preferredExpr})::numeric, 0), ${fallbackExpr})`;
 }
 
+/**
+ * Multi-PO View Table: a partial sto_metrics/SAP value must not hide a larger
+ * grouped shipment header SUM (or the reverse — take the best positive signal).
+ */
+export function sqlGreatestPositiveQty(exprs: string[]): string {
+  const parts = exprs.map((e) => `COALESCE(NULLIF((${e})::numeric, 0), 0)`);
+  return `NULLIF(GREATEST(${parts.join(', ')}), 0)`;
+}
+
 function shipmentListRowQtyMoveScalarSql(spAlias: string, columnSql: string): string {
   return `(
     SELECT SUM(${columnSql})
@@ -125,25 +134,23 @@ export function shipmentListRowQtyMoveReceiveSql(spAlias = 'sp'): string {
   return shipmentListRowQtyMoveScalarSql(spAlias, 'qm.quantity_receive');
 }
 
-/** sto_metrics → sap_agg → shipment header → qty_move (skip 0 stubs). */
+/** sto_metrics → sap_agg → shipment header → qty_move (skip 0 stubs; keep the largest positive). */
 export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
-  return sqlCoalesceNonZeroQty(
-    sqlCoalesceNonZeroQty(
-      sqlCoalesceNonZeroQty('sm.delivered_qty', 'sa.quantity_delivered_sap'),
-      `${spAlias}.quantity_delivered`,
-    ),
-    `NULLIF((${shipmentListRowQtyMoveDeliverySql(spAlias)})::numeric, 0)`,
-  );
+  return sqlGreatestPositiveQty([
+    'sm.delivered_qty',
+    'sa.quantity_delivered_sap',
+    `${spAlias}.quantity_delivered`,
+    shipmentListRowQtyMoveDeliverySql(spAlias),
+  ]);
 }
 
 export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
-  return sqlCoalesceNonZeroQty(
-    sqlCoalesceNonZeroQty(
-      sqlCoalesceNonZeroQty('sm.received_qty', 'sa.quantity_receive'),
-      `${spAlias}.actual_vessel_qty_receive`,
-    ),
-    `NULLIF((${shipmentListRowQtyMoveReceiveSql(spAlias)})::numeric, 0)`,
-  );
+  return sqlGreatestPositiveQty([
+    'sm.received_qty',
+    'sa.quantity_receive',
+    `${spAlias}.actual_vessel_qty_receive`,
+    shipmentListRowQtyMoveReceiveSql(spAlias),
+  ]);
 }
 
 /** SELECT list fragment for shipments page qty columns (null-safe). */
@@ -165,22 +172,24 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
     sapDelivery,
     `${spAlias}.quantity_delivered`,
   );
-  // Fallback when sto_metrics missing: Contract Qty − Open/Close fulfilled.
+  // Same fulfilled qty as Delivery/Receive columns (do not COALESCE stub NULL to 0).
   const listOutstandingFallback = sqlShipmentListOutstandingKgExpr({
     contractQtyExpr,
     incotermExpr,
-    receiveExpr: `COALESCE((${receiveResolved}), 0)`,
-    deliveryExpr: `COALESCE((${deliveryResolved}), 0)`,
+    receiveExpr: receiveResolved,
+    deliveryExpr: deliveryResolved,
     clampAtZero: false,
   });
+  const qtyMoveReceive = `NULLIF((SELECT qm.quantity_receive FROM qty_move qm WHERE qm.contract_number = c.contract_id)::numeric, 0)`;
+  const qtyMoveDelivery = `NULLIF((SELECT COALESCE(qm.quantity_delivery_vessel, qm.quantity_delivery_trucking) FROM qty_move qm WHERE qm.contract_number = c.contract_id)::numeric, 0)`;
   const globalOutstanding = `(SELECT SUM(
     CASE
       WHEN c.quantity_ordered IS NULL THEN NULL
       ELSE (${sqlShipmentListOutstandingKgExpr({
         contractQtyExpr: 'c.quantity_ordered',
         incotermExpr: 'c.incoterm',
-        receiveExpr: `(SELECT qm.quantity_receive FROM qty_move qm WHERE qm.contract_number = c.contract_id)`,
-        deliveryExpr: `(SELECT COALESCE(qm.quantity_delivery_vessel, qm.quantity_delivery_trucking) FROM qty_move qm WHERE qm.contract_number = c.contract_id)`,
+        receiveExpr: qtyMoveReceive,
+        deliveryExpr: qtyMoveDelivery,
         clampAtZero: false,
       })})
     END
@@ -202,5 +211,5 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
         ${sapDelivery} AS quantity_delivered_sap,
         sm.planning_qty AS planning_qty,
         sm.outstanding_qty_planning AS outstanding_qty_planning,
-        COALESCE(${globalOutstanding}, (${listOutstandingFallback}), sm.outstanding_qty_actual) AS outstanding_quantity`.trim();
+        COALESCE((${listOutstandingFallback}), sm.outstanding_qty_actual, ${globalOutstanding}) AS outstanding_quantity`.trim();
 }

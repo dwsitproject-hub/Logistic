@@ -3,6 +3,7 @@ import {
   shipmentListPageQtySelectSql,
   shipmentListRowContractQtySql,
   sqlCoalesceNonZeroQty,
+  sqlGreatestPositiveQty,
   sqlShipmentListOutstandingKgExpr,
 } from './shipmentListQtySql';
 
@@ -11,6 +12,15 @@ describe('sqlCoalesceNonZeroQty', () => {
     const sql = sqlCoalesceNonZeroQty('sm.delivered_qty', 'sa.quantity_delivered_sap');
     expect(sql).toContain('NULLIF((sm.delivered_qty)::numeric, 0)');
     expect(sql).toContain('sa.quantity_delivered_sap');
+  });
+});
+
+describe('sqlGreatestPositiveQty', () => {
+  it('takes the largest non-zero among SAP, header SUM, and qty_move', () => {
+    const sql = sqlGreatestPositiveQty(['sm.delivered_qty', 'sp.quantity_delivered']);
+    expect(sql).toContain('GREATEST(');
+    expect(sql).toContain('sm.delivered_qty');
+    expect(sql).toContain('sp.quantity_delivered');
   });
 });
 
@@ -38,7 +48,7 @@ describe('sqlShipmentListOutstandingKgExpr', () => {
 });
 
 describe('shipmentListPageQtySelectSql', () => {
-  it('prefers qty_move OS, then Open/Close fulfilled fallback (sto_metrics last)', () => {
+  it('prefers Open/Close fulfilled OS over qty_move stubs and sto_metrics last', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).not.toContain('COALESCE(sm.contract_qty, 0)');
     expect(sql).toContain('COALESCE(sm.sto_qty, sa.sto_quantity) AS sto_quantity');
@@ -48,14 +58,16 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql).toContain('quantity_delivered_klip');
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('AS outstanding_quantity');
+    const osAssign = sql.indexOf('AS outstanding_quantity');
+    expect(osAssign).toBeGreaterThan(-1);
+    expect(sql.indexOf('quantity_delivered_klip')).toBeGreaterThan(-1);
   });
 
-  it('maps hydrated SAP qty from sto_metrics without letting 0 hide sap_agg or qty_move', () => {
+  it('maps hydrated SAP qty from sto_metrics without letting 0 hide sap_agg or header SUM', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).toContain('sm.delivered_qty');
     expect(sql).toContain('sm.received_qty');
-    expect(sql).toContain('NULLIF((sm.delivered_qty)::numeric, 0)');
-    expect(sql).toContain('NULLIF((sm.received_qty)::numeric, 0)');
+    expect(sql).toContain('GREATEST(');
     expect(sql).toContain('quantity_delivered_sap');
     expect(sql).toContain('quantity_receive');
     expect(sql).toContain('quantity_delivery_vessel');

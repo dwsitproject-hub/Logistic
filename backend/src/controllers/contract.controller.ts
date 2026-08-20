@@ -10,6 +10,12 @@ import {
   appendGlobalSearchBase,
   parseColumnFiltersQuery,
 } from '../utils/contractListFilters';
+import {
+  InvalidDateInputError,
+  likeContainsPattern,
+  parseOptionalStrictDateRange,
+  sqlIlikeParam,
+} from '../utils/strictDateInput';
 import { buildContractsListOuterSql } from './contractsListOuterSql';
 import {
   buildContractsListBaseCycleFieldSelectSql,
@@ -187,7 +193,11 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 const getContractsUncached = async (req: AuthRequest, res: Response) => {
   try {
     await ensureUserStoContractAssignmentsTable();
-    const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
+    const { status, supplier, buyer, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
     const productFilter = (req.query as any).product as string | undefined;
     const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
     const productFilters =
@@ -354,14 +364,14 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     }
 
     if (supplier) {
-      queryText += ` AND base.supplier ILIKE $${paramIndex}`;
-      queryParams.push(`%${supplier}%`);
+      queryText += ` AND base.supplier ${sqlIlikeParam(paramIndex)}`;
+      queryParams.push(likeContainsPattern(String(supplier)));
       paramIndex++;
     }
 
     if (buyer) {
-      queryText += ` AND base.buyer ILIKE $${paramIndex}`;
-      queryParams.push(`%${buyer}%`);
+      queryText += ` AND base.buyer ${sqlIlikeParam(paramIndex)}`;
+      queryParams.push(likeContainsPattern(String(buyer)));
       paramIndex++;
     }
 
@@ -875,6 +885,10 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error: unknown) {
+    if (error instanceof InvalidDateInputError) {
+      res.status(400).json({ success: false, error: { message: error.message } });
+      return;
+    }
     const pgCode = (error as { code?: string })?.code;
     const pgDetail = (error as { detail?: string })?.detail;
     const pgMessage = error instanceof Error ? error.message : String(error);
@@ -970,10 +984,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       status,
       supplier,
       buyer,
-      dateFrom,
-      dateTo,
       companyCode,
     } = req.query as any;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
 
     const scope = String((req.query as any).scope ?? 'ytd').toLowerCase(); // 'ytd' | 'filtered'
     const debug = String((req.query as any).debug ?? '').toLowerCase() === '1' || String((req.query as any).debug ?? '').toLowerCase() === 'true';
@@ -1195,13 +1211,13 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     }
 
     if (scope === 'filtered' && supplier) {
-      queryText += ` AND (base.latest_spd_data->'raw'->>'Supplier' ILIKE $${paramIndex} OR base.latest_spd_data->>'Supplier' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
-      queryParams.push(`%${supplier}%`);
+      queryText += ` AND (base.latest_spd_data->'raw'->>'Supplier' ${sqlIlikeParam(paramIndex)} OR base.latest_spd_data->>'Supplier' ${sqlIlikeParam(paramIndex)} OR $${paramIndex}::text IS NULL)`;
+      queryParams.push(likeContainsPattern(String(supplier)));
       paramIndex++;
     }
     if (scope === 'filtered' && buyer) {
-      queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ILIKE $${paramIndex} OR base.latest_spd_data->>'Buyer' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
-      queryParams.push(`%${buyer}%`);
+      queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ${sqlIlikeParam(paramIndex)} OR base.latest_spd_data->>'Buyer' ${sqlIlikeParam(paramIndex)} OR $${paramIndex}::text IS NULL)`;
+      queryParams.push(likeContainsPattern(String(buyer)));
       paramIndex++;
     }
     if (scope === 'filtered' && companyCode) {
@@ -1290,12 +1306,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 
     if (scope === 'filtered' && globalSearch.length >= 2) {
       queryText += ` AND (
-        base.contract_id ILIKE $${paramIndex}
-        OR COALESCE(base.product, '') ILIKE $${paramIndex}
-        OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
-        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ILIKE $${paramIndex}
+        base.contract_id ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(base.product, '') ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(base.group_name, '') ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ${sqlIlikeParam(paramIndex)}
       )`;
-      queryParams.push(`%${globalSearch}%`);
+      queryParams.push(likeContainsPattern(globalSearch));
       paramIndex++;
     }
 
@@ -1651,11 +1667,14 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     // Helpful SQL context for debugging (kept small to avoid huge logs).
     try {
       const anyErr = error as any;
       const pos = typeof anyErr?.position === 'string' || typeof anyErr?.position === 'number' ? Number(anyErr.position) : null;
-      if (pos && typeof queryText === 'string') {
+      if (pos && typeof queryText === 'string' && queryText) {
         const start = Math.max(0, pos - 200);
         const end = Math.min(queryText.length, pos + 200);
         logger.error('Get late performance SQL near position', {
@@ -1681,6 +1700,9 @@ export const getLatePerformanceSummary = async (req: AuthRequest, res: Response)
     const data = await runLatePerformance(req, 'summary');
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get late performance summary error:', error);
     return res.status(500).json({
       success: false,
@@ -1696,6 +1718,9 @@ export const getLatePerformanceTree = async (req: AuthRequest, res: Response) =>
     const data = await runLatePerformance(req, 'tree');
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get late performance tree error:', error);
     return res.status(500).json({
       success: false,
@@ -1714,6 +1739,9 @@ export const getLatePerformanceData = async (req: AuthRequest, res: Response) =>
     const data = await runLatePerformance(req, 'all');
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get late performance data error:', error);
     return res.status(500).json({
       success: false,
@@ -1725,8 +1753,12 @@ export const getLatePerformanceData = async (req: AuthRequest, res: Response) =>
 /** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
 export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
   try {
-    const { search, b2bFlag, dateFrom, dateTo, product, transportMode, plant, columnFilters } =
+    const { search, b2bFlag, product, transportMode, plant, columnFilters } =
       req.query as Record<string, string | string[]>;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
 
     const params: any[] = [];
     let paramIndex = 1;
@@ -1763,8 +1795,8 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
 
     // Legacy single-product query param (Contract Performance toolbar)
     if (product && product !== 'ALL' && String(product).trim().length > 0) {
-      params.push(`%${String(product).trim()}%`);
-      aggConditions.push(`COALESCE(base.product, '') ILIKE $${paramIndex++}`);
+      params.push(likeContainsPattern(String(product).trim()));
+      aggConditions.push(`COALESCE(base.product, '') ${sqlIlikeParam(paramIndex++)}`);
     }
 
     // Transport mode — mirror getContracts list filter (contracts.transport_mode column).
@@ -1885,7 +1917,7 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
     `;
     const result = await query(q, params);
     const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0, mix_without_logistics: 0 };
-    res.json({
+    return res.json({
       success: true,
       data: {
         seaWithoutShipments: parseInt(String(row.sea_without_shipments), 10) || 0,
@@ -1894,8 +1926,11 @@ export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get unassigned counts error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch unassigned counts' },
     });
@@ -1912,8 +1947,8 @@ export const getDistinctBuyers = async (req: AuthRequest, res: Response) => {
     const params: unknown[] = [];
     let where = `WHERE buyer IS NOT NULL AND TRIM(buyer) <> ''`;
     if (search) {
-      params.push(`%${search}%`);
-      where += ` AND TRIM(buyer) ILIKE $${params.length}`;
+      params.push(likeContainsPattern(search));
+      where += ` AND TRIM(buyer) ${sqlIlikeParam(params.length)}`;
     }
     params.push(limit);
 
