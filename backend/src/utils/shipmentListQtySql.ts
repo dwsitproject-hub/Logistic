@@ -7,6 +7,10 @@ import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
 } from './shipmentManualQtyResolveSql';
+import { sqlSapQtyDeliveredAnyFromSpd } from './contractLogisticsStoDetailSql';
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+import { sqlSapIncotermFromJsonb } from './sapSourceTypeSql';
 
 /** Sum contract qty (kg) for contracts linked on a grouped shipment row. */
 export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
@@ -160,19 +164,53 @@ export function shipmentListHasRealSapStoKeySql(spAlias = 'sp'): string {
 }
 
 /**
- * sto_metrics → sap_agg → header → qty_move.
- * Real SAP STO rows skip contract-wide qty_move so Σ PO receive/delivery cannot inflate one STO.
+ * Per-STO SAP Quantity Receive (kg) — same grain as Edit Shipment modal / sap_agg primary match.
+ * Used when sto_metrics / sap_agg joins miss (shell hydrate) so KLIP 0 cannot blank the SAP column.
+ */
+export function shipmentListStoScopedSapReceiveSql(spAlias = 'sp'): string {
+  return `(
+    SELECT SUM(
+      NULLIF(regexp_replace(COALESCE(
+        ${sqlCoalesceSapRawQtyFields([
+          `spd.data->'raw'->>'Quantity Receive'`,
+          `spd.data->'raw'->>'Qty Receive'`,
+          `spd.data->'shipment'->>'quantity_receive'`,
+          `spd.data->'contract'->>'quantity_receive'`,
+        ])},
+        ''
+      ), '[^0-9\\.-]', '', 'g'), '')::numeric
+    )
+    FROM sap_processed_data spd
+    WHERE ${sapStoNumberKeyExpr('spd')} = TRIM(${spAlias}.sto_key::text)
+  )`;
+}
+
+/** Per-STO SAP delivery (kg) via incoterm matrix — vessel for CIF/FOB, not dirty trucking. */
+export function shipmentListStoScopedSapDeliverySql(spAlias = 'sp'): string {
+  return `(
+    SELECT SUM(${sqlSapQtyDeliveredAnyFromSpd('spd', sqlSapIncotermFromJsonb('spd.data'))})
+    FROM sap_processed_data spd
+    WHERE ${sapStoNumberKeyExpr('spd')} = TRIM(${spAlias}.sto_key::text)
+  )`;
+}
+
+/**
+ * SAP receive for list `quantity_receive` column (KLIP vessel receive is NOT mixed in —
+ * Open/Close resolve uses actual_vessel_qty_receive separately).
+ * Real SAP STO: sto_metrics → sap_agg → sto-scoped SAP subquery (never PO-wide qty_move).
+ * Synthetic OP-/MNL keys: allow qty_move contract fallback.
  */
 export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
+  const stoScoped = shipmentListStoScopedSapDeliverySql(spAlias);
   const perSto = sqlCoalesceNonZeroChain([
     'sm.delivered_qty',
     'sa.quantity_delivered_sap',
-    `${spAlias}.quantity_delivered`,
+    stoScoped,
   ]);
   const withQtyMove = sqlCoalesceNonZeroChain([
     'sm.delivered_qty',
     'sa.quantity_delivered_sap',
-    `${spAlias}.quantity_delivered`,
+    stoScoped,
     shipmentListRowQtyMoveDeliverySql(spAlias),
   ]);
   return `CASE
@@ -182,15 +220,16 @@ export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
 }
 
 export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
+  const stoScoped = shipmentListStoScopedSapReceiveSql(spAlias);
   const perSto = sqlCoalesceNonZeroChain([
     'sm.received_qty',
     'sa.quantity_receive',
-    `${spAlias}.actual_vessel_qty_receive`,
+    stoScoped,
   ]);
   const withQtyMove = sqlCoalesceNonZeroChain([
     'sm.received_qty',
     'sa.quantity_receive',
-    `${spAlias}.actual_vessel_qty_receive`,
+    stoScoped,
     shipmentListRowQtyMoveReceiveSql(spAlias),
   ]);
   return `CASE

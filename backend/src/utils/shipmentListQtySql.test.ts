@@ -74,25 +74,29 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql.indexOf('quantity_delivered_klip')).toBeGreaterThan(-1);
   });
 
-  it('maps hydrated SAP qty from sto_metrics first, then sap_agg, header; qty_move only for synthetic STO', () => {
+  it('maps hydrated SAP qty from sto_metrics / sap_agg / sto-scoped SAP (not KLIP vessel 0)', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).toContain('sm.delivered_qty');
     expect(sql).toContain('sm.received_qty');
     expect(sql).not.toContain('GREATEST(');
     expect(sql).toContain('quantity_delivered_sap');
     expect(sql).toContain('quantity_receive');
-    expect(sql).toContain('quantity_delivery_vessel');
+    expect(sql).toContain('Quantity Receive');
     expect(sql).toContain('qm.quantity_receive');
-    expect(sql).toContain('sp.quantity_delivered');
-    expect(sql).toContain('sp.actual_vessel_qty_receive');
     expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
+    // SAP receive column must not fall through to KLIP vessel receive (=0 blanks SAP)
+    const receiveSql = shipmentListSapReceiveQtySql('sp');
+    expect(receiveSql).not.toContain('actual_vessel_qty_receive');
   });
 
-  it('shipmentListSapReceiveQtySql skips PO-wide qty_move for real SAP STO keys', () => {
+  it('shipmentListSapReceiveQtySql uses sto-scoped SAP for real STO; qty_move only for synthetic', () => {
     const sql = shipmentListSapReceiveQtySql('sp');
     expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
     expect(sql).toContain('sm.received_qty');
     expect(sql).toContain('qm.quantity_receive');
+    expect(sql).toContain('sap_processed_data spd');
+    expect(sql).toContain('Quantity Receive');
+    expect(sql).not.toContain('actual_vessel_qty_receive');
     expect(sql).toMatch(/WHEN[\s\S]*OP-\|MNL-\|MSEA-[\s\S]*THEN[\s\S]*sm\.received_qty[\s\S]*ELSE[\s\S]*qm\.quantity_receive/s);
   });
 });
