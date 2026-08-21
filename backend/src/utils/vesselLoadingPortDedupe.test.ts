@@ -125,6 +125,19 @@ describe('dedupeStoGroupPorts', () => {
     expect(dedupeStoGroupPorts(one)).toEqual(one);
   });
 
+  it('collapses PORT OF X with bare X in the same slot', () => {
+    const rows = [
+      port({ shipment_id: 'ship-a', port_name: 'Bonemanjing' }),
+      port({
+        shipment_id: 'ship-b',
+        port_name: 'PORT OF BONEMANJING',
+        eta_vessel_arrival: '2026-07-02',
+      }),
+    ];
+    const out = dedupeStoGroupPorts(rows);
+    expect(out).toHaveLength(1);
+  });
+
   it('scores populated rows above empty ones', () => {
     expect(portRowDataScore(port({ eta_vessel_arrival: 'x', quality_ffa: 1 }))).toBeGreaterThan(
       portRowDataScore(port()),
@@ -139,6 +152,11 @@ describe('normalizePortIdentity', () => {
     expect(normalizePortIdentity('PORT BULUNGAN')).toBe(normalizePortIdentity('Bulungan'));
     expect(normalizePortIdentity('Jetty  SMP   Matan')).toBe(normalizePortIdentity('SMP MATAN'));
     expect(normalizePortIdentity('pangkal-balam')).toBe('PANGKAL BALAM');
+  });
+
+  it('treats PORT OF X like PORT X / bare X (STO 1006019408)', () => {
+    expect(normalizePortIdentity('PORT OF BONEMANJING')).toBe('BONEMANJING');
+    expect(normalizePortIdentity('Bonemanjing')).toBe('BONEMANJING');
   });
 
   it('keeps different berths distinct', () => {

@@ -8,21 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, HelpCircle, Loader2, MessageSquare, Pencil, Plus, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronDown, ChevronRight, GripVertical, HelpCircle, Loader2, MessageSquare, Search, Filter, Eye, X, Upload, Truck, Ship, FileText, SlidersHorizontal, Download, ClipboardCheck } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import api from '@/lib/api'
 import { isAuthenticatedLocally } from '@/lib/authSession'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
-import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import { buildCacheKey, cachedGet } from '@/lib/clientDataCache'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
-import {
-  contractShowsAddShipment,
-  contractShowsAddTrucking,
-} from '@/lib/contractLogisticsActions'
-import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
-import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { fetchContractPurchaseOrderOptions } from '@/components/shared/addNewShipmentTypes'
-import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
@@ -125,6 +116,7 @@ import {
   contractPerfTableColumnWidthPx,
   migrateContractColumnLayout,
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
@@ -353,16 +345,6 @@ function contractsListTableScopeLabel(
     return { text: `Table · ${statusFilter}`, emphasized: false }
   }
   return { text: 'Table · All status', emphasized: false }
-}
-
-function contractCountGt0(v: unknown): boolean {
-  const n = typeof v === 'string' ? parseFloat(v) : Number(v)
-  return Number.isFinite(n) && n > 0
-}
-
-/** True when a Klip `shipments` row exists — matches SEA-without-shipment filter on the backend. */
-function contractHasKlipShipment(contract: { shipment_count?: unknown }): boolean {
-  return contractCountGt0(contract.shipment_count)
 }
 
 function getStatusColor(status: string) {
@@ -1657,44 +1639,6 @@ function ContractsPageContent() {
   /** Section 2 lock: only while the global drilldown tree API refreshes (toolbar/tab). */
   const isSection2TreeLoading = latePerfTreeLoading
 
-  type ContractLogisticsUi =
-    | { kind: 'truck-create'; contract: Contract }
-    | { kind: 'truck-view'; contract: Contract }
-    | { kind: 'ship-create'; contract: Contract }
-    | { kind: 'ship-edit'; contractId: string }
-    | null
-  const [contractLogisticsUi, setContractLogisticsUi] = useState<ContractLogisticsUi>(null)
-  const [shipPoOptions, setShipPoOptions] = useState<ShipmentPoOption[]>([])
-
-  useEffect(() => {
-    if (contractLogisticsUi?.kind !== 'ship-create') {
-      setShipPoOptions([])
-      return
-    }
-    const contractId = contractLogisticsUi.contract.contract_id
-    let cancelled = false
-    void fetchContractPurchaseOrderOptions(contractId)
-      .then((options) => {
-        if (!cancelled) setShipPoOptions(options)
-      })
-      .catch(() => {
-        if (!cancelled) setShipPoOptions([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [contractLogisticsUi])
-
-  const shipPrefilledPOs = useMemo((): ShipmentPoOption[] | null => {
-    if (contractLogisticsUi?.kind !== 'ship-create') return null
-    if (shipPoOptions.length === 0) return null
-    const c = contractLogisticsUi.contract
-    const primaryPo = String(c.po_number || '').trim()
-    const match =
-      (primaryPo && shipPoOptions.find((o) => o.poNumber === primaryPo)) || shipPoOptions[0]
-    return match ? [match] : null
-  }, [contractLogisticsUi, shipPoOptions])
-
   const [openHeaderFilterId, setOpenHeaderFilterId] = useState<string | null>(null)
   const headerFilterPopoverRef = useRef<HTMLDivElement | null>(null)
 
@@ -2390,41 +2334,6 @@ function ContractsPageContent() {
     statusFilter !== 'All Status' ||
     unassignedFilter !== null ||
     hasActiveSectionOneColumnFilters(columnFilters)
-
-  const countGt0 = (v: unknown) => {
-    const n = typeof v === 'string' ? parseFloat(v) : Number(v)
-    return Number.isFinite(n) && n > 0
-  }
-
-  const handleTruckIconClick = (contract: Contract) => {
-    const hasTrucking = countGt0(contract.trucking_count)
-    if (!hasTrucking) {
-      if (!contractShowsAddTrucking(contract.incoterm)) {
-        alert(
-          'Trucking operations apply to FRC and LCO incoterms only. Open the Trucking page from the menu if you need to work across contracts.',
-        )
-        return
-      }
-      setContractLogisticsUi({ kind: 'truck-create', contract })
-      return
-    }
-    setContractLogisticsUi({ kind: 'truck-view', contract })
-  }
-
-  const handleShipIconClick = (contract: Contract) => {
-    const hasKlipShipment = contractHasKlipShipment(contract)
-    if (!hasKlipShipment) {
-      if (!contractShowsAddShipment(contract.incoterm)) {
-        alert(
-          'Shipments apply to FOB, CIF, and CFR incoterms only. Open the Shipments page from the menu if you need to work across contracts.',
-        )
-        return
-      }
-      setContractLogisticsUi({ kind: 'ship-create', contract })
-      return
-    }
-    setContractLogisticsUi({ kind: 'ship-edit', contractId: contract.contract_id })
-  }
 
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
 
@@ -4910,7 +4819,11 @@ function ContractsPageContent() {
                             }}
                           />
                         ))}
-                        <col style={{ width: isContractPerformance ? 120 : 192 }} />
+                        <col
+                          style={{
+                            width: isContractPerformance ? 120 : COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+                          }}
+                        />
                       </colgroup>
                       {/* Header */}
                       <thead>
@@ -5283,13 +5196,9 @@ function ContractsPageContent() {
                         <th
                           scope="col"
                           className={cn(
-                            isContractPerformance
-                              ? COMPACT_TABLE_ACTIONS_HEADER_CLASS
-                              : cn(
-                                  COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
-                                  'text-center align-top font-semibold border-l border-gray-200 whitespace-nowrap w-[1%]',
-                                  contractPerfTableCellPad,
-                                ),
+                            COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+                            !isContractPerformance && COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
+                            contractPerfTableCellPad,
                           )}
                         >
                           Actions
@@ -5370,40 +5279,13 @@ function ContractsPageContent() {
 
                                 <td
                                   className={cn(
-                                    isContractPerformance
-                                      ? cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)
-                                      : 'sticky right-0 z-10 border-l border-gray-200 align-middle whitespace-nowrap w-[1%]',
+                                    COMPACT_TABLE_ACTIONS_CELL_CLASS,
+                                    stripeClass,
                                     !isContractPerformance && contractPerfTableCellPad,
-                                    !isContractPerformance && stripeClass,
                                   )}
                                 >
-                                  <div
-                                    className={cn(
-                                      'flex items-center gap-1.5',
-                                      isContractPerformance ? 'justify-center' : 'justify-end',
-                                    )}
-                                  >
-                                  {!isContractPerformance && contractShowsAddTrucking(contract.incoterm) && (() => {
-                                    const hasData = countGt0(contract.trucking_count)
-                                    return (
-                                      <Button variant="outline" size="icon" onClick={() => handleTruckIconClick(contract)}
-                                        title={hasData ? 'View trucking' : 'Add trucking'}
-                                        className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100">
-                                        <Truck className="h-4 w-4" />
-                                      </Button>
-                                    )
-                                  })()}
-                                  {!isContractPerformance && contractShowsAddShipment(contract.incoterm) && (() => {
-                                    const hasData = contractHasKlipShipment(contract)
-                                    return (
-                                      <Button variant="outline" size="icon" onClick={() => handleShipIconClick(contract)}
-                                        title={hasData ? 'Edit shipment' : 'Add shipment'}
-                                        className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100">
-                                        {hasData ? <Pencil className="h-4 w-4" /> : <Ship className="h-4 w-4" />}
-                                      </Button>
-                                    )
-                                  })()}
-                                  <Button variant="outline" size="icon" onClick={() => setSelectedContract(contract)} title="View" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                                  <div className="flex items-center justify-center gap-1.5">
+                                  <Button variant="outline" size="icon" onClick={() => setSelectedContract(contract)} title="View Contract" className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
                                     <Eye className="h-4 w-4" />
                                   </Button>
 
@@ -5519,33 +5401,31 @@ function ContractsPageContent() {
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
-                          {/* Icons: Trucking, Shipping, Documents */}
-                          {!isContractPerformance && contractShowsAddTrucking(contract.incoterm) && (() => {
-                            const hasData = countGt0(contract.trucking_count)
-                            return (
-                              <Button variant="outline" size="sm" onClick={() => handleTruckIconClick(contract)}
-                                className="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100">
-                                {hasData ? <><Truck className="h-4 w-4 mr-2" />View</> : <><Truck className="h-4 w-4 mr-2" />Add</>}
-                              </Button>
-                            )
-                          })()}
-                          {!isContractPerformance && contractShowsAddShipment(contract.incoterm) && (() => {
-                            const hasData = contractHasKlipShipment(contract)
-                            return (
-                              <Button variant="outline" size="sm" onClick={() => handleShipIconClick(contract)}
-                                className={hasData ? '' : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'}>
-                                {hasData ? <><Pencil className="h-4 w-4 mr-2" />Edit</> : <><Plus className="h-4 w-4 mr-2" />Add</>}
-                              </Button>
-                            )
-                          })()}
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => setSelectedContract(contract)}
-                            className="bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 hidden md:inline-flex"
+                            className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
                           >
                             <Eye className="h-4 w-4 mr-2" />
                             View
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setRemarksModal({
+                                contractId: contract.id,
+                                subtitle:
+                                  contract.po_numbers ||
+                                  contract.po_number ||
+                                  contract.contract_id,
+                              })
+                            }
+                            className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
+                          >
+                            <MessageSquare className="h-4 w-4 mr-2" />
+                            Remarks
                           </Button>
                         </div>
                       </div>
@@ -5716,90 +5596,6 @@ function ContractsPageContent() {
           entityType="contract"
           entityId={remarksModal?.contractId ?? null}
           subtitle={remarksModal?.subtitle}
-        />
-
-        <CreateTruckingOperationModal
-          open={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-view'
-          }
-          mode={contractLogisticsUi?.kind === 'truck-view' ? 'edit' : 'add'}
-          readOnly={contractLogisticsUi?.kind === 'truck-view'}
-          onClose={() => setContractLogisticsUi(null)}
-          onCreated={() => {
-            const ui = contractLogisticsUi
-            setContractLogisticsUi(null)
-            invalidateLogisticsListCaches()
-            invalidateMissingEtaAlertCache()
-            if (ui?.kind === 'truck-create') {
-              const contractId = ui.contract.contract_id
-              setContracts((prev) =>
-                prev.map((c) =>
-                  c.contract_id === contractId
-                    ? { ...c, trucking_count: Math.max(1, Number(c.trucking_count || 0)) }
-                    : c,
-                ),
-              )
-            }
-            void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
-            if (CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED) {
-              void fetchUnassignedCounts()
-            }
-          }}
-          initialContractId={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-view'
-              ? contractLogisticsUi.contract.contract_id
-              : null
-          }
-          initialPoNumber={
-            contractLogisticsUi?.kind === 'truck-create' || contractLogisticsUi?.kind === 'truck-view'
-              ? (() => {
-                  const raw =
-                    contractLogisticsUi.contract.po_numbers || contractLogisticsUi.contract.po_number
-                  return String(raw ?? '').split(',')[0]?.trim() || null
-                })()
-              : null
-          }
-        />
-        <AddNewShipmentModal
-          open={
-            contractLogisticsUi?.kind === 'ship-create' || contractLogisticsUi?.kind === 'ship-edit'
-          }
-          mode={contractLogisticsUi?.kind === 'ship-edit' ? 'edit' : 'add'}
-          onClose={() => setContractLogisticsUi(null)}
-          prefilledPOs={shipPrefilledPOs}
-          availablePOs={
-            contractLogisticsUi?.kind === 'ship-create' ? shipPoOptions : null
-          }
-          editContractId={
-            contractLogisticsUi?.kind === 'ship-edit'
-              ? contractLogisticsUi.contractId
-              : null
-          }
-          onSubmit={async (payload) => {
-            await submitAddNewShipmentPayload(payload)
-            const ui = contractLogisticsUi
-            setContractLogisticsUi(null)
-            invalidateLogisticsListCaches()
-            invalidateMissingEtaAlertCache()
-            if (ui?.kind === 'ship-create') {
-              const contractId = ui.contract.contract_id
-              setContracts((prev) =>
-                prev.map((c) =>
-                  c.contract_id === contractId
-                    ? {
-                        ...c,
-                        shipment_count: Math.max(1, Number(c.shipment_count || 0)),
-                        sto_count: Math.max(1, Number(c.sto_count || 0)),
-                      }
-                    : c,
-                ),
-              )
-            }
-            void fetchContracts(currentPage, undefined, undefined, undefined, { force: true })
-            if (CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED) {
-              void fetchUnassignedCounts()
-            }
-          }}
         />
 
         <Dialog open={!!csvCargoResult} onOpenChange={(open) => { if (!open) setCsvCargoResult(null) }}>

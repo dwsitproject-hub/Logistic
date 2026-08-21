@@ -18,7 +18,8 @@ import {
   sqlContractImportStatusForStoExpr,
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
-import { resolveSapTruckingQuantityDelivered } from '../utils/sapMasterV2UatFormat';
+import { resolveSapTruckingQuantityDelivered, hasSapDeleteFlag } from '../utils/sapMasterV2UatFormat';
+import { normalizeSapQtyToKg } from '../utils/sapQtyUom';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import {
   denormalizeShipmentPortsFromSap,
@@ -209,6 +210,15 @@ export class SapDataDistributionService {
         if (!parsedData.contract.sto_quantity && parsedData.shipment.sto_quantity) {
           parsedData.contract.sto_quantity = parsedData.shipment.sto_quantity;
         }
+        if (!parsedData.contract.sto_qty_uom && parsedData.shipment.sto_qty_uom) {
+          parsedData.contract.sto_qty_uom = parsedData.shipment.sto_qty_uom;
+        }
+        if (!parsedData.contract.delete_sto_status && parsedData.shipment.delete_sto_status) {
+          parsedData.contract.delete_sto_status = parsedData.shipment.delete_sto_status;
+        }
+      }
+      if (hasSapDeleteFlag(parsedData) && parsedData.contract) {
+        parsedData.contract.status = 'Cancelled';
       }
 
       // 1. Create or update contract
@@ -339,7 +349,8 @@ export class SapDataDistributionService {
               client,
               undefined,
               result.contractId,
-              enriched
+              enriched,
+              parsedData,
             );
             if (truckingId) result.truckingOperationIds.push(truckingId);
             logger.info('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
@@ -390,7 +401,8 @@ export class SapDataDistributionService {
             client,
             result.shipmentId,
             result.contractId,
-            truckingData
+            truckingData,
+            parsedData,
           );
           if (truckingId) result.truckingOperationIds.push(truckingId);
         }
@@ -643,11 +655,31 @@ export class SapDataDistributionService {
       }
     }
 
-    const quantity = this.parseNumber(contractData.contract_quantity);
+    const quantity = normalizeSapQtyToKg(
+      this.parseNumber(contractData.contract_quantity),
+      contractData.contract_qty_uom,
+    );
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
-    const statusNorm = this.normalizeContractStatus(contractData.status) || 'Open';
+    const forceCancelled = hasSapDeleteFlag(parsedData ?? { contract: contractData });
+    const statusNorm = forceCancelled
+      ? 'Cancelled'
+      : this.normalizeContractStatus(contractData.status) || 'Open';
     const statusForDb = this.statusForDb(statusNorm);
+    const currencyRaw =
+      contractData.currency_unit_price ??
+      contractData.currency ??
+      (parsedData?.raw as Record<string, unknown> | undefined)?.['Currency Unit Price'] ??
+      null;
+    const currency =
+      currencyRaw != null && String(currencyRaw).trim() !== ''
+        ? String(currencyRaw).trim().toUpperCase()
+        : null;
+    const stoQuantity = normalizeSapQtyToKg(
+      this.parseNumber(contractData.sto_quantity),
+      contractData.sto_qty_uom ??
+        (parsedData?.shipment as Record<string, unknown> | undefined)?.sto_qty_uom,
+    );
 
     const params = [
       effectiveContractId,
@@ -668,10 +700,11 @@ export class SapDataDistributionService {
       contractData.contract_type || contractData.ltc_spot,
       statusForDb,
       contractData.sto_no,
-      this.parseNumber(contractData.sto_quantity),
+      stoQuantity,
       contractData.logistics_area_classification,
       contractData.sto_classification || contractData.po_classification,
       contractData.plant_code || null,
+      currency,
       userId,
     ];
 
@@ -720,16 +753,20 @@ export class SapDataDistributionService {
           delivery_end_date = COALESCE($14::date, delivery_end_date),
           source_type = COALESCE($15, source_type),
           contract_type = COALESCE($16, contract_type),
-          status = COALESCE($17, status),
+          status = CASE
+            WHEN $17::text = 'CANCELLED' THEN 'CANCELLED'
+            ELSE COALESCE($17, status)
+          END,
           sto_number = COALESCE($18, sto_number),
           sto_quantity = COALESCE($19::numeric, sto_quantity),
           logistics_classification = COALESCE($20, logistics_classification),
           po_classification = COALESCE($21, po_classification),
           plant_code = COALESCE($22, plant_code),
+          currency = COALESCE($23, currency),
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $23::uuid
+         WHERE id = $24::uuid
          RETURNING id`,
-        [...params.slice(0, 22), existingId],
+        [...params.slice(0, 23), existingId],
       );
       contractUuid = updated.rows[0].id as string;
     } else {
@@ -739,10 +776,10 @@ export class SapDataDistributionService {
           incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
           delivery_start_date, delivery_end_date, source_type, contract_type,
           status, sto_number, sto_quantity, logistics_classification, po_classification,
-          plant_code, created_by
+          plant_code, currency, created_by
         ) VALUES (
           $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
-          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, $23
+          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, COALESCE($23, 'USD'), $24
         )
         ON CONFLICT (contract_id) DO UPDATE SET
           po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
@@ -760,12 +797,16 @@ export class SapDataDistributionService {
           delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
           source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
           contract_type = COALESCE(EXCLUDED.contract_type, contracts.contract_type),
-          status = COALESCE(EXCLUDED.status, contracts.status),
+          status = CASE
+            WHEN EXCLUDED.status = 'CANCELLED' THEN 'CANCELLED'
+            ELSE COALESCE(EXCLUDED.status, contracts.status)
+          END,
           sto_number = COALESCE(EXCLUDED.sto_number, contracts.sto_number),
           sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
           logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
           po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
           plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
+          currency = COALESCE(EXCLUDED.currency, contracts.currency),
           updated_at = CURRENT_TIMESTAMP
         RETURNING id`,
         params,
@@ -793,7 +834,7 @@ export class SapDataDistributionService {
         [
           contractUuid,
           stoNo,
-          this.parseNumber(contractData.sto_quantity),
+          stoQuantity,
           stoType || null,
           contractData.sto_item || null,
           contractData.sto_classification || contractData.po_classification || null,
@@ -874,22 +915,43 @@ export class SapDataDistributionService {
 
     const etaArrival = this.parseDate(shipmentData.eta_vessel_arrival_loading_port_1 || shipmentData.eta_arrival_loading_port_1);
     const ataArrival = this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_1);
+    // Loading/discharge ATB (berthed) — persisted to shipments for Shipping Performance deltas.
+    // ETA berthed is KLIP-only and is never written from SAP.
     const etaSailed = this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_1);
     const ataSailed = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port);
 
     const shipmentDate = this.parseDate(shipmentData.shipment_date);
     const arrivalDate = this.parseDate(shipmentData.arrival_date);
 
-    const quantityShipped = this.parseNumber(shipmentData.quantity_at_loading_port_1_based_on_bast ?? shipmentData.quantity_shipped);
+    const quantityShipped = normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.quantity_at_loading_port_1_based_on_bast ?? shipmentData.quantity_shipped),
+      shipmentData.quantity_delivery_uom,
+    );
     // SAP MASTER v2 columns normalize to `quantity_delivery` and `quantity_receive`.
     // Map those to shipment fields used throughout the app.
-    const quantityDelivery = this.parseNumber(shipmentData.quantity_delivery ?? shipmentData.quantity_delivered);
-    const quantityReceive = this.parseNumber(shipmentData.quantity_receive ?? shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
+    const quantityDelivery = normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.quantity_delivery ?? shipmentData.quantity_delivered),
+      shipmentData.quantity_delivery_uom,
+    );
+    const quantityReceive = normalizeSapQtyToKg(
+      this.parseNumber(
+        shipmentData.quantity_receive ??
+          shipmentData.actual_vessel_qty_receive ??
+          shipmentData.quantity_delivered,
+      ),
+      shipmentData.quantity_receive_uom,
+    );
     const actualVesselQtyReceive = quantityReceive;
-    const blQuantity = this.parseNumber(shipmentData.bl_quantity);
+    const blQuantity = normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.bl_quantity),
+      shipmentData.bl_quantity_uom,
+    );
     const sfalQty = this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty);
     const sfbdQty = this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty);
-    const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? this.parseNumber(shipmentData.quantity_delivered);
+    const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.quantity_delivered),
+      shipmentData.quantity_delivery_uom,
+    );
     let difference = this.parseNumber(shipmentData.difference_final_qty_vs_bl_qty);
     if (difference === null && actualVesselQtyReceive !== null && blQuantity !== null) {
       difference = actualVesselQtyReceive - blQuantity;
@@ -932,18 +994,25 @@ export class SapDataDistributionService {
       shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
     );
 
-    const statusForInsert = deriveShipmentStatus({
-      ata_arrival_at_loading_port: ataArrivalLoading,
-      ata_berthed_at_loading_port: ataBerthedLoading,
-      ata_start_loading: ataLoadingStart,
-      ata_completed_loading: ataLoadingComplete,
-      ata_sailed_from_loading_port: ataSailedLoading,
-      ata_arrive_at_discharge_port: ataDischargeArrival,
-      ata_berthed_at_discharge_port: ataDischargeBerthed,
-      ata_start_discharging: ataDischargeStart,
-      ata_complete_discharge: ataDischargeComplete,
-      contract_import_status: contractSapClosed ? 'Close' : null,
-    });
+    const forceCancelled = hasSapDeleteFlag(
+      (parsedData as { contract?: Record<string, unknown>; shipment?: Record<string, unknown>; raw?: Record<string, unknown> }) ?? {
+        shipment: shipmentData,
+      },
+    );
+    const statusForInsert = forceCancelled
+      ? 'CANCELLED'
+      : deriveShipmentStatus({
+          ata_arrival_at_loading_port: ataArrivalLoading,
+          ata_berthed_at_loading_port: ataBerthedLoading,
+          ata_start_loading: ataLoadingStart,
+          ata_completed_loading: ataLoadingComplete,
+          ata_sailed_from_loading_port: ataSailedLoading,
+          ata_arrive_at_discharge_port: ataDischargeArrival,
+          ata_berthed_at_discharge_port: ataDischargeBerthed,
+          ata_start_discharging: ataDischargeStart,
+          ata_complete_discharge: ataDischargeComplete,
+          contract_import_status: contractSapClosed ? 'Close' : null,
+        });
 
     // Strategy:
     // 1) Prefer direct match by shipment_id from SAP.
@@ -1066,22 +1135,42 @@ export class SapDataDistributionService {
       }
     }
 
-    // SAP re-import: when contract has exactly one active shipment, update it instead of inserting a duplicate.
+    // SAP re-import: sole active row may be updated in place — but never rename/collapse a
+    // different numeric SAP STO into another (parallel multi-STO on the same PO/contract).
+    // True STO replacements use findKlipPlannedStoSupersedeCandidate (isStoReplacedInLatestSap).
     if (!targetShipmentId && contractUuid) {
-      const soleActive = await client.query<{ id: string }>(
-        `SELECT id FROM shipments
+      const soleActive = await client.query<{ id: string; shipment_id: string | null }>(
+        `SELECT id, shipment_id FROM shipments
          WHERE contract_id = $1::uuid
            AND COALESCE(status, '') <> 'CANCELLED'
          ORDER BY created_at DESC`,
         [contractUuid],
       );
       if (soleActive.rows.length === 1) {
-        targetShipmentId = soleActive.rows[0].id;
-        logger.info('upsertShipment: reusing sole active shipment on contract for SAP update', {
-          contractId,
-          existingShipmentId: targetShipmentId,
-          sapShipmentId: shipmentIdFromSap,
-        });
+        const sole = soleActive.rows[0];
+        const existingSid = String(sole.shipment_id ?? '').trim();
+        const newSid = String(shipmentIdFromSap ?? '').trim();
+        const bothDistinctSapSto =
+          Boolean(newSid) &&
+          Boolean(existingSid) &&
+          existingSid !== newSid &&
+          isSapSourcedShipmentId(existingSid) &&
+          isSapSourcedShipmentId(newSid);
+        if (bothDistinctSapSto) {
+          logger.info('upsertShipment: skipping sole-active reuse for parallel SAP STO', {
+            contractId,
+            existingShipmentIdValue: existingSid,
+            sapShipmentId: shipmentIdFromSap,
+          });
+        } else {
+          targetShipmentId = sole.id;
+          logger.info('upsertShipment: reusing sole active shipment on contract for SAP update', {
+            contractId,
+            existingShipmentId: targetShipmentId,
+            sapShipmentId: shipmentIdFromSap,
+            existingShipmentIdValue: existingSid || null,
+          });
+        }
       }
     }
 
@@ -1127,6 +1216,7 @@ export class SapDataDistributionService {
           total_lead_time_days = COALESCE($32::int, total_lead_time_days),
           eta_arrival = COALESCE($33::date, eta_arrival),
           ata_arrival = COALESCE($34::date, ata_arrival),
+          ata_berthed = COALESCE($51::date, ata_berthed),
           eta_sailed = COALESCE($35::date, eta_sailed),
           ata_sailed = COALESCE($36::date, ata_sailed),
           eta_loading_start = COALESCE($37::date, eta_loading_start),
@@ -1135,6 +1225,7 @@ export class SapDataDistributionService {
           ata_loading_complete = COALESCE($40::date, ata_loading_complete),
           eta_discharge_arrival = COALESCE($41::date, eta_discharge_arrival),
           ata_discharge_arrival = COALESCE($42::date, ata_discharge_arrival),
+          ata_discharge_berthed = COALESCE($52::date, ata_discharge_berthed),
           eta_discharge_start = COALESCE($43::date, eta_discharge_start),
           ata_discharge_start = COALESCE($44::date, ata_discharge_start),
           eta_discharge_complete = COALESCE($45::date, eta_discharge_complete),
@@ -1142,15 +1233,16 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE($47::numeric, sfal_qty),
           sfbd_qty = COALESCE($48::numeric, sfbd_qty),
           status = CASE
+            WHEN $49::text IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
+            WHEN UPPER(TRIM(COALESCE(status, ''))) IN ('CANCELLED', 'CANCELED') THEN status
             WHEN $50::boolean IS TRUE
-              AND UPPER(TRIM(COALESCE(status, ''))) NOT IN ('CANCELLED', 'CANCELED')
               THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('$49::text')} > ${sqlShipmentStatusRank('status')}
             THEN $49
             ELSE status
           END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $51`,
+         WHERE id = $53`,
         [
           contractUuid,
           voyageNo,
@@ -1202,6 +1294,8 @@ export class SapDataDistributionService {
           sfbdQty,
           statusForInsert,
           contractSapClosed,
+          ataBerthedLoading,
+          ataDischargeBerthed,
           id
         ]
       );
@@ -1250,21 +1344,21 @@ export class SapDataDistributionService {
           shipment_id, contract_id, status, voyage_no, vessel_code, vessel_name, vessel_owner,
           vessel_draft, vessel_loa, vessel_capacity, vessel_hull_type, vessel_registration_year,
           charter_type, loading_method, discharge_method, port_of_loading, port_of_discharge,
-          eta_arrival, ata_arrival, eta_sailed, ata_sailed, shipment_date, arrival_date,
+          eta_arrival, ata_arrival, ata_berthed, eta_sailed, ata_sailed, shipment_date, arrival_date,
           quantity_shipped, quantity_delivered, bl_quantity, actual_vessel_qty_receive,
           difference_final_qty_vs_bl_qty, estimated_km, estimated_nautical_miles, vessel_oa_budget,
           vessel_oa_actual, average_vessel_speed, eta_loading_start, ata_loading_start,
           eta_loading_complete, ata_loading_complete, eta_discharge_arrival, ata_discharge_arrival,
-          eta_discharge_start, ata_discharge_start, eta_discharge_complete, ata_discharge_complete,
-          loading_rate, discharge_rate, loading_duration_days, discharge_duration_days,
-          total_lead_time_days, sfal_qty, sfbd_qty
+          ata_discharge_berthed, eta_discharge_start, ata_discharge_start, eta_discharge_complete,
+          ata_discharge_complete, loading_rate, discharge_rate, loading_duration_days,
+          discharge_duration_days, total_lead_time_days, sfal_qty, sfbd_qty
         ) VALUES (
           $1, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12::int,
-          $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date,
-          $24::numeric, $25::numeric, $26::numeric, $27::numeric, $28::numeric, $29::numeric, $30::numeric,
-          $31::numeric, $32::numeric, $33::numeric, $34::date, $35::date, $36::date, $37::date,
-          $38::date, $39::date, $40::date, $41::date, $42::date, $43::date, $44::numeric, $45::numeric,
-          $46::int, $47::int, $48::int, $49::numeric, $50::numeric
+          $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date, $24::date,
+          $25::numeric, $26::numeric, $27::numeric, $28::numeric, $29::numeric, $30::numeric, $31::numeric,
+          $32::numeric, $33::numeric, $34::numeric, $35::date, $36::date, $37::date, $38::date,
+          $39::date, $40::date, $41::date, $42::date, $43::date, $44::date, $45::date,
+          $46::numeric, $47::numeric, $48::int, $49::int, $50::int, $51::numeric, $52::numeric
         )
         ON CONFLICT (contract_id, shipment_id) DO UPDATE SET
           voyage_no     = COALESCE(EXCLUDED.voyage_no, shipments.voyage_no),
@@ -1280,6 +1374,7 @@ export class SapDataDistributionService {
           discharge_method = COALESCE(EXCLUDED.discharge_method, shipments.discharge_method),
           eta_arrival   = COALESCE(EXCLUDED.eta_arrival, shipments.eta_arrival),
           ata_arrival   = COALESCE(EXCLUDED.ata_arrival, shipments.ata_arrival),
+          ata_berthed   = COALESCE(EXCLUDED.ata_berthed, shipments.ata_berthed),
           eta_sailed    = COALESCE(EXCLUDED.eta_sailed, shipments.eta_sailed),
           ata_sailed    = COALESCE(EXCLUDED.ata_sailed, shipments.ata_sailed),
           shipment_date = COALESCE(EXCLUDED.shipment_date, shipments.shipment_date),
@@ -1298,6 +1393,7 @@ export class SapDataDistributionService {
           ata_loading_complete = COALESCE(EXCLUDED.ata_loading_complete, shipments.ata_loading_complete),
           eta_discharge_arrival = COALESCE(EXCLUDED.eta_discharge_arrival, shipments.eta_discharge_arrival),
           ata_discharge_arrival = COALESCE(EXCLUDED.ata_discharge_arrival, shipments.ata_discharge_arrival),
+          ata_discharge_berthed = COALESCE(EXCLUDED.ata_discharge_berthed, shipments.ata_discharge_berthed),
           eta_discharge_start = COALESCE(EXCLUDED.eta_discharge_start, shipments.eta_discharge_start),
           ata_discharge_start = COALESCE(EXCLUDED.ata_discharge_start, shipments.ata_discharge_start),
           eta_discharge_complete = COALESCE(EXCLUDED.eta_discharge_complete, shipments.eta_discharge_complete),
@@ -1310,8 +1406,9 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
           sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
           status = CASE
-            WHEN $51::boolean IS TRUE
-              AND UPPER(TRIM(COALESCE(shipments.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+            WHEN EXCLUDED.status IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
+            WHEN UPPER(TRIM(COALESCE(shipments.status, ''))) IN ('CANCELLED', 'CANCELED') THEN shipments.status
+            WHEN $53::boolean IS TRUE
               THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('EXCLUDED.status')} > ${sqlShipmentStatusRank('shipments.status')}
             THEN EXCLUDED.status
@@ -1339,6 +1436,7 @@ export class SapDataDistributionService {
           portOfDischarge,
           etaArrival,
           ataArrival,
+          ataBerthedLoading,
           etaSailed,
           ataSailed,
           shipmentDate,
@@ -1359,6 +1457,7 @@ export class SapDataDistributionService {
           ataLoadingComplete,
           etaDischargeArrival,
           ataDischargeArrival,
+          ataDischargeBerthed,
           etaDischargeStart,
           ataDischargeStart,
           etaDischargeComplete,
@@ -1549,6 +1648,40 @@ export class SapDataDistributionService {
     if (!data.quantity_delivered_via_trucking) {
       data.quantity_delivered_via_trucking = resolveSapTruckingQuantityDelivered(parsedData);
     }
+    if (!data.quantity_delivery_trucking_uom) {
+      data.quantity_delivery_trucking_uom =
+        parsedData?.shipment?.quantity_delivery_trucking_uom ??
+        pick(['Delivery Trucking UoM', 'delivery trucking uom']);
+    }
+    if (!data.quantity_receive_uom) {
+      data.quantity_receive_uom =
+        parsedData?.shipment?.quantity_receive_uom ??
+        pick(['Receive UoM', 'receive uom']);
+    }
+    if (!data.currency_trucking_oa_budget) {
+      data.currency_trucking_oa_budget = pick([
+        'Currency Trucking OA Budget',
+        'currency trucking oa budget',
+      ]);
+    }
+    if (!data.currency_trucking_oa_actual) {
+      data.currency_trucking_oa_actual = pick([
+        'Currency Trucking OA Actual',
+        'currency trucking oa actual',
+      ]);
+    }
+    if (!data.trucking_oa_budget_at_starting_location) {
+      data.trucking_oa_budget_at_starting_location = pick([
+        'Trucking OA Budget',
+        'Truck OA Budget',
+      ]);
+    }
+    if (!data.trucking_oa_actual_at_starting_location) {
+      data.trucking_oa_actual_at_starting_location = pick([
+        'Trucking OA Actual',
+        'Truck OA Actual',
+      ]);
+    }
     return { sequence: truckingData?.sequence ?? 1, data };
   }
 
@@ -1559,7 +1692,8 @@ export class SapDataDistributionService {
     client: PoolClient,
     shipmentId: string | undefined,
     contractId: string | undefined,
-    truckingData: any
+    truckingData: any,
+    parsedData?: Record<string, unknown>,
   ): Promise<string | null> {
     const shipmentUuid = this.toUuid(shipmentId);
     const contractUuid = this.toUuid(contractId);
@@ -1618,40 +1752,89 @@ export class SapDataDistributionService {
     const startDate = this.resolveTruckingStartDate(data);
     const completionDate = this.resolveTruckingCompletionDate(data);
     const contractSapClosed = await this.isContractSapClosedForUuid(client, contractUuid);
-    const status = this.deriveTruckingStatusForSap(startDate, completionDate, contractSapClosed);
+    const forceCancelled = hasSapDeleteFlag(
+      (parsedData as {
+        contract?: Record<string, unknown>;
+        shipment?: Record<string, unknown>;
+        raw?: Record<string, unknown>;
+      }) ?? { raw: data },
+    );
+    const status = forceCancelled
+      ? 'CANCELLED'
+      : this.deriveTruckingStatusForSap(startDate, completionDate, contractSapClosed);
 
     const truckingOwner = data.trucking_owner_at_starting_location;
+    const deliveryUom =
+      data.quantity_delivery_trucking_uom ??
+      data.quantity_delivery_uom ??
+      null;
+    const receiveUom = data.quantity_receive_uom ?? null;
+    const qtySent = normalizeSapQtyToKg(
+      this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
+      deliveryUom,
+    );
+    const qtyDelivered = normalizeSapQtyToKg(
+      this.parseNumber(data.quantity_delivered_via_trucking),
+      deliveryUom ?? receiveUom,
+    );
+    const oaBudgetCurrency =
+      data.currency_trucking_oa_budget != null &&
+      String(data.currency_trucking_oa_budget).trim() !== ''
+        ? String(data.currency_trucking_oa_budget).trim().toUpperCase()
+        : null;
+    const oaActualCurrency =
+      data.currency_trucking_oa_actual != null &&
+      String(data.currency_trucking_oa_actual).trim() !== ''
+        ? String(data.currency_trucking_oa_actual).trim().toUpperCase()
+        : null;
 
     // Reuse the one active trucking row on this contract (unique index + find-or-create).
+    // When forcing CANCELLED from SAP delete flags, prefer an existing row (active first,
+    // else already-cancelled) so re-import does not spawn a second operation.
     let targetTruckingId: string | null = null;
     if (contractUuid) {
-      const created = await getOrCreateActiveTruckingOp(
-        (text, params) => client.query(text, params),
-        contractUuid,
-        {
-          allocateOperationId: async () => {
-            const dmy = formatDDMMYYYY(new Date());
-            const seq = await allocateNextSyntheticSequence(
-              (text, params) => client.query(text, params),
-              'trucking_operations',
-              'LAND',
-              dmy,
-            );
-            return buildSyntheticOperationId('LAND', dmy, seq);
+      if (forceCancelled) {
+        const existingAny = await client.query<{ id: string }>(
+          `SELECT t.id
+           FROM trucking_operations t
+           WHERE t.contract_id = $1::uuid
+             AND t.deduped_at IS NULL
+           ORDER BY CASE WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 1 ELSE 0 END,
+                    t.created_at ASC NULLS LAST, t.id ASC
+           LIMIT 1`,
+          [contractUuid],
+        );
+        targetTruckingId = existingAny.rows[0]?.id ?? null;
+      }
+      if (!targetTruckingId) {
+        const created = await getOrCreateActiveTruckingOp(
+          (text, params) => client.query(text, params),
+          contractUuid,
+          {
+            allocateOperationId: async () => {
+              const dmy = formatDDMMYYYY(new Date());
+              const seq = await allocateNextSyntheticSequence(
+                (text, params) => client.query(text, params),
+                'trucking_operations',
+                'LAND',
+                dmy,
+              );
+              return buildSyntheticOperationId('LAND', dmy, seq);
+            },
           },
-        },
-      );
-      targetTruckingId = created.id;
+        );
+        targetTruckingId = created.id;
+      }
     } else {
       const existingForShipment = await client.query<{ id: string }>(
         `SELECT t.id
          FROM trucking_operations t
          WHERE t.shipment_id = $1::uuid
-           AND COALESCE(t.status, '') <> 'CANCELLED'
+           AND (COALESCE(t.status, '') <> 'CANCELLED' OR $2::boolean)
            AND t.deduped_at IS NULL
          ORDER BY t.created_at ASC NULLS LAST, t.id ASC
          LIMIT 1`,
-        [shipmentUuid],
+        [shipmentUuid, forceCancelled],
       );
       targetTruckingId = existingForShipment.rows[0]?.id ?? null;
     }
@@ -1676,7 +1859,10 @@ export class SapDataDistributionService {
           oa_actual = COALESCE($9::numeric, oa_actual),
           quantity_sent = COALESCE($10::numeric, quantity_sent),
           gain_loss = COALESCE($12::numeric, gain_loss),
+          oa_budget_currency = COALESCE($16, oa_budget_currency),
+          oa_actual_currency = COALESCE($17, oa_actual_currency),
           status = CASE
+            WHEN $18::text = 'CANCELLED' THEN 'CANCELLED'
             WHEN status = 'CANCELLED' THEN status
             WHEN $14::date IS NOT NULL THEN 'COMPLETED'
             WHEN $13::date IS NOT NULL THEN 'IN_PROGRESS'
@@ -1694,12 +1880,15 @@ export class SapDataDistributionService {
           truckingOwner,
           this.parseNumber(data.trucking_oa_budget_at_starting_location),
           this.parseNumber(data.trucking_oa_actual_at_starting_location),
-          this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
-          this.parseNumber(data.quantity_delivered_via_trucking),
+          qtySent,
+          qtyDelivered,
           this.parseNumber(data.trucking_gain_loss_at_starting_location),
           startDate,
           completionDate,
-          targetTruckingId
+          targetTruckingId,
+          oaBudgetCurrency,
+          oaActualCurrency,
+          status,
         ]
       );
       if (startDate || completionDate) {
@@ -1721,11 +1910,12 @@ export class SapDataDistributionService {
         shipment_id, contract_id, location_sequence, cargo_readiness_date,
         loading_location, unloading_location, location, trucking_owner,
         oa_budget, oa_actual, quantity_sent, quantity_delivered, gain_loss,
-        trucking_start_date, trucking_completion_date, status
+        trucking_start_date, trucking_completion_date, status,
+        oa_budget_currency, oa_actual_currency
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7, $8,
         $9::numeric, $10::numeric, $11::numeric, $12::numeric, $13::numeric,
-        NULL, NULL, $14
+        NULL, NULL, $14, $15, $16
       ) RETURNING id`,
       [
         shipmentUuid,
@@ -1738,10 +1928,12 @@ export class SapDataDistributionService {
         truckingOwner,
         this.parseNumber(data.trucking_oa_budget_at_starting_location),
         this.parseNumber(data.trucking_oa_actual_at_starting_location),
-        this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
-        this.parseNumber(data.quantity_delivered_via_trucking),
+        qtySent,
+        qtyDelivered,
         this.parseNumber(data.trucking_gain_loss_at_starting_location),
-        status
+        status,
+        oaBudgetCurrency,
+        oaActualCurrency,
       ]
     );
     const newTruckingId = result.rows[0].id as string;

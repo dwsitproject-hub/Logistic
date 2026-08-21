@@ -3,7 +3,7 @@
  * Keeps backward compatibility with the 77-column B2B template.
  */
 
-/** Extra normalizeFieldName mappings for UAT (82-column) headers. */
+/** Extra normalizeFieldName mappings for UAT (82-column) and SAP Data v3 (93-column) headers. */
 export const SAP_MASTER_V2_UAT_FIELD_MAPPING: Record<string, string> = {
   'contract ext no': 'contract_ext_no',
   'contract ref po initial': 'contract_reference_po',
@@ -30,7 +30,46 @@ export const SAP_MASTER_V2_UAT_FIELD_MAPPING: Record<string, string> = {
   'quality at discharge location red': 'color_red',
   'quality at discharge location d&s': 'd_and_s',
   'quality at discharge location stone': 'stone',
+  // SAP Data v3 — UOM / currency / delete flags
+  'contract qty uom': 'contract_qty_uom',
+  'sto qty uom': 'sto_qty_uom',
+  'delivery vessel uom': 'quantity_delivery_uom',
+  'delivery trucking uom': 'quantity_delivery_trucking_uom',
+  'receive uom': 'quantity_receive_uom',
+  'b/l qty uom': 'bl_quantity_uom',
+  'currency unit price': 'currency_unit_price',
+  'currency trucking oa budget': 'currency_trucking_oa_budget',
+  'currency trucking oa actual': 'currency_trucking_oa_actual',
+  'delete po status': 'delete_po_status',
+  'delete sto status': 'delete_sto_status',
 };
+
+/** True when Delete PO Status or Delete STO Status is non-blank (L, S, or other). */
+export function hasSapDeleteFlag(parsedData: {
+  contract?: Record<string, unknown> | null;
+  shipment?: Record<string, unknown> | null;
+  raw?: Record<string, unknown> | null;
+}): boolean {
+  const sources: Array<Record<string, unknown> | null | undefined> = [
+    parsedData.contract,
+    parsedData.shipment,
+    parsedData.raw,
+  ];
+  for (const src of sources) {
+    if (!src) continue;
+    const po =
+      src.delete_po_status ??
+      src['Delete PO Status'] ??
+      src['delete po status'];
+    const sto =
+      src.delete_sto_status ??
+      src['Delete STO Status'] ??
+      src['delete sto status'];
+    if (po != null && String(po).trim() !== '') return true;
+    if (sto != null && String(sto).trim() !== '') return true;
+  }
+  return false;
+}
 
 export function isSapMasterV2UatFlatHeaderRow(headerRow: unknown[]): boolean {
   const headers = (headerRow ?? []).map((h) => String(h ?? '').trim().toLowerCase());

@@ -8,11 +8,20 @@ import {
 } from './loadingPortDisplay'
 
 describe('loadingPortDisplay', () => {
-  it('prefers SAP over KLIP and shows dash when both invalid', () => {
+  it('Open: prefers KLIP over SAP; Closed: prefers SAP over KLIP', () => {
     expect(
       resolveLoadingPortDisplayLabel({
         sapPortName: 'Ketapang',
-        klipPortName: '67.30',
+        klipPortName: 'Sadai',
+        contractSapClosed: false,
+      }),
+    ).toBe('Sadai')
+
+    expect(
+      resolveLoadingPortDisplayLabel({
+        sapPortName: 'Ketapang',
+        klipPortName: 'Sadai',
+        contractSapClosed: true,
       }),
     ).toBe('Ketapang')
 
@@ -20,6 +29,7 @@ describe('loadingPortDisplay', () => {
       resolveLoadingPortDisplayLabel({
         sapPortName: '67.30',
         klipPortName: 'Sadai',
+        contractSapClosed: true,
       }),
     ).toBe('Sadai')
 
@@ -35,7 +45,7 @@ describe('loadingPortDisplay', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: '67.30', sap_port_name: null },
-        { sap_vessel_loading_port_2: 'Sadai' },
+        { sap_vessel_loading_port_2: 'Sadai', is_contract_sap_closed: true },
         2,
       ),
     ).toBe('Sadai')
@@ -43,13 +53,13 @@ describe('loadingPortDisplay', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: '67.30', sap_port_name: null },
-        {},
+        { is_contract_sap_closed: true },
         2,
       ),
     ).toBe('-')
   })
 
-  it('falls back to shipment-level KLIP port_of_loading when VLP/SAP empty', () => {
+  it('Open: falls back to shipment-level KLIP port_of_loading when VLP/SAP empty', () => {
     expect(
       resolveLoadingPortDisplayFromRow(null, { vessel_loading_port_1: 'Dumai' }, 1),
     ).toBe('Dumai')
@@ -57,7 +67,7 @@ describe('loadingPortDisplay', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: '67.30', sap_port_name: null },
-        { vessel_loading_port_1: 'Ketapang' },
+        { vessel_loading_port_1: 'Ketapang', is_contract_sap_closed: false },
         1,
       ),
     ).toBe('Ketapang')
@@ -79,13 +89,14 @@ describe('loadingPortDisplay', () => {
     ).toBe('-')
   })
 
-  it('prefers SAP discharge port over KLIP', () => {
+  it('Closed: prefers SAP discharge port over KLIP', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: 'KLIP Dumai', is_discharge_port: true, sap_port_name: null },
         {
           sap_vessel_discharge_port_1: 'Belawan',
           vessel_discharge_port_1: 'KLIP Dumai',
+          is_contract_sap_closed: true,
         },
       ),
     ).toBe('Belawan')
@@ -94,8 +105,22 @@ describe('loadingPortDisplay', () => {
       resolveLoadingPortDisplayLabel({
         sapPortName: 'Belawan',
         klipPortName: 'KLIP Dumai',
+        contractSapClosed: true,
       }),
     ).toBe('Belawan')
+  })
+
+  it('Open: prefers KLIP discharge over SAP', () => {
+    expect(
+      resolveLoadingPortDisplayFromRow(
+        { port_name: 'KLIP Dumai', is_discharge_port: true, sap_port_name: null },
+        {
+          sap_vessel_discharge_port_1: 'Belawan',
+          vessel_discharge_port_1: 'KLIP Dumai',
+          is_contract_sap_closed: false,
+        },
+      ),
+    ).toBe('KLIP Dumai')
   })
 
   it('extracts KLIP input only when human-readable', () => {
@@ -107,11 +132,11 @@ describe('loadingPortDisplay', () => {
     expect(resolveKlipPortInputValue('Ketapang')).toBe('Ketapang')
   })
 
-  it('hides KLIP placeholder and prefers SAP loading/discharge names', () => {
+  it('Closed: hides KLIP placeholder and prefers SAP loading/discharge names', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: 'Loading Port 1', sap_port_name: 'PORT TALANG DUKU' },
-        {},
+        { is_contract_sap_closed: true },
         1,
       ),
     ).toBe('PORT TALANG DUKU')
@@ -119,7 +144,7 @@ describe('loadingPortDisplay', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: 'Loading Port 1', sap_port_name: null },
-        { sap_vessel_loading_port_1: 'PORT TALANG DUKU' },
+        { sap_vessel_loading_port_1: 'PORT TALANG DUKU', is_contract_sap_closed: true },
         0,
       ),
     ).toBe('PORT TALANG DUKU')
@@ -127,7 +152,7 @@ describe('loadingPortDisplay', () => {
     expect(
       resolveLoadingPortDisplayFromRow(
         { port_name: 'Marunda', is_discharge_port: true, sap_port_name: null },
-        { sap_vessel_discharge_port_1: 'PORT MARUNDA' },
+        { sap_vessel_discharge_port_1: 'PORT MARUNDA', is_contract_sap_closed: true },
       ),
     ).toBe('PORT MARUNDA')
 

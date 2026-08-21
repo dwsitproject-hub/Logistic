@@ -37,6 +37,7 @@ import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
 import { sqlMasterVesselLateralJoin } from '../utils/masterVesselDisplaySql';
 import { sqlSapVesselNameFromSpdJsonb } from '../utils/sapVesselFields';
 import { sqlIsContractSapClosedForStoExpr } from '../utils/contractDeliveryStatus';
+import { applyLiveSapAtaReferences } from '../utils/sapAtaReferenceFromProcessed';
 
 const SPD_EFFECTIVE_STO = `NULLIF(TRIM(COALESCE(
       spd.sto_number::text,
@@ -74,7 +75,13 @@ const SHIPMENT_BY_ID_SQL = `
     sap_sto.vessel_name_sap,
     sap_sto.vessel_code_sap,
     sap_sto.vessel_owner_sap,
+    mv.id AS master_vessel_resolved_id,
     mv.vessel_name_master,
+    mv.vessel_code_master,
+    mv.vessel_owner_master,
+    mv.vessel_capacity_mt_master,
+    mv.vessel_type_master,
+    mv.vessel_terms_master,
     ${sqlIsContractSapClosedForStoExpr(
       'c',
       `COALESCE(
@@ -116,8 +123,8 @@ const SHIPMENT_BY_ID_SQL = `
     LIMIT 1
   ) sap_sto ON TRUE
   ${sqlMasterVesselLateralJoin(
-    'COALESCE(s.vessel_code, sap_sto.vessel_code_sap)',
-    'COALESCE(s.vessel_name, sap_sto.vessel_name_sap)',
+    's.vessel_code',
+    's.vessel_name',
     'mv',
     's.master_vessel_id',
   )}
@@ -317,6 +324,36 @@ async function loadPortsAndInfo(
     shipmentInfo.sap_vessel_discharge_port_1 = sapPortNames.discharge;
   }
 
+  // SAP ATA chips: live from sap_processed_data (clears stale VLP sap_ata_* backfill).
+  const stoHint = String(preferredSto ?? '').trim();
+  const spdAta = await query(
+    `SELECT spd.data->'shipment' AS shipment
+     FROM sap_processed_data spd
+     INNER JOIN shipments s ON s.id = $1::uuid
+     LEFT JOIN contracts c ON c.id = s.contract_id
+     WHERE spd.contract_number = c.contract_id
+        OR ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
+             NULLIF($2::text, ''),
+             c.sto_number::text,
+             s.operation_id,
+             s.shipment_id::text
+           ))
+     ORDER BY
+       CASE WHEN ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
+         NULLIF($2::text, ''),
+         c.sto_number::text,
+         s.operation_id,
+         s.shipment_id::text
+       )) THEN 0 ELSE 1 END,
+       spd.created_at DESC NULLS LAST
+     LIMIT 1`,
+    [shipmentUuid, stoHint],
+  );
+  const sapShipmentRow = spdAta.rows[0] as { shipment?: Record<string, unknown> } | undefined;
+  if (sapShipmentRow) {
+    applyLiveSapAtaReferences(shipmentInfo, ports, sapShipmentRow.shipment ?? null);
+  }
+
   return {
     ports,
     shipmentInfo,
@@ -379,7 +416,10 @@ async function resolveShipmentEditPayloadUncached(
     : [];
 
   const shipment = shipmentRes.rows[0] as Record<string, unknown>;
-  mergeShipmentVesselFromSapRow(shipment, { overlayDisplayName: false });
+  mergeShipmentVesselFromSapRow(shipment, {
+    overlayDisplayName: false,
+    hydrateFromMaster: true,
+  });
 
   return {
     shipment,

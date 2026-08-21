@@ -231,6 +231,9 @@ describe('finalizeSapShipmentAfterUpsert', () => {
     const updates: string[] = [];
 
     const db = mockDb(vi.fn(async (text: string, params?: unknown[]) => {
+        if (text.includes('SELECT shipment_id FROM shipments WHERE id')) {
+          return { rows: [{ shipment_id: '1016010976' }] };
+        }
         if (text.includes('UPDATE shipments SET shipment_id')) {
           updates.push(`rename:${params?.[0]}`);
           return { rows: [] };
@@ -277,12 +280,59 @@ describe('finalizeSapShipmentAfterUpsert', () => {
     expect(updates.some((u) => u === 'delete_sto:1016010976')).toBe(true);
   });
 
+  it('does not rename keeper when parallel SAP STOs both exist in latest import', async () => {
+    const keeperUuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const contractUuid = '11111111-2222-3333-4444-555555555555';
+    const updates: string[] = [];
+
+    const db = mockDb(vi.fn(async (text: string, params?: unknown[]) => {
+        if (text.includes('SELECT shipment_id FROM shipments WHERE id')) {
+          return { rows: [{ shipment_id: '1586004927' }] };
+        }
+        if (text.includes('UPDATE shipments SET shipment_id')) {
+          updates.push(`rename:${params?.[0]}`);
+          return { rows: [] };
+        }
+        if (text.includes('UPDATE contracts SET sto_number')) {
+          updates.push(`sync_sto:${params?.[0]}`);
+          return { rows: [] };
+        }
+        if (text.includes('SELECT po_number FROM contracts')) {
+          return { rows: [{ po_number: '1581000931' }] };
+        }
+        if (text.includes('SELECT id, shipment_id FROM shipments') && text.includes('<> $2::uuid')) {
+          return { rows: [] };
+        }
+        if (text.includes('latest_import')) {
+          return {
+            rows: [{ sto_key: '1586004927' }, { sto_key: '1586004928' }, { sto_key: '1586004929' }],
+          };
+        }
+        return { rows: [] };
+      }));
+
+    const result = await finalizeSapShipmentAfterUpsert(
+      db,
+      contractUuid,
+      keeperUuid,
+      '1586004928',
+      '1581000931',
+    );
+
+    expect(result.cancelledShipmentIds).toEqual([]);
+    expect(updates.some((u) => u.startsWith('rename:'))).toBe(false);
+    expect(updates.some((u) => u.startsWith('sync_sto:'))).toBe(false);
+  });
+
   it('skips ghost sibling with KLIP activity', async () => {
     const keeperUuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     const contractUuid = '11111111-2222-3333-4444-555555555555';
     const ghostUuid = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee';
 
     const db = mockDb(vi.fn(async (text: string, params?: unknown[]) => {
+        if (text.includes('SELECT shipment_id FROM shipments WHERE id')) {
+          return { rows: [{ shipment_id: '1016010976' }] };
+        }
         if (text.includes('UPDATE shipments SET shipment_id')) return { rows: [] };
         if (text.includes('UPDATE contracts SET sto_number')) return { rows: [] };
         if (text.includes('SELECT po_number FROM contracts')) {

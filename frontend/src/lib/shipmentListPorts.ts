@@ -1,8 +1,7 @@
 /**
  * Shipments list — loading/discharge port display.
- * Priority: SAP Vessel Loading Port / Vessel Discharge Port first;
- * if SAP is null/invalid, fall back to KLIP Shipment operation input
- * (shipments.port_of_loading/discharge + vessel_loading_ports.port_name).
+ * Open (GR): KLIP → SAP → "" (UI shows "-").
+ * Closed (GR): SAP → KLIP → "".
  */
 
 import {
@@ -13,6 +12,7 @@ import {
   resolveShippingPerfLoadingPort,
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
+import { isContractSapClosedFlag } from '@/lib/shipmentVesselCompare'
 
 export type ShipmentListPortSource = ShippingPerformancePortSource & {
   loading_ports?: string | null
@@ -21,6 +21,18 @@ export type ShipmentListPortSource = ShippingPerformancePortSource & {
   discharge_ports_klip?: string | null
   sap_loading_ports?: string | null
   sap_discharge_ports?: string | null
+  is_contract_sap_closed?: boolean | string | null
+}
+
+/** Align with vesselLoadingPortDedupe.normalizePortIdentity (PORT OF X ≡ X). */
+export function normalizeListPortIdentity(name: unknown): string {
+  return String(name ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim()
+    .replace(/^(PORT|JETTY|TERMINAL|PELABUHAN|DERMAGA)(\s+OF)?\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function splitCommaPorts(value: unknown): string[] {
@@ -42,8 +54,8 @@ function joinUniquePorts(parts: string[]): string {
   const seen = new Set<string>()
   const out: string[] = []
   for (const part of parts) {
-    const key = part.toLowerCase()
-    if (seen.has(key)) continue
+    const key = normalizeListPortIdentity(part) || part.toLowerCase()
+    if (!key || seen.has(key)) continue
     seen.add(key)
     out.push(part)
   }
@@ -88,16 +100,19 @@ function resolveKlipDischargePorts(row: ShipmentListPortSource): string {
   )
 }
 
-/** Resolved loading ports for list table (comma-separated when multiple SAP ports). */
+function pickPortByGrStatus(klip: string, sap: string, closed: boolean): string {
+  if (closed) return sap || klip
+  return klip || sap
+}
+
+/** Resolved loading ports for list table (comma-separated when multiple). */
 export function resolveShipmentListLoadingPorts(row: ShipmentListPortSource): string {
-  const sap = resolveSapLoadingPorts(row)
-  if (sap) return sap
-  return resolveKlipLoadingPorts(row)
+  const closed = isContractSapClosedFlag(row.is_contract_sap_closed)
+  return pickPortByGrStatus(resolveKlipLoadingPorts(row), resolveSapLoadingPorts(row), closed)
 }
 
 /** Resolved discharge ports for list table. */
 export function resolveShipmentListDischargePorts(row: ShipmentListPortSource): string {
-  const sap = resolveSapDischargePorts(row)
-  if (sap) return sap
-  return resolveKlipDischargePorts(row)
+  const closed = isContractSapClosedFlag(row.is_contract_sap_closed)
+  return pickPortByGrStatus(resolveKlipDischargePorts(row), resolveSapDischargePorts(row), closed)
 }

@@ -12,6 +12,10 @@ describe('sqlMasterVesselCanonicalLateralJoin', () => {
     expect(sql).toContain('sp.master_vessel_id');
     expect(sql).toContain('mv.id = sp.master_vessel_id');
     expect(sql).toContain('vessel_name_master');
+    expect(sql).toContain('vessel_owner_master');
+    expect(sql).toContain('vessel_capacity_mt_master');
+    expect(sql).toContain('vessel_type_master');
+    expect(sql).toContain('vessel_terms_master');
   });
 
   it('omits id match when masterVesselIdExpr is not passed', () => {

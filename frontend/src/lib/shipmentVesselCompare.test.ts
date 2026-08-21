@@ -12,14 +12,32 @@ describe('shipmentVesselCompare', () => {
     expect(shipmentVesselPrimaryName('', 'VESSEL A')).toBe('VESSEL A')
   })
 
-  it('uses KLIP as primary when it differs from SAP', () => {
+  it('uses KLIP as primary when it differs from SAP (Open)', () => {
     expect(hasKlipVesselNameOverride('VESSEL B', 'VESSEL A')).toBe(true)
     expect(shipmentVesselPrimaryName('VESSEL B', 'VESSEL A')).toBe('VESSEL B')
   })
 
+  it('does not prefer Master over KLIP when Open', () => {
+    expect(
+      shipmentVesselPrimaryName('VESSEL B', 'VESSEL A', {
+        masterName: 'BG. ANDALAN 02',
+        contractSapClosed: false,
+      }),
+    ).toBe('VESSEL B')
+  })
+
+  it('prefers Master when GR is Closed', () => {
+    expect(
+      shipmentVesselPrimaryName('VESSEL B', 'VESSEL A', {
+        masterName: 'BG. ANDALAN 02',
+        contractSapClosed: true,
+      }),
+    ).toBe('BG. ANDALAN 02')
+  })
+
   it('does not treat matching names as an override', () => {
     expect(hasKlipVesselNameOverride('VESSEL A', 'vessel a')).toBe(false)
-    expect(shipmentVesselPrimaryName('VESSEL A', 'vessel a')).toBe('vessel a')
+    expect(shipmentVesselPrimaryName('VESSEL A', 'vessel a')).toBe('VESSEL A')
   })
 
   it('keeps the edited KLIP name on hydrate when GR is Open', () => {

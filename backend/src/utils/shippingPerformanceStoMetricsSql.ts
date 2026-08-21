@@ -158,6 +158,7 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
             contractQtyExpr: 'asp.contract_qty',
             stoKeyExpr: 'asp.sto_key',
             poNumberExpr: 'asp.po_number',
+            incotermExpr: 'asp.incoterm',
           })} AS delivery_kg,
           COALESCE(
             NULLIF((${sqlPoStoSapQtyKg({

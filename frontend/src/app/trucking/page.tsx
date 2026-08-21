@@ -347,6 +347,8 @@ interface TruckingOperation {
   gain_loss_amount: number
   oa_budget: number
   oa_actual: number
+  oa_budget_currency?: string | null
+  oa_actual_currency?: string | null
   estimated_km?: number
   status: string
   /** Raw DB status — use for edit lock (CANCELLED) when effective status differs. */
@@ -2632,6 +2634,16 @@ function TruckingPageContent() {
     })
   }
 
+  const formatOaWithCurrency = (
+    amount: number | string | null | undefined,
+    currency?: string | null,
+  ) => {
+    const formatted = formatNumber(amount as number | string)
+    if (formatted === '-') return formatted
+    const cur = currency != null ? String(currency).trim() : ''
+    return cur ? `${formatted} ${cur}` : formatted
+  }
+
   const toKg = (mt: number | string | null | undefined) => {
     if (mt === null || mt === undefined || mt === '') return null
     const raw = typeof mt === 'string' ? mt : String(mt)
@@ -3222,7 +3234,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.oa_budget || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.oa_budget)}
+          {formatOaWithCurrency(o.oa_budget, o.oa_budget_currency)}
         </span>
       )
     },
@@ -3235,7 +3247,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.oa_actual || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.oa_actual)}
+          {formatOaWithCurrency(o.oa_actual, o.oa_actual_currency)}
         </span>
       )
     },
@@ -5115,7 +5127,9 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatNumber(operation.oa_budget)}</div>
+                              <div className="font-medium">
+                                {formatOaWithCurrency(operation.oa_budget, operation.oa_budget_currency)}
+                              </div>
                             )}
                           </div>
                           <div>
@@ -5129,7 +5143,9 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatNumber(operation.oa_actual)}</div>
+                              <div className="font-medium">
+                                {formatOaWithCurrency(operation.oa_actual, operation.oa_actual_currency)}
+                              </div>
                             )}
                           </div>
                         </div>

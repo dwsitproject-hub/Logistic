@@ -90,6 +90,15 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).not.toContain("= TRIM((sp.sto_key)::text)");
   });
 
+  it('ignores blank/synthetic STO header GR when real SAP STO lines already have GR', () => {
+    const sql = sqlContractImportStatusExpr('c', 'c.po_number');
+    expect(sql).toContain('spd_gr');
+    expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
+    expect(sql).toContain('NOT EXISTS');
+    // Real SAP STO lines vote; blank/synthetic headers only vote when no such lines exist
+    expect(sql).toMatch(/IS NOT NULL[\s\S]*!~ '\^\(OP-\|MNL-\|MSEA-\)'[\s\S]*OR NOT EXISTS/);
+  });
+
   it('scopes LCO/FOB GR Close to sto_key while CIF/CFR stay PO-wide', () => {
     const scoped = sqlContractImportStatusExpr('c', 'c.po_number', 'sp.sto_key');
     expect(scoped).toContain('sp.sto_key');

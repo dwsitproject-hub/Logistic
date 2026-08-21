@@ -81,7 +81,8 @@ export function normalizePortIdentity(name: unknown): string {
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, ' ')
     .trim()
-    .replace(/^(PORT|JETTY|TERMINAL|PELABUHAN|DERMAGA)\s+/, '')
+    // "PORT OF BONEMANJING" and "PORT BONEMANJING" → same identity as "BONEMANJING"
+    .replace(/^(PORT|JETTY|TERMINAL|PELABUHAN|DERMAGA)(\s+OF)?\s+/, '')
     .replace(/\s+/g, ' ')
     .trim();
 }

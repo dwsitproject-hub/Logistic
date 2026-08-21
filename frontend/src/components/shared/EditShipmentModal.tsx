@@ -38,7 +38,10 @@ import {
 import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
 import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
 import {
+  firstNonEmptyVesselField,
   hasKlipVesselNameOverride,
+  isContractSapClosedFlag,
+  normalizeVesselNameKey,
   shipmentVesselPrimaryName,
 } from '@/lib/shipmentVesselCompare'
 import { invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
@@ -126,9 +129,8 @@ import {
 import {
   ataFieldsFromShipmentInfo,
   ataSapReferenceFromShipmentInfo,
-  dischargeAtaSapFromPortRow,
+  resolveAtaSapReferenceValue,
   emptyAtaFields,
-  loadingAtaSapFromPortRow,
   type ShipmentAtaApiField,
   type ShipmentAtaFields,
 } from '@/lib/shipmentAtaFields'
@@ -805,7 +807,6 @@ export function EditShipmentModal({
   const [originalVesselName, setOriginalVesselName] = useState('')
   const [sapVesselName, setSapVesselName] = useState('')
   const [sapVesselCode, setSapVesselCode] = useState('')
-  const [sapVesselOwner, setSapVesselOwner] = useState('')
   const [pendingMasterVessel, setPendingMasterVessel] = useState<MasterVesselOption | null>(null)
   const [vesselMeta, setVesselMeta] = useState<Record<string, string>>({})
   const [operationId, setOperationId] = useState('')
@@ -1073,7 +1074,6 @@ export function EditShipmentModal({
     setOriginalVesselName('')
     setSapVesselName('')
     setSapVesselCode('')
-    setSapVesselOwner('')
     setPendingMasterVessel(null)
     setVesselMeta({})
     setDetailRows([])
@@ -1297,20 +1297,69 @@ export function EditShipmentModal({
 
         const klipVn = String(row.vessel_name_klip ?? row.vessel_name ?? '').trim()
         const sapVn = String(row.vessel_name_sap ?? '').trim()
-        const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn)
+        const masterVn = String(row.vessel_name_master ?? '').trim()
+        const grClosed = isContractSapClosedFlag(row.is_contract_sap_closed)
+        const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn, {
+          masterName: masterVn,
+          contractSapClosed: grClosed,
+        })
+        const nameOverride = hasKlipVesselNameOverride(klipVn, sapVn)
+        const masterAlignedWithKlip =
+          !nameOverride ||
+          (Boolean(masterVn) &&
+            normalizeVesselNameKey(masterVn) === normalizeVesselNameKey(klipVn))
         setSapVesselName(sapVn)
         setSapVesselCode(String(row.vessel_code_sap ?? '').trim())
-        setSapVesselOwner(String(row.vessel_owner_sap ?? '').trim())
         setVesselName(primaryVn)
         setOriginalVesselName(primaryVn)
-        setPendingMasterVessel(null)
+        setPendingMasterVessel(
+          masterAlignedWithKlip && (masterVn || row.vessel_code_master)
+            ? {
+                id: String(
+                  row.master_vessel_resolved_id ?? row.master_vessel_id ?? '',
+                ),
+                vessel_code: String(row.vessel_code_master ?? row.vessel_code ?? '') || null,
+                vessel_name: masterVn || primaryVn,
+                vessel_capacity_mt:
+                  row.vessel_capacity_mt_master != null
+                    ? Number(row.vessel_capacity_mt_master)
+                    : null,
+                vessel_owner: String(row.vessel_owner_master ?? row.vessel_owner ?? '') || null,
+                vessel_type: String(row.vessel_type_master ?? '') || null,
+                terms: String(row.vessel_terms_master ?? '') || null,
+              }
+            : null,
+        )
+        const charterFromMaster = masterAlignedWithKlip
+          ? charterTypeFromMasterTerms(String(row.vessel_terms_master ?? '') || null)
+          : ''
         setVesselMeta({
-          vessel_code: String(row.vessel_code ?? ''),
-          vessel_owner: String(row.vessel_owner ?? ''),
-          vessel_capacity: String(row.vessel_capacity ?? ''),
+          vessel_code: firstNonEmptyVesselField(
+            row.vessel_code,
+            masterAlignedWithKlip ? row.vessel_code_master : null,
+            !nameOverride ? row.vessel_code_sap : null,
+          ),
+          // Owner from Master Vessel (no SAP compare line in UI).
+          vessel_owner: firstNonEmptyVesselField(
+            row.vessel_owner,
+            masterAlignedWithKlip ? row.vessel_owner_master : null,
+            !nameOverride ? row.vessel_owner_sap : null,
+          ),
+          vessel_capacity: firstNonEmptyVesselField(
+            row.vessel_capacity && String(row.vessel_capacity) !== '0' && String(row.vessel_capacity) !== '0.00'
+              ? row.vessel_capacity
+              : null,
+            masterAlignedWithKlip ? row.vessel_capacity_mt_master : null,
+          ),
           vessel_draft: String(row.vessel_draft ?? ''),
-          vessel_hull_type: String(row.vessel_hull_type ?? ''),
-          charter_type: String(row.charter_type ?? ''),
+          vessel_hull_type: firstNonEmptyVesselField(
+            row.vessel_hull_type,
+            masterAlignedWithKlip ? row.vessel_type_master : null,
+          ),
+          charter_type: firstNonEmptyVesselField(
+            charterFromMaster,
+            row.charter_type,
+          ),
           port_of_discharge: String(row.port_of_discharge ?? info.vessel_discharge_port_1 ?? ''),
         })
         setOperationId(String(row.operation_id ?? ''))
@@ -1939,16 +1988,15 @@ export function EditShipmentModal({
     key: ShipmentAtaApiField,
     portRow?: LoadingPortRef,
   ): string => {
-    if (key.includes('discharg')) {
-      const fromDisc = dischargeAtaSapFromPortRow(portRow as Record<string, unknown> | undefined)
-      const fromPort = fromDisc[key as keyof typeof fromDisc]
-      if (fromPort) return fromPort
-      return ataSapReference[key] ?? ''
-    }
-    const portSap = loadingAtaSapFromPortRow(portRow as Record<string, unknown> | undefined)
-    const fromPort = portSap[key as keyof typeof portSap]
-    if (fromPort) return fromPort
-    return ataSapReference[key] ?? ''
+    const isDischargeRow = Boolean(portRow?.is_discharge_port)
+    return resolveAtaSapReferenceValue(key, {
+      loadingPortRow: isDischargeRow ? undefined : (portRow as Record<string, unknown> | undefined),
+      // Discharge SAP chips must never read loading-port sap_ata_* (single-port layout bug).
+      dischargePortRow: isDischargeRow
+        ? (portRow as Record<string, unknown> | undefined)
+        : (dischargePortRow as Record<string, unknown> | undefined),
+      shipmentSapRef: ataSapReference,
+    })
   }
 
   const updateQualityField = (
@@ -2183,15 +2231,27 @@ export function EditShipmentModal({
                   }
                   format="text"
                   compact
-                />
-                <KlipSapCompareField
-                  label="Vessel Owner"
-                  klipValue={vesselMeta.vessel_owner}
-                  sapValue={sapVesselOwner}
-                  format="text"
-                  compact
+                  showKlipBadge={hasKlipSapMismatch(
+                    formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(vesselMeta.vessel_code),
+                    formatVesselCodeDisplay(sapVesselCode) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(sapVesselCode),
+                    'text',
+                  )}
+                  showOverrideBadge={hasKlipSapMismatch(
+                    formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(vesselMeta.vessel_code),
+                    formatVesselCodeDisplay(sapVesselCode) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(sapVesselCode),
+                    'text',
+                  )}
                 />
                 {[
+                  ['Vessel Owner', vesselMeta.vessel_owner],
                   ['Vessel Capacity (MT)', vesselMeta.vessel_capacity],
                   ['Vessel Draft', vesselMeta.vessel_draft],
                   ['Vessel Type', vesselMeta.vessel_hull_type],
@@ -3061,6 +3121,7 @@ export function EditShipmentModal({
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                     {ATA_FIELD_ROWS.map(({ key, label }) => {
                       const loadingPortRow = loadingPortRows[0]
+                      // Discharge keys use dischargePortRow inside resolveAtaSapReference.
                       const sapRef = resolveAtaSapReference(key, loadingPortRow)
                       const klipVal = ataFields[key]
                       const hasOverride = Boolean(klipVal && klipVal !== (sapRef || ''))

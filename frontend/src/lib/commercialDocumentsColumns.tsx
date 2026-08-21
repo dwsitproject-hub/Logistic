@@ -165,7 +165,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.unit_price,
-      render: (r) => <span className="text-sm tabular-nums">{formatCommercialIdr(r.unit_price)}</span>,
+      render: (r) => <span className="text-sm tabular-nums">{formatCommercialIdr(r.unit_price, r.currency)}</span>,
     },
     {
       id: 'total_price',
@@ -175,7 +175,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       formulaHelp: COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
       getSortValue: (r) => r.total_price,
       render: (r) => (
-        <span className="text-sm tabular-nums">{formatCommercialIdr(r.total_price)}</span>
+        <span className="text-sm tabular-nums">{formatCommercialIdr(r.total_price, r.currency)}</span>
       ),
     },
     {

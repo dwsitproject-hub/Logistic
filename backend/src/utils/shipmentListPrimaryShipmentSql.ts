@@ -1,16 +1,10 @@
 import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 /**
- * When shipment list groups multiple DB rows under one STO, pick the primary shipment row:
- * 1) STO Type V (vessel) before T (trucking) / other
- * 2) row with vessel_name populated
- * 3) shipment_id matches the group STO key
- * 4) row has ATA milestones populated
- * 5) newest created_at
- *
- * Uses join aliases only (no correlated subqueries) so this is safe inside GROUP BY + array_agg.
+ * Shared ORDER BY for picking the primary shipment row in a STO group.
+ * Keep in sync with sqlShipmentListPrimaryIdAgg / sqlShipmentListPrimaryFieldAgg.
  */
-export function sqlShipmentListPrimaryIdAgg(
+export function sqlShipmentListPrimaryOrderBy(
   stoKeyExpr?: string,
   contractAlias = 'c',
   spdAlias = 'l',
@@ -21,7 +15,7 @@ export function sqlShipmentListPrimaryIdAgg(
   const stoType = contractStosAlias
     ? `UPPER(TRIM(COALESCE(NULLIF(TRIM(${contractStosAlias}.sto_type), ''), 'Z')))`
     : `'Z'`;
-  return `(array_agg(${shipmentAlias}.id ORDER BY
+  return `
     CASE
       WHEN ${stoType} = 'V' THEN 0
       WHEN ${stoType} = 'T' THEN 2
@@ -45,6 +39,56 @@ export function sqlShipmentListPrimaryIdAgg(
       THEN 0
       ELSE 1
     END,
-    ${shipmentAlias}.created_at DESC
+    ${shipmentAlias}.created_at DESC`;
+}
+
+/**
+ * When shipment list groups multiple DB rows under one STO, pick the primary shipment row:
+ * 1) STO Type V (vessel) before T (trucking) / other
+ * 2) row with vessel_name populated
+ * 3) shipment_id matches the group STO key
+ * 4) row has ATA milestones populated
+ * 5) newest created_at
+ *
+ * Uses join aliases only (no correlated subqueries) so this is safe inside GROUP BY + array_agg.
+ */
+export function sqlShipmentListPrimaryIdAgg(
+  stoKeyExpr?: string,
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+  contractStosAlias?: string,
+): string {
+  const orderBy = sqlShipmentListPrimaryOrderBy(
+    stoKeyExpr,
+    contractAlias,
+    spdAlias,
+    shipmentAlias,
+    contractStosAlias,
+  );
+  return `(array_agg(${shipmentAlias}.id ORDER BY ${orderBy}
   ) FILTER (WHERE ${shipmentAlias}.id IS NOT NULL))[1]`;
+}
+
+/**
+ * Same primary-row ranking as sqlShipmentListPrimaryIdAgg, but returns a field
+ * (e.g. vessel_name) so list columns match the shipment opened in Edit modal.
+ */
+export function sqlShipmentListPrimaryFieldAgg(
+  fieldExpr: string,
+  stoKeyExpr?: string,
+  contractAlias = 'c',
+  spdAlias = 'l',
+  shipmentAlias = 's',
+  contractStosAlias?: string,
+): string {
+  const orderBy = sqlShipmentListPrimaryOrderBy(
+    stoKeyExpr,
+    contractAlias,
+    spdAlias,
+    shipmentAlias,
+    contractStosAlias,
+  );
+  return `(array_agg(${fieldExpr} ORDER BY ${orderBy}
+  ) FILTER (WHERE ${shipmentAlias}.id IS NOT NULL AND NULLIF(TRIM((${fieldExpr})::text), '') IS NOT NULL))[1]`;
 }

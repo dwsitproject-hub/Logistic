@@ -151,23 +151,52 @@ export function shipmentListRowQtyMoveReceiveSql(spAlias = 'sp'): string {
   return shipmentListRowQtyMoveScalarSql(spAlias, 'qm.quantity_receive');
 }
 
-/** sto_metrics (per-PO SAP) → sap_agg → header → qty_move. Do not GREATEST with header SUM. */
+/** True when list row sto_key is a real SAP STO (not KLIP OP-/MNL-/MSEA-). */
+export function shipmentListHasRealSapStoKeySql(spAlias = 'sp'): string {
+  return `(
+    NULLIF(TRIM(COALESCE(${spAlias}.sto_key::text, '')), '') IS NOT NULL
+    AND TRIM(${spAlias}.sto_key::text) !~ '^(OP-|MNL-|MSEA-)'
+  )`;
+}
+
+/**
+ * sto_metrics → sap_agg → header → qty_move.
+ * Real SAP STO rows skip contract-wide qty_move so Σ PO receive/delivery cannot inflate one STO.
+ */
 export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
-  return sqlCoalesceNonZeroChain([
+  const perSto = sqlCoalesceNonZeroChain([
+    'sm.delivered_qty',
+    'sa.quantity_delivered_sap',
+    `${spAlias}.quantity_delivered`,
+  ]);
+  const withQtyMove = sqlCoalesceNonZeroChain([
     'sm.delivered_qty',
     'sa.quantity_delivered_sap',
     `${spAlias}.quantity_delivered`,
     shipmentListRowQtyMoveDeliverySql(spAlias),
   ]);
+  return `CASE
+    WHEN ${shipmentListHasRealSapStoKeySql(spAlias)} THEN (${perSto})
+    ELSE (${withQtyMove})
+  END`;
 }
 
 export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
-  return sqlCoalesceNonZeroChain([
+  const perSto = sqlCoalesceNonZeroChain([
+    'sm.received_qty',
+    'sa.quantity_receive',
+    `${spAlias}.actual_vessel_qty_receive`,
+  ]);
+  const withQtyMove = sqlCoalesceNonZeroChain([
     'sm.received_qty',
     'sa.quantity_receive',
     `${spAlias}.actual_vessel_qty_receive`,
     shipmentListRowQtyMoveReceiveSql(spAlias),
   ]);
+  return `CASE
+    WHEN ${shipmentListHasRealSapStoKeySql(spAlias)} THEN (${perSto})
+    ELSE (${withQtyMove})
+  END`;
 }
 
 /** SELECT list fragment for shipments page qty columns (null-safe). */

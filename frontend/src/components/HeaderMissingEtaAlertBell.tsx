@@ -10,6 +10,11 @@ import {
   peekCache,
   subscribeMissingEtaAlertRefresh,
 } from '@/lib/clientDataCache'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModalByPo,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -66,10 +71,10 @@ function formatDaysLabel(days: number): string {
   return `${days} day${days === 1 ? '' : 's'} left`
 }
 
-function daysTone(days: number): string {
+/** Overdue = red; Due today and all remaining days (1–14) = amber. */
+export function daysTone(days: number): string {
   if (days < 0) return 'text-red-700'
-  if (days <= 3) return 'text-amber-700'
-  return 'text-gray-600'
+  return 'text-amber-700'
 }
 
 function chipTone(total: number, items: MissingEtaAlertUnit[]): {
@@ -139,6 +144,9 @@ export function HeaderMissingEtaAlertBell() {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(!cachedInitial)
   const [data, setData] = useState<AlertResponse>(cachedInitial ?? EMPTY_ALERT_RESPONSE)
+  const [contractDetailTarget, setContractDetailTarget] =
+    useState<ContractDetailModalContract | null>(null)
+  const [contractDetailLoadingKey, setContractDetailLoadingKey] = useState<string | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const fetchAlertsFromApi = useCallback(async (): Promise<AlertResponse> => {
@@ -202,152 +210,203 @@ export function HeaderMissingEtaAlertBell() {
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [open])
 
+  const openContractDetail = useCallback(async (item: MissingEtaAlertUnit) => {
+    const po = String(item.po_number || '').trim()
+    const contractId = String(item.contract_id || '').trim()
+    if (!po && !contractId) return
+
+    const loadKey = item.unit_key
+    setContractDetailLoadingKey(loadKey)
+    try {
+      const contract = await fetchContractForDetailModalByPo(po || contractId, contractId || null)
+      if (contract) {
+        setOpen(false)
+        setContractDetailTarget(contract)
+      } else {
+        console.warn('Missing Planning: contract details not found for', po || contractId)
+      }
+    } catch (err) {
+      console.warn('Missing Planning: failed to open contract details', err)
+    } finally {
+      setContractDetailLoadingKey((prev) => (prev === loadKey ? null : prev))
+    }
+  }, [])
+
   if (!data.visible) return null
 
   const badgeLabel = data.total > 99 ? '99+' : String(data.total)
   const tone = chipTone(data.total, data.items)
 
   return (
-    <div className="relative" ref={panelRef}>
-      <Tooltip delayDuration={200}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            className={cn(
-              'inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-1.5 text-sm shadow-sm transition-all',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-              tone.border,
-              tone.gradient,
-              tone.hoverBorder,
-              tone.hoverGradient,
-              tone.ring,
-              'bg-gradient-to-r',
-            )}
-            aria-label={`Missing Planning alerts: ${loading ? 'loading' : data.total}`}
-            aria-expanded={open}
-          >
-            <span
+    <>
+      <div className="relative" ref={panelRef}>
+        <Tooltip delayDuration={200}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
               className={cn(
-                'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
-                tone.iconBox,
+                'inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 py-1.5 text-sm shadow-sm transition-all',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                tone.border,
+                tone.gradient,
+                tone.hoverBorder,
+                tone.hoverGradient,
+                tone.ring,
+                'bg-gradient-to-r',
               )}
+              aria-label={`Missing Planning alerts: ${loading ? 'loading' : data.total}`}
+              aria-expanded={open}
             >
-              {loading ? (
-                <Loader2 className={cn('h-4 w-4 animate-spin', tone.icon)} aria-hidden />
-              ) : (
-                <Bell className={cn('h-4 w-4', tone.icon)} aria-hidden />
-              )}
-            </span>
-            <span className={cn('hidden font-medium sm:inline', tone.label)}>Missing Planning</span>
-            <span
-              className={cn(
-                'inline-flex min-w-[1.5rem] items-center justify-center rounded-md px-1.5 py-0.5 text-xs font-bold tabular-nums text-white',
-                tone.badge,
-              )}
-            >
-              {loading ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : badgeLabel}
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
-          {MISSING_ETA_TOOLTIP}
-        </TooltipContent>
-      </Tooltip>
+              <span
+                className={cn(
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                  tone.iconBox,
+                )}
+              >
+                {loading ? (
+                  <Loader2 className={cn('h-4 w-4 animate-spin', tone.icon)} aria-hidden />
+                ) : (
+                  <Bell className={cn('h-4 w-4', tone.icon)} aria-hidden />
+                )}
+              </span>
+              <span className={cn('hidden font-medium sm:inline', tone.label)}>Missing Planning</span>
+              <span
+                className={cn(
+                  'inline-flex min-w-[1.5rem] items-center justify-center rounded-md px-1.5 py-0.5 text-xs font-bold tabular-nums text-white',
+                  tone.badge,
+                )}
+              >
+                {loading ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : badgeLabel}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
+            {MISSING_ETA_TOOLTIP}
+          </TooltipContent>
+        </Tooltip>
 
-      {open && (
-        <div className="absolute right-0 top-full z-[70] mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-gray-200 bg-white shadow-lg">
-          <div className="border-b border-gray-100 px-4 py-3">
-            <p className="text-sm font-semibold leading-snug text-gray-900">
-              Missing Planning — Cargo Ready ≤ 14 Days
-            </p>
-            <p className="mt-0.5 text-xs leading-relaxed text-gray-500">
-              {data.scopedAsStaff
-                ? 'Scoped to your transport type, group plant, and product assignments.'
-                : `${data.total} alert unit${data.total === 1 ? '' : 's'} in your role scope.`}
-            </p>
-          </div>
-
-          <div className="max-h-80 overflow-y-auto">
-            {data.items.length === 0 ? (
-              <p className="px-4 py-6 text-center text-sm text-gray-500">
-                No contracts or STOs match this alert right now.
+        {open && (
+          <div className="absolute right-0 top-full z-[70] mt-2 w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-gray-200 bg-white shadow-lg">
+            <div className="border-b border-gray-100 px-4 py-3">
+              <p className="text-sm font-semibold leading-snug text-gray-900">
+                Missing Planning — Cargo Ready ≤ 14 Days
               </p>
-            ) : (
-              <ul className="divide-y divide-gray-100">
-                {data.items.map((item) => {
-                  const identity =
-                    item.po_number ||
-                    item.contract_ext_no ||
-                    item.contract_id ||
-                    '-'
-                  const stoOrOp =
-                    item.sto_number || item.operation_id
-                      ? ` · ${item.sto_number || item.operation_id}`
-                      : ''
-                  return (
-                    <li key={item.unit_key} className="px-4 py-3 text-sm">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate font-medium leading-snug text-gray-900">
-                            PO {identity}
-                            {stoOrOp}
-                          </p>
-                          <p className="truncate text-xs leading-relaxed text-gray-500">
-                            {item.product || '-'} · {item.missing_leg} ·{' '}
-                            {item.group_plant || '-'}
-                          </p>
-                          <p className="text-xs leading-relaxed text-gray-500">
-                            Cargo ready {formatDateDisplay(item.cargo_readiness_date)}
-                          </p>
+              <p className="mt-0.5 text-xs leading-relaxed text-gray-500">
+                {data.scopedAsStaff
+                  ? 'Scoped to your transport type, group plant, and product assignments.'
+                  : `${data.total} alert unit${data.total === 1 ? '' : 's'} in your role scope.`}
+              </p>
+            </div>
+
+            <div className="max-h-80 overflow-y-auto">
+              {data.items.length === 0 ? (
+                <p className="px-4 py-6 text-center text-sm text-gray-500">
+                  No contracts or STOs match this alert right now.
+                </p>
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {data.items.map((item) => {
+                    const identity =
+                      item.po_number ||
+                      item.contract_ext_no ||
+                      item.contract_id ||
+                      '-'
+                    const stoOrOp =
+                      item.sto_number || item.operation_id
+                        ? ` · ${item.sto_number || item.operation_id}`
+                        : ''
+                    const canOpenContract = Boolean(
+                      String(item.po_number || '').trim() || String(item.contract_id || '').trim(),
+                    )
+                    const poLoading = contractDetailLoadingKey === item.unit_key
+                    return (
+                      <li key={item.unit_key} className="px-4 py-3 text-sm">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-medium leading-snug text-gray-900">
+                              {canOpenContract ? (
+                                <button
+                                  type="button"
+                                  className="text-left text-primary hover:underline disabled:opacity-60"
+                                  disabled={poLoading}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    void openContractDetail(item)
+                                  }}
+                                >
+                                  PO {identity}
+                                  {poLoading ? (
+                                    <Loader2 className="ml-1 inline h-3 w-3 animate-spin" aria-hidden />
+                                  ) : null}
+                                </button>
+                              ) : (
+                                <>PO {identity}</>
+                              )}
+                              <span className="text-gray-900">{stoOrOp}</span>
+                            </p>
+                            <p className="truncate text-xs leading-relaxed text-gray-500">
+                              {item.product || '-'} · {item.missing_leg} ·{' '}
+                              {item.group_plant || '-'}
+                            </p>
+                            <p className="text-xs leading-relaxed text-gray-500">
+                              Cargo ready {formatDateDisplay(item.cargo_readiness_date)}
+                            </p>
+                          </div>
+                          <span
+                            className={cn(
+                              'shrink-0 text-xs font-semibold tabular-nums',
+                              daysTone(item.days_to_cargo_readiness),
+                            )}
+                          >
+                            {formatDaysLabel(item.days_to_cargo_readiness)}
+                          </span>
                         </div>
-                        <span
-                          className={cn(
-                            'shrink-0 text-xs font-semibold tabular-nums',
-                            daysTone(item.days_to_cargo_readiness),
-                          )}
-                        >
-                          {formatDaysLabel(item.days_to_cargo_readiness)}
-                        </span>
-                      </div>
-                    </li>
-                  )
-                })}
-              </ul>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {data.total > data.items.length && (
+              <p className="border-t border-gray-100 px-4 py-2 text-xs leading-relaxed text-gray-500">
+                Showing {data.items.length} of {data.total} alert units.
+              </p>
             )}
-          </div>
 
-          {data.total > data.items.length && (
-            <p className="border-t border-gray-100 px-4 py-2 text-xs leading-relaxed text-gray-500">
-              Showing {data.items.length} of {data.total} alert units.
-            </p>
-          )}
-
-          <div className="flex flex-wrap gap-2 border-t border-gray-100 px-4 py-3">
-            <Link
-              href="/shipments"
-              className="text-xs font-medium text-primary hover:underline"
-              onClick={() => setOpen(false)}
-            >
-              Shipments
-            </Link>
-            <Link
-              href="/trucking"
-              className="text-xs font-medium text-primary hover:underline"
-              onClick={() => setOpen(false)}
-            >
-              Trucking
-            </Link>
-            <Link
-              href="/contracts"
-              className="text-xs font-medium text-primary hover:underline"
-              onClick={() => setOpen(false)}
-            >
-              Contracts
-            </Link>
+            <div className="flex flex-wrap gap-2 border-t border-gray-100 px-4 py-3">
+              <Link
+                href="/shipments"
+                className="text-xs font-medium text-primary hover:underline"
+                onClick={() => setOpen(false)}
+              >
+                Shipments
+              </Link>
+              <Link
+                href="/trucking"
+                className="text-xs font-medium text-primary hover:underline"
+                onClick={() => setOpen(false)}
+              >
+                Trucking
+              </Link>
+              <Link
+                href="/contracts"
+                className="text-xs font-medium text-primary hover:underline"
+                onClick={() => setOpen(false)}
+              >
+                Contracts
+              </Link>
+            </div>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+
+      <ContractDetailModal
+        contract={contractDetailTarget}
+        onClose={() => setContractDetailTarget(null)}
+        stacked
+      />
+    </>
   )
 }

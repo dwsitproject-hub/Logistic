@@ -74,6 +74,18 @@ export function isStoGroupSapClosed(statuses: unknown[]): boolean {
 }
 
 /**
+ * True SAP STO identity on an SPD row — not blank and not KLIP synthetic OP-/MNL-/MSEA- ids.
+ * Header-only POs (no SAP STO) remain valid; those rows must keep voting in GR aggregation.
+ */
+function sqlSpdHasRealSapStoKeyExpr(spdAlias = 'spd'): string {
+  const key = sapStoNumberKeyExpr(spdAlias);
+  return `(
+    ${key} IS NOT NULL
+    AND TRIM((${key})::text) !~ '^(OP-|MNL-|MSEA-)'
+  )`;
+}
+
+/**
  * SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped rows.
  *
  * Important: do NOT take LIMIT 1 with per-row fallback to contracts.status.
@@ -83,6 +95,11 @@ export function isStoGroupSapClosed(statuses: unknown[]): boolean {
  *
  * Per SPD row, Open if the incoterm GR field is Open (stale Close in
  * `contract.gr_*` must not hide Open in raw). Do not use commercial Status.
+ *
+ * Dirty SAP header (blank / synthetic STO) with GR Open must not lock a PO Open when
+ * real SAP STO lines already carry GR Close. Prefer STO-line GR only when such lines
+ * exist; header-only POs (no SAP STO — common; KLIP may still have OP-* shipments)
+ * keep using the header row.
  *
  * Optional `stoKeyExpr`: for LCO/FOB (GR STO), restrict SPD rows to that STO so a
  * Close STO is not held Open by a sibling STO under the same PO. CIF/CFR/FRC
@@ -97,6 +114,11 @@ export function sqlContractImportStatusExpr(
   // NULL when the GR field is blank — never inject contracts.status per SPD row.
   const sapStatusNorm = sqlNormalizeContractDeliveryStatusExpr(
     sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, 'NULL'),
+  );
+  const lineGrStatusRaw = sqlIncotermImportStatusFromJson(
+    'spd_gr.data',
+    `${contractAlias}.incoterm`,
+    'NULL',
   );
   const openNorm = (expr: string) =>
     `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('OPEN', 'ACTIVE')`;
@@ -118,6 +140,13 @@ export function sqlContractImportStatusExpr(
     END
   )`;
 
+  const poMatch = (spdAlias: string) => `
+            AND (
+              NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+            )`;
+
   const stoScope =
     stoKeyExpr && String(stoKeyExpr).trim()
       ? `
@@ -129,6 +158,20 @@ export function sqlContractImportStatusExpr(
               OR ${sapStoNumberKeyExpr('spd')} = TRIM((${stoKeyExpr})::text)
             )`
       : '';
+
+  // Prefer real SAP STO lines when they exist with GR; keep blank/synthetic header otherwise.
+  const preferSapStoLinesOverDirtyHeader = `
+            AND (
+              ${sqlSpdHasRealSapStoKeyExpr('spd')}
+              OR NOT EXISTS (
+                SELECT 1
+                FROM sap_processed_data spd_gr
+                WHERE spd_gr.contract_number = ${contractAlias}.contract_id
+                  ${poMatch('spd_gr')}
+                  AND ${sqlSpdHasRealSapStoKeyExpr('spd_gr')}
+                  AND NULLIF(TRIM(COALESCE(${lineGrStatusRaw}, '')), '') IS NOT NULL
+              )
+            )`;
 
   return `
     COALESCE(
@@ -145,11 +188,7 @@ export function sqlContractImportStatusExpr(
             ${rowOpenSignal} AS row_open
           FROM sap_processed_data spd
           WHERE spd.contract_number = ${contractAlias}.contract_id
-            AND (
-              NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
-              OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
-              OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-            )${stoScope}${spdExtraAndSql}
+            ${poMatch('spd')}${stoScope}${preferSapStoLinesOverDirtyHeader}${spdExtraAndSql}
         ) s
         WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
           OR s.row_open

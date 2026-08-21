@@ -2,8 +2,10 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import {
   hasCompleteSapVesselIdentity,
+  hasKlipVesselNameOverride,
   parseContractSapClosedFlag,
   resolveShipmentDisplayVesselName,
+  canonicalVesselName,
 } from '../utils/sapVesselFields';
 import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
@@ -46,15 +48,25 @@ function pumpBackfillQueue(): void {
 /**
  * Attach SAP / master vessel identity without dropping source fields.
  * Display overlay (list): Open + KLIP filled → KLIP; GR Close → Master/SAP first.
+ * hydrateFromMaster (Edit modal): fill owner/capacity/hull/charter from master only when
+ * that master aligns with the KLIP vessel (not SAP’s vessel while KLIP name is overridden).
  */
 export function mergeShipmentVesselFromSapRow(
   row: ShipmentVesselRow,
-  options?: { overlayDisplayName?: boolean },
+  options?: { overlayDisplayName?: boolean; hydrateFromMaster?: boolean },
 ): boolean {
   const sapName = trimOrNull(row.vessel_name_sap);
   const sapCode = trimOrNull(row.vessel_code_sap);
   const sapOwner = trimOrNull(row.vessel_owner_sap);
   const masterName = trimOrNull(row.vessel_name_master);
+  const masterCode = trimOrNull(row.vessel_code_master);
+  const masterOwner = trimOrNull(row.vessel_owner_master);
+  const masterType = trimOrNull(row.vessel_type_master);
+  const masterTerms = trimOrNull(row.vessel_terms_master);
+  const masterCapacity =
+    row.vessel_capacity_mt_master != null && String(row.vessel_capacity_mt_master).trim() !== ''
+      ? row.vessel_capacity_mt_master
+      : null;
   const klipName = trimOrNull(row.vessel_name);
   row.vessel_name_klip = klipName;
   if (sapName) row.vessel_name_sap = sapName;
@@ -68,8 +80,47 @@ export function mergeShipmentVesselFromSapRow(
     if (displayName) row.vessel_name = displayName;
   }
 
-  if (sapCode && !trimOrNull(row.vessel_code)) row.vessel_code = sapCode;
-  if (sapOwner && !trimOrNull(row.vessel_owner)) row.vessel_owner = sapOwner;
+  const nameOverride = hasKlipVesselNameOverride(klipName, sapName);
+  const masterAlignedWithKlip =
+    !nameOverride ||
+    (masterName != null &&
+      klipName != null &&
+      canonicalVesselName(masterName) === canonicalVesselName(klipName));
+
+  // Fill empty code from SAP/master only when not an override to a different vessel.
+  if (!nameOverride) {
+    if (sapCode && !trimOrNull(row.vessel_code)) row.vessel_code = sapCode;
+    if (masterCode && !trimOrNull(row.vessel_code)) row.vessel_code = masterCode;
+  } else if (masterAlignedWithKlip && masterCode && !trimOrNull(row.vessel_code)) {
+    row.vessel_code = masterCode;
+  }
+
+  if (options?.hydrateFromMaster && masterAlignedWithKlip) {
+    // Owner / capacity / type / charter from Master Vessel (by code/name match).
+    // Modal shows owner without a SAP compare line — master is the display source.
+    if (masterOwner) {
+      if (!nameOverride || !trimOrNull(row.vessel_owner)) row.vessel_owner = masterOwner;
+    } else if (!nameOverride && sapOwner && !trimOrNull(row.vessel_owner)) {
+      row.vessel_owner = sapOwner;
+    }
+
+    if (masterCapacity != null) {
+      if (!nameOverride || row.vessel_capacity == null || String(row.vessel_capacity).trim() === '') {
+        row.vessel_capacity = masterCapacity;
+      }
+    }
+    if (masterType) {
+      if (!nameOverride || !trimOrNull(row.vessel_hull_type)) row.vessel_hull_type = masterType;
+    }
+    if (masterTerms) {
+      const t = masterTerms.toUpperCase();
+      if (t === 'V/C' || t === 'T/C') {
+        if (!nameOverride || !trimOrNull(row.charter_type)) row.charter_type = t;
+      }
+    }
+  } else if (!nameOverride && sapOwner && !trimOrNull(row.vessel_owner)) {
+    row.vessel_owner = sapOwner;
+  }
 
   return hasCompleteSapVesselIdentity({
     vessel_code: sapCode,

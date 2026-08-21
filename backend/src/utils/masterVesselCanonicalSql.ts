@@ -77,7 +77,14 @@ export function sqlMasterVesselCanonicalLateralJoin(
     : '';
   return `
       LEFT JOIN LATERAL (
-        SELECT mv.id, mv.vessel_name AS vessel_name_master, mv.vessel_code AS vessel_code_master
+        SELECT
+          mv.id,
+          mv.vessel_name AS vessel_name_master,
+          mv.vessel_code AS vessel_code_master,
+          mv.vessel_owner AS vessel_owner_master,
+          mv.vessel_capacity_mt AS vessel_capacity_mt_master,
+          mv.vessel_type AS vessel_type_master,
+          mv.terms AS vessel_terms_master
         FROM master_vessels mv
         LEFT JOIN master_vessel_code_aliases a
           ON a.master_vessel_id = mv.id

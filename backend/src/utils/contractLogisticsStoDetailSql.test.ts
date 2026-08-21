@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CONTRACT_REAL_STO_KEYS_SQL,
+  CONTRACT_SAP_ONLY_STOS_SQL,
   sqlSapQtyDeliveredAnyFromSpd,
   sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
@@ -25,10 +27,21 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(expr).toContain('Quantity Delivered');
   });
 
+  it('uses incoterm matrix so CIF prefers vessel over dirty trucking', () => {
+    const expr = sqlSapQtyDeliveredAnyFromSpd('spd', 'c.incoterm');
+    expect(expr).toContain("'CIF'");
+    expect(expr).toContain("'FOB'");
+    expect(expr).toContain("'FRC'");
+    expect(expr).toContain('c.incoterm');
+    // Must not prefer trucking via bare COALESCE(NULLIF(trucking), vessel)
+    expect(expr).not.toMatch(/COALESCE\(\s*NULLIF\(\s*\([^)]*Quantity Delivery Trucking/);
+  });
+
   it('normalizes MT-scale SAP delivery to kg', () => {
-    const expr = sqlSapQtyDeliveredKgFromSpd('spd2', 'c.quantity_ordered');
+    const expr = sqlSapQtyDeliveredKgFromSpd('spd2', 'c.quantity_ordered', 'c.incoterm');
     expect(expr).toContain('* 1000');
     expect(expr).toContain('quantity_ordered');
+    expect(expr).toContain('c.incoterm');
   });
 
   it('builds SAP STO qty by PO without falling back to contract quantity_ordered', () => {
@@ -81,6 +94,8 @@ describe('contractLogisticsStoDetailSql', () => {
     });
     expect(delivered).toContain('Quantity Delivery Trucking');
     expect(delivered).toContain('OP-|MNL-|MSEA-');
+    expect(delivered).toContain('c.incoterm');
+    expect(delivered).toContain("'CIF'");
     expect(receive).toContain('Quantity Receive');
     expect(receive).toContain('po_number');
   });
@@ -98,20 +113,23 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(sql).toContain('Quantity Delivery Vessel');
     expect(sql).toContain('LIMIT 1');
     expect(sql).toContain('created_at DESC');
+    expect(sql).toContain("'CIF'");
   });
 
-  it('sqlStoScopedReceiveKgSql filters by STO key, contract, and PO', () => {
-    const sql = sqlStoScopedReceiveKgSql({
-      contractNumberExpr: 'pl.contract_number',
-      contractQtyExpr: 'pl.contract_qty',
-      stoKeyExpr: '$1::text',
-      poNumberExpr: 'pl.po_number',
-    });
-    expect(sql).toContain('$1::text');
-    expect(sql).toContain('pl.contract_number');
-    expect(sql).toContain('pl.po_number');
-    expect(sql).toContain('Quantity Receive');
-    expect(sql).toContain('LIMIT 1');
-    expect(sql).toContain('created_at DESC');
+  it('CONTRACT_SAP_ONLY_STOS_SQL scopes qty by contract/PO helpers (not STO-wide SUM)', () => {
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('po_number');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('CROSS JOIN contracts c_po');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('c_po.id = $1');
+    // Must not reintroduce unscoped SUM across all POs on the same STO.
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).not.toMatch(
+      /FROM sap_processed_data spd2\s+WHERE NULLIF\(TRIM\(COALESCE\(spd2\.sto_number/,
+    );
+  });
+
+  it('CONTRACT_REAL_STO_KEYS_SQL unions contract_stos and SAP by contract/PO', () => {
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('contract_stos');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('sap_processed_data');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('c3.po_number');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('cs.contract_id = $1');
   });
 });

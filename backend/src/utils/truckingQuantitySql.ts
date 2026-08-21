@@ -2,6 +2,7 @@ import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
+import { sqlNormalizeSapQtyToKgWithUom } from './sapQtyUom';
 import {
   sqlWbActualDeliverySumKg,
   sqlWbActualReceiveSumKg,
@@ -68,6 +69,23 @@ export const SAP_RECEIVE_RAW_FIELDS = [
   `spd.data->'contract'->>'quantity_receive'`,
 ] as const;
 
+/** UOM columns paired with delivery qty (SAP Data v3). */
+export const SAP_DELIVERY_UOM_FIELDS = [
+  `spd.data->'trucking'->0->'data'->>'quantity_delivery_trucking_uom'`,
+  `spd.data->'shipment'->>'quantity_delivery_trucking_uom'`,
+  `spd.data->'shipment'->>'quantity_delivery_uom'`,
+  `spd.data->'raw'->>'Delivery Trucking UoM'`,
+  `spd.data->'raw'->>'Delivery Vessel UoM'`,
+] as const;
+
+/** UOM columns paired with receive qty (SAP Data v3). */
+export const SAP_RECEIVE_UOM_FIELDS = [
+  `spd.data->'trucking'->0->'data'->>'quantity_receive_uom'`,
+  `spd.data->'shipment'->>'quantity_receive_uom'`,
+  `spd.data->'contract'->>'quantity_receive_uom'`,
+  `spd.data->'raw'->>'Receive UoM'`,
+] as const;
+
 /**
  * Exported (in addition to being used locally below) so
  * `truckingPoQtyResolutionCteSql.ts` can build the same raw-value matching
@@ -77,6 +95,9 @@ export const SAP_RECEIVE_RAW_FIELDS = [
 export const SAP_DELIVERY_RAW_COALESCE = sqlCoalesceSapRawQtyFields(SAP_DELIVERY_RAW_FIELDS);
 
 export const SAP_RECEIVE_RAW_COALESCE = sqlCoalesceSapRawQtyFields(SAP_RECEIVE_RAW_FIELDS);
+
+export const SAP_DELIVERY_UOM_COALESCE = `COALESCE(${SAP_DELIVERY_UOM_FIELDS.join(', ')})`;
+export const SAP_RECEIVE_UOM_COALESCE = `COALESCE(${SAP_RECEIVE_UOM_FIELDS.join(', ')})`;
 
 /**
  * Latest-per-STO SAP qty (kg) with Contracts-style multi-STO PO-level dedup:
@@ -90,15 +111,17 @@ function sqlTruckingPoLevelSapQtyWithDedup(
   contractUuidExpr: string,
   poNumberExpr: string,
   contractQtyKgExpr: string,
+  uomExpr = `''`,
 ): string {
   const match = sqlTruckingPoLevelSapRowMatch(contractUuidExpr, poNumberExpr);
   const stoKey = `TRIM(COALESCE(${SPD_EFFECTIVE_STO}, spd.sto_number::text, ''))`;
-  const qtyKg = sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr);
+  const qtyKg = sqlNormalizeSapTruckingQtyToKg('x.qty', contractQtyKgExpr, 'x.uom');
   const cq = `(${contractQtyKgExpr})`;
   return `(
     WITH latest_per_sto AS (
       SELECT DISTINCT ON (spd.contract_number, ${stoKey})
-        ${rawQtyExpr} AS qty
+        ${rawQtyExpr} AS qty,
+        ${uomExpr} AS uom
       FROM sap_processed_data spd
       WHERE spd.contract_number = ${contractNumberExpr}
         AND ${match}
@@ -166,6 +189,7 @@ export function sqlTruckingPoLevelSapDeliveryQty(
     contractUuidExpr,
     poNumberExpr,
     contractQtyKgExpr,
+    SAP_DELIVERY_UOM_COALESCE,
   );
 }
 
@@ -188,6 +212,7 @@ export function sqlTruckingPoLevelSapReceiveQty(
     contractUuidExpr,
     poNumberExpr,
     contractQtyKgExpr,
+    SAP_RECEIVE_UOM_COALESCE,
   );
 }
 
@@ -202,28 +227,29 @@ export const TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG = 499;
 
 /**
  * SAP trucking quantity fields are often exported in MT while contracts.quantity_ordered is kg.
- * When the SAP value is clearly MT-scale, normalize to kg for API consumers and UI MT formatting.
+ * When an explicit UOM is present (SAP Data v3), convert by UOM; otherwise keep the scale heuristic.
  */
 export function sqlNormalizeSapTruckingQtyToKg(
   sapNumericExpr: string,
   contractQtyKgExpr = 'COALESCE(c.quantity_ordered, 0)',
+  uomExpr = `''`,
 ): string {
-  return `CASE
-    WHEN (${sapNumericExpr}) IS NULL THEN NULL
-    WHEN (${sapNumericExpr}) < (${contractQtyKgExpr}) / 10.0
-         AND (${sapNumericExpr}) * 1000 <= (${contractQtyKgExpr}) * 1.05
-      THEN (${sapNumericExpr}) * 1000
-    ELSE (${sapNumericExpr})
-  END`;
+  return sqlNormalizeSapQtyToKgWithUom(sapNumericExpr, uomExpr, contractQtyKgExpr);
 }
 
 const SAP_QTY_CAST = `CAST(REPLACE(REPLACE(TRIM(q.val), ',', ''), ' ', '') AS NUMERIC)`;
 
-function sqlSapNumericSubquery(fields: readonly string[]): string {
+function sqlSapNumericSubquery(
+  fields: readonly string[],
+  uomFields: readonly string[] = [],
+): string {
+  const uomSelect =
+    uomFields.length > 0 ? `COALESCE(${uomFields.join(', ')})` : `''`;
   return `(
-    SELECT ${sqlNormalizeSapTruckingQtyToKg(SAP_QTY_CAST)}
+    SELECT ${sqlNormalizeSapTruckingQtyToKg(SAP_QTY_CAST, 'COALESCE(c.quantity_ordered, 0)', 'q.uom')}
     FROM (
-      SELECT ${sqlCoalesceSapRawQtyFields(fields)} AS val
+      SELECT ${sqlCoalesceSapRawQtyFields(fields)} AS val,
+             ${uomSelect} AS uom
       FROM sap_processed_data spd
       WHERE spd.contract_number = c.contract_id
       ORDER BY spd.created_at DESC NULLS LAST
@@ -251,7 +277,7 @@ export function sqlTruckingQuantitySentCoalesce(tableCol = 't.quantity_sent'): s
 export function sqlTruckingQuantityDeliveredCoalesce(tableCol = 't.quantity_delivered'): string {
   return `COALESCE(
     NULLIF(${tableCol}, 0),
-    ${sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS)}
+    ${sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS, SAP_DELIVERY_UOM_FIELDS)}
   )`;
 }
 
@@ -259,7 +285,7 @@ export function sqlTruckingQuantityDeliveredCoalesce(tableCol = 't.quantity_deli
 export function sqlTruckingQuantityReceiveCoalesce(): string {
   return `COALESCE(
     NULLIF(t.quantity_delivered, 0),
-    ${sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS)}
+    ${sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS, SAP_RECEIVE_UOM_FIELDS)}
   )`;
 }
 
@@ -268,7 +294,7 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
  * Null when SAP has no matching numeric field.
  */
 export function sqlSapQtyDeliveryOnly(): string {
-  return sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS);
+  return sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS, SAP_DELIVERY_UOM_FIELDS);
 }
 
 /**
@@ -276,7 +302,7 @@ export function sqlSapQtyDeliveryOnly(): string {
  * Null when SAP has no matching numeric field.
  */
 export function sqlSapQtyReceiveOnly(): string {
-  return sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS);
+  return sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS, SAP_RECEIVE_UOM_FIELDS);
 }
 
 /** True when the trucking operation has at least one WB/daily actual row. */

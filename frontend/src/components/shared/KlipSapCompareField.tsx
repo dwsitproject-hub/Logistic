@@ -28,6 +28,8 @@ type KlipSapCompareFieldProps = {
   editing?: boolean
   editControl?: React.ReactNode
   showOverrideBadge?: boolean
+  /** When false, hide the always-on KLIP chip (use for fields where chip only means override). */
+  showKlipBadge?: boolean
   hidden?: boolean
 }
 
@@ -40,6 +42,7 @@ export function KlipSapCompareField({
   editing = false,
   editControl,
   showOverrideBadge = false,
+  showKlipBadge = true,
   hidden = false,
 }: KlipSapCompareFieldProps) {
   if (hidden) return null
@@ -64,9 +67,11 @@ export function KlipSapCompareField({
       ) : (
         <div className={cn('flex min-h-8 items-center gap-2', KLIP_VALUE_CLASS)}>
           <span>{formatKlipSapDisplayValue(klipValue, format)}</span>
-          <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
-            KLIP
-          </span>
+          {showKlipBadge ? (
+            <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+              KLIP
+            </span>
+          ) : null}
           {showOverrideBadge ? (
             <span className="text-[10px] font-medium text-emerald-600">(KLIP override)</span>
           ) : null}

@@ -125,6 +125,7 @@ import {
   resolveShipmentListDischargePorts,
   resolveShipmentListLoadingPorts,
 } from '@/lib/shipmentListPorts'
+import { resolveLoadingPortDisplayLabel } from '@/lib/loadingPortDisplay'
 import { resolveShipmentListSuppliers } from '@/lib/shipmentListSuppliers'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
@@ -414,6 +415,7 @@ interface VesselLoadingPort {
   quality_stone?: number | null
   is_discharge_port?: boolean
   is_cancelled?: boolean
+  sap_port_name?: string | null
   cancel_remark?: string | null
   cancelled_at?: string | null
   cancelled_by_name?: string | null
@@ -421,17 +423,31 @@ interface VesselLoadingPort {
   updated_at?: string
 }
 
-function formatGroupLoadingPortsDisplay(ports: VesselLoadingPort[]): string {
+function formatGroupLoadingPortsDisplay(
+  ports: VesselLoadingPort[],
+  contractSapClosed?: boolean | null,
+): string {
   const seen = new Set<string>()
   const unique: string[] = []
   for (const port of ports) {
     if (port.is_discharge_port) continue
-    const name = String(port.port_name ?? '').trim()
-    if (!name) continue
-    const key = name.toLowerCase()
+    if (port.is_cancelled) continue
+    const label = resolveLoadingPortDisplayLabel({
+      klipPortName: port.port_name,
+      sapPortName: port.sap_port_name,
+      contractSapClosed,
+    })
+    if (!label || label === '-') continue
+    const key = label
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, ' ')
+      .trim()
+      .replace(/^(PORT|JETTY|TERMINAL|PELABUHAN|DERMAGA)(\s+OF)?\s+/, '')
+      .replace(/\s+/g, ' ')
+      .trim() || label.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    unique.push(name)
+    unique.push(label)
   }
   return unique.join(', ')
 }
@@ -7657,7 +7673,7 @@ function ShipmentsPageContent() {
                             ),
                             color: 'text-gray-800',
                           },
-                          { label: 'Loading Port', value: formatGroupLoadingPortsDisplay(loadingPorts) || shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
+                          { label: 'Loading Port', value: formatGroupLoadingPortsDisplay(loadingPorts, selectedShipment?.is_contract_sap_closed) || shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
                           { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
                         ].map((m) => (
                           <div key={m.label} className="px-4 py-3">
@@ -7907,7 +7923,7 @@ function ShipmentsPageContent() {
                             </div>
                           ) : (
                           <div className="font-medium">
-                            {formatGroupLoadingPortsDisplay(loadingPorts) ||
+                            {formatGroupLoadingPortsDisplay(loadingPorts, selectedShipment?.is_contract_sap_closed) ||
                               formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}
                           </div>
                           )}

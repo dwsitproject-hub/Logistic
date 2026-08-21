@@ -1,10 +1,11 @@
 import { isGenericKlipPortPlaceholder } from '@/lib/shippingPerformancePorts'
+import { isContractSapClosedFlag } from '@/lib/shipmentVesselCompare'
 
 /**
- * Loading / discharge port labels in Edit Shipment modal.
- * Priority: SAP (human-readable) → KLIP input → "-".
- * Numeric SAP codes (e.g. 67.30) and generic KLIP placeholders ("Loading Port 1")
- * are treated as invalid port names.
+ * Loading / discharge port labels in Edit Shipment modal & list.
+ * Open (GR): KLIP → SAP → "-".
+ * Closed (GR): SAP → KLIP → "-".
+ * Numeric SAP codes and generic KLIP placeholders are invalid.
  */
 
 export const EMPTY_PORT_DISPLAY = '-'
@@ -18,17 +19,27 @@ export function isValidHumanPortName(value: unknown): boolean {
   return true
 }
 
+function validPortOrEmpty(value: unknown): string {
+  return isValidHumanPortName(value) ? String(value).trim() : ''
+}
+
+/**
+ * Primary port label by GR open/closed.
+ * Default (closed omitted/false) = Open: KLIP → SAP → "-".
+ */
 export function resolveLoadingPortDisplayLabel(opts: {
   sapPortName?: unknown
   klipPortName?: unknown
+  /** GR Close → SAP first. Open / unset → KLIP first. */
+  contractSapClosed?: unknown
 }): string {
-  if (isValidHumanPortName(opts.sapPortName)) {
-    return String(opts.sapPortName).trim()
+  const klip = validPortOrEmpty(opts.klipPortName)
+  const sap = validPortOrEmpty(opts.sapPortName)
+  const closed = isContractSapClosedFlag(opts.contractSapClosed)
+  if (closed) {
+    return sap || klip || EMPTY_PORT_DISPLAY
   }
-  if (isValidHumanPortName(opts.klipPortName)) {
-    return String(opts.klipPortName).trim()
-  }
-  return EMPTY_PORT_DISPLAY
+  return klip || sap || EMPTY_PORT_DISPLAY
 }
 
 export function resolveKlipPortInputValue(value: unknown): string {
@@ -83,6 +94,7 @@ export function resolveLoadingPortDisplayFromRow(
   portRow: { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown } | null | undefined,
   shipmentInfo?: Record<string, unknown> | null,
   sequence?: number,
+  contractSapClosed?: unknown,
 ): string {
   const isDischarge = Boolean(portRow?.is_discharge_port)
   const rawSeq = sequence ?? (portRow?.is_discharge_port ? undefined : 1)
@@ -94,8 +106,6 @@ export function resolveLoadingPortDisplayFromRow(
       : undefined
   const sapDischarge = isDischarge ? shipmentInfo?.sap_vessel_discharge_port_1 : undefined
 
-  // Align with Shipments list: after SAP / VLP.port_name, fall back to shipment-level KLIP ports
-  // (shipments.port_of_loading / port_of_discharge) so Edit is not blank when the table shows a port.
   let klipShipmentFallback: unknown
   if (isDischarge) {
     klipShipmentFallback = shipmentInfo?.vessel_discharge_port_1
@@ -108,8 +118,14 @@ export function resolveLoadingPortDisplayFromRow(
     ? klipShipmentFallback
     : undefined
 
+  const closed =
+    contractSapClosed ??
+    shipmentInfo?.is_contract_sap_closed ??
+    shipmentInfo?.contract_sap_closed
+
   return resolveLoadingPortDisplayLabel({
     sapPortName: portRow?.sap_port_name ?? sapFromInfo ?? sapDischarge,
     klipPortName: klipFromRow ?? klipFromShipment,
+    contractSapClosed: closed,
   })
 }

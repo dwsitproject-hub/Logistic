@@ -991,13 +991,33 @@ const LIST_PAGE_SELECT = `
         sp.*,
         ${shipmentListPageQtySelectSql('sp')},
         COALESCE(
-          NULLIF(TRIM(slpa.sap_loading_ports), ''),
-          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
-          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
-          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_discharge), '')
         ) AS discharge_ports,
         slpa.sap_loading_ports,
@@ -1022,13 +1042,33 @@ const LIST_PAGE_SELECT_ENRICHED = `
       SELECT
         sp.*,
         COALESCE(
-          NULLIF(TRIM(slpa.sap_loading_ports), ''),
-          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
-          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
-          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_discharge), '')
         ) AS discharge_ports,
         slpa.sap_loading_ports,

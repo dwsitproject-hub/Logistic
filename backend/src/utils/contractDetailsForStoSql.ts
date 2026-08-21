@@ -51,12 +51,14 @@ function stoScopedDeliveredKgSql(
   contractQtyExpr: string,
   stoKeyExpr: string,
   poNumberExpr: string,
+  incotermExpr?: string,
 ): string {
   return sqlStoScopedDeliveredKgSql({
     contractNumberExpr,
     contractQtyExpr,
     stoKeyExpr,
     poNumberExpr,
+    incotermExpr,
   });
 }
 
@@ -98,6 +100,7 @@ function stoScopedOutstandingActualSql(opts: {
       opts.contractQtyExpr,
       opts.stoKeyExpr,
       opts.poNumberExpr,
+      opts.incotermExpr,
     ),
     incotermExpr: opts.incotermExpr,
   });
@@ -166,6 +169,7 @@ export function buildContractDetailsForStoSql(): string {
     'pl.contract_qty',
     '$1::text',
     'pl.po_number',
+    'pl.incoterm',
   );
 
   const plReceiveKg = stoScopedReceiveKgSql(

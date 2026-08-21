@@ -272,13 +272,33 @@ export function buildShipmentListEnrichedCteBody(qtySelectSql: string): string {
         (${resolvedDelivery})::numeric AS resolved_quantity_delivered,
         (${resolvedReceive})::numeric AS resolved_quantity_receive,
         COALESCE(
-          NULLIF(TRIM(slpa.sap_loading_ports), ''),
-          NULLIF(TRIM(fs.loading_ports_klip), ''),
+          CASE
+            WHEN COALESCE(fs.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+            ELSE
+              NULLIF(TRIM(fs.loading_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(fs.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(fs.loading_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+          END,
           NULLIF(TRIM(fs.port_of_loading), '')
         ) AS loading_ports_sort,
         COALESCE(
-          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
-          NULLIF(TRIM(fs.discharge_ports_klip), ''),
+          CASE
+            WHEN COALESCE(fs.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+            ELSE
+              NULLIF(TRIM(fs.discharge_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(fs.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(fs.discharge_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+          END,
           NULLIF(TRIM(fs.port_of_discharge), '')
         ) AS discharge_ports_sort,
         COALESCE(sl.b2b_flag, '') AS b2b_flag_resolved,

@@ -47,7 +47,9 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('$1::text');
     expect(sql).toContain('Quantity Delivery Vessel');
     expect(sql).toContain('Quantity Receive');
-    expect(sql).toContain('SUM(');
+    // Edit Shipment path: latest SAP row per PO+STO (not SUM of sibling POs on shared STO).
+    expect(sql).toContain('LIMIT 1');
+    expect(sql).toContain('pl.contract_number');
   });
 
   it('excludes B2B child PO lines (Contract Reff PO set)', () => {

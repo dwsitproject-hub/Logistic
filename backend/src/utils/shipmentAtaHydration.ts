@@ -126,13 +126,10 @@ async function mergeStoSiblingAta(
   const agg = result.rows[0] as Record<string, unknown> | undefined;
   if (!agg) return;
 
+  // Fill KLIP/effective ATA gaps only — never copy effective dates into sap_* chips.
   for (const key of ATA_UI_KEYS) {
     if (shipmentInfo[key] == null && agg[key] != null) {
       shipmentInfo[key] = agg[key];
-    }
-    const sapKey = `sap_${key}`;
-    if (shipmentInfo[sapKey] == null && agg[key] != null) {
-      shipmentInfo[sapKey] = agg[key];
     }
   }
 }
@@ -141,8 +138,9 @@ async function mergeSapAtaPerField(shipmentInfo: Record<string, unknown>): Promi
   const contractNumber = shipmentInfo.contract_number;
   if (!contractNumber) return;
 
-  const needsSap = ATA_UI_KEYS.some((k) => shipmentInfo[k] == null);
-  if (!needsSap) return;
+  const needsKlipGap = ATA_UI_KEYS.some((k) => shipmentInfo[k] == null);
+  const needsSapRef = ATA_UI_KEYS.some((k) => shipmentInfo[`sap_${k}`] == null);
+  if (!needsKlipGap && !needsSapRef) return;
 
   const sapResult = await query(
     `SELECT data
@@ -160,14 +158,14 @@ async function mergeSapAtaPerField(shipmentInfo: Record<string, unknown>): Promi
 
   for (const [uiKey, sapKey] of Object.entries(SAP_SHIPMENT_KEY_MAP)) {
     const typedUiKey = uiKey as (typeof ATA_UI_KEYS)[number];
-    if (shipmentInfo[typedUiKey] == null && sapKey in shp) {
-      const normalized = normalizeSapDate(shp[sapKey]);
-      if (normalized) shipmentInfo[typedUiKey] = normalized;
+    const normalized = sapKey in shp ? normalizeSapDate(shp[sapKey]) : null;
+    if (needsKlipGap && shipmentInfo[typedUiKey] == null && normalized) {
+      shipmentInfo[typedUiKey] = normalized;
     }
+    // sap_* only from SAP JSON — never from KLIP/effective. Leave null when SAP blank.
     const sapRefKey = `sap_${typedUiKey}`;
-    if (shipmentInfo[sapRefKey] == null && sapKey in shp) {
-      const normalized = normalizeSapDate(shp[sapKey]);
-      if (normalized) shipmentInfo[sapRefKey] = normalized;
+    if (shipmentInfo[sapRefKey] == null && normalized) {
+      shipmentInfo[sapRefKey] = normalized;
     }
   }
 }

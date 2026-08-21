@@ -178,6 +178,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
+        t.oa_budget_currency,
+        t.oa_actual_currency,
         t.status AS status_db,
         ${sqlTruckingPagePipelineStageExpr(
           'c',
@@ -236,6 +238,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
+        t.oa_budget_currency,
+        t.oa_actual_currency,
         t.status AS status_db,
         ${sqlTruckingPagePipelineStageExpr(
           'c',

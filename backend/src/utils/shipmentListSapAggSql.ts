@@ -225,7 +225,7 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
               ''
             ), '[^0-9\\.-]', '', 'g'), '')::numeric
           ) AS quantity_receive,
-          SUM(${sqlSapQtyDeliveredAnyFromSpd('sk')}) AS quantity_delivered_sap
+          SUM(${sqlSapQtyDeliveredAnyFromSpd('sk', sqlSapIncotermFromJsonb('sk.data'))}) AS quantity_delivered_sap
         FROM sap_keyed_qty_latest sk
         GROUP BY sk.sto_key
       ),

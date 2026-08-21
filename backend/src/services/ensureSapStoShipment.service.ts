@@ -60,7 +60,7 @@ export async function hasActiveShipmentForSto(
      WHERE TRIM(c.contract_id) = TRIM($1::text)
        AND (
          TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
-         OR TRIM(COALESCE(s.sto_number::text, '')) = TRIM($2::text)
+         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
        )
        AND UPPER(COALESCE(s.status, '')) NOT IN ('CANCELLED')
      LIMIT 1`,
@@ -96,7 +96,7 @@ export function buildSapStoCandidateQuery(
         WHERE s.contract_id = c.id
           AND (
             TRIM(COALESCE(s.shipment_id::text, '')) = TRIM(${stoKey})
-            OR TRIM(COALESCE(s.sto_number::text, '')) = TRIM(${stoKey})
+            OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${stoKey})
           )
           AND UPPER(COALESCE(s.status, '')) NOT IN ('CANCELLED')
       )

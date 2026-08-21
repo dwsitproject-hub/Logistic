@@ -18,12 +18,29 @@ export function hasKlipVesselNameOverride(klipName: unknown, sapName: unknown): 
   return klip !== sap
 }
 
-/** Editable / primary label: KLIP override if present, otherwise SAP (or leftover KLIP). */
-export function shipmentVesselPrimaryName(klipName: unknown, sapName: unknown): string {
+export interface ShipmentVesselPrimaryNameOptions {
+  masterName?: unknown
+  /** GR Close → Master/SAP first (same as list). Open → KLIP then SAP. */
+  contractSapClosed?: boolean
+}
+
+/**
+ * Editable / primary vessel name — aligned with list hydrate:
+ * Open: KLIP → SAP → Master. Closed: Master → SAP → KLIP.
+ */
+export function shipmentVesselPrimaryName(
+  klipName: unknown,
+  sapName: unknown,
+  options?: ShipmentVesselPrimaryNameOptions,
+): string {
+  const closed = options?.contractSapClosed === true
   const klip = trimVesselName(klipName)
   const sap = trimVesselName(sapName)
-  if (hasKlipVesselNameOverride(klip, sap)) return klip
-  return sap || klip
+  const master = trimVesselName(options?.masterName)
+  if (!closed) {
+    return klip || sap || master
+  }
+  return master || sap || klip
 }
 
 /** pg / JSON flags — Boolean('false') is true, so parse explicitly. */
@@ -54,4 +71,13 @@ export function shipmentListHydrateVesselName(
   }
   const overlay = trimVesselName(hydrated.vessel_name)
   return overlay || trimVesselName(baseName)
+}
+
+/** First non-empty trimmed string among candidates. */
+export function firstNonEmptyVesselField(...values: unknown[]): string {
+  for (const v of values) {
+    const t = trimVesselName(v)
+    if (t) return t
+  }
+  return ''
 }

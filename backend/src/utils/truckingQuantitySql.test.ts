@@ -26,6 +26,17 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain('COALESCE(c.quantity_ordered, 0)');
   });
 
+  it('sqlNormalizeSapTruckingQtyToKg prefers explicit MT UOM over heuristic', () => {
+    const sql = sqlNormalizeSapTruckingQtyToKg('sap.val', 'COALESCE(c.quantity_ordered, 0)', 'sap.uom');
+    expect(sql).toContain(`IN ('MT', 'TO', 'TON', 'TONS', 'T')`);
+    expect(sql).toContain('sap.uom');
+  });
+
+  it('sqlSapQtyDeliveryOnly includes delivery UOM paths', () => {
+    const sql = sqlSapQtyDeliveryOnly();
+    expect(sql).toContain('Delivery Trucking UoM');
+  });
+
   it('sqlTruckingQuantityDeliveredCoalesce prefers trucking_operations column', () => {
     const sql = sqlTruckingQuantityDeliveredCoalesce();
     expect(sql).toContain('t.quantity_delivered');

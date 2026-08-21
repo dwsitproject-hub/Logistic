@@ -581,6 +581,9 @@ export async function findShipmentByPoAndSto(
   const sto = String(stoNumber ?? '').trim();
   if (!po || !sto) return null;
 
+  // Match shipment_id / operation_id only — never contracts.sto_number alone.
+  // Contract upsert writes the latest SAP STO onto contracts.sto_number before
+  // upsertShipment runs, which would falsely attach parallel STOs to the sole row.
   const rows = await runQuery<{ id: string; contract_uuid: string }>(
     db,
     `SELECT s.id, c.id::text AS contract_uuid
@@ -589,8 +592,8 @@ export async function findShipmentByPoAndSto(
      WHERE COALESCE(s.status, '') <> 'CANCELLED'
        AND TRIM(COALESCE(c.po_number, '')) = TRIM($1::text)
        AND (
-         TRIM(COALESCE(c.sto_number::text, '')) = TRIM($2::text)
-         OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+         TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
        )
      ORDER BY
        CASE WHEN TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text) THEN 0 ELSE 1 END,
@@ -625,8 +628,8 @@ export async function cancelDuplicateShipmentsForPoAndSto(
      WHERE COALESCE(s.status, '') <> 'CANCELLED'
        AND TRIM(COALESCE(c.po_number, '')) = TRIM($1::text)
        AND (
-         TRIM(COALESCE(c.sto_number::text, '')) = TRIM($2::text)
-         OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+         TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
+         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
        )
        AND s.id <> $3::uuid`,
     [po, sto, keeperShipmentUuid],
@@ -789,12 +792,27 @@ export async function finalizeSapShipmentAfterUpsert(
   if (!contractUuid || !keeperShipmentUuid) return result;
 
   if (sto) {
-    await runQuery(
+    const keeperRes = await runQuery<{ shipment_id: string | null }>(
       db,
-      `UPDATE shipments SET shipment_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
-      [sto, keeperShipmentUuid],
+      `SELECT shipment_id FROM shipments WHERE id = $1::uuid LIMIT 1`,
+      [keeperShipmentUuid],
     );
-    await syncContractStoFromSapShipment(db, contractUuid, sto);
+    const keeperSid = String(keeperRes.rows[0]?.shipment_id ?? '').trim();
+    const shouldRenameShipmentId =
+      !keeperSid ||
+      keeperSid === sto ||
+      isKlipManualShipmentId(keeperSid) ||
+      !isSapSourcedShipmentId(keeperSid) ||
+      (await isStoReplacedInLatestSap(db, poNumber, keeperSid, sto));
+
+    if (shouldRenameShipmentId) {
+      await runQuery(
+        db,
+        `UPDATE shipments SET shipment_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+        [sto, keeperShipmentUuid],
+      );
+      await syncContractStoFromSapShipment(db, contractUuid, sto);
+    }
   }
 
   const siblingResult = await reconcileSupersededNumericStoSiblings(

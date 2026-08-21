@@ -178,7 +178,7 @@ import {
   sqlSapAtaStartLoading,
 } from '../utils/shipmentAtaOverrideSql';
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
-import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
+import { sqlShipmentListPrimaryFieldAgg, sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
 import { isValidHumanPortName } from '../services/vesselLoadingPortsFromSap.service';
 import {
@@ -187,7 +187,6 @@ import {
 } from '../utils/shipmentStoGroupMembersSql';
 import { fanOutVesselLoadingPortAtaToStoGroup, fanOutShipmentEtaToStoGroup, fanOutShipmentLoadingEtaToStoGroup } from '../services/shipmentAtaStoFanOut.service';
 import { fanOutVesselIdentityToStoGroup, hasVesselIdentityUpdate } from '../services/shipmentVesselFromSap.service';
-import { sqlLatestNonBlankAgg } from '../utils/sapVesselFields';
 import {
   SQL_CONTRACT_IMPORT_STATUS,
   getContractImportStatusForShipment,
@@ -847,9 +846,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
-          ${sqlLatestNonBlankAgg('s.vessel_name')} as vessel_name,
-          ${sqlLatestNonBlankAgg('s.vessel_code')} as vessel_code,
-          ${sqlLatestNonBlankAgg('s.master_vessel_id')} AS master_vessel_id,
+          ${sqlShipmentListPrimaryFieldAgg('s.vessel_name', listStoKeySql, 'c', 'l', 's', 'cs_sto')} as vessel_name,
+          ${sqlShipmentListPrimaryFieldAgg('s.vessel_code', listStoKeySql, 'c', 'l', 's', 'cs_sto')} as vessel_code,
+          ${sqlShipmentListPrimaryFieldAgg('s.master_vessel_id::text', listStoKeySql, 'c', 'l', 's', 'cs_sto')}::uuid AS master_vessel_id,
           MAX(s.voyage_no) as voyage_no,
           MAX(s.vessel_owner) as vessel_owner,
           MAX(s.vessel_draft) as vessel_draft,
@@ -1949,13 +1948,33 @@ ${contractMetaSelectCore}
         sp.*,
         ${shipmentListPageQtySelectSql('sp')},
         COALESCE(
-          NULLIF(TRIM(slpa.sap_loading_ports), ''),
-          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
-          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
-          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_discharge), '')
         ) AS discharge_ports,
         slpa.sap_loading_ports,

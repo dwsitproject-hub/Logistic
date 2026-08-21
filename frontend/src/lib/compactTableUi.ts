@@ -18,13 +18,13 @@ export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_R
 /** Actions <th> only — sticky right + top corner cell (body <td> unchanged). */
 export const COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS = 'klip-op-col--actions-header'
 
-export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 80
+export const COMPACT_TABLE_ACTIONS_COL_WIDTH_PX = 112
 
 export const COMPACT_TABLE_ACTIONS_HEADER_CLASS =
-  'klip-op-col--actions text-center align-middle font-semibold whitespace-nowrap px-4 py-1.5'
+  'klip-op-col--actions text-center align-middle font-semibold whitespace-nowrap px-2 py-1.5'
 
 export const COMPACT_TABLE_ACTIONS_CELL_CLASS =
-  'klip-op-col--actions align-middle text-center px-4 py-1.5'
+  'klip-op-col--actions align-middle text-center px-2 py-1.5'
 
 export const COMPACT_TABLE_CLASS = 'w-full table-fixed border-collapse klip-compact-table'
 

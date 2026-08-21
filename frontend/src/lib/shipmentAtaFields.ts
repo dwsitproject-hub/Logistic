@@ -88,6 +88,36 @@ export function dischargeAtaSapFromPortRow(
   };
 }
 
+export function isDischargeAtaField(key: ShipmentAtaApiField): boolean {
+  return key.includes('discharg');
+}
+
+/**
+ * SAP chip value for an ATA field.
+ * Discharge keys must use the discharge VLP row only — never the loading port's sap_ata_*.
+ */
+export function resolveAtaSapReferenceValue(
+  key: ShipmentAtaApiField,
+  opts: {
+    loadingPortRow?: Record<string, unknown> | null
+    dischargePortRow?: Record<string, unknown> | null
+    shipmentSapRef: ShipmentAtaFields
+  },
+): string {
+  if (isDischargeAtaField(key)) {
+    const fromDisc = dischargeAtaSapFromPortRow(
+      opts.dischargePortRow ?? undefined,
+    );
+    const fromPort = fromDisc[key as keyof typeof fromDisc];
+    if (fromPort) return fromPort;
+    return opts.shipmentSapRef[key] ?? '';
+  }
+  const fromLoading = loadingAtaSapFromPortRow(opts.loadingPortRow ?? undefined);
+  const fromPort = fromLoading[key as keyof typeof fromLoading];
+  if (fromPort) return fromPort;
+  return opts.shipmentSapRef[key] ?? '';
+}
+
 export function buildAtaOverridePayload(
   current: ShipmentAtaFields,
   baseline: ShipmentAtaFields,

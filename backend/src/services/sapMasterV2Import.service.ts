@@ -702,9 +702,10 @@ export class SapMasterV2ImportService {
       'group', 'supplier', 'buyer', 'contract date', 'product', 'contract no', 'po no',
       'incoterm', 'incoterms', // Handle both singular and plural
       'sea / land', 'sea/land', // Handle with and without spaces
-      'contract quantity', 'unit price', 'due date delivery',
+      'contract quantity', 'contract qty uom', 'unit price', 'currency unit price', 'due date delivery',
       'source', 'ltc / spot', 'lt/spot', // Handle with and without space
-      'status', 'gr po status', 'gr sto status', 'sto no', 'sto quantity', 'classification',
+      'status', 'gr po status', 'gr sto status', 'sto no', 'sto quantity', 'sto qty uom', 'classification',
+      'delete po status', 'delete sto status',
       'b2b flag', 'contract type', 'contract reff po', 'contract reff po ini', 'contract reff so ini',
       'contract ref po', 'contract ref po initial', 'contract ref so initial',
       'contract ext no', 'company code', 'plant code', 'vendor group',
@@ -743,6 +744,7 @@ export class SapMasterV2ImportService {
       'vessel', 'voyage', 'loading port', 'discharge port', 'eta', 'ata',
       'berthed', 'sailed', 'arrival', 'quantity at', 'sto', 'shipment',
       'qty deliver', 'quantity delivery', 'qty receive', 'quantity receive', 'last receive',
+      'delivery vessel uom', 'receive uom', 'b/l qty uom',
       'sto item',
       'ship figure', 'sfal', 'sfbd',
       'transit destination', 'discharge destination',
@@ -758,6 +760,7 @@ export class SapMasterV2ImportService {
   private static isTruckingField(fieldName: string): boolean {
     const lower = fieldName.toLowerCase();
     if (isTruckingQuantityField(fieldName)) return true;
+    if (lower.includes('delivery trucking uom') || lower === 'receive uom') return true;
     return lower.includes('truck') ||
            lower.includes('trucking') ||
            lower.includes('cargo readiness') ||
@@ -856,9 +859,11 @@ export class SapMasterV2ImportService {
       'contract quantity (or po qty)': 'contract_quantity',
       'contract quantity': 'contract_quantity',
       'po qty': 'contract_quantity',
+      'contract qty uom': 'contract_qty_uom',
       
       'unit price': 'unit_price',
       'price': 'unit_price',
+      'currency unit price': 'currency_unit_price',
       
       'due date delivery (start)': 'due_date_delivery_start',
       'due date delivery (end)': 'due_date_delivery_end',
@@ -875,6 +880,8 @@ export class SapMasterV2ImportService {
       'spot': 'ltc_spot',
       
       'status': 'status',
+      'delete po status': 'delete_po_status',
+      'delete sto status': 'delete_sto_status',
       
       // LOGISTICS FIELDS
       'sto no.': 'sto_no',
@@ -886,6 +893,7 @@ export class SapMasterV2ImportService {
       'sto item': 'sto_item',
       
       'sto quantity': 'sto_quantity',
+      'sto qty uom': 'sto_qty_uom',
       
       'logistics area classification': 'logistics_area_classification',
       // UPDATED: PO Classification → STO Classification (Column Z)
@@ -936,6 +944,7 @@ export class SapMasterV2ImportService {
       'trucking oa budget at discharge': 'trucking_oa_budget_at_discharge',
       'truck oa budget': 'trucking_oa_budget_at_starting_location', // Column AL
       'trucking oa budget': 'trucking_oa_budget_at_starting_location', // Column AL
+      'currency trucking oa budget': 'currency_trucking_oa_budget',
       'estimated km': 'estimated_km', // Column AM
       'esimated km': 'estimated_km',
       
@@ -944,6 +953,7 @@ export class SapMasterV2ImportService {
       'trucking oa actual at starting location 3': 'trucking_oa_actual_at_starting_location_3',
       'trucking oa actual at discharge': 'trucking_oa_actual_at_discharge',
       'trucking oa actual': 'trucking_oa_actual_at_starting_location', // Column AK
+      'currency trucking oa actual': 'currency_trucking_oa_actual',
       
       'quantity sent via trucking (based on surat jalan)': 'quantity_sent_via_trucking_based_on_surat_jalan',
       'quantity delivered via trucking': 'quantity_delivered_via_trucking',
@@ -952,6 +962,10 @@ export class SapMasterV2ImportService {
       // UPDATED: QTY DELIVER → Quantity Delivery (Column AD)
       'qty deliver': 'quantity_delivery',
       'quantity delivery': 'quantity_delivery',
+      'delivery vessel uom': 'quantity_delivery_uom',
+      'delivery trucking uom': 'quantity_delivery_trucking_uom',
+      'receive uom': 'quantity_receive_uom',
+      'b/l qty uom': 'bl_quantity_uom',
       'qty receive': 'quantity_delivered_via_trucking',
       'selisih qty receive vs qty deliver': 'trucking_gain_loss_at_starting_location',
       

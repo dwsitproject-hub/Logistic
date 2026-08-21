@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   shipmentListPageQtySelectSql,
   shipmentListRowContractQtySql,
+  shipmentListSapReceiveQtySql,
   sqlCoalesceNonZeroChain,
   sqlCoalesceNonZeroQty,
   sqlGroupedMaybeCopiedQty,
@@ -73,7 +74,7 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql.indexOf('quantity_delivered_klip')).toBeGreaterThan(-1);
   });
 
-  it('maps hydrated SAP qty from sto_metrics first, then sap_agg, header, qty_move', () => {
+  it('maps hydrated SAP qty from sto_metrics first, then sap_agg, header; qty_move only for synthetic STO', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).toContain('sm.delivered_qty');
     expect(sql).toContain('sm.received_qty');
@@ -84,5 +85,14 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql).toContain('qm.quantity_receive');
     expect(sql).toContain('sp.quantity_delivered');
     expect(sql).toContain('sp.actual_vessel_qty_receive');
+    expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
+  });
+
+  it('shipmentListSapReceiveQtySql skips PO-wide qty_move for real SAP STO keys', () => {
+    const sql = shipmentListSapReceiveQtySql('sp');
+    expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
+    expect(sql).toContain('sm.received_qty');
+    expect(sql).toContain('qm.quantity_receive');
+    expect(sql).toMatch(/WHEN[\s\S]*OP-\|MNL-\|MSEA-[\s\S]*THEN[\s\S]*sm\.received_qty[\s\S]*ELSE[\s\S]*qm\.quantity_receive/s);
   });
 });
