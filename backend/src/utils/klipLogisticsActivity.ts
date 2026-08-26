@@ -1,7 +1,7 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
 import { sqlSpdPoNumberExpr } from './contractLogisticsStoDetailSql';
-import { sapStoNumberKeyExpr, sapStoTypeNormalizedExpr } from './shipmentStoTypeSql';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -29,6 +29,30 @@ export function isSapSourcedShipmentId(shipmentId: unknown): boolean {
 export function isKlipManualShipmentId(shipmentId: unknown): boolean {
   const text = String(shipmentId ?? '').trim();
   return text.startsWith('MNL-') || text.startsWith('MSEA-');
+}
+
+/**
+ * SQL: shipment row owns this SAP STO as its list identity.
+ * `operation_id` alone must not claim STO X when `shipment_id` is already a different
+ * numeric SAP STO (SIT collapse: shipment_id=1586004929, operation_id=1586004927).
+ */
+export function sqlShipmentMatchesSapStoExpr(
+  shipmentAlias: string,
+  stoSql: string,
+): string {
+  const sid = `TRIM(COALESCE(${shipmentAlias}.shipment_id::text, ''))`;
+  const oid = `TRIM(COALESCE(${shipmentAlias}.operation_id::text, ''))`;
+  const sto = `TRIM((${stoSql})::text)`;
+  return `(
+    ${sid} = ${sto}
+    OR (
+      ${oid} = ${sto}
+      AND NOT (
+        ${sid} ~ '^[0-9]+$'
+        AND ${sid} <> ${sto}
+      )
+    )
+  )`;
 }
 
 /**
@@ -222,9 +246,10 @@ export function isTerminalShipmentExecutionStatus(status: unknown): boolean {
 }
 
 /**
- * Latest SAP import SEA STO keys for a PO — used to distinguish STO replacement vs parallel STOs.
- * Excludes STO Type T (trucking) so SEA Shipments supersede aligns with list sea-row scope.
- * Returns distinct STO ids from the most recent import batch that contains this PO.
+ * Latest SAP import STO keys for a PO — used to distinguish STO replacement vs parallel STOs.
+ * Includes Type T: on CIF/CFR, SAP often labels sea lines as Type T; excluding them made
+ * parallel multi-STO POs look empty and broke replacement vs parallel detection.
+ * FOB trucking legs are filtered at sea-leg / candidate layers, not here.
  */
 export async function fetchLatestSapStoKeysForPo(
   db: Queryable,
@@ -235,13 +260,12 @@ export async function fetchLatestSapStoKeysForPo(
 
   const poExpr = sqlSpdPoNumberExpr('spd');
   const stoExpr = sapStoNumberKeyExpr('spd');
-  const stoTypeExpr = sapStoTypeNormalizedExpr('spd');
 
   const rows = await runQuery<{ sto_key: string }>(
     db,
     `WITH latest_import AS (
        SELECT spd.import_id
-       from sap_processed_data spd
+       FROM sap_processed_data spd
        WHERE ${poExpr} = TRIM($1::text)
        ORDER BY spd.created_at DESC NULLS LAST
        LIMIT 1
@@ -250,8 +274,7 @@ export async function fetchLatestSapStoKeysForPo(
      FROM sap_processed_data spd
      WHERE spd.import_id = (SELECT import_id FROM latest_import)
        AND ${poExpr} = TRIM($1::text)
-       AND NULLIF(TRIM((${stoExpr})::text), '') IS NOT NULL
-       AND (${stoTypeExpr}) <> 'T'`,
+       AND NULLIF(TRIM((${stoExpr})::text), '') IS NOT NULL`,
     [po],
   );
 
@@ -547,9 +570,16 @@ export async function findSapShipmentSupersedeCandidate(
   );
   if (existingNew.rows.length > 0) return null;
 
-  const candidates = await runQuery<{ id: string }>(
+  const poRes = await runQuery<{ po_number: string | null }>(
     db,
-    `SELECT id FROM shipments
+    `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
+    [contractUuid],
+  );
+  const po = String(poRes.rows[0]?.po_number ?? '').trim();
+
+  const candidates = await runQuery<{ id: string; shipment_id: string | null }>(
+    db,
+    `SELECT id, shipment_id FROM shipments
      WHERE contract_id = $1::uuid
        AND COALESCE(status, '') <> 'CANCELLED'
        AND TRIM(COALESCE(shipment_id, '')) <> TRIM($2::text)
@@ -564,6 +594,17 @@ export async function findSapShipmentSupersedeCandidate(
   );
 
   for (const candidate of candidates.rows) {
+    const oldSid = String(candidate.shipment_id ?? '').trim();
+    // Parallel multi-STO on the same PO: never reuse numeric SAP row A for STO B.
+    if (
+      po &&
+      isSapSourcedShipmentId(oldSid) &&
+      isSapSourcedShipmentId(sto) &&
+      oldSid !== sto &&
+      !(await isStoReplacedInLatestSap(db, po, oldSid, sto))
+    ) {
+      continue;
+    }
     if (await canAutoConsolidateShipmentForSap(db, candidate.id, contractUuid)) {
       return candidate.id;
     }
@@ -581,9 +622,10 @@ export async function findShipmentByPoAndSto(
   const sto = String(stoNumber ?? '').trim();
   if (!po || !sto) return null;
 
-  // Match shipment_id / operation_id only — never contracts.sto_number alone.
+  // Match shipment identity for this STO — never contracts.sto_number alone.
   // Contract upsert writes the latest SAP STO onto contracts.sto_number before
   // upsertShipment runs, which would falsely attach parallel STOs to the sole row.
+  // Do not treat operation_id=STO-A on a row whose shipment_id is already STO-B.
   const rows = await runQuery<{ id: string; contract_uuid: string }>(
     db,
     `SELECT s.id, c.id::text AS contract_uuid
@@ -591,10 +633,7 @@ export async function findShipmentByPoAndSto(
      INNER JOIN contracts c ON c.id = s.contract_id
      WHERE COALESCE(s.status, '') <> 'CANCELLED'
        AND TRIM(COALESCE(c.po_number, '')) = TRIM($1::text)
-       AND (
-         TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
-         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
-       )
+       AND ${sqlShipmentMatchesSapStoExpr('s', '$2')}
      ORDER BY
        CASE WHEN TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text) THEN 0 ELSE 1 END,
        s.created_at ASC
@@ -627,10 +666,7 @@ export async function cancelDuplicateShipmentsForPoAndSto(
      INNER JOIN contracts c ON c.id = s.contract_id
      WHERE COALESCE(s.status, '') <> 'CANCELLED'
        AND TRIM(COALESCE(c.po_number, '')) = TRIM($1::text)
-       AND (
-         TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
-         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
-       )
+       AND ${sqlShipmentMatchesSapStoExpr('s', '$2')}
        AND s.id <> $3::uuid`,
     [po, sto, keeperShipmentUuid],
   );

@@ -17,6 +17,7 @@ import {
   sqlIsSapSeaStoRowForIncotermExpr,
 } from '../utils/shipmentStoTypeSql';
 import { buildUnplannedContractToolbarScope } from '../utils/shipmentUnplannedHybridSql';
+import { sqlShipmentMatchesSapStoExpr } from '../utils/klipLogisticsActivity';
 
 export const DEFAULT_ENSURE_SAP_STO_BATCH_CAP = 50;
 
@@ -58,10 +59,7 @@ export async function hasActiveShipmentForSto(
      FROM shipments s
      INNER JOIN contracts c ON c.id = s.contract_id
      WHERE TRIM(c.contract_id) = TRIM($1::text)
-       AND (
-         TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
-         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
-       )
+       AND ${sqlShipmentMatchesSapStoExpr('s', '$2')}
        AND UPPER(COALESCE(s.status, '')) NOT IN ('CANCELLED')
      LIMIT 1`,
     [contractNumber, stoNumber],
@@ -94,10 +92,7 @@ export function buildSapStoCandidateQuery(
         SELECT 1
         FROM shipments s
         WHERE s.contract_id = c.id
-          AND (
-            TRIM(COALESCE(s.shipment_id::text, '')) = TRIM(${stoKey})
-            OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${stoKey})
-          )
+          AND ${sqlShipmentMatchesSapStoExpr('s', stoKey)}
           AND UPPER(COALESCE(s.status, '')) NOT IN ('CANCELLED')
       )
       ${contractScopeSql}
@@ -189,6 +184,75 @@ export async function ensureSapStoShipmentFromRow(
   }
 }
 
+export interface ParallelStoOperationIdCollision {
+  shipmentUuid: string;
+  shipmentId: string;
+  operationId: string;
+  poNumber: string | null;
+}
+
+/**
+ * Clear operation_id when it points at a different parallel SAP STO than shipment_id
+ * on the same PO (both STOs still present in sap_processed_data).
+ * Example SIT: shipment_id=1586004929, operation_id=1586004927 blocked materialize of 4927.
+ */
+export async function clearParallelSapStoOperationIdCollisions(
+  client: PoolClient,
+  opts: { po?: string; dryRun?: boolean } = {},
+): Promise<ParallelStoOperationIdCollision[]> {
+  const params: unknown[] = [];
+  let poFilter = '';
+  if (opts.po) {
+    params.push(opts.po);
+    poFilter = ` AND TRIM(c.po_number::text) = TRIM($${params.length}::text)`;
+  }
+
+  const selectSql = `
+    SELECT s.id::text AS shipment_uuid,
+           TRIM(s.shipment_id::text) AS shipment_id,
+           TRIM(s.operation_id::text) AS operation_id,
+           c.po_number
+    FROM shipments s
+    INNER JOIN contracts c ON c.id = s.contract_id
+    WHERE COALESCE(s.status, '') <> 'CANCELLED'
+      AND TRIM(COALESCE(s.shipment_id::text, '')) ~ '^[0-9]+$'
+      AND TRIM(COALESCE(s.operation_id::text, '')) ~ '^[0-9]+$'
+      AND TRIM(s.shipment_id::text) <> TRIM(s.operation_id::text)
+      AND EXISTS (
+        SELECT 1 FROM sap_processed_data spd
+        WHERE TRIM(COALESCE(spd.po_number::text, '')) = TRIM(COALESCE(c.po_number::text, ''))
+          AND TRIM(COALESCE(spd.sto_number::text, '')) = TRIM(s.operation_id::text)
+      )
+      AND EXISTS (
+        SELECT 1 FROM sap_processed_data spd2
+        WHERE TRIM(COALESCE(spd2.po_number::text, '')) = TRIM(COALESCE(c.po_number::text, ''))
+          AND TRIM(COALESCE(spd2.sto_number::text, '')) = TRIM(s.shipment_id::text)
+      )
+      ${poFilter}
+    ORDER BY c.po_number, s.shipment_id`;
+
+  const found = await client.query(selectSql, params);
+  const rows = found.rows.map((r) => ({
+    shipmentUuid: String(r.shipment_uuid),
+    shipmentId: String(r.shipment_id),
+    operationId: String(r.operation_id),
+    poNumber: r.po_number != null ? String(r.po_number) : null,
+  }));
+
+  if (opts.dryRun || rows.length === 0) return rows;
+
+  await client.query(
+    `UPDATE shipments s
+     SET operation_id = NULL, updated_at = CURRENT_TIMESTAMP
+     FROM contracts c
+     WHERE s.contract_id = c.id
+       AND s.id = ANY($1::uuid[])`,
+    [rows.map((r) => r.shipmentUuid)],
+  );
+
+  return rows;
+}
+
 export async function ensureSapStoShipmentsBatch(
   opts: {
     limit?: number;
@@ -202,17 +266,34 @@ export async function ensureSapStoShipmentsBatch(
     fobOnly?: boolean;
     userId?: string;
     invalidateCache?: boolean;
+    /** Clear parallel STO operation_id collisions before materializing missing rows. */
+    repairOperationIdCollisions?: boolean;
   } = {},
-): Promise<EnsureSapStoShipmentBatchResult> {
+): Promise<EnsureSapStoShipmentBatchResult & { repairedOperationIds: number }> {
   const client = await pool.connect();
-  const result: EnsureSapStoShipmentBatchResult = {
+  const result: EnsureSapStoShipmentBatchResult & { repairedOperationIds: number } = {
     processed: 0,
     created: 0,
     skipped: 0,
     failed: 0,
+    repairedOperationIds: 0,
   };
 
   try {
+    if (opts.repairOperationIdCollisions) {
+      const cleared = await clearParallelSapStoOperationIdCollisions(client, {
+        po: opts.po,
+        dryRun: false,
+      });
+      result.repairedOperationIds = cleared.length;
+      if (cleared.length > 0) {
+        logger.info('Cleared parallel SAP STO operation_id collisions', {
+          count: cleared.length,
+          samples: cleared.slice(0, 10),
+        });
+      }
+    }
+
     const candidates = await findSapStoCandidates(client, {
       limit: opts.limit ?? DEFAULT_ENSURE_SAP_STO_BATCH_CAP,
       contractScope: opts.contractScope,
@@ -228,11 +309,14 @@ export async function ensureSapStoShipmentsBatch(
       else result.skipped += 1;
     }
 
-    if (result.created > 0 && opts.invalidateCache !== false) {
+    if (
+      (result.created > 0 || result.repairedOperationIds > 0) &&
+      opts.invalidateCache !== false
+    ) {
       invalidateShipmentsListCache();
     }
 
-    if (result.created > 0) {
+    if (result.created > 0 || result.repairedOperationIds > 0) {
       logger.info('ensureSapStoShipmentsBatch finished', result);
     }
   } finally {

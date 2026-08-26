@@ -14,6 +14,7 @@ import {
   isStoReplacedInLatestSap,
   isTerminalShipmentExecutionStatus,
   reconcileSupersededNumericStoSiblings,
+  sqlShipmentMatchesSapStoExpr,
 } from './klipLogisticsActivity';
 
 describe('klipLogisticsActivity ids', () => {
@@ -26,6 +27,14 @@ describe('klipLogisticsActivity ids', () => {
   it('detects KLIP manual shipment ids', () => {
     expect(isKlipManualShipmentId('MNL-123')).toBe(true);
     expect(isKlipManualShipmentId('1006018592')).toBe(false);
+  });
+
+  it('sqlShipmentMatchesSapStoExpr ignores operation_id on a different numeric SAP STO', () => {
+    const sql = sqlShipmentMatchesSapStoExpr('s', '$2');
+    expect(sql).toContain("s.shipment_id::text");
+    expect(sql).toContain("s.operation_id::text");
+    expect(sql).toContain("~ '^[0-9]+$'");
+    expect(sql).toContain('TRIM(($2)::text)');
   });
 });
 
@@ -377,15 +386,15 @@ describe('fetchLatestSapStoKeysForPo', () => {
     await expect(fetchLatestSapStoKeysForPo(db, '1011003113')).resolves.toEqual(['1016010973']);
   });
 
-  it('queries with STO Type T excluded for SEA supersede', async () => {
+  it('includes all STO keys including Type T (CIF parallel multi-STO)', async () => {
     const queryFn = vi.fn().mockResolvedValue({
-      rows: [{ sto_key: '1016010973' }],
+      rows: [{ sto_key: '1586004927' }],
     });
     const db = mockDb(queryFn);
-    await fetchLatestSapStoKeysForPo(db, '1011003113');
+    await fetchLatestSapStoKeysForPo(db, '1581000931');
     const sql = String(queryFn.mock.calls[0]?.[0] ?? '');
-    expect(sql).toContain("<> 'T'");
-    expect(sql).toContain('STO Type');
+    expect(sql).not.toContain("<> 'T'");
+    expect(sql).toContain('sap_processed_data');
   });
 });
 

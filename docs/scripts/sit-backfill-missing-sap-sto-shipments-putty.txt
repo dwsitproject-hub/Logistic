@@ -1,47 +1,48 @@
-# SIT — materialize missing multi-STO shipments (PuTTY → backend 172.28.92.57)
-# Example: PO 1581000931 STOs 1586004927 / 4928 missing from Shipments search
-# while SAP has three STO lines and local already shows them.
+# SIT — repair parallel multi-STO collapse + materialize missing shipments
+# Case: PO 1581000931 — Shipments showed 4928+4929 only; Contracts showed 4927+4928+4929.
+# Root cause on RDS: shipment_id=1586004929 had operation_id=1586004927 (false match),
+# so backfill skipped creating 1586004927.
 #
-# Prereq: pull latest SIT + rebuild backend so dist/scripts/backfillMissingSapStoShipments.js exists.
+# Prereq: pull latest SIT + rebuild backend.
 
 cd /opt/klip
 git fetch origin
 git checkout SIT
 git pull origin SIT
-
-# Rebuild backend (required for new script in dist/)
 docker compose -f docker-compose.backend.yml up -d --build
 
-# Optional check before backfill
-docker exec -i klip-postgres psql -U klip_user -d klip_db <<'SQL'
-SELECT s.shipment_id, s.status
-FROM shipments s
-JOIN contracts c ON c.id = s.contract_id
-WHERE c.po_number = '1581000931'
-ORDER BY 1;
-SELECT spd.sto_number
-FROM sap_processed_data spd
-WHERE spd.po_number = '1581000931'
-  AND NULLIF(TRIM(spd.sto_number),'') IS NOT NULL
-ORDER BY 1;
-SQL
+# Confirm DB is Aliyun RDS (not co-located postgres)
+docker exec klip-backend printenv DB_HOST DB_NAME NODE_ENV
 
-# Dry-run (lists candidates that would get a shipment row)
+# Diagnose (shows collisions + gaps)
+docker exec -w /app klip-backend node dist/scripts/backfillMissingSapStoShipments.js --diagnose --po 1581000931
+
+# Dry-run: lists operation_id clears + missing STO creates
 docker exec -w /app klip-backend node dist/scripts/backfillMissingSapStoShipments.js --dry-run --po 1581000931
 
-# Create missing shipment rows for that PO
-docker exec -w /app klip-backend node dist/scripts/backfillMissingSapStoShipments.js --po 1581000931
+# Repair: clear colliding operation_id, then create missing shipment rows
+docker exec -w /app klip-backend node dist/scripts/backfillMissingSapStoShipments.js --repair-operation-id --po 1581000931
 
-# Or broader (capped) for all missing sea STOs:
-# docker exec -w /app klip-backend node dist/scripts/backfillMissingSapStoShipments.js --limit 200
+# Verify via API DB
+docker exec -i -w /app klip-backend node <<'EOF'
+const pool = require('./dist/database/connection').default;
+(async () => {
+  const c = await pool.connect();
+  try {
+    const ships = await c.query(
+      `select s.shipment_id, s.operation_id, s.status
+       from shipments s
+       join contracts ct on ct.id = s.contract_id
+       where trim(ct.po_number::text) = '1581000931'
+       order by 1`
+    );
+    console.log('ships', ships.rows);
+  } finally {
+    c.release();
+    process.exit(0);
+  }
+})().catch((e) => { console.error(e); process.exit(1); });
+EOF
 
-# Verify
-docker exec -i klip-postgres psql -U klip_user -d klip_db <<'SQL'
-SELECT s.shipment_id, s.status
-FROM shipments s
-JOIN contracts c ON c.id = s.contract_id
-WHERE c.po_number = '1581000931'
-ORDER BY 1;
-SQL
-
-# Then hard-refresh Shipments UI and search 1586004927 / 1586004928 / 1581000931
+# Expect three shipment_id values: 1586004927, 1586004928, 1586004929
+# Then hard-refresh Shipments UI and search 1586004927 / 1581000931

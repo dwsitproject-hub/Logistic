@@ -11,6 +11,10 @@ describe('ensureSapStoShipment.service', () => {
     expect(sql).toContain('FROM shipments s');
     expect(sql).toContain("IS DISTINCT FROM 'T'");
     expect(sql).toContain('LIMIT 25');
+    // Parallel multi-STO: operation_id alone must not own a different numeric shipment_id
+    expect(sql).toContain("shipment_id::text");
+    expect(sql).toContain("operation_id::text");
+    expect(sql).toContain("~ '^[0-9]+$'");
   });
 
   it('isSapStoCandidateEligible rejects FOB Type T trucking legs', () => {
