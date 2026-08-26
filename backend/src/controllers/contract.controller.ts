@@ -1978,11 +1978,44 @@ export const getDistinctBuyers = async (req: AuthRequest, res: Response) => {
   }
 };
 
+const CONTRACT_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Accepts a contract UUID, a contract number, or a PO number.
+ *
+ * `contracts.id` is a uuid column, so passing a PO number straight into `WHERE id = $1` made
+ * Postgres raise "invalid input syntax for type uuid"; the catch below turned that into a 500.
+ * Business users hold PO numbers rather than UUIDs, so the identifier they actually have was the
+ * one path that failed - and it failed as a server fault rather than a 404.
+ *
+ * The uuid path is byte-for-byte what it was. Only non-uuid input takes the new branch, which
+ * previously could not succeed at all.
+ *
+ * A PO number can legitimately span several contracts (multi-STO). Rather than guess silently,
+ * this returns one deterministically - exact contract number first, then newest, with `id` as a
+ * final unique key so the choice cannot shift between query plans - and reports `match_count` so
+ * a caller can tell a unique hit from a collapsed set. Those two fields are additive; existing
+ * consumers of `contract` / `shipments` / `payments` are unaffected.
+ */
 export const getContract = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const rawId = String(id ?? '').trim();
+    const isUuid = CONTRACT_ID_UUID_RE.test(rawId);
 
-    const result = await query('SELECT * FROM contracts WHERE id = $1', [id]);
+    const result = isUuid
+      ? await query('SELECT * FROM contracts WHERE id = $1', [id])
+      : await query(
+          `SELECT * FROM contracts
+             WHERE TRIM(COALESCE(contract_id::text, '')) = $1
+                OR TRIM(COALESCE(po_number::text, '')) = $1
+             ORDER BY
+               CASE WHEN TRIM(COALESCE(contract_id::text, '')) = $1 THEN 0 ELSE 1 END,
+               created_at DESC NULLS LAST,
+               id ASC
+             LIMIT 1`,
+          [rawId]
+        );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -1991,16 +2024,30 @@ export const getContract = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    let matchCount = result.rows.length;
+    if (!isUuid) {
+      const countResult = await query(
+        `SELECT COUNT(*)::int AS n FROM contracts
+          WHERE TRIM(COALESCE(contract_id::text, '')) = $1
+             OR TRIM(COALESCE(po_number::text, '')) = $1`,
+        [rawId]
+      );
+      matchCount = Number(countResult.rows[0]?.n ?? 1);
+    }
+
+    // Related records key off the contract's uuid, which is not necessarily what the caller sent.
+    const contractUuid = result.rows[0].id;
+
     // Get related shipments
     const shipmentsResult = await query(
       'SELECT * FROM shipments WHERE contract_id = $1 ORDER BY created_at DESC',
-      [id]
+      [contractUuid]
     );
 
     // Get related payments
     const paymentsResult = await query(
       'SELECT * FROM payments WHERE contract_id = $1 ORDER BY created_at DESC',
-      [id]
+      [contractUuid]
     );
 
     return res.json({
@@ -2009,6 +2056,8 @@ export const getContract = async (req: AuthRequest, res: Response) => {
         contract: result.rows[0],
         shipments: shipmentsResult.rows,
         payments: paymentsResult.rows,
+        matched_by: isUuid ? 'uuid' : 'contract_or_po_number',
+        match_count: matchCount,
       },
     });
   } catch (error) {
