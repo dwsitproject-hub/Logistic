@@ -167,6 +167,7 @@ import {
   type PrePlannedTableGroup,
 } from '@/lib/prePlannedGroupTableRows'
 import {
+  EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
   ShipmentOutstandingQtySummary,
   reconcileOutstandingQtyStripForDisplay,
 } from '@/components/shipments/ShipmentOutstandingQtySummary'
@@ -995,6 +996,7 @@ function ShipmentsPageContent() {
   const [summaryFetching, setSummaryFetching] = useState(false)
   /** Outstanding Qty strip — usually arrives with summaryOnly (bucketsComplete). */
   const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
+  const [section1LoadError, setSection1LoadError] = useState<string | null>(null)
   const [vesselIdleCount, setVesselIdleCount] = useState(0)
   const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
   const [vesselWillFreeList, setVesselWillFreeList] = useState<VesselWillFreeListRow[]>([])
@@ -1618,9 +1620,14 @@ function ShipmentsPageContent() {
     const listGen = ++listFetchGenRef.current
     const hadRows = shipments.length > 0
     const forceOsRefresh = Boolean(options?.force || section1SummaryForceNextFetchRef.current)
+    const hasSection1 = shipmentsSection1Summary != null
     if (!hadRows) setLoading(true)
     setListFetching(true)
-    setSummaryFetching(true)
+    // Status cards are toolbar-scoped — do not spin them on pagination/sort.
+    if (!hasSection1 || forceOsRefresh) {
+      setSummaryFetching(true)
+      setSection1LoadError(null)
+    }
     // OS strip is static across status cards — only reset/refetch on global-filter force.
     if (forceOsRefresh) {
       setOutstandingQtyFetching(true)
@@ -1629,6 +1636,10 @@ function ShipmentsPageContent() {
       )
     }
     setQtyFieldsReady(false)
+    let startSection1Fetches = () => {
+      setSummaryFetching(false)
+      setOutstandingQtyFetching(false)
+    }
     try {
       const effectivePage = forcedPage ?? page
       const params = new URLSearchParams()
@@ -1796,6 +1807,7 @@ function ShipmentsPageContent() {
             return next
           })
           setSummaryFetching(false)
+          setSection1LoadError(null)
           section1SummaryForceNextFetchRef.current = false
           // Full OS buckets arrive with summaryOnly; stop spinner when complete.
           if (
@@ -1885,60 +1897,79 @@ function ShipmentsPageContent() {
         }
       }
 
-      // Section 1 cards (summaryOnly) — progressive: card counts/OS totals without waiting for strip buckets.
-      // OS FOB/CIF/CFR × 3rd/Interco loads in parallel via outstandingQtyOnly and merges when ready.
-      if (
-        forceOsRefresh ||
-        shipmentsSection1Summary?.outstandingQty?.bucketsComplete !== true
-      ) {
-        setOutstandingQtyFetching(true)
-      }
-      void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-        force: summaryForce,
-        onRevalidate: (fresh) => {
-          if (listGen !== listFetchGenRef.current) return
-          applySummaryEnvelope(fresh)
-        },
-      })
-        .then(({ data }) => {
-          if (listGen !== listFetchGenRef.current) return
-          applySummaryEnvelope(data)
-        })
-        .catch(() => {
-          if (listGen === listFetchGenRef.current) {
-            setSummaryFetching(false)
-            section1SummaryForceNextFetchRef.current = false
-          }
-        })
-
-      const needsOsStripFetch =
-        forceOsRefresh ||
-        shipmentsSection1Summary?.outstandingQty?.bucketsComplete !== true
-      if (needsOsStripFetch) {
-        const osParams = new URLSearchParams(summaryParams.toString())
-        osParams.delete('summaryOnly')
-        osParams.delete('osStatus')
-        osParams.set('outstandingQtyOnly', 'true')
-        const osUrl = `/shipments?${osParams.toString()}`
-        const osCacheKey = buildCacheKey('GET', osUrl)
-        void cachedGet(osCacheKey, () => api.get(osUrl).then((r) => r.data), {
-          force: forceOsRefresh,
-          onRevalidate: (fresh) => {
-            if (listGen !== listFetchGenRef.current) return
-            applySummaryEnvelope(fresh)
+      // Section 1 cards after the list shell returns so summary/OS cannot starve the table query.
+      const SECTION1_SUMMARY_TIMEOUT_MS = 60_000
+      startSection1Fetches = () => {
+        if (listGen !== listFetchGenRef.current) return
+        void cachedGet(
+          summaryCacheKey,
+          () => api.get(summaryUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS }).then((r) => r.data),
+          {
+            force: summaryForce,
+            onRevalidate: (fresh) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(fresh)
+            },
           },
-        })
+        )
           .then(({ data }) => {
             if (listGen !== listFetchGenRef.current) return
             applySummaryEnvelope(data)
           })
-          .catch(() => {
+          .catch((err: unknown) => {
+            console.error('Shipment Section 1 summary failed:', err)
             if (listGen === listFetchGenRef.current) {
-              setOutstandingQtyFetching(false)
+              setSummaryFetching(false)
+              section1SummaryForceNextFetchRef.current = false
+              setSection1LoadError(apiErrorMessage(err, 'Failed to load shipment status summary'))
+              setShipmentsSection1Summary((prev) => prev ?? { total: 0 })
             }
           })
-      } else {
-        setOutstandingQtyFetching(false)
+
+        const needsOsStripFetch =
+          forceOsRefresh ||
+          shipmentsSection1Summary?.outstandingQty?.bucketsComplete !== true
+        if (needsOsStripFetch) {
+          if (forceOsRefresh || shipmentsSection1Summary?.outstandingQty == null) {
+            setOutstandingQtyFetching(true)
+          }
+          const osParams = new URLSearchParams(summaryParams.toString())
+          osParams.delete('summaryOnly')
+          osParams.delete('osStatus')
+          osParams.set('outstandingQtyOnly', 'true')
+          const osUrl = `/shipments?${osParams.toString()}`
+          const osCacheKey = buildCacheKey('GET', osUrl)
+          void cachedGet(
+            osCacheKey,
+            () => api.get(osUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS }).then((r) => r.data),
+            {
+              force: forceOsRefresh,
+              onRevalidate: (fresh) => {
+                if (listGen !== listFetchGenRef.current) return
+                applySummaryEnvelope(fresh)
+              },
+            },
+          )
+            .then(({ data }) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(data)
+            })
+            .catch((err: unknown) => {
+              console.error('Shipment outstanding qty summary failed:', err)
+              if (listGen === listFetchGenRef.current) {
+                setOutstandingQtyFetching(false)
+                setShipmentsSection1Summary((prev) => ({
+                  ...(prev ?? {}),
+                  outstandingQty: reconcileOutstandingQtyStripForDisplay({
+                    ...(prev?.outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY),
+                    bucketsComplete: true,
+                  }),
+                }))
+              }
+            })
+        } else {
+          setOutstandingQtyFetching(false)
+        }
       }
 
       const LIST_SHELL_TIMEOUT_MS = useAccurateQtySort ? 90_000 : 45_000
@@ -1962,6 +1993,7 @@ function ShipmentsPageContent() {
       if (searchTrim.length >= 2 || useAccurateQtySort) {
         setQtyFieldsReady(true)
       }
+      startSection1Fetches()
 
       // Section 2 ETA scoped summary (only when a pipeline stage is selected).
       if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
@@ -2071,7 +2103,7 @@ function ShipmentsPageContent() {
         setShipments([])
       }
       setListFetching(false)
-      setSummaryFetching(false)
+      startSection1Fetches()
       setTableScopeLoading(false)
       setQtyFieldsReady(true)
     } finally {
@@ -5859,6 +5891,12 @@ function ShipmentsPageContent() {
           hasActiveFilters={hasActiveShipmentFilters}
           onClearFilters={clearShipmentFilters}
         />
+
+        {section1LoadError ? (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            {section1LoadError}
+          </p>
+        ) : null}
 
         {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
         <AttentionInsightsSection

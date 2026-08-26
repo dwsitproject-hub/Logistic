@@ -98,6 +98,7 @@ describe('shipmentStatusCardQtySql', () => {
     );
     expect(sql).toContain('unplanned_execution_contract_qty');
     expect(sql).toContain('unplanned_execution_outstanding_qty');
+    expect(sql).toContain('0::numeric AS unplanned_execution_outstanding_qty');
     expect(sql).toContain('planned_outstanding_qty');
     expect(sql).toContain('at_loading_port_outstanding_qty');
     expect(sql).toContain("effective_status = 'PLANNED'");
@@ -105,6 +106,11 @@ describe('shipmentStatusCardQtySql', () => {
     expect(sql).toContain('contract_qty');
     expect(sql).not.toMatch(/FROM enriched e[\s\S]*e\.is_contract_sap_closed/);
     expect(sql).toContain('outstanding_quantity');
+    expect(sql).toContain('execution_os');
+    expect(sql).toContain('FROM execution_os');
+    expect(sql).not.toContain('LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key');
+    expect(sql).not.toContain('po_sto_count');
+    expect(sql).toContain('qty_move');
   });
 
   it('sumShipmentStatusOutstandingQtyKg sums the six active stages', () => {

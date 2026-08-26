@@ -9,6 +9,7 @@ import {
   shouldResolveAllHybridShipmentsList,
   shouldResolveCompletedHybridShipmentsList,
 } from './shipmentUnplannedHybridList.service';
+import { buildShipmentListEnrichedPageQuery } from './shipmentList.service';
 
 describe('shipmentUnplannedHybridList.service', () => {
   const baseInput = {
@@ -67,6 +68,46 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(ctx.shipmentCtx.outerSql).not.toContain('is_contract_sap_closed');
       expect(ctx.shipmentCtx.outerSql).not.toContain('eta_arrival');
       expect(ctx.shipmentCtx.cacheKey).toContain(':all-hybrid');
+      expect(ctx.shipmentCtx.cacheKey).toContain(':sap=0');
+    });
+
+    it('does not share cache between skipSapJoin shell and hydrate so OS/receive/delivery can fill', () => {
+      const shell = buildShipmentAllHybridListContext(baseInput);
+      const hydrate = buildShipmentAllHybridListContext({ ...baseInput, skipSapJoin: false });
+      expect(shell.shipmentCtx.cacheKey).toContain(':sap=0');
+      expect(hydrate.shipmentCtx.cacheKey).toContain(':sap=1');
+      expect(shell.shipmentCtx.cacheKey).not.toBe(hydrate.shipmentCtx.cacheKey);
+    });
+
+    it('does not share cache across sort keys', () => {
+      const created = buildShipmentAllHybridListContext({
+        ...baseInput,
+        sortKey: 'created_at',
+        sortDir: 'DESC',
+      });
+      const vessel = buildShipmentAllHybridListContext({
+        ...baseInput,
+        sortKey: 'vessel_name',
+        sortDir: 'ASC',
+      });
+      expect(created.shipmentCtx.cacheKey).not.toBe(vessel.shipmentCtx.cacheKey);
+    });
+
+    it('hydrate execution SQL still computes OS, receive, and delivery qty', () => {
+      const ctx = buildShipmentAllHybridListContext({ ...baseInput, skipSapJoin: false });
+      const q = buildShipmentListEnrichedPageQuery(ctx.shipmentCtx, 20, 0);
+      expect(q.text).toMatch(/\bqty_move\b/);
+      expect(q.text).toContain('AS outstanding_quantity');
+      expect(q.text).toContain('AS quantity_receive');
+      expect(q.text).toContain('AS quantity_delivered_sap');
+      expect(q.text).toContain('sm.po_sto_count');
+    });
+
+    it('shell execution SQL omits qty_move so first paint cannot poison hydrate cache', () => {
+      const ctx = buildShipmentAllHybridListContext(baseInput);
+      const q = buildShipmentListEnrichedPageQuery(ctx.shipmentCtx, 20, 0);
+      expect(q.text).not.toMatch(/\bqty_move\b/);
+      expect(q.text).not.toContain('AS outstanding_quantity');
     });
 
     it('includes unplanned and preplanned contract backlog for ALL hybrid', () => {

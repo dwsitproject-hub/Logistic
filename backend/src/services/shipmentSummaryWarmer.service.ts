@@ -9,9 +9,9 @@
  *   summaryOnly                         16823ms  -> 1547ms   <-- no warmer existed
  *   outstandingQtyOnly                   8338ms  ->    8ms   <-- no warmer existed
  *
- * The list itself was already cached and fast. The two summary calls were not warmed at all, so
- * the first visitor after every restart paid ~25s across them - on the page the team opens most.
- * Shipping Performance, Oil Loss and Trucking already had warmers; Shipments did not.
+ * The compact list shell is warmed first (created_at + vessel_name) so the table is not
+ * starved by summary/OS at boot. Section 1 summary/OS no longer join list-grain
+ * sto_metrics/sap_agg (qty_move only); cold times above are the pre-change baseline.
  *
  * These call the real request handler with a synthetic request, exactly as the Trucking warmer
  * does. That matters: it populates the same cache entries a browser hits, through the identical
@@ -77,8 +77,10 @@ function buildSyntheticRequest(extraQuery: Record<string, string | string[]>): A
       compact: 'true',
       skipSapJoin: 'true',
       includeSummary: 'false',
-      limit: '25',
+      limit: '20',
       page: '1',
+      sortKey: 'created_at',
+      sortDir: 'desc',
       dateFrom,
       dateTo,
       ...extraQuery,
@@ -127,6 +129,12 @@ function scopeToExtraQuery(scope: {
     extra.columnFilters = productColumnFilters(scope.products);
   }
   return extra;
+}
+
+/** Compact list shell (skipSapJoin) — default created_at then persisted vessel_name sort. */
+export async function startShipmentListShellCacheWarmer(): Promise<void> {
+  await warmOne('list shell', { sortKey: 'created_at', sortDir: 'desc' });
+  await warmOne('list shell vessel_name', { sortKey: 'vessel_name', sortDir: 'asc' });
 }
 
 /** Section 1 status cards (the 16.8s call) — default YTD only. */

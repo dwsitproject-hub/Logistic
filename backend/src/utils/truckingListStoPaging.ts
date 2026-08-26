@@ -13,6 +13,7 @@ export type TruckingStoPagingFilterInput = {
   globalSearch?: string;
   colFilters?: ColumnFilterPayload;
   unplannedHybrid?: boolean;
+  allHybrid?: boolean;
 };
 
 function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
@@ -25,7 +26,7 @@ function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
  * status is derived per operation (PO grain) and must not be applied before paging.
  */
 export function canUseTruckingStoKeyPaging(input: TruckingStoPagingFilterInput): boolean {
-  if (input.summaryOnly || input.unplannedHybrid) return false;
+  if (input.summaryOnly || input.unplannedHybrid || input.allHybrid) return false;
   if (input.stoIsSet || input.contractIsSet) return false;
   if (String(input.globalSearch ?? '').trim().length >= 2) return false;
   if (hasColumnFilters(input.colFilters)) return false;

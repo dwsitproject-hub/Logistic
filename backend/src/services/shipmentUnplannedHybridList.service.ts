@@ -206,7 +206,7 @@ function buildShipmentHybridListContext(input: {
       innerParams: input.innerParams,
       outerParams: input.toolbarOuterParams,
       skipSapJoin: input.skipSapJoin,
-      cacheKey: `${input.filterCacheKey}:${input.cacheKeySuffix}`,
+      cacheKey: `${input.filterCacheKey}:${input.cacheKeySuffix}:sap=${input.skipSapJoin ? 0 : 1}:sk=${input.sortKey ?? 'created_at'}:${input.sortDir ?? 'DESC'}`,
       filterCacheKey: input.filterCacheKey,
       usesStoKeyPaging: false,
       tableStatusFilter: input.tableStatusFilter,
@@ -418,6 +418,9 @@ type HybridListResult = ShipmentListResponseData & { unplannedBreakdown: Unplann
  * Same TTL and eviction bound as PAGE_CACHE so behaviour is consistent across list paths, plus
  * in-flight sharing: concurrent identical requests (several users, or a refresh burst) run the
  * queries once and all receive that result.
+ *
+ * Cache keys include skipSapJoin (`sap=0` shell vs `sap=1` hydrate) and sort. Compact first
+ * paint omits OS/receive/delivery; sharing that entry with skipSapJoin=false would freeze qty as "-".
  *
  * Registered with the invalidation registry so an edit clears it - without that a cached list
  * would keep showing pre-edit rows.

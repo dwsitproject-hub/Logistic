@@ -2,10 +2,13 @@
  * Shipments page Section 1 — per-card Contract Qty / Outstanding Qty aggregates (kg).
  */
 
-import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
-import { shipmentListSpdAggCtes } from './shipmentListSapAggSql';
-import { shipmentListPageQtySelectSql } from './shipmentListQtySql';
+import { shipmentListRowContractQtySql } from './shipmentListQtySql';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
+import {
+  sqlShipmentExecutionOsPerContractCtes,
+  sqlShipmentSection1LightExecutionEnrichSelect,
+} from './shipmentOutstandingQtySummarySql';
+
 export interface ShipmentStatusContractQtyKg {
   unplanned: number;
   preplanned: number;
@@ -200,14 +203,11 @@ export function applyShipmentStatusVesselZeroGuards(
   };
 }
 
-/** Toolbar-scoped execution rows with SAP qty enrich — contract + OS per pipeline card. */
+/** Toolbar-scoped execution rows — contract qty from linked POs, OS from qty_move. */
 export function buildShipmentStatusCardQtyExecutionAggregateQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
 ): string {
-  const eff = shipmentEffectiveStatusExpr('sp');
-  const qtySelect = shipmentListPageQtySelectSql('sp');
-  const spdAggCtes = shipmentListSpdAggCtes(false);
   return `
     ${shipmentBaseCteSql},
     filtered_shipments AS (
@@ -221,27 +221,22 @@ export function buildShipmentStatusCardQtyExecutionAggregateQuery(
       FROM filtered_shipments fs
     ),
     ${shipmentListQtyMoveCteFromPage()},
-    ${spdAggCtes},
     enriched AS (
       SELECT
-        ${eff} AS effective_status,
-        /* Unplanned card is PO-only; never attribute execution qty to Unplanned. */
-        FALSE AS is_unplanned_execution,
-        ${qtySelect}
+        ${sqlShipmentSection1LightExecutionEnrichSelect('sp')},
+        (${shipmentListRowContractQtySql('sp')}) AS contract_qty
       FROM shipment_page sp
-      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
-    )
+    ),
+    ${sqlShipmentExecutionOsPerContractCtes('enriched')}
     SELECT
       COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_contract_qty,
       COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_contract_qty,
       COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
       COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty,
-      COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_outstanding_qty,
-      COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
-      COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}), 0)::numeric AS at_loading_port_outstanding_qty,
-      COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'SAILED'), 0)::numeric AS sailed_outstanding_qty,
-      COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${DISCHARGE_STATUS_GROUP}), 0)::numeric AS at_discharge_port_outstanding_qty
+      0::numeric AS unplanned_execution_outstanding_qty,
+      COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED') FROM execution_os), 0)::numeric AS planned_outstanding_qty,
+      COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_loading_port_outstanding_qty,
+      COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'SAILED') FROM execution_os), 0)::numeric AS sailed_outstanding_qty,
+      COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${DISCHARGE_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_discharge_port_outstanding_qty
     FROM enriched e`;
 }

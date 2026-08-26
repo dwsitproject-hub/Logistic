@@ -3,10 +3,10 @@
  */
 
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
-import { shipmentListSpdAggCtes } from './shipmentListSapAggSql';
-import { shipmentListPageQtySelectSql } from './shipmentListQtySql';
+import { shipmentListRowContractQtySql } from './shipmentListQtySql';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import { sqlMasterVesselLateralJoin } from './masterVesselDisplaySql';
+import { sqlCoalesceSourceType } from './sapSourceTypeSql';
 import {
   shipmentPagePipelineSummarySelectSql,
   shipmentPagePipelineVesselNamesSelectSql,
@@ -97,14 +97,14 @@ export interface ShipmentSection1CombinedSummaryQueryOpts {
 }
 
 function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSummaryQueryOpts): string {
-  const qtySelect = shipmentListPageQtySelectSql('f');
-  const spdAggCtes = shipmentListSpdAggCtes(false);
   const masterJoin = sqlMasterVesselLateralJoin(
-    'COALESCE(f.vessel_code, sl.vessel_code_sap)',
-    'COALESCE(f.vessel_name, sl.vessel_name_sap)',
+    'f.vessel_code',
+    'f.vessel_name',
     'mv',
     'f.master_vessel_id',
   );
+  const osSource = sqlCoalesceSourceType('f.contract_source_type');
+  const osIncoterm = `COALESCE(NULLIF(TRIM(f.incoterm::text), ''), '')`;
 
   return `${opts.shipmentBaseCteSql}
       ${opts.unplannedBacklogCountCteSql}
@@ -114,26 +114,22 @@ function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSumm
         WHERE 1=1 ${opts.toolbarOuterSql}
           AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       )${opts.summaryScopeCte}
-      , ${shipmentListQtyMoveCteFromPage('filtered_shipments')}
       , shipment_page AS (
         SELECT * FROM ${opts.summaryEnrichedFrom}
       )
-      , ${spdAggCtes}
+      , ${shipmentListQtyMoveCteFromPage('shipment_page')}
       , enriched AS (
         SELECT
           f.*,
           ${buildShipmentSummaryEtaEnrichmentSelect('f')},
           FALSE AS is_unplanned_execution,
-          ${qtySelect},
-          sl.vessel_name_sap,
-          sl.vessel_code_sap,
+          (${shipmentListRowContractQtySql('f')}) AS contract_qty,
+          NULL::text AS vessel_name_sap,
+          NULL::text AS vessel_code_sap,
           mv.vessel_name_master,
-          COALESCE(f.contract_source_type, sl.source_type) AS os_source_type,
-          COALESCE(NULLIF(TRIM(f.incoterm::text), ''), NULLIF(TRIM(sl.incoterm::text), ''), '') AS os_incoterm
+          ${osSource} AS os_source_type,
+          ${osIncoterm} AS os_incoterm
         FROM ${opts.summaryEnrichedFrom} f
-        LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(f.sto_key::text)
-        LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(f.sto_key::text)
-        LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(f.sto_key::text)
         ${masterJoin}
       ),
       ${sqlShipmentExecutionOsPerContractCtes('enriched')}`;
@@ -241,7 +237,7 @@ export function overlayShipmentDailySummaryLiveStageCounts(
   return out;
 }
 
-/** Pipeline summary + status-card contract/OS qty in one SPD-joined scan. */
+/** Pipeline summary + status-card contract/OS qty (qty_move, no sto_metrics). */
 export function buildShipmentSection1CombinedSummaryQuery(
   opts: ShipmentSection1CombinedSummaryQueryOpts,
 ): string {
@@ -271,7 +267,7 @@ export function buildShipmentSection1CombinedSummaryQuery(
         COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_contract_qty,
         COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
         COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty,
-        COALESCE(SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_outstanding_qty,
+        0::numeric AS unplanned_execution_outstanding_qty,
         COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'PLANNED') FROM execution_os), 0)::numeric AS planned_outstanding_qty,
         COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE ${LOADING_STATUS_GROUP}) FROM execution_os), 0)::numeric AS at_loading_port_outstanding_qty,
         COALESCE((SELECT SUM(COALESCE(outstanding_quantity, 0)) FILTER (WHERE effective_status = 'SAILED') FROM execution_os), 0)::numeric AS sailed_outstanding_qty,

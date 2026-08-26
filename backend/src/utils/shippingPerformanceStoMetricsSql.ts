@@ -140,7 +140,7 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           AND COALESCE(cc.po_number, '') = COALESCE(NULLIF(TRIM(u.po_number::text), ''), '')
         GROUP BY TRIM(u.sto_number::text), TRIM(u.contract_number), COALESCE(NULLIF(TRIM(u.po_number::text), ''), '')
       ),
-      sto_po_lines AS (
+      sto_po_lines_raw AS (
         SELECT
           asp.sto_key,
           asp.contract_id,
@@ -178,6 +178,28 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           AND TRIM(csp.contract_id) = TRIM(asp.contract_id)
           AND csp.po_number = COALESCE(NULLIF(TRIM(asp.po_number::text), ''), '')
         WHERE ${sqlB2bChildExcludeWhere('b2b')}
+      ),
+      po_sto_counts AS (
+        SELECT
+          TRIM(contract_id) AS contract_id,
+          TRIM(COALESCE(po_number::text, '')) AS po_number,
+          COUNT(DISTINCT sto_key)::int AS sto_count_on_po
+        FROM all_sto_contract_links
+        GROUP BY TRIM(contract_id), TRIM(COALESCE(po_number::text, ''))
+      ),
+      sto_po_lines AS (
+        SELECT
+          raw.*,
+          COALESCE(psc.sto_count_on_po, 1) AS sto_count_on_po,
+          CASE
+            WHEN COALESCE(psc.sto_count_on_po, 1) > 1
+              THEN COALESCE(NULLIF(raw.sto_qty_kg, 0), raw.contract_qty)
+            ELSE raw.contract_qty
+          END AS os_base_kg
+        FROM sto_po_lines_raw raw
+        LEFT JOIN po_sto_counts psc
+          ON psc.contract_id = TRIM(raw.contract_id)
+         AND psc.po_number = TRIM(COALESCE(raw.po_number::text, ''))
       ),
       sto_shipment_klip AS (
         SELECT
@@ -219,9 +241,10 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           SUM(po.receive_kg)::numeric AS received_qty,
           SUM(po.delivery_kg)::numeric AS delivered_qty,
           SUM(po.shipment_planning_kg)::numeric AS planning_qty,
+          MAX(po.sto_count_on_po)::int AS po_sto_count,
           (
             ${sqlShipmentListOutstandingKgExpr({
-              contractQtyExpr: 'SUM(po.contract_qty)',
+              contractQtyExpr: 'SUM(po.os_base_kg)',
               // Dominant / any incoterm on the STO — FOB/LCO use delivery; FRC/CIF use receive
               incotermExpr: `(ARRAY_AGG(po.incoterm ORDER BY po.contract_id))[1]`,
               receiveExpr: sqlShipmentResolvedReceiveKg(
@@ -241,10 +264,10 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           )::numeric AS outstanding_qty_actual,
           SUM((
             CASE
-              WHEN po.contract_qty IS NULL THEN NULL
+              WHEN po.os_base_kg IS NULL THEN NULL
               WHEN po.sto_qty_kg IS NULL THEN NULL
               ELSE GREATEST(
-                po.contract_qty::numeric
+                po.os_base_kg::numeric
                 - COALESCE(po.sto_qty_kg, 0)::numeric
                 - COALESCE(po.shipment_planning_kg, 0)::numeric,
                 0

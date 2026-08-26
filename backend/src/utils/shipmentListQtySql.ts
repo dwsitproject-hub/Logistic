@@ -69,8 +69,26 @@ export function sqlShipmentListFulfilledKgCase(
 }
 
 /**
+ * OS base qty (kg) for a Shipments / Shipping Perf STO row.
+ * Default: Contract Qty (1 STO × N POs).
+ * When one PO has several parallel SAP STOs, use STO Qty so the PO commitment
+ * is not copied onto every line (PO 1581000931 / STOs 4927–4929).
+ */
+export function sqlShipmentListOsBaseQtyExpr(opts: {
+  poStoCountExpr: string;
+  stoQtyExpr: string;
+  contractQtyExpr: string;
+}): string {
+  return `CASE
+    WHEN COALESCE((${opts.poStoCountExpr})::int, 1) > 1
+      THEN COALESCE(NULLIF((${opts.stoQtyExpr})::numeric, 0), (${opts.contractQtyExpr})::numeric)
+    ELSE (${opts.contractQtyExpr})::numeric
+  END`;
+}
+
+/**
  * Outstanding (kg) = base qty − fulfilled.
- * Shipments / Shipping Perf OS uses Contract Qty as base (not STO Qty).
+ * Base is Contract Qty, or STO Qty when sqlShipmentListOsBaseQtyExpr detects parallel STOs.
  * Fulfilled follows Open→KLIP / Close→SAP (same as Delivery/Receive columns).
  * Missing Delivery/Receive (null) counts as 0 so View Table OS is numeric, not "-".
  */
@@ -257,9 +275,15 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
     sapDelivery,
     `${spAlias}.quantity_delivered`,
   );
-  // Same fulfilled qty as Delivery/Receive columns; null fulfilled → 0 (OS = contract qty).
-  const listOutstandingFallback = sqlShipmentListOutstandingKgExpr({
+  const stoQtyExpr = `COALESCE(sm.sto_qty, sa.sto_quantity)`;
+  const osBaseExpr = sqlShipmentListOsBaseQtyExpr({
+    poStoCountExpr: 'sm.po_sto_count',
+    stoQtyExpr,
     contractQtyExpr,
+  });
+  // Same fulfilled qty as Delivery/Receive columns; null fulfilled → 0 (OS = base qty).
+  const listOutstandingFallback = sqlShipmentListOutstandingKgExpr({
+    contractQtyExpr: osBaseExpr,
     incotermExpr,
     receiveExpr: receiveResolved,
     deliveryExpr: deliveryResolved,

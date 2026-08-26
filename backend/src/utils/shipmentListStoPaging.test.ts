@@ -160,6 +160,42 @@ describe('shipmentListStoPaging', () => {
     ).toBe(false);
   });
 
+  it('canUseShipmentStoKeyPaging allows vessel_name sort', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: {},
+        sortKey: 'vessel_name',
+      }),
+    ).toBe(true);
+  });
+
+  it('canUseShipmentStoKeyPaging blocks qty/SAP sorts that cannot be ranked before enrich', () => {
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: {},
+        sortKey: 'outstanding_quantity',
+      }),
+    ).toBe(false);
+    expect(
+      canUseShipmentStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        status: 'ALL',
+        globalSearch: '',
+        colFilters: {},
+        sortKey: 'contract_qty',
+      }),
+    ).toBe(false);
+  });
+
   it('injectShipmentStoKeyPaging inserts ranked_sto and paged filter', () => {
     const stoKey = `COALESCE(
       CASE WHEN NULLIF(TRIM(s.shipment_id::text), '') ~ '^[0-9]+$' THEN NULLIF(TRIM(s.shipment_id::text), '') ELSE NULL END,
@@ -184,6 +220,19 @@ describe('shipmentListStoPaging', () => {
     expect(injected).not.toContain("'^[0-9]+ GROUP BY");
   });
 
+  it('buildRankedStoCtes orders paged keys by vessel_name when requested', () => {
+    const ranked = buildRankedStoCtes('s.shipment_id', '1=1', 'vessel_name', 'ASC');
+    expect(ranked).toContain('AS sort_val');
+    expect(ranked).toContain('ORDER BY sort_val ASC NULLS LAST, mx DESC');
+    expect(ranked).toContain("LOWER(NULLIF(TRIM(MAX(s.vessel_name::text)), ''))");
+  });
+
+  it('buildRankedStoCtes defaults to created_at DESC', () => {
+    const ranked = buildRankedStoCtes('s.shipment_id', '1=1');
+    expect(ranked).toContain('MAX(s.created_at) AS mx');
+    expect(ranked).toContain('ORDER BY sort_val DESC NULLS LAST, mx DESC');
+  });
+
   it('canUseShipmentStageSnapshotPaging requires a grouped status card', () => {
     const base = {
       summaryOnly: false,
@@ -192,6 +241,12 @@ describe('shipmentListStoPaging', () => {
       colFilters: {},
     };
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'PLANNED' })).toBe(true);
+    expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'PLANNED', sortKey: 'created_at' })).toBe(
+      true,
+    );
+    expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'PLANNED', sortKey: 'vessel_name' })).toBe(
+      false,
+    );
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'COMPLETED' })).toBe(false);
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'ALL' })).toBe(false);
     expect(canUseShipmentStageSnapshotPaging({ ...base, status: 'UNPLANNED' })).toBe(false);

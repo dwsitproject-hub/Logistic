@@ -74,4 +74,15 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).toContain('c.contract_date >= $1');
     expect(sql).toContain('trucking_operations t_ns');
   });
+
+  it('backlog page query defaults to contract_date DESC', () => {
+    const sql = buildTruckingUnplannedBacklogPageQuery('', '', 20, 0);
+    expect(sql).toContain('ORDER BY contract_date DESC NULLS LAST, contract_id ASC');
+  });
+
+  it('backlog page query follows list sort key for All hybrid merge', () => {
+    const sql = buildTruckingUnplannedBacklogPageQuery('', '', 20, 0, 'supplier', 'ASC');
+    expect(sql).toContain('ORDER BY supplier ASC NULLS LAST, contract_id ASC');
+    expect(sql).not.toContain('ORDER BY contract_date DESC NULLS LAST, contract_id ASC');
+  });
 });

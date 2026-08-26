@@ -27,6 +27,7 @@ import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUn
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
+import { invalidateRegisteredListCaches } from '../utils/listCacheRegistry';
 import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import {
   buildTruckingExpansionKeyOrderBy,
@@ -158,7 +159,7 @@ const UNPLANNED_BACKLOG_CACHE = new Map<
   }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v41';
+const CACHE_VERSION = 'trucking-list-v42';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
@@ -427,6 +428,7 @@ export function clearTruckingListMemoryCaches(): void {
 
 export function invalidateTruckingListCache(): void {
   clearTruckingListMemoryCaches();
+  invalidateRegisteredListCaches();
   markPipelineDailySummaryStale(['trucking']).catch(() => {});
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
@@ -1642,12 +1644,14 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
   const stageFilter = typeof status === 'string' ? status : undefined;
-  const isUnplannedHybrid = String(status ?? '').trim().toUpperCase() === 'UNPLANNED';
+  const normalizedStatus = String(status ?? '').trim().toUpperCase();
+  const isUnplannedHybrid = normalizedStatus === 'UNPLANNED';
+  const isAllHybrid = !normalizedStatus || normalizedStatus === 'ALL';
   /** Status cards need full SAP (GR/OS) — same path as Section 1 summary. */
   const statusScopedList =
     Boolean(stageFilter) &&
     !isUnplannedHybrid &&
-    String(stageFilter).trim().toUpperCase() !== 'ALL';
+    !isAllHybrid;
 
   // Pipeline status is computed per operation (PO grain) — filter only after expansion.
   // Status-scoped requests force the full SAP variant (circle-consistent fallback).
@@ -1683,6 +1687,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     globalSearch,
     colFilters,
     unplannedHybrid: isUnplannedHybrid,
+    allHybrid: isAllHybrid,
   });
 
   const listBuilt: TruckingListBuiltQuery = {
@@ -1726,23 +1731,28 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     };
   }
 
-  if (isUnplannedHybrid) {
+  if (isUnplannedHybrid || isAllHybrid) {
     const {
+      buildTruckingAllHybridContext,
       buildTruckingUnplannedHybridContext,
       resolveTruckingUnplannedHybridList,
     } = await import('./truckingUnplannedHybridList.service');
-    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir, {
-      executionBuilt: listBuilt,
-    });
+    const ctx = isAllHybrid
+      ? buildTruckingAllHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt })
+      : buildTruckingUnplannedHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt });
     const hybrid = await resolveTruckingUnplannedHybridList(req, ctx);
     let summary: TruckingListResponseData['summary'];
     if (includeSummary) {
-      summary = await loadTruckingListSummary(summaryBuilt, req);
-      summary = mergeTruckingUnplannedBreakdownIntoSummary(summary, hybrid.unplannedBreakdown);
+      if (isUnplannedHybrid) {
+        summary = await loadTruckingListSummary(summaryBuilt, req);
+        summary = mergeTruckingUnplannedBreakdownIntoSummary(summary, hybrid.unplannedBreakdown);
+      } else {
+        summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
+      }
     }
     return {
       truckingOperations: hybrid.truckingOperations,
-      unplannedBreakdown: hybrid.unplannedBreakdown,
+      ...(isUnplannedHybrid ? { unplannedBreakdown: hybrid.unplannedBreakdown } : {}),
       summary,
       pagination: hybrid.pagination,
     };
@@ -1760,6 +1770,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     useStageSnapshot &&
     normalizedStageForSnapshot &&
     !isUnplannedHybrid &&
+    !isAllHybrid &&
     sortKey === 'supplier' &&
     !listUsesStoPaging
   ) {

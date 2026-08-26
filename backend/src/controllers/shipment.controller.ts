@@ -1039,10 +1039,16 @@ ${contractMetaSelectCore}
         viewQuery: viewQueryParam,
         unplannedHybrid: isUnplannedHybridList,
         allHybrid: isAllHybridList,
+        sortKey: listSortKey,
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
-    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, shipmentBaseWhereSql)
+    const rankedStoBlock = buildRankedStoCtes(
+      listStoKeySql,
+      shipmentBaseWhereSql,
+      listSortKey,
+      listSortDir,
+    )
       .replace('__STO_PAGE_LIMIT__', String(listLimit))
       .replace('__STO_PAGE_OFFSET__', String(listOffset));
 
@@ -1093,6 +1099,7 @@ ${contractMetaSelectCore}
         viewOption: viewOptionParam,
         viewQuery: viewQueryParam,
         unplannedHybrid: isUnplannedHybridList,
+        sortKey: listSortKey,
       })
     ) {
       const stageForSnapshot = normalizeShipmentPagePipelineStageParam(
@@ -1228,7 +1235,7 @@ ${contractMetaSelectCore}
 
     const loadSection1OutstandingQty = () =>
       loadShipmentOutstandingQtyForRequest(req, {
-        shipmentBaseCteSql: shipmentBaseCteSqlFull,
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
         toolbarOuterSql: section1SummaryFilterSql,
         innerParams,
         toolbarOuterParams,
@@ -1238,7 +1245,7 @@ ${contractMetaSelectCore}
     const loadSection1StatusCardQty = (backlogParts: ShipmentStatusCardQtyBacklogParts) =>
       loadShipmentStatusCardQtyForRequest(
         {
-          shipmentBaseCteSql: shipmentBaseCteSqlFull,
+          shipmentBaseCteSql: shipmentBaseCteSqlSummary,
           toolbarOuterSql: section1SummaryFilterSql,
           innerParams,
           toolbarOuterParams,
@@ -1266,7 +1273,7 @@ ${contractMetaSelectCore}
     }
 
     const summaryCountQuery = buildShipmentSection1CombinedSummaryQuery({
-      shipmentBaseCteSql: shipmentBaseCteSqlFull,
+      shipmentBaseCteSql: shipmentBaseCteSqlSummary,
       unplannedBacklogCountCteSql: buildUnplannedContractBacklogTableCountCte(contractScopeSql),
       toolbarOuterSql: section1SummaryFilterSql,
       summaryScopeCte,

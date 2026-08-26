@@ -64,5 +64,7 @@ describe('shipmentListStoPaging SQL shape', () => {
     expect(sql).toContain('FROM ranked_sto) AS __filter_total');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
     expect(sql).not.toMatch(/NOT\s*\([^)]*= 'T'\)/);
+    expect(sql).not.toMatch(/\bqty_move\b/);
+    expect(sql).not.toMatch(/LEFT JOIN sto_metrics\b/);
   });
 });

@@ -63,6 +63,56 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('vessel_name_master');
   });
 
+  it('skipSapJoin shell omits qty_move and sto_metrics so first paint cannot drift OS/receive/delivery', () => {
+    const q = buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-shell',
+        filterCacheKey: 'fk-shell',
+        sortKey: 'created_at',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).not.toMatch(/\bqty_move\b/);
+    expect(q.text).not.toMatch(/LEFT JOIN sto_metrics\b/);
+    expect(q.text).not.toMatch(/LEFT JOIN sap_agg\b/);
+    expect(q.text).not.toContain('AS outstanding_quantity');
+    expect(q.text).not.toContain('AS quantity_receive');
+    expect(q.text).toContain('AS effective_status');
+    expect(q.text).toContain('vessel_name_master');
+  });
+
+  it('hydrate skipSapJoin=false keeps list qty SQL for OS, receive, and delivery', () => {
+    const q = buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: false,
+        cacheKey: 'k-hydrate',
+        filterCacheKey: 'fk-hydrate',
+        sortKey: 'created_at',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toMatch(/\bqty_move\b/);
+    expect(q.text).toMatch(/LEFT JOIN sto_metrics sm ON/);
+    expect(q.text).toContain('AS outstanding_quantity');
+    expect(q.text).toContain('AS quantity_receive');
+    expect(q.text).toContain('AS quantity_delivered_sap');
+    expect(q.text).toContain('sm.po_sto_count');
+    expect(q.text).toContain('quantity_delivered_klip');
+  });
+
   it('enriches before ORDER BY for contract_qty even when skipSapJoin is true', () => {
     const q = buildShipmentListPageQuery(
       {
@@ -102,6 +152,8 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('list_enriched AS');
     expect(q.text).toContain('le.outstanding_quantity ASC');
     expect(q.text).not.toMatch(/ORDER BY\s+fs\.created_at ASC/);
+    expect(q.text).toMatch(/\bqty_move\b/);
+    expect(q.text).toContain('AS outstanding_quantity');
   });
 });
 

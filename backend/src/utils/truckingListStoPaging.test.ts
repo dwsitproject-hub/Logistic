@@ -39,6 +39,18 @@ describe('truckingListStoPaging', () => {
     ).toBe(false);
   });
 
+  it('canUseTruckingStoKeyPaging blocks All hybrid (ops + open-PO backlog)', () => {
+    expect(
+      canUseTruckingStoKeyPaging({
+        summaryOnly: false,
+        stoIsSet: false,
+        contractIsSet: false,
+        status: 'ALL',
+        allHybrid: true,
+      }),
+    ).toBe(false);
+  });
+
   it('expansion paging injects expansion_keys and paged_expansion CTEs', () => {
     const sql = buildTruckingListExpansionSql('SELECT 1 AS id', {
       skipSapJoin: true,

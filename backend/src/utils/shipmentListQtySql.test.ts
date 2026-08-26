@@ -6,6 +6,7 @@ import {
   sqlCoalesceNonZeroChain,
   sqlCoalesceNonZeroQty,
   sqlGroupedMaybeCopiedQty,
+  sqlShipmentListOsBaseQtyExpr,
   sqlShipmentListOutstandingKgExpr,
 } from './shipmentListQtySql';
 
@@ -42,6 +43,20 @@ describe('shipmentListRowContractQtySql', () => {
   });
 });
 
+describe('sqlShipmentListOsBaseQtyExpr', () => {
+  it('uses STO qty when the PO has more than one STO', () => {
+    const sql = sqlShipmentListOsBaseQtyExpr({
+      poStoCountExpr: 'sm.po_sto_count',
+      stoQtyExpr: 'sm.sto_qty',
+      contractQtyExpr: 'sm.contract_qty',
+    });
+    expect(sql).toContain('sm.po_sto_count');
+    expect(sql).toContain('sm.sto_qty');
+    expect(sql).toContain('sm.contract_qty');
+    expect(sql).toContain('> 1');
+  });
+});
+
 describe('sqlShipmentListOutstandingKgExpr', () => {
   it('returns NULL only when contract qty is unknown; null fulfilled counts as 0', () => {
     const sql = sqlShipmentListOutstandingKgExpr({
@@ -69,6 +84,7 @@ describe('shipmentListPageQtySelectSql', () => {
     expect(sql).toContain('quantity_delivered_klip');
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('AS outstanding_quantity');
+    expect(sql).toContain('sm.po_sto_count');
     const osAssign = sql.indexOf('AS outstanding_quantity');
     expect(osAssign).toBeGreaterThan(-1);
     expect(sql.indexOf('quantity_delivered_klip')).toBeGreaterThan(-1);

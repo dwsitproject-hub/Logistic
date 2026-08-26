@@ -12,6 +12,8 @@ import {
   sqlPoStoSapQtyKg,
 } from './contractPoGlobalMetricsSql';
 import { shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
+import { sqlShipmentListOsBaseQtyExpr } from './shipmentListQtySql';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { LATEST_SPD_B2B_CTE, sqlB2bChildExcludeWhere } from './shippingPerformanceStoMetricsSql';
 
 /** PO number from SAP JSON (raw / contract) — default spd alias. */
@@ -77,8 +79,25 @@ function stoScopedReceiveKgSql(
 }
 
 /**
+ * Distinct SAP STO count on this PO/contract — >1 means parallel multi-STO (OS base = STO Qty).
+ */
+function sqlPoSapStoCountExpr(contractNumberExpr: string, poNumberExpr: string): string {
+  const stoKey = sapStoNumberKeyExpr('spd_cnt');
+  return `(
+    SELECT COUNT(DISTINCT ${stoKey})
+    FROM sap_processed_data spd_cnt
+    WHERE TRIM(spd_cnt.contract_number) = TRIM(${contractNumberExpr})
+      AND (
+        NULLIF(TRIM(COALESCE(${poNumberExpr}::text, '')), '') IS NULL
+        OR TRIM(COALESCE(spd_cnt.po_number::text, '')) = TRIM(COALESCE(${poNumberExpr}::text, ''))
+      )
+      AND ${stoKey} IS NOT NULL
+  )`;
+}
+
+/**
  * STO-scoped OS actual — contract qty minus STO-scoped fulfilled (incoterm-aware).
- * Matches Shipping Performance / shipments list: sqlShipmentListOutstandingKgExpr.
+ * Parallel multi-STO POs use STO Qty as base (same as Shipments View Table).
  */
 function stoScopedOutstandingActualSql(opts: {
   contractQtyExpr: string;
@@ -86,9 +105,15 @@ function stoScopedOutstandingActualSql(opts: {
   contractNumberExpr: string;
   stoKeyExpr: string;
   poNumberExpr: string;
+  stoQtyExpr: string;
 }): string {
+  const osBase = sqlShipmentListOsBaseQtyExpr({
+    poStoCountExpr: sqlPoSapStoCountExpr(opts.contractNumberExpr, opts.poNumberExpr),
+    stoQtyExpr: opts.stoQtyExpr,
+    contractQtyExpr: opts.contractQtyExpr,
+  });
   return shipmentOutstandingQtyExpr({
-    stoQtyExpr: `COALESCE(${opts.contractQtyExpr}, 0)`,
+    stoQtyExpr: `COALESCE((${osBase}), 0)`,
     receiveExpr: stoScopedReceiveKgSql(
       opts.contractNumberExpr,
       opts.contractQtyExpr,
@@ -162,6 +187,7 @@ export function buildContractDetailsForStoSql(): string {
     contractNumberExpr: 'pl.contract_number',
     stoKeyExpr: '$1::text',
     poNumberExpr: 'pl.po_number',
+    stoQtyExpr: plSapStoQty,
   });
 
   const plDeliveredKg = stoScopedDeliveredKgSql(
@@ -207,6 +233,7 @@ export function buildContractDetailsForStoSql(): string {
     contractNumberExpr: 'soc.contract_number',
     stoKeyExpr: '$1::text',
     poNumberExpr: socPoNumberExpr,
+    stoQtyExpr: socSapStoQty,
   });
 
   const socDeliveredKg = stoScopedDeliveredKgSql(

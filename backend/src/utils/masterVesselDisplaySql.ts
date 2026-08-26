@@ -30,6 +30,14 @@ export const SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN = sqlMasterVesselLateralJo
   'sp.master_vessel_id',
 );
 
+/** Compact skipSapJoin shell — KLIP vessel only (no sap_latest). */
+export const SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN_SHELL = sqlMasterVesselLateralJoin(
+  'sp.vessel_code',
+  'sp.vessel_name',
+  'mv',
+  'sp.master_vessel_id',
+);
+
 /** Shipping performance: lateral join using shipments s + sap_agg sa aliases. */
 export const SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN = sqlMasterVesselLateralJoin(
   's.vessel_code',

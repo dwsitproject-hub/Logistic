@@ -13,7 +13,10 @@ import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/s
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
-import { SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
+import {
+  SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN,
+  SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN_SHELL,
+} from '../utils/masterVesselDisplaySql';
 import {
   shipmentListQtyMoveCteFromPage,
 } from '../utils/shipmentOutstandingQtySql';
@@ -119,7 +122,7 @@ const SUMMARY_CACHE = new Map<
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'shipment-list-v35';
+const CACHE_VERSION = 'shipment-list-v36';
 const MAX_CACHE_ENTRIES = 80;
 const OUTSTANDING_QTY_CACHE = new Map<
   string,
@@ -291,7 +294,6 @@ function buildShipmentListPageCore(
     };
   }
 
-  const spdAggCtes = shipmentListSpdAggCtes(ctx.skipSapJoin);
   const shipmentPageCte = ctx.usesStoKeyPaging
     ? `shipment_page AS (
         SELECT
@@ -316,14 +318,27 @@ function buildShipmentListPageCore(
         LIMIT $${limitIdx} OFFSET $${offsetIdx}
       )`;
 
-  const text = `${ctx.shipmentBaseCteSql},
+  const filteredAndPage = `${ctx.shipmentBaseCteSql},
       filtered_shipments AS (
         SELECT sb.*
         FROM shipment_base sb
         WHERE 1=1 ${ctx.outerSql}
           AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       ),
-      ${shipmentPageCte},
+      ${shipmentPageCte}`;
+
+  // True compact shell: KLIP columns + status + master vessel. Qty/SAP hydrate on skipSapJoin=false.
+  if (ctx.skipSapJoin) {
+    const text = `${filteredAndPage}
+      ${LIST_PAGE_SELECT_SHELL}`;
+    return {
+      text,
+      params: ctx.usesStoKeyPaging ? baseParams : [...baseParams, limit, offset],
+    };
+  }
+
+  const spdAggCtes = shipmentListSpdAggCtes(false);
+  const text = `${filteredAndPage},
       ${shipmentListQtyMoveCteFromPage()},
       ${spdAggCtes}
       ${LIST_PAGE_SELECT}`;
@@ -985,6 +1000,14 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
   }
   return rows;
 }
+
+const LIST_PAGE_SELECT_SHELL = `
+      SELECT
+        sp.*,
+        mv.vessel_name_master,
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+      FROM shipment_page sp
+      ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN_SHELL}`;
 
 const LIST_PAGE_SELECT = `
       SELECT

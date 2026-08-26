@@ -113,6 +113,11 @@ describe('shipmentListSapAggSql', () => {
     expect(full).toContain('spd.po_number');
   });
 
+  it('exposes po_sto_count on sto_metrics stub so skipSapJoin list SQL can reference sm.po_sto_count', () => {
+    expect(shipmentListSpdAggCtes(true)).toContain('po_sto_count');
+    expect(shipmentListSpdAggCtes(false)).toContain('po_sto_count');
+  });
+
   it('exposes spd_id in both the stub and full CTEs so the shapes stay compatible', () => {
     expect(shipmentListSpdAggCtes(true)).toContain('spd_id');
     expect(shipmentListSpdAggCtes(false)).toContain('spd_id');

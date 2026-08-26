@@ -41,6 +41,33 @@ const CB_COL: Record<string, string> = {
   status: `'UNPLANNED'`,
 };
 
+/** Output-column aliases from truckingUnplannedContractBacklogRowSelectSql (whitelist only). */
+const BACKLOG_PAGE_ORDER_ALIAS: Record<string, string> = {
+  created_at: 'created_at',
+  contract_date: 'contract_date',
+  supplier: 'supplier',
+  po_number: 'po_number',
+  contract_number: 'contract_number',
+  outstanding_quantity: 'outstanding_quantity',
+  contract_qty: 'contract_qty',
+  status: 'status',
+  delivery_start_date: 'delivery_start_date',
+  delivery_end_date: 'delivery_end_date',
+  incoterm: 'incoterm',
+  product: 'product',
+  buyer: 'buyer',
+  group_name: 'group_name',
+};
+
+export function buildTruckingUnplannedBacklogOrderBy(
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+): string {
+  const field = BACKLOG_PAGE_ORDER_ALIAS[sortKey] || 'contract_date';
+  const dir = sortDir === 'ASC' ? 'ASC' : 'DESC';
+  return `${field} ${dir} NULLS LAST, contract_id ASC`;
+}
+
 export function buildTruckingUnplannedBacklogLatestSpdCte(): string {
   return `
       latest_spd_contract AS (
@@ -304,6 +331,8 @@ export function buildTruckingUnplannedBacklogPageQuery(
   toolbarSql: string,
   limit: number,
   offset: number,
+  sortKey = 'contract_date',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
 ): string {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
@@ -319,6 +348,7 @@ export function buildTruckingUnplannedBacklogPageQuery(
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}`,
   });
+  const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir);
   return `
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
     ${qtyMoveCte},
@@ -328,7 +358,7 @@ export function buildTruckingUnplannedBacklogPageQuery(
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}
-      ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC
+      ORDER BY ${orderBy}
       LIMIT ${limit} OFFSET ${offset}
     )
     SELECT * FROM unplanned_trucking_backlog`;

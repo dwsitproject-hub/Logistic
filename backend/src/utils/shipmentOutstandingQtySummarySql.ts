@@ -10,8 +10,6 @@ import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlo
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
-import { shipmentListSpdAggCtes } from './shipmentListSapAggSql';
-import { shipmentListPageQtySelectSql } from './shipmentListQtySql';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import {
   appendShipmentPipelineStageFilter,
@@ -201,6 +199,23 @@ export function sqlShipmentOutstandingActiveStagePredicate(alias: string): strin
   )`;
 }
 
+/**
+ * Execution enrich for Section 1 OS / status-card aggregates — contract fields + qty_move.
+ * Avoids sto_metrics / sap_agg (those are list-row grain and dominate cold summary time).
+ */
+export function sqlShipmentSection1LightExecutionEnrichSelect(alias: string): string {
+  const incotermExpr = `COALESCE(NULLIF(TRIM(${alias}.incoterm::text), ''), '')`;
+  const sourceExpr = sqlCoalesceSourceType(`${alias}.contract_source_type`);
+  return `
+        ${shipmentEffectiveStatusExpr(alias)} AS effective_status,
+        FALSE AS is_unplanned_execution,
+        ${sourceExpr} AS source_type,
+        ${sourceExpr} AS os_source_type,
+        ${incotermExpr} AS incoterm,
+        ${incotermExpr} AS os_incoterm,
+        ${alias}.contract_numbers`;
+}
+
 /** Furthest active pipeline stage wins when one PO sits on multiple STOs. */
 export function sqlShipmentActiveStageRankExpr(effectiveStatusExpr: string): string {
   return `CASE
@@ -387,12 +402,6 @@ export function buildShipmentOutstandingQtyExecutionAggregateQuery(
   );
   const params = [...baseParams, ...stageFilter.params];
 
-  const incotermExpr = `COALESCE(NULLIF(TRIM(sp.incoterm::text), ''), NULLIF(TRIM(sl.incoterm::text), ''), '')`;
-  const sourceExpr = sqlCoalesceSourceType('sp.contract_source_type', 'sl.source_type');
-  const eff = shipmentEffectiveStatusExpr('sp');
-  const qtySelect = shipmentListPageQtySelectSql('sp');
-  const spdAggCtes = shipmentListSpdAggCtes(false);
-
   const text = `
     ${shipmentBaseCteSql}
     , filtered_shipments AS (
@@ -408,21 +417,10 @@ export function buildShipmentOutstandingQtyExecutionAggregateQuery(
       FROM filtered_shipments fs
     ),
     ${shipmentListQtyMoveCteFromPage()},
-    ${spdAggCtes},
     enriched AS (
       SELECT
-        ${eff} AS effective_status,
-        FALSE AS is_unplanned_execution,
-        ${sourceExpr} AS source_type,
-        ${sourceExpr} AS os_source_type,
-        ${incotermExpr} AS incoterm,
-        ${incotermExpr} AS os_incoterm,
-        sp.contract_numbers,
-        ${qtySelect}
+        ${sqlShipmentSection1LightExecutionEnrichSelect('sp')}
       FROM shipment_page sp
-      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
     ),
     ${sqlShipmentExecutionOsPerContractCtes('enriched')}
     SELECT

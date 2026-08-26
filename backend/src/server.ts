@@ -16,6 +16,7 @@ import { notFoundHandler } from './middleware/notFoundHandler';
 import logger from './utils/logger';
 import { runWarmupJobsSequentially } from './utils/startupWarmupQueue';
 import {
+  startShipmentListShellCacheWarmer,
   startShipmentOutstandingQtyCacheWarmer,
   startShipmentScopedToolbarCacheWarmer,
   startShipmentSummaryCacheWarmer,
@@ -300,6 +301,7 @@ if (process.env.NODE_ENV !== 'test') {
     void runWarmupJobsSequentially(
       [
         { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
+        { name: 'Shipments list shell', run: () => startShipmentListShellCacheWarmer() },
         { name: 'Shipments summary', run: () => startShipmentSummaryCacheWarmer() },
         { name: 'Shipments outstanding qty', run: () => startShipmentOutstandingQtyCacheWarmer() },
         {

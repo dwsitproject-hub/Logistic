@@ -47,7 +47,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(shouldIncludeShipmentPreplannedBacklogForOs('PLANNED')).toBe(false)
   })
 
-  it('page KPI path (osStatus null) uses row-level outstanding_quantity enriched CTE aligned with status cards', () => {
+  it('page KPI path (osStatus null) uses qty_move execution_os without sto_metrics', () => {
     const q = buildShipmentOutstandingQtyExecutionAggregateQuery(
       'WITH shipment_base AS (SELECT 1)',
       ' AND TRUE',
@@ -60,9 +60,10 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(q.text).not.toContain('active_shipments')
     expect(q.text).toContain('card_total_kg')
     expect(q.text).toContain('is_unplanned_execution')
-    expect(q.text).toContain('sto_metrics')
+    expect(q.text).not.toContain('LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key')
+    expect(q.text).not.toContain('po_sto_count')
     expect(q.text).toContain('contract_source_type')
-    expect(q.text).toContain("sk.data->'raw'->>'Source'")
+    expect(q.text).toContain('qty_move')
     expect(q.text).not.toContain('active_shipments')
     // Buckets must exclude COMPLETED / CANCELLED so strip breakdown stays active-stage scoped.
     expect(q.text).toContain(sqlShipmentOutstandingActiveStagePredicate('sb').trim().slice(0, 40))

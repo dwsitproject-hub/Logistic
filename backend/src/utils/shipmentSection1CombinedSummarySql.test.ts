@@ -9,7 +9,7 @@ import {
 } from './shipmentSection1CombinedSummarySql';
 
 describe('shipmentSection1CombinedSummarySql', () => {
-  it('buildShipmentSection1CombinedSummaryQuery joins SPD once and includes qty columns', () => {
+  it('buildShipmentSection1CombinedSummaryQuery uses qty_move without sto_metrics', () => {
     const sql = buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
@@ -17,19 +17,22 @@ describe('shipmentSection1CombinedSummarySql', () => {
       summaryScopeCte: '',
       summaryEnrichedFrom: 'filtered_shipments',
     });
-    expect(sql).toContain('sto_metrics sm');
-    expect(sql).toContain('sap_agg sa');
+    expect(sql).not.toContain('LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key');
+    expect(sql).not.toContain('sap_agg sa');
+    expect(sql).not.toContain('po_sto_count');
+    expect(sql).toContain('qty_move');
     expect(sql).toContain('unplanned_execution_contract_qty');
     expect(sql).toContain('unplanned_execution_outstanding_qty');
+    expect(sql).toContain('0::numeric AS unplanned_execution_outstanding_qty');
     expect(sql).toContain('planned_outstanding_qty');
     expect(sql).toContain('execution_os');
     expect(sql).toContain('DISTINCT ON (contract_number)');
     expect(sql).toContain('at_loading_port_outstanding_qty');
     expect(sql).toContain('planned_count');
     expect(sql).toContain('loading_no_eta');
-    expect(sql.match(/LEFT JOIN sto_metrics sm/g)?.length).toBe(1);
     expect(sql).toContain('vessel_name_master');
     expect(sql).toContain('vessel_name_sap');
+    expect(sql).toContain('contract_source_type');
   });
 
   it('buildPipelineCardVesselNamesQuery uses master + SAP display vessel key and live stage counts', () => {
@@ -94,7 +97,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(merged.eta_loading_delay).toBe(5);
   });
 
-  it('defines a shipment_page CTE so the spliced-in SAP-agg CTEs (shipment_page_contracts, spd_keyed, perf_sto_keys) resolve', () => {
+  it('defines a shipment_page CTE so qty_move can scope contracts without sto_metrics', () => {
     const sql = buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
@@ -106,6 +109,8 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('SELECT * FROM filtered_shipments');
     // shipment_page must be defined before it is first referenced downstream.
     expect(sql.indexOf('shipment_page AS (')).toBeLessThan(sql.indexOf('FROM shipment_page sp'));
+    expect(sql).not.toContain('LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key');
+    expect(sql).not.toContain('po_sto_count');
   });
 
   it('aliases shipment_page to the scoped source when Section 1 stage scope is active', () => {

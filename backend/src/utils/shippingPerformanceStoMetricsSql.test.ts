@@ -11,9 +11,10 @@ describe('shippingPerformanceStoMetricsSql', () => {
     expect(sql).toContain('sto_shipment_klip');
     expect(sql).toContain('quantity_delivered_klip');
     expect(sql).toContain('SUM(po.contract_qty)');
+    expect(sql).toContain('SUM(po.os_base_kg)');
+    expect(sql).toContain('po_sto_count');
     expect(sql).toContain('AS outstanding_qty_actual');
-    // OS base must be Contract Qty, not STO Qty
-    expect(sql).toMatch(/outstanding_qty_actual[\s\S]*?SUM\(po\.contract_qty\)|SUM\(po\.contract_qty\)[\s\S]*?outstanding_qty_actual/);
+    expect(sql).toMatch(/outstanding_qty_actual[\s\S]*?SUM\(po\.os_base_kg\)|SUM\(po\.os_base_kg\)[\s\S]*?outstanding_qty_actual/);
   });
 
   it('uses STO+PO scoped SAP qty in sto_po_lines (matches Edit Shipment modal)', () => {
