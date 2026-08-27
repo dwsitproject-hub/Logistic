@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { AuthRequest } from '../middleware/auth';
+import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
 import {
   InvalidDateInputError,
@@ -505,6 +506,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
   const timingsMs: Record<string, number> = {};
   const tReq0 = performance.now();
   try {
+    // `contractId` / `contract_id` are accepted as aliases for `contract`, and a uuid is
+    // resolved to the contract number the list actually filters on. Done before anything reads
+    // the query so filter builders and cache keys all see one canonical value.
+    await applyContractFilterAlias(req.query as Record<string, unknown>);
     const { status, vessel, port, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
     const { dateFrom, dateTo } = parseOptionalStrictDateRange({
       dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,

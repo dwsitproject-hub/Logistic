@@ -3,6 +3,7 @@ import { query } from '../database/connection';
 import { assertTruckingOperationContractOpen, isContractDeliveryClosed, SQL_CONTRACT_IMPORT_STATUS } from '../utils/contractDeliveryStatus';
 import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
+import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
 import {
   InvalidDateInputError,
@@ -258,6 +259,10 @@ async function ensureMissingTruckingOperationIds(): Promise<void> {
 
 export const getTruckingOperations = async (req: AuthRequest, res: Response) => {
   try {
+    // `contractId` / `contract_id` are accepted as aliases for `contract`, and a uuid is
+    // resolved to the contract number the list actually filters on. Done before anything reads
+    // the query so filter builders and the response cache key all see one canonical value.
+    await applyContractFilterAlias(req.query as Record<string, unknown>);
     const summaryOnly =
       String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
     if (!summaryOnly) {
