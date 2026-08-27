@@ -50,6 +50,12 @@ describe('truckingViewTableExport', () => {
     ).toMatch(/0 MT/)
     expect(
       resolveTruckingViewTableExportCell(
+        { id: 'outstanding_qty_mt', label: 'Outstanding Qty' },
+        {},
+      ),
+    ).toBe('0 MT')
+    expect(
+      resolveTruckingViewTableExportCell(
         { id: 'sto_number', label: 'STO' },
         { row_kind: 'contract_backlog', sto_number: 'OP-LAND-1' },
       ),

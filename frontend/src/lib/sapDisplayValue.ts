@@ -99,7 +99,7 @@ export function formatSapDisplayNumber(
   return opts?.suffix ? `${formatted}${opts.suffix}` : formatted
 }
 
-/** SAP quantity stored in kg — display as MT; null SAP → "-". */
+/** SAP quantity stored in kg — display as MT; null/empty → 0 MT. */
 export function formatSapQtyMtDisplay(
   kg: number | string | null | undefined,
   opts?: { maxFractionDigits?: number },
@@ -107,7 +107,7 @@ export function formatSapQtyMtDisplay(
   return formatQtyMtFromKg(kg, opts)
 }
 
-/** SAP outstanding quantity in kg — display as MT with over-delivery styling context; null → "-". */
+/** SAP outstanding quantity in kg — display as MT with over-delivery styling context; null/empty → 0 MT. */
 export function formatSapOutstandingQtyMtDisplay(
   kg: number | string | null | undefined,
   opts?: { maxFractionDigits?: number },

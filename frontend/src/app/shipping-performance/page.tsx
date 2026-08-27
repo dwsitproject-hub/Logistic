@@ -2838,10 +2838,7 @@ function ShippingPerformancePageContent() {
                                 )
                               }
                             } else if (isOutstandingQtyColumn(String(key))) {
-                              cellContent =
-                                rawValue === null || rawValue === undefined ? (
-                                  <span className="text-gray-400">-</span>
-                                ) : (
+                              cellContent = (
                                   <span
                                     className={cn(
                                       'text-sm tabular-nums font-normal',
@@ -2852,12 +2849,9 @@ function ShippingPerformancePageContent() {
                                   </span>
                                 )
                             } else if (isMtQtyColumn(String(key))) {
-                              cellContent =
-                                rawValue === null || rawValue === undefined ? (
-                                  <span className="text-gray-400">-</span>
-                                ) : (
+                              cellContent = (
                                   <span className="text-sm tabular-nums">
-                                    {(Number(rawValue) / 1000).toLocaleString('en-US', {
+                                    {(Number(rawValue ?? 0) / 1000).toLocaleString('en-US', {
                                       maximumFractionDigits: 0,
                                     })}
                                     {' MT'}

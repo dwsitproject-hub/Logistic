@@ -8,6 +8,7 @@ import {
   buildContractPerfToolbarGlobal,
   buildLatePerformanceCardSummaryApiParams,
 } from '@/lib/contractPerformanceFilters'
+import { readShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 
 export function ytdDateRange(): { dateFrom: string; dateTo: string } {
   const d = new Date()
@@ -17,15 +18,15 @@ export function ytdDateRange(): { dateFrom: string; dateTo: string } {
   return { dateFrom: `${y}-01-01`, dateTo: `${y}-${m}-${day}` }
 }
 
-function prefetchFromUrl(url: string): PrefetchRequest {
+function prefetchFromUrl(url: string, timeoutMs?: number): PrefetchRequest {
   const cacheKey = buildCacheKey('GET', url)
   return {
     cacheKey,
-    fetch: () => api.get(url).then((r) => r.data),
+    fetch: () => api.get(url, timeoutMs != null ? { timeout: timeoutMs } : undefined).then((r) => r.data),
   }
 }
 
-function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
+export function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
   const { dateFrom, dateTo } = ytdDateRange()
 
   switch (href) {
@@ -50,6 +51,7 @@ function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
       return [prefetchFromUrl(listUrl), prefetchFromUrl(summaryUrl)]
     }
     case '/shipments': {
+      const { sortKey, sortDir } = readShipmentsCompactSort()
       const listParams = new URLSearchParams({
         limit: '20',
         page: '1',
@@ -58,17 +60,11 @@ function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
         dateTo,
         includeSummary: 'false',
         skipSapJoin: 'true',
+        sortKey,
+        sortDir,
       })
-      const listUrl = `/shipments?${listParams}`
-      const summaryParams = new URLSearchParams(listParams)
-      summaryParams.delete('status')
-      summaryParams.delete('etaLoading')
-      summaryParams.delete('etaDischarge')
-      summaryParams.set('summaryOnly', 'true')
-      summaryParams.delete('includeSummary')
-      summaryParams.delete('skipSapJoin')
-      const summaryUrl = `/shipments?${summaryParams}`
-      return [prefetchFromUrl(listUrl), prefetchFromUrl(summaryUrl)]
+      // List shell only — summaryOnly on hover starved the default ALL-hybrid table query.
+      return [prefetchFromUrl(`/shipments?${listParams}`, 90_000)]
     }
     case '/contracts': {
       const params = new URLSearchParams({

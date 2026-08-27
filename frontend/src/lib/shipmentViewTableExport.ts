@@ -144,8 +144,7 @@ export function resolveShipmentViewTableExportCell(
     return formatSapQtyMtDisplay(rec.contract_qty as number | string | null, QTY_MT_OPTS)
   }
   if (id === 'sto_quantity') {
-    const kg = resolveShipmentListStoKg(rec)
-    return kg == null ? '-' : formatSapQtyMtDisplay(kg, QTY_MT_OPTS)
+    return formatSapQtyMtDisplay(resolveShipmentListStoKg(rec), QTY_MT_OPTS)
   }
   if (id === 'quantity_delivered') {
     return formatSapQtyMtDisplay(shipmentListDeliveredKgForViewTable(rec), QTY_MT_OPTS)
@@ -154,12 +153,9 @@ export function resolveShipmentViewTableExportCell(
     return formatSapQtyMtDisplay(shipmentListReceiveKgForViewTable(rec), QTY_MT_OPTS)
   }
   if (id === 'outstanding_quantity') {
-    const kg = shipmentListOutstandingKgForViewTable(rec)
-    if (kg == null) return '-'
-    return formatSapOutstandingQtyMtDisplay(kg, QTY_MT_OPTS)
+    return formatSapOutstandingQtyMtDisplay(shipmentListOutstandingKgForViewTable(rec), QTY_MT_OPTS)
   }
   if (id === 'outstanding_qty_planning') {
-    if (rec.outstanding_qty_planning == null || rec.outstanding_qty_planning === '') return '-'
     return formatSapOutstandingQtyMtDisplay(
       rec.outstanding_qty_planning as number | string | null,
       QTY_MT_OPTS,

@@ -2931,20 +2931,15 @@ function ContractsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (c) => contractPerfQtySortValue(c.outstanding_quantity),
-      render: (c) => {
-        if (c.outstanding_quantity == null) {
-          return <span className="text-sm truncate text-gray-500">-</span>
-        }
-        return (
-          <span
-            className={`text-sm truncate ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
-          >
-            {isContractPerformance
-              ? formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)
-              : formatContractOutstandingQtyMtDisplay(c.outstanding_quantity)}
-          </span>
-        )
-      }
+      render: (c) => (
+        <span
+          className={`text-sm truncate ${outstandingQtyMtColorClass(c.outstanding_quantity)}`}
+        >
+          {isContractPerformance
+            ? formatSapOutstandingQtyMtDisplay(c.outstanding_quantity)
+            : formatContractOutstandingQtyMtDisplay(c.outstanding_quantity)}
+        </span>
+      )
     },
     {
       id: 'trade_cycle_days',
@@ -5398,13 +5393,9 @@ function ContractsPageContent() {
                               {formatSapDisplayValue(contract.product)}
                               {' • '}
                               <span className="text-gray-500">Outstanding:</span>{' '}
-                              {contract.outstanding_quantity == null ? (
-                                <span className="text-gray-800">-</span>
-                              ) : (
-                                <span className={`font-medium ${outstandingQtyMtColorClass(contract.outstanding_quantity)}`}>
-                                  {formatContractOutstandingQtyMtDisplay(contract.outstanding_quantity)}
-                                </span>
-                              )}
+                              <span className={`font-medium ${outstandingQtyMtColorClass(contract.outstanding_quantity)}`}>
+                                {formatContractOutstandingQtyMtDisplay(contract.outstanding_quantity)}
+                              </span>
                             </div>
                           </div>
                         </div>

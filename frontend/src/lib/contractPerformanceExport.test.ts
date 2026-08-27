@@ -99,6 +99,23 @@ describe('buildContractPerfExportMatrix', () => {
     expect(matrix[1][3]).toBe('0 MT')
   })
 
+  it('exports missing outstanding qty as 0 MT', () => {
+    expect(
+      resolveContractPerfExportCell(
+        col('outstanding_qty_mt', 'Outstanding Qty'),
+        {},
+        formatters,
+      ),
+    ).toBe('0 MT')
+    expect(
+      resolveContractPerfExportCell(
+        col('contract_qty', 'Contract Qty'),
+        {},
+        formatters,
+      ),
+    ).toBe('0 MT')
+  })
+
   it('exports "-" for missing cycle days instead of 0', () => {
     const cell = resolveContractPerfExportCell(
       col('trade_cycle_days', 'Trade Cycle'),

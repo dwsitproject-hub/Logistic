@@ -37,6 +37,21 @@ describe('shipmentViewTableExport', () => {
     ).toMatch(/MT/)
   })
 
+  it('exports missing qty columns as 0 MT', () => {
+    expect(
+      resolveShipmentViewTableExportCell(
+        { id: 'contract_qty', label: 'Contract Qty' },
+        {},
+      ),
+    ).toBe('0 MT')
+    expect(
+      resolveShipmentViewTableExportCell(
+        { id: 'outstanding_quantity', label: 'Outstanding Qty' },
+        {},
+      ),
+    ).toBe('0 MT')
+  })
+
   it('exports late indicator text and hides synthetic STO on backlog rows', () => {
     expect(
       resolveShipmentViewTableExportCell(

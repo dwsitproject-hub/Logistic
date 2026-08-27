@@ -82,9 +82,9 @@ describe('truckingModalDailyTables', () => {
     expect(filterActualRowsForSto(rows, '1006018596', { includeLegacyEmpty: true })).toHaveLength(2)
   })
 
-  it('formatSapQtyMtOrDash shows dash for null', () => {
-    expect(formatSapQtyMtOrDash(null)).toBe('-')
-    expect(formatSapQtyMtOrDash(undefined)).toBe('-')
+  it('formatSapQtyMtOrDash shows 0.00 for null', () => {
+    expect(formatSapQtyMtOrDash(null)).toBe('0.00')
+    expect(formatSapQtyMtOrDash(undefined)).toBe('0.00')
     expect(formatSapQtyMtOrDash(250000)).toBe('250.00')
   })
 

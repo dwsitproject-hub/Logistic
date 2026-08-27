@@ -71,6 +71,7 @@ describe('prePlannedGroupTableRows', () => {
     ];
     expect(sumGroupQtyKg(members, (m) => m.contract_qty ?? null)).toBe(3_000_000);
     expect(formatPrePlannedGroupQtyMt(3_000_000)).toBe('3,000 MT');
+    expect(formatPrePlannedGroupQtyMt(null)).toBe('0 MT');
   });
 
   it('sumGroupQtyKgForColumn sums outstanding_quantity', () => {

@@ -8,6 +8,7 @@ import {
   isUnplannedHybridListRequest,
   shouldResolveAllHybridShipmentsList,
   shouldResolveCompletedHybridShipmentsList,
+  shouldSerializeHybridListQuery,
 } from './shipmentUnplannedHybridList.service';
 import { buildShipmentListEnrichedPageQuery } from './shipmentList.service';
 
@@ -77,6 +78,11 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(shell.shipmentCtx.cacheKey).toContain(':sap=0');
       expect(hydrate.shipmentCtx.cacheKey).toContain(':sap=1');
       expect(shell.shipmentCtx.cacheKey).not.toBe(hydrate.shipmentCtx.cacheKey);
+    });
+
+    it('serializes hydrate hybrid but not the compact skipSapJoin shell', () => {
+      expect(shouldSerializeHybridListQuery(true)).toBe(false);
+      expect(shouldSerializeHybridListQuery(false)).toBe(true);
     });
 
     it('does not share cache across sort keys', () => {

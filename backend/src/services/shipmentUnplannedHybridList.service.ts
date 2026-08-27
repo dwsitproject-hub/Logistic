@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 import {
   buildShipmentListEnrichedPageQuery,
   normalizeShipmentListRows,
+  runSerializedShipmentHeavyQuery,
   type ShipmentListQueryContext,
   type ShipmentListResponseData,
 } from './shipmentList.service';
@@ -463,7 +464,14 @@ export async function resolveHybridShipmentsList(
   const inFlight = HYBRID_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
-  const run = computeHybridShipmentsList(ctx, pageNum, limitNum)
+  // Hydrate (skipSapJoin=false) joins sap_processed_data — serialize with summary/OS.
+  // Compact shells stay off the queue so the table is not starved by Section 1.
+  const compute = () => computeHybridShipmentsList(ctx, pageNum, limitNum);
+  const queued = shouldSerializeHybridListQuery(ctx.shipmentCtx.skipSapJoin)
+    ? runSerializedShipmentHeavyQuery(`hybrid:${cacheKey}`, compute)
+    : compute();
+
+  const run = queued
     .then((data) => {
       HYBRID_CACHE.set(cacheKey, { data, expiresAt: Date.now() + HYBRID_CACHE_TTL_MS });
       evictHybridCacheIfNeeded();
@@ -475,6 +483,11 @@ export async function resolveHybridShipmentsList(
 
   HYBRID_IN_FLIGHT.set(cacheKey, run);
   return run;
+}
+
+/** ALL-hybrid hydrate contends for sap_processed_data; the skipSapJoin shell must not wait behind it. */
+export function shouldSerializeHybridListQuery(skipSapJoin: boolean): boolean {
+  return skipSapJoin !== true;
 }
 
 /** Unchanged hybrid list computation - extracted so the cache wraps it without altering it. */

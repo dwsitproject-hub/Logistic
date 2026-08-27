@@ -450,7 +450,7 @@ function MtQtyInput({
         <div
           className={`flex min-h-0 items-center justify-end ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         >
-          {valueKg === null ? '—' : formatQtyMtFromKg(valueKg)}
+          {formatQtyMtFromKg(valueKg)}
         </div>
       </div>
     )
@@ -484,24 +484,9 @@ function MtQtyInput({
 }
 
 function MtQtyReadOnly({ valueKg }: { valueKg: number | null | undefined }) {
-  if (valueKg === null || valueKg === undefined) {
-    return (
-      <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
-        <div>—</div>
-      </div>
-    )
-  }
-  const kg = typeof valueKg === 'number' ? valueKg : Number(String(valueKg).replace(/,/g, '').trim())
-  if (!Number.isFinite(kg)) {
-    return (
-      <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
-        <div>—</div>
-      </div>
-    )
-  }
   return (
     <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
-      <div>{formatQtyMtFromKg(kg)}</div>
+      <div>{formatQtyMtFromKg(valueKg)}</div>
     </div>
   )
 }
@@ -2739,11 +2724,11 @@ export function EditShipmentModal({
                     <>
                       <ReadOnlyInfoField
                         label="SFAL Qty (MT)"
-                        value={formatMetricReadOnly(sfalQty === null ? null : sfalQty / 1000)}
+                        value={formatMetricReadOnly(sfalQty === null ? 0 : sfalQty / 1000)}
                       />
                       <ReadOnlyInfoField
                         label="SFBD Qty (MT)"
-                        value={formatMetricReadOnly(sfbdQty === null ? null : sfbdQty / 1000)}
+                        value={formatMetricReadOnly(sfbdQty === null ? 0 : sfbdQty / 1000)}
                       />
                     </>
                   )}

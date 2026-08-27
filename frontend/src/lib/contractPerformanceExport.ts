@@ -74,9 +74,8 @@ export function contractPerfQtySortValue(value: unknown): number {
 }
 
 /**
- * Contracts / Contract Performance View Table only.
- * Received Qty with no KLIP and no SAP value shows 0 MT (same as Shipments / Trucking tables).
- * Contract detail modal keeps null → "-" via formatQtyMtFromKg.
+ * Contracts / Contract Performance View Table.
+ * Null qty displays as 0 MT (same as Shipments / Trucking tables).
  */
 export function formatContractViewTableReceiveQtyMt(value: unknown): string {
   return formatSapQtyMtDisplay(parseContractPerfKg(value) ?? 0)
@@ -139,7 +138,6 @@ export function resolveContractPerfExportCell(
     return formatSapQtyMtDisplay(rec[field] as number | string | null | undefined)
   }
   if (id === 'outstanding_qty_mt') {
-    if (rec.outstanding_quantity == null || rec.outstanding_quantity === '') return '-'
     return formatSapOutstandingQtyMtDisplay(
       rec.outstanding_quantity as number | string | null | undefined,
     )

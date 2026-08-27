@@ -144,17 +144,15 @@ const SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS = { maxFractionDigits: 0 } as const
 /** Display trucking qty stored in kg as MT (table, calendar, mobile). */
 function formatTruckingQtyMt(
   value: unknown,
-  opts: { maxFractionDigits?: number; nullAsZero?: boolean } = SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS,
+  opts: { maxFractionDigits?: number } = SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS,
 ): string {
   const kg = parseTruckingQtyKg(value)
-  if (kg === null) return opts.nullAsZero ? '0 MT' : '—'
-  if (kg === 0) return '0 MT'
   return formatQtyMtFromKg(kg, opts)
 }
 
 /** View-table SAP delivery/receive qty — null/missing renders as 0 MT (display only). */
 function formatTruckingSapQtyMtDisplay(value: unknown): string {
-  return formatTruckingQtyMt(value, { ...SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS, nullAsZero: true })
+  return formatTruckingQtyMt(value, SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS)
 }
 
 /** API daily_deliverables.quantity_delivered is kg; calendar drafts/edits are MT. */
@@ -182,13 +180,13 @@ function parseDailyPlanningMtDraft(raw: string): number | 'invalid' {
 function formatDailyPlanningQtyMtDisplay(value: unknown): string {
   if (value === null || value === undefined || value === '') return '0.00'
   const n = Number(String(value).replace(/,/g, '').trim())
-  if (!Number.isFinite(n)) return '—'
+  if (!Number.isFinite(n)) return '0.00'
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
 function formatTruckingQtyPlain(n: number): string {
-  if (!Number.isFinite(n)) return '—'
+  if (!Number.isFinite(n)) return '0'
   if (n === 0) return '0'
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
 }
@@ -3089,7 +3087,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.contract_qty || 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(o.contract_qty)}
+          {qtyFieldsReady ? formatQtyMtFromKg(o.contract_qty) : <QtyLoadingDots />}
         </span>
       )
     },

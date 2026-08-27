@@ -6,12 +6,16 @@
  *
  *   shell   (compact, skipSapJoin=true)   733ms  ->    8ms
  *   hydrate (compact, skipSapJoin=false) 1746ms  ->    5ms
- *   summaryOnly                         16823ms  -> 1547ms   <-- no warmer existed
- *   outstandingQtyOnly                   8338ms  ->    8ms   <-- no warmer existed
+ *   summaryOnly                         16823ms  -> 1547ms   <-- warmer + daily snapshot
+ *   outstandingQtyOnly                   8338ms  ->    8ms
  *
- * The compact list shell is warmed first (created_at + vessel_name) so the table is not
- * starved by summary/OS at boot. Section 1 summary/OS no longer join list-grain
- * sto_metrics/sap_agg (qty_move only); cold times above are the pre-change baseline.
+ * Section 1 now reads the daily snapshot even when marked stale (live stage overlay still
+ * runs). Table paging still requires a fresh snapshot.
+ *
+ * The compact list shell is first in the startup warmup queue (created_at + persisted
+ * vessel_name) so a Shipments visitor after restart is not waiting behind Shipping
+ * Performance. Section 1 summary/OS no longer join list-grain sto_metrics/sap_agg
+ * (qty_move only); cold times above are the pre-change baseline.
  *
  * These call the real request handler with a synthetic request, exactly as the Trucking warmer
  * does. That matters: it populates the same cache entries a browser hits, through the identical

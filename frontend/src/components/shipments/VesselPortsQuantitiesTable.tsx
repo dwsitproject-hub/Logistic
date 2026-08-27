@@ -39,12 +39,8 @@ function resolveRowQty(
   return parseKg(row[field])
 }
 
-function formatMtRight(kg: number | null | undefined, nullAsZero = false): string {
-  const parsed = parseKg(kg)
-  if (parsed === null) {
-    return nullAsZero ? formatQtyMtFromKg(0, { maxFractionDigits: 0 }) : '—'
-  }
-  return formatQtyMtFromKg(parsed, { maxFractionDigits: 0 })
+function formatMtRight(kg: number | null | undefined): string {
+  return formatQtyMtFromKg(kg, { maxFractionDigits: 0 })
 }
 
 function sumRowsMt(
@@ -203,7 +199,7 @@ export function VesselPortsQuantitiesTable({
                       onChange={(kg) => onChangeRowQty(row.rowKey, 'quantity_delivered', kg)}
                     />
                   ) : (
-                    <span className="tabular-nums">{formatMtRight(deliveredKg, true)}</span>
+                    <span className="tabular-nums">{formatMtRight(deliveredKg)}</span>
                   )}
                 </TableCell>
                 <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
@@ -214,7 +210,7 @@ export function VesselPortsQuantitiesTable({
                       onChange={(kg) => onChangeRowQty(row.rowKey, 'quantity_receive', kg)}
                     />
                   ) : (
-                    <span className="tabular-nums">{formatMtRight(receiveKg, true)}</span>
+                    <span className="tabular-nums">{formatMtRight(receiveKg)}</span>
                   )}
                 </TableCell>
                 <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-center`}>
@@ -270,10 +266,10 @@ export function VesselPortsQuantitiesTable({
               {formatMtRight(totals.sto_qty)}
             </TableCell>
             <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-              {formatMtRight(totals.quantity_delivered, true)}
+              {formatMtRight(totals.quantity_delivered)}
             </TableCell>
             <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right tabular-nums`}>
-              {formatMtRight(totals.quantity_receive, true)}
+              {formatMtRight(totals.quantity_receive)}
             </TableCell>
             <TableCell className={VESSEL_MODAL_COMPACT_TD} />
           </TableRow>

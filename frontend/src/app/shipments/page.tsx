@@ -24,6 +24,7 @@ import {
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { resolvePerformancePeriodDateRange } from '@/lib/performancePeriodFilters'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
 import { buildShipmentViewTableExportMatrix } from '@/lib/shipmentViewTableExport'
@@ -199,6 +200,7 @@ import {
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
 import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
+import { readShipmentsCompactSort, writeShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -851,8 +853,8 @@ function resolvePortsModalQuantityReceiveKg(
 }
 
 function formatQuantityKgDisplay(value: unknown): string {
-  const parsed = parseApiNumber(value)
-  return parsed !== null ? `${formatNumber(parsed)} Kg` : '—'
+  const parsed = parseApiNumber(value) ?? 0
+  return `${formatNumber(parsed)} Kg`
 }
 
 function resolvePortsModalQuantityDelivered(
@@ -1207,16 +1209,9 @@ function ShipmentsPageContent() {
   }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
   const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null)
-  const [dateFrom, setDateFrom] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  })
+  const shipmentYtdRange = useMemo(() => resolvePerformancePeriodDateRange('YTD'), [])
+  const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolvePerformancePeriodDateRange('YTD').dateTo)
   const [uploadingId, setUploadingId] = useState<string>('')
   const listFetchGenRef = useRef(0)
   const fetchShipmentsRef = useRef<
@@ -1299,6 +1294,8 @@ function ShipmentsPageContent() {
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  /** Wait for localStorage sort restore so we do not fetch created_at then immediately vessel_name. */
+  const [sortHydrated, setSortHydrated] = useState(false)
 
   const globalFilterScope = useMemo(
     () => ({
@@ -1413,10 +1410,10 @@ function ShipmentsPageContent() {
 
   /** Single consolidated fetch — global scope + pipeline stage + pagination/sort. */
   useEffect(() => {
-    if (!userScopeReady) return
+    if (!userScopeReady || !sortHydrated) return
     fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScopeReady, listQueryKey])
+  }, [userScopeReady, listQueryKey, sortHydrated])
 
   const fetchVesselIdle = useCallback(async () => {
     setVesselIdleLoading(true)
@@ -1996,7 +1993,7 @@ function ShipmentsPageContent() {
         }
       }
 
-      const LIST_SHELL_TIMEOUT_MS = useAccurateQtySort ? 90_000 : 45_000
+      const LIST_SHELL_TIMEOUT_MS = 90_000
 
       const { data: listEnvelope } = await cachedGet(
         listCacheKey,
@@ -3120,7 +3117,9 @@ function ShipmentsPageContent() {
   }, [])
 
   const hasActiveShipmentFilters =
-    Boolean(dateFrom || dateTo || searchDraft || searchTerm) ||
+    Boolean(searchDraft || searchTerm) ||
+    dateFrom !== shipmentYtdRange.dateFrom ||
+    dateTo !== shipmentYtdRange.dateTo ||
     statusFilter !== 'ALL' ||
     lateIndicatorFilter !== 'ALL' ||
     charterTypeFilter !== 'ALL' ||
@@ -3146,15 +3145,15 @@ function ShipmentsPageContent() {
     resetUserScopeFilters()
     setSelectedIncoterms([])
     setSelectedSuppliers([])
-    setDateFrom('')
-    setDateTo('')
+    setDateFrom(shipmentYtdRange.dateFrom)
+    setDateTo(shipmentYtdRange.dateTo)
     setColumnFilters({})
     if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
       setEtaLoadingFilter('ALL')
       setEtaDischargeFilter('ALL')
     }
     setPage(1)
-  }, [resetUserScopeFilters])
+  }, [resetUserScopeFilters, shipmentYtdRange.dateFrom, shipmentYtdRange.dateTo])
 
   const unplannedTableBreakdown = useMemo(() => {
     if (unplannedBreakdown) return unplannedBreakdown
@@ -3659,7 +3658,6 @@ function ShipmentsPageContent() {
   // Column visibility and sorting
   const columnStorageKey = 'shipments.compact.visibleColumns'
   const columnOrderStorageKey = 'shipments.compact.columnOrder'
-  const sortStorageKey = 'shipments.compact.sort'
   const userViewPrefKey = 'shipments.compact.view.v2'
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
@@ -3778,19 +3776,16 @@ function ShipmentsPageContent() {
   }, [columnOrderIds, userViewPrefKey, visibleColumnIds])
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(sortStorageKey)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        setSortKey(parsed.key || 'created_at')
-        setSortDir(parsed.dir || 'desc')
-      }
-    } catch {}
+    const stored = readShipmentsCompactSort()
+    setSortKey(stored.sortKey)
+    setSortDir(stored.sortDir)
+    setSortHydrated(true)
   }, [])
 
   useEffect(() => {
-    localStorage.setItem(sortStorageKey, JSON.stringify({ key: sortKey, dir: sortDir }))
-  }, [sortKey, sortDir])
+    if (!sortHydrated) return
+    writeShipmentsCompactSort(sortKey, sortDir)
+  }, [sortKey, sortDir, sortHydrated])
 
   const toggleColumn = (colId: string) => {
     setVisibleColumnIds(prev => {
@@ -4102,7 +4097,9 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.contract_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.contract_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(s.contract_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       ),
     },
@@ -4462,7 +4459,7 @@ function ShipmentsPageContent() {
         })
         return (
           <span className="text-sm break-words">
-            {shortageMt != null ? formatNumber(shortageMt) : '-'}
+            {formatNumber(shortageMt ?? 0)}
           </span>
         )
       }
@@ -4838,12 +4835,11 @@ function ShipmentsPageContent() {
       }
 
       if (mode === 'sumKg') {
-        if (!qtyFieldsReady && col.id !== 'contract_qty') {
+        if (!qtyFieldsReady) {
           return <QtyLoadingDots />
         }
         const kg = sumGroupQtyKgForColumn(group.members, col.id)
-        const displayKg =
-          col.id === 'quantity_delivered' || col.id === 'quantity_receive' ? kg ?? 0 : kg
+        const displayKg = kg ?? 0
         if (col.id === 'outstanding_quantity') {
           return (
             <span
@@ -6340,7 +6336,7 @@ function ShipmentsPageContent() {
                         const fmtMt = (mt: number) =>
                           Number.isFinite(mt)
                             ? mt.toLocaleString('en-US', { maximumFractionDigits: 0 })
-                            : '—'
+                            : '0'
                         const dueStart = r.delivery_start_date ? formatDateDMY(r.delivery_start_date) : '-'
                         const dueEnd = r.delivery_end_date ? formatDateDMY(r.delivery_end_date) : '-'
                         const blQty = Number(r.bl_quantity ?? r.quantity_shipped ?? 0)
@@ -6392,7 +6388,7 @@ function ShipmentsPageContent() {
                             {shipCalendarMetaOrderIds.map((id) => {
                               if (id === 'due_start') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
                               if (id === 'due_end') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueEnd}</td>
-                              return <td key={id} className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{blQty ? `${fmtMt(blQtyMt)} MT` : '—'}</td>
+                              return <td key={id} className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{`${fmtMt(blQtyMt)} MT`}</td>
                             })}
                             {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
                               const date = dayIso(d)
@@ -8604,9 +8600,7 @@ function ShipmentsPageContent() {
                               />
                             ) : (
                               <div className="font-medium">
-                                {displayData.quantity_at_loading_port !== null && displayData.quantity_at_loading_port !== undefined
-                                  ? formatNumber(displayData.quantity_at_loading_port)
-                                  : '-'}
+                                {formatNumber(displayData.quantity_at_loading_port ?? 0)}
                               </div>
                             )}
                           </div>

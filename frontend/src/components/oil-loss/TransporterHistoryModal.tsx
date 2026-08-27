@@ -82,8 +82,8 @@ const CONTRACT_COLUMNS: Array<{
 ]
 
 function formatQtyMtFromKg(kg: number | null | undefined): string {
-  if (kg === null || kg === undefined || !Number.isFinite(Number(kg))) return '—'
-  const mt = Number(kg) / 1000
+  const n = kg === null || kg === undefined ? 0 : Number(kg)
+  const mt = Number.isFinite(n) ? n / 1000 : 0
   return mt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 })
 }
 

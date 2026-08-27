@@ -190,22 +190,37 @@ async function getRefreshMeta(module: PipelineSummaryModule): Promise<{
   return row;
 }
 
-export async function isPipelineDailySummaryFresh(module: PipelineSummaryModule): Promise<boolean> {
-  const meta = await getRefreshMeta(module);
-  if (!meta || meta.is_stale) return false;
-  if (
-    module === 'trucking' &&
-    meta.logic_version < TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION
-  ) {
+export function isPipelineDailySummaryMetaUsable(
+  meta: { is_stale: boolean; logic_version: number } | null,
+  module: PipelineSummaryModule,
+): boolean {
+  if (!meta) return false;
+  if (module === 'trucking' && meta.logic_version < TRUCKING_PIPELINE_SUMMARY_LOGIC_VERSION) {
     return false;
   }
-  if (
-    module === 'shipment' &&
-    meta.logic_version < SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION
-  ) {
+  if (module === 'shipment' && meta.logic_version < SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION) {
     return false;
   }
   return true;
+}
+
+export function isPipelineDailySummaryMetaFresh(
+  meta: { is_stale: boolean; logic_version: number } | null,
+  module: PipelineSummaryModule,
+): boolean {
+  if (!meta || !isPipelineDailySummaryMetaUsable(meta, module)) return false;
+  return !meta.is_stale;
+}
+
+export async function isPipelineDailySummaryFresh(module: PipelineSummaryModule): Promise<boolean> {
+  const meta = await getRefreshMeta(module);
+  return isPipelineDailySummaryMetaFresh(meta, module);
+}
+
+/** Snapshot exists at current logic version — usable for Section 1 cards even if marked stale. */
+export async function isPipelineDailySummaryUsable(module: PipelineSummaryModule): Promise<boolean> {
+  const meta = await getRefreshMeta(module);
+  return isPipelineDailySummaryMetaUsable(meta, module);
 }
 
 export async function markPipelineDailySummaryStale(
@@ -229,7 +244,8 @@ export async function markPipelineDailySummaryStale(
  *
  * A completion-based guard makes overlap impossible however slow a refresh becomes. Skipping is
  * safe: the staleness flag stays set, so the next trigger after the in-flight run finishes will
- * refresh, and readers fall back to live queries while it is stale.
+ * refresh. Section 1 cards keep reading the last snapshot (with a live stage overlay) while stale;
+ * table paging still requires a fresh snapshot.
  */
 let refreshInFlight = false;
 
@@ -547,7 +563,10 @@ export async function loadShipmentSummaryFromDaily(
     totalTableRows: number;
   };
 } | null> {
-  if (!(await isPipelineDailySummaryFresh('shipment'))) return null;
+  if (!(await isPipelineDailySummaryUsable('shipment'))) return null;
+  if (!(await isPipelineDailySummaryFresh('shipment'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
 
   const { sql, params } = buildDailySummaryWhere(scope);
   const res = await query(

@@ -7,6 +7,7 @@ import { resolveShippingTcShortageMtForListRow } from './shipmentTcR4Shortage'
 import { TC_VESSEL_PERF_LABELS } from './shipmentTcPerformanceLabels'
 import { resolveShipmentDisplayStoNumber } from './shipmentStoDisplay'
 import type { ShippingPerformancePortSource } from './shippingPerformancePorts'
+import { formatQtyMtFromKg } from './utils'
 
 export type ShippingPerfVesselModalSourceRow = ShippingPerformancePortSource & {
   id: string
@@ -366,9 +367,7 @@ export function formatShippingPerfVesselModalDate(value: string | null | undefin
 }
 
 export function formatShippingPerfVesselModalQtyMt(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-'
-  const mt = Number(value) / 1000
-  return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+  return formatQtyMtFromKg(value, { maxFractionDigits: 2 })
 }
 
 const OPEN_DELTA_COLUMN_KEYS = new Set<VesselModalOpenColumnKey>([

@@ -4,6 +4,7 @@ import {
   formatRupiah,
   toKgFromMt,
   formatKgFromMt,
+  formatQtyMtFromKg,
   formatOutstandingQtyMtFromKg,
   outstandingQtyMtColorClass,
 } from './utils';
@@ -34,6 +35,20 @@ describe('formatRupiah', () => {
   });
 });
 
+describe('formatQtyMtFromKg', () => {
+  it('formats kg as whole MT', () => {
+    expect(formatQtyMtFromKg(1000)).toBe('1 MT');
+    expect(formatQtyMtFromKg(1_500_000)).toBe('1,500 MT');
+  });
+
+  it('shows 0 MT for null, empty, or non-finite qty', () => {
+    expect(formatQtyMtFromKg(null)).toBe('0 MT');
+    expect(formatQtyMtFromKg(undefined)).toBe('0 MT');
+    expect(formatQtyMtFromKg('')).toBe('0 MT');
+    expect(formatQtyMtFromKg('abc')).toBe('0 MT');
+  });
+});
+
 describe('formatOutstandingQtyMtFromKg', () => {
   it('shows +MT for over-delivery (negative kg), rounded to whole MT by default', () => {
     expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+3 MT');
@@ -43,8 +58,11 @@ describe('formatOutstandingQtyMtFromKg', () => {
     expect(formatOutstandingQtyMtFromKg(1500)).toBe('2 MT');
   });
 
-  it('shows zero MT for fully delivered', () => {
+  it('shows zero MT for fully delivered or missing qty', () => {
     expect(formatOutstandingQtyMtFromKg(0)).toBe('0 MT');
+    expect(formatOutstandingQtyMtFromKg(null)).toBe('0 MT');
+    expect(formatOutstandingQtyMtFromKg(undefined)).toBe('0 MT');
+    expect(outstandingQtyMtColorClass(null)).toBe('text-gray-500');
   });
 
   it('supports decimal display when maxFractionDigits is passed', () => {

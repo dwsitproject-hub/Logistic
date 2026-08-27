@@ -242,11 +242,11 @@ export function wbGrandTotalsFromActualRows(
   }
 }
 
-/** Format kg as MT with 2 decimals; null/undefined/NaN → "-". */
+/** Format kg as MT with 2 decimals; null/undefined/NaN → 0.00. */
 export function formatSapQtyMtOrDash(valueKg: unknown): string {
-  if (valueKg == null || valueKg === '') return '-'
+  if (valueKg == null || valueKg === '') return '0.00'
   const n = typeof valueKg === 'number' ? valueKg : parseFloat(String(valueKg).replace(/,/g, '').trim())
-  if (!Number.isFinite(n)) return '-'
+  if (!Number.isFinite(n)) return '0.00'
   const mt = n / 1000
   return mt.toLocaleString('en-US', {
     minimumFractionDigits: 2,

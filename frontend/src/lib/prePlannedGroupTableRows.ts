@@ -172,7 +172,6 @@ export function formatPrePlannedGroupQtyMt(
   kg: number | null,
   opts?: { maxFractionDigits?: number },
 ): string {
-  if (kg == null) return '-';
   return formatQtyMtFromKg(kg, opts);
 }
 

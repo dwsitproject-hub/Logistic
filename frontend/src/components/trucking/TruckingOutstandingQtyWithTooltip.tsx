@@ -18,27 +18,13 @@ export function TruckingOutstandingQtyWithTooltip({
   const tooltip = truckingOutstandingQtyFormulaTooltip(incoterm)
   const triggerClass = `cursor-help border-b border-dotted border-transparent hover:border-gray-300 ${className ?? ''}`
 
-  if (outstandingKg === null || outstandingKg === undefined || !Number.isFinite(Number(outstandingKg))) {
-    return (
-      <Tooltip delayDuration={200}>
-        <TooltipTrigger asChild>
-          <span className={`text-sm text-gray-400 tabular-nums ${triggerClass}`}>—</span>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs leading-relaxed max-w-xs whitespace-pre-wrap">
-          {tooltip}
-        </TooltipContent>
-      </Tooltip>
-    )
-  }
-
-  const n = Number(outstandingKg)
-  const colorClass = outstandingQtyMtColorClass(n)
+  const colorClass = outstandingQtyMtColorClass(outstandingKg)
 
   return (
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>
         <span className={`text-sm break-words tabular-nums ${colorClass} ${triggerClass}`}>
-          {formatOutstandingQtyMtFromKg(n, { maxFractionDigits: 0 })}
+          {formatOutstandingQtyMtFromKg(outstandingKg, { maxFractionDigits: 0 })}
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs leading-relaxed max-w-xs whitespace-pre-wrap">

@@ -293,16 +293,15 @@ if (process.env.NODE_ENV !== 'test') {
      * is the right trade: nothing waits on the warmers, but the requests they were competing
      * with do have a user waiting.
      *
-     * Shipments is warmed here for the first time. Its two summary calls were the only heavy
-     * page calls with no warmer at all, costing the first visitor after each restart ~25s on the
-     * most-used page (measured: summaryOnly 16.8s, outstandingQtyOnly 8.3s).
+     * Shipments (the most-opened page) is warmed first so a visitor after restart is
+     * not competing with Shipping Performance. Shell (created_at + vessel_name) runs
+     * before summary/OS. Shipping Performance follows the Shipments warmers.
      *
      * Ordering is by how likely a page is to be opened first, so the earliest visitor benefits
      * most. Nothing about what any warmer computes or returns changes.
      */
     void runWarmupJobsSequentially(
       [
-        { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
         { name: 'Shipments list shell', run: () => startShipmentListShellCacheWarmer() },
         { name: 'Shipments summary', run: () => startShipmentSummaryCacheWarmer() },
         { name: 'Shipments outstanding qty', run: () => startShipmentOutstandingQtyCacheWarmer() },
@@ -310,6 +309,7 @@ if (process.env.NODE_ENV !== 'test') {
           name: 'Shipments scoped toolbar (plant×product)',
           run: () => startShipmentScopedToolbarCacheWarmer(),
         },
+        { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
         { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
         { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
       ],

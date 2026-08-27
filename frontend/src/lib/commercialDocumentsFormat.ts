@@ -3,8 +3,8 @@ import type { CommercialDocumentRow } from '@/lib/commercialDocumentsTypes'
 
 export function formatCommercialQtyKg(value: number | null | undefined): string {
   const n = Number(value)
-  if (!Number.isFinite(n)) return '-'
-  return `${n.toLocaleString('en-US', { maximumFractionDigits: 2 })} kg`
+  const qty = Number.isFinite(n) ? n : 0
+  return `${qty.toLocaleString('en-US', { maximumFractionDigits: 2 })} kg`
 }
 
 export function formatCommercialIdr(

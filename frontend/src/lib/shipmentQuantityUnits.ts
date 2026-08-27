@@ -186,8 +186,7 @@ export function resolveShipmentListDeliveredKg(shipment: {
 }
 
 /**
- * Shipments View Table only: empty Delivery Qty (KLIP + SAP null) shows 0, same as Receive / OS.
- * Edit/View Shipment modal must keep null → "—" via MtQtyReadOnly.
+ * Shipments View Table: empty Delivery Qty (KLIP + SAP null) shows 0.
  */
 export function shipmentListDeliveredKgForViewTable(
   shipment: Parameters<typeof resolveShipmentListDeliveredKg>[0],
@@ -196,8 +195,7 @@ export function shipmentListDeliveredKgForViewTable(
 }
 
 /**
- * Shipments View Table only: empty Received Qty (KLIP + SAP null) shows 0.
- * Edit/View Shipment modal must keep null → "—" via MtQtyReadOnly.
+ * Shipments View Table: empty Received Qty (KLIP + SAP null) shows 0.
  */
 export function shipmentListReceiveKgForViewTable(
   shipment: Parameters<typeof resolveShipmentListReceiveKg>[0],

@@ -28,13 +28,17 @@ export function formatKgFromMt(mt: number | string | null | undefined) {
   return `${formatNumber(toKgFromMt(mt))} Kg`
 }
 
-/** Contract/shipment quantities are stored in kg; display as whole MT (no decimals by default). */
-export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?: { maxFractionDigits?: number }) {
-  if (kg === null || kg === undefined || kg === '') return '-'
+function parseQtyKgOrZero(kg: number | string | null | undefined): number {
+  if (kg === null || kg === undefined || kg === '') return 0
   const raw =
     typeof kg === 'string' ? kg.replace(/,/g, '').replace(/\s+/g, '').trim() : kg
   const n = typeof raw === 'string' ? Number(raw) : raw
-  if (!Number.isFinite(n)) return '-'
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Contract/shipment quantities are stored in kg; display as whole MT (no decimals by default). Null/empty → 0 MT. */
+export function formatQtyMtFromKg(kg: number | string | null | undefined, opts?: { maxFractionDigits?: number }) {
+  const n = parseQtyKgOrZero(kg)
   // MT quantities display as whole numbers (no decimals). Callers can still opt into
   // decimals by passing maxFractionDigits explicitly.
   const maxFractionDigits = opts?.maxFractionDigits ?? 0
@@ -53,14 +57,12 @@ function outstandingDisplayedAbsMt(
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-/** Outstanding qty in kg; over-delivery (negative kg) shows +MT; remaining (positive kg) shows MT without minus. */
+/** Outstanding qty in kg; over-delivery (negative kg) shows +MT; remaining (positive kg) shows MT without minus. Null/empty → 0 MT. */
 export function formatOutstandingQtyMtFromKg(
   kg: number | string | null | undefined,
   opts?: { maxFractionDigits?: number },
 ) {
-  if (kg === null || kg === undefined || kg === '') return '-'
-  const n = typeof kg === 'string' ? Number(kg) : kg
-  if (!Number.isFinite(n)) return '-'
+  const n = parseQtyKgOrZero(kg)
   const maxFractionDigits = opts?.maxFractionDigits ?? 0
   const displayedAbs = outstandingDisplayedAbsMt(n, maxFractionDigits)
   const absFmt = displayedAbs.toLocaleString('en-US', {
@@ -74,14 +76,12 @@ export function formatOutstandingQtyMtFromKg(
   return `${absFmt} MT`
 }
 
-/** View-table text color for outstanding qty (kg): green over-delivery, black remaining, gray zero. */
+/** View-table text color for outstanding qty (kg): green over-delivery, black remaining, gray zero. Null/empty treated as 0. */
 export function outstandingQtyMtColorClass(
   kg: number | string | null | undefined,
   opts?: { maxFractionDigits?: number },
 ): string {
-  if (kg === null || kg === undefined || kg === '') return 'text-gray-400'
-  const n = typeof kg === 'string' ? Number(kg) : kg
-  if (!Number.isFinite(n)) return 'text-gray-400'
+  const n = parseQtyKgOrZero(kg)
   const maxFractionDigits = opts?.maxFractionDigits ?? 0
   // Color follows the rounded display value, not raw kg residual.
   if (outstandingDisplayedAbsMt(n, maxFractionDigits) === 0) return 'text-gray-500'

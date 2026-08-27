@@ -133,6 +133,29 @@ const OUTSTANDING_QTY_CACHE = new Map<
 // so users are served from the cache instead of paying the full query cost. Does not
 // change responses — it only re-runs the identical loader off the request path.
 const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
+const SUMMARY_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS, maxEntries: 4 });
+
+/**
+ * At most one heavy Shipments query (hydrate, live summary, OS strip) at a time, plus
+ * single-flight per cache key. Prevents pool stampede after a cold restart that used to
+ * abort Section 1 at the 60s browser timeout.
+ */
+const HEAVY_INFLIGHT = new Map<string, Promise<unknown>>();
+let heavyChain: Promise<unknown> = Promise.resolve();
+
+export function runSerializedShipmentHeavyQuery<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const existing = HEAVY_INFLIGHT.get(key);
+  if (existing) return existing as Promise<T>;
+  const run = heavyChain
+    .catch(() => {})
+    .then(work)
+    .finally(() => {
+      HEAVY_INFLIGHT.delete(key);
+    }) as Promise<T>;
+  HEAVY_INFLIGHT.set(key, run);
+  heavyChain = run.catch(() => {});
+  return run;
+}
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
   const keys = Object.keys(colFilters).sort();
@@ -508,7 +531,7 @@ export async function loadShipmentOutstandingQtyForRequest(
   const inFlight = OUTSTANDING_QTY_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
-  const run = (async () => {
+  const run = runSerializedShipmentHeavyQuery(`os:${cacheKey}`, async () => {
     const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
     const execQ = buildShipmentOutstandingQtyExecutionAggregateQuery(
       opts.shipmentBaseCteSql,
@@ -556,7 +579,7 @@ export async function loadShipmentOutstandingQtyForRequest(
     });
     evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
     return summary;
-  })().finally(() => OUTSTANDING_QTY_IN_FLIGHT.delete(cacheKey));
+  }).finally(() => OUTSTANDING_QTY_IN_FLIGHT.delete(cacheKey));
 
   OUTSTANDING_QTY_IN_FLIGHT.set(cacheKey, run);
   return run;
@@ -729,7 +752,9 @@ export async function loadShipmentListSummary(
   }
   if (cached) SUMMARY_CACHE.delete(cacheKey);
 
-  const result = await query(summaryCountQuery, params);
+  const result = await runSerializedShipmentHeavyQuery(`summary:${cacheKey}`, () =>
+    query(summaryCountQuery, params),
+  );
   const summaryRow = (result.rows[0] || {}) as Record<string, unknown>;
   const totalCount = parseInt(String(summaryRow.total_count ?? '0'), 10) || 0;
   SUMMARY_CACHE.set(cacheKey, {
@@ -742,7 +767,8 @@ export async function loadShipmentListSummary(
 }
 
 /**
- * Section 1 summary: daily table when toolbar-only + fresh; else live SQL + hybrid unplanned breakdown.
+ * Section 1 summary: daily snapshot when toolbar-only (even if marked stale, with live
+ * stage overlay); else live SQL + hybrid unplanned breakdown.
  */
 export async function loadShipmentSummaryBundle(
   req: AuthRequest,
@@ -768,6 +794,18 @@ export async function loadShipmentSummaryBundle(
   completedBreakdown: ShipmentSummaryCompletedBreakdown;
   source: ShipmentSummaryLoadSource;
 }> {
+  const liveLoadStartedAt = Date.now();
+  const registerSummaryKeepWarm = () => {
+    SUMMARY_KEEP_WARM.register(
+      opts.cacheKey,
+      async () => {
+        SUMMARY_CACHE.delete(opts.cacheKey);
+        await loadShipmentSummaryBundle(req, opts);
+      },
+      Date.now() - liveLoadStartedAt,
+    );
+  };
+
   const emptyPreplanned: ShipmentSummaryPreplannedBreakdown = {
     contractRows: 0,
     groupCount: 0,
@@ -829,6 +867,7 @@ export async function loadShipmentSummaryBundle(
         loadPreplanned(),
         loadCompleted(),
       ]);
+      registerSummaryKeepWarm();
       return {
         summaryRow,
         totalCount,
@@ -842,6 +881,7 @@ export async function loadShipmentSummaryBundle(
 
   const cached = SUMMARY_CACHE.get(opts.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
+    SUMMARY_KEEP_WARM.touch(opts.cacheKey);
     const [unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
       opts.loadUnplannedBreakdown(),
       loadPreplanned(),
@@ -872,6 +912,7 @@ export async function loadShipmentSummaryBundle(
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
   evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  registerSummaryKeepWarm();
   return {
     summaryRow,
     totalCount: loaded.totalCount,
@@ -913,6 +954,7 @@ export function invalidateShipmentsListCache(): void {
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
   PAGE_KEEP_WARM.rewarmRecentlyUsed();
+  SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
 }
 
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
@@ -1207,14 +1249,11 @@ export function buildShipmentListPageQueryWithoutInlineCount(
   return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: false });
 }
 
-// The SAP-hydrated variant (skipSapJoin=false) is a background refresh that can run
-// for a minute or more. Rapid filter changes used to fire one per filter combination
-// CONCURRENTLY, monopolizing DB connections/CPU so even the fast compact queries
-// queued behind them. Serialize these hydration loads (concurrency 1) and share one
-// execution per cache key. Pure scheduling — each request still gets the exact same
-// result its query would have produced.
+// SAP hydrate, live summary, OS strip, and ALL-hybrid hydrate share
+// runSerializedShipmentHeavyQuery so they never stampede the pool. Compact skipSapJoin
+// shells stay off this queue so the table can paint while those jobs wait. Same-key
+// hydrate requests still single-flight.
 const HYDRATE_INFLIGHT = new Map<string, Promise<{ rows: ShipmentListRow[]; total: number }>>();
-let hydrateChain: Promise<unknown> = Promise.resolve();
 
 function loadShipmentListPageSerialized(
   ctx: ShipmentListQueryContext,
@@ -1223,14 +1262,12 @@ function loadShipmentListPageSerialized(
 ): Promise<{ rows: ShipmentListRow[]; total: number }> {
   const existing = HYDRATE_INFLIGHT.get(ctx.cacheKey);
   if (existing) return existing;
-  const run = hydrateChain
-    .catch(() => {})
-    .then(() => runShipmentListPageQuery(ctx, page, limit))
-    .finally(() => {
-      HYDRATE_INFLIGHT.delete(ctx.cacheKey);
-    });
+  const run = runSerializedShipmentHeavyQuery(`hydrate:${ctx.cacheKey}`, () =>
+    runShipmentListPageQuery(ctx, page, limit),
+  ).finally(() => {
+    HYDRATE_INFLIGHT.delete(ctx.cacheKey);
+  });
   HYDRATE_INFLIGHT.set(ctx.cacheKey, run);
-  hydrateChain = run.catch(() => {});
   return run;
 }
 

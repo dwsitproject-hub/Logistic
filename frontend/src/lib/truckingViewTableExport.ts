@@ -115,7 +115,6 @@ export function resolveTruckingViewTableExportCell(
     return formatSapQtyMtDisplay(rec[id] as number | string | null, QTY_MT_OPTS)
   }
   if (id === 'outstanding_qty_mt') {
-    if (rec.outstanding_quantity == null || rec.outstanding_quantity === '') return '-'
     return formatSapOutstandingQtyMtDisplay(
       rec.outstanding_quantity as number | string | null,
       QTY_MT_OPTS,

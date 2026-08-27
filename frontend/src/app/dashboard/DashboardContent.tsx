@@ -878,8 +878,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   }
 
   const formatKg = (mt: unknown) => {
-    const n = parseNumberLoose(mt)
-    if (n === null) return '-'
+    const n = parseNumberLoose(mt) ?? 0
     if (quantityUnit === 'mt') return `${formatNumber(n / 1_000)} MT`
     return `${formatNumber(n)} Kg`
   }

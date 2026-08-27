@@ -1,8 +1,8 @@
 /** Oil Loss display — MT qty as whole numbers; % keeps 2 decimals. */
 
 export function formatOilLossMtFromKg(kg: number | null | undefined): string {
-  if (kg === null || kg === undefined || !Number.isFinite(Number(kg))) return '—'
-  const mt = Number(kg) / 1000
+  const n = Number(kg)
+  const mt = Number.isFinite(n) ? n / 1000 : 0
   return mt.toLocaleString('en-US', {
     maximumFractionDigits: 0,
     useGrouping: true,
@@ -20,7 +20,7 @@ export function formatOilLossPct(value: number | null | undefined): string {
 
 /** YTD summary cards — avg oil loss in MT (already in MT, not Kg). */
 export function formatOilLossAvgMt(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—'
+  if (value == null || !Number.isFinite(value)) return '0'
   return value.toLocaleString('en-US', {
     maximumFractionDigits: 0,
     useGrouping: true,
