@@ -376,6 +376,26 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    // Incoterm filter, pushed into the query rather than applied after the fetch.
+    //
+    // The aggregate endpoints under /late-performance already accepted `incoterms`
+    // (comma-separated) but this paginated list did not, so a caller narrowing by incoterm here
+    // got an unchanged `pagination.total` and silently filtered a partial page client-side. The
+    // singular `incoterm` is accepted too, because that is the spelling callers reach for first.
+    //
+    // Matched on `base.incoterm`, which is the same value this endpoint returns in each row, so
+    // the filter agrees with what the caller sees rather than with a differently-derived one.
+    const incotermsFilter = parseCommaSeparatedQuery(
+      (req.query as any).incoterms ?? (req.query as any).incoterm,
+    )
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+    if (incotermsFilter.length > 0) {
+      queryText += ` AND UPPER(TRIM(COALESCE(base.incoterm, ''))) = ANY($${paramIndex}::text[])`;
+      queryParams.push(incotermsFilter);
+      paramIndex++;
+    }
+
     if (transportMode) {
       queryText += ` AND UPPER(base.transport_mode) = $${paramIndex}`;
       queryParams.push(String(transportMode).toUpperCase());
