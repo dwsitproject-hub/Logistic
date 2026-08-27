@@ -156,6 +156,7 @@ export function seedKlipQtyFromShipmentHeader(
  * Legacy quantity_delivered is only a last-resort fallback when KLIP/SAP are both absent.
  */
 export function resolveShipmentListDeliveredKg(shipment: {
+  klip_delivery_qty?: number | string | null
   quantity_delivered_klip?: number | string | null
   quantity_delivered?: number | string | null
   total_quantity_delivered?: number | string | null
@@ -163,7 +164,9 @@ export function resolveShipmentListDeliveredKg(shipment: {
   is_contract_sap_closed?: boolean | null
 }): number | null {
   const closed = Boolean(shipment.is_contract_sap_closed)
-  const klip = shipmentStoredQtyKg(shipment.quantity_delivered_klip)
+  const klip =
+    shipmentStoredQtyKg(shipment.klip_delivery_qty)
+    ?? shipmentStoredQtyKg(shipment.quantity_delivered_klip)
   const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
   const legacy =
     shipmentStoredQtyKg(shipment.quantity_delivered)
@@ -251,12 +254,15 @@ export function shipmentListOutstandingKgForViewTable(shipment: {
  * Open without KLIP → SAP; last resort vessel/manual
  */
 export function resolveShipmentListReceiveKg(shipment: {
+  klip_receive_qty?: number | string | null
   actual_vessel_qty_receive?: number | string | null
   quantity_receive?: number | string | null
   is_contract_sap_closed?: boolean | null
 }): number | null {
   const closed = Boolean(shipment.is_contract_sap_closed)
-  const klip = shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
+  const klip =
+    shipmentStoredQtyKg(shipment.klip_receive_qty)
+    ?? shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
 
   if (closed) {

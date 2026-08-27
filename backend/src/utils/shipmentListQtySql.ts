@@ -11,6 +11,7 @@ import { sqlSapQtyDeliveredAnyFromSpd } from './contractLogisticsStoDetailSql';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { sqlSapIncotermFromJsonb } from './sapSourceTypeSql';
+import { shipmentListRowGlobalOutstandingSql } from './shipmentOutstandingQtySql';
 
 /** Sum contract qty (kg) for contracts linked on a grouped shipment row. */
 export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
@@ -69,10 +70,11 @@ export function sqlShipmentListFulfilledKgCase(
 }
 
 /**
- * OS base qty (kg) for a Shipments / Shipping Perf STO row.
+ * OS base qty (kg) for Shipping Perf STO metrics / Edit Shipment STO-scoped OS.
  * Default: Contract Qty (1 STO × N POs).
  * When one PO has several parallel SAP STOs, use STO Qty so the PO commitment
  * is not copied onto every line (PO 1581000931 / STOs 4927–4929).
+ * Shipments View Table OS does not use this — parallel STOs show PO-level OS instead.
  */
 export function sqlShipmentListOsBaseQtyExpr(opts: {
   poStoCountExpr: string;
@@ -87,10 +89,10 @@ export function sqlShipmentListOsBaseQtyExpr(opts: {
 }
 
 /**
- * Outstanding (kg) = base qty − fulfilled.
- * Base is Contract Qty, or STO Qty when sqlShipmentListOsBaseQtyExpr detects parallel STOs.
- * Fulfilled follows Open→KLIP / Close→SAP (same as Delivery/Receive columns).
+ * Outstanding (kg) = Contract Qty − fulfilled (Open→KLIP / Close→SAP).
  * Missing Delivery/Receive (null) counts as 0 so View Table OS is numeric, not "-".
+ * Callers that need PO-level OS on parallel STO rows should wrap this with
+ * sqlShipmentListViewTableOutstandingKgExpr instead of changing the base qty.
  */
 export function sqlShipmentListOutstandingKgExpr(opts: {
   contractQtyExpr: string;
@@ -213,13 +215,32 @@ export function shipmentListStoScopedSapDeliverySql(spAlias = 'sp'): string {
 }
 
 /**
+ * KLIP receive for a View Table STO row: one qty per PO/contract (sto_shipment_klip)
+ * then SUM — same grain as Edit Shipment Grand Total.
+ * Falls back to grouped header actual_vessel_qty_receive (maybeCopied MAX) before hydrate.
+ */
+export function shipmentListKlipReceiveKgExpr(spAlias = 'sp'): string {
+  return sqlCoalesceNonZeroQty('sm.klip_receive_kg', `${spAlias}.actual_vessel_qty_receive`);
+}
+
+/** KLIP delivery — same per-PO-then-SUM grain as receive. */
+export function shipmentListKlipDeliveryKgExpr(spAlias = 'sp'): string {
+  return sqlCoalesceNonZeroQty('sm.klip_delivery_kg', `${spAlias}.quantity_delivered_klip`);
+}
+
+/**
  * SAP receive for list `quantity_receive` column (KLIP vessel receive is NOT mixed in —
  * Open/Close resolve uses actual_vessel_qty_receive separately).
  * Real SAP STO: sto_metrics → sap_agg → sto-scoped SAP subquery (never PO-wide qty_move).
+ * 1 PO × several STOs: skip the unscoped SPD SUM (history / PO-level copies).
  * Synthetic OP-/MNL keys: allow qty_move contract fallback.
  */
 export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
   const stoScoped = shipmentListStoScopedSapDeliverySql(spAlias);
+  const siblingSto = sqlCoalesceNonZeroChain([
+    'sm.delivered_qty',
+    'sa.quantity_delivered_sap',
+  ]);
   const perSto = sqlCoalesceNonZeroChain([
     'sm.delivered_qty',
     'sa.quantity_delivered_sap',
@@ -232,6 +253,8 @@ export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
     shipmentListRowQtyMoveDeliverySql(spAlias),
   ]);
   return `CASE
+    WHEN ${shipmentListHasRealSapStoKeySql(spAlias)}
+      AND COALESCE((sm.po_sto_count)::int, 1) > 1 THEN (${siblingSto})
     WHEN ${shipmentListHasRealSapStoKeySql(spAlias)} THEN (${perSto})
     ELSE (${withQtyMove})
   END`;
@@ -239,6 +262,10 @@ export function shipmentListSapDeliveryQtySql(spAlias = 'sp'): string {
 
 export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
   const stoScoped = shipmentListStoScopedSapReceiveSql(spAlias);
+  const siblingSto = sqlCoalesceNonZeroChain([
+    'sm.received_qty',
+    'sa.quantity_receive',
+  ]);
   const perSto = sqlCoalesceNonZeroChain([
     'sm.received_qty',
     'sa.quantity_receive',
@@ -251,6 +278,8 @@ export function shipmentListSapReceiveQtySql(spAlias = 'sp'): string {
     shipmentListRowQtyMoveReceiveSql(spAlias),
   ]);
   return `CASE
+    WHEN ${shipmentListHasRealSapStoKeySql(spAlias)}
+      AND COALESCE((sm.po_sto_count)::int, 1) > 1 THEN (${siblingSto})
     WHEN ${shipmentListHasRealSapStoKeySql(spAlias)} THEN (${perSto})
     ELSE (${withQtyMove})
   END`;
@@ -264,61 +293,43 @@ export function shipmentListPageQtySelectSql(spAlias = 'sp'): string {
   const incotermExpr = `COALESCE(NULLIF(TRIM(${spAlias}.incoterm::text), ''), NULLIF(TRIM(sl.incoterm::text), ''), '')`;
   const sapReceive = shipmentListSapReceiveQtySql(spAlias);
   const sapDelivery = shipmentListSapDeliveryQtySql(spAlias);
+  const klipReceive = shipmentListKlipReceiveKgExpr(spAlias);
+  const klipDelivery = shipmentListKlipDeliveryKgExpr(spAlias);
   const receiveResolved = sqlShipmentResolvedReceiveKg(
     closedExpr,
-    `${spAlias}.actual_vessel_qty_receive`,
+    klipReceive,
     sapReceive,
   );
   const deliveryResolved = sqlShipmentResolvedDeliveryKg(
     closedExpr,
-    `${spAlias}.quantity_delivered_klip`,
+    klipDelivery,
     sapDelivery,
     `${spAlias}.quantity_delivered`,
   );
-  const stoQtyExpr = `COALESCE(sm.sto_qty, sa.sto_quantity)`;
-  const osBaseExpr = sqlShipmentListOsBaseQtyExpr({
-    poStoCountExpr: 'sm.po_sto_count',
-    stoQtyExpr,
-    contractQtyExpr,
-  });
-  // Same fulfilled qty as Delivery/Receive columns; null fulfilled → 0 (OS = base qty).
+  // Same fulfilled qty as Delivery/Receive columns; null fulfilled → 0 (OS = contract qty).
   const listOutstandingFallback = sqlShipmentListOutstandingKgExpr({
-    contractQtyExpr: osBaseExpr,
+    contractQtyExpr,
     incotermExpr,
     receiveExpr: receiveResolved,
     deliveryExpr: deliveryResolved,
     clampAtZero: false,
   });
-  const qtyMoveReceive = `NULLIF((SELECT qm.quantity_receive FROM qty_move qm WHERE qm.contract_number = c.contract_id)::numeric, 0)`;
-  const qtyMoveDelivery = `NULLIF((SELECT COALESCE(qm.quantity_delivery_vessel, qm.quantity_delivery_trucking) FROM qty_move qm WHERE qm.contract_number = c.contract_id)::numeric, 0)`;
-  const globalOutstanding = `(SELECT SUM(
-    CASE
-      WHEN c.quantity_ordered IS NULL THEN NULL
-      ELSE (${sqlShipmentListOutstandingKgExpr({
-        contractQtyExpr: 'c.quantity_ordered',
-        incotermExpr: 'c.incoterm',
-        receiveExpr: qtyMoveReceive,
-        deliveryExpr: qtyMoveDelivery,
-        clampAtZero: false,
-      })})
-    END
-  )
-  FROM contracts c
-  WHERE c.contract_id IS NOT NULL
-    AND ${spAlias}.contract_numbers IS NOT NULL
-    AND TRIM(${spAlias}.contract_numbers) <> ''
-    AND EXISTS (
-      SELECT 1
-      FROM unnest(regexp_split_to_array(${spAlias}.contract_numbers, E'\\\\s*,\\\\s*')) AS cn
-      WHERE TRIM(cn) = TRIM(c.contract_id)
-    ))`;
+  // PO-grain OS (qty_move) — same as Contracts / status cards / Section OS Qty.
+  // Repeated on every sibling STO row when po_sto_count > 1 (UI only; cards stay 1×).
+  const poLevelOutstanding = shipmentListRowGlobalOutstandingSql(spAlias);
 
   return `
         COALESCE(sm.contract_qty, ${contractQtyFallback}) AS contract_qty,
         COALESCE(sm.sto_qty, sa.sto_quantity) AS sto_quantity,
+        ${klipReceive} AS klip_receive_qty,
+        ${klipDelivery} AS klip_delivery_qty,
         ${sapReceive} AS quantity_receive,
         ${sapDelivery} AS quantity_delivered_sap,
         sm.planning_qty AS planning_qty,
         sm.outstanding_qty_planning AS outstanding_qty_planning,
-        COALESCE((${listOutstandingFallback}), sm.outstanding_qty_actual, ${globalOutstanding}) AS outstanding_quantity`.trim();
+        CASE
+          WHEN COALESCE((sm.po_sto_count)::int, 1) > 1
+            THEN (${poLevelOutstanding})
+          ELSE COALESCE((${listOutstandingFallback}), sm.outstanding_qty_actual, ${poLevelOutstanding})
+        END AS outstanding_quantity`.trim();
 }

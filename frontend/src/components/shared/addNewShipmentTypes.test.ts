@@ -3,8 +3,6 @@ import {
   formatPoPlantLabel,
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
-  resolveShipmentPlanQtyMaxMt,
-  shipmentPlanQtyExceedsOsActual,
 } from './addNewShipmentTypes'
 import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
 
@@ -69,30 +67,5 @@ describe('classifyShipmentTransportMode', () => {
   it('returns null for blank', () => {
     expect(classifyShipmentTransportMode('')).toBe(null)
     expect(classifyShipmentTransportMode(null)).toBe(null)
-  })
-})
-
-describe('shipment plan qty vs OS Actual', () => {
-  it('caps Shipment Plan Qty by OS Actual, not OS Plan', () => {
-    expect(
-      resolveShipmentPlanQtyMaxMt({
-        outstanding_quantity: 400_000,
-        outstanding_quantity_planning: 0,
-        outstanding_quantity_planning_budget: 0,
-      }),
-    ).toBe(400)
-    expect(
-      resolveShipmentPlanQtyMaxMt({
-        outstanding_qty_actual: 250_000,
-        outstanding_quantity: 1,
-        outstanding_quantity_planning_budget: 9_000_000,
-      }),
-    ).toBe(250)
-  })
-
-  it('treats missing OS Actual as a zero cap', () => {
-    expect(resolveShipmentPlanQtyMaxMt({})).toBe(0)
-    expect(shipmentPlanQtyExceedsOsActual(400_000, 0)).toBe(true)
-    expect(shipmentPlanQtyExceedsOsActual(0, 0)).toBe(false)
   })
 })

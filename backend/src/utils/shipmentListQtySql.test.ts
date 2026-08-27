@@ -94,15 +94,36 @@ describe('shipmentListPageQtySelectSql', () => {
     const sql = shipmentListPageQtySelectSql('sp');
     expect(sql).toContain('sm.delivered_qty');
     expect(sql).toContain('sm.received_qty');
-    expect(sql).not.toContain('GREATEST(');
+    expect(sql).toContain('sm.klip_receive_kg');
+    expect(sql).toContain('AS klip_receive_qty');
+    expect(sql).toContain('AS klip_delivery_qty');
     expect(sql).toContain('quantity_delivered_sap');
     expect(sql).toContain('quantity_receive');
     expect(sql).toContain('Quantity Receive');
     expect(sql).toContain('qm.quantity_receive');
     expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
-    // SAP receive column must not fall through to KLIP vessel receive (=0 blanks SAP)
     const receiveSql = shipmentListSapReceiveQtySql('sp');
     expect(receiveSql).not.toContain('actual_vessel_qty_receive');
+    expect(receiveSql).not.toContain('GREATEST(');
+  });
+
+  it('repeats PO-level qty_move OS on every sibling STO when po_sto_count > 1', () => {
+    const sql = shipmentListPageQtySelectSql('sp');
+    expect(sql).toContain('WHEN COALESCE((sm.po_sto_count)::int, 1) > 1');
+    expect(sql).toContain('c.quantity_ordered');
+    expect(sql).toContain('qm.quantity_receive');
+    expect(sql).toContain('AS outstanding_quantity');
+    expect(sql).not.toContain(
+      'THEN COALESCE(NULLIF((COALESCE(sm.sto_qty, sa.sto_quantity))::numeric, 0)',
+    );
+  });
+
+  it('uses STO-scoped SAP only (no SPD history SUM) when the PO has several STOs', () => {
+    const sql = shipmentListSapReceiveQtySql('sp');
+    expect(sql).toContain('COALESCE((sm.po_sto_count)::int, 1) > 1');
+    expect(sql).toContain('sm.received_qty');
+    expect(sql).toContain('sa.quantity_receive');
+    expect(sql).toContain("'^(OP-|MNL-|MSEA-)'");
   });
 
   it('shipmentListSapReceiveQtySql uses sto-scoped SAP for real STO; qty_move only for synthetic', () => {

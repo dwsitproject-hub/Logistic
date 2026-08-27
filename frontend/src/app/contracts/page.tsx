@@ -57,6 +57,7 @@ import {
   partiesBuyerDisplay,
 } from '@/components/contracts/ContractDetailModal'
 import { HistoricalRemarksModal } from '@/components/shared/HistoricalRemarksModal'
+import { hasEntityRemarks } from '@/lib/entityRemarks'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { getInitialUserScopeFilters, markUserScopeFiltersCleared, wereUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
@@ -308,6 +309,7 @@ interface Contract {
   contract_ext_no?: string
   shipment_count?: number
   document_count?: number
+  remarks_count?: number
   cargo_readiness_date?: string
   plant_site?: string | null
   over_under_delivery_status?: string
@@ -1132,7 +1134,13 @@ function ContractsPageContent() {
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
-  const [csvCargoResult, setCsvCargoResult] = useState<{ updated: number; notFound: number; errors: { po_number: string; reason: string }[] } | null>(null)
+  const [csvCargoResult, setCsvCargoResult] = useState<{
+    updated: number
+    skipped?: number
+    notFound: number
+    errors: { po_number: string; reason: string }[]
+    skippedRows?: { po_number: string; reason: string }[]
+  } | null>(null)
   const [detailDocsRefreshKey, setDetailDocsRefreshKey] = useState(0)
   const [docsModalContract, setDocsModalContract] = useState<Contract | null>(null)
   const [docsModalDocs, setDocsModalDocs] = useState<DocumentItem[]>([])
@@ -2433,7 +2441,7 @@ function ContractsPageContent() {
   }
 
   const handleContractDetailUpdated = useCallback(
-    (patch: { id: string; cargo_readiness_date?: string }) => {
+    (patch: { id: string; cargo_readiness_date?: string; remarks_count?: number }) => {
       setContracts((prev) =>
         prev.map((c) => (c.id === patch.id ? { ...c, ...patch } : c)),
       )
@@ -3375,13 +3383,7 @@ function ContractsPageContent() {
       byId.has(id),
     )
     const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
-    const visible = orderedAll.filter((c) => visibleColumnIds.has(c.id))
-    const mustHave = ['contract_id']
-    const visibleIds = new Set(visible.map((c) => c.id))
-    const missing = mustHave
-      .map((id) => byId.get(id))
-      .filter((c): c is CompactColumn => Boolean(c) && !visibleIds.has((c as CompactColumn).id))
-    return [...visible, ...missing]
+    return orderedAll.filter((c) => visibleColumnIds.has(c.id))
   }, [columnOrderIds, compactColumns, isContractPerformance, visibleColumnIds])
 
   /**
@@ -3602,7 +3604,6 @@ function ContractsPageContent() {
   }
 
   const toggleColumn = (id: string) => {
-    if (id === 'contract_id' || id === 'status') return
     setVisibleColumnIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) {
@@ -4594,7 +4595,7 @@ function ContractsPageContent() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                    className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
                     onClick={downloadContractPerformanceTable}
                     disabled={listFetching || section3TableLoading || downloadingTable || displayTotalContracts === 0}
                   >
@@ -4603,7 +4604,7 @@ function ContractsPageContent() {
                     ) : (
                       <Download className="h-4 w-4 mr-2" />
                     )}
-                    Download Table
+                    Download Data
                   </Button>
                 )}
                 <div className="relative">
@@ -4637,7 +4638,7 @@ function ContractsPageContent() {
                           variant="ghost"
                           size="sm"
                           className="flex-1 text-xs h-7"
-                          onClick={() => setVisibleColumnIds(new Set(['contract_id', 'status']))}
+                          onClick={() => setVisibleColumnIds(new Set())}
                         >
                           Unselect All
                         </Button>
@@ -4652,7 +4653,6 @@ function ContractsPageContent() {
                       </div>
                       <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
                         {(() => {
-                          const excluded = new Set(['contract_id', 'status'])
                           const byId = new Map(compactColumns.map(c => [c.id, c] as const))
                           const allMenuIds = compactColumns.map((c) => c.id)
                           const orderedIds =
@@ -4665,10 +4665,10 @@ function ContractsPageContent() {
                                 : compactColumnFallbackOrder(false, allMenuIds)
                           const menuCols = orderedIds
                             .map((id) => byId.get(id))
-                            .filter((c): c is CompactColumn => !!c && !excluded.has(c.id))
+                            .filter((c): c is CompactColumn => !!c)
                           if (!isContractPerformance) {
                             const visibleIds = new Set(
-                              visibleColumns.filter((c) => !excluded.has(c.id)).map((c) => c.id),
+                              visibleColumns.map((c) => c.id),
                             )
                             const visibleInMenu = menuCols.filter((c) => visibleIds.has(c.id))
                             const hiddenCols = menuCols
@@ -5289,23 +5289,32 @@ function ContractsPageContent() {
                                     <Eye className="h-4 w-4" />
                                   </Button>
 
-                                  <Button
-                                    variant="outline"
-                                    size="icon"
-                                    onClick={() =>
-                                      setRemarksModal({
-                                        contractId: contract.id,
-                                        subtitle:
-                                          contract.po_numbers ||
-                                          contract.po_number ||
-                                          contract.contract_id,
-                                      })
+                                  <span
+                                    className="inline-flex"
+                                    title={
+                                      hasEntityRemarks(contract.remarks_count)
+                                        ? 'View remarks'
+                                        : 'No remarks yet'
                                     }
-                                    title="View remarks"
-                                    className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
                                   >
-                                    <MessageSquare className="h-4 w-4" />
-                                  </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="icon"
+                                      disabled={!hasEntityRemarks(contract.remarks_count)}
+                                      onClick={() =>
+                                        setRemarksModal({
+                                          contractId: contract.id,
+                                          subtitle:
+                                            contract.po_numbers ||
+                                            contract.po_number ||
+                                            contract.contract_id,
+                                        })
+                                      }
+                                      className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                                    >
+                                      <MessageSquare className="h-4 w-4" />
+                                    </Button>
+                                  </span>
                                   </div>
                                 </td>
                               </tr>
@@ -5410,23 +5419,33 @@ function ContractsPageContent() {
                             <Eye className="h-4 w-4 mr-2" />
                             View
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() =>
-                              setRemarksModal({
-                                contractId: contract.id,
-                                subtitle:
-                                  contract.po_numbers ||
-                                  contract.po_number ||
-                                  contract.contract_id,
-                              })
+                          <span
+                            className="inline-flex"
+                            title={
+                              hasEntityRemarks(contract.remarks_count)
+                                ? 'View remarks'
+                                : 'No remarks yet'
                             }
-                            className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
                           >
-                            <MessageSquare className="h-4 w-4 mr-2" />
-                            Remarks
-                          </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={!hasEntityRemarks(contract.remarks_count)}
+                              onClick={() =>
+                                setRemarksModal({
+                                  contractId: contract.id,
+                                  subtitle:
+                                    contract.po_numbers ||
+                                    contract.po_number ||
+                                    contract.contract_id,
+                                })
+                              }
+                              className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                            >
+                              <MessageSquare className="h-4 w-4 mr-2" />
+                              Remarks
+                            </Button>
+                          </span>
                         </div>
                       </div>
 
@@ -5605,10 +5624,14 @@ function ContractsPageContent() {
             </DialogHeader>
             {csvCargoResult && (
               <div className="space-y-4 text-sm">
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                   <div className="rounded-md border bg-slate-50 px-3 py-2">
                     <div className="text-xs text-muted-foreground">Updated</div>
                     <div className="text-lg font-semibold tabular-nums text-green-700">{csvCargoResult.updated}</div>
+                  </div>
+                  <div className="rounded-md border bg-blue-50 px-3 py-2">
+                    <div className="text-xs text-muted-foreground">Skipped (KLIP edit)</div>
+                    <div className="text-lg font-semibold tabular-nums text-blue-700">{csvCargoResult.skipped ?? 0}</div>
                   </div>
                   <div className="rounded-md border bg-yellow-50 px-3 py-2">
                     <div className="text-xs text-muted-foreground">Not Found</div>
@@ -5619,6 +5642,18 @@ function ContractsPageContent() {
                     <div className="text-lg font-semibold tabular-nums text-red-700">{csvCargoResult.errors.length}</div>
                   </div>
                 </div>
+                {(csvCargoResult.skippedRows?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-gray-900 mb-2">Skipped — KLIP-edited dates kept</div>
+                    <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
+                      {csvCargoResult.skippedRows!.map((e, i) => (
+                        <li key={`skip-${i}`}>
+                          <span className="font-mono font-semibold">{e.po_number}</span>: {e.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {csvCargoResult.errors.length > 0 && (
                   <div>
                     <div className="font-medium text-gray-900 mb-2">Failed rows</div>

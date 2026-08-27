@@ -407,30 +407,3 @@ export async function batchSaveShipmentPoPlanQty(args: {
     throw new Error(res.data?.error?.message || 'Failed to save Shipment Plan Qty')
   }
 }
-
-/** Remaining OS Actual (kg) used as the Shipment Plan Qty cap. */
-export function resolveShipmentPlanQtyMaxKg(
-  contractData: Record<string, unknown> | null | undefined,
-): number {
-  if (!contractData) return 0
-  const kg = Number(
-    contractData.outstanding_qty_actual ??
-      contractData.outstanding_quantity_actual ??
-      contractData.outstanding_quantity ??
-      0,
-  )
-  return Number.isFinite(kg) && kg > 0 ? kg : 0
-}
-
-export function resolveShipmentPlanQtyMaxMt(
-  contractData: Record<string, unknown> | null | undefined,
-): number {
-  return resolveShipmentPlanQtyMaxKg(contractData) / 1000
-}
-
-/** Positive plan qty above OS Actual is invalid; zero plan qty is always allowed. */
-export function shipmentPlanQtyExceedsOsActual(planQtyKg: number, osActualKg: number): boolean {
-  if (!Number.isFinite(planQtyKg) || planQtyKg <= 0) return false
-  const cap = Number.isFinite(osActualKg) ? osActualKg : 0
-  return planQtyKg > cap + 1e-6
-}

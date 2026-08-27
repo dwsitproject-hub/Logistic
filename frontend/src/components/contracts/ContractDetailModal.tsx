@@ -92,6 +92,7 @@ export type ContractDetailModalContract = {
   payoff_date_deviation_days?: number
   contract_ext_no?: string
   cargo_readiness_date?: string
+  remarks_count?: number
   over_under_delivery_status?: string
   log_cycle_days?: number | null
   trade_cycle_days?: number | null
@@ -652,11 +653,13 @@ export function ContractDetailModal({
       await api.post(`/contracts/${contract.id}/remarks`, { text })
       setNewRemarkText('')
       const res = await api.get(`/contracts/${contract.id}/remarks`)
-      setContractRemarks(Array.isArray(res.data?.data) ? res.data.data : [])
+      const loaded = Array.isArray(res.data?.data) ? res.data.data : []
+      setContractRemarks(loaded)
+      onContractUpdated?.({ id: contract.id, remarks_count: loaded.length })
     } finally {
       setNewRemarkSaving(false)
     }
-  }, [newRemarkText, contract?.id])
+  }, [newRemarkText, contract?.id, onContractUpdated])
 
   const startCargoReadinessEdit = useCallback(() => {
     if (!displayContract) return
@@ -698,14 +701,16 @@ export function ContractDetailModal({
         putRes.data?.data?.cargo_readiness_date != null
           ? sliceIsoDate(String(putRes.data.data.cargo_readiness_date))
           : nextDate ?? ''
+      const remarksRes = await api.get(`/contracts/${displayContract.id}/remarks`)
+      const loaded = Array.isArray(remarksRes.data?.data) ? remarksRes.data.data : []
+      setContractRemarks(loaded)
       const patch = {
         id: displayContract.id,
         cargo_readiness_date: updatedDate || undefined,
+        remarks_count: loaded.length,
       }
       setDisplayContract((prev) => (prev ? { ...prev, ...patch } : prev))
       onContractUpdated?.(patch)
-      const remarksRes = await api.get(`/contracts/${displayContract.id}/remarks`)
-      setContractRemarks(Array.isArray(remarksRes.data?.data) ? remarksRes.data.data : [])
       setDetailLogTab('comments')
       setCargoReadinessEditing(false)
       setCargoReadinessDraft('')

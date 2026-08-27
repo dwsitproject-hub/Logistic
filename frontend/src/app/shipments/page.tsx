@@ -25,6 +25,8 @@ import {
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
+import { buildShipmentViewTableExportMatrix } from '@/lib/shipmentViewTableExport'
 import { shipmentListHydrateVesselName } from '@/lib/shipmentVesselCompare'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
@@ -291,6 +293,10 @@ interface Shipment {
   vessel_oa_actual?: number | null
   bl_quantity?: number | null
   actual_vessel_qty_receive?: number | null
+  /** STO-summed per-PO KLIP receive (Edit Shipment Grand Total grain). */
+  klip_receive_qty?: number | null
+  /** STO-summed per-PO KLIP delivery. */
+  klip_delivery_qty?: number | null
   difference_final_qty_vs_bl_qty?: number | null
   average_vessel_speed?: number | null
   status: string
@@ -605,7 +611,16 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       sto_quantity: preferHydratedQty(match.sto_quantity, row.sto_quantity),
       quantity_receive: preferHydratedQty(match.quantity_receive, row.quantity_receive),
       quantity_delivered_sap: preferHydratedQty(match.quantity_delivered_sap, row.quantity_delivered_sap),
-      quantity_delivered_klip: match.quantity_delivered_klip ?? row.quantity_delivered_klip,
+      quantity_delivered_klip: preferHydratedQty(
+        match.klip_delivery_qty ?? match.quantity_delivered_klip,
+        row.klip_delivery_qty ?? row.quantity_delivered_klip,
+      ),
+      klip_receive_qty: preferHydratedQty(match.klip_receive_qty, row.klip_receive_qty),
+      klip_delivery_qty: preferHydratedQty(match.klip_delivery_qty, row.klip_delivery_qty),
+      actual_vessel_qty_receive: preferHydratedQty(
+        match.klip_receive_qty ?? match.actual_vessel_qty_receive,
+        row.klip_receive_qty ?? row.actual_vessel_qty_receive,
+      ),
       is_contract_sap_closed: match.is_contract_sap_closed ?? row.is_contract_sap_closed,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
       outstanding_qty_planning: match.outstanding_qty_planning ?? row.outstanding_qty_planning,
@@ -948,6 +963,7 @@ function ShipmentsPageContent() {
   const [loading, setLoading] = useState(true)
   /** Stale-while-revalidate: in-flight list fetch without clearing visible rows. */
   const [listFetching, setListFetching] = useState(false)
+  const [downloadingTable, setDownloadingTable] = useState(false)
   /** Immediate table skeleton when status / ETA scope changes (not pagination). */
   const [tableScopeLoading, setTableScopeLoading] = useState(false)
   /** SAP-derived qty columns show a loading indicator ("...") until hydrate merges real values. */
@@ -1612,6 +1628,74 @@ function ShipmentsPageContent() {
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
+  const buildShipmentListSearchParams = (opts: {
+    page: number
+    limit: number
+    skipSapJoin: boolean
+    searchOverride?: string
+  }) => {
+    const params = new URLSearchParams()
+    params.append('compact', 'true')
+    params.append('skipSapJoin', opts.skipSapJoin ? 'true' : 'false')
+    params.append('limit', String(opts.limit))
+    params.append('page', String(opts.page))
+    params.append('includeSummary', 'false')
+    if (statusFilter && statusFilter !== 'ALL') {
+      params.append('status', statusFilter)
+    }
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+      if (etaLoadingFilter !== 'ALL') {
+        params.append('etaLoading', etaLoadingFilter)
+      }
+      if (etaDischargeFilter !== 'ALL') {
+        params.append('etaDischarge', etaDischargeFilter)
+      }
+    }
+    if (dateFrom) params.append('dateFrom', dateFrom)
+    if (dateTo) params.append('dateTo', dateTo)
+    const searchTrim = (opts.searchOverride ?? searchTerm).trim()
+    if (searchTrim.length >= 2) {
+      params.append('search', searchTrim)
+    }
+    const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+      selectedIncoterms,
+      selectedProducts: debouncedSelectedProducts,
+      selectedSuppliers,
+    })
+    const cfKeys = Object.keys(mergedColumnFilters)
+    if (cfKeys.length > 0) {
+      params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+    }
+    if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
+      params.append('lateIndicator', lateIndicatorFilter)
+    }
+    if (charterTypeFilter && charterTypeFilter !== 'ALL') {
+      params.append('charterType', charterTypeFilter)
+    }
+    if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
+      params.append('viewOption', viewOption)
+      params.append('viewQuery', viewFilterValue.trim())
+    }
+    const delayedParam = searchParams.get('delayed')
+    if (delayedParam === 'true') {
+      params.append('delayed', 'true')
+    }
+    const stoParam = searchParams.get('sto')
+    if (stoParam) {
+      params.append('sto', stoParam)
+    }
+    const contractParam = searchParams.get('contract')
+    if (contractParam) {
+      params.append('contract', contractParam)
+    }
+    if (debouncedSelectedGroupPlants.length > 0) {
+      debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
+    }
+    params.append('sortKey', sortKey)
+    params.append('sortDir', sortDir)
+    return params
+  }
+
   const fetchShipments = async (
     forcedPage?: number,
     searchOverride?: string,
@@ -1642,10 +1726,6 @@ function ShipmentsPageContent() {
     }
     try {
       const effectivePage = forcedPage ?? page
-      const params = new URLSearchParams()
-      params.append('compact', 'true')
-      // Qty/SAP/port sorts must enrich before LIMIT so ORDER BY matches displayed values.
-      // Default skipSapJoin=true otherwise falls back to created_at (Contract Qty / OS look unsorted).
       const accurateSortKeys = new Set([
         'quantity_delivered',
         'quantity_receive',
@@ -1659,71 +1739,15 @@ function ShipmentsPageContent() {
         'contract_ext_no',
       ])
       const useAccurateQtySort = accurateSortKeys.has(sortKey)
-      params.append('skipSapJoin', useAccurateQtySort ? 'false' : 'true')
-      params.append('limit', String(pageSize))
-      params.append('page', String(effectivePage))
-      const isUnplannedHybridList = statusFilter === 'UNPLANNED'
-      // Section 1 cards always come from parallel summaryOnly (toolbar scope, no status card).
-      // List includeSummary previously overwrote Unplanned with hybrid/table-scoped counts when
-      // switching Unplanned ↔ Preplanned, which made the Unplanned card flicker.
-      params.append('includeSummary', 'false')
-      if (statusFilter && statusFilter !== 'ALL') {
-        params.append('status', statusFilter)
-      }
-      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
-        if (etaLoadingFilter !== 'ALL') {
-          params.append('etaLoading', etaLoadingFilter)
-        }
-        if (etaDischargeFilter !== 'ALL') {
-          params.append('etaDischarge', etaDischargeFilter)
-        }
-      }
-      if (dateFrom) params.append('dateFrom', dateFrom)
-      if (dateTo) params.append('dateTo', dateTo)
+      const params = buildShipmentListSearchParams({
+        page: effectivePage,
+        limit: pageSize,
+        skipSapJoin: !useAccurateQtySort,
+        searchOverride,
+      })
       const searchTrim = (searchOverride ?? searchTerm).trim()
       const forceListRefresh = Boolean(options?.force || searchTrim.length >= 2)
-      if (searchTrim.length >= 2) {
-        params.append('search', searchTrim)
-      }
-      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-        selectedIncoterms,
-        selectedProducts: debouncedSelectedProducts,
-        selectedSuppliers,
-      })
-      const cfKeys = Object.keys(mergedColumnFilters)
-      if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
-      }
-      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
-        params.append('lateIndicator', lateIndicatorFilter)
-      }
-      if (charterTypeFilter && charterTypeFilter !== 'ALL') {
-        params.append('charterType', charterTypeFilter)
-      }
-      if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
-        params.append('viewOption', viewOption)
-        params.append('viewQuery', viewFilterValue.trim())
-      }
-
-      const delayedParam = searchParams.get('delayed')
-      if (delayedParam === 'true') {
-        params.append('delayed', 'true')
-      }
-
-      const stoParam = searchParams.get('sto')
-      if (stoParam) {
-        params.append('sto', stoParam)
-      }
-
-      const contractParam = searchParams.get('contract')
-      if (contractParam) {
-        params.append('contract', contractParam)
-      }
-      if (debouncedSelectedGroupPlants.length > 0) {
-        debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
-      }
-      params.append('sortKey', sortKey)
-      params.append('sortDir', sortDir)
+      const isUnplannedHybridList = statusFilter === 'UNPLANNED'
 
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
@@ -4099,6 +4123,7 @@ function ShipmentsPageContent() {
     {
       id: 'quantity_delivered',
       label: 'Delivery Qty',
+      formulaHelp: FIELD_HELP.shipmentViewTableDeliveryQty,
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => shipmentListDeliveredKgForViewTable(s),
@@ -4113,6 +4138,7 @@ function ShipmentsPageContent() {
     {
       id: 'quantity_receive',
       label: 'Received Qty',
+      formulaHelp: FIELD_HELP.shipmentReceivedQty,
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => shipmentListReceiveKgForViewTable(s),
@@ -4687,6 +4713,51 @@ function ShipmentsPageContent() {
     () => buildShipmentVisibleColumns(compactColumns, effectiveVisibleColumnIds, columnOrderIds),
     [compactColumns, effectiveVisibleColumnIds, columnOrderIds],
   )
+
+  const downloadShipmentViewTable = async () => {
+    if (downloadingTable) return
+    const exportColumns = visibleColumns.map((col) => ({ id: col.id, label: col.label }))
+    if (exportColumns.length === 0) {
+      alert('No visible columns to download. Enable at least one column in Columns.')
+      return
+    }
+    setDownloadingTable(true)
+    try {
+      const exportPageSize = 500
+      const collected: Shipment[] = []
+      let exportPage = 1
+      let exportTotalPages = 1
+      while (exportPage <= exportTotalPages) {
+        const params = buildShipmentListSearchParams({
+          page: exportPage,
+          limit: exportPageSize,
+          skipSapJoin: false,
+        })
+        const response = await api.get(`/shipments?${params.toString()}`)
+        const envelope = response.data as {
+          data?: { shipments?: Shipment[]; pagination?: { totalPages?: number } }
+        }
+        collected.push(...(envelope?.data?.shipments || []))
+        exportTotalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        exportPage += 1
+      }
+      if (collected.length === 0) {
+        alert('No shipments match the current filters.')
+        return
+      }
+      const matrix = buildShipmentViewTableExportMatrix(exportColumns, collected)
+      const today = new Date().toISOString().slice(0, 10)
+      downloadAoaXlsx(matrix, {
+        sheetName: 'Shipments',
+        fileName: `shipments-${today}.xlsx`,
+      })
+    } catch (error) {
+      console.error('Failed to download Shipments table:', error)
+      alert('Failed to download table. Please try again.')
+    } finally {
+      setDownloadingTable(false)
+    }
+  }
 
   const moveColumnOrder = (id: string, direction: 'up' | 'down') => {
     setColumnOrderIds((prev) => {
@@ -6530,6 +6601,26 @@ function ShipmentsPageContent() {
                   </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                  onClick={() => void downloadShipmentViewTable()}
+                  disabled={
+                    listFetching ||
+                    section3TableLoading ||
+                    downloadingTable ||
+                    totalCount === 0 ||
+                    visibleColumns.length === 0
+                  }
+                >
+                  {downloadingTable ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-2" />
+                  )}
+                  Download Data
+                </Button>
                 <div className="relative">
                   <Button
                     variant="outline"

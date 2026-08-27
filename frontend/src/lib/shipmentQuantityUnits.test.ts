@@ -211,6 +211,17 @@ describe('resolveShipmentListReceiveKg', () => {
     ).toBe(497_115)
   })
 
+  it('Open prefers STO-summed per-PO KLIP over grouped header MAX', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        klip_receive_qty: 14_400_000,
+        actual_vessel_qty_receive: 3_600_000,
+        quantity_receive: 14_400_000,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(14_400_000)
+  })
+
   it('View Table shows 0 when KLIP and SAP receive qty are both null', () => {
     expect(shipmentListReceiveKgForViewTable({})).toBe(0)
     expect(

@@ -10,6 +10,8 @@ import {
   buildShippingPerfStoMetricsCte,
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
+import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
+import { shippingPerfOutstandingQtyKgForAggregate } from '../utils/shippingPerformanceOutstandingAgg';
 import {
   shippingPerfStoGroupKeyFromRow,
   shippingPerfStoMetricsKeyExpr,
@@ -263,6 +265,12 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
     outstanding_qty_actual: metrics.outstandingQtyActual,
     outstanding_qty_planning: metrics.outstandingQtyPlanning,
     outstanding_qty: metrics.outstandingQtyActual,
+    po_sto_count: Math.max(
+      ...rows.map((row) => {
+        const n = Number(row.po_sto_count ?? 1);
+        return Number.isFinite(n) && n > 1 ? n : 1;
+      }),
+    ),
     import_status:
       aggregateImportStatusForStoGroup(rows.map((row) => row.import_status)) ??
       pick.import_status,
@@ -476,9 +484,16 @@ const SHIPPING_PERFORMANCE_SQL = `
         WHERE COALESCE(vlp.is_discharge_port, false) = true
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
       ),
+      ${buildQtyMoveCte({
+        kind: 'in_subquery',
+        subquery: `SELECT DISTINCT TRIM(sk.contract_id)
+          FROM ship_keys sk
+          WHERE sk.contract_id IS NOT NULL AND TRIM(sk.contract_id) <> ''`,
+      })},
       ${buildShippingPerfStoMetricsCte()}
       SELECT
         s.id,
+        (SELECT COUNT(*)::int FROM remarks r WHERE r.related_entity_type = 'SHIPMENT' AND r.related_entity_id = s.id) AS remarks_count,
         s.shipment_id,
         NULLIF(TRIM(s.operation_id), '') AS operation_id,
         ${SHIPPING_PERF_STO_GROUP_KEY_EXPR} AS sto_key,
@@ -614,6 +629,7 @@ const SHIPPING_PERFORMANCE_SQL = `
           )}
         ), 0)::numeric AS delivered_qty,
         COALESCE(sm.planning_qty, 0)::numeric AS planning_qty,
+        COALESCE(sm.po_sto_count, 1)::int AS po_sto_count,
         COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty_actual,
         COALESCE(sm.outstanding_qty_planning, 0)::numeric AS outstanding_qty_planning,
         COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty
@@ -719,7 +735,7 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
     stoKeys.add(shippingPerfStoGroupKey(row));
     const contractNumber = String(row.contract_number || '').trim();
     if (contractNumber) contracts.add(contractNumber);
-    totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
+    totalQty += shippingPerfOutstandingQtyKgForAggregate(row);
     sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
     sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
     sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
@@ -762,7 +778,7 @@ function buildPerfTree(rows: Record<string, unknown>[]): ShippingPerfTreeNode[] 
     const plant = String(row.plant_site || '').trim() || 'Blank';
     const inc = String(row.incoterm || '').trim() || 'Blank';
     const ves = String(row.vessel_name || '').trim() || 'Unknown';
-    const qty = Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
+    const qty = shippingPerfOutstandingQtyKgForAggregate(row);
 
     if (!root.has(prod)) root.set(prod, { count: 0, totalQty: 0, plants: new Map() });
     const pN = root.get(prod)!;

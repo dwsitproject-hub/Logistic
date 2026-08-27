@@ -23,6 +23,8 @@ export const SHIPMENT_LIST_STO_METRICS_STUB = `
           NULL::numeric AS sto_qty,
           NULL::numeric AS received_qty,
           NULL::numeric AS delivered_qty,
+          NULL::numeric AS klip_receive_kg,
+          NULL::numeric AS klip_delivery_kg,
           NULL::numeric AS planning_qty,
           NULL::int AS po_sto_count,
           NULL::numeric AS outstanding_qty_actual,

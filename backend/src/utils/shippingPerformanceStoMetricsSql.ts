@@ -16,6 +16,7 @@ import {
 } from './shipmentManualQtyResolveSql';
 import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import {
   sqlStoScopedDeliveredKgSql,
   sqlStoScopedReceiveKgSql,
@@ -240,27 +241,47 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
           SUM(po.sto_qty_kg)::numeric AS sto_qty,
           SUM(po.receive_kg)::numeric AS received_qty,
           SUM(po.delivery_kg)::numeric AS delivered_qty,
+          MAX(sk.klip_receive_kg)::numeric AS klip_receive_kg,
+          MAX(sk.klip_delivery_kg)::numeric AS klip_delivery_kg,
           SUM(po.shipment_planning_kg)::numeric AS planning_qty,
           MAX(po.sto_count_on_po)::int AS po_sto_count,
           (
-            ${sqlShipmentListOutstandingKgExpr({
-              contractQtyExpr: 'SUM(po.os_base_kg)',
-              // Dominant / any incoterm on the STO — FOB/LCO use delivery; FRC/CIF use receive
-              incotermExpr: `(ARRAY_AGG(po.incoterm ORDER BY po.contract_id))[1]`,
-              receiveExpr: sqlShipmentResolvedReceiveKg(
-                'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
-                // klip_* already SUM'd per STO; MAX avoids multiplying by PO lines
-                'MAX(sk.klip_receive_kg)',
-                'SUM(po.receive_kg)',
-              ),
-              deliveryExpr: sqlShipmentResolvedDeliveryKg(
-                'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
-                'MAX(sk.klip_delivery_kg)',
-                'SUM(po.delivery_kg)',
-                'MAX(sk.klip_delivery_kg)',
-              ),
-              clampAtZero: false,
-            })}
+            CASE
+              WHEN MAX(po.sto_count_on_po) > 1 THEN COALESCE((
+                SELECT SUM(${sqlContractGlobalOutstandingExpr({
+                  contractQtyExpr: 'c.quantity_ordered',
+                  incotermExpr: 'c.incoterm',
+                  contractNumberExpr: 'c.contract_id',
+                })})
+                FROM contracts c
+                WHERE EXISTS (
+                  SELECT 1
+                  FROM sto_po_lines x
+                  WHERE x.sto_key = po.sto_key
+                    AND TRIM(x.contract_id) = TRIM(c.contract_id)
+                )
+              ), 0)
+              ELSE (
+                ${sqlShipmentListOutstandingKgExpr({
+                  contractQtyExpr: 'SUM(po.os_base_kg)',
+                  // Dominant / any incoterm on the STO — FOB/LCO use delivery; FRC/CIF use receive
+                  incotermExpr: `(ARRAY_AGG(po.incoterm ORDER BY po.contract_id))[1]`,
+                  receiveExpr: sqlShipmentResolvedReceiveKg(
+                    'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
+                    // klip_* already SUM'd per STO; MAX avoids multiplying by PO lines
+                    'MAX(sk.klip_receive_kg)',
+                    'SUM(po.receive_kg)',
+                  ),
+                  deliveryExpr: sqlShipmentResolvedDeliveryKg(
+                    'COALESCE(BOOL_AND(sk.all_closed), FALSE)',
+                    'MAX(sk.klip_delivery_kg)',
+                    'SUM(po.delivery_kg)',
+                    'MAX(sk.klip_delivery_kg)',
+                  ),
+                  clampAtZero: false,
+                })}
+              )
+            END
           )::numeric AS outstanding_qty_actual,
           SUM((
             CASE

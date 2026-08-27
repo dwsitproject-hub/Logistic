@@ -16,6 +16,8 @@ import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
+import { buildTruckingViewTableExportMatrix } from '@/lib/truckingViewTableExport'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -1063,6 +1065,7 @@ function TruckingPageContent() {
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [templateDownloading, setTemplateDownloading] = useState(false)
+  const [downloadingTable, setDownloadingTable] = useState(false)
   const onSuppliersChange = useCallback((values: string[]) => {
     setPage(1)
     setHasMore(true)
@@ -1638,12 +1641,18 @@ function TruckingPageContent() {
         })
         setWbUploadOpen(true)
       }
+      // Result is ready — stop the Upload WB spinner before the list refresh.
+      // Refreshing the table can take long; users can already close the result modal.
+      setWbUploading(false)
       invalidateLogisticsListCaches()
       section1SummaryForceNextFetchRef.current = true
-      await fetchTruckingOperations(page, undefined, { force: true })
-      if (activeTab === 'calendar') {
-        await fetchCalendarRows()
-      }
+      void fetchTruckingOperations(page, undefined, { force: true })
+        .then(() => {
+          if (activeTab === 'calendar') return fetchCalendarRows()
+        })
+        .catch((err) => {
+          console.warn('Trucking list refresh after WB upload failed:', err)
+        })
     } catch (err: unknown) {
       const message =
         sapImportInProgressErrorMessage(err) ||
@@ -3464,6 +3473,55 @@ function TruckingPageContent() {
     [columnOrderIds, compactColumns, visibleColumnIds],
   )
 
+  const downloadTruckingViewTable = async () => {
+    if (downloadingTable) return
+    const exportColumns = visibleColumns.map((col) => ({ id: col.id, label: col.label }))
+    if (exportColumns.length === 0) {
+      alert('No visible columns to download. Enable at least one column in Columns.')
+      return
+    }
+    setDownloadingTable(true)
+    try {
+      const exportPageSize = 500
+      const collected: TruckingOperation[] = []
+      let exportPage = 1
+      let exportTotalPages = 1
+      while (exportPage <= exportTotalPages) {
+        const params = buildTruckingListSearchParams({
+          page: exportPage,
+          limit: exportPageSize,
+          includeSummary: false,
+          skipSapJoin: false,
+        })
+        const response = await api.get(`/trucking?${params.toString()}`)
+        const envelope = response.data as {
+          data?: {
+            truckingOperations?: TruckingOperation[]
+            pagination?: { totalPages?: number }
+          }
+        }
+        collected.push(...(envelope?.data?.truckingOperations || []))
+        exportTotalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        exportPage += 1
+      }
+      if (collected.length === 0) {
+        alert('No trucking operations match the current filters.')
+        return
+      }
+      const matrix = buildTruckingViewTableExportMatrix(exportColumns, collected)
+      const today = new Date().toISOString().slice(0, 10)
+      downloadAoaXlsx(matrix, {
+        sheetName: 'Trucking',
+        fileName: `trucking-${today}.xlsx`,
+      })
+    } catch (error) {
+      console.error('Failed to download Trucking table:', error)
+      alert('Failed to download table. Please try again.')
+    } finally {
+      setDownloadingTable(false)
+    }
+  }
+
   const resetCompactColumnView = useCallback(() => {
     const allIds = compactColumns.map((c) => c.id)
     const vis = new Set(truckingDefaultVisibleColumnIds(allIds))
@@ -4402,6 +4460,26 @@ function TruckingPageContent() {
               </CardTitle>
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                  onClick={() => void downloadTruckingViewTable()}
+                  disabled={
+                    listFetching ||
+                    section3TableLoading ||
+                    downloadingTable ||
+                    totalCount === 0 ||
+                    visibleColumns.length === 0
+                  }
+                >
+                  {downloadingTable ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-2" />
+                  )}
+                  Download Data
+                </Button>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">

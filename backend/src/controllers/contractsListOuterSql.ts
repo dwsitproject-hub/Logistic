@@ -97,6 +97,7 @@ function buildContractsListRowProjection(options: ContractsListOuterSqlOptions =
         base.import_status,
         base.sap_presence,
         base.sap_withdrawn_reason,${paymentBlock}
+        (SELECT COUNT(*)::int FROM remarks r WHERE r.related_entity_type = 'CONTRACT' AND r.related_entity_id = base.id) AS remarks_count,
         base.first_trucking_start_date,
         base.last_trucking_completion_date,
         base.last_trucking_wb_actuals_date,

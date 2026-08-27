@@ -57,7 +57,6 @@ import {
   formatPoPlantLabel,
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
-  resolveShipmentPlanQtyMaxMt,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -464,8 +463,6 @@ export function AddNewShipmentModal({
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [newShipment, setNewShipment] = useState(emptyShipment)
   const [contractQtyAssigned, setContractQtyAssigned] = useState<Record<string, string>>({})
-  /** PO row keys whose STO Qty is still the untouched SAP default (skip OS max validation). */
-  const [stoQtyFromSapUntouched, setStoQtyFromSapUntouched] = useState<Record<string, boolean>>({})
   const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
@@ -778,11 +775,6 @@ export function AddNewShipmentModal({
       delete next[contractId]
       return next
     })
-    setStoQtyFromSapUntouched((prev) => {
-      const next = { ...prev }
-      delete next[contractId]
-      return next
-    })
     setContractValidations((prev) => {
       const next = { ...prev }
       delete next[contractId]
@@ -944,33 +936,6 @@ export function AddNewShipmentModal({
     !Number.isNaN(vesselCapacityNum) &&
     contractQtyAssignedSum > vesselCapacityNum
 
-  const isStoQtyOsValidationEnabled = useCallback(
-    (selectionKey: string) => {
-      if (!hasSapSto) return true
-      return !stoQtyFromSapUntouched[selectionKey]
-    },
-    [hasSapSto, stoQtyFromSapUntouched],
-  )
-
-  const contractQtyAssignedExceedsOutstanding = useMemo(() => {
-    const next: Record<string, { assignedMt: number; outstandingMt: number }> = {}
-    for (const contractId of newShipment.contractNumbers) {
-      if (!isStoQtyOsValidationEnabled(contractId)) continue
-      const assignedMt = parseFloat(String(contractQtyAssigned[contractId] ?? '')) || 0
-      const contractData = contractValidations[contractId]?.contractData
-      const maxPlanMt = resolveShipmentPlanQtyMaxMt(contractData)
-      if (assignedMt > 0 && assignedMt > maxPlanMt + 1e-9) {
-        next[contractId] = { assignedMt, outstandingMt: maxPlanMt }
-      }
-    }
-    return next
-  }, [
-    contractQtyAssigned,
-    contractValidations,
-    isStoQtyOsValidationEnabled,
-    newShipment.contractNumbers,
-  ])
-
   const fillAssignQtyFromOutstanding = useCallback(
     (contractId: string) => {
       const validation = contractValidations[contractId]
@@ -982,11 +947,6 @@ export function AddNewShipmentModal({
         ...prev,
         [contractId]: String(outstandingMt),
       }))
-      setStoQtyFromSapUntouched((prev) => {
-        const next = { ...prev }
-        delete next[contractId]
-        return next
-      })
       setFormErrors((prev) => {
         const next = { ...prev }
         delete next.contractQty
@@ -1447,7 +1407,6 @@ export function AddNewShipmentModal({
     setNewShipment(emptyShipment())
     contractNumbersRef.current = []
     setContractQtyAssigned({})
-    setStoQtyFromSapUntouched({})
     setContractValidations({})
     setEtaDetails([])
     setContractSearchTerm('')
@@ -1569,8 +1528,6 @@ export function AddNewShipmentModal({
       opts?: {
         existingQtyByKey?: Record<string, string>
         preserveOperationId?: boolean
-        /** Plot / SAP prefill — treat auto-filled qty as untouched (skip max plan validation). */
-        markSapPrefillUntouched?: boolean
       },
     ) => {
       const seenPoKeys = new Set<string>()
@@ -1585,7 +1542,6 @@ export function AddNewShipmentModal({
       const keys = uniquePrefilled.map((po) => po.key)
       const validations: typeof contractValidations = {}
       const qtySeed: Record<string, string> = {}
-      const sapUntouchedSeed: Record<string, boolean> = {}
       const existingQty = opts?.existingQtyByKey ?? {}
 
       for (const po of uniquePrefilled) {
@@ -1604,9 +1560,6 @@ export function AddNewShipmentModal({
         const preservedNum = preservedRaw ? parseFloat(preservedRaw) : NaN
         if (Number.isFinite(preservedNum) && preservedNum > 0) {
           qtySeed[po.key] = preservedRaw
-          if (opts?.markSapPrefillUntouched) {
-            sapUntouchedSeed[po.key] = true
-          }
         } else {
           const sapStoKg = Number(po.contractData?.sap_sto_qty ?? 0)
           const planKg = Number(
@@ -1616,15 +1569,11 @@ export function AddNewShipmentModal({
           const shouldSuggestSapQty = outstandingActualKg === 0 && sapStoKg > 0
           const qtyKg = planKg > 0 ? planKg : shouldSuggestSapQty ? sapStoKg : 0
           qtySeed[po.key] = qtyKg > 0 ? String(qtyKg / 1000) : '0'
-          if (planKg <= 0 && shouldSuggestSapQty) {
-            sapUntouchedSeed[po.key] = true
-          }
         }
       }
 
       setContractValidations(validations)
       setContractQtyAssigned(qtySeed)
-      setStoQtyFromSapUntouched(sapUntouchedSeed)
       contractNumbersRef.current = keys
       setNewShipment((prev) => ({
         ...prev,
@@ -1748,7 +1697,6 @@ export function AddNewShipmentModal({
           applyStoLinkedPoOptionsToForm(allPos, {
             existingQtyByKey: qtyAssigned,
             preserveOperationId: true,
-            markSapPrefillUntouched: true,
           })
         } else {
           const contractIdFallback =
@@ -2203,16 +2151,6 @@ export function AddNewShipmentModal({
         'warning',
         'Quantity exceeds vessel capacity',
         'Sum of Shipment Qty (MT) cannot exceed Vessel Capacity.',
-      )
-      return
-    }
-    if (Object.keys(contractQtyAssignedExceedsOutstanding).length > 0) {
-      const first = Object.keys(contractQtyAssignedExceedsOutstanding)[0]
-      const { assignedMt, outstandingMt } = contractQtyAssignedExceedsOutstanding[first]
-      showNotification(
-        'warning',
-        `Assigned qty exceeds OS Qty (Actual) for ${first}`,
-        `Assigned ${formatNumber(assignedMt)} MT, but remaining OS Qty (Actual) is ${formatNumber(outstandingMt)} MT.`,
       )
       return
     }
@@ -2691,14 +2629,9 @@ export function AddNewShipmentModal({
                             const data = validation?.contractData
                             const label = getPoLabel(contractId)
                             const contractExtNo = getPoContractExtNo(contractId)
-                            const exceed = contractQtyAssignedExceedsOutstanding[contractId]
-                            const sapQtyUntouched = Boolean(stoQtyFromSapUntouched[contractId])
-                            const osValidationEnabled = isStoQtyOsValidationEnabled(contractId)
-                            const rowError =
-                              Boolean(exceed) || Boolean(formErrors.contractQty && validation?.exists)
+                            const rowError = Boolean(formErrors.contractQty && validation?.exists)
                             const contractQtyMt = (Number(data?.quantity_ordered) || 0) / 1000
                             const outstandingQtyMt = (Number(data?.outstanding_quantity) || 0) / 1000
-                            const maxPlanQtyMt = resolveShipmentPlanQtyMaxMt(data)
                             return (
                               <TableRow
                                 key={contractId}
@@ -2770,16 +2703,10 @@ export function AddNewShipmentModal({
                                               ...prev,
                                               [contractId]: e.target.value,
                                             }))
-                                            setStoQtyFromSapUntouched((prev) => {
-                                              if (!prev[contractId]) return prev
-                                              const next = { ...prev }
-                                              delete next[contractId]
-                                              return next
-                                            })
                                           }}
                                           readOnly={isEditMode}
                                           disabled={isEditMode}
-                                          className={`h-8 text-xs w-24 text-right ${isEditMode ? READONLY_FIELD_CLASS : 'bg-white'} ${exceed ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
+                                          className={`h-8 text-xs w-24 text-right ${isEditMode ? READONLY_FIELD_CLASS : 'bg-white'}`}
                                           placeholder="0"
                                         />
                                         <button
@@ -2797,23 +2724,6 @@ export function AddNewShipmentModal({
                                           Use outstanding
                                         </button>
                                       </div>
-                                      {exceed ? (
-                                        <span className="text-[10px] text-red-600 leading-tight flex items-center gap-0.5">
-                                          <AlertCircle className="h-2.5 w-2.5 shrink-0" />
-                                          Max {formatNumber(exceed.outstandingMt)} MT
-                                        </span>
-                                      ) : sapQtyUntouched ? (
-                                        <span className="text-[10px] text-cyan-700 leading-tight">
-                                          From SAP — no plan qty limit until edited
-                                        </span>
-                                      ) : (
-                                        osValidationEnabled &&
-                                        maxPlanQtyMt > 0 && (
-                                          <span className="text-[10px] text-gray-400 leading-tight">
-                                            Max {formatNumber(maxPlanQtyMt)} MT
-                                          </span>
-                                        )
-                                      )}
                                     </div>
                                   ) : (
                                     <span className="text-gray-400">?</span>
@@ -2838,8 +2748,7 @@ export function AddNewShipmentModal({
                         <TableFooter>
                           <TableRow
                             className={
-                              contractQtyAssignedExceedsCapacity ||
-                              Object.keys(contractQtyAssignedExceedsOutstanding).length > 0
+                              contractQtyAssignedExceedsCapacity
                                 ? 'bg-red-50 hover:bg-red-50'
                                 : 'bg-gray-50/80 hover:bg-gray-50'
                             }

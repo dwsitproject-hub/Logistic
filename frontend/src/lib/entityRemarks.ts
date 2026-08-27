@@ -12,6 +12,11 @@ export interface EntityRemarkRow {
 
 export type EntityRemarkType = 'contract' | 'shipment'
 
+/** View Remarks is enabled only when the entity already has at least one remarks row. */
+export function hasEntityRemarks(count: number | string | null | undefined): boolean {
+  return Number(count ?? 0) > 0
+}
+
 export function formatRemarkAuthor(row: EntityRemarkRow): string {
   return row.full_name?.trim() || row.username?.trim() || '—'
 }

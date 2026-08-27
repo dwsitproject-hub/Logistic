@@ -14,6 +14,8 @@ describe('shippingPerformanceStoMetricsSql', () => {
     expect(sql).toContain('SUM(po.os_base_kg)');
     expect(sql).toContain('po_sto_count');
     expect(sql).toContain('AS outstanding_qty_actual');
+    expect(sql).toContain('WHEN MAX(po.sto_count_on_po) > 1');
+    expect(sql).toContain('c.quantity_ordered');
     expect(sql).toMatch(/outstanding_qty_actual[\s\S]*?SUM\(po\.os_base_kg\)|SUM\(po\.os_base_kg\)[\s\S]*?outstanding_qty_actual/);
   });
 
@@ -36,6 +38,8 @@ describe('shippingPerformanceStoMetricsSql', () => {
     expect(sql).toContain('DISTINCT ON (raw.sto_key, raw.contract_id)');
     expect(sql).toContain('updated_at DESC NULLS LAST');
     expect(sql).toContain('actual_vessel_qty_receive');
+    expect(sql).toContain('MAX(sk.klip_receive_kg)::numeric AS klip_receive_kg');
+    expect(sql).toContain('MAX(sk.klip_delivery_kg)::numeric AS klip_delivery_kg');
   });
 
   it('STO 1016010610 pattern: excludes B2B child PO and SAP-only phantom contract', () => {

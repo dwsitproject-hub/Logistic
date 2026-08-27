@@ -118,6 +118,13 @@ describe('shipmentListSapAggSql', () => {
     expect(shipmentListSpdAggCtes(false)).toContain('po_sto_count');
   });
 
+  it('exposes per-PO-summed KLIP qty on sto_metrics for View Table Grand Total grain', () => {
+    expect(shipmentListSpdAggCtes(true)).toContain('klip_receive_kg');
+    expect(shipmentListSpdAggCtes(true)).toContain('klip_delivery_kg');
+    expect(shipmentListSpdAggCtes(false)).toContain('AS klip_receive_kg');
+    expect(shipmentListSpdAggCtes(false)).toContain('AS klip_delivery_kg');
+  });
+
   it('exposes spd_id in both the stub and full CTEs so the shapes stay compatible', () => {
     expect(shipmentListSpdAggCtes(true)).toContain('spd_id');
     expect(shipmentListSpdAggCtes(false)).toContain('spd_id');

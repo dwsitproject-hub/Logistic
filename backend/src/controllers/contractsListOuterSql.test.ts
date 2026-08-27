@@ -7,6 +7,7 @@ describe('buildContractsListOuterSql', () => {
     expect(sql).toContain('due_date_payment_fb');
     expect(sql).toContain('trucking_count');
     expect(sql).toContain('document_count');
+    expect(sql).toContain('remarks_count');
   });
 
   it('compact projection keeps SAP qty and outstanding but skips payments table and counts', () => {
@@ -19,6 +20,7 @@ describe('buildContractsListOuterSql', () => {
     expect(sql).not.toContain('due_date_payment_fb');
     expect(sql).not.toContain('trucking_count');
     expect(sql).not.toContain('document_count');
+    expect(sql).toContain('remarks_count');
   });
 
   it('outstanding uses incoterm Quantity Delivery, not vessel-first quantity_delivery_sap', () => {

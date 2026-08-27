@@ -91,6 +91,11 @@ import {
 import { cn } from '@/lib/utils'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { HistoricalRemarksModal } from '@/components/shared/HistoricalRemarksModal'
+import { hasEntityRemarks } from '@/lib/entityRemarks'
+import {
+  shippingPerfOutstandingQtyKgForAggregate,
+  sumShippingPerfOutstandingQtyKg,
+} from '@/lib/shippingPerformanceOutstandingAgg'
 import {
   mergeShippingPerfColumnOrder,
   mergeShippingPerfVisibleColumns,
@@ -157,6 +162,8 @@ interface ShippingPerformanceRow {
   /** @deprecated Use outstanding_qty_actual — kept for API backward compatibility. */
   outstanding_qty?: number | null
   shipment_count?: number | null
+  po_sto_count?: number | null
+  remarks_count?: number | null
   cargo_readiness_date?: string | null
   loading_eta_arrival?: string | null
   loading_eta_berthed?: string | null
@@ -449,9 +456,9 @@ function aggregateByVessel(rows: ShippingPerformanceRow[]): ShippingPerformanceR
       sto_qty: sumMetric(vesselRows, 'sto_qty'),
       received_qty: sumMetric(vesselRows, 'received_qty'),
       delivered_qty: sumMetric(vesselRows, 'delivered_qty'),
-      outstanding_qty_actual: sumMetric(vesselRows, 'outstanding_qty_actual'),
+      outstanding_qty_actual: sumShippingPerfOutstandingQtyKg(vesselRows),
       outstanding_qty_planning: sumMetric(vesselRows, 'outstanding_qty_planning'),
-      outstanding_qty: sumMetric(vesselRows, 'outstanding_qty_actual'),
+      outstanding_qty: sumShippingPerfOutstandingQtyKg(vesselRows),
       loading_delta_eta_etr_days: deltas.loading_delta_eta_etr_days,
       loading_delta_eta_etb_days: deltas.loading_delta_eta_etb_days,
       loading_delta_etb_etc_days: deltas.loading_delta_etb_etc_days,
@@ -761,7 +768,7 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
   for (const row of rows) {
     addDistinctShippingPerfStoKey(stoKeys, row)
     addDistinctContractIds(contracts, row.contract_number)
-    totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0)
+    totalQty += shippingPerfOutstandingQtyKgForAggregate(row)
   }
 
   const avgDelta = (logicalKey: (typeof PERF_DELTA_LOGICAL_KEYS)[number]) =>
@@ -2979,24 +2986,33 @@ function ShippingPerformancePageContent() {
                                     >
                                       <Eye className="h-4 w-4" />
                                     </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="icon"
-                                      onClick={() =>
-                                        setRemarksModal({
-                                          shipmentId: row.id,
-                                          subtitle:
-                                            row.operation_id ||
-                                            row.shipment_id ||
-                                            row.sto_number ||
-                                            '',
-                                        })
+                                    <span
+                                      className="inline-flex"
+                                      title={
+                                        hasEntityRemarks(row.remarks_count)
+                                          ? 'View remarks'
+                                          : 'No remarks yet'
                                       }
-                                      title="View remarks"
-                                      className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100"
                                     >
-                                      <MessageSquare className="h-4 w-4" />
-                                    </Button>
+                                      <Button
+                                        variant="outline"
+                                        size="icon"
+                                        disabled={!hasEntityRemarks(row.remarks_count)}
+                                        onClick={() =>
+                                          setRemarksModal({
+                                            shipmentId: row.id,
+                                            subtitle:
+                                              row.operation_id ||
+                                              row.shipment_id ||
+                                              row.sto_number ||
+                                              '',
+                                          })
+                                        }
+                                        className="bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100 disabled:opacity-40"
+                                      >
+                                        <MessageSquare className="h-4 w-4" />
+                                      </Button>
+                                    </span>
                                   </>
                                 ) : null}
                               </div>

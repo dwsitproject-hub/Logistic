@@ -39,11 +39,13 @@ describe('shipment list OS / receive / delivery regression', () => {
     expect(qtySelect).toContain('sm.po_sto_count');
   });
 
-  it('OS base still uses STO qty when the PO has more than one STO', () => {
+  it('OS repeats PO-level qty_move outstanding when the PO has more than one STO', () => {
     const hydrate = buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0).text;
     expect(hydrate).toContain('sm.po_sto_count');
     expect(hydrate).toContain('WHEN COALESCE((sm.po_sto_count)::int, 1) > 1');
-    expect(hydrate).toContain('THEN COALESCE(NULLIF((COALESCE(sm.sto_qty, sa.sto_quantity))::numeric, 0)');
+    expect(hydrate).not.toContain(
+      'THEN COALESCE(NULLIF((COALESCE(sm.sto_qty, sa.sto_quantity))::numeric, 0)',
+    );
   });
 
   it('hydrate keeps Open→KLIP / Close→SAP receive and delivery resolve', () => {
@@ -59,9 +61,10 @@ describe('shipment list OS / receive / delivery regression', () => {
       'PLACEHOLDER',
       'sp.quantity_delivered',
     );
-    // Shared Close/Open branching (ignore nested SAP qty body).
     expect(hydrate).toContain('COALESCE(sp.is_contract_sap_closed, FALSE)');
+    expect(hydrate).toContain('sm.klip_receive_kg');
     expect(hydrate).toContain('sp.actual_vessel_qty_receive');
+    expect(hydrate).toContain('sm.klip_delivery_kg');
     expect(hydrate).toContain('sp.quantity_delivered_klip');
     expect(receive).toContain('IS TRUE THEN');
     expect(delivery).toContain('IS TRUE THEN');

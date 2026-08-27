@@ -34,6 +34,11 @@ import {
 } from '../utils/sapIncotermMetrics';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
+import {
+  applyCargoReadinessKlipEditFlag,
+  classifyCargoReadinessExcelContract,
+  CARGO_READINESS_KLIP_SKIP_REASON,
+} from '../utils/cargoReadinessKlipProtect';
 import { ttlMemo } from '../utils/ttlMemo';
 import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
@@ -3027,7 +3032,7 @@ export const updateContract = async (req: AuthRequest, res: Response) => {
         error: { message: filtered.message },
       });
     }
-    const updates = filtered.updates;
+    const updates = applyCargoReadinessKlipEditFlag(filtered.updates);
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
@@ -3121,8 +3126,10 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
   }
 
   let updated = 0;
+  let skipped = 0;
   let notFound = 0;
   const errors: { po_number: string; reason: string }[] = [];
+  const skippedRows: { po_number: string; reason: string }[] = [];
 
   for (let i = 1; i < matrix.length; i++) {
     const row = matrix[i];
@@ -3135,6 +3142,22 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
       : null;
 
     try {
+      const existing = await query(
+        `SELECT id, cargo_readiness_klip_edited FROM contracts WHERE po_number = $1`,
+        [po]
+      );
+      const outcome = classifyCargoReadinessExcelContract(existing.rows[0]);
+      if (outcome === 'not_found') {
+        notFound++;
+        errors.push({ po_number: po, reason: 'Not found' });
+        continue;
+      }
+      if (outcome === 'skipped') {
+        skipped++;
+        skippedRows.push({ po_number: po, reason: CARGO_READINESS_KLIP_SKIP_REASON });
+        continue;
+      }
+
       const result = await query(
         `UPDATE contracts SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP WHERE po_number = $2 RETURNING id`,
         [cargoDate, po]
@@ -3157,6 +3180,6 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
     }
   }
 
-  return res.json({ success: true, data: { updated, notFound, errors } });
+  return res.json({ success: true, data: { updated, skipped, notFound, errors, skippedRows } });
 };
 

@@ -1,5 +1,7 @@
 import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
 import {
+  shipmentListKlipDeliveryKgExpr,
+  shipmentListKlipReceiveKgExpr,
   shipmentListRowContractQtySql,
   shipmentListSapDeliveryQtySql,
   shipmentListSapReceiveQtySql,
@@ -259,13 +261,13 @@ export function buildShipmentListEnrichedCteBody(qtySelectSql: string): string {
   const closedExpr = 'COALESCE(fs.is_contract_sap_closed, FALSE)';
   const resolvedDelivery = sqlShipmentResolvedDeliveryKg(
     closedExpr,
-    'fs.quantity_delivered_klip',
+    shipmentListKlipDeliveryKgExpr('fs'),
     shipmentListSapDeliveryQtySql('fs'),
     'fs.quantity_delivered',
   );
   const resolvedReceive = sqlShipmentResolvedReceiveKg(
     closedExpr,
-    'fs.actual_vessel_qty_receive',
+    shipmentListKlipReceiveKgExpr('fs'),
     shipmentListSapReceiveQtySql('fs'),
   );
   return `

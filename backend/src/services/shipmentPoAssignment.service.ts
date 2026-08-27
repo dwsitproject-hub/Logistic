@@ -77,13 +77,6 @@ export function poLineKey(contractNumber: string, poNumber: string | null | unde
   return `${String(contractNumber).trim().toLowerCase()}::${String(poNumber ?? '').trim().toLowerCase()}`;
 }
 
-/** True when a positive Shipment Plan Qty exceeds remaining OS Actual (kg). Zero plan qty is always allowed. */
-export function shipmentPlanQtyExceedsOsActual(planQtyKg: number, osActualKg: number): boolean {
-  if (!Number.isFinite(planQtyKg) || planQtyKg <= 0) return false;
-  const cap = Number.isFinite(osActualKg) ? osActualKg : 0;
-  return planQtyKg > cap + 1e-6;
-}
-
 /** Exact PO-line key, then unique contract match if the client omitted / mismatched PO. */
 export function lookupPoLineMetricKg(
   byKey: Map<string, number>,
@@ -277,13 +270,6 @@ export async function attachPurchaseOrderToShipment(args: {
   );
   if (!Number.isFinite(outstandingActualKg) || outstandingActualKg <= 0) {
     return { ok: false, status: 400, message: 'This PO has no outstanding actual quantity remaining' };
-  }
-  if (shipmentPlanQtyExceedsOsActual(qtyKg, outstandingActualKg)) {
-    return {
-      ok: false,
-      status: 400,
-      message: `Shipment Plan Qty exceeds OS Qty (Actual) (${Math.round(outstandingActualKg)} kg)`,
-    };
   }
 
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
@@ -479,18 +465,6 @@ export async function batchSaveShipmentPoPlanQty(args: {
 
   await ensureUserStoContractAssignmentsTable();
 
-  const contractList = context.contract_numbers
-    .split(',')
-    .map((c) => c.trim())
-    .filter(Boolean);
-  const detailsSql = buildContractDetailsForStoSql();
-  const detailsRes = await query(detailsSql, [context.lookup_key, contractList]);
-  const budgetByKey = new Map<string, number>();
-  for (const row of detailsRes.rows as Array<Record<string, unknown>>) {
-    const key = poLineKey(String(row.contract_number ?? ''), row.po_number as string | null);
-    budgetByKey.set(key, Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0));
-  }
-
   for (const row of args.rows) {
     const contractNumber = String(row.contractNumber ?? '').trim();
     if (!contractNumber) continue;
@@ -498,15 +472,6 @@ export async function batchSaveShipmentPoPlanQty(args: {
     const qtyKg = Number(row.shipmentPlanQtyKg);
     if (!Number.isFinite(qtyKg) || qtyKg < 0) {
       return { ok: false, status: 400, message: `Invalid Shipment Plan Qty for ${contractNumber}` };
-    }
-
-    const osActualKg = lookupPoLineMetricKg(budgetByKey, contractNumber, poNumber);
-    if (shipmentPlanQtyExceedsOsActual(qtyKg, osActualKg)) {
-      return {
-        ok: false,
-        status: 400,
-        message: `Shipment Plan Qty for ${contractNumber} exceeds OS Qty (Actual)`,
-      };
     }
 
     await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);

@@ -67,7 +67,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty, shipmentPlanQtyExceedsOsActual } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -1706,18 +1706,6 @@ export function EditShipmentModal({
     setNotification(null)
     try {
       if (!isLimitedViewSave && !planQtyReadOnly && detailRows.length > 0) {
-        const overOs = detailRows.find((row) => {
-          const planKg = planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
-          return shipmentPlanQtyExceedsOsActual(planKg, row.outstanding_qty_actual)
-        })
-        if (overOs) {
-          setSaving(false)
-          setNotification({
-            type: 'error',
-            message: `Shipment Plan Qty for ${overOs.contract_number} exceeds OS Qty (Actual)`,
-          })
-          return
-        }
         await batchSaveShipmentPoPlanQty({
           shipmentId,
           rows: detailRows.map((row) => ({
@@ -2577,7 +2565,7 @@ export function EditShipmentModal({
                           </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="KLIP plan on this STO — capped by OS Qty (Actual)">Shipment Plan Qty</span>
+                          <span title="KLIP plan on this STO — may exceed OS Qty (Actual)">Shipment Plan Qty</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           Delivered Qty (Klip)
@@ -2707,6 +2695,10 @@ export function EditShipmentModal({
                     </TableFooter>
                   </Table>
                 </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Grand Total Delivered / Received Qty (Klip) is the STO total shown on Shipments View Table.
+                  One PO with several STOs: each shipment row is that STO only.
+                </p>
 
                 {vesselCapacityMt != null && vesselCapacityMt > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">

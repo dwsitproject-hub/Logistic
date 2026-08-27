@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatRemarkCategoryLabel } from './entityRemarks'
+import { formatRemarkCategoryLabel, hasEntityRemarks } from './entityRemarks'
 
 describe('entityRemarks', () => {
   it('formatRemarkCategoryLabel maps known shipment keys', () => {
@@ -18,5 +18,17 @@ describe('entityRemarks', () => {
   it('formatRemarkCategoryLabel returns null for empty', () => {
     expect(formatRemarkCategoryLabel(null)).toBeNull()
     expect(formatRemarkCategoryLabel('')).toBeNull()
+  })
+
+  it('hasEntityRemarks is false when empty or missing', () => {
+    expect(hasEntityRemarks(0)).toBe(false)
+    expect(hasEntityRemarks(undefined)).toBe(false)
+    expect(hasEntityRemarks(null)).toBe(false)
+    expect(hasEntityRemarks('0')).toBe(false)
+  })
+
+  it('hasEntityRemarks is true when count is at least 1', () => {
+    expect(hasEntityRemarks(1)).toBe(true)
+    expect(hasEntityRemarks('2')).toBe(true)
   })
 })

@@ -379,4 +379,47 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     expect(merged.ata_loading_delta_eta_etr_days).toBe(14);
     expect(merged.ata_loading_delta_eta_etb_days).toBe(-1);
   });
+
+  it('keeps remarks_count from the keeper row', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        id: 'other',
+        shipment_id: 'MNL-1',
+        sto_number: 'STO-R1',
+        remarks_count: 0,
+        contract_qty: 50,
+      },
+      {
+        id: 'keeper',
+        shipment_id: '1646000001',
+        sto_number: 'STO-R1',
+        remarks_count: 4,
+        contract_qty: 100,
+      },
+    ]);
+    expect(merged.id).toBe('keeper');
+    expect(merged.remarks_count).toBe(4);
+  });
+
+  it('keeps the max po_sto_count so sibling STO OS is not triple-counted in KPIs', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        id: 'a',
+        shipment_id: '1586004927',
+        sto_number: '1586004927',
+        po_sto_count: 3,
+        outstanding_qty_actual: 40_000,
+        contract_qty: 100,
+      },
+      {
+        id: 'b',
+        shipment_id: '1586004928',
+        sto_number: '1586004928',
+        po_sto_count: 1,
+        outstanding_qty_actual: 40_000,
+        contract_qty: 50,
+      },
+    ]);
+    expect(merged.po_sto_count).toBe(3);
+  });
 });

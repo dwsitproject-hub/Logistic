@@ -31,7 +31,7 @@ export const FIELD_HELP = {
   receivedQty: `FRC: GR PO Open + WB Netto EUP > 0 → Netto EUP; LCO: GR STO Open + WB Netto EUP > 0 → Netto EUP (same as Trucking Received Qty). Empty/null WB receive stays on SAP Quantity Receive. SEA Open with KLIP receive: actual vessel receive. GR Close uses SAP Quantity Receive. Otherwise SAP Quantity Receive.`,
 
   outstandingQtyMt: `Contract Qty minus fulfilled quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (same UAT trucking/vessel matrix as the Quantity Delivery column). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
-  shipmentOutstandingQtyMt: `Remaining qty on this STO: Contract Qty minus fulfilled Delivery/Receive (Open→KLIP / Close→SAP). CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. When one PO has several STOs, the base is STO Qty so the PO commitment is not copied onto every line. PO-level OS (Contracts / Section OS strip / status cards) stays Contract Qty minus all related STOs. Missing Delivery/Receive counts as 0 MT. Green = Over Delivered (+MT); black = Still Outstanding.`,
+  shipmentOutstandingQtyMt: `Remaining qty on this STO, same as Contracts OS Qty. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery (Open→KLIP / Close→SAP). When one PO has several STOs, each row repeats the PO remainder (Contract Qty minus all related STOs) for display only. Status cards and Section OS Qty still count that PO once. Missing Delivery/Receive counts as 0 MT. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 
@@ -73,8 +73,9 @@ export const FIELD_HELP = {
   shipmentTotalDelta: `Sum of all delay gaps in days: (Loading ETA−ETR) + (Loading ETA−ETB) + (Loading ETB−ETC) + (Discharge ETA−ETB) + (Discharge ETB−ETC). Positive = late, negative = ahead of schedule.`,
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
-  shipmentReceivedQty: `Actual quantity received at destination (actual_vessel_qty_receive or BL quantity as fallback), in MT.`,
-  shipmentOutstandingQtyActual: `Contract Qty minus fulfilled Delivery/Receive by Open/Close rules for this STO: GR Close → SAP; Open → KLIP then SAP. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery. Same as Shipments View Table OS Qty. Green = Over Delivered (+MT); black = Still Outstanding.`,
+  shipmentReceivedQty: `Shipments View Table grain is the STO (one row). Open + KLIP: sum of Received Qty (Klip) per PO on this STO — same as Edit Shipment Grand Total, not a single PO cell. One PO with several STOs: this row is that STO only (not the full PO copied onto every sibling). GR Close uses SAP Quantity Receive for this STO.`,
+  shipmentViewTableDeliveryQty: `Shipments View Table grain is the STO (one row). Open + KLIP: sum of Delivered Qty (Klip) per PO on this STO — same as Edit Shipment Grand Total. One PO with several STOs: this row is that STO only. GR Close uses SAP delivery for this STO.`,
+  shipmentOutstandingQtyActual: `Remaining qty, same as Shipments View Table OS Qty. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery (Open→KLIP / Close→SAP). When one PO has several STOs, each row repeats the PO remainder for display only. On Going / Close cards, the product tree, and By Vessel totals split that remainder so it is not multiplied by STO count. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentOutstandingQtyPlanning: `Contract Qty minus SAP STO Qty (planning via SAP) minus Shipment Planning Qty (KLIP daily deliverables on shipment + linked trucking for the STO). Net aggregate at STO level — over-planning on one PO can offset another. Displayed in MT.`,
   shipmentPlanningQty: `KLIP shipment planning qty — sum of daily deliverables on the shipment calendar plus linked trucking daily deliverables for the same STO.`,
   /** @deprecated Use shipmentOutstandingQtyActual */
