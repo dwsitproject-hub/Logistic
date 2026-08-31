@@ -6,11 +6,15 @@ import {
   isStoGroupSapClosed,
   normalizeContractDeliveryStatusForDisplay,
   sqlContractImportStatusExpr,
+  sqlContractImportStatusIsCancelledExpr,
   sqlContractImportStatusIsClosedExpr,
   sqlContractImportStatusIsOpenExpr,
+  sqlIsContractSapCancelledExpr,
   sqlIsContractSapClosedExpr,
   sqlIsContractSapClosedForStoExpr,
   sqlIsContractSapClosedForShipmentBacklogExpr,
+  sqlIsContractSapInactiveForOsExpr,
+  sqlIsContractSapInactiveForShipmentBacklogExpr,
   sqlNormalizeContractDeliveryStatusExpr,
   sqlShipmentBacklogSpdSeaLegFilterSql,
 } from './contractDeliveryStatus';
@@ -109,6 +113,20 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain("'FOB'");
   });
 
+  it('prefers Delete PO/STO flag → Cancelled over GR Open', () => {
+    const sql = sqlContractImportStatusExpr('c', 'c.po_number');
+    expect(sql).toContain('Delete PO Status');
+    expect(sql).toContain('Delete STO Status');
+    expect(sql).toContain("THEN 'Cancelled'");
+    expect(sql).toMatch(/EXISTS[\s\S]*spd_del[\s\S]*THEN 'Cancelled'/);
+    // Delete cancelled branch must appear before Open wins
+    const delIdx = sql.search(/EXISTS[\s\S]*spd_del/);
+    const openIdx = sql.indexOf("THEN 'Open'");
+    expect(delIdx).toBeGreaterThan(-1);
+    expect(openIdx).toBeGreaterThan(-1);
+    expect(delIdx).toBeLessThan(openIdx);
+  });
+
   it('ignores blank/synthetic STO header GR when real SAP STO lines already have GR', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
     expect(sql).toContain('spd_gr');
@@ -148,10 +166,23 @@ describe('sqlContractImportStatusExpr', () => {
   });
 });
 
-describe('sqlContractImportStatusIsOpenExpr / ClosedExpr', () => {
+describe('sqlContractImportStatusIsOpenExpr / ClosedExpr / Cancelled', () => {
   it('matches Open/Close on import_status column', () => {
     expect(sqlContractImportStatusIsOpenExpr('base.import_status')).toContain('OPEN');
     expect(sqlContractImportStatusIsClosedExpr('base.import_status')).toContain('CLOSED');
+  });
+
+  it('matches Cancelled without folding into Close', () => {
+    expect(sqlContractImportStatusIsCancelledExpr('base.import_status')).toContain('CANCELLED');
+    expect(sqlIsContractSapCancelledExpr('c')).toContain('Delete PO Status');
+    const inactive = sqlIsContractSapInactiveForOsExpr('c');
+    expect(inactive).toContain("'CLOSE'");
+    expect(inactive).toContain('CANCELLED');
+    expect(sqlIsContractSapInactiveForShipmentBacklogExpr('c')).toContain('CANCELLED');
+    // Close predicate tokens must not include Cancel
+    const closedOnly = sqlContractImportStatusIsClosedExpr('x.status');
+    expect(closedOnly).toContain("'CLOSE'");
+    expect(closedOnly).not.toContain('CANCEL');
   });
 });
 

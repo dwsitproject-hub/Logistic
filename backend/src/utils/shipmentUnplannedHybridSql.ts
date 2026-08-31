@@ -2,7 +2,10 @@
  * Shipments page — Unplanned hybrid list (contract backlog + shipment execution rows).
  */
 
-import { sqlIsContractSapClosedForShipmentBacklogExpr } from './contractDeliveryStatus';
+import {
+  sqlIsContractSapCancelledExpr,
+  sqlIsContractSapInactiveForShipmentBacklogExpr,
+} from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
@@ -171,7 +174,7 @@ export function appendContractScopeToolbarFilters(
 export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
   return `
     ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
-    AND NOT (${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias)})
+    AND NOT (${sqlIsContractSapInactiveForShipmentBacklogExpr(contractAlias)})
     AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
     AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}
     AND NOT EXISTS (
@@ -231,6 +234,20 @@ export function completedContractBacklogBaseWhereSql(contractAlias = 'c', spdAli
   return contractBacklogCoreWhereSql(contractAlias, spdAlias);
 }
 
+/**
+ * Cancelled SEA PO without any shipment row (Delete PO/STO / Cancelled import status).
+ * Intentionally does NOT reuse open-backlog core (which excludes SAP-inactive contracts).
+ */
+export function cancelledContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
+  return `
+    ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
+    AND ${sqlIsContractSapCancelledExpr(contractAlias)}
+    AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
+    AND NOT EXISTS (
+      SELECT 1 FROM shipments s_ns WHERE s_ns.contract_id = ${contractAlias}.id
+    )`;
+}
+
 /** SELECT list aligned with shipment list row shape for contract backlog rows. */
 /** SAP qty_move scalars — same CTE as OS (`sqlContractGlobalOutstandingExpr`). */
 function qtyMoveScalarSql(
@@ -242,7 +259,7 @@ function qtyMoveScalarSql(
 
 export function unplannedContractBacklogRowSelectSql(
   outstandingExpr: string,
-  statusLiteral: 'UNPLANNED' | 'PREPLANNED' | 'COMPLETED' = 'UNPLANNED',
+  statusLiteral: 'UNPLANNED' | 'PREPLANNED' | 'COMPLETED' | 'CANCELLED' = 'UNPLANNED',
   options?: { promoteLowOsToCompleted?: boolean },
 ): string {
   const plantCode = resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code');
@@ -854,6 +871,61 @@ export function buildCompletedContractBacklogPageQuery(
       LIMIT ${limit} OFFSET ${offset}
     )
     SELECT * FROM completed_contract_backlog`;
+}
+
+export function buildCancelledContractBacklogCountQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): string {
+  const backlogWhere = `${cancelledContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    cancelled_contract_backlog AS (
+      SELECT
+        c.id,
+        c.quantity_ordered
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    )
+    SELECT
+      COUNT(*)::bigint AS c,
+      COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
+      0::numeric AS outstanding_qty_kg
+    FROM cancelled_contract_backlog`;
+}
+
+export function buildCancelledContractBacklogPageQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+  limit: number,
+  offset: number,
+  sortKey = 'created_at',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
+): string {
+  const backlogWhere = `${cancelledContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  /** Cancelled POs contribute 0 OS on Shipments cards (same as Contracts OS gate). */
+  const outstandingExpr = '0';
+  const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
+  const qtyMoveCte = buildQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}`,
+  });
+  return `
+    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${qtyMoveCte},
+    cancelled_contract_backlog AS (
+      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'CANCELLED')}
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+      ORDER BY ${pageOrder}
+      LIMIT ${limit} OFFSET ${offset}
+    )
+    SELECT * FROM cancelled_contract_backlog`;
 }
 
 /** Shipment-side unplanned filter (toolbar + unplanned execution predicate). */

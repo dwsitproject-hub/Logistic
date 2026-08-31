@@ -71,30 +71,45 @@ export function sqlSapQtyVesselFromSpd(spdAlias = 'spd'): string {
   );
 }
 
+import {
+  sqlSpdHasDeletePoFlagExpr,
+  sqlSpdHasDeleteStoFlagExpr,
+} from './sapMasterV2UatFormat';
+
 /**
  * GR PO status fields from SAP JSON — GR PO only (not commercial Status).
  * Generic Status Open on blank-GR rows used to keep import status Open forever
  * and block Shipment Completed when GR PO was already Close.
+ * Delete PO Status non-blank → Cancelled (SAP Data v3).
  */
 export function sqlSapGrPoStatusFromJson(spdDataExpr: string): string {
-  return `NULLIF(TRIM(COALESCE(
+  const gr = `NULLIF(TRIM(COALESCE(
     ${spdDataExpr}->'raw'->>'GR PO Status',
     ${spdDataExpr}->'contract'->>'gr_po_status',
     ${spdDataExpr}->>'gr_po_status'
   )), '')`;
+  return `CASE
+    WHEN ${sqlSpdHasDeletePoFlagExpr(spdDataExpr)} THEN 'Cancelled'
+    ELSE ${gr}
+  END`;
 }
 
 /**
  * GR STO status fields from SAP JSON.
  * Prefer raw Excel columns over normalized `contract.*` — stale Close in contract JSON
  * used to win over Open in raw and force Trucking list onto Σ SAP instead of WB.
+ * Delete STO Status non-blank → Cancelled (SAP Data v3).
  */
 export function sqlSapGrStoStatusFromJson(spdDataExpr: string): string {
-  return `NULLIF(TRIM(COALESCE(
+  const gr = `NULLIF(TRIM(COALESCE(
     ${spdDataExpr}->'raw'->>'GR STO Status',
     ${spdDataExpr}->'contract'->>'gr_sto_status',
     ${spdDataExpr}->>'gr_sto_status'
   )), '')`;
+  return `CASE
+    WHEN ${sqlSpdHasDeleteStoFlagExpr(spdDataExpr)} THEN 'Cancelled'
+    ELSE ${gr}
+  END`;
 }
 
 /** Incoterm-based import status from latest SAP JSON + contracts.incoterm. */

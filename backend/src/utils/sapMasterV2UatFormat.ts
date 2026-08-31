@@ -71,6 +71,31 @@ export function hasSapDeleteFlag(parsedData: {
   return false;
 }
 
+/** SQL: Delete PO Status non-blank on SPD JSON (`spd.data` or similar). */
+export function sqlSpdHasDeletePoFlagExpr(spdDataExpr = 'spd.data'): string {
+  return `NULLIF(TRIM(COALESCE(
+    ${spdDataExpr}->'raw'->>'Delete PO Status',
+    ${spdDataExpr}->'contract'->>'delete_po_status',
+    ${spdDataExpr}->'shipment'->>'delete_po_status',
+    ${spdDataExpr}->>'delete_po_status'
+  )), '') IS NOT NULL`;
+}
+
+/** SQL: Delete STO Status non-blank on SPD JSON. */
+export function sqlSpdHasDeleteStoFlagExpr(spdDataExpr = 'spd.data'): string {
+  return `NULLIF(TRIM(COALESCE(
+    ${spdDataExpr}->'raw'->>'Delete STO Status',
+    ${spdDataExpr}->'contract'->>'delete_sto_status',
+    ${spdDataExpr}->'shipment'->>'delete_sto_status',
+    ${spdDataExpr}->>'delete_sto_status'
+  )), '') IS NOT NULL`;
+}
+
+/** SQL: either Delete PO or Delete STO flag is set. */
+export function sqlSpdHasAnyDeleteFlagExpr(spdDataExpr = 'spd.data'): string {
+  return `(${sqlSpdHasDeletePoFlagExpr(spdDataExpr)} OR ${sqlSpdHasDeleteStoFlagExpr(spdDataExpr)})`;
+}
+
 export function isSapMasterV2UatFlatHeaderRow(headerRow: unknown[]): boolean {
   const headers = (headerRow ?? []).map((h) => String(h ?? '').trim().toLowerCase());
   return headers.includes('gr po status') || headers.includes('contract ext no');

@@ -234,3 +234,23 @@ describe('completed contract backlog OS gate', () => {
     expect(pageSql).toContain('<= 1000');
   });
 });
+
+describe('cancelled contract backlog', () => {
+  it('selects Cancelled SEA POs without shipment and forces zero OS', async () => {
+    const {
+      buildCancelledContractBacklogCountQuery,
+      buildCancelledContractBacklogPageQuery,
+      cancelledContractBacklogBaseWhereSql,
+    } = await import('./shipmentUnplannedHybridSql');
+    const whereSql = cancelledContractBacklogBaseWhereSql('c', 'l');
+    expect(whereSql).toContain("'CANCELLED', 'CANCELED', 'CANCEL'");
+    expect(whereSql).toContain('NOT EXISTS');
+    expect(whereSql).toContain('s_ns.contract_id = c.id');
+    const countSql = buildCancelledContractBacklogCountQuery('', '');
+    expect(countSql).toContain('cancelled_contract_backlog');
+    expect(countSql).toContain('0::numeric AS outstanding_qty_kg');
+    const pageSql = buildCancelledContractBacklogPageQuery('', '', 20, 0);
+    expect(pageSql).toContain("'CANCELLED'::text");
+    expect(pageSql).toContain('cancelled_contract_backlog');
+  });
+});

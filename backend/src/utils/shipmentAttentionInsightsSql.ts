@@ -4,7 +4,11 @@
  * contract backlog uses sto_key = contract:{uuid}.
  */
 
-import { sqlIsContractSapClosedExpr, sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
+import {
+  sqlIsContractSapCancelledExpr,
+  sqlIsContractSapInactiveForOsExpr,
+  sqlIsContractSapClosedForStoExpr,
+} from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import {
@@ -107,6 +111,7 @@ function buildShipmentOverdueExecutionGroupedRowsCte(
         AND COALESCE((${outstandingExpr})::numeric, 0) > 0
         AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF')
         AND NOT (${sqlIsContractSapClosedForStoExpr('c', 'sp.sto_key')})
+        AND NOT (${sqlIsContractSapCancelledExpr('c')})
     ),
     overdue_rows AS (
       SELECT
@@ -272,7 +277,7 @@ export function buildShipmentCarryOverInsightsQuery(
   toolbarSql: string,
 ): string {
   const openWhere = `${buildShipmentPageSeaIncotermScopeSql('c')}
-    AND NOT (${sqlIsContractSapClosedExpr('c')})
+    AND NOT (${sqlIsContractSapInactiveForOsExpr('c')})
     AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF')${contractScopeSql}${toolbarSql}`;
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');

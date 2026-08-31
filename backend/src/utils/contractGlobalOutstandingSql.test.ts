@@ -24,6 +24,17 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('contract_candidates');
   });
 
+  it('sqlContractGlobalOutstandingExpr zeros OS when contract is Cancelled (Delete PO/STO)', () => {
+    const sql = sqlContractGlobalOutstandingExpr({
+      contractQtyExpr: 'pl.contract_qty',
+      incotermExpr: 'pl.incoterm',
+      contractNumberExpr: 'pl.contract_number',
+    });
+    expect(sql).toContain('Delete PO Status');
+    expect(sql).toContain('THEN 0::numeric');
+    expect(sql).toContain('CANCELLED');
+  });
+
   it('sqlContractGlobalOutstandingExpr uses qty_move receive/delivery per incoterm (Contracts list rules)', () => {
     const sql = sqlContractGlobalOutstandingExpr({
       contractQtyExpr: 'pl.contract_qty',
@@ -119,10 +130,18 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('qty_move_scope');
     expect(sql).toContain('b2b_child_qty_rollup');
     expect(sql).toContain('qty_move_resolved');
-    expect(sql).toContain('COALESCE(NULLIF(r.quantity_delivery_trucking, 0), roll.sum_delivery_trucking)');
-    expect(sql).toContain('COALESCE(NULLIF(r.quantity_delivery_vessel, 0), roll.sum_delivery_vessel)');
-    expect(sql).toContain('COALESCE(NULLIF(r.quantity_receive, 0), roll.sum_receive)');
+    expect(sql).toContain('LEAST(');
+    expect(sql).toContain('roll.sum_delivery_trucking');
+    expect(sql).toContain('roll.sum_delivery_vessel');
+    expect(sql).toContain('roll.sum_receive');
+    expect(sql).toContain('quantity_ordered');
     expect(sql).not.toContain('r.quantity_receive + roll.sum_receive');
     expect(sql).toContain('Contract Reff PO Ini');
+  });
+
+  it('buildQtyMoveCte trucking WB overlay skips soft-deduped ops', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('trucking_wb_overlay');
+    expect(sql).toContain('t.deduped_at IS NULL');
   });
 });

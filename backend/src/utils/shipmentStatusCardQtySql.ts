@@ -89,6 +89,7 @@ export function mergeShipmentStatusCardQtyParts(input: {
   unplannedBacklogContractQtyKg: number;
   preplannedContractQtyKg: number;
   completedBacklogContractQtyKg?: number;
+  cancelledBacklogContractQtyKg?: number;
   unplannedBacklogOutstandingQtyKg: number;
   preplannedOutstandingQtyKg: number;
   outstanding: ShipmentStatusOutstandingQtyExecutionParts;
@@ -101,7 +102,8 @@ export function mergeShipmentStatusCardQtyParts(input: {
       planned: input.execution.planned,
       completed:
         input.execution.completed + (Number(input.completedBacklogContractQtyKg) || 0),
-      cancelled: input.execution.cancelled,
+      cancelled:
+        input.execution.cancelled + (Number(input.cancelledBacklogContractQtyKg) || 0),
     },
     statusOutstandingQty: {
       unplanned: Number(input.unplannedBacklogOutstandingQtyKg) || 0,

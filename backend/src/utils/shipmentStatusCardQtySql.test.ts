@@ -73,11 +73,12 @@ describe('shipmentStatusCardQtySql', () => {
         unplannedExecution: 0,
         planned: 0,
         completed: 500,
-        cancelled: 0,
+        cancelled: 200,
       },
       unplannedBacklogContractQtyKg: 0,
       preplannedContractQtyKg: 0,
       completedBacklogContractQtyKg: 4000,
+      cancelledBacklogContractQtyKg: 1500,
       unplannedBacklogOutstandingQtyKg: 0,
       preplannedOutstandingQtyKg: 0,
       outstanding: {
@@ -89,6 +90,7 @@ describe('shipmentStatusCardQtySql', () => {
       },
     });
     expect(merged.statusContractQty.completed).toBe(4500);
+    expect(merged.statusContractQty.cancelled).toBe(1700);
   });
 
   it('buildShipmentStatusCardQtyExecutionAggregateQuery includes stage filters', () => {

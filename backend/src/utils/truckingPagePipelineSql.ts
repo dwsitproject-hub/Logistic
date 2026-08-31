@@ -3,7 +3,7 @@
  * Does not replace contractLogisticsStoDisplay / other modules.
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
 import { sqlHasTruckingKlipPlanning } from './truckingEffectiveStatus';
 import { sqlRealizationStartDate } from './truckingRealizationSql';
 import {
@@ -61,7 +61,7 @@ export function sqlTruckingPageUnplannedPredicate(
   grClosedExpr?: string,
   sapAlias?: string,
 ): string {
-  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)})`;
+  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr)})`;
   const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)})`;
   const noStartReceive = `${sqlRealizationStartDate(contractAlias, sapAlias)} IS NULL`;
   return `(
@@ -100,7 +100,7 @@ export function sqlTruckingPagePipelineStageExpr(
   const realizationStart = sqlRealizationStartDate(contractAlias, sapAlias);
   const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
   const notCompleted = `NOT (${isCompleted})`;
-  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)})`;
+  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr)})`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
     WHEN ${isCompleted} THEN 'COMPLETED'

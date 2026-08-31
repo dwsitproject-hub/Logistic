@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 
 export type ActiveTruckingOpRow = {
   id: string;
@@ -46,6 +47,18 @@ export function sqlTruckingOpIsListVisibleSql(truckingAlias = 't'): string {
 
 /** Append to trucking list / pipeline base WHERE (alias `t`). */
 export const truckingListExcludeDedupedWhereSql = `AND ${sqlTruckingOpIsListVisibleSql('t')}`;
+
+/**
+ * Contract Details STO list/detail — same visibility as GET /trucking/:id.
+ * Hides soft-dedupe losers and leftover ops on non-FRC/LCO contracts.
+ */
+export function sqlContractDetailsTruckingOpVisible(
+  truckingAlias = 't',
+  contractAlias = 'c',
+): string {
+  return `${sqlTruckingOpExcludeDedupedSql(truckingAlias)}
+    AND ${buildTruckingPageIncotermScopeSql(contractAlias)}`;
+}
 
 export function formatDuplicateTruckingMessage(ops: Pick<ActiveTruckingOpRow, 'operation_id' | 'id'>[]): string {
   const labels = ops.map((o) => (o.operation_id && String(o.operation_id).trim()) || o.id);

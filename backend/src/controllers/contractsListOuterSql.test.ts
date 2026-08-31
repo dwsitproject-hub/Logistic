@@ -29,4 +29,12 @@ describe('buildContractsListOuterSql', () => {
     expect(sql).toContain("IN ('LCO', 'FOB') THEN base.quantity_delivery");
     expect(sql).not.toContain('quantity_delivery_sap');
   });
+
+  it('zeros outstanding when import_status is Cancelled', () => {
+    const sql = buildContractsListOuterSql(false, { compact: true });
+    expect(sql).toContain('base.import_status');
+    expect(sql).toContain('CANCELLED');
+    expect(sql).toContain('THEN 0::numeric');
+    expect(sql).toContain('Delete PO Status');
+  });
 });

@@ -33,17 +33,10 @@ describe('buildExactNumericGlobalSearchInnerSql', () => {
     expect(sql).toContain('c.po_number');
   });
 
-  it('matches sibling STO numbers on the same contract', () => {
+  it('does not fan out to sibling STOs on the same contract', () => {
     const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
-    expect(sql).toContain('contract_stos cs_search');
-    expect(sql).toContain('cs_search.contract_id = c.id');
-  });
-
-  it('does not treat FOB Type T sibling STOs as a Shipments search hit', () => {
-    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
-    expect(sql).toContain("= 'FOB'");
-    expect(sql).toContain("= 'T'");
-    expect(sql).toContain('spd_sto_num');
+    expect(sql).not.toContain('cs_search');
+    expect(sql).not.toMatch(/contract_stos cs_search/);
   });
 
   /*

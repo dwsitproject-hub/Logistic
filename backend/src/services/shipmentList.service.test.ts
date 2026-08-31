@@ -213,6 +213,17 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('COMPLETED');
   });
 
+  it('keeps CANCELLED on contract_backlog rows', () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'CANCELLED',
+        contract_number: '1014000003',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('CANCELLED');
+  });
+
   it('keeps PREPLANNED on contract_backlog rows', () => {
     const rows = normalizeShipmentListRows([
       {

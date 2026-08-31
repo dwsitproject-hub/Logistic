@@ -8,7 +8,7 @@
  * SAP Open but pipeline Completed/Cancelled is excluded (population gap).
  */
 
-import { sqlIsContractSapClosedExpr, sqlIsContractSapClosedForShipmentBacklogExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapInactiveForOsExpr, sqlIsContractSapInactiveForShipmentBacklogExpr } from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { SHIPMENT_PAGE_SEA_INCOTERMS } from './shipmentIncotermScope';
 import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
@@ -52,7 +52,7 @@ function sqlHasActiveSeaShipment(
       INNER JOIN contracts sc ON sc.id = s.contract_id
       WHERE s.contract_id = ${contractUuidExpr}
         AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
-        AND NOT (${sqlIsContractSapClosedExpr('sc')})
+        AND NOT (${sqlIsContractSapInactiveForOsExpr('sc')})
     )
     OR ${sibling}
   )`;
@@ -76,7 +76,7 @@ function sqlHasSeaStripBacklog(contractUuidExpr: string): string {
     SELECT 1
     FROM contracts c_sea
     WHERE c_sea.id = ${contractUuidExpr}
-      AND NOT (${sqlIsContractSapClosedForShipmentBacklogExpr('c_sea')})
+      AND NOT (${sqlIsContractSapInactiveForShipmentBacklogExpr('c_sea')})
       AND ${sqlContractHasNoRegisteredEtaExpr('c_sea')}
   )`;
 }
@@ -115,7 +115,7 @@ function sqlHasLandStripBacklog(contractUuidExpr: string): string {
     FROM contracts c_land
     WHERE c_land.id = ${contractUuidExpr}
       AND UPPER(COALESCE(NULLIF(TRIM(c_land.transport_mode::text), ''), 'LAND')) IN ('LAND', 'MIX')
-      AND NOT (${sqlIsContractSapClosedExpr('c_land')})
+      AND NOT (${sqlIsContractSapInactiveForOsExpr('c_land')})
   )`;
 }
 

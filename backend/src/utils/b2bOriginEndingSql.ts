@@ -179,13 +179,23 @@ export function sqlB2bChildGrStoStatusLookup(originPoExpr: string): string {
 /**
  * B2B origin qty overlay: parent > 0 replaces child SUM; NULL or 0 uses child.
  * Never parent + child. Example: parent 200 + child 3000 → 200, not 3200.
+ * Optional capAtParentContractQty: when falling back to child SUM, never exceed
+ * origin contract qty (downstream FOB child legs can be larger than the origin PO).
  */
 export function coalesceB2bOriginParentOrChildQty(
   parentQty: number | null | undefined,
   childSum: number | null | undefined,
+  options?: { capAtParentContractQty?: number | null },
 ): number | null {
   if (parentQty != null && Number(parentQty) !== 0) return Number(parentQty);
-  if (childSum != null) return Number(childSum);
+  if (childSum != null) {
+    const child = Number(childSum);
+    const cap = options?.capAtParentContractQty;
+    if (cap != null && Number.isFinite(Number(cap)) && Number(cap) > 0) {
+      return Math.min(child, Number(cap));
+    }
+    return child;
+  }
   return parentQty == null ? null : Number(parentQty);
 }
 
@@ -194,10 +204,17 @@ export function sqlCoalesceB2bOriginParentOrChildQty(
   parentExpr: string,
   childSumExpr: string,
   rollExistsExpr: string,
+  options?: { capAtParentContractQtyExpr?: string },
 ): string {
+  const cappedChild = options?.capAtParentContractQtyExpr
+    ? `LEAST(
+      (${childSumExpr})::numeric,
+      GREATEST(COALESCE((${options.capAtParentContractQtyExpr})::numeric, 0), 0)
+    )`
+    : childSumExpr;
   return `CASE
     WHEN ${rollExistsExpr}
-    THEN COALESCE(NULLIF(${parentExpr}, 0), ${childSumExpr})
+    THEN COALESCE(NULLIF(${parentExpr}, 0), ${cappedChild})
     ELSE ${parentExpr}
   END`;
 }

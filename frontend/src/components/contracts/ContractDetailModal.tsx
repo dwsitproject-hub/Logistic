@@ -39,6 +39,7 @@ import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
 import { resolveShipmentTablePrimaryAction } from '@/lib/shipmentViewTableActions'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import { stoOperationIdDisplay, stoOperationIdIsOpenable } from '@/lib/contractStoOperationLink'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
 
@@ -115,6 +116,7 @@ export interface DocumentItem {
 
 export interface StoInfoRow {
   type: 'shipment' | 'trucking'
+  id?: string | null
   sto_number: string
   operation_id?: string | null
   late_indicator: string
@@ -889,11 +891,11 @@ export function ContractDetailModal({
   /** Operation ID → Add New / Edit / View / Plot Trucking or Shipment (same actions as list pages). */
   const openStoLogisticsOperation = useCallback(
     async (row: StoInfoRow) => {
-      if (!contract?.id) return
+      if (!contract?.id || !stoOperationIdIsOpenable(row)) return
       setStoLogisticsOpLoading(true)
       try {
         const data = await fetchStoDetailData(row)
-        const entityId = String(data?.id ?? '').trim() || null
+        const entityId = String(data?.id ?? '').trim() || String(row.id ?? '').trim() || null
         const status = String(data?.status ?? row.status ?? '').trim()
         const primary = resolveShipmentTablePrimaryAction(status)
 
@@ -1306,19 +1308,23 @@ export function ContractDetailModal({
                               </button>
                             </td>
                             <td className="p-2">
-                              <button
-                                type="button"
-                                onClick={() => void openStoLogisticsOperation(row)}
-                                disabled={stoLogisticsOpLoading}
-                                className="text-left text-blue-600 hover:underline font-medium cursor-pointer disabled:opacity-50"
-                                title={
-                                  row.type === 'shipment'
-                                    ? 'Open Add / Edit / View Shipment'
-                                    : 'Open Add / Edit / View Trucking'
-                                }
-                              >
-                                {row.operation_id?.trim() ? row.operation_id : '—'}
-                              </button>
+                              {stoOperationIdIsOpenable(row) ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void openStoLogisticsOperation(row)}
+                                  disabled={stoLogisticsOpLoading}
+                                  className="text-left text-blue-600 hover:underline font-medium cursor-pointer disabled:opacity-50"
+                                  title={
+                                    row.type === 'shipment'
+                                      ? 'Open Add / Edit / View Shipment'
+                                      : 'Open Add / Edit / View Trucking'
+                                  }
+                                >
+                                  {stoOperationIdDisplay(row)}
+                                </button>
+                              ) : (
+                                <span className="text-gray-700">{stoOperationIdDisplay(row)}</span>
+                              )}
                             </td>
                             <td className="p-2">
                               <Badge

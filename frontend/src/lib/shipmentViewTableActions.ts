@@ -42,7 +42,7 @@ export function cancelKlipShipmentDisabledReason(shipment: {
   if (status === 'CANCELLED') return 'Shipment is already cancelled'
 
   if (String(shipment.row_kind ?? '').trim() === 'contract_backlog') {
-    return 'Unplanned backlog rows cannot be cancelled'
+    return 'Contract backlog rows cannot be cancelled'
   }
 
   const displaySto = resolveShipmentDisplayStoNumber(shipment.sto_number)

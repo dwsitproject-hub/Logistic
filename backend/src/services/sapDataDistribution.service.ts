@@ -363,6 +363,12 @@ export class SapDataDistributionService {
       } else {
         logger.info('No shipment/trucking data found to upsert or SEA/LAND value not set');
       }
+
+      // Delete PO/STO: force all linked live logistics rows Cancelled (Cancelled card),
+      // even when this import row did not materialize a new shipment/trucking upsert.
+      if (hasSapDeleteFlag(parsedData) && result.contractId) {
+        await this.cancelLinkedLogisticsForDeletedContract(client, result.contractId);
+      }
       
       // 3. Create quality surveys (multiple) - only for SEA shipments
       if (seaLike && parsedData.quality && parsedData.quality.length > 0) {
@@ -609,6 +615,38 @@ export class SapDataDistributionService {
       `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
       [contractNumber, placeholderUuid]
     );
+  }
+
+  /**
+   * When Delete PO/STO is set, mark all live linked shipments + trucking ops CANCELLED
+   * so Cancelled cards fill without requiring each historical logistics row to re-upsert.
+   */
+  private static async cancelLinkedLogisticsForDeletedContract(
+    client: PoolClient,
+    contractUuid: string,
+  ): Promise<void> {
+    const ship = await client.query(
+      `UPDATE shipments
+       SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+       WHERE contract_id = $1::uuid
+         AND COALESCE(status, '') <> 'CANCELLED'`,
+      [contractUuid],
+    );
+    const truck = await client.query(
+      `UPDATE trucking_operations
+       SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+       WHERE contract_id = $1::uuid
+         AND deduped_at IS NULL
+         AND COALESCE(status, '') <> 'CANCELLED'`,
+      [contractUuid],
+    );
+    if ((ship.rowCount ?? 0) > 0 || (truck.rowCount ?? 0) > 0) {
+      logger.info('Cancelled linked logistics for Delete PO/STO contract', {
+        contractUuid,
+        shipments: ship.rowCount ?? 0,
+        trucking: truck.rowCount ?? 0,
+      });
+    }
   }
 
   /**

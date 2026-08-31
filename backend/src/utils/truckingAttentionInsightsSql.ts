@@ -2,7 +2,7 @@
  * Trucking page — Attention Needed + Aging Overdue insights (toolbar-scoped).
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 import {
@@ -26,7 +26,7 @@ export function truckingOpenLandContractBaseWhereSql(
   return `
     ${buildTruckingPageIncotermScopeSql(contractAlias)}
     AND UPPER(COALESCE(NULLIF(TRIM(${contractAlias}.transport_mode::text), ''), 'LAND')) IN ('LAND', 'MIX')
-    AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
+    AND NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias)})
     AND NOT (
       ${contractAlias}.contract_id IS NOT NULL
       AND UPPER(NULLIF(TRIM(COALESCE(${spdAlias}.b2b_flag_raw, ${contractAlias}.contract_type::text, '')), '')) = 'B2B'

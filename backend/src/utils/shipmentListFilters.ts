@@ -3,7 +3,6 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
-import { sqlIsFobTypeTStoNumberExpr } from './shipmentStoTypeSql'
 import {
   LEGACY_SHIPMENT_STATUS_ALIASES,
   SHIPMENT_AUTO_STATUSES,
@@ -158,23 +157,10 @@ export function buildExactNumericGlobalSearchInnerSql(
         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${p}::text)
         OR TRIM(COALESCE(c.po_number::text, '')) = TRIM(${p}::text)
         /*
-         * Sibling STO numbers.
+         * Exact STO search is identity-only (sto_key / shipment_id / operation_id).
+         * Do not match via contract_stos on the same contract: the list is one row per STO,
+         * so that EXISTS pulled every sibling STO on the PO.
          *
-         * A contract can carry several vessel STO lines while KLIP holds one shipment for the
-         * group, keyed to just one of them. Searching any of the other STO numbers therefore
-         * found nothing even though the shipment is on the page under a different number
-         * (measured: 148 STO lines across 141 contracts). Matching the contract's own STO list
-         * makes every STO on a contract a usable search term. This only widens what a search
-         * FINDS - it adds no rows to the list and changes no figure.
-         */
-        OR EXISTS (
-          SELECT 1
-          FROM contract_stos cs_search
-          WHERE cs_search.contract_id = c.id
-            AND TRIM(cs_search.sto_number::text) = TRIM(${p}::text)
-            AND NOT ${sqlIsFobTypeTStoNumberExpr('c', `${p}::text`)}
-        )
-        /*
          * PO / contract numbers of the OTHER contracts on the same STO.
          *
          * The list groups by STO, and several contracts can share one STO number. The
@@ -205,8 +191,8 @@ export function buildExactNumericGlobalSearchInnerSql(
          * branch touches neither the row set nor any figure - only whether an existing row is
          * reachable by that search term.
          *
-         * Like the sibling-STO branch, this only widens what a search FINDS - it adds no rows
-         * to the list and changes no figure.
+         * Searching a PO still finds that STO group row. Searching a STO number does not
+         * fan out to other STO rows on the same PO.
          */
         OR EXISTS (
           SELECT 1

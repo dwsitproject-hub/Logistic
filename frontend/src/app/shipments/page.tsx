@@ -32,6 +32,11 @@ import { shipmentListHydrateVesselName } from '@/lib/shipmentVesselCompare'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
 import {
+  ContractDetailModal,
+  fetchContractForDetailModal,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
+import {
   acceptPrePlannedGroup,
   dismissPrePlannedGroup,
   fetchPrePlannedGroups,
@@ -1256,6 +1261,7 @@ function ShipmentsPageContent() {
   const [showDocs, setShowDocs] = useState(false)
 
   const [showAddShipment, setShowAddShipment] = useState(false)
+  const [contractDetailTarget, setContractDetailTarget] = useState<ContractDetailModalContract | null>(null)
   const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
   const [addShipmentPrefilledSto, setAddShipmentPrefilledSto] = useState<string | null>(null)
   const [addShipmentPrefilledContractNumbers, setAddShipmentPrefilledContractNumbers] = useState<string[] | null>(null)
@@ -2215,8 +2221,37 @@ function ShipmentsPageContent() {
     }
   }
 
+  const openContractDetailForShipmentRow = async (shipment: Shipment) => {
+    const contractNumber =
+      resolveShipmentEditContractId(shipment) ||
+      String(shipment.contract_number || shipment.contract_numbers || '').trim()
+    if (!contractNumber) {
+      alert('Contract number is required to open Contract Details.')
+      return
+    }
+    try {
+      const detail = await fetchContractForDetailModal(contractNumber)
+      if (!detail) {
+        alert(`Contract ${contractNumber} was not found.`)
+        return
+      }
+      setContractDetailTarget(detail)
+    } catch (err) {
+      console.error('openContractDetailForShipmentRow:', err)
+      alert('Failed to open Contract Details.')
+    }
+  }
+
   const handleOpenEditShipmentModal = (shipment: Shipment, options?: { readOnly?: boolean }) => {
     const readOnly = options?.readOnly === true
+    if (
+      readOnly &&
+      isContractBacklogRow(shipment) &&
+      String(shipment.status ?? '').trim().toUpperCase() === 'CANCELLED'
+    ) {
+      void openContractDetailForShipmentRow(shipment)
+      return
+    }
     if (!readOnly && perms.loaded && !canEditShipment) {
       alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
       return
@@ -2459,6 +2494,13 @@ function ShipmentsPageContent() {
   }
 
   const handleOpenAddShipmentForContractRow = (shipment: Shipment) => {
+    if (
+      isContractBacklogRow(shipment) &&
+      String(shipment.status ?? '').trim().toUpperCase() === 'CANCELLED'
+    ) {
+      void openContractDetailForShipmentRow(shipment)
+      return
+    }
     if (perms.loaded && !canOpenAddShipmentModal) {
       alert('You need permission to create shipments. Ask an admin to update your role.')
       return
@@ -9096,6 +9138,12 @@ function ShipmentsPageContent() {
           void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
         }}
+      />
+
+      <ContractDetailModal
+        contract={contractDetailTarget}
+        onClose={() => setContractDetailTarget(null)}
+        stacked
       />
 
       <VesselIdleModal

@@ -49,8 +49,10 @@ import {
 } from '../services/pipelineDailySummary.service';
 import {
   buildShipmentAllHybridListContext,
+  buildShipmentCancelledHybridListContext,
   buildShipmentCompletedHybridListContext,
   buildShipmentUnplannedHybridListContext,
+  countCancelledContractBacklog,
   countCompletedContractBacklog,
   countPreplannedContracts,
   countUnplannedHybridBreakdown,
@@ -58,11 +60,14 @@ import {
   isPreplannedListRequest,
   isUnplannedHybridListRequest,
   shouldResolveAllHybridShipmentsList,
+  shouldResolveCancelledHybridShipmentsList,
   shouldResolveCompletedHybridShipmentsList,
   resolveAllHybridShipmentsList,
+  resolveCancelledHybridShipmentsList,
   resolveCompletedHybridShipmentsList,
   resolvePreplannedContractsList,
   resolveUnplannedHybridShipmentsList,
+  type CancelledContractBacklogBreakdown,
   type CompletedContractBacklogBreakdown,
   type PreplannedContractsBreakdown,
   type UnplannedHybridBreakdown,
@@ -359,6 +364,7 @@ function shipmentListSummaryPayload(
     statusOutstandingQty?: ShipmentStatusOutstandingQtyKg | null;
   } | null,
   completedBreakdown?: CompletedContractBacklogBreakdown | null,
+  cancelledBreakdown?: CancelledContractBacklogBreakdown | null,
 ) {
   /** Unplanned card = PO backlog only (STO open rows are Planned). */
   const unplannedContractRows = unplannedBreakdown
@@ -382,7 +388,8 @@ function shipmentListSummaryPayload(
     atDischargePort: Number(summaryRow.at_discharge_port_count || 0),
     completed:
       Number(summaryRow.completed_count || 0) + (completedBreakdown?.contractRows ?? 0),
-    cancelled: Number(summaryRow.cancelled_count || 0),
+    cancelled:
+      Number(summaryRow.cancelled_count || 0) + (cancelledBreakdown?.contractRows ?? 0),
   };
 
   const guardedQty = applyShipmentStatusCardZeroGuards({
@@ -1234,6 +1241,13 @@ ${contractMetaSelectCore}
         colFilters,
         cacheKey: `${shipmentListFilterCacheKey}:completed-backlog`,
       });
+    const loadSection1CancelledBreakdown = () =>
+      countCancelledContractBacklog({
+        contractScope: { dateFrom, dateTo, contract, plants },
+        globalSearch,
+        colFilters,
+        cacheKey: `${shipmentListFilterCacheKey}:cancelled-backlog`,
+      });
 
     const loadSection1OutstandingQty = () =>
       loadShipmentOutstandingQtyForRequest(req, {
@@ -1312,6 +1326,8 @@ ${contractMetaSelectCore}
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
         loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
         loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+        loadCancelledBreakdown: loadSection1CancelledBreakdown,
         liveStageCountsQuery,
         liveStageCountsParams,
       });
@@ -1321,12 +1337,14 @@ ${contractMetaSelectCore}
         unplannedBreakdown: unplannedBreakdownForSummary,
         preplannedBreakdown: preplannedBreakdownForSummary,
         completedBreakdown: completedBreakdownForSummary,
+        cancelledBreakdown: cancelledBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
       const statusCardQtyBacklogParts: ShipmentStatusCardQtyBacklogParts = {
         unplannedBacklogContractQtyKg: unplannedBreakdownForSummary.contractQtyKg,
         preplannedContractQtyKg: preplannedBreakdownForSummary.contractQtyKg,
         completedBacklogContractQtyKg: completedBreakdownForSummary.contractQtyKg,
+        cancelledBacklogContractQtyKg: cancelledBreakdownForSummary.contractQtyKg,
         unplannedBacklogOutstandingQtyKg: unplannedBreakdownForSummary.outstandingQtyKg,
         preplannedOutstandingQtyKg: preplannedBreakdownForSummary.outstandingQtyKg,
       };
@@ -1379,6 +1397,7 @@ ${contractMetaSelectCore}
             attentionInsights,
             statusCardQty,
             completedBreakdownForSummary,
+            cancelledBreakdownForSummary,
           ),
           pagination: {
             total: tc,
@@ -1453,6 +1472,8 @@ ${contractMetaSelectCore}
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
             loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
             loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
             liveStageCountsQuery,
             liveStageCountsParams,
           });
@@ -1465,6 +1486,7 @@ ${contractMetaSelectCore}
             undefined,
             undefined,
             summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
           );
         }
         timingsMs.total = performance.now() - tReq0;
@@ -1527,6 +1549,8 @@ ${contractMetaSelectCore}
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
             loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
             loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
             liveStageCountsQuery,
             liveStageCountsParams,
           });
@@ -1540,6 +1564,7 @@ ${contractMetaSelectCore}
             undefined,
             undefined,
             summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
           );
         }
         timingsMs.total = performance.now() - tReq0;
@@ -1585,6 +1610,8 @@ ${contractMetaSelectCore}
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
             loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
             loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
             liveStageCountsQuery,
             liveStageCountsParams,
           });
@@ -1597,6 +1624,7 @@ ${contractMetaSelectCore}
             undefined,
             undefined,
             summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
           );
         }
         timingsMs.total = performance.now() - tReq0;
@@ -1657,6 +1685,8 @@ ${contractMetaSelectCore}
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
             loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
             loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
             liveStageCountsQuery,
             liveStageCountsParams,
           });
@@ -1669,11 +1699,87 @@ ${contractMetaSelectCore}
             undefined,
             undefined,
             summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
           );
         }
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
           path: 'list-completed-hybrid',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: hybrid.shipments.length,
+          contractRows: hybrid.unplannedBreakdown.contractRows,
+          shipmentRows: hybrid.unplannedBreakdown.shipmentRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: hybrid.shipments,
+            pagination: hybrid.pagination,
+            unplannedBreakdown: hybrid.unplannedBreakdown,
+            ...(hybridSummary ? { summary: hybridSummary } : {}),
+          },
+        });
+      }
+
+      if (shouldResolveCancelledHybridShipmentsList(status)) {
+        const hybrid = await resolveCancelledHybridShipmentsList(
+          req,
+          buildShipmentCancelledHybridListContext({
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            toolbarOuterSql: outerSql,
+            innerParams,
+            toolbarOuterParams: outerParams,
+            skipSapJoin,
+            filterCacheKey,
+            contractScope: {
+              dateFrom,
+              dateTo,
+              contract,
+              plants,
+            },
+            globalSearch,
+            colFilters,
+            sortKey: listSortKey,
+            sortDir: listSortDir,
+            tableStatusFilter: typeof status === 'string' ? status : undefined,
+          }),
+        );
+        let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
+          });
+          hybridSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+            undefined,
+            undefined,
+            undefined,
+            summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-cancelled-hybrid',
           compact,
           skipSapJoin,
           includeSummary,
@@ -1707,6 +1813,8 @@ ${contractMetaSelectCore}
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
             loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
             loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
             liveStageCountsQuery,
             liveStageCountsParams,
           });
@@ -1735,6 +1843,7 @@ ${contractMetaSelectCore}
           unplannedBreakdown: unplannedBreakdownForSummary,
           preplannedBreakdown: preplannedBreakdownForSummary,
           completedBreakdown: completedBreakdownForSummary,
+          cancelledBreakdown: cancelledBreakdownForSummary,
           source: summarySource,
         } = summaryBundle;
         timingsMs.total = performance.now() - tReq0;
@@ -1770,6 +1879,7 @@ ${contractMetaSelectCore}
               undefined,
               undefined,
               completedBreakdownForSummary,
+              cancelledBreakdownForSummary,
             ),
           },
         });
@@ -1861,6 +1971,8 @@ ${contractMetaSelectCore}
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
         loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
         loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+        loadCancelledBreakdown: loadSection1CancelledBreakdown,
         liveStageCountsQuery,
         liveStageCountsParams,
       });
@@ -1870,12 +1982,14 @@ ${contractMetaSelectCore}
         unplannedBreakdown: unplannedBreakdownForSummary,
         preplannedBreakdown: preplannedBreakdownForSummary,
         completedBreakdown: completedBreakdownForSummary,
+        cancelledBreakdown: cancelledBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
       const statusCardQtyBacklogParts: ShipmentStatusCardQtyBacklogParts = {
         unplannedBacklogContractQtyKg: unplannedBreakdownForSummary.contractQtyKg,
         preplannedContractQtyKg: preplannedBreakdownForSummary.contractQtyKg,
         completedBacklogContractQtyKg: completedBreakdownForSummary.contractQtyKg,
+        cancelledBacklogContractQtyKg: cancelledBreakdownForSummary.contractQtyKg,
         unplannedBacklogOutstandingQtyKg: unplannedBreakdownForSummary.outstandingQtyKg,
         preplannedOutstandingQtyKg: preplannedBreakdownForSummary.outstandingQtyKg,
       };
@@ -1913,6 +2027,7 @@ ${contractMetaSelectCore}
             undefined,
             statusCardQty,
             completedBreakdownForSummary,
+            cancelledBreakdownForSummary,
           ),
           pagination: {
             total: tc,
@@ -2061,6 +2176,7 @@ ${contractMetaSelectCore}
     let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
     let preplannedBreakdownForSummary: PreplannedContractsBreakdown | null = null;
     let completedBreakdownForSummary: CompletedContractBacklogBreakdown | null = null;
+    let cancelledBreakdownForSummary: CancelledContractBacklogBreakdown | null = null;
     let summarySource: string | undefined;
     if (includeSummary) {
       const tSa0 = performance.now();
@@ -2075,6 +2191,8 @@ ${contractMetaSelectCore}
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
         loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
         loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+        loadCancelledBreakdown: loadSection1CancelledBreakdown,
         liveStageCountsQuery,
         liveStageCountsParams,
       });
@@ -2082,6 +2200,7 @@ ${contractMetaSelectCore}
       unplannedBreakdownForSummary = summaryBundle.unplannedBreakdown;
       preplannedBreakdownForSummary = summaryBundle.preplannedBreakdown;
       completedBreakdownForSummary = summaryBundle.completedBreakdown;
+      cancelledBreakdownForSummary = summaryBundle.cancelledBreakdown;
       summarySource = summaryBundle.source;
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
     }
@@ -2112,6 +2231,7 @@ ${contractMetaSelectCore}
           undefined,
           undefined,
           completedBreakdownForSummary,
+          cancelledBreakdownForSummary,
         ),
         pagination: {
           total: totalCount,

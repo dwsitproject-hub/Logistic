@@ -402,11 +402,12 @@ const STATUS_CARD_QTY_CACHE = new Map<
 const STATUS_CARD_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentStatusCardQtyBundle>>();
 const OUTSTANDING_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentOutstandingQtySummary>>();
 
-/** Backlog qty parts already computed by the Unplanned/Preplanned/Completed breakdown queries. */
+/** Backlog qty parts already computed by the Unplanned/Preplanned/Completed/Cancelled breakdown queries. */
 export interface ShipmentStatusCardQtyBacklogParts {
   unplannedBacklogContractQtyKg: number;
   preplannedContractQtyKg: number;
   completedBacklogContractQtyKg?: number;
+  cancelledBacklogContractQtyKg?: number;
   unplannedBacklogOutstandingQtyKg: number;
   preplannedOutstandingQtyKg: number;
 }
@@ -433,6 +434,7 @@ export async function mergeShipmentStatusCardQtyFromCombinedSummaryRow(
     unplannedBacklogContractQtyKg: backlogParts.unplannedBacklogContractQtyKg,
     preplannedContractQtyKg: backlogParts.preplannedContractQtyKg,
     completedBacklogContractQtyKg: backlogParts.completedBacklogContractQtyKg,
+    cancelledBacklogContractQtyKg: backlogParts.cancelledBacklogContractQtyKg,
     unplannedBacklogOutstandingQtyKg: backlogParts.unplannedBacklogOutstandingQtyKg,
     preplannedOutstandingQtyKg: backlogParts.preplannedOutstandingQtyKg,
     outstanding: outstandingExec,
@@ -489,6 +491,7 @@ export async function loadShipmentStatusCardQtyForRequest(
       unplannedBacklogContractQtyKg: backlogParts.unplannedBacklogContractQtyKg,
       preplannedContractQtyKg: backlogParts.preplannedContractQtyKg,
       completedBacklogContractQtyKg: backlogParts.completedBacklogContractQtyKg,
+      cancelledBacklogContractQtyKg: backlogParts.cancelledBacklogContractQtyKg,
       unplannedBacklogOutstandingQtyKg: backlogParts.unplannedBacklogOutstandingQtyKg,
       preplannedOutstandingQtyKg: backlogParts.preplannedOutstandingQtyKg,
       outstanding,
@@ -691,6 +694,8 @@ export type ShipmentSummaryCompletedBreakdown = {
   outstandingQtyKg: number;
 };
 
+export type ShipmentSummaryCancelledBreakdown = ShipmentSummaryCompletedBreakdown;
+
 export type ShipmentSummaryLoadSource = 'cache' | 'daily' | 'live';
 
 export function buildShipmentPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
@@ -779,6 +784,7 @@ export async function loadShipmentSummaryBundle(
     loadUnplannedBreakdown: () => Promise<ShipmentSummaryUnplannedBreakdown>;
     loadPreplannedBreakdown?: () => Promise<ShipmentSummaryPreplannedBreakdown>;
     loadCompletedBreakdown?: () => Promise<ShipmentSummaryCompletedBreakdown>;
+    loadCancelledBreakdown?: () => Promise<ShipmentSummaryCancelledBreakdown>;
     /**
      * Lightweight live stage-count + vessel-name SQL (master join, no SPD qty). When daily
      * is used, overlays planned/atLP/sailed/… counts and vessel lists so cards match the table.
@@ -792,6 +798,7 @@ export async function loadShipmentSummaryBundle(
   unplannedBreakdown: ShipmentSummaryUnplannedBreakdown;
   preplannedBreakdown: ShipmentSummaryPreplannedBreakdown;
   completedBreakdown: ShipmentSummaryCompletedBreakdown;
+  cancelledBreakdown: ShipmentSummaryCancelledBreakdown;
   source: ShipmentSummaryLoadSource;
 }> {
   const liveLoadStartedAt = Date.now();
@@ -819,8 +826,15 @@ export async function loadShipmentSummaryBundle(
     contractQtyKg: 0,
     outstandingQtyKg: 0,
   };
+  const emptyCancelled: ShipmentSummaryCancelledBreakdown = {
+    contractRows: 0,
+    totalTableRows: 0,
+    contractQtyKg: 0,
+    outstandingQtyKg: 0,
+  };
   const loadPreplanned = opts.loadPreplannedBreakdown ?? (async () => emptyPreplanned);
   const loadCompleted = opts.loadCompletedBreakdown ?? (async () => emptyCompleted);
+  const loadCancelled = opts.loadCancelledBreakdown ?? (async () => emptyCancelled);
 
   /** Unplanned is PO-only — no execution vessels. Normalize without a second DB round-trip. */
   const normalizeSummaryRow = (summaryRow: Record<string, unknown>): Record<string, unknown> => ({
@@ -862,11 +876,13 @@ export async function loadShipmentSummaryBundle(
       evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
       // Live hybrid counts for Unplanned + Preplanned cards — daily SUM can be stale or
       // diverge from the hybrid table (e.g. preplanned moves, execution rows).
-      const [unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
-        opts.loadUnplannedBreakdown(),
-        loadPreplanned(),
-        loadCompleted(),
-      ]);
+      const [unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
+        await Promise.all([
+          opts.loadUnplannedBreakdown(),
+          loadPreplanned(),
+          loadCompleted(),
+          loadCancelled(),
+        ]);
       registerSummaryKeepWarm();
       return {
         summaryRow,
@@ -874,6 +890,7 @@ export async function loadShipmentSummaryBundle(
         unplannedBreakdown,
         preplannedBreakdown,
         completedBreakdown,
+        cancelledBreakdown,
         source: 'daily',
       };
     }
@@ -882,28 +899,33 @@ export async function loadShipmentSummaryBundle(
   const cached = SUMMARY_CACHE.get(opts.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     SUMMARY_KEEP_WARM.touch(opts.cacheKey);
-    const [unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
-      opts.loadUnplannedBreakdown(),
-      loadPreplanned(),
-      loadCompleted(),
-    ]);
+    const [unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
+      await Promise.all([
+        opts.loadUnplannedBreakdown(),
+        loadPreplanned(),
+        loadCompleted(),
+        loadCancelled(),
+      ]);
     return {
       summaryRow: normalizeSummaryRow(cached.summaryRow),
       totalCount: cached.totalCount,
       unplannedBreakdown,
       preplannedBreakdown,
       completedBreakdown,
+      cancelledBreakdown,
       source: 'cache',
     };
   }
   if (cached) SUMMARY_CACHE.delete(opts.cacheKey);
 
-  const [loaded, unplannedBreakdown, preplannedBreakdown, completedBreakdown] = await Promise.all([
-    loadShipmentListSummary(opts.summaryCountQuery, opts.params, opts.cacheKey),
-    opts.loadUnplannedBreakdown(),
-    loadPreplanned(),
-    loadCompleted(),
-  ]);
+  const [loaded, unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
+    await Promise.all([
+      loadShipmentListSummary(opts.summaryCountQuery, opts.params, opts.cacheKey),
+      opts.loadUnplannedBreakdown(),
+      loadPreplanned(),
+      loadCompleted(),
+      loadCancelled(),
+    ]);
   // Combined summary SQL already includes stage counts + vessel name arrays.
   const summaryRow = normalizeSummaryRow(loaded.summaryRow);
   SUMMARY_CACHE.set(opts.cacheKey, {
@@ -919,6 +941,7 @@ export async function loadShipmentSummaryBundle(
     unplannedBreakdown,
     preplannedBreakdown,
     completedBreakdown,
+    cancelledBreakdown,
     source: 'live',
   };
 }
@@ -961,7 +984,11 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
   for (const row of rows) {
     if (String(row.row_kind ?? '').trim() === 'contract_backlog') {
       const statusUpper = String(row.status ?? '').trim().toUpperCase();
-      if (statusUpper !== 'PREPLANNED' && statusUpper !== 'COMPLETED') {
+      if (
+        statusUpper !== 'PREPLANNED'
+        && statusUpper !== 'COMPLETED'
+        && statusUpper !== 'CANCELLED'
+      ) {
         row.status = 'UNPLANNED';
       }
       continue;

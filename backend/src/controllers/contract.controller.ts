@@ -47,7 +47,16 @@ import { ttlMemo } from '../utils/ttlMemo';
 import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
 import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
-import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from '../utils/truckingQuantitySql';
+import { sqlContractDetailsTruckingOpVisible } from '../utils/truckingOperationUniqueness';
+import {
+  TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+  sqlTruckingResolvedDeliveryQty,
+  sqlTruckingResolvedReceiveQty,
+} from '../utils/truckingQuantitySql';
+import {
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from '../utils/shipmentManualQtyResolveSql';
 import {
   computeClosedCashCycleDays,
   computeClosedDpCycleDays,
@@ -96,7 +105,16 @@ import {
   resolveContractLogisticsStoStatus,
   summarizeContractLogisticsStoQty,
 } from '../utils/contractLogisticsStoDisplay';
-import { sqlContractImportStatusExpr, sqlContractImportStatusForStoExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
+import {
+  sqlContractImportStatusExpr,
+  sqlContractImportStatusForStoExpr,
+  sqlContractImportStatusIsClosedExpr,
+  sqlContractImportStatusIsOpenExpr,
+  sqlContractListImportStatusAggExpr,
+  normalizeContractDeliveryStatusForDisplay,
+  sqlIsContractSapClosedExpr,
+  sqlIsContractSapClosedForStoExpr,
+} from '../utils/contractDeliveryStatus';
 import {
   sqlMaxTruckingLastReceiveDateForContract,
   sqlMaxTruckingWbActualsDateForContract,
@@ -2120,19 +2138,27 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           stoKeyExpr: 'sk.sto_key',
         })}, 0), 0) AS sto_quantity,
         COALESCE(
-          NULLIF(${sqlSapQtyDeliveredForStoKeyExpr({
-            contractAlias: 'c_po',
-            stoKeyExpr: 'sk.sto_key',
-            contractQtyExpr: 'c_po.quantity_ordered',
-          })}, 0),
-          sp.quantity_delivered_db,
+          ${sqlShipmentResolvedDeliveryKg(
+            sqlIsContractSapClosedForStoExpr('c_po', 'sk.sto_key'),
+            'COALESCE(NULLIF(sp.quantity_delivered_klip, 0), sp.quantity_delivered_db)',
+            `(${sqlSapQtyDeliveredForStoKeyExpr({
+              contractAlias: 'c_po',
+              stoKeyExpr: 'sk.sto_key',
+              contractQtyExpr: 'c_po.quantity_ordered',
+            })})`,
+            'sp.quantity_delivered_db',
+          )},
           0
         ) AS quantity_delivered,
         COALESCE(
-          NULLIF(${sqlSapQtyReceiveForStoKeyExpr({
-            contractAlias: 'c_po',
-            stoKeyExpr: 'sk.sto_key',
-          })}, 0),
+          ${sqlShipmentResolvedReceiveKg(
+            sqlIsContractSapClosedForStoExpr('c_po', 'sk.sto_key'),
+            'sp.actual_vessel_qty_receive',
+            `(${sqlSapQtyReceiveForStoKeyExpr({
+              contractAlias: 'c_po',
+              stoKeyExpr: 'sk.sto_key',
+            })})`,
+          )},
           0
         ) AS quantity_receive,
         sp.vessel_name,
@@ -2145,9 +2171,12 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       CROSS JOIN contracts c_po
       LEFT JOIN LATERAL (
         SELECT
+          s.id,
           s.operation_id,
           s.status,
           COALESCE(s.quantity_delivered, 0) AS quantity_delivered_db,
+          s.quantity_delivered_klip,
+          s.actual_vessel_qty_receive,
           s.vessel_name,
           s.ata_discharge_complete,
           s.eta_discharge_complete,
@@ -2201,8 +2230,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       op_fallback_keys AS (
         SELECT DISTINCT TRIM(t.operation_id::text) AS sto_key
         FROM trucking_operations t
+        INNER JOIN contracts c ON c.id = t.contract_id
         WHERE t.contract_id = $1
           AND NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
+          AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
           AND NOT EXISTS (SELECT 1 FROM real_sto_keys)
       ),
       sto_keys AS (
@@ -2213,6 +2244,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       SELECT
         sk.sto_key AS sto_number,
         sk.sto_key AS sto_key,
+        tp.id,
         tp.operation_id,
         tp.status,
         COALESCE(
@@ -2229,17 +2261,26 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           })}, 0),
           0
         ) AS sto_quantity,
-        COALESCE(tp.quantity_delivered, 0) AS quantity_receive_db,
-        COALESCE(tp.quantity_delivered, 0) AS quantity_delivered_db,
-        ${sqlSapQtyReceiveForStoKeyExpr({
-          contractAlias: 'c',
-          stoKeyExpr: 'sk.sto_key',
-        })} AS quantity_receive_sap,
-        ${sqlSapQtyDeliveredForStoKeyExpr({
-          contractAlias: 'c',
-          stoKeyExpr: 'sk.sto_key',
-          contractQtyExpr: 'c.quantity_ordered',
-        })} AS quantity_delivered_sap,
+        -- Open+WB>0 → WB; Close → SAP (same as Trucking list)
+        ${sqlTruckingResolvedDeliveryQty(
+          'COALESCE(tp.quantity_delivered, 0)',
+          `(${sqlSapQtyDeliveredForStoKeyExpr({
+            contractAlias: 'c',
+            stoKeyExpr: 'sk.sto_key',
+            contractQtyExpr: 'c.quantity_ordered',
+          })})`,
+          'tp.id',
+          'c',
+        )} AS quantity_delivered,
+        ${sqlTruckingResolvedReceiveQty(
+          'COALESCE(tp.quantity_delivered, 0)',
+          `(${sqlSapQtyReceiveForStoKeyExpr({
+            contractAlias: 'c',
+            stoKeyExpr: 'sk.sto_key',
+          })})`,
+          'tp.id',
+          'c',
+        )} AS quantity_receive,
         COALESCE((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
@@ -2310,6 +2351,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         SELECT t.*
         FROM trucking_operations t
         WHERE t.contract_id = $1
+          AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
           AND (
             (sk.sto_key ~ '^(OP-|MNL-|MSEA-)' AND TRIM(t.operation_id::text) = sk.sto_key)
             OR (sk.sto_key !~ '^(OP-|MNL-|MSEA-)')
@@ -2344,6 +2386,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       });
       return {
         type: 'shipment' as const,
+        id: r.id ?? null,
         sto_number: resolveContractLogisticsStoNumber(r.sto_number),
         operation_id: resolveContractLogisticsOperationId(r.operation_id, r.sto_key),
         late_indicator: lateIndicator,
@@ -2385,18 +2428,14 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       });
       return {
         type: 'trucking' as const,
+        id: r.id ?? null,
         sto_number: resolveContractLogisticsStoNumber(r.sto_number),
         operation_id: resolveContractLogisticsOperationId(r.operation_id),
         late_indicator: lateIndicator,
         status,
         sto_quantity: toSapDisplayNumber(r.sto_quantity),
-        // Prefer SAP; treat 0 as missing so Operation ID rows can fall back to trucking DB qty.
-        quantity_receive: toSapDisplayNumber(
-          Number(r.quantity_receive_sap) > 0 ? r.quantity_receive_sap : r.quantity_receive_db,
-        ),
-        quantity_delivered: toSapDisplayNumber(
-          Number(r.quantity_delivered_sap) > 0 ? r.quantity_delivered_sap : r.quantity_delivered_db,
-        ),
+        quantity_receive: toSapDisplayNumber(r.quantity_receive),
+        quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
         trucking_owner: r.trucking_owner || null,
         eta_trucking_completion_date: r.eta_trucking_completion_date || null,
         trucking_start_date: r.trucking_start_date || null,
@@ -2452,6 +2491,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           });
           return {
             type: 'shipment' as const,
+            id: null,
             sto_number: resolveContractLogisticsStoNumber(r.sto_number),
             operation_id: resolveContractLogisticsOperationId(r.operation_id),
             late_indicator: lateIndicator,
@@ -2485,6 +2525,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         });
         return {
           type: 'trucking' as const,
+          id: null,
           sto_number: resolveContractLogisticsStoNumber(r.sto_number),
           operation_id: resolveContractLogisticsOperationId(r.operation_id),
           late_indicator: lateIndicator,
@@ -2574,20 +2615,29 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           s.port_of_loading,
           s.port_of_discharge,
           s.quantity_shipped AS sto_quantity,
-          s.quantity_delivered,
-          (
-            SELECT SUM(NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-              NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-              ''
-            ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND (
-                NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '')
-                  = ANY($2::text[])
-                OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Operation ID', '')), '') = ANY($2::text[])
-              )
+          COALESCE(
+            ${sqlShipmentResolvedDeliveryKg(
+              sqlIsContractSapClosedExpr('c'),
+              'COALESCE(NULLIF(s.quantity_delivered_klip, 0), s.quantity_delivered)',
+              `(${sqlSapQtyDeliveredForStoKeyExpr({
+                contractAlias: 'c',
+                stoKeyExpr: `(SELECT TRIM(k) FROM unnest($2::text[]) AS t(k) WHERE TRIM(k) <> '' LIMIT 1)`,
+                contractQtyExpr: 'c.quantity_ordered',
+              })})`,
+              's.quantity_delivered',
+            )},
+            0
+          ) AS quantity_delivered,
+          COALESCE(
+            ${sqlShipmentResolvedReceiveKg(
+              sqlIsContractSapClosedExpr('c'),
+              's.actual_vessel_qty_receive',
+              `(${sqlSapQtyReceiveForStoKeyExpr({
+                contractAlias: 'c',
+                stoKeyExpr: `(SELECT TRIM(k) FROM unnest($2::text[]) AS t(k) WHERE TRIM(k) <> '' LIMIT 1)`,
+              })})`,
+            )},
+            0
           ) AS quantity_receive,
           c.delivery_start_date,
           c.delivery_end_date,
@@ -2733,7 +2783,9 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         t.loading_location,
         ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         c.quantity_ordered AS contract_qty,
-        COALESCE(NULLIF((
+        ${sqlTruckingResolvedDeliveryQty(
+          'COALESCE(t.quantity_delivered, 0)',
+          `COALESCE(NULLIF((
           SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered', 'c.incoterm')})
           FROM sap_processed_data spd
           WHERE (
@@ -2760,8 +2812,13 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
                 )
               )
             )
-        ), 0), t.quantity_delivered) AS quantity_delivered,
-        COALESCE(NULLIF((
+        ), 0), 0)`,
+          't.id',
+          'c',
+        )} AS quantity_delivered,
+        ${sqlTruckingResolvedReceiveQty(
+          'COALESCE(t.quantity_delivered, 0)',
+          `COALESCE(NULLIF((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
             NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
@@ -2792,7 +2849,10 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
                 )
               )
             )
-        ), 0), t.quantity_delivered) AS quantity_receive,
+        ), 0), 0)`,
+          't.id',
+          'c',
+        )} AS quantity_receive,
         ${sqlContractGlobalOutstandingExpr({
           contractQtyExpr: 'c.quantity_ordered',
           incotermExpr: contractEffectiveIncotermExpr('c'),
@@ -2826,6 +2886,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
       ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       ${TRUCKING_REALIZATIONS_JOIN}
       WHERE c.id = $1
+        AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
         AND (
           TRIM(COALESCE(t.operation_id::text, '')) = ANY($2::text[])
           OR EXISTS (

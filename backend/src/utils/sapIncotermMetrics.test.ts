@@ -12,6 +12,8 @@ import {
   sqlIncotermOutstandingCase,
   sqlIncotermQuantityDeliveryCase,
   sqlQtyMoveJoinIncotermDelivery,
+  sqlSapGrPoStatusFromJson,
+  sqlSapGrStoStatusFromJson,
   sqlUatQuantityDeliveryCase,
   usesGrPoStatus,
   usesTruckingQuantityDelivery,
@@ -130,6 +132,17 @@ describe('sapIncotermMetrics', () => {
     expect(stoIdx).toBeGreaterThan(-1);
     expect(stoContractIdx).toBeGreaterThan(-1);
     expect(stoIdx).toBeLessThan(stoContractIdx);
+  });
+
+  it('overlays Cancelled on GR PO/STO when Delete flag is set', () => {
+    const po = sqlSapGrPoStatusFromJson('spd.data');
+    expect(po).toContain('Delete PO Status');
+    expect(po).toContain("'Cancelled'");
+    expect(po).toContain('GR PO Status');
+    const sto = sqlSapGrStoStatusFromJson('spd.data');
+    expect(sto).toContain('Delete STO Status');
+    expect(sto).toContain("'Cancelled'");
+    expect(sto).toContain('GR STO Status');
   });
 
   it('sqlQtyMoveJoinIncotermDelivery uses trucking/vessel columns not vessel-first COALESCE', () => {

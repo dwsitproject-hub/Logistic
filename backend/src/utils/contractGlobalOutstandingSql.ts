@@ -9,7 +9,10 @@ import {
   SQL_SPD_CONTRACT_REFF_PO,
   sqlCoalesceB2bOriginParentOrChildQty,
 } from './b2bOriginEndingSql';
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import {
+  sqlIsContractSapCancelledExpr,
+  sqlIsContractSapClosedExpr,
+} from './contractDeliveryStatus';
 import {
   sqlContractOutstandingFromFields,
   sqlParseSapNumeric,
@@ -119,6 +122,7 @@ function truckingWbOverlayCte(): string {
           WHERE ${effectiveIncoterm} IN ('FRC', 'LCO')
             AND NOT (${grClosed})
             AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
+            AND t.deduped_at IS NULL
           GROUP BY c.contract_id
           HAVING BOOL_OR(
             EXISTS (
@@ -161,20 +165,25 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
   const qtyTrucking = sqlSapQtyTruckingFromSpd('spd');
   const qtyVessel = sqlSapQtyVesselFromSpd('spd');
   const parentIsOrigin = `(roll.origin_po IS NOT NULL AND ${SQL_SPD_CONTRACT_REFF_PO('p_spd.data')} IS NULL)`;
+  const parentContractQtyExpr = `(SELECT MAX(c_cap.quantity_ordered) FROM contracts c_cap WHERE c_cap.contract_id = r.contract_number)`;
+  const overlayCap = { capAtParentContractQtyExpr: parentContractQtyExpr };
   const overlayTrucking = sqlCoalesceB2bOriginParentOrChildQty(
     'r.quantity_delivery_trucking',
     'roll.sum_delivery_trucking',
     parentIsOrigin,
+    overlayCap,
   );
   const overlayVessel = sqlCoalesceB2bOriginParentOrChildQty(
     'r.quantity_delivery_vessel',
     'roll.sum_delivery_vessel',
     parentIsOrigin,
+    overlayCap,
   );
   const overlayReceive = sqlCoalesceB2bOriginParentOrChildQty(
     'r.quantity_receive',
     'roll.sum_receive',
     parentIsOrigin,
+    overlayCap,
   );
 
   return `
@@ -471,13 +480,21 @@ export function sqlContractGlobalOutstandingExpr(opts: {
   // do not correlate sap_processed_data here (this expr is used in list/OS membership).
   const transportExpr = `(SELECT UPPER(TRIM(COALESCE(c.transport_mode, ''))) FROM contracts c WHERE c.contract_id = ${contractNumberExpr} LIMIT 1)`;
   const qmDelivery = sqlQtyMoveIncotermDelivery(incotermExpr, contractNumberExpr, transportExpr);
-  return sqlContractOutstandingFromFields({
+  const outstanding = sqlContractOutstandingFromFields({
     contractQtyExpr,
     incotermExpr,
     receiveExpr: qmReceive,
     deliveryExpr: qmDelivery,
     clampAtZero: true,
   });
+  // Cancelled-by-delete POs are excluded from OS Qty (PO-scoped).
+  const cancelled = `(
+    SELECT ${sqlIsContractSapCancelledExpr('c_os')}
+    FROM contracts c_os
+    WHERE c_os.contract_id = ${contractNumberExpr}
+    LIMIT 1
+  )`;
+  return `CASE WHEN COALESCE((${cancelled}), FALSE) THEN 0::numeric ELSE (${outstanding}) END`;
 }
 
 export { sqlQtyMoveIncotermDelivery };

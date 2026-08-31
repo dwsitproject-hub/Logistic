@@ -21,6 +21,8 @@ import {
   buildAllHybridContractBacklogPageQuery,
   buildCompletedContractBacklogCountQuery,
   buildCompletedContractBacklogPageQuery,
+  buildCancelledContractBacklogCountQuery,
+  buildCancelledContractBacklogPageQuery,
   buildUnplannedShipmentExecutionCountQuery,
   buildUnplannedContractToolbarScope,
   buildPreplannedContractsCountQuery,
@@ -39,8 +41,8 @@ export interface UnplannedHybridListContext {
   };
   globalSearch: string;
   colFilters: ColumnFilterPayload;
-  /** ALL hybrid merges unplanned + preplanned + completed-OS backlog; UNPLANNED / COMPLETED are single-mode. */
-  contractBacklogMode?: 'unplanned' | 'all' | 'completed';
+  /** ALL hybrid merges unplanned + preplanned + completed-OS backlog; UNPLANNED / COMPLETED / CANCELLED are single-mode. */
+  contractBacklogMode?: 'unplanned' | 'all' | 'completed' | 'cancelled';
 }
 
 export interface UnplannedHybridBreakdown {
@@ -59,6 +61,9 @@ export interface CompletedContractBacklogBreakdown {
   contractQtyKg: number;
   outstandingQtyKg: number;
 }
+
+/** Alias — Cancelled PO backlog uses the same shape as Completed backlog counts. */
+export type CancelledContractBacklogBreakdown = CompletedContractBacklogBreakdown;
 
 export interface PreplannedContractsBreakdown {
   /** Contract rows shown in the Preplanned table. */
@@ -185,6 +190,31 @@ export function buildShipmentCompletedHybridListContext(input: {
   };
 }
 
+/** Cancelled card/table: execution CANCELLED + Cancelled SEA POs with no shipment row. */
+export function buildShipmentCancelledHybridListContext(input: {
+  shipmentBaseCteSql: string;
+  toolbarOuterSql: string;
+  innerParams: unknown[];
+  toolbarOuterParams: unknown[];
+  skipSapJoin: boolean;
+  filterCacheKey: string;
+  contractScope: UnplannedHybridListContext['contractScope'];
+  globalSearch: string;
+  colFilters: ColumnFilterPayload;
+  sortKey?: string;
+  sortDir?: 'ASC' | 'DESC';
+  tableStatusFilter?: string;
+}): UnplannedHybridListContext {
+  return {
+    ...buildShipmentHybridListContext({
+      ...input,
+      executionOuterSql: input.toolbarOuterSql,
+      cacheKeySuffix: 'cancelled-hybrid-v1',
+    }),
+    contractBacklogMode: 'cancelled',
+  };
+}
+
 function buildShipmentHybridListContext(input: {
   shipmentBaseCteSql: string;
   executionOuterSql: string;
@@ -252,11 +282,17 @@ const COMPLETED_BREAKDOWN_CACHE = new Map<
   { data: CompletedContractBacklogBreakdown; expiresAt: number }
 >();
 const COMPLETED_BREAKDOWN_IN_FLIGHT = new Map<string, Promise<CompletedContractBacklogBreakdown>>();
+const CANCELLED_BREAKDOWN_CACHE = new Map<
+  string,
+  { data: CancelledContractBacklogBreakdown; expiresAt: number }
+>();
+const CANCELLED_BREAKDOWN_IN_FLIGHT = new Map<string, Promise<CancelledContractBacklogBreakdown>>();
 
 export function invalidateHybridBreakdownCache(): void {
   BREAKDOWN_CACHE.clear();
   PREPLANNED_BREAKDOWN_CACHE.clear();
   COMPLETED_BREAKDOWN_CACHE.clear();
+  CANCELLED_BREAKDOWN_CACHE.clear();
 }
 
 registerListCacheInvalidator(invalidateHybridBreakdownCache);
@@ -299,12 +335,15 @@ async function computeHybridBreakdown(
   const { contractScopeSql, params: contractParams, toolbarSql } = buildContractQueryParts(ctx);
   const isAllHybrid = ctx.contractBacklogMode === 'all';
   const isCompletedHybrid = ctx.contractBacklogMode === 'completed';
+  const isCancelledHybrid = ctx.contractBacklogMode === 'cancelled';
 
-  const contractCountSql = isCompletedHybrid
-    ? buildCompletedContractBacklogCountQuery(contractScopeSql, toolbarSql)
-    : isAllHybrid
-      ? buildAllHybridContractBacklogCountQuery(contractScopeSql, toolbarSql)
-      : buildUnplannedContractBacklogCountQuery(contractScopeSql, toolbarSql);
+  const contractCountSql = isCancelledHybrid
+    ? buildCancelledContractBacklogCountQuery(contractScopeSql, toolbarSql)
+    : isCompletedHybrid
+      ? buildCompletedContractBacklogCountQuery(contractScopeSql, toolbarSql)
+      : isAllHybrid
+        ? buildAllHybridContractBacklogCountQuery(contractScopeSql, toolbarSql)
+        : buildUnplannedContractBacklogCountQuery(contractScopeSql, toolbarSql);
 
   const contractRes = await query(contractCountSql, contractParams);
 
@@ -312,8 +351,8 @@ async function computeHybridBreakdown(
   const contractQtyKg = Number(contractRes.rows[0]?.contract_qty_kg ?? 0) || 0;
   const outstandingQtyKg = Number(contractRes.rows[0]?.outstanding_qty_kg ?? 0) || 0;
 
-  /** Unplanned card/table = PO backlog only; ALL / Completed hybrid merge execution rows. */
-  if (!isAllHybrid && !isCompletedHybrid) {
+  /** Unplanned card/table = PO backlog only; ALL / Completed / Cancelled hybrid merge execution rows. */
+  if (!isAllHybrid && !isCompletedHybrid && !isCancelledHybrid) {
     return {
       contractRows,
       shipmentRows: 0,
@@ -358,8 +397,8 @@ async function fetchContractBacklogPage(
   const sortKey = ctx.shipmentCtx.sortKey ?? 'created_at';
   const sortDir = ctx.shipmentCtx.sortDir ?? 'DESC';
   const text =
-    ctx.contractBacklogMode === 'completed'
-      ? buildCompletedContractBacklogPageQuery(
+    ctx.contractBacklogMode === 'cancelled'
+      ? buildCancelledContractBacklogPageQuery(
           contractScopeSql,
           toolbarSql,
           limit,
@@ -367,23 +406,32 @@ async function fetchContractBacklogPage(
           sortKey,
           sortDir,
         )
-      : ctx.contractBacklogMode === 'all'
-      ? buildAllHybridContractBacklogPageQuery(
-          contractScopeSql,
-          toolbarSql,
-          limit,
-          offset,
-          sortKey,
-          sortDir,
-        )
-      : buildUnplannedContractBacklogPageQuery(
-          contractScopeSql,
-          toolbarSql,
-          limit,
-          offset,
-          sortKey,
-          sortDir,
-        );
+      : ctx.contractBacklogMode === 'completed'
+        ? buildCompletedContractBacklogPageQuery(
+            contractScopeSql,
+            toolbarSql,
+            limit,
+            offset,
+            sortKey,
+            sortDir,
+          )
+        : ctx.contractBacklogMode === 'all'
+          ? buildAllHybridContractBacklogPageQuery(
+              contractScopeSql,
+              toolbarSql,
+              limit,
+              offset,
+              sortKey,
+              sortDir,
+            )
+          : buildUnplannedContractBacklogPageQuery(
+              contractScopeSql,
+              toolbarSql,
+              limit,
+              offset,
+              sortKey,
+              sortDir,
+            );
   const result = await query(text, params);
   return result.rows as Record<string, unknown>[];
 }
@@ -405,6 +453,18 @@ async function fetchShipmentExecutionPage(
 }
 
 type HybridListResult = ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown };
+
+function applyContractBacklogRowKind(row: Record<string, unknown>): void {
+  const statusUpper = String(row.status ?? '').trim().toUpperCase();
+  if (
+    statusUpper !== 'PREPLANNED'
+    && statusUpper !== 'COMPLETED'
+    && statusUpper !== 'CANCELLED'
+  ) {
+    row.status = 'UNPLANNED';
+  }
+  row.row_kind = 'contract_backlog';
+}
 
 /*
  * Response cache for the hybrid list.
@@ -536,13 +596,7 @@ async function computeHybridShipmentsList(
       contractPage = contractPool;
       shipmentPage = shipmentPool;
       for (const row of contractPage) {
-        if (
-          String(row.status ?? '').trim().toUpperCase() !== 'PREPLANNED'
-          && String(row.status ?? '').trim().toUpperCase() !== 'COMPLETED'
-        ) {
-          row.status = 'UNPLANNED';
-        }
-        row.row_kind = 'contract_backlog';
+        applyContractBacklogRowKind(row);
       }
       const mergedRows = normalizeShipmentListRows([
         ...shipmentPage,
@@ -565,13 +619,7 @@ async function computeHybridShipmentsList(
       ]);
 
       for (const row of contractPage) {
-        if (
-          String(row.status ?? '').trim().toUpperCase() !== 'PREPLANNED'
-          && String(row.status ?? '').trim().toUpperCase() !== 'COMPLETED'
-        ) {
-          row.status = 'UNPLANNED';
-        }
-        row.row_kind = 'contract_backlog';
+        applyContractBacklogRowKind(row);
       }
 
       const mergedRows = normalizeShipmentListRows([
@@ -615,6 +663,13 @@ export async function resolveCompletedHybridShipmentsList(
   return resolveHybridShipmentsList(req, ctx);
 }
 
+export async function resolveCancelledHybridShipmentsList(
+  req: AuthRequest,
+  ctx: UnplannedHybridListContext,
+): Promise<ShipmentListResponseData & { unplannedBreakdown: UnplannedHybridBreakdown }> {
+  return resolveHybridShipmentsList(req, ctx);
+}
+
 export function isAllHybridListRequest(status: unknown): boolean {
   const normalized = String(status ?? '').trim().toUpperCase();
   return !normalized || normalized === 'ALL';
@@ -628,6 +683,10 @@ export function isCompletedHybridListRequest(status: unknown): boolean {
   return String(status ?? '').trim().toUpperCase() === 'COMPLETED';
 }
 
+export function isCancelledHybridListRequest(status: unknown): boolean {
+  return String(status ?? '').trim().toUpperCase() === 'CANCELLED';
+}
+
 /**
  * ALL table merges execution + Unplanned/Preplanned/Completed-OS backlog.
  * Keep this true for 10-digit PO/STO search — otherwise Unplanned POs vanish from ALL.
@@ -639,6 +698,11 @@ export function shouldResolveAllHybridShipmentsList(status: unknown): boolean {
 /** Completed card also includes PO backlog with remaining OS ≤ 1 MT (no shipment row). */
 export function shouldResolveCompletedHybridShipmentsList(status: unknown): boolean {
   return isCompletedHybridListRequest(status);
+}
+
+/** Cancelled card also includes Cancelled SEA POs with no shipment row (Delete PO/STO). */
+export function shouldResolveCancelledHybridShipmentsList(status: unknown): boolean {
+  return isCancelledHybridListRequest(status);
 }
 
 export function isPreplannedListRequest(status: unknown): boolean {
@@ -798,5 +862,61 @@ export async function countCompletedContractBacklog(
     });
 
   COMPLETED_BREAKDOWN_IN_FLIGHT.set(cacheKey, run);
+  return run;
+}
+
+function buildCancelledBreakdownCacheKey(ctx: PreplannedListContext): string {
+  if (ctx.cacheKey && ctx.cacheKey.trim()) return ctx.cacheKey;
+  return `cancelled-backlog:${JSON.stringify({
+    contractScope: ctx.contractScope,
+    globalSearch: ctx.globalSearch,
+    colFilters: ctx.colFilters,
+  })}`;
+}
+
+async function computeCancelledContractBacklogBreakdown(
+  ctx: PreplannedListContext,
+): Promise<CancelledContractBacklogBreakdown> {
+  const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
+  const res = await query(
+    buildCancelledContractBacklogCountQuery(contractScopeSql, toolbarSql),
+    params,
+  );
+  const contractRows = parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;
+  const contractQtyKg = Number(res.rows[0]?.contract_qty_kg ?? 0) || 0;
+  const outstandingQtyKg = Number(res.rows[0]?.outstanding_qty_kg ?? 0) || 0;
+  return { contractRows, totalTableRows: contractRows, contractQtyKg, outstandingQtyKg };
+}
+
+export async function countCancelledContractBacklog(
+  ctx: PreplannedListContext,
+): Promise<CancelledContractBacklogBreakdown> {
+  const cacheKey = buildCancelledBreakdownCacheKey(ctx);
+  const cached = CANCELLED_BREAKDOWN_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (cached) CANCELLED_BREAKDOWN_CACHE.delete(cacheKey);
+
+  const inFlight = CANCELLED_BREAKDOWN_IN_FLIGHT.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const run = computeCancelledContractBacklogBreakdown(ctx)
+    .then((data) => {
+      CANCELLED_BREAKDOWN_CACHE.set(cacheKey, {
+        data,
+        expiresAt: Date.now() + HYBRID_CACHE_TTL_MS,
+      });
+      if (CANCELLED_BREAKDOWN_CACHE.size > HYBRID_MAX_CACHE_ENTRIES) {
+        const oldest = [...CANCELLED_BREAKDOWN_CACHE.entries()].sort(
+          (a, b) => a[1].expiresAt - b[1].expiresAt,
+        )[0];
+        if (oldest) CANCELLED_BREAKDOWN_CACHE.delete(oldest[0]);
+      }
+      return data;
+    })
+    .finally(() => {
+      CANCELLED_BREAKDOWN_IN_FLIGHT.delete(cacheKey);
+    });
+
+  CANCELLED_BREAKDOWN_IN_FLIGHT.set(cacheKey, run);
   return run;
 }

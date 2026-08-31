@@ -5,6 +5,7 @@ import {
   sqlSapGrStoStatusFromJson,
 } from '../utils/sapIncotermMetrics';
 import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
+import { sqlContractImportStatusIsCancelledExpr } from '../utils/contractDeliveryStatus';
 
 const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   contractQtyExpr: 'base.quantity_ordered',
@@ -12,6 +13,12 @@ const CONTRACT_LIST_OUTSTANDING_SQL = sqlContractOutstandingSignedExpr({
   receiveExpr: 'base.quantity_receive',
   deliveryExpr: 'base.quantity_delivery',
 });
+
+/** Cancelled (Delete PO/STO) POs contribute 0 OS Qty. */
+const CONTRACT_LIST_OUTSTANDING_WITH_CANCEL = `CASE
+  WHEN ${sqlContractImportStatusIsCancelledExpr('base.import_status')} THEN 0::numeric
+  ELSE (${CONTRACT_LIST_OUTSTANDING_SQL})::numeric
+END`;
 
 export type ContractsListOuterSqlOptions = {
   /** Skip payments-table fallbacks and logistics/doc COUNT subqueries (Contract Performance list). */
@@ -77,7 +84,7 @@ function buildContractsListRowProjection(options: ContractsListOuterSqlOptions =
         base.sto_number,
         base.sto_numbers_agg AS sto_numbers,
         base.total_sto_quantity,
-        (${CONTRACT_LIST_OUTSTANDING_SQL})::numeric AS outstanding_quantity,
+        (${CONTRACT_LIST_OUTSTANDING_WITH_CANCEL}) AS outstanding_quantity,
         base.po_count,
         base.sto_count,
         COALESCE(base.latest_spd_data->'contract'->>'company_code', base.latest_spd_data->'raw'->>'Company Code', base.latest_spd_data->'raw'->>'company code', base.latest_spd_data->>'Company Code', base.latest_spd_data->>'company code') AS company_code,

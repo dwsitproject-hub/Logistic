@@ -73,6 +73,12 @@ describe('B2B origin qty / GR STO overlay helpers', () => {
     expect(coalesceB2bOriginParentOrChildQty(null, null)).toBeNull();
   });
 
+  it('coalesceB2bOriginParentOrChildQty caps child SUM at origin contract qty', () => {
+    expect(coalesceB2bOriginParentOrChildQty(0, 3000, { capAtParentContractQty: 1500 })).toBe(1500);
+    expect(coalesceB2bOriginParentOrChildQty(null, 900, { capAtParentContractQty: 1500 })).toBe(900);
+    expect(coalesceB2bOriginParentOrChildQty(200, 3000, { capAtParentContractQty: 1500 })).toBe(200);
+  });
+
   it('sqlCoalesceB2bOriginParentOrChildQty is COALESCE(NULLIF(parent,0), child) not parent+child', () => {
     const sql = sqlCoalesceB2bOriginParentOrChildQty(
       'r.quantity_receive',
@@ -81,6 +87,18 @@ describe('B2B origin qty / GR STO overlay helpers', () => {
     );
     expect(sql).toContain('COALESCE(NULLIF(r.quantity_receive, 0), roll.sum_receive)');
     expect(sql).not.toContain('r.quantity_receive +');
+  });
+
+  it('sqlCoalesceB2bOriginParentOrChildQty can LEAST-cap child SUM at parent contract qty', () => {
+    const sql = sqlCoalesceB2bOriginParentOrChildQty(
+      'r.quantity_delivery_vessel',
+      'roll.sum_delivery_vessel',
+      'roll.origin_po IS NOT NULL',
+      { capAtParentContractQtyExpr: 'pc.quantity_ordered' },
+    );
+    expect(sql).toContain('LEAST(');
+    expect(sql).toContain('pc.quantity_ordered');
+    expect(sql).toContain('roll.sum_delivery_vessel');
   });
 
   it('child GR STO agg is any Open / all Close across children', () => {

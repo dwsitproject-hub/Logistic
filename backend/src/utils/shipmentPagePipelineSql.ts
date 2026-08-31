@@ -3,7 +3,7 @@
  * Does NOT write to shipments.status; separate from Shipping Performance status logic.
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
 import { shipmentEffectiveStatusExpr, shipmentHasAnyEtaExpr, shipmentHasDeliveryQtyExpr } from './shipmentListFilters';
 import {
   SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
@@ -202,7 +202,7 @@ export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''
         FROM contracts c
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE ${buildShipmentPageSeaIncotermScopeSql('c')}
-          AND NOT (${sqlIsContractSapClosedExpr('c')})
+          AND NOT (${sqlIsContractSapInactiveForOsExpr('c')})
           AND ${shipmentPageExcludeB2bChildCond('l')}
           AND ${sqlContractHasNoRegisteredEtaExpr('c')}
           ${contractScopeSql}

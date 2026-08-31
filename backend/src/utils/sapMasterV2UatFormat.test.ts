@@ -12,6 +12,9 @@ import {
   isTruckingQuantityField,
   resolveSapMasterV2QualityLocation,
   resolveSapTruckingQuantityDelivered,
+  sqlSpdHasAnyDeleteFlagExpr,
+  sqlSpdHasDeletePoFlagExpr,
+  sqlSpdHasDeleteStoFlagExpr,
 } from './sapMasterV2UatFormat';
 
 function headersToMetadata(headers: string[]): FieldMetadata[] {
@@ -70,6 +73,13 @@ describe('sapMasterV2UatFormat', () => {
     expect(hasSapDeleteFlag({ contract: { delete_sto_status: 'S' } })).toBe(true);
     expect(hasSapDeleteFlag({ raw: { 'Delete PO Status': 'L' } })).toBe(true);
     expect(hasSapDeleteFlag({ contract: { delete_po_status: '' }, shipment: {} })).toBe(false);
+  });
+
+  it('emits SQL for Delete PO/STO non-blank checks', () => {
+    expect(sqlSpdHasDeletePoFlagExpr('spd.data')).toContain('Delete PO Status');
+    expect(sqlSpdHasDeletePoFlagExpr('spd.data')).toContain('delete_po_status');
+    expect(sqlSpdHasDeleteStoFlagExpr('spd.data')).toContain('Delete STO Status');
+    expect(sqlSpdHasAnyDeleteFlagExpr('spd.data')).toContain('OR');
   });
 
   it('separates vessel vs trucking quantity columns', () => {

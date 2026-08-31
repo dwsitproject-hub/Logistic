@@ -3,6 +3,7 @@ import {
   SQL_TRUCKING_KEEPER_PRIORITY_ORDER,
   compareTruckingWbCompleteKeepers,
   pickTruckingWbCompleteKeeper,
+  sqlContractDetailsTruckingOpVisible,
   truckingOperationIdIsAssigned,
   truckingStatusKeeperRank,
 } from './truckingOperationUniqueness';
@@ -17,6 +18,15 @@ describe('SQL_TRUCKING_KEEPER_PRIORITY_ORDER', () => {
     expect(statusIdx).toBeGreaterThanOrEqual(0);
     expect(locIdx).toBeGreaterThan(statusIdx);
     expect(ddIdx).toBeGreaterThan(locIdx);
+  });
+});
+
+describe('sqlContractDetailsTruckingOpVisible', () => {
+  it('matches GET /trucking/:id visibility (not deduped, FRC/LCO)', () => {
+    const sql = sqlContractDetailsTruckingOpVisible('t', 'c');
+    expect(sql).toContain('t.deduped_at IS NULL');
+    expect(sql).toContain("IN ('FRC', 'LCO')");
+    expect(sql).toContain('c.incoterm');
   });
 });
 

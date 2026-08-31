@@ -7,6 +7,7 @@ import {
   isAllHybridListRequest,
   isUnplannedHybridListRequest,
   shouldResolveAllHybridShipmentsList,
+  shouldResolveCancelledHybridShipmentsList,
   shouldResolveCompletedHybridShipmentsList,
   shouldSerializeHybridListQuery,
 } from './shipmentUnplannedHybridList.service';
@@ -45,6 +46,14 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(shouldResolveAllHybridShipmentsList('')).toBe(true);
       expect(shouldResolveAllHybridShipmentsList('UNPLANNED')).toBe(false);
       expect(shouldResolveAllHybridShipmentsList('PLANNED')).toBe(false);
+    });
+  });
+
+  describe('shouldResolveCancelledHybridShipmentsList', () => {
+    it('keeps Cancelled hybrid for Cancelled card status', () => {
+      expect(shouldResolveCancelledHybridShipmentsList('CANCELLED')).toBe(true);
+      expect(shouldResolveCancelledHybridShipmentsList('ALL')).toBe(false);
+      expect(shouldResolveCancelledHybridShipmentsList('COMPLETED')).toBe(false);
     });
   });
 
@@ -150,7 +159,7 @@ describe('shipmentUnplannedHybridList.service', () => {
     });
   });
 
-  describe('getShipments ALL/Completed hybrid gates', () => {
+  describe('getShipments ALL/Completed/Cancelled hybrid gates', () => {
     it('does not skip hybrid when 10-digit PO/STO search sets exactStoKey', () => {
       const src = readFileSync(
         join(__dirname, '../controllers/shipment.controller.ts'),
@@ -158,8 +167,10 @@ describe('shipmentUnplannedHybridList.service', () => {
       );
       expect(src).toContain('if (shouldResolveAllHybridShipmentsList(status))');
       expect(src).toContain('if (shouldResolveCompletedHybridShipmentsList(status))');
+      expect(src).toContain('if (shouldResolveCancelledHybridShipmentsList(status))');
       expect(src).not.toMatch(/shouldResolveAllHybridShipmentsList\(status\)\s*&&\s*!exactStoKey/);
       expect(src).not.toMatch(/shouldResolveCompletedHybridShipmentsList\(status\)\s*&&\s*!exactStoKey/);
+      expect(src).not.toMatch(/shouldResolveCancelledHybridShipmentsList\(status\)\s*&&\s*!exactStoKey/);
       expect(src).not.toMatch(/isAllHybridListRequest\(status\)\s*&&\s*!exactStoKey/);
     });
   });
