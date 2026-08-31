@@ -97,9 +97,9 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain("'OPEN'");
     expect(sql).toContain("'ACTIVE'");
     expect(sql).toContain('row_open');
-    expect(sql).not.toContain('LIMIT 1');
-    // Per-row SAP pick uses NULL fallback (blank GR ignored); outer COALESCE may use c.status.
-    expect(sql).toContain(', NULL)');
+    // Latest-import scope uses LIMIT 1 only for picking import_id — not for GR row fallback
+    expect(sql).toContain('spd_li.import_id');
+    expect(sql).toContain('IS NOT DISTINCT FROM');
     expect(sql).toContain('BOOL_OR(s.row_open)');
     // Open signal is GR PO/STO only — not commercial Status (blocks false Open → Planned)
     expect(sql).not.toMatch(/row_open[\s\S]*->>'Status'/);
@@ -113,18 +113,30 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain("'FOB'");
   });
 
-  it('prefers Delete PO/STO flag → Cancelled over GR Open', () => {
+  it('prefers Delete PO / all-STO Delete → Cancelled over GR Open (partial Delete STO does not)', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
     expect(sql).toContain('Delete PO Status');
     expect(sql).toContain('Delete STO Status');
     expect(sql).toContain("THEN 'Cancelled'");
     expect(sql).toMatch(/EXISTS[\s\S]*spd_del[\s\S]*THEN 'Cancelled'/);
+    // Partial cancel: live real STOs without Delete STO must block PO Cancelled
+    expect(sql).toContain('spd_live');
+    expect(sql).toContain('NOT EXISTS');
     // Delete cancelled branch must appear before Open wins
     const delIdx = sql.search(/EXISTS[\s\S]*spd_del/);
     const openIdx = sql.indexOf("THEN 'Open'");
     expect(delIdx).toBeGreaterThan(-1);
     expect(openIdx).toBeGreaterThan(-1);
     expect(delIdx).toBeLessThan(openIdx);
+  });
+
+  it('scopes Delete STO Cancelled to sto_key when provided', () => {
+    const scoped = sqlContractImportStatusExpr('c', 'c.po_number', 'sk.sto_key');
+    expect(scoped).toContain('Delete STO Status');
+    expect(scoped).toContain('sk.sto_key');
+    expect(scoped).toContain("THEN 'Cancelled'");
+    // PO-wide all-deleted branch is not used when stoKey is set
+    expect(scoped).not.toContain('spd_live');
   });
 
   it('ignores blank/synthetic STO header GR when real SAP STO lines already have GR', () => {

@@ -1445,7 +1445,9 @@ export class SapDataDistributionService {
           sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
           status = CASE
             WHEN EXCLUDED.status IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
-            WHEN UPPER(TRIM(COALESCE(shipments.status, ''))) IN ('CANCELLED', 'CANCELED') THEN shipments.status
+            WHEN UPPER(TRIM(COALESCE(shipments.status, ''))) IN ('CANCELLED', 'CANCELED')
+              AND EXCLUDED.status NOT IN ('CANCELLED', 'CANCELED')
+              THEN EXCLUDED.status
             WHEN $53::boolean IS TRUE
               THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('EXCLUDED.status')} > ${sqlShipmentStatusRank('shipments.status')}
@@ -1784,8 +1786,15 @@ export class SapDataDistributionService {
       unloadingLocation = null;
     }
 
-    // Derive a generic plant/location value for filters and dashboards
-    const location = unloadingLocation || loadingLocation || null;
+    // Plant/Site (`location`): prefer SAP Discharge Destination, then unload/load.
+    const shipment = (parsedData as { shipment?: Record<string, unknown>; raw?: Record<string, unknown> } | undefined)
+      ?.shipment;
+    const raw = (parsedData as { raw?: Record<string, unknown> } | undefined)?.raw;
+    const dischargeDestination = [shipment?.discharge_destination, raw?.['Discharge Destination'], data.discharge_destination]
+      .map((v) => (v == null ? '' : String(v).trim()))
+      .find((v) => v && v !== '0.00') || null;
+
+    const location = dischargeDestination || unloadingLocation || loadingLocation || null;
     
     const startDate = this.resolveTruckingStartDate(data);
     const completionDate = this.resolveTruckingCompletionDate(data);

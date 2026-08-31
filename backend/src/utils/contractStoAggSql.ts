@@ -43,10 +43,16 @@ function sqlStoAggHasStoWhere(spdAlias = 'spd'): string {
   AND ${spdAlias}.data->'contract'->>'sto_quantity' IS NOT NULL`;
 }
 
-/** Live sto_agg CTE — scoped to contract list filter. */
+/**
+ * Live sto_agg CTE — scoped to contract list filter.
+ * Only STOs from the latest SAP import per contract (same idea as CONTRACT_REAL_STO_KEYS_SQL)
+ * so historical STOs no longer in SAP do not inflate the Contracts View Table.
+ */
 export function buildStoAggCte(filter: StoAggContractFilter): string {
   const join = sqlStoAggScopeJoin(filter);
+  const joinLatest = sqlStoAggScopeJoin(filter, 'spd2');
   const extraWhere = sqlStoAggScopeWhere(filter);
+  const extraWhereLatest = sqlStoAggScopeWhere(filter, 'spd2');
   const effectiveSto = sqlEffectiveStoExpr('spd');
   const stoQtyNum = sqlStoQuantityNumExpr('spd');
   const hasSto = sqlStoAggHasStoWhere('spd');
@@ -68,6 +74,17 @@ export function buildStoAggCte(filter: StoAggContractFilter): string {
               ${stoQtyNum} AS sto_quantity_num,
               spd.created_at
             FROM sap_processed_data spd
+            INNER JOIN (
+              SELECT DISTINCT ON (spd2.contract_number)
+                spd2.contract_number,
+                spd2.import_id
+              FROM sap_processed_data spd2
+              ${joinLatest}
+              WHERE spd2.contract_number IS NOT NULL AND TRIM(spd2.contract_number) != ''
+                ${extraWhereLatest}
+              ORDER BY spd2.contract_number, spd2.created_at DESC NULLS LAST
+            ) li ON li.contract_number = spd.contract_number
+                 AND li.import_id IS NOT DISTINCT FROM spd.import_id
             ${join}
             WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
               ${extraWhere}

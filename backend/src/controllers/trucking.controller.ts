@@ -1,7 +1,10 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
 import { assertTruckingOperationContractOpen, isContractDeliveryClosed, SQL_CONTRACT_IMPORT_STATUS } from '../utils/contractDeliveryStatus';
-import { sapTruckingLoadingLocationSql } from '../utils/sapTruckingLoadingLocationSql';
+import {
+  sapDischargeDestinationSql,
+  sapTruckingLoadingLocationSql,
+} from '../utils/sapTruckingLoadingLocationSql';
 import { AuthRequest } from '../middleware/auth';
 import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
@@ -675,9 +678,14 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
         ${SQL_CONTRACT_IMPORT_STATUS} AS sap_import_status,
         ${SQL_CONTRACT_IMPORT_STATUS} AS import_status,
         c.plant_code,
-        mp.plant_name,
         mp.company_name AS plant_company_name,
         NULLIF(TRIM(mp.group_plant), '') AS group_plant_suggestion,
+        -- Plant/Site in Add/Edit Trucking: SAP Discharge Destination (fallback master plant_name)
+        COALESCE(
+          NULLIF(TRIM(sap_loc.sap_discharge_destination), ''),
+          NULLIF(TRIM(mp.plant_name), '')
+        ) AS plant_name,
+        NULLIF(TRIM(sap_loc.sap_discharge_destination), '') AS sap_discharge_destination,
         COALESCE(sap_loc.sap_loading_location, NULLIF(TRIM(c.supplier), '')) AS sap_loading_location,
         (
           SELECT s.mills
@@ -703,7 +711,8 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       LEFT JOIN master_plants mp ON mp.plant_code = c.plant_code
       LEFT JOIN LATERAL (
         SELECT
-          ${sapTruckingLoadingLocationSql} AS sap_loading_location
+          ${sapTruckingLoadingLocationSql} AS sap_loading_location,
+          ${sapDischargeDestinationSql} AS sap_discharge_destination
         FROM sap_processed_data spd
         WHERE spd.contract_number = c.contract_id
         ORDER BY spd.created_at DESC NULLS LAST

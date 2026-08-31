@@ -34,6 +34,19 @@ export const CONTRACT_PERF_PRODUCT_MULTI_OPTIONS = [
   'Shell Palm',
 ] as const
 
+/** Map auth/role product assignments onto Contract/Shipping Performance multi-select labels. */
+export function mapUserProductsToContractPerfOptions(products: string[]): string[] {
+  const matched: string[] = []
+  for (const product of products) {
+    const match = CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find(
+      (option) =>
+        normalizePerfProductGroupKey(option) === normalizePerfProductGroupKey(product),
+    )
+    if (match && !matched.includes(match)) matched.push(match)
+  }
+  return matched
+}
+
 export type ContractPerfDrilldownFilters = {
   product: string | null
   plant: string | null

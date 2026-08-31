@@ -39,3 +39,15 @@ export const sapTruckingListDischargeLocationSql = `
     NULLIF(TRIM(spd.data->'raw'->>'Truck Unloading at Starting Location'), '')
   )), '')
 `;
+
+/**
+ * SAP Discharge Destination — source of truth for Trucking modal Plant/Site
+ * (e.g. PO 9231000077 → BONTANG). Prefer shipment JSON, then raw column.
+ */
+export const sapDischargeDestinationSql = `
+  NULLIF(TRIM(COALESCE(
+    NULLIF(TRIM(spd.data->'shipment'->>'discharge_destination'), ''),
+    NULLIF(TRIM(spd.data->'raw'->>'Discharge Destination'), ''),
+    NULLIF(TRIM(spd.data->>'discharge_destination'), '')
+  )), '')
+`;

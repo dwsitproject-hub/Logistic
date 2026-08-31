@@ -33,6 +33,7 @@ import {
   buildTruckingExpansionKeyOrderBy,
   canUseTruckingStoKeyPaging,
 } from '../utils/truckingListStoPaging';
+import { resolveTruckingListSortField, resolveTruckingListSortRowKey } from '../utils/truckingListSort';
 import {
   buildTruckingListFromClause,
   buildTruckingListSelectClause,
@@ -170,34 +171,6 @@ const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
 // the heaviest cold cost on the page. Same registry pattern as PAGE_KEEP_WARM — it only
 // re-runs the identical loader off the request path (refresh-ahead + after invalidation).
 const SUMMARY_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS, maxEntries: 4 });
-
-const SORT_FIELD_BY_KEY: Record<string, string> = {
-  created_at: 'created_at',
-  operation_id: 'operation_id',
-  status: 'status',
-  contract_number: 'contract_number',
-  po_number: 'po_number',
-  sto_number: 'sto_number',
-  supplier: 'supplier',
-  trucking_owner: 'trucking_owner',
-  loading_location: 'loading_location',
-  unloading_location: 'unloading_location',
-  trucking_start_date: 'trucking_start_date',
-  trucking_completion_date: 'trucking_completion_date',
-  delivery_start_date: 'delivery_start_date',
-  delivery_end_date: 'delivery_end_date',
-  quantity_delivered: 'quantity_delivered',
-  quantity_receive: 'quantity_receive',
-  outstanding_quantity: 'outstanding_quantity',
-  outstanding_qty_mt: 'outstanding_quantity',
-  quantity_sent: 'quantity_sent',
-  contract_qty: 'contract_qty',
-  incoterm: 'incoterm',
-  oa_budget: 'oa_budget',
-  oa_actual: 'oa_actual',
-  gain_loss_percentage: 'gain_loss_percentage',
-  gain_loss_amount: 'gain_loss_amount',
-};
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
   const keys = Object.keys(colFilters).sort();
@@ -520,7 +493,7 @@ export function sortTruckingListRows(
   sortDir: 'ASC' | 'DESC',
   options?: { prioritizeSapSto?: boolean },
 ): TruckingListRow[] {
-  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const field = resolveTruckingListSortRowKey(sortKey);
   const prioritizeSapSto = options?.prioritizeSapSto === true;
   return [...rows].sort((a, b) => {
     if (prioritizeSapSto) {
@@ -1051,7 +1024,7 @@ export function buildPaginatedListQuery(
   offset: number,
   stageFilter?: string | null,
 ): { text: string; params: unknown[] } {
-  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const field = resolveTruckingListSortField(sortKey);
   const baseParams = [...built.innerParams, ...built.outerParams];
   const stageScoped = buildTruckingExpandedStatusFilterWhere(
     'tf.status',
@@ -1110,7 +1083,7 @@ export function buildTruckingListPageQueryWithoutInlineCount(
   offset: number,
   stageFilter?: string | null,
 ): { text: string; params: unknown[] } {
-  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const field = resolveTruckingListSortField(sortKey);
   const baseParams = [...built.innerParams, ...built.outerParams];
   const stageScoped = buildTruckingExpandedStatusFilterWhere(
     'tf.status',
@@ -1554,7 +1527,7 @@ async function loadTruckingStageSnapshotPage(
     );
     const orderBy = buildListOrderByWithSapStoPriority(
       'tf.sto_number',
-      `${SORT_FIELD_BY_KEY['supplier'] || 'supplier'} ${sortDir} NULLS LAST, created_at DESC, id`,
+      `${resolveTruckingListSortField('supplier')} ${sortDir} NULLS LAST, created_at DESC, id`,
       stage,
     );
     const text = `

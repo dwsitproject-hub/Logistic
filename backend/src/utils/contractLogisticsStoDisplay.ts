@@ -2,6 +2,7 @@
 
 import { deriveShipmentStatus, type ShipmentMilestones } from './shipmentStatus';
 import { deriveTruckingEffectiveStatus } from './truckingEffectiveStatus';
+import { normalizeContractDeliveryStatusForDisplay } from './contractDeliveryStatus';
 
 function trimOrNull(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -101,6 +102,8 @@ export function summarizeContractLogisticsStoQty(
 /**
  * Contract Detail STO status: logistics workflow only (UNPLANNED … COMPLETED).
  * Contract SAP Close is separate — when contract is Close without ATA, shipment status is still COMPLETED.
+ * SAP Cancelled (Delete PO / Delete STO on this line) always shows CANCELLED even without a shipment row.
+ * Sticky DB CANCELLED without SAP Cancelled falls through to milestone derivation (Open → PLANNED).
  */
 export function resolveContractLogisticsStoStatus(input: {
   contractImportStatus?: unknown;
@@ -125,6 +128,11 @@ export function resolveContractLogisticsStoStatus(input: {
         contractImportStatus: input.contractImportStatus,
       },
     );
+  }
+
+  const importDisplay = normalizeContractDeliveryStatusForDisplay(input.contractImportStatus);
+  if (importDisplay === 'Cancelled') {
+    return 'CANCELLED';
   }
 
   return deriveShipmentStatus({

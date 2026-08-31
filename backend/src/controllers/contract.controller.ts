@@ -46,7 +46,8 @@ import {
 import { ttlMemo } from '../utils/ttlMemo';
 import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
-import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import { resolveContractStoInformationLogisticsIncludes } from '../utils/contractStoInformationLogisticsScope';
 import { sqlContractDetailsTruckingOpVisible } from '../utils/truckingOperationUniqueness';
 import {
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
@@ -2103,11 +2104,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
     const deliveryEnd = contract.delivery_end_date ?? null;
     const transportMode = String(contract.transport_mode ?? '').trim().toUpperCase();
     const contractIncoterm = String(contract.incoterm ?? '').trim();
-    const includeShipments =
-      transportMode === '' || transportMode === 'SEA' || transportMode === 'MIX';
-    const includeTrucking =
-      transportMode === '' || transportMode === 'LAND' || transportMode === 'MIX'
-      || isTruckingPageIncoterm(contractIncoterm);
+    const { includeShipments, includeTrucking } = resolveContractStoInformationLogisticsIncludes({
+      incoterm: contractIncoterm,
+      transportMode,
+    });
 
     // Shipment STOs: enumerate contract_stos ∪ SAP (like trucking), then attach matching shipment rows.
     // Do not group only by contracts.sto_number — that collapses multi-STO POs into one row.
@@ -2199,7 +2199,6 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           ) AS ata_arrival_loading
         FROM shipments s
         WHERE s.contract_id = $1
-          AND COALESCE(s.status, '') <> 'CANCELLED'
           AND (
             TRIM(COALESCE(s.shipment_id::text, '')) = sk.sto_key
             OR TRIM(COALESCE(s.operation_id::text, '')) = sk.sto_key
@@ -2210,6 +2209,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           )
         ORDER BY
           CASE WHEN TRIM(COALESCE(s.shipment_id::text, '')) = sk.sto_key THEN 0 ELSE 1 END,
+          -- Prefer non-cancelled when both exist; still attach Cancelled for Delete STO rows
+          CASE WHEN UPPER(TRIM(COALESCE(s.status, ''))) IN ('CANCELLED', 'CANCELED') THEN 1 ELSE 0 END,
           s.updated_at DESC NULLS LAST,
           s.created_at DESC NULLS LAST
         LIMIT 1

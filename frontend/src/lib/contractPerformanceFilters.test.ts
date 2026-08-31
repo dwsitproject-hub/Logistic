@@ -943,3 +943,13 @@ describe('Cross-section integration — all three sections must stay in sync', (
     expect(contractStatus).toBe('Open')
   })
 })
+
+describe('mapUserProductsToContractPerfOptions', () => {
+  it('maps role product assignments onto Section 1 multi-select labels', async () => {
+    const { mapUserProductsToContractPerfOptions } = await import('./contractPerformanceFilters')
+    expect(mapUserProductsToContractPerfOptions(['cpo', 'SHELL PALM', 'unknown'])).toEqual([
+      'CPO',
+      'Shell Palm',
+    ])
+  })
+})

@@ -112,7 +112,10 @@ import { PerformancePeriodSelect } from '@/components/performance/PerformancePer
 import {
   CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
   CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
+  mapUserProductsToContractPerfOptions,
 } from '@/lib/contractPerformanceFilters'
+import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { applyShippingPerfSourceProductFilter } from '@/lib/shippingPerformanceScopeFilters'
 import {
   resolvePerformancePeriodDateRange,
@@ -1376,8 +1379,15 @@ function ShippingPerformancePageContent() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedSources, setSelectedSources] = useState<string[]>([])
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([])
-  const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>([])
+  const {
+    selectedProducts,
+    selectedGroupPlants,
+    handleProductsChange,
+    handleGroupPlantsChange,
+    resetUserScopeFilters,
+  } = useUserScopeFilterDefaults('shipping-performance', {
+    mapProducts: mapUserProductsToContractPerfOptions,
+  })
   const [selectedVessels, setSelectedVessels] = useState<string[]>([])
   const [performancePeriod, setPerformancePeriod] = useState<PerformancePeriodKey>('YTD')
   const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
@@ -1804,15 +1814,15 @@ function ShippingPerformancePageContent() {
   }, [showColumnManager])
 
   const resetPerfSelections = useCallback(() => {
+    markUserScopeFiltersCleared('shipping-performance')
     setPerfCardFilter('all')
     setPerformancePeriod('YTD')
     setSelectedSources([])
-    setSelectedProducts([])
-    setSelectedGroupPlants([])
+    resetUserScopeFilters()
     setSelectedIncoterms([])
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [])
+  }, [resetUserScopeFilters])
 
   const togglePerfCardFilter = useCallback((card: Exclude<ShippingPerfCardFilter, 'all'>) => {
     setPerfCardFilter((prev) => (prev === card ? 'all' : card))
@@ -2119,7 +2129,10 @@ function ShippingPerformancePageContent() {
                     label=""
                     options={availableGroupPlants}
                     selected={selectedGroupPlants}
-                    onChange={setSelectedGroupPlants}
+                    onChange={(values) => {
+                      handleGroupPlantsChange(values)
+                      setCurrentPage(1)
+                    }}
                     placeholder="All group plants"
                     emptyMessage="No group plants"
                     uppercaseOptionLabels
@@ -2165,7 +2178,7 @@ function ShippingPerformancePageContent() {
                     options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
                     selected={selectedProducts}
                     onChange={(values) => {
-                      setSelectedProducts(values)
+                      handleProductsChange(values)
                       setCurrentPage(1)
                     }}
                     placeholder="All products"
@@ -2418,21 +2431,21 @@ function ShippingPerformancePageContent() {
               showProductFilter
               productOptions={availableProducts}
               selectedProducts={selectedProducts}
-              onProductsChange={setSelectedProducts}
+              onProductsChange={handleProductsChange}
               groupPlantOptions={availableGroupPlants}
               selectedGroupPlants={selectedGroupPlants}
-              onGroupPlantsChange={setSelectedGroupPlants}
+              onGroupPlantsChange={handleGroupPlantsChange}
               dateFrom={dateFrom}
               dateTo={dateTo}
               onDateFromChange={setDateFrom}
               onDateToChange={setDateTo}
               showClearButton
               onClear={() => {
+                markUserScopeFiltersCleared('shipping-performance')
                 setSearchDraft('')
                 setSearchTerm('')
                 setSelectedIncoterms([])
-                setSelectedProducts([])
-                setSelectedGroupPlants([])
+                resetUserScopeFilters()
                 setSelectedVessels([])
                 setStatusFilter('All')
                 setDateFrom('')

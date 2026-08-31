@@ -203,6 +203,7 @@ import {
   getContractImportStatusForShipment,
   sqlIsContractSapClosedForStoExpr,
 } from '../utils/contractDeliveryStatus';
+import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
 import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
@@ -2351,6 +2352,7 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
         c.group_name,
         c.quantity_ordered,
         c.unit,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status,
         COALESCE(
           NULLIF(TRIM(c.sto_number::text), ''),
           sap_sto.effective_sto,
@@ -2386,9 +2388,26 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    const row = result.rows[0] as Record<string, unknown>;
+    // Sticky CANCELLED without SAP Cancelled → show derived Open/Planned status (matches Contract Detail List STO).
+    row.status = resolveContractLogisticsStoStatus({
+      contractImportStatus: row.contract_import_status,
+      dbStatus: row.status,
+      logisticsType: 'shipment',
+      shipmentMilestones: {
+        eta_arrival_at_loading_port: row.eta_arrival,
+        eta_complete_discharge: row.eta_discharge_complete,
+        ata_complete_discharge: row.ata_discharge_complete,
+        ata_arrival_at_loading_port: row.ata_arrival,
+        quantity_delivered: row.quantity_delivered,
+        quantity_delivered_klip: row.quantity_delivered_klip,
+      },
+    });
+    delete row.contract_import_status;
+
     return res.json({
       success: true,
-      data: result.rows[0],
+      data: row,
     });
   } catch (error) {
     logger.error('Get shipment by ID error:', error);

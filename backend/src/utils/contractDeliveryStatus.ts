@@ -5,7 +5,10 @@ import {
   INCOTERM_GR_STO_STATUS,
   sqlIncotermImportStatusFromJson,
 } from './sapIncotermMetrics';
-import { sqlSpdHasAnyDeleteFlagExpr } from './sapMasterV2UatFormat';
+import {
+  sqlSpdHasDeletePoFlagExpr,
+  sqlSpdHasDeleteStoFlagExpr,
+} from './sapMasterV2UatFormat';
 import { sapStoNumberKeyExpr, sqlIsSapSeaStoRowExpr } from './shipmentStoTypeSql';
 import { shippingPerfStoMetricsKeyExpr } from './shippingPerformanceStoSql';
 
@@ -175,6 +178,18 @@ export function sqlContractImportStatusExpr(
       : '';
 
   // Prefer real SAP STO lines when they exist with GR; keep blank/synthetic header otherwise.
+  // Scope to latest import so historical STOs (no longer in SAP) do not keep the PO Open.
+  const latestImportIdSubquery = `(
+            SELECT spd_li.import_id
+            FROM sap_processed_data spd_li
+            WHERE spd_li.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_li')}
+            ORDER BY spd_li.created_at DESC NULLS LAST
+            LIMIT 1
+          )`;
+  const latestImportOnly = (alias: string) =>
+    `AND ${alias}.import_id IS NOT DISTINCT FROM ${latestImportIdSubquery}`;
+
   const preferSapStoLinesOverDirtyHeader = `
             AND (
               ${sqlSpdHasRealSapStoKeyExpr('spd')}
@@ -183,21 +198,84 @@ export function sqlContractImportStatusExpr(
                 FROM sap_processed_data spd_gr
                 WHERE spd_gr.contract_number = ${contractAlias}.contract_id
                   ${poMatch('spd_gr')}
+                  ${latestImportOnly('spd_gr')}
                   AND ${sqlSpdHasRealSapStoKeyExpr('spd_gr')}
                   AND NULLIF(TRIM(COALESCE(${lineGrStatusRaw}, '')), '') IS NOT NULL
               )
             )`;
 
-  // Delete PO/STO non-blank → Cancelled (PO-wide), even when GR is still Open.
-  const deleteFlagCancelled = `
-      CASE
-        WHEN EXISTS (
+  // Delete PO → Cancelled for the whole PO.
+  // Delete STO: per-STO Cancelled when stoKey is set; PO-wide Cancelled only when
+  // every real SAP STO in the latest import is deleted (partial cancel must not hide sibling Close/Open).
+  const deletePoExists = `EXISTS (
           SELECT 1
           FROM sap_processed_data spd_del
           WHERE spd_del.contract_number = ${contractAlias}.contract_id
             ${poMatch('spd_del')}
-            AND ${sqlSpdHasAnyDeleteFlagExpr('spd_del.data')}
-        ) THEN 'Cancelled'
+            AND ${sqlSpdHasDeletePoFlagExpr('spd_del.data')}
+        )`;
+  const thisStoDeleted =
+    stoKeyExpr && String(stoKeyExpr).trim()
+      ? `EXISTS (
+          SELECT 1
+          FROM sap_processed_data spd_del
+          WHERE spd_del.contract_number = ${contractAlias}.contract_id
+            ${poMatch('spd_del')}
+            ${latestImportOnly('spd_del')}
+            AND ${sapStoNumberKeyExpr('spd_del')} = TRIM((${stoKeyExpr})::text)
+            AND ${sqlSpdHasDeleteStoFlagExpr('spd_del.data')}
+        )`
+      : 'FALSE';
+  const allRealStosDeleted = `(
+          EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_any
+            WHERE spd_any.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_any')}
+              ${latestImportOnly('spd_any')}
+              AND ${sqlSpdHasRealSapStoKeyExpr('spd_any')}
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_live
+            WHERE spd_live.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_live')}
+              ${latestImportOnly('spd_live')}
+              AND ${sqlSpdHasRealSapStoKeyExpr('spd_live')}
+              AND NOT (${sqlSpdHasDeleteStoFlagExpr('spd_live.data')})
+          )
+        )`;
+  const headerOnlyDeleteSto = `(
+          NOT EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_any
+            WHERE spd_any.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_any')}
+              ${latestImportOnly('spd_any')}
+              AND ${sqlSpdHasRealSapStoKeyExpr('spd_any')}
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_del
+            WHERE spd_del.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_del')}
+              ${latestImportOnly('spd_del')}
+              AND ${sqlSpdHasDeleteStoFlagExpr('spd_del.data')}
+          )
+        )`;
+  const deleteFlagCancelled =
+    stoKeyExpr && String(stoKeyExpr).trim()
+      ? `
+      CASE
+        WHEN ${deletePoExists} THEN 'Cancelled'
+        WHEN ${thisStoDeleted} THEN 'Cancelled'
+        ELSE NULL
+      END`
+      : `
+      CASE
+        WHEN ${deletePoExists} THEN 'Cancelled'
+        WHEN ${allRealStosDeleted} THEN 'Cancelled'
+        WHEN ${headerOnlyDeleteSto} THEN 'Cancelled'
         ELSE NULL
       END`;
 
@@ -218,6 +296,8 @@ export function sqlContractImportStatusExpr(
           FROM sap_processed_data spd
           WHERE spd.contract_number = ${contractAlias}.contract_id
             ${poMatch('spd')}${stoScope}${preferSapStoLinesOverDirtyHeader}${spdExtraAndSql}
+            ${latestImportOnly('spd')}
+            AND NOT (${sqlSpdHasDeleteStoFlagExpr('spd.data')})
         ) s
         WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
           OR s.row_open

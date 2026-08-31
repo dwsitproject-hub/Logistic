@@ -8,6 +8,7 @@ import {
 } from './sapIncotermMetrics';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import { sqlSapIncotermFromJsonb } from './sapSourceTypeSql';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 
 export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
   spd.sto_number::text,
@@ -17,62 +18,66 @@ export const SPD_EFFECTIVE_STO_SQL = `NULLIF(TRIM(COALESCE(
   spd.data->'contract'->>'sto_no'
 )), '')`;
 
+/** PO number from SAP JSON (raw / contract). */
+export function sqlSpdPoNumberExpr(spdAlias = 'spd'): string {
+  return `NULLIF(TRIM(COALESCE(
+    ${spdAlias}.po_number::text,
+    ${spdAlias}.data->'raw'->>'PO No.',
+    ${spdAlias}.data->'raw'->>'PO Number',
+    ${spdAlias}.data->'raw'->>'PO No',
+    ${spdAlias}.data->'contract'->>'po_number',
+    ${spdAlias}.data->>'PO No.'
+  )), '')`;
+}
+
 /**
- * Distinct real STO keys for a contract ($1 = contracts.id): contract_stos ∪ SAP by
- * contract_number ∪ SAP by PO. Used by Contract Detail SEA + LAND STO tables so
- * multi-STO POs appear even when only one shipment/trucking row exists.
+ * Distinct real STO keys for Contract Detail List STO ($1 = contracts.id).
+ * Prefer STOs from the latest SAP import that touched this contract/PO (same idea as
+ * fetchLatestSapStoKeysForPo) so historical STOs no longer in SAP do not inflate the list.
+ * Falls back to contract_stos when this PO has no SAP STO rows yet.
  */
 export const CONTRACT_REAL_STO_KEYS_SQL = `
-  SELECT DISTINCT TRIM(sto.sto_number) AS sto_key
-  FROM (
-    SELECT TRIM(cs.sto_number::text) AS sto_number
-    FROM contract_stos cs
-    WHERE cs.contract_id = $1
-      AND cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
-    UNION
-    SELECT TRIM(COALESCE(
-      spd.sto_number::text,
-      spd.data->'raw'->>'STO No.',
-      spd.data->'raw'->>'STO Number',
-      spd.data->'shipment'->>'sto_no',
-      spd.data->'contract'->>'sto_no'
-    )) AS sto_number
+  WITH c_scope AS (
+    SELECT c.id, c.contract_id, NULLIF(TRIM(c.po_number::text), '') AS po_number
+    FROM contracts c
+    WHERE c.id = $1
+  ),
+  latest_import AS (
+    SELECT spd.import_id
     FROM sap_processed_data spd
-    INNER JOIN contracts c2 ON c2.contract_id = spd.contract_number
-    WHERE c2.id = $1
-      AND TRIM(COALESCE(
-        spd.sto_number::text,
-        spd.data->'raw'->>'STO No.',
-        spd.data->'raw'->>'STO Number',
-        spd.data->'shipment'->>'sto_no',
-        spd.data->'contract'->>'sto_no'
-      )) != ''
-    UNION
-    SELECT TRIM(COALESCE(
-      spd.sto_number::text,
-      spd.data->'raw'->>'STO No.',
-      spd.data->'raw'->>'STO Number',
-      spd.data->'shipment'->>'sto_no',
-      spd.data->'contract'->>'sto_no'
-    )) AS sto_number
+    CROSS JOIN c_scope cs
+    WHERE (
+      spd.contract_number = cs.contract_id
+      OR (
+        cs.po_number IS NOT NULL
+        AND ${sqlSpdPoNumberExpr('spd')} = cs.po_number
+      )
+    )
+    ORDER BY spd.created_at DESC NULLS LAST
+    LIMIT 1
+  ),
+  sap_latest_keys AS (
+    SELECT DISTINCT TRIM((${sapStoNumberKeyExpr('spd')})::text) AS sto_key
     FROM sap_processed_data spd
-    INNER JOIN contracts c3 ON c3.id = $1
-    WHERE NULLIF(TRIM(c3.po_number::text), '') IS NOT NULL
-      AND TRIM(COALESCE(
-        spd.po_number::text,
-        spd.data->'raw'->>'PO No',
-        spd.data->'raw'->>'PO No.',
-        ''
-      )) = TRIM(c3.po_number::text)
-      AND TRIM(COALESCE(
-        spd.sto_number::text,
-        spd.data->'raw'->>'STO No.',
-        spd.data->'raw'->>'STO Number',
-        spd.data->'shipment'->>'sto_no',
-        spd.data->'contract'->>'sto_no'
-      )) != ''
-  ) sto
-  WHERE sto.sto_number IS NOT NULL AND TRIM(sto.sto_number) != ''
+    CROSS JOIN c_scope cs
+    WHERE spd.import_id = (SELECT import_id FROM latest_import)
+      AND (
+        spd.contract_number = cs.contract_id
+        OR (
+          cs.po_number IS NOT NULL
+          AND ${sqlSpdPoNumberExpr('spd')} = cs.po_number
+        )
+      )
+      AND NULLIF(TRIM((${sapStoNumberKeyExpr('spd')})::text), '') IS NOT NULL
+  )
+  SELECT sto_key FROM sap_latest_keys
+  UNION
+  SELECT TRIM(cst.sto_number::text) AS sto_key
+  FROM contract_stos cst
+  CROSS JOIN c_scope cs
+  WHERE cst.contract_id = cs.id
+    AND cst.sto_number IS NOT NULL AND TRIM(cst.sto_number::text) != ''
+    AND NOT EXISTS (SELECT 1 FROM sap_latest_keys)
 `;
 
 /**
@@ -184,18 +189,6 @@ export function sqlSapQtyDeliveredKgFromSpd(
     sqlSapQtyDeliveredAnyFromSpd(spdAlias, incotermExpr),
     contractQtyExpr,
   );
-}
-
-/** PO number from SAP JSON (raw / contract). */
-export function sqlSpdPoNumberExpr(spdAlias = 'spd'): string {
-  return `NULLIF(TRIM(COALESCE(
-    ${spdAlias}.po_number::text,
-    ${spdAlias}.data->'raw'->>'PO No.',
-    ${spdAlias}.data->'raw'->>'PO Number',
-    ${spdAlias}.data->'raw'->>'PO No',
-    ${spdAlias}.data->'contract'->>'po_number',
-    ${spdAlias}.data->>'PO No.'
-  )), '')`;
 }
 
 /** @deprecated Use sqlSpdPoNumberExpr — kept for existing imports. */
@@ -532,20 +525,51 @@ export const TRUCKING_SAP_STO_DETAIL_SQL = `
   ORDER BY sk.effective_sto
   LIMIT 1`;
 
-/** SAP STO rows for contract detail list not already covered by shipments/trucking. */
+/**
+ * SAP STO rows for contract detail list not already covered by shipments/trucking.
+ * Scoped to the latest SAP import for this contract/PO (same idea as CONTRACT_REAL_STO_KEYS_SQL)
+ * so historical STOs no longer in SAP are not re-appended as sap-only rows.
+ */
 export const CONTRACT_SAP_ONLY_STOS_SQL = `
-  WITH sap_rows AS (
+  WITH c_scope AS (
+    SELECT c.id, c.contract_id, NULLIF(TRIM(c.po_number::text), '') AS po_number,
+           c.transport_mode, c.incoterm
+    FROM contracts c
+    WHERE c.id = $1
+  ),
+  latest_import AS (
+    SELECT spd.import_id
+    FROM sap_processed_data spd
+    CROSS JOIN c_scope cs
+    WHERE (
+      spd.contract_number = cs.contract_id
+      OR (
+        cs.po_number IS NOT NULL
+        AND ${sqlSpdPoNumberExpr('spd')} = cs.po_number
+      )
+    )
+    ORDER BY spd.created_at DESC NULLS LAST
+    LIMIT 1
+  ),
+  sap_rows AS (
     SELECT
       ${SPD_EFFECTIVE_STO_SQL} AS effective_sto,
       ${SPD_SEA_LAND_SQL} AS sea_land,
       spd.data,
       spd.created_at,
       spd.contract_number,
-      c.transport_mode,
-      c.incoterm
+      cs.transport_mode,
+      cs.incoterm
     FROM sap_processed_data spd
-    INNER JOIN contracts c ON c.contract_id = spd.contract_number
-    WHERE c.id = $1
+    CROSS JOIN c_scope cs
+    WHERE spd.import_id = (SELECT import_id FROM latest_import)
+      AND (
+        spd.contract_number = cs.contract_id
+        OR (
+          cs.po_number IS NOT NULL
+          AND ${sqlSpdPoNumberExpr('spd')} = cs.po_number
+        )
+      )
   ),
   sap_stos AS (
     SELECT DISTINCT ON (effective_sto)
@@ -626,8 +650,9 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
     CASE
       WHEN s.sea_land LIKE 'LAND%' THEN 'trucking'
       WHEN s.sea_land LIKE 'SEA%' THEN 'shipment'
-      WHEN UPPER(TRIM(COALESCE(s.transport_mode, ''))) IN ('LAND', 'MIX') THEN 'trucking'
       WHEN UPPER(TRIM(COALESCE(s.incoterm, ''))) IN ('FRC', 'LCO') THEN 'trucking'
+      WHEN UPPER(TRIM(COALESCE(s.incoterm, ''))) IN ('CIF', 'FOB', 'CFR') THEN 'shipment'
+      WHEN UPPER(TRIM(COALESCE(s.transport_mode, ''))) = 'LAND' THEN 'trucking'
       WHEN UPPER(TRIM(COALESCE(s.transport_mode, ''))) IN ('SEA', 'MIX') THEN 'shipment'
       ELSE 'shipment'
     END AS logistics_type

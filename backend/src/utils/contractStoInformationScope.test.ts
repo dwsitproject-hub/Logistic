@@ -44,4 +44,15 @@ describe('contract.controller sto-information shipment qty scope', () => {
     expect(uses.length).toBeGreaterThanOrEqual(3);
     expect(src).toContain("import { sqlContractDetailsTruckingOpVisible } from '../utils/truckingOperationUniqueness'");
   });
+
+  it('gates List STO shipment vs trucking by incoterm helper (CIF not dual MIX rows)', () => {
+    const src = readFileSync(
+      join(__dirname, '../controllers/contract.controller.ts'),
+      'utf8',
+    );
+    expect(src).toContain('resolveContractStoInformationLogisticsIncludes');
+    expect(src).not.toMatch(
+      /includeTrucking\s*=\s*[\s\S]*transportMode === 'MIX'[\s\S]*isTruckingPageIncoterm/,
+    );
+  });
 });

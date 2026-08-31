@@ -84,4 +84,9 @@ describe('truckingListStoPaging', () => {
     expect(orderBy).toContain('csla.agg_sto_lines');
     expect(orderBy).not.toMatch(/WHERE csl\.contract_uuid = ts\.contract_id/);
   });
+
+  it('outstanding_qty_mt sort uses trucking_source outstanding_quantity (not created_at)', () => {
+    const orderBy = buildTruckingExpansionKeyOrderBy('outstanding_qty_mt', 'ASC', 'ALL');
+    expect(orderBy).toContain('ts.outstanding_quantity ASC');
+  });
 });

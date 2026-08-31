@@ -3578,9 +3578,25 @@ function TruckingPageContent() {
 
   const sortedOperations = useMemo(() => {
     const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
+    const col = compactColumns.find((c) => c.id === sortKey)
+    const getSortValue = col?.sortable ? col.getSortValue : undefined
+    // Default ALL / status cards without SAP-STO priority: trust server ORDER BY.
     if (!prioritizeSapSto) return filteredOperations
-    return [...filteredOperations].sort((a, b) => compareSapStoListRowPriority(a, b))
-  }, [filteredOperations, statusFilter])
+
+    const dirMul = sortDir === 'asc' ? 1 : -1
+    return [...filteredOperations].sort((a, b) => {
+      const pri = compareSapStoListRowPriority(a, b)
+      if (pri !== 0) return pri
+      if (!getSortValue) return 0
+      const av = getSortValue(a)
+      const bv = getSortValue(b)
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dirMul
+      return (
+        String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' }) *
+        dirMul
+      )
+    })
+  }, [filteredOperations, statusFilter, compactColumns, sortKey, sortDir])
 
   const section3TableLoading =
     tableScopeLoading || (listFetching && truckingOperations.length === 0)

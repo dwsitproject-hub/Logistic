@@ -197,11 +197,14 @@ export function formatTemplateQtyMtFromKg(kg: unknown, opts?: { maxFractionDigit
 }
 
 /**
- * OS Qty (MT) on Download Template — up to 2 decimal MT
- * (aligns with backend OS validation messages, e.g. 439.02).
+ * OS Qty (MT) on Download Template — whole MT (round half up), e.g. 2.41 → 2, 205.78 → 206.
  */
 export function formatTemplateOsQtyMtFromKg(kg: unknown): string {
-  return formatTemplateQtyMtFromKg(kg, { maxFractionDigits: 2 })
+  if (kg === null || kg === undefined || kg === '') return ''
+  const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg)
+  if (!Number.isFinite(n)) return ''
+  const mt = Math.round(n / 1000)
+  return String(mt)
 }
 
 /** @deprecated Use formatTemplateQtyMtFromKg */
@@ -543,7 +546,11 @@ function applyWideTemplateNumericQtyCells(ws: XLSX.WorkSheet, matrix: string[][]
 
     const osQty = parseTemplateQtyMtCell(row[osQtyColIdx])
     if (osQty != null) {
-      ws[XLSX.utils.encode_cell({ r, c: osQtyColIdx })] = { t: 'n', v: osQty }
+      ws[XLSX.utils.encode_cell({ r, c: osQtyColIdx })] = {
+        t: 'n',
+        v: Math.round(osQty),
+        z: '0',
+      }
     }
 
     for (let c = UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX; c <= lastDateColIdx; c += 1) {

@@ -9,18 +9,34 @@ import {
   type UserScopePage,
 } from '@/lib/userScopeFilters'
 
-function readInitialScopeFilters(page: UserScopePage): { products: string[]; groupPlants: string[] } {
-  if (typeof window === 'undefined') return { products: [], groupPlants: [] }
-  if (wereUserScopeFiltersCleared(page)) return { products: [], groupPlants: [] }
-  return getInitialUserScopeFilters()
+export type UserScopeFilterDefaultsOptions = {
+  /** Map auth product labels onto page-specific multi-select options (e.g. Shell Palm). */
+  mapProducts?: (products: string[]) => string[]
 }
 
-export function useUserScopeFilterDefaults(page: UserScopePage) {
+function readInitialScopeFilters(
+  page: UserScopePage,
+  mapProducts?: (products: string[]) => string[],
+): { products: string[]; groupPlants: string[] } {
+  if (typeof window === 'undefined') return { products: [], groupPlants: [] }
+  if (wereUserScopeFiltersCleared(page)) return { products: [], groupPlants: [] }
+  const initial = getInitialUserScopeFilters()
+  return {
+    products: mapProducts ? mapProducts(initial.products) : initial.products,
+    groupPlants: initial.groupPlants,
+  }
+}
+
+export function useUserScopeFilterDefaults(
+  page: UserScopePage,
+  options?: UserScopeFilterDefaultsOptions,
+) {
+  const mapProducts = options?.mapProducts
   const [selectedProducts, setSelectedProducts] = useState<string[]>(
-    () => readInitialScopeFilters(page).products,
+    () => readInitialScopeFilters(page, mapProducts).products,
   )
   const [selectedGroupPlants, setSelectedGroupPlants] = useState<string[]>(
-    () => readInitialScopeFilters(page).groupPlants,
+    () => readInitialScopeFilters(page, mapProducts).groupPlants,
   )
   /** False until profile sync finishes and default Staff filters are applied. */
   const [userScopeReady, setUserScopeReady] = useState(false)
@@ -33,7 +49,7 @@ export function useUserScopeFilterDefaults(page: UserScopePage) {
 
       if (!wereUserScopeFiltersCleared(page)) {
         const { products, groupPlants } = getInitialUserScopeFilters()
-        setSelectedProducts(products)
+        setSelectedProducts(mapProducts ? mapProducts(products) : products)
         setSelectedGroupPlants(groupPlants)
       }
 
@@ -43,7 +59,7 @@ export function useUserScopeFilterDefaults(page: UserScopePage) {
     return () => {
       cancelled = true
     }
-  }, [page])
+  }, [page, mapProducts])
 
   const resetUserScopeFilters = useCallback(() => {
     setSelectedProducts([])

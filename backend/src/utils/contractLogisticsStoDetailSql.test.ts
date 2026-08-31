@@ -124,6 +124,14 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('NULL::date AS daily_plan_start_date');
   });
 
+  it('CONTRACT_SAP_ONLY_STOS_SQL uses latest SAP import only (not full history)', () => {
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('latest_import');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('c_scope');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain(
+      'spd.import_id = (SELECT import_id FROM latest_import)',
+    );
+  });
+
   it('CONTRACT_SAP_ONLY_STOS_SQL scopes qty by contract/PO helpers (not STO-wide SUM)', () => {
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('po_number');
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('CROSS JOIN contracts c_po');
@@ -134,10 +142,11 @@ describe('contractLogisticsStoDetailSql', () => {
     );
   });
 
-  it('CONTRACT_REAL_STO_KEYS_SQL unions contract_stos and SAP by contract/PO', () => {
-    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('contract_stos');
+  it('CONTRACT_REAL_STO_KEYS_SQL uses latest SAP import STOs (not full history)', () => {
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('latest_import');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('sap_latest_keys');
     expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('sap_processed_data');
-    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('c3.po_number');
-    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('cs.contract_id = $1');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('contract_stos');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('NOT EXISTS (SELECT 1 FROM sap_latest_keys)');
   });
 });

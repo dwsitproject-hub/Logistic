@@ -1,6 +1,13 @@
 import api from '@/lib/api'
 
-export type UserScopePage = 'contracts' | 'shipments' | 'trucking' | 'oil-loss'
+export type UserScopePage =
+  | 'contracts'
+  | 'shipments'
+  | 'trucking'
+  | 'oil-loss'
+  | 'contract-performance'
+  | 'shipping-performance'
+
 
 export type StoredAuthUser = {
   plants?: string[]

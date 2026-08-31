@@ -1,5 +1,11 @@
 import type { ColumnFilterPayload } from './contractListFilters';
-import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
+export {
+  buildTruckingExpansionKeyOrderBy,
+  resolveTruckingExpansionKeySortField,
+  resolveTruckingListSortField,
+  TRUCKING_EXPANSION_KEY_SORT_FIELD,
+  TRUCKING_LIST_SORT_FIELD_BY_KEY,
+} from './truckingListSort';
 
 export type TruckingStoPagingFilterInput = {
   summaryOnly: boolean;
@@ -37,53 +43,4 @@ export function canUseTruckingStoKeyPaging(input: TruckingStoPagingFilterInput):
   const status = String(input.status ?? 'ALL').trim().toUpperCase();
   if (status && status !== 'ALL') return false;
   return true;
-}
-
-/**
- * Aggregated STO list for expansion-key sort (PO grain — one row per operation).
- * Reads the pre-aggregated contract_sto_lines_agg (LEFT JOINed as `csla` in ranked_expansion)
- * instead of a correlated STRING_AGG subquery re-run per row — same fix as sto_line_resolved
- * in truckingListStoExpandSql.ts.
- */
-const AGGREGATED_STO_SORT = `COALESCE(csla.agg_sto_lines, NULLIF(TRIM(ts.sto_number::text), ''))`;
-
-/** Sort expressions available on expansion_keys (trucking_source + contracts). */
-const EXPANSION_KEY_SORT_FIELD: Record<string, string> = {
-  created_at: 'ts.created_at',
-  operation_id: 'ts.operation_id',
-  status: 'ts.status',
-  contract_number: 'c.contract_id',
-  po_number: 'c.po_number',
-  sto_number: AGGREGATED_STO_SORT,
-  supplier: 'c.supplier',
-  trucking_owner: 'ts.trucking_owner',
-  loading_location: 'ts.loading_location',
-  unloading_location: 'ts.unloading_location',
-  trucking_start_date: 'ts.trucking_start_date',
-  trucking_completion_date: 'ts.trucking_completion_date',
-  delivery_start_date: 'c.delivery_start_date',
-  delivery_end_date: 'c.delivery_end_date',
-  quantity_delivered: 'ts.quantity_delivered',
-  quantity_receive: 'ts.quantity_receive',
-  outstanding_quantity: 'ts.outstanding_quantity',
-  quantity_sent: 'ts.quantity_sent',
-  contract_qty: 'c.quantity_ordered',
-  incoterm: 'c.incoterm',
-  oa_budget: 'ts.oa_budget',
-  oa_actual: 'ts.oa_actual',
-  gain_loss_percentage: 'ts.gain_loss_percentage',
-  gain_loss_amount: 'ts.gain_loss_amount',
-};
-
-export function buildTruckingExpansionKeyOrderBy(
-  sortKey: string,
-  sortDir: 'ASC' | 'DESC',
-  stageFilter?: string | null,
-): string {
-  const field = EXPANSION_KEY_SORT_FIELD[sortKey] || 'ts.created_at';
-  return buildListOrderByWithSapStoPriority(
-    AGGREGATED_STO_SORT,
-    `${field} ${sortDir} NULLS LAST, ts.created_at DESC`,
-    stageFilter,
-  );
 }

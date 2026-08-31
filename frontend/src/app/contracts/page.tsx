@@ -59,7 +59,7 @@ import {
 import { HistoricalRemarksModal } from '@/components/shared/HistoricalRemarksModal'
 import { hasEntityRemarks } from '@/lib/entityRemarks'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
-import { getInitialUserScopeFilters, markUserScopeFiltersCleared, wereUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
 import {
@@ -77,6 +77,7 @@ import {
   contractPerfDrilldownSelectionsEqual,
   contractPerfDrilldownToTableColumnFilters,
   contractPerfProductLabelToApiValue,
+  mapUserProductsToContractPerfOptions,
   stableContractPerfApiParamsKey,
   flattenLatePerfApiTreeToHotspots,
   hasContractPerfDrilldownSelection,
@@ -414,19 +415,6 @@ const CONTRACTS_DEFAULT_COLUMN_ORDER: string[] = [
 ]
 
 /** Contract Performance page-only product tabs (Section 1–3) — tab list lives in contractPerformanceFilters. */
-
-/** Staff default product multi-select for Contract Performance Section 1. */
-function resolveStaffContractPerfInitialProducts(): string[] {
-  if (typeof window === 'undefined') return []
-  if (wereUserScopeFiltersCleared('contracts')) return []
-  const { products } = getInitialUserScopeFilters()
-  if (products.length !== 1) return []
-  const match = CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find(
-    (option) =>
-      normalizePerfProductGroupKey(option) === normalizePerfProductGroupKey(products[0]),
-  )
-  return match ? [match] : []
-}
 
 /** Contract Performance first load — Open selected so Section 1, drilldown, and table stay in sync.
  * Must use Next `pathname` (not `window`) so SSR + hydration agree; otherwise hard refresh
@@ -1086,11 +1074,18 @@ function ContractsPageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
   } = useUserScopeFilterDefaults('contracts')
+  const {
+    selectedProducts: contractPerfSelectedProducts,
+    setSelectedProducts: setContractPerfSelectedProducts,
+    selectedGroupPlants: contractPerfSelectedGroupPlants,
+    setSelectedGroupPlants: setContractPerfSelectedGroupPlants,
+    handleProductsChange: handleContractPerfProductsChange,
+    handleGroupPlantsChange: handleContractPerfGroupPlantsChange,
+    resetUserScopeFilters: resetContractPerfUserScopeFilters,
+  } = useUserScopeFilterDefaults('contract-performance', {
+    mapProducts: mapUserProductsToContractPerfOptions,
+  })
   const [contractPerfSelectedSources, setContractPerfSelectedSources] = useState<string[]>([])
-  const [contractPerfSelectedProducts, setContractPerfSelectedProducts] = useState<string[]>(
-    () => resolveStaffContractPerfInitialProducts(),
-  )
-  const [contractPerfSelectedGroupPlants, setContractPerfSelectedGroupPlants] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
@@ -1602,6 +1597,7 @@ function ContractsPageContent() {
    */
   const resetContractPerformancePage = useCallback(() => {
     if (!isContractPerformance) return
+    markUserScopeFiltersCleared('contract-performance')
     markUserScopeFiltersCleared('contracts')
     lockSection1FilterChange()
     setPerformancePeriod('YTD')
@@ -1613,6 +1609,7 @@ function ContractsPageContent() {
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
     setSelectedSuppliers([])
+    resetContractPerfUserScopeFilters()
     resetUserScopeFilters()
     setPerfTransportMode('ALL')
     setLateOnTimeFilter('ALL')
@@ -1625,7 +1622,15 @@ function ContractsPageContent() {
     collapseAll()
     setAppliedDrilldownSelection(EMPTY_CONTRACT_PERF_DRILLDOWN)
     setColumnFilters({})
-  }, [collapseAll, isContractPerformance, lockSection1FilterChange, resetUserScopeFilters])
+  }, [
+    collapseAll,
+    isContractPerformance,
+    lockSection1FilterChange,
+    resetContractPerfUserScopeFilters,
+    resetUserScopeFilters,
+    setContractPerfSelectedGroupPlants,
+    setContractPerfSelectedProducts,
+  ])
 
   const applySummaryStatusCard = useCallback(
     (status: 'Open' | 'Close') => {
@@ -1734,19 +1739,6 @@ function ContractsPageContent() {
     }, 150)
     return () => window.clearInterval(interval)
   }, [])
-
-  useEffect(() => {
-    if (!userScopeReady || !isContractPerformance || wereUserScopeFiltersCleared('contracts')) return
-    const { products } = getInitialUserScopeFilters()
-    if (products.length !== 1) return
-    const match = CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find(
-      (option) =>
-        normalizePerfProductGroupKey(option) === normalizePerfProductGroupKey(products[0]),
-    )
-    if (match) {
-      setContractPerfSelectedProducts((prev) => (prev.length === 0 ? [match] : prev))
-    }
-  }, [userScopeReady, isContractPerformance])
 
   useEffect(() => {
     if (!userScopeReady || !isContractPerformance) return
@@ -3789,7 +3781,7 @@ function ContractsPageContent() {
                       selected={contractPerfSelectedGroupPlants}
                       onChange={(values) => {
                         lockSection1FilterChange()
-                        setContractPerfSelectedGroupPlants(values)
+                        handleContractPerfGroupPlantsChange(values)
                         setCurrentPage(1)
                       }}
                       placeholder="All group plants"
@@ -3843,7 +3835,7 @@ function ContractsPageContent() {
                       selected={contractPerfSelectedProducts}
                       onChange={(values) => {
                         lockSection1FilterChange()
-                        setContractPerfSelectedProducts(values)
+                        handleContractPerfProductsChange(values)
                         setCurrentPage(1)
                       }}
                       placeholder="All products"

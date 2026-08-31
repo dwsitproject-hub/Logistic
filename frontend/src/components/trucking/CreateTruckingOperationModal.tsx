@@ -222,7 +222,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             delivery_start_date: sliceIsoDate(cd.delivery_start_date),
             delivery_end_date: sliceIsoDate(cd.delivery_end_date),
           })
-          const plantLabel = cd.plant_name || ''
+          const plantLabel =
+            String(cd.sap_discharge_destination ?? '').trim() ||
+            String(cd.plant_name ?? '').trim()
           const sapLoading = String(cd.sap_loading_location ?? cd.supplier ?? '').trim()
           const supplierMills = String(cd.supplier_mills_suggestion ?? '').trim()
           // B2B origin: prefer child-PO Buyer (Contract Reff PO); else origin buyer / group plant.
@@ -430,10 +432,16 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       // (e.g. "PLANT EUP KUMAI" vs correct "EUP BIOMASS KUMAI").
       const unloadingForEdit = b2bChildBuyer || unloadingSuggestion || storedUnloading
 
+      // Plant/Site = SAP Discharge Destination (e.g. BONTANG), not stored buyer/plant label.
+      const sapDischargeDestination = String(
+        validated?.sap_discharge_destination ?? validated?.plant_name ?? '',
+      ).trim()
+      const locationForEdit = sapDischargeDestination || String(op.location ?? '').trim()
+
       setNewOperation((prev) => ({
         ...prev,
         operation_id: String(op.operation_id ?? ''),
-        location: String(op.location ?? ''),
+        location: locationForEdit,
         loading_location: String(op.loading_location ?? ''),
         unloading_location: unloadingForEdit,
         trucking_owner: String(op.trucking_owner ?? ''),

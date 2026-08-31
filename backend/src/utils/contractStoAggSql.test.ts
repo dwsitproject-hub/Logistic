@@ -7,6 +7,8 @@ describe('contractStoAggSql', () => {
     expect(sql).toContain('INNER JOIN contract_scope cs');
     expect(sql).toContain('STRING_AGG(DISTINCT x.effective_sto');
     expect(sql).toContain("data->'contract'->>'sto_quantity'");
+    expect(sql).toContain('DISTINCT ON (spd2.contract_number)');
+    expect(sql).toContain('li.import_id IS NOT DISTINCT FROM spd.import_id');
   });
 
   it('buildStoAggCte supports in_subquery filter', () => {

@@ -60,6 +60,49 @@ describe('contractLogisticsStoDisplay', () => {
     ).toBe('COMPLETED');
   });
 
+  it('shows CANCELLED when SAP import status is Cancelled (even without shipment row)', () => {
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Cancelled',
+        dbStatus: null,
+        logisticsType: 'shipment',
+        shipmentMilestones: {
+          eta_arrival_at_loading_port: '2026-01-15',
+        },
+      }),
+    ).toBe('CANCELLED');
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Cancelled',
+        dbStatus: 'CANCELLED',
+        logisticsType: 'shipment',
+      }),
+    ).toBe('CANCELLED');
+  });
+
+  it('ignores sticky DB CANCELLED when SAP import is still Open', () => {
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Open',
+        dbStatus: 'CANCELLED',
+        logisticsType: 'shipment',
+        shipmentMilestones: {
+          eta_arrival_at_loading_port: '2026-01-15',
+        },
+      }),
+    ).toBe('PLANNED');
+  });
+
+  it('maps sticky CANCELLED + GR Close to COMPLETED', () => {
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Close',
+        dbStatus: 'CANCELLED',
+        logisticsType: 'shipment',
+      }),
+    ).toBe('COMPLETED');
+  });
+
   it('derives shipment status when contract is still open', () => {
     expect(
       resolveContractLogisticsStoStatus({

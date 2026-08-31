@@ -249,10 +249,12 @@ describe('truckingActualsTemplate', () => {
     expect(formatTemplateQtyMtFromKg(null)).toBe('')
   })
 
-  it('formats OS Qty (MT) with up to 2 decimal places', () => {
-    expect(formatTemplateOsQtyMtFromKg(24050)).toBe('24.05')
-    expect(formatTemplateOsQtyMtFromKg(24550)).toBe('24.55')
-    expect(formatTemplateOsQtyMtFromKg(439020)).toBe('439.02')
+  it('formats OS Qty (MT) as whole MT (rounded)', () => {
+    expect(formatTemplateOsQtyMtFromKg(500000)).toBe('500')
+    expect(formatTemplateOsQtyMtFromKg(2410)).toBe('2')
+    expect(formatTemplateOsQtyMtFromKg(205780)).toBe('206')
+    expect(formatTemplateOsQtyMtFromKg(24050)).toBe('24')
+    expect(formatTemplateOsQtyMtFromKg(24550)).toBe('25')
     expect(formatTemplateOsQtyMtFromKg(0)).toBe('0')
     expect(formatTemplateOsQtyMtFromKg(null)).toBe('')
   })
@@ -428,7 +430,9 @@ describe('truckingActualsTemplate', () => {
     expect(matrix[0]?.[6]).toBe('Status')
     expect(matrix[0]?.[7]).toBe(UNPLANNED_TEMPLATE_OS_QTY_HEADER)
     expect(matrix[1]?.[6]).toBe('Planned')
+    expect(matrix[1]?.[7]).toBe('80')
     expect(matrix[2]?.[6]).toBe('Unplanned')
+    expect(matrix[2]?.[7]).toBe('50')
   })
 
   it('builds failed upload re-template with Reason column at the end', async () => {
