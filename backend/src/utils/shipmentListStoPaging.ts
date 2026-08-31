@@ -1,5 +1,6 @@
 import type { ColumnFilterPayload } from './contractListFilters';
 import { isExactStoGlobalSearch } from './shipmentListFilters';
+import { sqlShipmentListB2bOriginContractJoins } from './shipmentB2bOriginSql';
 
 export const SHIPMENT_BASE_CORE_GROUP_BY_MARKER = '/* SHIPMENT_BASE_CORE_GROUP_BY */';
 
@@ -127,8 +128,7 @@ export function buildRankedStoCtes(
           MAX(s.created_at) AS mx,
           ${orderExpr} AS sort_val
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        ${sqlShipmentListB2bOriginContractJoins()}
         WHERE 1=1
           AND (${coreWhereSql})
           AND NOT (

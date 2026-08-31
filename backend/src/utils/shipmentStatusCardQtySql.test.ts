@@ -111,6 +111,7 @@ describe('shipmentStatusCardQtySql', () => {
     expect(sql).not.toContain('LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key');
     expect(sql).not.toContain('po_sto_count');
     expect(sql).toContain('qty_move');
+    expect(sql).toContain('b2b_child_qty_rollup');
   });
 
   it('sumShipmentStatusOutstandingQtyKg sums the six active stages', () => {

@@ -60,6 +60,15 @@ describe('truckingList.service', () => {
     expect(overlay.filterCacheKey).not.toContain('originPlant=1');
   });
 
+  it('ALL list plant filter uses origin plant so Unplanned badges match the Unplanned card', () => {
+    const req = {
+      query: { plant: 'Bontang', status: 'ALL', page: '1', limit: '20' },
+    } as Parameters<typeof buildTruckingListQuery>[0];
+    const allList = buildTruckingListQuery(req, { omitStatusFilter: true, originGroupPlant: true });
+    expect(allList.preOuterQuery).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(allList.filterCacheKey).toContain('originPlant=1');
+  });
+
   it('buildTruckingSummaryFromRows mirrors SQL status partition counts', () => {
     const rows: TruckingListRow[] = [
       { status: 'PLANNED', status_db: 'PLANNED', trucking_start_date: null, trucking_completion_date: null },

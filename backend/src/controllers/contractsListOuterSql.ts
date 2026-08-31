@@ -93,7 +93,10 @@ function buildContractsListRowProjection(options: ContractsListOuterSqlOptions =
         COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No') AS contract_ext_no,
         COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
         ${sqlSapGrPoStatusFromJson('base.latest_spd_data')} AS gr_po_status,
-        ${sqlSapGrStoStatusFromJson('base.latest_spd_data')} AS gr_sto_status,
+        COALESCE(
+          NULLIF(TRIM(${sqlSapGrStoStatusFromJson('base.latest_spd_data')}), ''),
+          NULLIF(TRIM(base.b2b_child_gr_sto_status), '')
+        ) AS gr_sto_status,
         base.import_status,
         base.sap_presence,
         base.sap_withdrawn_reason,${paymentBlock}

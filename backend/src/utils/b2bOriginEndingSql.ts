@@ -11,7 +11,12 @@
  * List overlay is a PK lookup on b2b_ending_child_snapshot (refreshed on SAP
  * import / startup). Building the origin_po map inline per list query still
  * scanned sap_processed_data JSON and kept those pages slower than before.
+ *
+ * Qty overlay (NULL/0 parent → SUM children; parent > 0 replaces) lives in
+ * qty_move. GR STO overlay is child_gr_sto_status on this snapshot.
  */
+
+import { sqlSapGrStoStatusFromJson } from './sapIncotermMetrics';
 
 export const SQL_SPD_CONTRACT_REFF_PO = (dataExpr: string): string => `NULLIF(TRIM(COALESCE(
   ${dataExpr}->'contract'->>'contract_reference_po',
@@ -124,6 +129,92 @@ export function sqlB2bOriginEndingUnloadSubquery(originPoExpr: string): string {
   )`;
 }
 
+/** Normalize a GR STO token the same way import_status maps Open/Close. */
+function sqlNormalizeChildGrStoExpr(statusExpr: string): string {
+  const u = `UPPER(TRIM(COALESCE(${statusExpr}, '')))`;
+  return `CASE
+    WHEN ${u} IN ('ACTIVE', 'OPEN') THEN 'Open'
+    WHEN ${u} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE') THEN 'Close'
+    WHEN ${u} IN ('CANCELLED', 'CANCELED', 'CANCEL') THEN 'Cancelled'
+    ELSE NULLIF(TRIM(${statusExpr}::text), '')
+  END`;
+}
+
+/**
+ * All children of an origin PO → one GR STO: any Open wins; Close only if every
+ * child is Close (NULL child status is not Close).
+ */
+export function sqlB2bChildGrStoAggSelect(): string {
+  const childStatus = sqlNormalizeChildGrStoExpr(sqlSapGrStoStatusFromJson('ch_spd.data'));
+  return `
+      SELECT
+        ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} AS origin_po,
+        CASE
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+          WHEN COUNT(*) > 0
+           AND COUNT(*) = COUNT(*) FILTER (
+             WHERE UPPER(TRIM(COALESCE(st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')
+           )
+          THEN 'Close'
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+          ELSE NULL
+        END AS child_gr_sto_status,
+        COUNT(*)::int AS child_count
+      FROM contracts ch
+      ${SQL_B2B_CHILD_LATEST_SPD}
+      CROSS JOIN LATERAL (SELECT ${childStatus} AS st) s
+      WHERE ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} IS NOT NULL
+      GROUP BY ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')}`;
+}
+
+/** Scalar PK lookup — unique origin_po, no LIMIT 1 (import-status tests forbid LIMIT 1). */
+export function sqlB2bChildGrStoStatusLookup(originPoExpr: string): string {
+  return `(
+    SELECT NULLIF(TRIM(m.child_gr_sto_status), '')
+    FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
+    WHERE m.origin_po = NULLIF(TRIM((${originPoExpr})::text), '')
+  )`;
+}
+
+/**
+ * B2B origin qty overlay: parent > 0 replaces child SUM; NULL or 0 uses child.
+ * Never parent + child. Example: parent 200 + child 3000 → 200, not 3200.
+ */
+export function coalesceB2bOriginParentOrChildQty(
+  parentQty: number | null | undefined,
+  childSum: number | null | undefined,
+): number | null {
+  if (parentQty != null && Number(parentQty) !== 0) return Number(parentQty);
+  if (childSum != null) return Number(childSum);
+  return parentQty == null ? null : Number(parentQty);
+}
+
+/** SQL: COALESCE(NULLIF(parent, 0), child_sum) only when a child rollup row exists. */
+export function sqlCoalesceB2bOriginParentOrChildQty(
+  parentExpr: string,
+  childSumExpr: string,
+  rollExistsExpr: string,
+): string {
+  return `CASE
+    WHEN ${rollExistsExpr}
+    THEN COALESCE(NULLIF(${parentExpr}, 0), ${childSumExpr})
+    ELSE ${parentExpr}
+  END`;
+}
+
+/** Overlay parent SAP qty with qty_move snapshot (child SUM when parent is NULL or 0). */
+export function sqlOverlayParentQtyOrQtyMoveSnapshot(
+  parentQtyExpr: string,
+  contractNumberExpr: string,
+  qtyMoveColumn: 'quantity_delivery_trucking' | 'quantity_receive',
+): string {
+  return sqlCoalesceB2bOriginParentOrChildQty(
+    parentQtyExpr,
+    `(SELECT s.${qtyMoveColumn} FROM contract_qty_move_snapshot s WHERE s.contract_number = ${contractNumberExpr})`,
+    `EXISTS (SELECT 1 FROM contract_qty_move_snapshot s WHERE s.contract_number = ${contractNumberExpr})`,
+  );
+}
+
 export function buildB2bEndingChildSnapshotRefreshSql(): string {
   return `
     INSERT INTO ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} (
@@ -132,19 +223,26 @@ export function buildB2bEndingChildSnapshotRefreshSql(): string {
       company_name,
       buyer,
       unload_location,
+      child_gr_sto_status,
+      child_count,
       refreshed_at
     )
     SELECT
-      origin_po,
-      plant_code,
-      company_name,
-      buyer,
-      unload_location,
+      latest.origin_po,
+      latest.plant_code,
+      latest.company_name,
+      latest.buyer,
+      latest.unload_location,
+      agg.child_gr_sto_status,
+      agg.child_count,
       NOW()
     FROM (
       ${sqlB2bEndingChildMapSelect()}
-    ) src
-    WHERE origin_po IS NOT NULL AND TRIM(origin_po) != ''`;
+    ) latest
+    LEFT JOIN (
+      ${sqlB2bChildGrStoAggSelect()}
+    ) agg ON agg.origin_po = latest.origin_po
+    WHERE latest.origin_po IS NOT NULL AND TRIM(latest.origin_po) != ''`;
 }
 
 /** Aggregated plant_code for GROUP BY contract_id queries that join b2b_end. */

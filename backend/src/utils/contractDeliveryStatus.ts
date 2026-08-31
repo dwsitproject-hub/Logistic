@@ -1,3 +1,4 @@
+import { sqlB2bChildGrStoStatusLookup } from './b2bOriginEndingSql';
 import { query } from '../database/connection';
 import {
   INCOTERM_GR_PO_STATUS,
@@ -71,6 +72,19 @@ export function aggregateImportStatusForStoGroup(statuses: unknown[]): string | 
 /** True when every STO group member is GR Close (matches shipment list BOOL_AND). */
 export function isStoGroupSapClosed(statuses: unknown[]): boolean {
   return aggregateImportStatusForStoGroup(statuses) === 'Close';
+}
+
+/**
+ * B2B origin GR STO: parent SAP value wins when filled; otherwise any-Open / all-Close from children.
+ * Parent Close + child Open → Close (replace, not merge).
+ */
+export function overlayB2bOriginGrStoStatus(
+  parentStatus: unknown,
+  childStatuses: unknown[],
+): string | null {
+  const parent = normalizeContractDeliveryStatusForDisplay(parentStatus);
+  if (parent) return parent;
+  return aggregateImportStatusForStoGroup(childStatuses);
 }
 
 /**
@@ -193,6 +207,11 @@ export function sqlContractImportStatusExpr(
         WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
           OR s.row_open
       ),
+      CASE
+        WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)})
+        THEN ${sqlB2bChildGrStoStatusLookup(poNumberRef)}
+        ELSE NULL
+      END,
       ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
     )`.trim();
 }

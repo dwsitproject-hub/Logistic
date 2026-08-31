@@ -3,7 +3,7 @@
  * Uses contract_stos (multi-STO per contract) with legacy contracts.sto_number fallback.
  */
 
-import { sqlB2bChildContractRowExcludeWhere } from './b2bChildSql';
+import { SQL_SPD_CONTRACT_REFF_PO } from './b2bOriginEndingSql';
 
 /** Operational STO key on a grouped shipment list row (matches shipmentListStoKeyExpr). */
 export function buildGroupedStoTrimExpr(stoKeySql: string): string {
@@ -13,19 +13,13 @@ export function buildGroupedStoTrimExpr(stoKeySql: string): string {
 /**
  * Contracts linked to a grouped list row key (SAP STO or KLIP operation_id / shipment_id).
  *
- * The STO match is applied in an inner scan and the B2B-child exclusion outside it. Both
- * are ANDed, so the result is identical either way — but the B2B test costs two correlated
- * sap_processed_data lookups per contract row it touches. Filtering first drops the input
- * from every contract (~6.3k) to the handful that match this STO, which is the difference
- * between ~1.2M SAP lookups per query and a few dozen.
- *
- * `OFFSET 0` is an optimizer fence, not paging: without it Postgres flattens the subquery,
- * merges the two WHERE clauses back together and re-evaluates B2B against every contract,
- * which is exactly the cost this split exists to avoid. Do not remove it.
+ * The STO match is applied in an inner scan; B2B children are then mapped to their
+ * origin contract (Reff PO → origin.po_number) instead of dropped. Filtering STO first
+ * keeps the B2B/SAP work on a handful of contracts. `OFFSET 0` is an optimizer fence.
  */
 export function contractsOnStoSubquery(groupedStoExpr: string): string {
   return `
-    SELECT DISTINCT cc.contract_id
+    SELECT DISTINCT COALESCE(b2b_o.contract_id, cc.contract_id) AS contract_id
     FROM (
       SELECT cc.id, cc.contract_id, cc.contract_type
       FROM contracts cc
@@ -61,7 +55,27 @@ export function contractsOnStoSubquery(groupedStoExpr: string): string {
         )
       OFFSET 0
     ) cc
-    WHERE ${sqlB2bChildContractRowExcludeWhere('cc')}`;
+    LEFT JOIN LATERAL (
+      SELECT
+        ${SQL_SPD_CONTRACT_REFF_PO('spd.data')} AS reff,
+        UPPER(TRIM(COALESCE(
+          spd.data->'contract'->>'contract_type',
+          spd.data->>'B2B Flag',
+          cc.contract_type::text,
+          ''
+        ))) AS flag
+      FROM sap_processed_data spd
+      WHERE TRIM(spd.contract_number) = TRIM(cc.contract_id)
+      ORDER BY spd.created_at DESC NULLS LAST
+      LIMIT 1
+    ) ch_spd ON true
+    LEFT JOIN contracts b2b_o
+      ON ch_spd.flag = 'B2B'
+      AND ch_spd.reff IS NOT NULL
+      AND TRIM(b2b_o.po_number::text) = ch_spd.reff
+    WHERE ch_spd.flag IS DISTINCT FROM 'B2B'
+       OR ch_spd.reff IS NULL
+       OR b2b_o.contract_id IS NOT NULL`;
 }
 
 export function buildStoLinkedContractNumbersSql(

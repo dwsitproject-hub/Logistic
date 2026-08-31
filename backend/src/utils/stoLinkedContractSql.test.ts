@@ -27,11 +27,13 @@ describe('stoLinkedContractSql', () => {
     expect(sql).toContain('COALESCE');
   });
 
-  it('contractsOnStoSubquery excludes B2B child contracts', () => {
+  it('contractsOnStoSubquery maps B2B child contracts to origin (does not list child PO)', () => {
     const grouped = buildGroupedStoTrimExpr('sb.sto_key');
     const sql = contractsOnStoSubquery(grouped);
     expect(sql).toContain("= 'B2B'");
     expect(sql).toContain('contract_reference_po');
+    expect(sql).toContain('COALESCE(b2b_o.contract_id, cc.contract_id)');
+    expect(sql).toContain('TRIM(b2b_o.po_number::text) = ch_spd.reff');
   });
 
   it('buildStoLinkedPoNumbersSql falls back to join aggregation when STO lookup empty', () => {

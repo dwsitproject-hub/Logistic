@@ -24,6 +24,10 @@ import {
   preplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
 import { buildShipmentPageSeaRowScopeSql, shipmentListStoKeyExpr } from './shipmentStoTypeSql';
+import {
+  sqlShipmentListB2bOriginContractJoins,
+  sqlShipmentListExecutionCsStoJoin,
+} from './shipmentB2bOriginSql';
 
 const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 
@@ -127,11 +131,8 @@ function buildShipmentDailyBaseCteSql(): string {
           0::bigint AS contract_count_from_join,
           ''::text AS contract_ext_no_from_join
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        LEFT JOIN contract_stos cs_sto ON cs_sto.contract_id = c.id
-          AND NULLIF(TRIM(cs_sto.sto_number::text), '') IS NOT NULL
-          AND TRIM(cs_sto.sto_number::text) = TRIM((${listStoKeySql})::text)
+        ${sqlShipmentListB2bOriginContractJoins()}
+        ${sqlShipmentListExecutionCsStoJoin(listStoKeySql)}
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
         ${SHIPMENT_ATA_OVERRIDES_JOIN}

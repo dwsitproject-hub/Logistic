@@ -36,6 +36,8 @@ describe('contractLogisticsOpenOsSql', () => {
     expect(sql).toContain('contract_stos');
     expect(sql).toContain('cs_self.contract_id = base.id');
     expect(sql).toContain('IS DISTINCT FROM');
+    expect(sql).toContain('b2b_ending_child_snapshot');
+    expect(sql).toContain('child_gr_sto_status');
   });
 
   it('SEA backlog matches Unplanned/Preplanned: no shipment and no registered ETA', () => {

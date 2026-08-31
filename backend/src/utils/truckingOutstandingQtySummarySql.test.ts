@@ -106,6 +106,7 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(text).toContain('AS card_total_kg')
     expect(text).toContain('quantity_ordered')
     expect(text).toContain('qty_move')
+    expect(text).toContain('b2b_child_qty_rollup')
     expect(text).toContain('outstanding_quantity')
     expect(text).toContain('third_party_frc_kg')
     expect(text).toContain('interco_lco_kg')

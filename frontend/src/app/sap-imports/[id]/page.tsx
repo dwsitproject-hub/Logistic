@@ -30,6 +30,7 @@ interface ImportDetail {
   failed_records: number;
   skipped_records?: number;
   error_log: string | null;
+  source?: string;
 }
 
 interface ImportRecord {
@@ -516,6 +517,12 @@ export default function ImportDetailPage() {
               <div>
                 <div className="text-sm text-gray-500">Status</div>
                 <div>{getStatusBadge(importData.status)}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-500">Source</div>
+                <div className="font-medium">
+                  {importData.source === 'scheduler' ? 'Scheduler' : 'Manual'}
+                </div>
               </div>
             </div>
           </CardContent>

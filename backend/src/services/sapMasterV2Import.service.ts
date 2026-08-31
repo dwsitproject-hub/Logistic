@@ -16,6 +16,7 @@ import { invalidateShippingPerformanceRowCache } from './shippingPerformance.ser
 import { normalizePoNumber } from '../utils/contractPoIdentity';
 import { applyAbsenceForImport, evaluateImportTrust } from './sapAbsenceTracking.service';
 import { applyPresenceState } from './sapPresence.service';
+import { identityFromParsedSapRow, type SapAutoImportIdentityRow } from '../utils/sapAutoImportIdentity';
 
 export interface MasterV2Config {
   filePath: string;
@@ -28,6 +29,17 @@ export interface MasterV2Config {
   dataStartRow: number; // Row 9 (index 8)
 }
 
+export type SapImportSource = 'manual' | 'scheduler';
+
+export interface QueueMasterV2FileImportOptions {
+  source?: SapImportSource;
+  keepSourceFile?: boolean;
+}
+
+export interface ImportMasterV2FileOptions {
+  source?: SapImportSource;
+}
+
 export interface SapMasterV2ImportResult {
   success: boolean;
   importId?: string;
@@ -36,6 +48,8 @@ export interface SapMasterV2ImportResult {
   failedRecords: number;
   skippedRecords?: number;
   errors?: string[];
+  successIdentities?: SapAutoImportIdentityRow[];
+  failedIdentities?: SapAutoImportIdentityRow[];
   summary?: {
     contractsCreated: number;
     shipmentsCreated: number;
@@ -149,31 +163,41 @@ export class SapMasterV2ImportService {
     }
   }
 
-  /**
-   * Queue a file import: validate + create DB record, then process rows in the background.
-   * Returns quickly so nginx/proxy timeouts do not abort long imports (~5000+ rows).
-   */
-  static async queueMasterV2FileImport(filePath: string): Promise<{ importId: string; totalRecords: number }> {
-    const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
-
+  private static async createProcessingImport(
+    totalRecords: number,
+    source: SapImportSource = 'manual',
+  ): Promise<string> {
     const client = await pool.connect();
-    let importId: string;
     try {
       await client.query('BEGIN');
       const importResult = await client.query(
-        `INSERT INTO sap_data_imports (import_date, status, total_records)
-         VALUES (CURRENT_DATE, 'processing', $1)
+        `INSERT INTO sap_data_imports (import_date, status, total_records, source)
+         VALUES (CURRENT_DATE, 'processing', $1, $2)
          RETURNING id`,
-        [validDataRows.length]
+        [totalRecords, source === 'scheduler' ? 'scheduler' : 'manual'],
       );
-      importId = importResult.rows[0].id;
       await client.query('COMMIT');
+      return importResult.rows[0].id as string;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Queue a file import: validate + create DB record, then process rows in the background.
+   * Returns quickly so nginx/proxy timeouts do not abort long imports (~5000+ rows).
+   */
+  static async queueMasterV2FileImport(
+    filePath: string,
+    options: QueueMasterV2FileImportOptions = {},
+  ): Promise<{ importId: string; totalRecords: number }> {
+    const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
+    const source = options.source === 'scheduler' ? 'scheduler' : 'manual';
+    const keepSourceFile = options.keepSourceFile === true;
+    const importId = await this.createProcessingImport(validDataRows.length, source);
 
     setImmediate(() => {
       void (async () => {
@@ -184,7 +208,7 @@ export class SapMasterV2ImportService {
           logger.error('SAP MASTER v2 background import failed', { importId, error });
           await this.markImportFailed(importId, error);
         } finally {
-          if (fs.existsSync(filePath)) {
+          if (!keepSourceFile && fs.existsSync(filePath)) {
             try {
               fs.unlinkSync(filePath);
             } catch (unlinkErr) {
@@ -201,28 +225,13 @@ export class SapMasterV2ImportService {
   /**
    * Import data from SAP MASTER v2 Excel file (blocks until all rows are processed).
    */
-  static async importMasterV2File(filePath: string): Promise<SapMasterV2ImportResult> {
+  static async importMasterV2File(
+    filePath: string,
+    options: ImportMasterV2FileOptions = {},
+  ): Promise<SapMasterV2ImportResult> {
     const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
-
-    const client = await pool.connect();
-    let importId: string;
-    try {
-      await client.query('BEGIN');
-      const importResult = await client.query(
-        `INSERT INTO sap_data_imports (import_date, status, total_records)
-         VALUES (CURRENT_DATE, 'processing', $1)
-         RETURNING id`,
-        [validDataRows.length]
-      );
-      importId = importResult.rows[0].id;
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
+    const source = options.source === 'scheduler' ? 'scheduler' : 'manual';
+    const importId = await this.createProcessingImport(validDataRows.length, source);
     return this.processMasterV2Import(importId, validDataRows, fieldMetadata);
   }
 
@@ -243,6 +252,8 @@ export class SapMasterV2ImportService {
       let failedRecords = 0;
       let skippedRecords = 0;
       const errors: string[] = [];
+      const successIdentities: SapAutoImportIdentityRow[] = [];
+      const failedIdentities: SapAutoImportIdentityRow[] = [];
       
       const summary = {
         contractsCreated: 0,
@@ -274,6 +285,7 @@ export class SapMasterV2ImportService {
         // it here and write it to sap_import_failures after the rollback.
         let failurePo: string | null = null;
         let failureSto: string | null = null;
+        let rowIdentity: SapAutoImportIdentityRow | null = null;
         try {
           const row = validDataRows[i];
 
@@ -290,6 +302,7 @@ export class SapMasterV2ImportService {
 
           // Parse row into structured data
           const parsedData = this.parseDataRow(row, fieldMetadata);
+          rowIdentity = identityFromParsedSapRow(parsedData);
 
           // Match processed SAP rows by PO + STO (contract_no may be null or change over time).
           const contractNumber = parsedData.contract?.contract_no || null;
@@ -374,6 +387,7 @@ export class SapMasterV2ImportService {
 
               await client.query(`RELEASE SAVEPOINT ${savepointName}`);
               processedRecords++;
+              if (rowIdentity) successIdentities.push(rowIdentity);
               await maybeRefreshImportProgress();
               continue;
           }
@@ -400,6 +414,7 @@ export class SapMasterV2ImportService {
           await client.query(`RELEASE SAVEPOINT ${savepointName}`);
 
           processedRecords++;
+          if (rowIdentity) successIdentities.push(rowIdentity);
           await maybeRefreshImportProgress();
 
         } catch (error) {
@@ -435,10 +450,33 @@ export class SapMasterV2ImportService {
           }
 
           try {
+            const failedIdentity: SapAutoImportIdentityRow = {
+              contractDate: rowIdentity?.contractDate ?? null,
+              contractNumber: rowIdentity?.contractNumber ?? null,
+              contractExtNo: rowIdentity?.contractExtNo ?? null,
+              poNumber: failurePo ?? rowIdentity?.poNumber ?? null,
+              stoNumber: failureSto ?? rowIdentity?.stoNumber ?? null,
+              supplier: rowIdentity?.supplier ?? null,
+              remarks: errorMsg,
+            };
+            failedIdentities.push(failedIdentity);
             await client.query(
-              `INSERT INTO sap_import_failures (import_id, row_number, po_number, sto_number, error_message)
-               VALUES ($1::uuid, $2, $3, $4, $5)`,
-              [importId, i + 1, failurePo, failureSto, errorMsg],
+              `INSERT INTO sap_import_failures (
+                 import_id, row_number, po_number, sto_number, error_message,
+                 contract_date, contract_number, contract_ext_no, supplier
+               )
+               VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [
+                importId,
+                i + 1,
+                failedIdentity.poNumber,
+                failedIdentity.stoNumber,
+                errorMsg,
+                failedIdentity.contractDate,
+                failedIdentity.contractNumber,
+                failedIdentity.contractExtNo,
+                failedIdentity.supplier,
+              ],
             );
           } catch (failLogErr) {
             logger.error('Failed to record row error to sap_import_failures', {
@@ -526,6 +564,8 @@ export class SapMasterV2ImportService {
         failedRecords,
         skippedRecords,
         errors: errors.length > 0 ? errors.slice(0, 100) : undefined, // Limit to first 100 errors
+        successIdentities,
+        failedIdentities,
         summary
       };
       
@@ -817,6 +857,8 @@ export class SapMasterV2ImportService {
       'contract no': 'contract_no',
       'contract number': 'contract_no',
       'no contract': 'contract_no',
+      'contract ext no': 'contract_ext_no',
+      'contract ext no.': 'contract_ext_no',
       
       'po no.': 'po_no',
       'po no': 'po_no',

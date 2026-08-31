@@ -253,7 +253,8 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
          CASE WHEN i.status IN ('processing', 'pending')
            THEN COALESCE(i.failed_records, 0)
            ELSE COALESCE(rc.failed, 0)
-         END::int AS failed_records
+         END::int AS failed_records,
+         COALESCE(i.source, 'manual') AS source
        FROM sap_data_imports i
        LEFT JOIN LATERAL (
          SELECT
@@ -354,6 +355,70 @@ export const importMasterV2Upload = async (req: Request, res: Response): Promise
       fs.unlinkSync(req.file.path);
     }
 
+    res.status(500).json({
+      success: false,
+      error: sapImportHttpError(error),
+    });
+  }
+};
+
+/**
+ * ADMIN: run the Synology Original-folder MASTER v2 job immediately (UAT / catch-up).
+ */
+export const runSapFolderAutoImport = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { runSapFolderAutoImport: runJob } = await import('../services/sapFolderAutoImport.service');
+    const result = await runJob({ notify: true });
+    const conflict = result.skipReason === 'in_flight' || result.skipReason === 'already_running';
+    res.status(conflict ? 409 : 200).json({
+      success: !conflict,
+      data: result,
+      ...(conflict
+        ? {
+            error: {
+              message:
+                result.skipReason === 'in_flight'
+                  ? 'Skipped: an SAP import is already running'
+                  : 'Skipped: auto-import is already in progress',
+            },
+          }
+        : {}),
+    });
+  } catch (error) {
+    logger.error('SAP folder auto-import manual run failed', error);
+    res.status(500).json({
+      success: false,
+      error: sapImportHttpError(error),
+    });
+  }
+};
+
+/**
+ * ADMIN: download a Failed workbook written by the folder scheduler.
+ * Query: file= or path= (basename or share-style path under Failed/).
+ */
+export const downloadAutoImportFailedFile = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const requested = String(req.query.file || req.query.path || '').trim();
+    const { failedWorkbookAbsolutePath } = await import('../services/sapFolderAutoImport.service');
+    const resolved = failedWorkbookAbsolutePath(requested);
+    if (!resolved) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Invalid failed-file path' },
+      });
+      return;
+    }
+    if (!fs.existsSync(resolved)) {
+      res.status(404).json({
+        success: false,
+        error: { message: 'Failed workbook not found' },
+      });
+      return;
+    }
+    res.download(resolved, path.basename(resolved));
+  } catch (error) {
+    logger.error('SAP auto-import failed-file download failed', error);
     res.status(500).json({
       success: false,
       error: sapImportHttpError(error),

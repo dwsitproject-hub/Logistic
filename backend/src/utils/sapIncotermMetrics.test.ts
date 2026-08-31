@@ -43,6 +43,8 @@ describe('sapIncotermMetrics', () => {
     expect(resolveUatQuantityDeliveryTs('CIF', 'SEA', 0, 500000)).toBe(500000);
     expect(resolveUatQuantityDeliveryTs('CIF', 'MIX', 300550, 0)).toBe(300550);
     expect(resolveUatQuantityDeliveryTs('FOB', 'MIX', 0, 249490)).toBe(249490);
+    expect(resolveUatQuantityDeliveryTs('FOB', 'MIX', 3000000, 3000000)).toBe(3000000);
+    expect(resolveUatQuantityDeliveryTs('CIF', 'MIX', 300550, 500000)).toBe(500000);
     expect(resolveUatQuantityDeliveryTs('LCO', 'LAND', 0, 0)).toBe(0);
     expect(resolveUatQuantityDeliveryTs('FOB', 'SEA', 100, 200)).toBe(200);
 
@@ -55,6 +57,7 @@ describe('sapIncotermMetrics', () => {
     expect(sql).toContain("'MIX'");
     expect(sql).toContain('quantity_delivery_trucking');
     expect(sql).toContain('quantity_delivery_vessel');
+    expect(sql).not.toMatch(/quantity_delivery_trucking\) \+ /);
   });
 
   it('emits SQL CASE for delivery and outstanding', () => {

@@ -129,7 +129,10 @@ export function sqlTransportModeFromContractAndJson(
 
 /**
  * SAP UAT quantity delivery matrix (transport + incoterm).
- * MIX: trucking sum covers STO Type T legs, vessel sum covers STO Type V legs.
+ * FRC/LCO → trucking. FOB/CIF/CFR → vessel.
+ * MIX + FOB/CIF: vessel if present, else trucking (Type T only). Do not add both —
+ * trucking on a FOB MIX PO is the land leg of the same cargo (PO-level vessel qty
+ * repeated on Type T rows), not a second delivery.
  */
 export function sqlUatQuantityDeliveryCase(opts: {
   incotermExpr: string;
@@ -141,11 +144,12 @@ export function sqlUatQuantityDeliveryCase(opts: {
   const tm = `UPPER(TRIM(COALESCE(${opts.transportExpr}, '')))`;
   const trucking = `COALESCE(${opts.truckingQtyExpr}, 0)`;
   const vessel = `COALESCE(${opts.vesselQtyExpr}, 0)`;
+  const mixVesselThenTrucking = `COALESCE(NULLIF(${vessel}, 0), ${trucking})`;
   return `CASE
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_TRUCKING)}) AND ${tm} IN ('LAND', '') THEN ${trucking}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_TRUCKING)}) THEN ${trucking}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'SEA' THEN ${vessel}
-    WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'MIX' THEN (${trucking} + ${vessel})
+    WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'MIX' THEN ${mixVesselThenTrucking}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'LAND' THEN ${vessel}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) THEN ${vessel}
     ELSE COALESCE(NULLIF(${opts.vesselQtyExpr}, 0), NULLIF(${opts.truckingQtyExpr}, 0), 0)
@@ -333,7 +337,7 @@ export function resolveUatQuantityDeliveryTs(
   }
   if ((INCOTERM_QTY_VESSEL as readonly string[]).includes(inc)) {
     if (tm === 'SEA') return vessel;
-    if (tm === 'MIX') return trucking + vessel;
+    if (tm === 'MIX') return vessel || trucking;
     if (tm === 'LAND') return vessel;
     return vessel;
   }

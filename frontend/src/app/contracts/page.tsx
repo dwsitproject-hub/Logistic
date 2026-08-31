@@ -154,7 +154,7 @@ import {
 import { useContractPerformanceFilters } from '@/hooks/useContractPerformanceFilters'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-/** Column ids sorted on the API (see GET /contracts allowedSort). */
+/** Column ids sorted on GET /contracts (SQL ORDER BY or node sort, then paginate). */
 const API_SORTABLE_COLUMN_IDS = new Set([
   'contract_date',
   'contract_id',
@@ -172,10 +172,6 @@ const API_SORTABLE_COLUMN_IDS = new Set([
   'contract_qty',
   'outstanding_qty_mt',
   'created_at',
-])
-
-/** Computed / UI-only columns — sorted client-side on the current result set. */
-const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'log_cycle_days',
   'trade_cycle_days',
   'cash_cycle_days',
@@ -199,6 +195,11 @@ const CLIENT_ONLY_SORT_COLUMN_IDS = new Set([
   'lt_spot',
   'sto_number',
 ])
+
+function resolveApiSortKey(columnId: string): string | null {
+  if (!API_SORTABLE_COLUMN_IDS.has(columnId)) return null
+  return columnId
+}
 
 /**
  * Temporarily hide SEA/LAND/MIX contracts-without-logistics cards.
@@ -226,12 +227,6 @@ const DATE_SORT_COLUMN_IDS = new Set([
   'eta_vessel_complete_discharge',
   'last_planning_delivery_date',
 ])
-
-function resolveApiSortKey(columnId: string): string | null {
-  if (CLIENT_ONLY_SORT_COLUMN_IDS.has(columnId)) return null
-  if (!API_SORTABLE_COLUMN_IDS.has(columnId)) return null
-  return columnId
-}
 
 function compareContractSortValues(
   av: string | number,
@@ -3636,6 +3631,7 @@ function ContractsPageContent() {
   const sortedContracts = useMemo(() => {
     const col = compactColumns.find((c) => c.id === sortKey)
     if (!col?.sortable || !col.getSortValue) return filteredContracts
+    // API sort already ordered the full filtered set; keep that order for this page.
     if (resolveApiSortKey(sortKey)) return filteredContracts
     const dirMul = sortDir === 'asc' ? 1 : -1
     const copy = [...filteredContracts]

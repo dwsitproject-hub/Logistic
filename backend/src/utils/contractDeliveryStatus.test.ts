@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  overlayB2bOriginGrStoStatus,
   aggregateImportStatusForStoGroup,
   isContractDeliveryClosed,
   isStoGroupSapClosed,
@@ -52,6 +53,19 @@ describe('aggregateImportStatusForStoGroup / isStoGroupSapClosed', () => {
   });
 });
 
+describe('overlayB2bOriginGrStoStatus', () => {
+  // Example: parent 9231000077 blank GR STO, child 1001029278 Open → parent Open.
+  it('uses child any-Open / all-Close when parent GR STO is blank', () => {
+    expect(overlayB2bOriginGrStoStatus(null, ['Open', 'Close'])).toBe('Open');
+    expect(overlayB2bOriginGrStoStatus('', ['Close', 'Close'])).toBe('Close');
+  });
+
+  it('keeps filled parent GR STO (Close + child Open stays Close)', () => {
+    expect(overlayB2bOriginGrStoStatus('Close', ['Open'])).toBe('Close');
+    expect(overlayB2bOriginGrStoStatus('Open', ['Close'])).toBe('Open');
+  });
+});
+
 describe('isContractDeliveryClosed', () => {
   it('returns true for Close variants', () => {
     expect(isContractDeliveryClosed('Close')).toBe(true);
@@ -88,6 +102,11 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain("'CFR'");
     // PO-wide (no stoKey) must not force SPD STO equality
     expect(sql).not.toContain("= TRIM((sp.sto_key)::text)");
+    // B2B origin: child GR STO snapshot before contracts.status (FOB/LCO only)
+    expect(sql).toContain('b2b_ending_child_snapshot');
+    expect(sql).toContain('child_gr_sto_status');
+    expect(sql).toContain("'LCO'");
+    expect(sql).toContain("'FOB'");
   });
 
   it('ignores blank/synthetic STO header GR when real SAP STO lines already have GR', () => {
@@ -117,6 +136,8 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain('BOOL_OR');
     expect(sql).toContain('GR PO Status');
     expect(sql).not.toContain("->'raw'->>'Status'");
+    expect(sql).toContain('b2b_ending_child_snapshot');
+    expect(sql).toContain('child_gr_sto_status');
   });
 
   it('builds STO-scoped closed predicate for SEA list / Perf parity', () => {

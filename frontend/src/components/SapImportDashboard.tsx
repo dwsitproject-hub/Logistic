@@ -80,6 +80,7 @@ interface SapImport {
   total_records: number;
   processed_records: number;
   failed_records: number;
+  source?: string;
 }
 
 type UploadPhase = 'idle' | 'uploading' | 'processing';
@@ -462,6 +463,7 @@ const SapImportDashboard: React.FC = () => {
                 <tr className="border-b">
                   <th className="text-left p-3">Import Date</th>
                   <th className="text-left p-3">Status</th>
+                  <th className="text-left p-3">Source</th>
                   <th className="text-right p-3">Total Records</th>
                   <th className="text-right p-3">Processed</th>
                   <th className="text-right p-3">Failed</th>
@@ -486,6 +488,11 @@ const SapImportDashboard: React.FC = () => {
                         </div>
                       </td>
                       <td className="p-3">{getStatusBadge(imp.status)}</td>
+                      <td className="p-3">
+                        <Badge variant="secondary">
+                          {imp.source === 'scheduler' ? 'Scheduler' : 'Manual'}
+                        </Badge>
+                      </td>
                       <td className="p-3 text-right">{imp.total_records.toLocaleString()}</td>
                       <td className="p-3 text-right text-green-600 font-medium">
                         {imp.processed_records.toLocaleString()}

@@ -15,6 +15,7 @@
  * of once per output row via a re-executed, text-duplicated subquery.
  */
 
+import { sqlCoalesceB2bOriginParentOrChildQty } from './b2bOriginEndingSql';
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import {
@@ -188,7 +189,8 @@ export const TRUCKING_QTY_RESOLUTION_JOIN = `
       LEFT JOIN sap_delivery_dedup spq_d ON spq_d.contract_uuid = e.contract_id
       LEFT JOIN sap_receive_dedup spq_r ON spq_r.contract_uuid = e.contract_id
       LEFT JOIN gr_closed grc ON grc.contract_uuid = e.contract_id
-      LEFT JOIN wb_actuals wb ON wb.operation_id = e.id`;
+      LEFT JOIN wb_actuals wb ON wb.operation_id = e.id
+      LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id`;
 
 /** Column refs to feed into `sqlTruckingResolvedDeliveryQty`/`ReceiveQty` as overrides. */
 export const TRUCKING_QTY_RESOLUTION_OVERRIDES = {
@@ -196,6 +198,14 @@ export const TRUCKING_QTY_RESOLUTION_OVERRIDES = {
   hasWbExpr: 'COALESCE(wb.has_actuals, false)',
   wbDeliveryExpr: 'COALESCE(wb.delivery_kg, 0)',
   wbReceiveExpr: 'COALESCE(wb.receive_kg, 0)',
-  sapDeliveryExpr: 'spq_d.qty_kg',
-  sapReceiveExpr: 'spq_r.qty_kg',
+  sapDeliveryExpr: sqlCoalesceB2bOriginParentOrChildQty(
+    'spq_d.qty_kg',
+    'qm.quantity_delivery_trucking',
+    'qm.contract_number IS NOT NULL',
+  ),
+  sapReceiveExpr: sqlCoalesceB2bOriginParentOrChildQty(
+    'spq_r.qty_kg',
+    'qm.quantity_receive',
+    'qm.contract_number IS NOT NULL',
+  ),
 };

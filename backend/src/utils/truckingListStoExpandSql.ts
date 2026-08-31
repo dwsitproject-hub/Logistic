@@ -141,8 +141,8 @@ function buildQuantitySelects(skipSapJoin: boolean): {
   }
 
   // PO-grain SAP Delivery/Receive (dedup'd across STOs) — pre-aggregated once per
-  // contract via sap_delivery_dedup / sap_receive_dedup (see TRUCKING_QTY_RESOLUTION_JOIN)
-  // instead of a correlated subquery re-run (and text-duplicated) per output row.
+  // contract via sap_delivery_dedup / sap_receive_dedup, then B2B origin overlay
+  // from qty_move snapshot when parent SAP is NULL or 0 (same formula as Contracts).
   const qtyDelivered = sqlTruckingResolvedDeliveryQty(
     'COALESCE(e.quantity_delivered, 0)',
     TRUCKING_QTY_RESOLUTION_OVERRIDES.sapDeliveryExpr,

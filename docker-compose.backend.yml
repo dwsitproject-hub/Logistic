@@ -97,6 +97,11 @@ services:
       # SIT-only testing recipient(s) — added on top of the DB-driven Logistics distribution
       # list. Comma/semicolon-separated. Intentionally NOT set on local (docker-compose.yml).
       CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS: ${CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS:-ryan.pohan@energi-up.com}
+      # Synology drop-folder MASTER v2 (Klip/SAP Data/Original). Enable after the share is mounted.
+      SAP_AUTO_IMPORT_ENABLED: ${SAP_AUTO_IMPORT_ENABLED:-true}
+      SAP_AUTO_IMPORT_CRON: ${SAP_AUTO_IMPORT_CRON:-0 7 * * *}
+      SAP_AUTO_IMPORT_ROOT: "${SAP_AUTO_IMPORT_ROOT:-/app/uploads/SAP Data}"
+      SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

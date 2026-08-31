@@ -7,6 +7,7 @@ import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
 } from '../utils/shipmentListStoPaging';
 import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
+import { sqlShipmentListB2bOriginContractJoins } from '../utils/shipmentB2bOriginSql';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 
 async function main(): Promise<void> {
@@ -44,8 +45,7 @@ async function main(): Promise<void> {
           NULL::text AS contract_ext_no_from_join,
           NULL::text AS suppliers
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        ${sqlShipmentListB2bOriginContractJoins()}
         WHERE 1=1 AND (${seaIncoterm}) AND (${coreWhereSql})
         ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER} GROUP BY ${listStoKeySql}
       )`;

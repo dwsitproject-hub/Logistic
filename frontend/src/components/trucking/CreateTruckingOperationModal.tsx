@@ -56,6 +56,8 @@ import {
   type TruckingModalStoActual,
 } from '@/lib/truckingModalDailyTables'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   ContractDetailModal,
   fetchContractForDetailModalByPo,
@@ -793,8 +795,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         />
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+        <label className="flex items-center gap-1 text-xs font-semibold text-gray-600 mb-1.5">
           Qty Delivery (SAP)
+          <FieldHelp text={FIELD_HELP.truckingDeliveryQty} />
         </label>
         <Input
           value={formatSapQtyMtOrDash(
@@ -806,8 +809,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         />
       </div>
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+        <label className="flex items-center gap-1 text-xs font-semibold text-gray-600 mb-1.5">
           Qty Receive (SAP)
+          <FieldHelp text={FIELD_HELP.truckingReceivedQty} />
         </label>
         <Input
           value={formatSapQtyMtOrDash(

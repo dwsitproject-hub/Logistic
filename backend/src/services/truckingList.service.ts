@@ -702,8 +702,9 @@ export function buildTruckingListQuery(
     skipSapJoin?: boolean;
     omitStatusFilter?: boolean;
     /**
-     * Status cards + status-click table use contract origin plant (same as
-     * trucking_pipeline_daily_summary / stage snapshot). Default list keeps B2B ending overlay.
+     * When true, plant toolbar matches status cards / daily snapshot (contract origin
+     * plant). When false, plant uses B2B ending overlay. The page list always passes true
+     * so ALL rows with Unplanned status match the Unplanned card.
      */
     originGroupPlant?: boolean;
   },
@@ -1655,10 +1656,12 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
 
   // Pipeline status is computed per operation (PO grain) — filter only after expansion.
   // Status-scoped requests force the full SAP variant (circle-consistent fallback).
+  // Plant filter always uses origin plant so ALL-view Unplanned badges match the Unplanned card
+  // (B2B ending overlay was showing extra Unplanned rows for ending-plant Bontang).
   const built = buildTruckingListQuery(req, {
     omitStatusFilter: true,
+    originGroupPlant: true,
     ...(statusScopedList ? { skipSapJoin: false } : {}),
-    ...(statusScopedList || isUnplannedHybrid ? { originGroupPlant: true } : {}),
   });
   // Resolve row stages from the daily-refresh snapshot when it is fresh so status
   // clicks are served in ~2s from the same source as the circles; when stale, the

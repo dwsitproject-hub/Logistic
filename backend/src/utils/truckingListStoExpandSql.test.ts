@@ -19,6 +19,9 @@ describe('truckingListStoExpandSql', () => {
     // OS uses Contract Qty − Σ Delivery/Receive across STOs on the PO
     expect(sql).toContain('COALESCE(e.contract_qty, 0)');
     expect(sql).toContain("data->'raw'->>'PO No'");
+    expect(sql).toContain('contract_qty_move_snapshot');
+    expect(sql).toContain('COALESCE(NULLIF(spq_d.qty_kg, 0), qm.quantity_delivery_trucking)');
+    expect(sql).toContain('COALESCE(NULLIF(spq_r.qty_kg, 0), qm.quantity_receive)');
   });
 
   it('recomputes pipeline status per operation / PO (not passthrough)', () => {

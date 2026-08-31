@@ -1,5 +1,6 @@
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
+import { sqlOverlayParentQtyOrQtyMoveSnapshot } from './b2bOriginEndingSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import { sqlNormalizeSapQtyToKgWithUom } from './sapQtyUom';
@@ -291,18 +292,26 @@ export function sqlTruckingQuantityReceiveCoalesce(): string {
 
 /**
  * SAP-only Qty Delivery (kg) — no coalesce with trucking_operations / WB.
- * Null when SAP has no matching numeric field.
+ * B2B origin: parent NULL or 0 uses qty_move child SUM (same overlay as Contracts).
  */
 export function sqlSapQtyDeliveryOnly(): string {
-  return sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS, SAP_DELIVERY_UOM_FIELDS);
+  return sqlOverlayParentQtyOrQtyMoveSnapshot(
+    sqlSapNumericSubquery(SAP_DELIVERY_RAW_FIELDS, SAP_DELIVERY_UOM_FIELDS),
+    'c.contract_id',
+    'quantity_delivery_trucking',
+  );
 }
 
 /**
  * SAP-only Qty Receive (kg) — no coalesce with trucking_operations / WB.
- * Null when SAP has no matching numeric field.
+ * B2B origin: parent NULL or 0 uses qty_move child SUM (same overlay as Contracts).
  */
 export function sqlSapQtyReceiveOnly(): string {
-  return sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS, SAP_RECEIVE_UOM_FIELDS);
+  return sqlOverlayParentQtyOrQtyMoveSnapshot(
+    sqlSapNumericSubquery(SAP_RECEIVE_RAW_FIELDS, SAP_RECEIVE_UOM_FIELDS),
+    'c.contract_id',
+    'quantity_receive',
+  );
 }
 
 /** True when the trucking operation has at least one WB/daily actual row. */

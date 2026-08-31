@@ -64,6 +64,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(q.text).not.toContain('po_sto_count')
     expect(q.text).toContain('contract_source_type')
     expect(q.text).toContain('qty_move')
+    expect(q.text).toContain('b2b_child_qty_rollup')
     expect(q.text).not.toContain('active_shipments')
     // Buckets must exclude COMPLETED / CANCELLED so strip breakdown stays active-stage scoped.
     expect(q.text).toContain(sqlShipmentOutstandingActiveStagePredicate('sb').trim().slice(0, 40))
@@ -75,6 +76,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(sql).toContain('UNION ALL')
     expect(sql).toContain("'CFR'")
     expect(sql).toContain('qty_move')
+    expect(sql).toContain('b2b_child_qty_rollup')
     expect(sql).toContain('third_party_cfr_kg')
     expect(sql).toContain('pre_planned_group')
     expect(sql).toContain('source_type_raw')

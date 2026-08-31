@@ -107,5 +107,15 @@ describe('truckingUnplannedHybridList.service', () => {
       expect(src).toContain('isAllHybrid');
       expect(src).not.toMatch(/isAllHybrid\s*&&\s*!.*[Ss]earch/);
     });
+
+    it('ALL list uses origin plant like Unplanned / status cards', () => {
+      const src = readFileSync(join(__dirname, 'truckingList.service.ts'), 'utf8');
+      expect(src).not.toMatch(
+        /statusScopedList \|\| isUnplannedHybrid \? \{ originGroupPlant: true \}/,
+      );
+      const builtIdx = src.indexOf('const built = buildTruckingListQuery');
+      expect(builtIdx).toBeGreaterThan(0);
+      expect(src.slice(builtIdx, builtIdx + 400)).toContain('originGroupPlant: true');
+    });
   });
 });

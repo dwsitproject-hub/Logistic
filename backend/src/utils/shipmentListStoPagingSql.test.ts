@@ -7,6 +7,7 @@ import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
 } from './shipmentListStoPaging';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
+import { sqlShipmentListB2bOriginContractJoins } from './shipmentB2bOriginSql';
 import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 function buildStoPagingListSql(): string {
@@ -18,8 +19,7 @@ function buildStoPagingListSql(): string {
       shipment_base_core AS (
         SELECT ${listStoKeySql} AS sto_key
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        ${sqlShipmentListB2bOriginContractJoins()}
         WHERE 1=1 AND (${coreWhereSql})
         ${SHIPMENT_BASE_CORE_GROUP_BY_MARKER} GROUP BY ${listStoKeySql}
       )`;
@@ -63,6 +63,7 @@ describe('shipmentListStoPaging SQL shape', () => {
     expect(sql).toContain('LEFT JOIN sto_link_agg sla');
     expect(sql).toContain('FROM ranked_sto) AS __filter_total');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
+    expect(sql).toContain('COALESCE(c_origin.id, c_link.id)');
     expect(sql).not.toMatch(/NOT\s*\([^)]*= 'T'\)/);
     expect(sql).not.toMatch(/\bqty_move\b/);
     expect(sql).not.toMatch(/LEFT JOIN sto_metrics\b/);

@@ -610,9 +610,19 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
       NULLIF(TRIM(s.data->'raw'->>'ETA Vessel Complete Discharge'), ''),
       NULLIF(TRIM(s.data->'shipment'->>'eta_vessel_complete_discharge'), '')
     )`)} AS eta_discharge_complete,
+    ${sqlParseSapDateExpr(`COALESCE(
+      NULLIF(TRIM(s.data->'raw'->>'ATA Vessel Arrival at Loading Port 1'), ''),
+      NULLIF(TRIM(s.data->'raw'->>'ATA Vessel Arrival at Loading Port'), '')
+    )`)} AS ata_arrival_loading,
     ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'ATA Vessel Complete Discharge'), '')`)} AS ata_discharge_complete,
     ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'ETA Trucking Completion Date'), '')`)} AS eta_trucking_completion_date,
     ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'Trucking Last Receive Date'), '')`)} AS trucking_completion_date,
+    NULL::date AS daily_plan_start_date,
+    NULL::date AS daily_plan_end_date,
+    NULL::date AS wb_start_date,
+    NULL::date AS wb_end_date,
+    ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'Trucking Start Receive Date'), '')`)} AS sap_trucking_start_receive_date,
+    ${sqlParseSapDateExpr(`NULLIF(TRIM(s.data->'raw'->>'Trucking Last Receive Date'), '')`)} AS sap_trucking_last_receive_date,
     CASE
       WHEN s.sea_land LIKE 'LAND%' THEN 'trucking'
       WHEN s.sea_land LIKE 'SEA%' THEN 'shipment'

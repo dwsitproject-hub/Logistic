@@ -7,6 +7,7 @@ describe('buildShipmentStageSnapshotInsertSql', () => {
     expect(sql).toContain('quantity_delivered');
     expect(sql).toContain('quantity_delivered_klip');
     expect(sql).toContain('master_vessel_id');
-    expect(sql).toContain('ARRAY_AGG(s.vessel_name ORDER BY s.updated_at DESC');
+    expect(sql).toContain('COALESCE(c_origin.id, c_link.id)');
+    expect(sql).toContain('cs_sto.contract_id = c_link.id');
   });
 });

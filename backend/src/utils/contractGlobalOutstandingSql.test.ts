@@ -110,5 +110,19 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('qty_move AS');
     expect(sql).toContain('trucking_wb_overlay');
     expect(sql).toContain('shipment_klip_overlay');
+    expect(sql).toContain('b2b_child_qty_rollup');
+  });
+
+  it('buildQtyMoveCte rolls SUM child onto origin when parent qty is NULL or 0 (not parent+child)', () => {
+    // Example: parent 9231000077 + child 1001029278 — overlay in qty_move so snapshot/cards match the list.
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('qty_move_scope');
+    expect(sql).toContain('b2b_child_qty_rollup');
+    expect(sql).toContain('qty_move_resolved');
+    expect(sql).toContain('COALESCE(NULLIF(r.quantity_delivery_trucking, 0), roll.sum_delivery_trucking)');
+    expect(sql).toContain('COALESCE(NULLIF(r.quantity_delivery_vessel, 0), roll.sum_delivery_vessel)');
+    expect(sql).toContain('COALESCE(NULLIF(r.quantity_receive, 0), roll.sum_receive)');
+    expect(sql).not.toContain('r.quantity_receive + roll.sum_receive');
+    expect(sql).toContain('Contract Reff PO Ini');
   });
 });

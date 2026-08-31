@@ -3106,6 +3106,7 @@ function TruckingPageContent() {
     {
       id: 'quantity_delivered',
       label: 'Delivery Qty',
+      formulaHelp: FIELD_HELP.truckingDeliveryQty,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
@@ -3118,6 +3119,7 @@ function TruckingPageContent() {
     {
       id: 'quantity_receive',
       label: 'Received Qty',
+      formulaHelp: FIELD_HELP.truckingReceivedQty,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered) ?? 0,

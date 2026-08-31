@@ -116,6 +116,14 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(sql).toContain("'CIF'");
   });
 
+  it('CONTRACT_SAP_ONLY_STOS_SQL exposes SEA ATA loading for contract STO table', () => {
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('ATA Vessel Arrival at Loading Port');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('ata_arrival_loading');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('eta_discharge_complete');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('sap_trucking_start_receive_date');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('NULL::date AS daily_plan_start_date');
+  });
+
   it('CONTRACT_SAP_ONLY_STOS_SQL scopes qty by contract/PO helpers (not STO-wide SUM)', () => {
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('po_number');
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('CROSS JOIN contracts c_po');

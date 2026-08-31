@@ -49,6 +49,8 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain("data->'raw'->>'Quantity Delivery'");
     expect(sql).toContain('^-?0+(\\.0*)?$');
     expect(sql).not.toContain('t.quantity_delivered');
+    expect(sql).toContain('contract_qty_move_snapshot');
+    expect(sql).toContain('quantity_delivery_trucking');
   });
 
   it('sqlSapQtyReceiveOnly reads receive keys only', () => {
@@ -56,6 +58,8 @@ describe('truckingQuantitySql', () => {
     expect(sql).not.toContain('t.quantity_delivered');
     expect(sql).toContain('Quantity Receive');
     expect(sql).toContain('Qty Receive');
+    expect(sql).toContain('contract_qty_move_snapshot');
+    expect(sql).toContain('quantity_receive');
   });
 
   it('sqlTruckingOutstandingQtyByIncoterm uses receive for FRC and delivered for LCO', () => {

@@ -37,6 +37,10 @@ APPs/
       claim-mutu/
       claim-susut/
       suppliers/
+      SAP Data/
+        Original/                  ← drop SAP MASTER v2 Excel here (kept after import)
+        Success/                   ← daily success-row workbooks
+        Failed/                    ← daily failed-row workbooks + Remarks
       {uuid}_file.pdf              ← general documents module
     other-app/                     ← other applications under dev/
 ```
@@ -50,8 +54,13 @@ APPs/
 | Claim Mutu import | `claim-mutu/` |
 | Claim Susut import | `claim-susut/` |
 | Supplier import | `suppliers/` |
+| SAP MASTER v2 auto-import | `SAP Data/Original/` (input, never moved), `SAP Data/Success/`, `SAP Data/Failed/` |
 
-Transient imports (SAP Master, planning Excel, etc.) are **not** stored on Synology.
+Manual SAP upload in the UI still uses a temp file and is **not** written to Original. The 07:00 Asia/Jakarta scheduler reads Original, runs the same MASTER v2 engine, writes Success/Failed workbooks (non-empty only), and emails ADMIN. Set `SAP_AUTO_IMPORT_ENABLED=true` after these folders exist on the share.
+
+If IT stores SAP files under a share labelled `Klip > SAP Data` outside `APPs/dev/klip`, either copy/symlink that tree to `dev/klip/SAP Data` or set `SAP_AUTO_IMPORT_ROOT` to a second bind mount. The Synology overlay (`docker-compose.backend.synology.yml`) is enough when the KLIP upload root is already `/app/uploads`.
+
+The Contract ETA reminder also runs at 07:00; it is a separate job and still runs when SAP auto-import is enabled.
 
 ## One-time setup (backend server 172.28.92.57)
 
@@ -87,6 +96,8 @@ In `/opt/klip/.env` (and align `backend/.env`):
 ```env
 KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
 UPLOAD_DIR=/app/uploads
+SAP_AUTO_IMPORT_ENABLED=true
+SAP_AUTO_IMPORT_ROOT=/app/uploads/SAP Data
 ```
 
 ### 5. Deploy backend (Synology bind mount)
@@ -108,6 +119,9 @@ docker compose -f docker-compose.backend.yml exec backend sh -c 'touch /app/uplo
 
 # After uploading a commercial PDF in UI
 ls -la /mnt/synology-apps/dev/klip/commercial-documents/
+
+# SAP drop folders (scheduler reads Original/)
+ls -la /mnt/synology-apps/dev/klip/SAP\ Data/Original /mnt/synology-apps/dev/klip/SAP\ Data/Success /mnt/synology-apps/dev/klip/SAP\ Data/Failed
 ```
 
 On Synology File Station: **APPs → dev → klip** should show uploaded files.

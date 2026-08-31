@@ -4,6 +4,7 @@ import logger from '../utils/logger';
 import { FinanceMaterializedViewService } from './financeMaterializedView.service';
 import { PipelineDailySummaryService } from './pipelineDailySummary.service';
 import { runContractEtaReminderJob } from './contractEtaReminder.service';
+import { runSapFolderAutoImportJob } from './sapFolderAutoImport.service';
 
 export interface ScheduledImport {
   id: string;
@@ -33,6 +34,7 @@ export class SchedulerService {
 
     // Independent cron (not part of the Excel-import ScheduledImport framework/admin UI).
     this.startContractEtaReminderCron();
+    this.startSapFolderAutoImportCron();
 
     logger.info('Scheduler service initialized successfully');
   }
@@ -56,6 +58,27 @@ export class SchedulerService {
       { timezone: 'Asia/Jakarta' },
     );
     logger.info(`Contract ETA reminder cron scheduled: ${schedule} (Asia/Jakarta)`);
+  }
+
+  /**
+   * Daily MASTER v2 import from Synology `Klip/SAP Data/Original` (independent of
+   * logistics_overview Excel jobs). Defaults to 07:00 Asia/Jakarta; disabled unless
+   * SAP_AUTO_IMPORT_ENABLED=true. Safe to overlap the Contract ETA reminder cron.
+   */
+  private static startSapFolderAutoImportCron(): void {
+    if (String(process.env.SAP_AUTO_IMPORT_ENABLED || 'false').toLowerCase() !== 'true') {
+      logger.info('SAP folder auto-import cron is disabled (SAP_AUTO_IMPORT_ENABLED is not true)');
+      return;
+    }
+    const schedule = process.env.SAP_AUTO_IMPORT_CRON || '0 7 * * *';
+    cron.schedule(
+      schedule,
+      async () => {
+        await runSapFolderAutoImportJob();
+      },
+      { timezone: 'Asia/Jakarta' },
+    );
+    logger.info(`SAP folder auto-import cron scheduled: ${schedule} (Asia/Jakarta)`);
   }
   
   /**

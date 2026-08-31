@@ -21,6 +21,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).not.toContain('sap_agg sa');
     expect(sql).not.toContain('po_sto_count');
     expect(sql).toContain('qty_move');
+    expect(sql).toContain('b2b_child_qty_rollup');
     expect(sql).toContain('unplanned_execution_contract_qty');
     expect(sql).toContain('unplanned_execution_outstanding_qty');
     expect(sql).toContain('0::numeric AS unplanned_execution_outstanding_qty');

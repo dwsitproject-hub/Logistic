@@ -12,6 +12,7 @@ describe('resolveContractsQtyMoveCte', () => {
     expect(sql).toContain('qty_move AS');
     expect(sql).toContain('trucking_wb_overlay');
     expect(sql).toContain('qty_move_sap');
+    expect(sql).toContain('b2b_child_qty_rollup');
     expect(sql).not.toContain('FROM contract_qty_move_snapshot');
   });
 

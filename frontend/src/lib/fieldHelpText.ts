@@ -18,7 +18,7 @@ export const FIELD_HELP = {
   dpCycle: `Completion Date vs DP Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
 
   /** Contract Performance — view table signed OS; Open card + drilldown use max(0, same qty_move OS). Over-delivery: +MT (green) in the table. Remaining outstanding: MT (black). */
-  contractPerfOutstandingQty: `Open card + Section 2 drilldown = Shipments OS (FOB/CIF/CFR, Unplanned–At DP) + Trucking OS (FRC/LCO, Unplanned+Planned+In Progress), qty_move floored at 0. SAP Open but pipeline Completed/Cancelled is excluded. Table column is signed (over-delivery +MT green).`,
+  contractPerfOutstandingQty: `Open card + Section 2 drilldown = Shipments OS (FOB/CIF/CFR, Unplanned–At DP) + Trucking OS (FRC/LCO, Unplanned+Planned+In Progress), qty_move floored at 0. SAP Open but pipeline Completed/Cancelled is excluded. Table column is signed (over-delivery +MT green). B2B origin (empty Contract Reff PO): when parent Delivery/Receive is NULL or 0, qty_move uses SUM of children (parent > 0 replaces, never parent+child). GR STO Open/Close on FOB/LCO follows children when parent GR STO is blank (any Open / all Close).`,
   contractPerfTradeCycle: `Completion Date vs Due Date Delivery End. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
   contractPerfDpCycle: `Completion Date vs DP Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
   contractPerfCashCycle: `Completion Date vs Payoff Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
@@ -26,11 +26,11 @@ export const FIELD_HELP = {
 
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 
-  deliveryQty: `FRC: GR PO Open + WB Netto PKS > 0 → Netto PKS; LCO: GR STO Open + WB Netto PKS > 0 → Netto PKS (same as Trucking Delivery Qty). Empty/null WB delivery stays on SAP. SEA Open with KLIP actuals: shipment delivered qty. GR Close (FRC GR PO / LCO GR STO) uses SAP. Otherwise SAP quantity_delivery (trucking or vessel by incoterm / transport).`,
+  deliveryQty: `FRC: GR PO Open + WB Netto PKS > 0 → Netto PKS; LCO: GR STO Open + WB Netto PKS > 0 → Netto PKS (same as Trucking Delivery Qty). Empty/null WB delivery stays on SAP. SEA Open with KLIP actuals: shipment delivered qty. GR Close (FRC GR PO / LCO GR STO) uses SAP. FOB/CIF MIX uses Quantity Delivery Vessel when present (not trucking+vessel). Otherwise SAP quantity_delivery (trucking or vessel by incoterm / transport). B2B origin (empty Contract Reff PO): parent NULL or 0 uses SUM of child Delivery Qty; parent > 0 replaces (not parent+child).`,
 
-  receivedQty: `FRC: GR PO Open + WB Netto EUP > 0 → Netto EUP; LCO: GR STO Open + WB Netto EUP > 0 → Netto EUP (same as Trucking Received Qty). Empty/null WB receive stays on SAP Quantity Receive. SEA Open with KLIP receive: actual vessel receive. GR Close uses SAP Quantity Receive. Otherwise SAP Quantity Receive.`,
+  receivedQty: `FRC: GR PO Open + WB Netto EUP > 0 → Netto EUP; LCO: GR STO Open + WB Netto EUP > 0 → Netto EUP (same as Trucking Received Qty). Empty/null WB receive stays on SAP Quantity Receive. SEA Open with KLIP receive: actual vessel receive. GR Close uses SAP Quantity Receive. Otherwise SAP Quantity Receive. B2B origin (empty Contract Reff PO): parent NULL or 0 uses SUM of child Receive Qty; parent > 0 replaces (not parent+child).`,
 
-  outstandingQtyMt: `Contract Qty minus fulfilled quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (same UAT trucking/vessel matrix as the Quantity Delivery column). Over-delivery shows +MT (green); remaining outstanding shows MT (black).`,
+  outstandingQtyMt: `Contract Qty minus fulfilled quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (same UAT trucking/vessel matrix as the Quantity Delivery column). Over-delivery shows +MT (green); remaining outstanding shows MT (black). B2B origin uses the same qty_move overlay as Delivery/Receive (SUM children when parent is NULL or 0).`,
   shipmentOutstandingQtyMt: `Remaining qty on this STO, same as Contracts OS Qty. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery (Open→KLIP / Close→SAP). When one PO has several STOs, each row repeats the PO remainder (Contract Qty minus all related STOs) for display only. Status cards and Section OS Qty still count that PO once. Missing Delivery/Receive counts as 0 MT. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
@@ -38,7 +38,14 @@ export const FIELD_HELP = {
   companyName: `From Buyer in latest SAP data. For B2B origin (empty Contract Reff PO), Buyer / Company Name overlay the latest child PO (same as Group Plant and Truck Unload).`,
   b2bBuyer: `SAP Buyer on this PO. For B2B origin (empty Contract Reff PO), Buyer overlays the latest child PO — not Truck Discharge Location.`,
 
-  b2bParties: `Lists contracts whose Contract Reff PO Ini matches this contract's PO Number.`,
+  b2bParties: `Lists child POs whose Contract Reff PO matches this origin PO, with Buyer, Supplier, Delivery Qty, and Receive Qty.`,
+
+  stoListEta: `Trucking: first date on Daily Planning (Start Daily Plan). Shipment: ETA Vessel Arrival at Loading Port (ETA at LP).`,
+  stoListEtc: `Trucking: last date on Daily Planning (End Daily Plan). Shipment: ETA Vessel Complete Discharge (ETC at DP).`,
+  stoListAta: `Trucking: first Weighbridge (WB) date while the operation is open; SAP Trucking Start Receive Date when Completed. Shipment: ATA Vessel Arrival at Loading Port (ATA at LP).`,
+  stoListAtc: `Trucking: last Weighbridge (WB) date while the operation is open; SAP Trucking Last Receive Date when Completed. Shipment: ATA Vessel Complete Discharge (ATC at DP).`,
+
+  grStoStatus: `SAP GR STO Status. For B2B origin (empty Contract Reff PO), blank parent GR STO uses children: Open if any child is Open; Close only if every child is Close. A filled parent GR STO replaces children (not merged). FRC/CIF import status still uses GR PO on the parent.`,
 
   aiInsight: `Generated by Gemini using aggregated metrics for the filters you selected. Cached per filter combination; use Re-generate to refresh.`,
 
@@ -58,15 +65,19 @@ export const FIELD_HELP = {
   truckingOaBudget: `OA Budget is the planned operational allowance (budget) for the trucking leg.`,
   truckingOaActual: `OA Actual is the realized operational allowance (actual cost) for the trucking leg.`,
   etaVsDueDelivery: `ETA fields are planned dates; Due Date Delivery Start/End come from the contract delivery window. Use these to assess schedule risk and lateness.`,
-  truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total. Qty on this card is Outstanding Qty (floored at 0), same formula as Planned.`,
+  truckingStatusUnplanned: `Unplanned view table rows: open contracts without a trucking operation, plus unplanned trucking operations (no Daily Planning and not yet started/completed). The badge count matches the table row total, including on ALL (plant filter uses contract origin plant, same as this card). Qty on this card is Outstanding Qty (floored at 0), same formula as Planned.`,
   truckingStatusPlanned: `Open contract with ETA or Daily Planning, plus In Progress (Start Receive). The summary card is labeled Planned / In Progress; the view-table status badge stays Planned. Totals and list filter still include both Planned and In Progress. Qty on this card is Outstanding Qty (after WB).`,
   truckingStatusInProgress: `Included in the Planned card. Trucking shipment (STO/Operation) with a valid Trucking Start Receive Date (SAP AV). Stays In Progress until GR PO/STO is Close, or until Outstanding Qty is within tolerance while GR is still Open.`,
   truckingStatusCompleted: `Trucking shipment (STO/Operation) is Complete when GR PO Status (FRC/CIF) or GR STO Status (LCO/FOB) is Close — no OS Qty check required. Alternatively, when GR is still Open, Complete applies if Outstanding Qty is within tolerance (kg, after WB actual qty when uploaded). Trucking Last Receive Date is informational only.`,
   truckingStatusCancelled: `Operation was set to Cancelled manually and is excluded from active execution. Use the Status filter below to view cancelled operations only.`,
-  truckingOutstandingQtyMt: `Outstanding Qty by incoterm for the PO: FRC = Contract Qty − Σ Received Qty across all STOs on the PO; LCO = Contract Qty − Σ Delivered Qty across all STOs on the PO. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —.`,
+  truckingOutstandingQtyMt: `Outstanding Qty by incoterm for the PO: FRC = Contract Qty − Σ Received Qty across all STOs on the PO; LCO = Contract Qty − Σ Delivered Qty across all STOs on the PO. Displayed in MT. Green = over delivered (+MT); black = still outstanding. Other incoterms show —. B2B origin (empty Contract Reff PO): Delivery/Receive SAP uses SUM of children when parent is NULL or 0 (parent > 0 replaces, not parent+child).`,
+
+  truckingDeliveryQty: `GR Open + WB Netto PKS > 0 → Netto PKS; GR Close uses SAP Quantity Delivery Trucking. B2B origin (empty Contract Reff PO): parent NULL or 0 uses SUM of child Delivery Qty; parent > 0 replaces (not parent+child).`,
+
+  truckingReceivedQty: `GR Open + WB Netto EUP > 0 → Netto EUP; GR Close uses SAP Quantity Receive. B2B origin (empty Contract Reff PO): parent NULL or 0 uses SUM of child Receive Qty; parent > 0 replaces (not parent+child).`,
 
   // Oil Loss
-  oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Qty Delivery follows SAP UAT incoterm rules (Trucking for FRC/LCO; Vessel for FOB/CIF; MIX sums by transport). Negative values indicate oil loss.`,
+  oilLossAmount: `Formula: Qty Receive − Qty Delivery (displayed in MT). Qty Delivery follows SAP UAT incoterm rules (Trucking for FRC/LCO; Vessel for FOB/CIF; MIX uses vessel if present, else trucking). Negative values indicate oil loss.`,
   oilLossPct: `Formula: (Qty Receive − Qty Delivery) ÷ Qty Delivery × 100%. Qty Delivery uses SAP UAT Quantity Delivery Trucking/Vessel matrix. Negative values indicate oil loss.`,
 
   // Shipping Performance
@@ -74,7 +85,7 @@ export const FIELD_HELP = {
 
   shipmentStoQty: `STO Quantity from the linked contract in SAP (in MT). Represents the planned quantity allocated to this shipment.`,
   shipmentReceivedQty: `Shipments View Table grain is the STO (one row). Open + KLIP: sum of Received Qty (Klip) per PO on this STO — same as Edit Shipment Grand Total, not a single PO cell. One PO with several STOs: this row is that STO only (not the full PO copied onto every sibling). GR Close uses SAP Quantity Receive for this STO.`,
-  shipmentViewTableDeliveryQty: `Shipments View Table grain is the STO (one row). Open + KLIP: sum of Delivered Qty (Klip) per PO on this STO — same as Edit Shipment Grand Total. One PO with several STOs: this row is that STO only. GR Close uses SAP delivery for this STO.`,
+  shipmentViewTableDeliveryQty: `Shipments View Table grain is the STO (one row). Open + KLIP: sum of Delivered Qty (Klip) per PO on this STO — same as Edit Shipment Grand Total. One PO with several STOs: this row is that STO only. GR Close uses SAP delivery for this STO. B2B origin (empty Contract Reff PO): child sea STOs are shown on the origin row; the child PO is not a separate row.`,
   shipmentOutstandingQtyActual: `Remaining qty, same as Shipments View Table OS Qty. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery (Open→KLIP / Close→SAP). When one PO has several STOs, each row repeats the PO remainder for display only. On Going / Close cards, the product tree, and By Vessel totals split that remainder so it is not multiplied by STO count. Green = Over Delivered (+MT); black = Still Outstanding.`,
   shipmentOutstandingQtyPlanning: `Contract Qty minus SAP STO Qty (planning via SAP) minus Shipment Planning Qty (KLIP daily deliverables on shipment + linked trucking for the STO). Net aggregate at STO level — over-planning on one PO can offset another. Displayed in MT.`,
   shipmentPlanningQty: `KLIP shipment planning qty — sum of daily deliverables on the shipment calendar plus linked trucking daily deliverables for the same STO.`,

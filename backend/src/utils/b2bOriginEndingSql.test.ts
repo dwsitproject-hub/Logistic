@@ -10,6 +10,11 @@ import {
   sqlB2bEndingUnloadExpr,
   sqlB2bOriginEndingChildLateralJoin,
   sqlB2bOriginEndingUnloadSubquery,
+  coalesceB2bOriginParentOrChildQty,
+  sqlB2bChildGrStoAggSelect,
+  sqlB2bChildGrStoStatusLookup,
+  sqlCoalesceB2bOriginParentOrChildQty,
+  sqlOverlayParentQtyOrQtyMoveSnapshot,
 } from './b2bOriginEndingSql';
 
 describe('b2bOriginEndingSql', () => {
@@ -33,6 +38,8 @@ describe('b2bOriginEndingSql', () => {
     const sql = buildB2bEndingChildSnapshotRefreshSql();
     expect(sql).toContain(`INSERT INTO ${B2B_ENDING_CHILD_SNAPSHOT_TABLE}`);
     expect(sql).toContain('DISTINCT ON (origin_po)');
+    expect(sql).toContain('child_gr_sto_status');
+    expect(sql).toContain('child_count');
   });
 
   it('prefers child plant, unload, and buyer over origin fallbacks', () => {
@@ -52,5 +59,55 @@ describe('b2bOriginEndingSql', () => {
     expect(sql).toContain('m.origin_po = NULLIF(TRIM(c.po_number), \'\')');
     expect(sql).not.toContain('LEFT JOIN LATERAL');
     expect(sql).not.toContain('sap_processed_data');
+  });
+});
+
+describe('B2B origin qty / GR STO overlay helpers', () => {
+  // Example: parent 9231000077 qty NULL/0 + child 1001029278 qty 3000 → 3000; parent 200 → 200 not 3200.
+  it('coalesceB2bOriginParentOrChildQty uses child when parent is NULL or 0, else replaces', () => {
+    expect(coalesceB2bOriginParentOrChildQty(null, 3000)).toBe(3000);
+    expect(coalesceB2bOriginParentOrChildQty(0, 3000)).toBe(3000);
+    expect(coalesceB2bOriginParentOrChildQty(200, 3000)).toBe(200);
+    expect(coalesceB2bOriginParentOrChildQty(200, 3000)).not.toBe(3200);
+    expect(coalesceB2bOriginParentOrChildQty(0, null)).toBe(0);
+    expect(coalesceB2bOriginParentOrChildQty(null, null)).toBeNull();
+  });
+
+  it('sqlCoalesceB2bOriginParentOrChildQty is COALESCE(NULLIF(parent,0), child) not parent+child', () => {
+    const sql = sqlCoalesceB2bOriginParentOrChildQty(
+      'r.quantity_receive',
+      'roll.sum_receive',
+      'roll.origin_po IS NOT NULL',
+    );
+    expect(sql).toContain('COALESCE(NULLIF(r.quantity_receive, 0), roll.sum_receive)');
+    expect(sql).not.toContain('r.quantity_receive +');
+  });
+
+  it('child GR STO agg is any Open / all Close across children', () => {
+    const sql = sqlB2bChildGrStoAggSelect();
+    expect(sql).toContain('BOOL_OR');
+    expect(sql).toContain("'OPEN'");
+    expect(sql).toContain("'CLOSE'");
+    expect(sql).toContain('child_gr_sto_status');
+    expect(sql).toContain('COUNT(*)');
+  });
+
+  it('child GR STO lookup is a snapshot PK join without LIMIT 1', () => {
+    const sql = sqlB2bChildGrStoStatusLookup('c.po_number');
+    expect(sql).toContain(B2B_ENDING_CHILD_SNAPSHOT_TABLE);
+    expect(sql).toContain('child_gr_sto_status');
+    expect(sql).not.toContain('LIMIT 1');
+  });
+
+  it('sqlOverlayParentQtyOrQtyMoveSnapshot uses snapshot when parent qty is NULL or 0', () => {
+    const sql = sqlOverlayParentQtyOrQtyMoveSnapshot(
+      'parent.qty',
+      'c.contract_id',
+      'quantity_delivery_trucking',
+    );
+    expect(sql).toContain('contract_qty_move_snapshot');
+    expect(sql).toContain('COALESCE(NULLIF(parent.qty, 0)');
+    expect(sql).toContain('quantity_delivery_trucking');
+    expect(sql).not.toContain('parent.qty +');
   });
 });

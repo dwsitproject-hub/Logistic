@@ -5,6 +5,10 @@
  * Close → SAP (no WB overlay). SEA FOB/CIF Open: KLIP shipment actuals over SAP.
  */
 
+import {
+  SQL_SPD_CONTRACT_REFF_PO,
+  sqlCoalesceB2bOriginParentOrChildQty,
+} from './b2bOriginEndingSql';
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import {
   sqlContractOutstandingFromFields,
@@ -24,30 +28,53 @@ export type QtyMoveContractFilter =
   | { kind: 'join_scope'; scopeCteName: string }
   | { kind: 'in_subquery'; subquery: string };
 
-function scopeJoin(filter: QtyMoveContractFilter, spdAlias = 'spd'): string {
-  if (filter.kind === 'join_scope') {
-    return `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = ${spdAlias}.contract_number`;
-  }
-  return '';
+/**
+ * Include in-scope contracts, their B2B children (Reff PO → origin PO), and
+ * origins of in-scope children so parent overlay can SUM child qty even when
+ * the child contract_id is outside the date/filter scope.
+ */
+function qtyMoveScopeCte(filter: QtyMoveContractFilter): string {
+  const originIds =
+    filter.kind === 'join_scope'
+      ? `SELECT cs.contract_id FROM ${filter.scopeCteName} cs`
+      : filter.subquery;
+  const latestChildSpd = `
+          SELECT DISTINCT ON (spd.contract_number)
+            spd.contract_number,
+            spd.data
+          FROM sap_processed_data spd
+          WHERE spd.contract_number IS NOT NULL
+            AND TRIM(spd.contract_number) != ''
+            AND ${SQL_SPD_CONTRACT_REFF_PO('spd.data')} IS NOT NULL
+          ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST`;
+  return `
+        qty_move_scope AS (
+          SELECT contract_id FROM (${originIds}) scoped_ids(contract_id)
+          UNION
+          SELECT DISTINCT ch.contract_id
+          FROM contracts ch
+          INNER JOIN (${latestChildSpd}) ch_spd ON ch_spd.contract_number = ch.contract_id
+          WHERE ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} IN (
+            SELECT NULLIF(TRIM(o.po_number::text), '')
+            FROM contracts o
+            WHERE o.contract_id IN (${originIds})
+              AND NULLIF(TRIM(o.po_number::text), '') IS NOT NULL
+          )
+          UNION
+          SELECT DISTINCT o.contract_id
+          FROM contracts o
+          INNER JOIN (${latestChildSpd}) ch_spd
+            ON ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} = NULLIF(TRIM(o.po_number::text), '')
+          WHERE ch_spd.contract_number IN (${originIds})
+        )`;
 }
 
-function scopeWhere(filter: QtyMoveContractFilter, spdAlias = 'spd'): string {
-  if (filter.kind === 'in_subquery') {
-    return `AND ${spdAlias}.contract_number IN (${filter.subquery})`;
-  }
-  return '';
-}
-
-function contractOrderedCte(filter: QtyMoveContractFilter): string {
-  const scope = contractScopeSql(filter);
-  const whereClause = filter.kind === 'in_subquery' ? scope.replace(/^WHERE /, 'WHERE ') : '';
-  const joinClause = filter.kind === 'join_scope' ? scope : '';
+function contractOrderedCte(): string {
   return `
         contract_ordered AS (
           SELECT c.contract_id AS contract_number, MAX(c.quantity_ordered) AS quantity_ordered
           FROM contracts c
-          ${joinClause}
-          ${whereClause}
+          INNER JOIN qty_move_scope cs ON cs.contract_id = c.contract_id
           GROUP BY c.contract_id
         )`;
 }
@@ -62,14 +89,6 @@ function aggregateQtyField(fieldName: 'quantity_delivery_trucking' | 'quantity_d
             END AS ${col}`;
 }
 
-/** Scope filter for contracts table inside qty_move CTEs. */
-function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): string {
-  if (filter.kind === 'join_scope') {
-    return `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = ${contractAlias}.contract_id`;
-  }
-  return `WHERE ${contractAlias}.contract_id IN (${filter.subquery})`;
-}
-
 /**
  * FRC/LCO Open contracts with WB daily actuals — separate delivery (Netto PKS)
  * and receive (Netto EUP) sums across non-cancelled trucking ops. Close contracts
@@ -82,13 +101,7 @@ function contractScopeSql(filter: QtyMoveContractFilter, contractAlias = 'c'): s
  *
  * Expressions use sqlWbActualDeliverySumKg / sqlWbActualReceiveSumKg (catalog-scoped).
  */
-function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
-  const joinScope =
-    filter.kind === 'join_scope'
-      ? `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = c.contract_id`
-      : '';
-  const contractFilter =
-    filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
+function truckingWbOverlayCte(): string {
   const grClosed = sqlIsContractSapClosedExpr('c');
   const effectiveIncoterm = contractEffectiveIncotermExpr('c');
   const wbDeliveryPerOp = sqlWbActualDeliverySumKg('t.id');
@@ -101,12 +114,11 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
             COALESCE(SUM(${wbDeliveryPerOp}), 0)::numeric AS wb_delivery_qty_kg,
             COALESCE(SUM(${wbReceivePerOp}), 0)::numeric AS wb_receive_qty_kg
           FROM contracts c
-          ${joinScope}
+          INNER JOIN qty_move_scope cs ON cs.contract_id = c.contract_id
           INNER JOIN trucking_operations t ON t.contract_id = c.id
           WHERE ${effectiveIncoterm} IN ('FRC', 'LCO')
             AND NOT (${grClosed})
             AND UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
-            ${contractFilter}
           GROUP BY c.contract_id
           HAVING BOOL_OR(
             EXISTS (
@@ -123,13 +135,7 @@ function truckingWbOverlayCte(filter: QtyMoveContractFilter): string {
  * actual_vessel_qty_receive when present (legacy KLIP receive).
  * Mirror trucking: Open + actual → KLIP; Close (and Open without actual) stay on SAP.
  */
-function shipmentKlipOverlayCte(filter: QtyMoveContractFilter): string {
-  const joinScope =
-    filter.kind === 'join_scope'
-      ? `INNER JOIN ${filter.scopeCteName} cs ON cs.contract_id = c.contract_id`
-      : '';
-  const contractFilter =
-    filter.kind === 'in_subquery' ? `AND c.contract_id IN (${filter.subquery})` : '';
+function shipmentKlipOverlayCte(): string {
   const grClosed = sqlIsContractSapClosedExpr('c');
 
   return `
@@ -139,12 +145,11 @@ function shipmentKlipOverlayCte(filter: QtyMoveContractFilter): string {
             NULLIF(SUM(COALESCE(s.quantity_delivered_klip, 0)), 0)::numeric AS klip_delivery_kg,
             NULLIF(SUM(COALESCE(s.actual_vessel_qty_receive, 0)), 0)::numeric AS klip_receive_kg
           FROM contracts c
-          ${joinScope}
+          INNER JOIN qty_move_scope cs ON cs.contract_id = c.contract_id
           INNER JOIN shipments s ON s.contract_id = c.id
           WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF', 'CFR')
             AND NOT (${grClosed})
             AND COALESCE(s.status, '') <> 'CANCELLED'
-            ${contractFilter}
           GROUP BY c.contract_id
           HAVING SUM(COALESCE(s.quantity_delivered_klip, 0)) > 0
               OR SUM(COALESCE(s.actual_vessel_qty_receive, 0)) > 0
@@ -152,14 +157,30 @@ function shipmentKlipOverlayCte(filter: QtyMoveContractFilter): string {
 }
 
 export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
-  const join = scopeJoin(filter);
-  const extraWhere = scopeWhere(filter);
+  const join = 'INNER JOIN qty_move_scope cs ON cs.contract_id = spd.contract_number';
   const qtyTrucking = sqlSapQtyTruckingFromSpd('spd');
   const qtyVessel = sqlSapQtyVesselFromSpd('spd');
+  const parentIsOrigin = `(roll.origin_po IS NOT NULL AND ${SQL_SPD_CONTRACT_REFF_PO('p_spd.data')} IS NULL)`;
+  const overlayTrucking = sqlCoalesceB2bOriginParentOrChildQty(
+    'r.quantity_delivery_trucking',
+    'roll.sum_delivery_trucking',
+    parentIsOrigin,
+  );
+  const overlayVessel = sqlCoalesceB2bOriginParentOrChildQty(
+    'r.quantity_delivery_vessel',
+    'roll.sum_delivery_vessel',
+    parentIsOrigin,
+  );
+  const overlayReceive = sqlCoalesceB2bOriginParentOrChildQty(
+    'r.quantity_receive',
+    'roll.sum_receive',
+    parentIsOrigin,
+  );
 
   return `
       qty_move AS (
-        WITH latest_per_sto AS (
+        WITH ${qtyMoveScopeCte(filter)},
+        latest_per_sto AS (
           SELECT DISTINCT ON (spd.contract_number, spd.sto_number)
             spd.contract_number,
             spd.sto_number,
@@ -172,7 +193,6 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           FROM sap_processed_data spd
           ${join}
           WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-            ${extraWhere}
             AND spd.sto_number IS NOT NULL AND TRIM(spd.sto_number::text) != ''
           ORDER BY spd.contract_number, spd.sto_number, spd.created_at DESC NULLS LAST
         ),
@@ -188,7 +208,6 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           FROM sap_processed_data spd
           ${join}
           WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-            ${extraWhere}
             AND (spd.sto_number IS NULL OR TRIM(spd.sto_number::text) = '')
             AND NOT EXISTS (
               SELECT 1 FROM sap_processed_data spd2
@@ -197,7 +216,7 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
             )
           ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
         ),
-        ${contractOrderedCte(filter)},
+        ${contractOrderedCte()},
         sto_metrics AS (
           SELECT
             l.contract_number,
@@ -276,42 +295,93 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter): string {
           FROM sto_result sr
           FULL OUTER JOIN latest_no_sto ns ON ns.contract_number = sr.contract_number
         ),
-        ${truckingWbOverlayCte(filter)},
-        ${shipmentKlipOverlayCte(filter)}
+        ${truckingWbOverlayCte()},
+        ${shipmentKlipOverlayCte()},
+        qty_move_resolved AS (
+          SELECT
+            COALESCE(s.contract_number, w.contract_number, sk.contract_number) AS contract_number,
+            CASE
+              WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
+              ELSE s.quantity_delivery_trucking
+            END AS quantity_delivery_trucking,
+            CASE
+              WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
+              ELSE s.quantity_delivery_vessel
+            END AS quantity_delivery_vessel,
+            CASE
+              WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
+              WHEN w.wb_receive_qty_kg > 0 THEN w.wb_receive_qty_kg
+              ELSE s.quantity_receive
+            END AS quantity_receive,
+            COALESCE(
+              NULLIF(
+                CASE
+                  WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
+                  ELSE s.quantity_delivery_vessel
+                END,
+                0
+              ),
+              NULLIF(
+                CASE
+                  WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
+                  ELSE s.quantity_delivery_trucking
+                END,
+                0
+              )
+            ) AS quantity_delivery
+          FROM qty_move_sap s
+          FULL OUTER JOIN trucking_wb_overlay w ON w.contract_number = s.contract_number
+          FULL OUTER JOIN shipment_klip_overlay sk ON sk.contract_number = COALESCE(s.contract_number, w.contract_number)
+        ),
+        b2b_child_qty_rollup AS (
+          SELECT
+            ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} AS origin_po,
+            SUM(r.quantity_delivery_trucking) AS sum_delivery_trucking,
+            SUM(r.quantity_delivery_vessel) AS sum_delivery_vessel,
+            SUM(r.quantity_receive) AS sum_receive
+          FROM qty_move_resolved r
+          INNER JOIN (
+            SELECT DISTINCT ON (spd.contract_number)
+              spd.contract_number,
+              spd.data
+            FROM sap_processed_data spd
+            INNER JOIN qty_move_scope qs ON qs.contract_id = spd.contract_number
+            WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+              AND ${SQL_SPD_CONTRACT_REFF_PO('spd.data')} IS NOT NULL
+            ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+          ) ch_spd ON ch_spd.contract_number = r.contract_number
+          WHERE ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} IS NOT NULL
+          GROUP BY ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')}
+        )
         SELECT
-          COALESCE(s.contract_number, w.contract_number, sk.contract_number) AS contract_number,
-          CASE
-            WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
-            ELSE s.quantity_delivery_trucking
-          END AS quantity_delivery_trucking,
-          CASE
-            WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
-            ELSE s.quantity_delivery_vessel
-          END AS quantity_delivery_vessel,
-          CASE
-            WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
-            WHEN w.wb_receive_qty_kg > 0 THEN w.wb_receive_qty_kg
-            ELSE s.quantity_receive
-          END AS quantity_receive,
+          o.contract_number,
+          o.quantity_delivery_trucking,
+          o.quantity_delivery_vessel,
+          o.quantity_receive,
           COALESCE(
-            NULLIF(
-              CASE
-                WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
-                ELSE s.quantity_delivery_vessel
-              END,
-              0
-            ),
-            NULLIF(
-              CASE
-                WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
-                ELSE s.quantity_delivery_trucking
-              END,
-              0
-            )
+            NULLIF(o.quantity_delivery_vessel, 0),
+            NULLIF(o.quantity_delivery_trucking, 0)
           ) AS quantity_delivery
-        FROM qty_move_sap s
-        FULL OUTER JOIN trucking_wb_overlay w ON w.contract_number = s.contract_number
-        FULL OUTER JOIN shipment_klip_overlay sk ON sk.contract_number = COALESCE(s.contract_number, w.contract_number)
+        FROM (
+          SELECT
+            r.contract_number,
+            ${overlayTrucking} AS quantity_delivery_trucking,
+            ${overlayVessel} AS quantity_delivery_vessel,
+            ${overlayReceive} AS quantity_receive
+          FROM qty_move_resolved r
+          LEFT JOIN contracts pc ON pc.contract_id = r.contract_number
+          LEFT JOIN (
+            SELECT DISTINCT ON (spd.contract_number)
+              spd.contract_number,
+              spd.data
+            FROM sap_processed_data spd
+            INNER JOIN qty_move_scope qs ON qs.contract_id = spd.contract_number
+            WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
+            ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+          ) p_spd ON p_spd.contract_number = r.contract_number
+          LEFT JOIN b2b_child_qty_rollup roll
+            ON roll.origin_po = NULLIF(TRIM(pc.po_number::text), '')
+        ) o
       )`;
 }
 
