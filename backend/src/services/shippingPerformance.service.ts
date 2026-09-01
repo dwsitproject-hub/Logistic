@@ -136,6 +136,47 @@ function joinDistinctValues(rows: Record<string, unknown>[], field: string): str
   return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
 }
 
+/** Distinct YYYY-MM-DD contract dates across STO members (sorted ascending). */
+export function parseShippingPerfContractDateList(value: unknown): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  const values = new Set<string>();
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const iso = toIsoDate10FromCell(trimmed) ?? (/^\d{4}-\d{2}-\d{2}/.test(trimmed) ? trimmed.slice(0, 10) : null);
+    if (iso) values.add(iso);
+  }
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+function joinDistinctContractDates(rows: Record<string, unknown>[]): string {
+  const values = new Set<string>();
+  for (const row of rows) {
+    for (const iso of parseShippingPerfContractDateList(row.contract_date)) {
+      values.add(iso);
+    }
+  }
+  return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
+}
+
+/** True if any contract date falls within [dateFrom, dateTo] inclusive. */
+export function shippingPerfRowMatchesContractDateRange(
+  contractDate: unknown,
+  dateFrom: string,
+  dateTo: string,
+): boolean {
+  const dates = parseShippingPerfContractDateList(contractDate);
+  if (dates.length === 0) {
+    return !(dateFrom || dateTo);
+  }
+  return dates.some((iso) => {
+    if (dateFrom && iso < dateFrom) return false;
+    if (dateTo && iso > dateTo) return false;
+    return true;
+  });
+}
+
 /** Milestone date fields max-merged across STO members (Shipments list MAX ATA/ETA). */
 const SHIPPING_PERF_MILESTONE_FIELDS = [
   'cargo_readiness_date',
@@ -250,6 +291,7 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
       (pick.contract_numbers as string | undefined) ??
       (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
+    contract_date: joinDistinctContractDates(rows) || pick.contract_date,
     source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
     supplier: joinDistinctValues(rows, 'supplier') || pick.supplier,
     // One STO can span several contracts. Treat the group as still present if any member is,
@@ -705,9 +747,9 @@ function filterGlobalRows(rows: Record<string, unknown>[], filters: ShippingPerf
     if (filters.incoterms.length > 0 && !filters.incoterms.includes(inc)) return false;
     const plant = String(row.plant_site || '').trim() || 'Blank';
     if (filters.plants.length > 0 && !filters.plants.includes(plant)) return false;
-    const cDate = toIsoDate10FromCell(row.contract_date) ?? '';
-    if (filters.dateFrom && cDate && cDate < filters.dateFrom) return false;
-    if (filters.dateTo && cDate && cDate > filters.dateTo) return false;
+    if (!shippingPerfRowMatchesContractDateRange(row.contract_date, filters.dateFrom, filters.dateTo)) {
+      return false;
+    }
     return true;
   });
 }

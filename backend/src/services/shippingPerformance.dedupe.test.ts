@@ -422,4 +422,46 @@ describe('aggregateShippingPerformanceRowsBySto', () => {
     ]);
     expect(merged.po_sto_count).toBe(3);
   });
+
+  it('joins distinct contract_date values across STO members (sorted ISO)', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        id: 'a',
+        shipment_id: '1006019520',
+        sto_number: '1006019520',
+        sto_key: '1006019520',
+        contract_date: '2026-06-19',
+        contract_qty: 100,
+        status: 'PLANNED',
+      },
+      {
+        id: 'b',
+        shipment_id: '1006019520',
+        sto_number: '1006019520',
+        sto_key: '1006019520',
+        contract_date: '2026-06-12',
+        contract_qty: 50,
+        status: 'PLANNED',
+      },
+      {
+        id: 'c',
+        shipment_id: '1006019520',
+        sto_number: '1006019520',
+        sto_key: '1006019520',
+        contract_date: '2026-06-26',
+        contract_qty: 25,
+        status: 'PLANNED',
+      },
+      {
+        id: 'd',
+        shipment_id: '1006019520',
+        sto_number: '1006019520',
+        sto_key: '1006019520',
+        contract_date: '2026-06-19',
+        contract_qty: 10,
+        status: 'PLANNED',
+      },
+    ]);
+    expect(merged.contract_date).toBe('2026-06-12, 2026-06-19, 2026-06-26');
+  });
 });

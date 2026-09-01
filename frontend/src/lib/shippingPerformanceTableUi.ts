@@ -19,7 +19,18 @@ import {
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
 import { formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOutstandingQtyMtFromKg } from '@/lib/utils'
+
+/** Format multi-value contract_date (ISO, comma-separated) as one DMY line for table + tooltip. */
+export function formatShippingPerfContractDatesDisplay(raw: unknown): string {
+  const dates = String(raw ?? '')
+    .split(',')
+    .map((part) => part.trim().slice(0, 10))
+    .filter((iso) => /^\d{4}-\d{2}-\d{2}$/.test(iso))
+  if (dates.length === 0) return ''
+  return dates.map((iso) => formatDateDMY(iso)).join(', ')
+}
 
 /** All Shipments view — default column order (On Going ETA / Close ATA share keys; headers follow label mode). */
 export const ALL_SHIPMENTS_PRESET_COLUMN_ORDER = [
@@ -110,6 +121,7 @@ const SHIPPING_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES: Partial<
   contract_number: 'truncate',
   sto_number: 'truncate',
   po_number: 'truncate',
+  contract_date: 'truncate',
 }
 
 export function getShippingPerfTableColumnLayout(
@@ -149,6 +161,7 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   shipment_count: 64,
   status: 80,
   po_number: 80,
+  contract_date: 100,
   contract_number: 88,
   sto_number: 80,
   sto_qty: 80,
@@ -203,6 +216,7 @@ export const SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'contract_number',
   'po_number',
   'sto_number',
+  'contract_date',
   'contract_qty',
   'delivered_qty',
   'sto_qty',
@@ -221,6 +235,7 @@ export type ShippingPerfCellTooltipSource = ShippingPerformancePortSource & {
   contract_ext_no?: string | null
   contract_number?: string | null
   po_number?: string | null
+  contract_date?: string | null
   product?: string | null
   supplier?: string | null
   incoterm?: string | null
@@ -248,6 +263,10 @@ export function shippingPerfCellTooltipText(
       return String(row.contract_number ?? '').trim() || null
     case 'po_number':
       return String(row.po_number ?? '').trim() || null
+    case 'contract_date': {
+      const text = formatShippingPerfContractDatesDisplay(row.contract_date)
+      return text || null
+    }
     case 'product':
       return String(row.product ?? '').trim() || null
     case 'supplier':

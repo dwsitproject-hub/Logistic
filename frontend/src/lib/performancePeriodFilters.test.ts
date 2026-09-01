@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPerformancePeriodOptions,
   normalizePerformancePeriodKey,
+  parsePerformanceContractDateList,
   resolvePerformancePeriodDateRange,
   rowMatchesPerformancePeriod,
+  rowMatchesPerformancePeriodAnyDate,
 } from '@/lib/performancePeriodFilters'
 
 describe('performancePeriodFilters', () => {
@@ -88,5 +90,21 @@ describe('performancePeriodFilters', () => {
     expect(rowMatchesPerformancePeriod('2026-07-01', '2026-07-01', '2026-07-31')).toBe(true)
     expect(rowMatchesPerformancePeriod('2026-08-01', '2026-07-01', '2026-07-31')).toBe(false)
     expect(rowMatchesPerformancePeriod(null, '2026-07-01', '2026-07-31')).toBe(false)
+  })
+
+  it('parsePerformanceContractDateList returns sorted distinct ISO dates', () => {
+    expect(parsePerformanceContractDateList('2026-06-19, 2026-06-12, 2026-06-26, 2026-06-19')).toEqual([
+      '2026-06-12',
+      '2026-06-19',
+      '2026-06-26',
+    ])
+  })
+
+  it('rowMatchesPerformancePeriodAnyDate matches if any date is in range', () => {
+    const multi = '2026-06-12, 2026-06-19, 2026-06-26'
+    expect(rowMatchesPerformancePeriodAnyDate(multi, '2026-06-15', '2026-06-20')).toBe(true)
+    expect(rowMatchesPerformancePeriodAnyDate(multi, '2026-07-01', '2026-07-31')).toBe(false)
+    expect(rowMatchesPerformancePeriodAnyDate('2026-06-19', '2026-06-01', '2026-06-30')).toBe(true)
+    expect(rowMatchesPerformancePeriodAnyDate('', '2026-06-01', '2026-06-30')).toBe(false)
   })
 })

@@ -16,7 +16,7 @@ import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
 export type OilLossBySupplierRow = OilLossByTransporterRow
 
-export const OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-supplier-v2'
+export const OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-supplier-v3'
 export const OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY =
   'oil-loss.by-supplier.compact.columnLayoutVersion'
 
@@ -26,8 +26,10 @@ export const OIL_LOSS_BY_SUPPLIER_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] 
   'quantity_contract',
   'quantity_delivery',
   'quantity_received',
-  'gain_loss_amount',
-  'gain_loss_percentage',
+  'r1',
+  'r2',
+  'r3',
+  'r4',
 ] as const
 
 export const OIL_LOSS_BY_SUPPLIER_COLUMN_WIDTH_PX = OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX

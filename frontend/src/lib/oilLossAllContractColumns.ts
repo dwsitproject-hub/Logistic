@@ -6,7 +6,7 @@
 import { mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 
-export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v2'
+export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v3'
 export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY =
   'oil-loss.all-contract.compact.columnLayoutVersion'
 
@@ -21,8 +21,10 @@ export const OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[]
   'quantity_contract',
   'quantity_delivery',
   'quantity_received',
-  'gain_loss_amount',
-  'gain_loss_percentage',
+  'r1',
+  'r2',
+  'r3',
+  'r4',
   'status',
 ] as const
 
@@ -36,8 +38,10 @@ export const OIL_LOSS_ALL_CONTRACT_COLUMN_WIDTH_PX: Readonly<Record<string, numb
   quantity_contract: 96,
   quantity_delivery: 96,
   quantity_received: 96,
-  gain_loss_amount: 96,
-  gain_loss_percentage: 88,
+  r1: 96,
+  r2: 96,
+  r3: 96,
+  r4: 96,
   status: 80,
   transport_mode: 72,
   group_name: 88,

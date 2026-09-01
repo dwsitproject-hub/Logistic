@@ -9,20 +9,19 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
+import { Droplets, Eye, GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
-import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
+import { formatOilLossMtFromKg, formatOilLossTotalMt } from '@/lib/oilLossFormat'
 import {
-  formatOilLossMtFromKg,
-  formatOilLossPct,
-  formatOilLossTotalMt,
-  formatOilLossTotalPct,
-} from '@/lib/oilLossFormat'
+  ContractDetailModal,
+  fetchContractForDetailModal,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
 import {
   filterOilLossEligibleRows,
   OIL_LOSS_MODE_FILTER_OPTIONS,
@@ -71,6 +70,9 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  COMPACT_TABLE_ACTIONS_CELL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import {
@@ -161,6 +163,73 @@ const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string
   { key: 'r3', label: 'R3', formula: 'Quantity Receive - Quantity SFBD' },
   { key: 'r4', label: 'R4', formula: 'Quantity Receive - Quantity Delivery' },
 ]
+
+function parseOilLossRowQty(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Per-row R1–R4 oil loss in kg (same formulas as Section 1 cards). */
+function computeRowROilLossKg(row: OilLossTableRow, kind: ROilLossKey): number | null {
+  const delivery = parseOilLossRowQty(
+    'quantity_delivery' in row ? (row as { quantity_delivery?: number | null }).quantity_delivery : null,
+  )
+  const receive = parseOilLossRowQty(row.quantity_received)
+  const sfal = parseOilLossRowQty(
+    'quantity_sfal' in row ? (row as { quantity_sfal?: number | null }).quantity_sfal : null,
+  )
+  const sfbd = parseOilLossRowQty(
+    'quantity_sfbd' in row ? (row as { quantity_sfbd?: number | null }).quantity_sfbd : null,
+  )
+
+  if (kind === 'r1') {
+    if (sfal == null || delivery == null) return null
+    return sfal - delivery
+  }
+  if (kind === 'r2') {
+    if (sfbd == null || sfal == null) return null
+    return sfbd - sfal
+  }
+  if (kind === 'r3') {
+    if (receive == null || sfbd == null) return null
+    return receive - sfbd
+  }
+  if (kind === 'r4') {
+    if (receive == null || delivery == null) return null
+    return receive - delivery
+  }
+  return null
+}
+
+function renderROilLossCell(kg: number | null): ReactNode {
+  if (kg == null) return <span className="text-sm text-gray-400">—</span>
+  const tone = kg < 0 ? 'text-red-600' : kg > 0 ? 'text-green-600' : 'text-gray-900'
+  return (
+    <span className={`text-sm tabular-nums ${tone}`}>{`${formatOilLossMtFromKg(kg)} MT`}</span>
+  )
+}
+
+/** Prefer contract_number; fall back to contract_ext_no; use first token if multi-value. */
+function resolveOilLossRowContractNumber(row: OilLossTableRow): string {
+  const raw = String(
+    ('contract_number' in row && row.contract_number) || row.contract_ext_no || '',
+  ).trim()
+  if (!raw) return ''
+  return raw.split(',')[0]?.trim() || ''
+}
+
+function buildROilLossCompactColumns(): CompactColumn[] {
+  return R_OIL_LOSS_CARDS.map((card) => ({
+    id: card.key,
+    label: card.label,
+    formulaHelp: `Formula: ${card.formula}`,
+    defaultVisible: true,
+    sortable: true,
+    getSortValue: (r) => computeRowROilLossKg(r, card.key) ?? Number.NEGATIVE_INFINITY,
+    render: (r) => renderROilLossCell(computeRowROilLossKg(r, card.key)),
+  }))
+}
 
 function oilLossValueTone(value: number | null, emphasis: 'primary' | 'secondary'): string {
   if (value == null) return emphasis === 'primary' ? 'text-gray-400' : 'text-gray-300'
@@ -276,34 +345,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
         <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
       ),
     },
-    {
-      id: 'gain_loss_amount',
-      label: 'Oil Loss',
-      formulaHelp: FIELD_HELP.oilLossAmount,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_amount || 0,
-      render: (r) => {
-        const kg = r.gain_loss_amount
-        const tone =
-          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
-      },
-    },
-    {
-      id: 'gain_loss_percentage',
-      label: 'Oil Loss %',
-      formulaHelp: FIELD_HELP.oilLossPct,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_percentage || 0,
-      render: (r) => {
-        const pct = r.gain_loss_percentage
-        const tone =
-          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
-      },
-    },
+    ...buildROilLossCompactColumns(),
     {
       id: 'status',
       label: 'Status',
@@ -455,34 +497,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
         <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
       ),
     },
-    {
-      id: 'gain_loss_amount',
-      label: 'Oil Loss',
-      formulaHelp: FIELD_HELP.oilLossAmount,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_amount || 0,
-      render: (r) => {
-        const kg = r.gain_loss_amount
-        const tone =
-          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
-      },
-    },
-    {
-      id: 'gain_loss_percentage',
-      label: 'Oil Loss %',
-      formulaHelp: FIELD_HELP.oilLossPct,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_percentage || 0,
-      render: (r) => {
-        const pct = r.gain_loss_percentage
-        const tone =
-          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
-      },
-    },
+    ...buildROilLossCompactColumns(),
     {
       id: 'loading_location',
       label: 'Loading Location',
@@ -744,34 +759,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
         <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
       ),
     },
-    {
-      id: 'gain_loss_amount',
-      label: 'Oil Loss',
-      formulaHelp: FIELD_HELP.oilLossAmount,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_amount || 0,
-      render: (r) => {
-        const kg = r.gain_loss_amount
-        const tone =
-          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
-      },
-    },
-    {
-      id: 'gain_loss_percentage',
-      label: 'Oil Loss %',
-      formulaHelp: FIELD_HELP.oilLossPct,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_percentage || 0,
-      render: (r) => {
-        const pct = r.gain_loss_percentage
-        const tone =
-          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
-      },
-    },
+    ...buildROilLossCompactColumns(),
     {
       id: 'loading_location',
       label: 'Loading Location',
@@ -1126,6 +1114,8 @@ export default function OilLossPage() {
   const [viewMode, setViewMode] = useState<OilLossTableViewMode>('all_contract')
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [selectedGroupData, setSelectedGroupData] = useState<OilLossGroupHistoryModalSelection | null>(null)
+  const [selectedContract, setSelectedContract] = useState<ContractDetailModalContract | null>(null)
+  const [openingContractKey, setOpeningContractKey] = useState<string | null>(null)
   const pageSize = 20
 
   const activePrefs = columnPrefsByView[viewMode]
@@ -1644,6 +1634,29 @@ export default function OilLossPage() {
     setGroupModalOpen(true)
   }, [])
 
+  const openContractDetailFromRow = useCallback(async (row: OilLossTableRow) => {
+    const contractNumber = resolveOilLossRowContractNumber(row)
+    if (!contractNumber) {
+      alert('Contract number is required to open Contract Details.')
+      return
+    }
+    const requestKey = `${row.id}:${contractNumber}`
+    setOpeningContractKey(requestKey)
+    try {
+      const detail = await fetchContractForDetailModal(contractNumber)
+      if (!detail) {
+        alert(`Contract ${contractNumber} was not found.`)
+        return
+      }
+      setSelectedContract(detail)
+    } catch (err) {
+      console.error('openContractDetailFromRow:', err)
+      alert('Failed to open Contract Details.')
+    } finally {
+      setOpeningContractKey((current) => (current === requestKey ? null : current))
+    }
+  }, [])
+
   const aggregatedRows = useMemo(() => {
     if (viewMode === 'all_contract') return aggregatedContractRows
     if (viewMode === 'by_transporter') return aggregatedTransporterRows
@@ -1900,7 +1913,6 @@ export default function OilLossPage() {
               totalPct: null,
             }
             const totalMt = showBlockingLoad ? null : summary.totalMt
-            const totalPct = showBlockingLoad ? null : summary.totalPct
 
             return (
               <div
@@ -1914,30 +1926,16 @@ export default function OilLossPage() {
                   <FieldHelp text={`Formula: ${card.formula}`} />
                 </div>
 
-                <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
-                      Total (MT)
-                    </div>
-                    <div
-                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
-                      }`}
-                    >
-                      {showBlockingLoad ? '…' : formatOilLossTotalMt(totalMt)}
-                    </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
+                    Total
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
-                      Total (%)
-                    </div>
-                    <div
-                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
-                      }`}
-                    >
-                      {showBlockingLoad ? '…' : formatOilLossTotalPct(totalPct)}
-                    </div>
+                  <div
+                    className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
+                      showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
+                    }`}
+                  >
+                    {showBlockingLoad ? '…' : `${formatOilLossTotalMt(totalMt)} MT`}
                   </div>
                 </div>
               </div>
@@ -2300,6 +2298,7 @@ export default function OilLossPage() {
                             />
                           )
                         })}
+                        <col style={{ width: compactTableColWidthCss(COMPACT_TABLE_ACTIONS_COL_WIDTH_PX) }} />
                       </colgroup>
                       <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
@@ -2342,6 +2341,16 @@ export default function OilLossPage() {
                               </th>
                             )
                           })}
+                          <th
+                            scope="col"
+                            className={cn(
+                              COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+                              'sticky top-0 z-20 bg-gray-50',
+                              CONTRACT_PERF_TABLE_CELL_PAD,
+                            )}
+                          >
+                            Actions
+                          </th>
                         </tr>
                       </thead>
                       <tbody
@@ -2351,13 +2360,13 @@ export default function OilLossPage() {
                       >
                         {(loading || dataFetching) && rows.length === 0 ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length || 1}
+                            colSpan={visibleColumns.length + 1 || 1}
                             icon={Droplets}
                           />
                         ) : !dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
                           <tr className="bg-white">
                             <td
-                              colSpan={visibleColumns.length || 1}
+                              colSpan={visibleColumns.length + 1 || 1}
                               className="px-4 py-10 text-center text-gray-500"
                             >
                               <Droplets className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -2450,6 +2459,35 @@ export default function OilLossPage() {
                                     </td>
                                   )
                                 })}
+                                <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    {(() => {
+                                      const contractNumber = resolveOilLossRowContractNumber(row)
+                                      const requestKey = `${row.id}:${contractNumber}`
+                                      const isOpening = openingContractKey === requestKey
+                                      return (
+                                        <Button
+                                          variant="outline"
+                                          size="icon"
+                                          disabled={!contractNumber || isOpening}
+                                          onClick={() => void openContractDetailFromRow(row)}
+                                          title={
+                                            contractNumber
+                                              ? 'View Contract'
+                                              : 'Contract number unavailable'
+                                          }
+                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                        >
+                                          {isOpening ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                          ) : (
+                                            <Eye className="h-4 w-4" />
+                                          )}
+                                        </Button>
+                                      )
+                                    })()}
+                                  </div>
+                                </td>
                               </tr>
                             )
                           })
@@ -2524,6 +2562,11 @@ export default function OilLossPage() {
           }}
           selection={selectedGroupData}
           sourceRows={groupHistorySourceRows}
+        />
+
+        <ContractDetailModal
+          contract={selectedContract}
+          onClose={() => setSelectedContract(null)}
         />
       </div>
     </Layout>

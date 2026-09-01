@@ -68,6 +68,7 @@ import {
   ensureAllShipmentsPresetColumnOrder,
   getShippingPerfTableColumnLayout,
   isAllShipmentsPresetVisibleColumn,
+  formatShippingPerfContractDatesDisplay,
   shippingPerfCellTooltipText,
   shippingPerfTableColumnWidthPx,
 } from '@/lib/shippingPerformanceTableUi'
@@ -123,7 +124,7 @@ import { applyShippingPerfSourceProductFilter } from '@/lib/shippingPerformanceS
 import {
   buildPerformancePeriodOptions,
   resolvePerformancePeriodDateRange,
-  rowMatchesPerformancePeriod,
+  rowMatchesPerformancePeriodAnyDate,
   type PerformancePeriodKey,
 } from '@/lib/performancePeriodFilters'
 import {
@@ -728,9 +729,9 @@ function applyGlobalFiltersToRows(
     const vessel = normalizeVesselKey(row.vessel_name)
     if (filters.selectedVessels.length > 0 && !filters.selectedVessels.includes(vessel)) return false
     if (!matchesTableStatusFilter(String(row.status || ''), filters.statusFilter)) return false
-    const cDate = String(row.contract_date || '').slice(0, 10)
-    if (filters.dateFrom && cDate && cDate < filters.dateFrom) return false
-    if (filters.dateTo && cDate && cDate > filters.dateTo) return false
+    if (!rowMatchesPerformancePeriodAnyDate(String(row.contract_date ?? ''), filters.dateFrom, filters.dateTo)) {
+      return false
+    }
     return true
   })
 }
@@ -959,6 +960,7 @@ const COLUMN_DEFS: ColumnDef[] = [
   { key: 'status', label: 'Status Shipment', type: 'text', defaultVisible: false },
   { key: 'po_number', label: 'PO No', type: 'text', defaultVisible: false },
   { key: 'contract_number', label: 'Contract No', type: 'text', defaultVisible: false },
+  { key: 'contract_date', label: 'Contract Date', type: 'text', defaultVisible: false },
   { key: 'sto_number', label: 'STO', type: 'text', defaultVisible: false },
   { key: 'sto_qty', label: 'STO Qty', type: 'number', defaultVisible: false },
   { key: 'received_qty', label: 'Received Qty', type: 'number', defaultVisible: false },
@@ -1515,11 +1517,11 @@ function ShippingPerformancePageContent() {
     [rows],
   )
 
-  // Step A2: Period scope (contract_date)
+  // Step A2: Period scope (contract_date) — STO may carry multiple comma-separated dates
   const periodFilteredRows = useMemo(
     () =>
       baseFilteredRows.filter((row) =>
-        rowMatchesPerformancePeriod(String(row.contract_date ?? ''), dateFrom, dateTo),
+        rowMatchesPerformancePeriodAnyDate(String(row.contract_date ?? ''), dateFrom, dateTo),
       ),
     [baseFilteredRows, dateFrom, dateTo],
   )
@@ -2937,6 +2939,13 @@ function ShippingPerformancePageContent() {
                             ) {
                               const text = asDisplayValue(rawValue)
                               cellContent = <span className="text-sm">{text}</span>
+                            } else if (colKey === 'contract_date') {
+                              const text = formatShippingPerfContractDatesDisplay(rawValue)
+                              cellContent = text ? (
+                                <span className="text-sm">{text}</span>
+                              ) : (
+                                <span className="text-sm text-gray-400">-</span>
+                              )
                             } else if (colKey === 'lp_flow_rate' || colKey === 'dp_flow_rate') {
                               cellContent =
                                 rawValue === null || rawValue === undefined ? (

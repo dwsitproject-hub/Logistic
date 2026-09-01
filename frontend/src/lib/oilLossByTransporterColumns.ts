@@ -9,7 +9,7 @@ import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { sumR4OilLossPctByContract } from '@/lib/oilLossSummary'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
-export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-transporter-v3'
+export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-transporter-v4'
 export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY =
   'oil-loss.by-transporter.compact.columnLayoutVersion'
 
@@ -19,8 +19,10 @@ export const OIL_LOSS_BY_TRANSPORTER_DEFAULT_VISIBLE_COLUMN_IDS: readonly string
   'quantity_contract',
   'quantity_delivery',
   'quantity_received',
-  'gain_loss_amount',
-  'gain_loss_percentage',
+  'r1',
+  'r2',
+  'r3',
+  'r4',
 ] as const
 
 export const OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
@@ -31,8 +33,10 @@ export const OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX: Readonly<Record<string, nu
   sto_number: 110,
   quantity_delivery: 96,
   quantity_received: 96,
-  gain_loss_amount: 96,
-  gain_loss_percentage: 88,
+  r1: 96,
+  r2: 96,
+  r3: 96,
+  r4: 96,
   contract_date: 100,
   po_number: 110,
   product: 120,

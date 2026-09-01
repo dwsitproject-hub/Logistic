@@ -127,3 +127,29 @@ export function rowMatchesPerformancePeriod(
   if (dateTo && iso > dateTo) return false
   return true
 }
+
+/** Parse comma-separated contract dates into sorted distinct ISO YYYY-MM-DD values. */
+export function parsePerformanceContractDateList(value: string | null | undefined): string[] {
+  const raw = String(value ?? '').trim()
+  if (!raw) return []
+  const values = new Set<string>()
+  for (const part of raw.split(',')) {
+    const iso = part.trim().slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) values.add(iso)
+  }
+  return [...values].sort((a, b) => a.localeCompare(b))
+}
+
+/**
+ * STO / multi-contract rows: match if any contract date falls within [dateFrom, dateTo].
+ * Single-date strings keep previous behavior.
+ */
+export function rowMatchesPerformancePeriodAnyDate(
+  rowDates: string | null | undefined,
+  dateFrom: string,
+  dateTo: string,
+): boolean {
+  const dates = parsePerformanceContractDateList(rowDates)
+  if (dates.length === 0) return false
+  return dates.some((iso) => rowMatchesPerformancePeriod(iso, dateFrom, dateTo))
+}
