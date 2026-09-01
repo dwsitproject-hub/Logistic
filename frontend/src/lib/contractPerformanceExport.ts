@@ -3,7 +3,6 @@
  * and the sheet must include only columns the user set visible (same left-to-right order).
  */
 
-import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import {
   formatLogCycleDaysCompact,
   formatSignedCycleDaysCompact,
@@ -38,7 +37,6 @@ export const CONTRACT_PERF_EXPORT_DATE_COLUMN_IDS = new Set([
   'delivery_end',
   'last_planning_delivery_date',
   'cargo_readiness_date',
-  'created_at',
 ])
 
 export const CONTRACT_PERF_EXPORT_QTY_MT_COLUMN_IDS = new Set([
@@ -92,13 +90,6 @@ function dashIfEmpty(value: string | number | null | undefined): string | number
   return value
 }
 
-export function formatContractPerfExportDeliveryStatus(row: {
-  import_status?: unknown
-  status?: unknown
-}): string {
-  return formatContractDeliveryStatusLabel(row.import_status || row.status) || '-'
-}
-
 export function resolveContractPerfExportCell(
   column: ContractPerfExportColumn,
   row: object,
@@ -107,14 +98,8 @@ export function resolveContractPerfExportCell(
   const id = column.id
   const rec = asRecord(row)
 
-  if (id === 'delivery_status') {
-    return formatContractPerfExportDeliveryStatus(rec)
-  }
   if (id === 'status_overall') {
     return formatters.formatStatusOverall(row) || '-'
-  }
-  if (id === 'unusual_status') {
-    return column.getSortValue?.(row) === 1 ? 'Unusual' : 'Normal'
   }
   if (id === 'over_under_delivery_status') {
     return formatSapDisplayValue(rec.over_under_delivery_status)

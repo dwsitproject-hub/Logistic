@@ -32,41 +32,43 @@ describe('authenticateToken', () => {
     vi.restoreAllMocks();
   });
 
-  it('401 when Authorization header missing (negative)', () => {
+  it('401 when Authorization header missing (negative)', async () => {
     const req = { headers: {} } as AuthRequest;
     const res = mockRes();
     const next = vi.fn() as NextFunction;
-    authenticateToken(req, res, next);
+    await authenticateToken(req, res, next);
     expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('403 when token invalid (negative)', () => {
+  // resolveAuthenticatedUser collapses every token failure (missing / malformed / wrong
+  // secret) into a single 401 — avoids leaking why authentication failed.
+  it('401 when token invalid (negative)', async () => {
     const req = { headers: { authorization: 'Bearer not-a-jwt' } } as AuthRequest;
     const res = mockRes();
     const next = vi.fn() as NextFunction;
-    authenticateToken(req, res, next);
-    expect(res.statusCode).toBe(403);
+    await authenticateToken(req, res, next);
+    expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('403 when token signed with wrong secret (negative)', () => {
+  it('401 when token signed with wrong secret (negative)', async () => {
     const evil = jwt.sign({ sub: '1', role: 'ADMIN' }, 'wrong-secret-at-least-32-chars-long!!');
     const req = { headers: { authorization: `Bearer ${evil}` } } as AuthRequest;
     const res = mockRes();
     const next = vi.fn() as NextFunction;
-    authenticateToken(req, res, next);
-    expect(res.statusCode).toBe(403);
+    await authenticateToken(req, res, next);
+    expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('calls next and sets user when token valid (positive)', () => {
+  it('calls next and sets user when token valid (positive)', async () => {
     const payload = { id: 'u1', username: 'alice', email: 'a@x.com', role: 'ADMIN' };
     const token = jwt.sign(payload, secret, { expiresIn: '1h' });
     const req = { headers: { authorization: `Bearer ${token}` } } as AuthRequest;
     const res = mockRes();
     const next = vi.fn() as NextFunction;
-    authenticateToken(req, res, next);
+    await authenticateToken(req, res, next);
     expect(next).toHaveBeenCalled();
     expect(req.user).toMatchObject(payload);
   });

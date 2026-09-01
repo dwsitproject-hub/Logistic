@@ -10,6 +10,14 @@ describe('ContractPerfUnifiedNodeCard formatters', () => {
     expect(formatSegmentCardQtyMt(1_235_702_000)).toBe('1,235,702')
   })
 
+  it('formatSegmentCardQtyMt uses outstanding sign rules (+ over-delivery, plain 0)', () => {
+    expect(formatSegmentCardQtyMt(-3000)).toBe('+3')
+    expect(formatSegmentCardQtyMt(-60)).toBe('0')
+    expect(formatSegmentCardQtyMt(60)).toBe('0')
+    expect(formatSegmentCardQtyMt(0)).toBe('0')
+    expect(formatSegmentCardQtyMt(2500_000)).toBe('2,500')
+  })
+
   it('buildSegmentCardTooltip includes contract count and avg trade', () => {
     const tip = buildSegmentCardTooltip({
       count: 2949,

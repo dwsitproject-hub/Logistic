@@ -13,6 +13,12 @@ import {
 } from '@/components/ui/table'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import {
+  DECIMAL_DOT_HINT,
+  blockCommaDecimalKeyDown,
+  parseDecimalDotInput,
+  sanitizeDecimalDotInput,
+} from '@/lib/decimalDotInput'
+import {
   VESSEL_MODAL_COMPACT_TD,
   VESSEL_MODAL_COMPACT_TH,
   VESSEL_MODAL_TABLE_FOOTER_CLASS,
@@ -78,19 +84,23 @@ function MtQtyInput({
   return (
     <div className="relative w-full min-w-[6.5rem]">
       <Input
-        type="number"
-        step="0.01"
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
         disabled={disabled}
         value={mtDisplay}
+        onKeyDown={blockCommaDecimalKeyDown}
         onChange={(e) => {
           const raw = e.target.value
           if (raw === '') {
             onChange(null)
             return
           }
-          const mt = parseFloat(raw)
-          onChange(Number.isNaN(mt) ? null : mt * 1000)
+          if (sanitizeDecimalDotInput(raw) === null) return
+          const mt = parseDecimalDotInput(raw)
+          onChange(mt === null ? null : mt * 1000)
         }}
+        title={DECIMAL_DOT_HINT}
         className={`h-8 text-xs pr-10 text-right tabular-nums ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
       />
       <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">

@@ -57,6 +57,12 @@ import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
+  DECIMAL_DOT_HINT,
+  blockCommaDecimalKeyDown,
+  parseDecimalDotInput,
+  sanitizeDecimalDotInput,
+} from '@/lib/decimalDotInput'
+import {
   seedKlipQtyFromShipmentHeader,
   sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
@@ -461,17 +467,20 @@ function MtQtyInput({
     <div className="text-right">
       <div className="relative w-full min-w-[5.5rem]">
         <Input
-          type="number"
-          step="0.01"
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
           value={mtDisplay}
+          onKeyDown={blockCommaDecimalKeyDown}
           onChange={(e) => {
             const raw = e.target.value
             if (raw === '') {
               onChange(0)
               return
             }
-            const mt = parseFloat(raw)
-            onChange(Number.isNaN(mt) ? 0 : mt * 1000)
+            if (sanitizeDecimalDotInput(raw) === null) return
+            const mt = parseDecimalDotInput(raw)
+            onChange(mt === null ? 0 : mt * 1000)
           }}
           className={`h-7 px-2 py-1 pr-9 text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         />
@@ -499,7 +508,7 @@ function isTcCharterType(value: unknown): boolean {
   return raw.includes('TIME')
 }
 
-/** Plain decimal metric input (not KG-scaled) for TC vessel performance fields. */
+/** Plain decimal metric input (not KG-scaled) for TC / SFAL / SFBD fields. Dot decimal only. */
 function MetricDecimalInput({
   value,
   onChange,
@@ -512,17 +521,19 @@ function MetricDecimalInput({
   return (
     <div className="relative w-full">
       <Input
-        type="number"
-        step="0.01"
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
         value={value === null ? '' : String(value)}
+        onKeyDown={blockCommaDecimalKeyDown}
         onChange={(e) => {
           const raw = e.target.value
           if (raw === '') {
             onChange(null)
             return
           }
-          const parsed = parseFloat(raw)
-          onChange(Number.isNaN(parsed) ? null : parsed)
+          if (sanitizeDecimalDotInput(raw) === null) return
+          onChange(parseDecimalDotInput(raw))
         }}
         className={`h-9 text-right ${unit ? 'pr-12' : ''}`}
       />
@@ -2475,6 +2486,9 @@ export function EditShipmentModal({
                     Delivered Qty (Klip) / Received Qty (Klip) stay locked until at least one of SLD or SDD is uploaded.
                   </p>
                 )}
+                {canModifyCoreSections && (
+                  <p className="text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+                )}
 
                 {editContext?.has_sap_sto && !readOnly && (
                   <p className="text-xs italic text-gray-500">
@@ -2707,6 +2721,7 @@ export function EditShipmentModal({
                           value={sfalQty === null ? null : sfalQty / 1000}
                           onChange={(mt) => setSfalQty(mt === null ? null : mt * 1000)}
                         />
+                        <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
@@ -2714,6 +2729,7 @@ export function EditShipmentModal({
                           value={sfbdQty === null ? null : sfbdQty / 1000}
                           onChange={(mt) => setSfbdQty(mt === null ? null : mt * 1000)}
                         />
+                        <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
                       </div>
                     </>
                   ) : (

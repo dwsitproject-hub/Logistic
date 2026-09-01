@@ -1,6 +1,6 @@
 'use client'
 
-import { cn } from '@/lib/utils'
+import { cn, formatOutstandingQtyMtFromKg } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   type UnifiedPerfNode,
@@ -63,9 +63,12 @@ const SEGMENT_UI: Record<
   },
 }
 
-/** Display quantity as whole MT without unit suffix (unit noted under section header). */
+/**
+ * Display quantity as whole MT without unit suffix (unit noted under section header).
+ * Same sign rules as View table outstanding: over-delivery → +MT, rounded 0 → plain 0, remaining → unsigned.
+ */
 export function formatSegmentCardQtyMt(kg: number): string {
-  return (kg / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 })
+  return formatOutstandingQtyMtFromKg(kg).replace(/ MT$/u, '')
 }
 
 export function formatSegmentCardAvgTrade(days: number | null): string {

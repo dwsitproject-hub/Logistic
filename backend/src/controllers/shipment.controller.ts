@@ -3107,15 +3107,12 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
 
     invalidateShipmentsListCache();
     invalidateShippingPerformanceRowCache();
-    setImmediate(() => {
-      import('../services/contractQtyMoveSnapshot.service')
-        .then(({ ContractQtyMoveSnapshotService }) =>
-          ContractQtyMoveSnapshotService.refreshForShipmentIds([shipmentId]),
-        )
-        .catch((err) => {
-          logger.warn('Contract qty_move snapshot refresh after shipment update failed', { err, shipmentId });
-        });
-    });
+    try {
+      const { ContractQtyMoveSnapshotService } = await import('../services/contractQtyMoveSnapshot.service');
+      await ContractQtyMoveSnapshotService.refreshForShipmentIds([shipmentId]);
+    } catch (err) {
+      logger.warn('Contract qty_move snapshot refresh after shipment update failed', { err, shipmentId });
+    }
 
     return res.json({
       success: true,
@@ -5329,18 +5326,15 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
 
     invalidateShipmentsListCache();
     if (shipmentIds.length > 0) {
-      setImmediate(() => {
-        import('../services/contractQtyMoveSnapshot.service')
-          .then(({ ContractQtyMoveSnapshotService }) =>
-            ContractQtyMoveSnapshotService.refreshForShipmentIds(shipmentIds),
-          )
-          .catch((err) => {
-            logger.warn('Contract qty_move snapshot refresh after shipment create failed', {
-              err,
-              shipmentIds,
-            });
-          });
-      });
+      try {
+        const { ContractQtyMoveSnapshotService } = await import('../services/contractQtyMoveSnapshot.service');
+        await ContractQtyMoveSnapshotService.refreshForShipmentIds(shipmentIds);
+      } catch (err) {
+        logger.warn('Contract qty_move snapshot refresh after shipment create failed', {
+          err,
+          shipmentIds,
+        });
+      }
     }
 
     const attachedContractUuids = contractCheck.rows.map((row: { id: string }) => String(row.id));

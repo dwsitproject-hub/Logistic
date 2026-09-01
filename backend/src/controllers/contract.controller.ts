@@ -247,7 +247,6 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           ? [sourceTypeFilter.trim()]
           : [];
     const transportMode = (req.query as any).transportMode as string | undefined;
-    const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' | 'mix'
     const plant = (req.query as any).plant as string | string[] | undefined;
     const sortKeyRaw = String((req.query as any).sortKey || 'contract_date');
     const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
@@ -382,12 +381,16 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          // Same fallback the display layer already applies (row.import_status || row.status):
+          // only kicks in when the SAP-derived status itself is unresolved (e.g. LCO/FOB contract
+          // with no STO in SAP yet), not tied to whether any SAP row exists at all. Keeps the
+          // Contract Performance drilldown card total aligned with this View table's OS sum.
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
@@ -490,18 +493,6 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     // Optional: delivered=true -> only contracts that have any STO quantity (delivered > 0)
     if ((req.query as any).delivered === 'true') {
       queryText += ` AND COALESCE(base.total_sto_quantity, 0) > 0`;
-    }
-
-    const effectiveTransportExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(base.transport_mode), ''), base.latest_spd_data->'contract'->>'transport_mode', base.latest_spd_data->'contract'->>'sea_land', base.latest_spd_data->'raw'->>'Sea / Land', base.latest_spd_data->'raw'->>'Sea_Land', '')))`;
-    if (unassigned === 'sea') {
-      queryText += ` AND ${effectiveTransportExpr} LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)`;
-    } else if (unassigned === 'land') {
-      queryText += ` AND ${effectiveTransportExpr} LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)`;
-    } else if (unassigned === 'mix') {
-      queryText += ` AND ${effectiveTransportExpr} LIKE 'MIX%' AND (
-        NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)
-        OR NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)
-      )`;
     }
 
     // Group Plant filter via master_plants (matches contract performance / filter-options).
@@ -1214,12 +1205,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
@@ -1764,193 +1755,6 @@ export const getLatePerformanceData = async (req: AuthRequest, res: Response) =>
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch late performance data' },
-    });
-  }
-};
-
-/** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
-export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
-  try {
-    const { search, b2bFlag, product, transportMode, plant, columnFilters } =
-      req.query as Record<string, string | string[]>;
-    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
-      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
-      dateTo: (req.query as { dateTo?: unknown }).dateTo,
-    });
-
-    const params: any[] = [];
-    let paramIndex = 1;
-
-    // Row-level conditions (applied before GROUP BY — work on individual contract rows)
-    const rowConditions: string[] = [];
-
-    // Post-aggregate conditions (mirror getContracts filter logic on `base` alias)
-    const aggConditions: string[] = [];
-
-    if (dateFrom) {
-      params.push(dateFrom);
-      rowConditions.push(`c.contract_date >= $${paramIndex++}`);
-    }
-
-    if (dateTo) {
-      params.push(dateTo);
-      rowConditions.push(`c.contract_date <= $${paramIndex++}`);
-    }
-
-    // Section 1 alert cards always count Open contracts only (toolbar status does not apply).
-    aggConditions.push(`(
-      UPPER(TRIM(COALESCE(base.import_status, ''))) IN ('OPEN', 'ACTIVE')
-      OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
-    )`);
-
-    // B2B flag — use JSONB contract_type (same as getContracts)
-    if (b2bFlag && b2bFlag !== 'ALL') {
-      params.push(b2bFlag);
-      aggConditions.push(
-        `COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex++}`,
-      );
-    }
-
-    // Legacy single-product query param (Contract Performance toolbar)
-    if (product && product !== 'ALL' && String(product).trim().length > 0) {
-      params.push(likeContainsPattern(String(product).trim()));
-      aggConditions.push(`COALESCE(base.product, '') ${sqlIlikeParam(paramIndex++)}`);
-    }
-
-    // Transport mode — mirror getContracts list filter (contracts.transport_mode column).
-    if (transportMode && String(transportMode).toUpperCase() !== 'ALL') {
-      params.push(String(transportMode).toUpperCase());
-      aggConditions.push(`UPPER(base.transport_mode) = $${paramIndex++}`);
-    }
-
-    const plantArr = Array.isArray(plant) ? plant : plant ? [plant] : [];
-    const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    const useB2bEndingOverlay = plants.length > 0;
-    const groupPlantFilter = appendGroupPlantFilter(
-      plants,
-      paramIndex,
-      groupPlantExpr('base.plant_code', 'base.company_name'),
-    );
-    if (groupPlantFilter.sql) {
-      aggConditions.push(groupPlantFilter.sql.replace(/^\s*AND\s*/, ''));
-      params.push(...groupPlantFilter.params);
-      paramIndex = groupPlantFilter.nextIndex;
-    }
-
-    const globalSearch = typeof search === 'string' ? search.trim() : '';
-    const searchFrag = appendGlobalSearchBase(globalSearch, paramIndex);
-    if (searchFrag.sql) {
-      aggConditions.push(searchFrag.sql.replace(/^\s*AND\s*/, ''));
-      params.push(...searchFrag.params);
-      paramIndex = searchFrag.nextIndex;
-    }
-
-    const colFilters = parseColumnFiltersQuery(columnFilters);
-    const colFrag = appendColumnFiltersBase(colFilters, paramIndex);
-    if (colFrag.sql) {
-      aggConditions.push(colFrag.sql.replace(/^\s*AND\s*/, ''));
-      params.push(...colFrag.params);
-      paramIndex = colFrag.nextIndex;
-    }
-
-    const rowWhereSql = rowConditions.length > 0 ? `WHERE ${rowConditions.join(' AND ')}` : '';
-    const aggWhereSql = aggConditions.length > 0 ? `AND ${aggConditions.join(' AND ')}` : '';
-
-    const q = `
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (contract_number) contract_number, data, created_at
-        FROM sap_processed_data
-        ORDER BY contract_number, created_at DESC NULLS LAST
-      ),
-      base AS (
-        SELECT
-          c.contract_id,
-          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
-          MAX(c.status) AS raw_status,
-          MAX(c.status) AS status,
-          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
-          MAX(c.product) AS product,
-          MAX(c.incoterm) AS incoterm,
-          MAX(c.supplier) AS supplier,
-          ${useB2bEndingOverlay ? sqlB2bEndingBuyerAgg() : 'MAX(c.buyer)'} AS buyer,
-          MAX(c.group_name) AS group_name,
-          ${useB2bEndingOverlay ? sqlB2bEndingPlantCodeAgg() : 'MAX(c.plant_code)'} AS plant_code,
-          ${useB2bEndingOverlay ? sqlB2bEndingCompanyAgg() : 'MAX(c.company_name)'} AS company_name,
-          MAX(c.transport_mode) AS transport_mode,
-          MAX(c.contract_date) AS contract_date,
-          STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
-          MAX(c.sto_number) AS sto_number,
-          NULL::text AS sto_numbers_agg,
-          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
-          COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
-        FROM contracts c
-        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        ${useB2bEndingOverlay ? sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' }) : ''}
-        ${rowWhereSql}
-        GROUP BY c.contract_id
-      ),
-      filtered AS (
-        SELECT * FROM base
-        WHERE 1=1 ${aggWhereSql}
-        AND NOT (
-          UPPER(TRIM(COALESCE(
-            base.latest_spd_data->'contract'->>'contract_type',
-            base.latest_spd_data->>'B2B Flag',
-            ''
-          ))) = 'B2B'
-          AND NULLIF(TRIM(COALESCE(
-            base.latest_spd_data->'contract'->>'contract_reference_po',
-            base.latest_spd_data->>'CONTRACT REFF PO',
-            base.latest_spd_data->>'Contract Reff PO Ini',
-            base.latest_spd_data->'raw'->>'Contract Reff PO Ini',
-            base.latest_spd_data->'raw'->>'CONTRACT REFF PO'
-          )), '') IS NOT NULL
-        )
-      ),
-      sea_no_ship AS (
-        SELECT 1
-        FROM filtered f
-        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'SEA%'
-          AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = f.id)
-      ),
-      land_no_truck AS (
-        SELECT 1
-        FROM filtered f
-        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'LAND%'
-          AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
-      ),
-      mix_incomplete AS (
-        SELECT 1
-        FROM filtered f
-        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'MIX%'
-          AND (
-            NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = f.id)
-            OR NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
-          )
-      )
-      SELECT
-        (SELECT COUNT(*) FROM sea_no_ship) AS sea_without_shipments,
-        (SELECT COUNT(*) FROM land_no_truck) AS land_without_trucking,
-        (SELECT COUNT(*) FROM mix_incomplete) AS mix_without_logistics
-    `;
-    const result = await query(q, params);
-    const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0, mix_without_logistics: 0 };
-    return res.json({
-      success: true,
-      data: {
-        seaWithoutShipments: parseInt(String(row.sea_without_shipments), 10) || 0,
-        landWithoutTrucking: parseInt(String(row.land_without_trucking), 10) || 0,
-        mixWithoutLogistics: parseInt(String(row.mix_without_logistics), 10) || 0,
-      },
-    });
-  } catch (error) {
-    if (error instanceof InvalidDateInputError) {
-      return res.status(400).json({ success: false, error: { message: error.message } });
-    }
-    logger.error('Get unassigned counts error:', error);
-    return res.status(500).json({
-      success: false,
-      error: { message: 'Failed to fetch unassigned counts' },
     });
   }
 };

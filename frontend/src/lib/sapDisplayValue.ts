@@ -34,9 +34,7 @@ const OPERATIONAL_TABLE_PRESERVE_CASE_COLUMN_IDS = new Set([
   'lt_spot',
   'status',
   'status_overall',
-  'delivery_status',
   'late_indicator',
-  'unusual_status',
   'over_under_delivery_status',
 ])
 

@@ -1,8 +1,6 @@
 /** Hover help for calculated / business-logic fields (Contracts, Dashboard, etc.) */
 
 export const FIELD_HELP = {
-  contractAging: `Days from today to Due Date Delivery End (or delivery window). Overdue shows in red when past the end date.`,
-
   overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
   logCycle: `Cargo Readiness Date − Completion Date. LAND Completion: when OS ≈ 0 MT use Last Receive/WB, else Last Planning Delivery Date / ETA.`,

@@ -4,7 +4,7 @@ import { sqlContractOutstandingSignedExpr } from './sapIncotermMetrics';
  * GET /contracts list sort.
  *
  * SQL keys ORDER BY on the `filtered` CTE then LIMIT/OFFSET (all pages).
- * Node keys are computed after row hydration (cycle / aging / overall status);
+ * Node keys are computed after row hydration (cycle / overall status);
  * the handler fetches up to 10k matching rows, sorts, then slices the page.
  */
 
@@ -47,7 +47,6 @@ export const CONTRACTS_LIST_SQL_SORT_COLUMNS: Record<string, string> = {
   outstanding_qty: OUTSTANDING_QTY_EXPR,
   outstanding_qty_mt: OUTSTANDING_QTY_EXPR,
   contract_qty: 'quantity_ordered',
-  created_at: 'created_at',
   po_number: 'po_numbers',
   po_numbers: 'po_numbers',
   sto_number: `COALESCE(NULLIF(TRIM(sto_numbers_agg), ''), NULLIF(TRIM(sto_number::text), ''))`,
@@ -60,7 +59,6 @@ export const CONTRACTS_LIST_SQL_SORT_COLUMNS: Record<string, string> = {
   quantity_delivery: 'quantity_delivery',
   quantity_receive: 'quantity_receive',
   month_delivery_end: `to_char(delivery_end_date::date, 'YYYY-MM')`,
-  delivery_status: `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`,
   cargo_readiness_date: 'cargo_readiness_date::date',
   vessel_name: `NULLIF(TRIM(last_vessel_name), '')`,
   eta_vessel_completed_loading: 'last_eta_vessel_completed_loading',
@@ -81,9 +79,7 @@ export const CONTRACTS_LIST_NODE_SORT_KEYS = new Set([
   'trade_cycle_days',
   'cash_cycle_days',
   'dp_cycle_days',
-  'contract_aging',
   'status_overall',
-  'unusual_status',
   'over_under_delivery_status',
 ]);
 
@@ -92,11 +88,7 @@ const NODE_NUMERIC_SORT_KEYS = new Set([
   'trade_cycle_days',
   'cash_cycle_days',
   'dp_cycle_days',
-  'contract_aging',
-  'unusual_status',
 ]);
-
-const CLOSED_STATUS = new Set(['CLOSE', 'CLOSED', 'COMPLETED']);
 
 export function resolveContractsListSort(sortKeyRaw: unknown): ContractsListSortResolution {
   const key = typeof sortKeyRaw === 'string' ? sortKeyRaw.trim() : '';
@@ -124,53 +116,10 @@ export function resolveContractsListSort(sortKeyRaw: unknown): ContractsListSort
   };
 }
 
-function asCalendarDate(value: unknown): Date | null {
-  if (value == null) return null;
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime())) return null;
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
-  }
-  const s = String(value).trim();
-  if (!s) return null;
-  const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
-  if (iso) {
-    const y = Number(iso[1]);
-    const m = Number(iso[2]);
-    const d = Number(iso[3]);
-    const cal = new Date(y, m - 1, d);
-    if (cal.getFullYear() === y && cal.getMonth() === m - 1 && cal.getDate() === d) return cal;
-    return null;
-  }
-  const dt = new Date(s);
-  if (Number.isNaN(dt.getTime())) return null;
-  return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
-}
-
 function deliveryStatusUpper(row: Record<string, unknown>): string {
   return String(row.import_status || row.status || '')
     .trim()
     .toUpperCase();
-}
-
-export function computeContractAgingDays(
-  row: Record<string, unknown>,
-  todayMid: Date,
-): number | null {
-  const end = asCalendarDate(row.delivery_end_date);
-  if (!end) return null;
-  if (CLOSED_STATUS.has(deliveryStatusUpper(row))) return null;
-  return Math.floor((todayMid.getTime() - end.getTime()) / (1000 * 60 * 60 * 24));
-}
-
-export function computeUnusualStatusSortValue(row: Record<string, unknown>): number {
-  const log = typeof row.log_cycle_days === 'number' ? row.log_cycle_days : null;
-  const trade = typeof row.trade_cycle_days === 'number' ? row.trade_cycle_days : null;
-  const cash = typeof row.cash_cycle_days === 'number' ? row.cash_cycle_days : null;
-  const unusual =
-    (log != null && Math.abs(log) >= 35) ||
-    (trade != null && trade >= 35) ||
-    (cash != null && cash >= 35);
-  return unusual ? 1 : 0;
 }
 
 export function computeStatusOverallSortValue(row: Record<string, unknown>): string {
@@ -189,19 +138,8 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-function contractsListSortNumeric(
-  row: Record<string, unknown>,
-  sortKey: string,
-  todayMid: Date,
-): number | null {
-  switch (sortKey) {
-    case 'contract_aging':
-      return computeContractAgingDays(row, todayMid);
-    case 'unusual_status':
-      return computeUnusualStatusSortValue(row);
-    default:
-      return asNumber(row[sortKey]);
-  }
+function contractsListSortNumeric(row: Record<string, unknown>, sortKey: string): number | null {
+  return asNumber(row[sortKey]);
 }
 
 function contractsListSortString(row: Record<string, unknown>, sortKey: string): string {
@@ -218,11 +156,11 @@ export function compareContractsListSortRows(
   b: Record<string, unknown>,
   sortKey: string,
   dirMul: number,
-  todayMid: Date = new Date(),
+  _todayMid: Date = new Date(),
 ): number {
   if (NODE_NUMERIC_SORT_KEYS.has(sortKey)) {
-    const av = contractsListSortNumeric(a, sortKey, todayMid);
-    const bv = contractsListSortNumeric(b, sortKey, todayMid);
+    const av = contractsListSortNumeric(a, sortKey);
+    const bv = contractsListSortNumeric(b, sortKey);
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;

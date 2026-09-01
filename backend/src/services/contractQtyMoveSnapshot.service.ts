@@ -4,6 +4,7 @@ import {
   buildContractQtyMoveSnapshotUpsertSql,
   buildQtyMoveCte,
   buildQtyMoveFromSnapshotCte,
+  buildQtyMoveHybridCte,
 } from '../utils/contractGlobalOutstandingSql';
 import logger from '../utils/logger';
 
@@ -93,13 +94,20 @@ export class ContractQtyMoveSnapshotService {
 }
 
 /**
- * Live qty_move CTE for Contracts / Contract Performance / dashboard reads.
- * Always live (scoped via contract_scope join) so Delivery/Received match Trucking WB
- * and never lag behind a stale contract_qty_move_snapshot.
- * Snapshot refresh remains available for tooling/regression only.
+ * qty_move CTE for Contracts / Contract Performance / dashboard reads.
+ * Fast path: when contract_qty_move_snapshot is fresh, Close and prior-year-Open contracts
+ * read straight from the snapshot while only current-year Open contracts stay fully live
+ * (buildQtyMoveHybridCte) — this is what cuts Contract Performance / Contracts list load
+ * times from tens-to-hundreds of seconds down to low seconds for the majority of rows.
+ * Defensive fallback: if the snapshot is stale (e.g. mid SAP import / refreshAll running),
+ * fall back to the fully-live computation for every contract, same as the sto_agg/latest_spd
+ * snapshots do, so numbers never lag behind a stale snapshot.
  */
 export async function resolveContractsQtyMoveCte(scopeCteName = 'contract_scope'): Promise<string> {
-  return buildQtyMoveCte({ kind: 'join_scope', scopeCteName });
+  if (!(await isContractQtyMoveSnapshotFresh())) {
+    return buildQtyMoveCte({ kind: 'join_scope', scopeCteName });
+  }
+  return buildQtyMoveHybridCte({ kind: 'join_scope', scopeCteName });
 }
 
 export { buildQtyMoveFromSnapshotCte, buildQtyMoveCte };

@@ -526,6 +526,8 @@ export function filterContractsForPerformanceTable(
 ): PerformanceTableContract[] {
   const { drilldown } = scope
   const applyTreeInclusionGuard = hasContractPerfDrilldownSelection(drilldown)
+  // All = On Time + Late + Unscheduled — never strip rows via late/on-time tree membership.
+  const includeUnscheduledInAll = lateOnTimeFilter === 'ALL'
 
   return contracts.filter((c) => {
     if (!contractMatchesSummaryCardStatus(c, scope.contractStatus)) {
@@ -537,15 +539,12 @@ export function filterContractsForPerformanceTable(
     }
 
     let backendTreeInclusionApplied = false
-    if (applyTreeInclusionGuard) {
+    if (applyTreeInclusionGuard && !includeUnscheduledInAll) {
       if (typeof c.contract_perf_in_tree === 'boolean') {
-        if (!c.contract_perf_in_tree) {
-          if (lateOnTimeFilter !== 'ALL' || !isContractPerfUnscheduledRow(c)) return false
-        } else {
-          backendTreeInclusionApplied = true
-        }
+        if (!c.contract_perf_in_tree) return false
+        backendTreeInclusionApplied = true
       } else if (!contractMeetsPerformanceTreeInclusion(c, lateOnTimeFilter)) {
-        if (lateOnTimeFilter !== 'ALL' || !isContractPerfUnscheduledRow(c)) return false
+        return false
       }
     }
 
@@ -577,14 +576,13 @@ export function filterContractsForPerformanceTable(
       return false
     }
 
-    // When backend set contract_perf_in_tree (excludeUnscheduled=true), late/on-time is already applied.
-    if (
-      !backendTreeInclusionApplied &&
-      isContractPerfUnscheduledRow(c) &&
-      lateOnTimeFilter === 'ALL'
-    ) {
+    // All segment: keep Unscheduled (and any other row matching dimensions). Backend already
+    // sent excludeUnscheduled=false; do not re-apply late/on-time membership here.
+    if (includeUnscheduledInAll) {
       return true
     }
+
+    // When backend set contract_perf_in_tree (excludeUnscheduled=true), late/on-time is already applied.
     if (
       !backendTreeInclusionApplied &&
       !contractMatchesLateOnTimeFilter(

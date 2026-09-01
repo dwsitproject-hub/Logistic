@@ -354,7 +354,13 @@ export function sqlContractImportStatusIsCancelledExpr(importStatusExpr: string)
  * Use for OS/backlog exclusion — do NOT fold into sqlIsContractSapClosedExpr
  * (that drives COMPLETED on shipment/trucking pipelines).
  */
-export function sqlIsContractSapCancelledExpr(contractAlias = 'c'): string {
+/**
+ * `precomputed` mirrors `sqlIsContractSapClosedExpr`'s override: lets a caller substitute a
+ * column reference for the whole expression when it has already been resolved once per
+ * contract in an earlier CTE, instead of re-scanning `sap_processed_data` per caller.
+ */
+export function sqlIsContractSapCancelledExpr(contractAlias = 'c', precomputed?: string): string {
+  if (precomputed) return precomputed;
   return sqlContractImportStatusIsCancelledExpr(sqlContractImportStatusExpr(contractAlias));
 }
 
@@ -366,18 +372,23 @@ export function sqlIsContractSapCancelledExpr(contractAlias = 'c'): string {
 export function sqlIsContractSapInactiveForOsExpr(
   contractAlias = 'c',
   grClosedPrecomputed?: string,
+  cancelledPrecomputed?: string,
 ): string {
   return `(
     ${sqlIsContractSapClosedExpr(contractAlias, grClosedPrecomputed)}
-    OR ${sqlIsContractSapCancelledExpr(contractAlias)}
+    OR ${sqlIsContractSapCancelledExpr(contractAlias, cancelledPrecomputed)}
   )`;
 }
 
 /** Shipment backlog inactive: GR Close (FOB sea-leg scoped) OR Cancelled. */
-export function sqlIsContractSapInactiveForShipmentBacklogExpr(contractAlias = 'c'): string {
+export function sqlIsContractSapInactiveForShipmentBacklogExpr(
+  contractAlias = 'c',
+  closedForBacklogPrecomputed?: string,
+  cancelledPrecomputed?: string,
+): string {
   return `(
-    ${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias)}
-    OR ${sqlIsContractSapCancelledExpr(contractAlias)}
+    ${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias, closedForBacklogPrecomputed)}
+    OR ${sqlIsContractSapCancelledExpr(contractAlias, cancelledPrecomputed)}
   )`;
 }
 
@@ -430,7 +441,11 @@ export function sqlShipmentBacklogSpdSeaLegFilterSql(contractAlias = 'c'): strin
 }
 
 /** Closed check for Unplanned/Preplanned contract backlog cards (FOB Type V scoped). */
-export function sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias = 'c'): string {
+export function sqlIsContractSapClosedForShipmentBacklogExpr(
+  contractAlias = 'c',
+  precomputed?: string,
+): string {
+  if (precomputed) return precomputed;
   return sqlContractImportStatusIsClosedExpr(
     sqlContractImportStatusExpr(
       contractAlias,

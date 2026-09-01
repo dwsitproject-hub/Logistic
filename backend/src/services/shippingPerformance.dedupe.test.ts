@@ -17,14 +17,15 @@ describe('deriveShippingPerfRowStatus', () => {
     ).toBe('COMPLETED');
   });
 
-  it('matches Shipments: ATA discharge complete → COMPLETED', () => {
+  // Completed requires SAP GR Close; ATA discharge complete with GR still Open stays UNLOADING.
+  it('matches Shipments: ATA discharge complete with GR Open → UNLOADING', () => {
     expect(
       deriveShippingPerfRowStatus({
         status: 'PLANNED',
         import_status: 'Open',
         discharge_ata_completed: '2026-07-20',
       }),
-    ).toBe('COMPLETED');
+    ).toBe('UNLOADING');
   });
 
   it('matches Shipments: ATA sailed → SAILED', () => {

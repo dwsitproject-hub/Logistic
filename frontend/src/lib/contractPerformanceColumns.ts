@@ -172,10 +172,7 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   month_delivery_end: 96,
   contract_id: 120,
   group_name: 120,
-  contract_aging: 100,
-  delivery_status: 100,
   status_overall: 88,
-  unusual_status: 88,
   received_qty: 120,
   outstanding_qty: 120,
   over_under_delivery_status: 140,
@@ -189,7 +186,6 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   vessel_name: 120,
   eta_vessel_completed_loading: 108,
   eta_vessel_complete_discharge: 108,
-  created_at: 100,
 }
 
 /** Multi-word / long text columns — ID columns use operational nowrap/stack layout instead. */

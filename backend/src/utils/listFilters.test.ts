@@ -4,6 +4,7 @@ import {
   appendGlobalSearchBase,
   appendColumnFiltersBase,
 } from './contractListFilters';
+import { likeContainsPattern } from './strictDateInput';
 
 describe('parseColumnFiltersQuery', () => {
   it('empty inputs', () => {
@@ -36,15 +37,16 @@ describe('appendGlobalSearchBase', () => {
 
   it('param not inlined', () => {
     const r = appendGlobalSearchBase('ab', 5);
-    expect(r.params).toEqual(['ab']);
-    expect(r.sql).toContain('$5::text');
+    expect(r.params).toEqual([likeContainsPattern('ab')]);
+    expect(r.sql).toContain('$5');
+    expect(r.sql).toMatch(/ESCAPE/);
     expect(r.sql).not.toContain('ab');
   });
 
   it('injection as param', () => {
     const m = "x' OR 1=1; --";
     const r = appendGlobalSearchBase(m, 1);
-    expect(r.params[0]).toBe(m);
+    expect(r.params[0]).toBe(likeContainsPattern(m));
     expect(r.sql).not.toContain('OR 1=1');
   });
 });

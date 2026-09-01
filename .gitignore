@@ -72,3 +72,18 @@ lateperf*.json
 
 # Word/Excel temp lock files
 ~$*
+
+# Agent scratch / debug scripts and captured output (never part of the app)
+/tmp/
+backend/tree-debug.json
+
+# Data files / DB dumps / reports dropped into docs/ during investigations
+docs/*.xlsx
+docs/*.XLSX
+docs/*.xls
+docs/*.csv
+docs/*.pdf
+docs/*.docx
+docs/*.sql
+docs/*.dump
+docs/test-reports/

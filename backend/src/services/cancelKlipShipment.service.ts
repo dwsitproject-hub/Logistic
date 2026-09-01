@@ -211,13 +211,12 @@ export async function cancelKlipShipmentGroup(
 
   invalidateShipmentsListCache();
   if (cancelledIds.length > 0) {
-    setImmediate(() => {
-      import('./contractQtyMoveSnapshot.service')
-        .then(({ ContractQtyMoveSnapshotService }) =>
-          ContractQtyMoveSnapshotService.refreshForShipmentIds(cancelledIds),
-        )
-        .catch(() => {});
-    });
+    try {
+      const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
+      await ContractQtyMoveSnapshotService.refreshForShipmentIds(cancelledIds);
+    } catch {
+      // best-effort; snapshot fallback (is_stale) covers correctness if this fails
+    }
   }
 
   return {

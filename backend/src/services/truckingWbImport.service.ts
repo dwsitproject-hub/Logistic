@@ -959,16 +959,13 @@ export async function processWbRekapWorkbookUpload(args: {
   // (list uses contract_qty_move_snapshot when fresh).
   if (touchedOps.size > 0) {
     const opIds = [...touchedOps.keys()];
-    setImmediate(() => {
-      import('./contractQtyMoveSnapshot.service')
-        .then(({ ContractQtyMoveSnapshotService }) =>
-          ContractQtyMoveSnapshotService.refreshForTruckingOperationIds(opIds),
-        )
-        .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error('[WB import] contract_qty_move_snapshot refresh failed', err);
-        });
-    });
+    try {
+      const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
+      await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds(opIds);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[WB import] contract_qty_move_snapshot refresh failed', err);
+    }
   }
 
   return {

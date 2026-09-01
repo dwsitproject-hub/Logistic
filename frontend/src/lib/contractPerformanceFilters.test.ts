@@ -756,6 +756,87 @@ describe('Section 3 — performance tree inclusion guard', () => {
     )
     expect(rows.map((r) => r.contract_id)).toEqual(['IN-TREE'])
   })
+
+  it('ALL keeps Unscheduled rows under drilldown even when contract_perf_in_tree is false', () => {
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const }
+    const drilldown: ContractPerfDrilldownFilters = {
+      product: 'CPO',
+      plant: null,
+      incoterm: null,
+      supplier: 'ETAM',
+    }
+    const { scope: s3Scope } = resolveSection3Scope(global, drilldown)
+    const rows = filterContractsForPerformanceTable(
+      [
+        tableContract({
+          contract_id: 'LATE-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: '2026-05-01',
+          trade_cycle_days: 5,
+          contract_perf_in_tree: true,
+        }),
+        tableContract({
+          contract_id: 'UNSCHED-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: null,
+          trade_cycle_days: null,
+          contract_perf_in_tree: false,
+        }),
+        tableContract({
+          contract_id: 'OTHER-SUPPLIER',
+          product: 'CPO',
+          supplier: 'OTHER',
+          import_status: 'OPEN',
+          delivery_end_date: null,
+          trade_cycle_days: null,
+          contract_perf_in_tree: false,
+        }),
+      ],
+      s3Scope,
+      'ALL',
+    )
+    expect(rows.map((r) => r.contract_id).sort()).toEqual(['LATE-1', 'UNSCHED-1'])
+  })
+
+  it('LATE still drops Unscheduled when contract_perf_in_tree is false under drilldown', () => {
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const }
+    const drilldown: ContractPerfDrilldownFilters = {
+      product: 'CPO',
+      plant: null,
+      incoterm: null,
+      supplier: 'ETAM',
+    }
+    const { scope: s3Scope } = resolveSection3Scope(global, drilldown)
+    const rows = filterContractsForPerformanceTable(
+      [
+        tableContract({
+          contract_id: 'LATE-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: '2026-05-01',
+          trade_cycle_days: 5,
+          contract_perf_in_tree: true,
+        }),
+        tableContract({
+          contract_id: 'UNSCHED-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: null,
+          trade_cycle_days: null,
+          contract_perf_in_tree: false,
+        }),
+      ],
+      s3Scope,
+      'LATE',
+    )
+    expect(rows.map((r) => r.contract_id)).toEqual(['LATE-1'])
+  })
 })
 
 describe('AC5 — null trade_cycle_days = unscheduled (no Completion Date)', () => {

@@ -8,7 +8,13 @@
  * SAP Open but pipeline Completed/Cancelled is excluded (population gap).
  */
 
-import { sqlIsContractSapInactiveForOsExpr, sqlIsContractSapInactiveForShipmentBacklogExpr } from './contractDeliveryStatus';
+import {
+  sqlIsContractSapCancelledExpr,
+  sqlIsContractSapClosedExpr,
+  sqlIsContractSapClosedForShipmentBacklogExpr,
+  sqlIsContractSapInactiveForOsExpr,
+  sqlIsContractSapInactiveForShipmentBacklogExpr,
+} from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { SHIPMENT_PAGE_SEA_INCOTERMS } from './shipmentIncotermScope';
 import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
@@ -41,6 +47,8 @@ function sqlContractQtyMoveOsKg(contractNumberExpr: string, incotermExpr: string
 function sqlHasActiveSeaShipment(
   contractUuidExpr: string,
   sharesActiveSeaStoExpr?: string,
+  grClosedPrecomputed?: string,
+  cancelledPrecomputed?: string,
 ): string {
   const sibling =
     sharesActiveSeaStoExpr ??
@@ -52,7 +60,7 @@ function sqlHasActiveSeaShipment(
       INNER JOIN contracts sc ON sc.id = s.contract_id
       WHERE s.contract_id = ${contractUuidExpr}
         AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
-        AND NOT (${sqlIsContractSapInactiveForOsExpr('sc')})
+        AND NOT (${sqlIsContractSapInactiveForOsExpr('sc', grClosedPrecomputed, cancelledPrecomputed)})
     )
     OR ${sibling}
   )`;
@@ -71,18 +79,22 @@ function sqlHasAnySeaShipment(contractUuidExpr: string): string {
  * Same core as Unplanned + Preplanned shipment backlog (no shipment, no ETA, GR Open).
  * Preplanned vs Unplanned both sit on the Shipments OS strip.
  */
-function sqlHasSeaStripBacklog(contractUuidExpr: string): string {
+function sqlHasSeaStripBacklog(
+  contractUuidExpr: string,
+  closedForBacklogPrecomputed?: string,
+  cancelledPrecomputed?: string,
+): string {
   return `EXISTS (
     SELECT 1
     FROM contracts c_sea
     WHERE c_sea.id = ${contractUuidExpr}
-      AND NOT (${sqlIsContractSapInactiveForShipmentBacklogExpr('c_sea')})
+      AND NOT (${sqlIsContractSapInactiveForShipmentBacklogExpr('c_sea', closedForBacklogPrecomputed, cancelledPrecomputed)})
       AND ${sqlContractHasNoRegisteredEtaExpr('c_sea')}
   )`;
 }
 
 /** Trucking op still on Unplanned / Planned / In Progress (not pipeline Completed). */
-function sqlHasActiveLandTrucking(contractUuidExpr: string): string {
+function sqlHasActiveLandTrucking(contractUuidExpr: string, grClosedPrecomputed?: string): string {
   const outstanding = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'tc.quantity_ordered',
     incotermExpr: contractEffectiveIncotermExpr('tc'),
@@ -94,7 +106,7 @@ function sqlHasActiveLandTrucking(contractUuidExpr: string): string {
     INNER JOIN contracts tc ON tc.id = t.contract_id
     WHERE t.contract_id = ${contractUuidExpr}
       AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
-      AND NOT (${sqlTruckingPipelineIsCompletedExpr('tc', outstanding)})
+      AND NOT (${sqlTruckingPipelineIsCompletedExpr('tc', outstanding, grClosedPrecomputed)})
       AND UPPER(TRIM(COALESCE(t.status, ''))) IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
   )`;
 }
@@ -109,13 +121,17 @@ function sqlHasActiveLandTruckingOp(contractUuidExpr: string): string {
 }
 
 /** Open FRC/LCO LAND/MIX with no active trucking op — same as Trucking Unplanned backlog. */
-function sqlHasLandStripBacklog(contractUuidExpr: string): string {
+function sqlHasLandStripBacklog(
+  contractUuidExpr: string,
+  grClosedPrecomputed?: string,
+  cancelledPrecomputed?: string,
+): string {
   return `EXISTS (
     SELECT 1
     FROM contracts c_land
     WHERE c_land.id = ${contractUuidExpr}
       AND UPPER(COALESCE(NULLIF(TRIM(c_land.transport_mode::text), ''), 'LAND')) IN ('LAND', 'MIX')
-      AND NOT (${sqlIsContractSapInactiveForOsExpr('c_land')})
+      AND NOT (${sqlIsContractSapInactiveForOsExpr('c_land', grClosedPrecomputed, cancelledPrecomputed)})
   )`;
 }
 
@@ -132,16 +148,33 @@ export function sqlContractInActiveLogisticsOpenOsExpr(opts: {
   incotermExpr: string;
   /** Precomputed sibling predicate (e.g. `base.id IN (SELECT …)` from a once-built CTE). */
   sharesActiveSeaStoExpr?: string;
+  /**
+   * Precomputed per-contract SAP status columns (see `sqlIsContractSapClosedExpr` /
+   * `sqlIsContractSapCancelledExpr` / `sqlIsContractSapClosedForShipmentBacklogExpr`).
+   * When provided, the expensive `sap_processed_data` correlated subqueries collapse to a
+   * single-pass CTE lookup instead of being re-evaluated for every logistics-strip check.
+   */
+  grClosedPrecomputed?: string;
+  cancelledPrecomputed?: string;
+  closedForShipmentBacklogPrecomputed?: string;
 }): string {
-  const { contractUuidExpr, contractNumberExpr, incotermExpr, sharesActiveSeaStoExpr } = opts;
+  const {
+    contractUuidExpr,
+    contractNumberExpr,
+    incotermExpr,
+    sharesActiveSeaStoExpr,
+    grClosedPrecomputed,
+    cancelledPrecomputed,
+    closedForShipmentBacklogPrecomputed,
+  } = opts;
   const osKg = sqlContractQtyMoveOsKg(contractNumberExpr, incotermExpr);
   const seaActive = `(
     ${sqlIncotermIsSeaLogistics(incotermExpr)}
     AND (
-      ${sqlHasActiveSeaShipment(contractUuidExpr, sharesActiveSeaStoExpr)}
+      ${sqlHasActiveSeaShipment(contractUuidExpr, sharesActiveSeaStoExpr, grClosedPrecomputed, cancelledPrecomputed)}
       OR (
         NOT ${sqlHasAnySeaShipment(contractUuidExpr)}
-        AND ${sqlHasSeaStripBacklog(contractUuidExpr)}
+        AND ${sqlHasSeaStripBacklog(contractUuidExpr, closedForShipmentBacklogPrecomputed, cancelledPrecomputed)}
         AND (${osKg}) > ${BACKLOG_OS_COMPLETED_MAX_KG}
       )
     )
@@ -150,13 +183,45 @@ export function sqlContractInActiveLogisticsOpenOsExpr(opts: {
   const landActive = `(
     ${sqlIncotermIsLandLogistics(incotermExpr)}
     AND (
-      ${sqlHasActiveLandTrucking(contractUuidExpr)}
+      ${sqlHasActiveLandTrucking(contractUuidExpr, grClosedPrecomputed)}
       OR (
         NOT ${sqlHasActiveLandTruckingOp(contractUuidExpr)}
-        AND ${sqlHasLandStripBacklog(contractUuidExpr)}
+        AND ${sqlHasLandStripBacklog(contractUuidExpr, grClosedPrecomputed, cancelledPrecomputed)}
       )
     )
   )`;
 
   return `(${seaActive} OR ${landActive})`;
+}
+
+/**
+ * Precomputes the 3 SAP-status booleans `sqlContractInActiveLogisticsOpenOsExpr` needs
+ * (`is_closed`, `is_cancelled`, `is_closed_for_shipment_backlog`), once per contract id already
+ * in `sourceCte`, instead of letting each logistics-strip check re-run its own correlated
+ * `sap_processed_data` subquery. Each of those raw expressions costs a near full-table scan
+ * of `contracts` when Postgres flattens the correlated EXISTS calls (~9-10s each observed on
+ * the Contract Performance drilldown query), so collapsing all three to a single pass keyed by
+ * id removes most of that cost.
+ *
+ * `sourceCte` must expose `idColumn` (a `contracts.id` UUID, e.g. `base.id`). Join the result
+ * back with `LEFT JOIN <cteName> lgs ON lgs.id = base.id` and pass
+ * `COALESCE(lgs.is_closed, false)` etc. as the `*Precomputed` overrides above.
+ */
+export function buildLogisticsGrStatusPrecomputeCte(opts: {
+  cteName?: string;
+  sourceCte: string;
+  idColumn: string;
+}): string {
+  const cteName = opts.cteName ?? 'logistics_gr_status';
+  const { sourceCte, idColumn } = opts;
+  return `
+    ${cteName} AS MATERIALIZED (
+      SELECT
+        g.id,
+        ${sqlIsContractSapClosedExpr('g')} AS is_closed,
+        ${sqlIsContractSapCancelledExpr('g')} AS is_cancelled,
+        ${sqlIsContractSapClosedForShipmentBacklogExpr('g')} AS is_closed_for_shipment_backlog
+      FROM (SELECT DISTINCT ${idColumn} AS id FROM ${sourceCte}) lgs_ids
+      INNER JOIN contracts g ON g.id = lgs_ids.id
+    )`;
 }

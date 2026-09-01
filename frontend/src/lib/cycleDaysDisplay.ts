@@ -62,13 +62,6 @@ export function formatSignedCycleDaysCompact(days: number | null | undefined): s
   return `${abs} ${unit}`
 }
 
-export function formatContractAgingDays(days: number): string {
-  if (days === 0) return 'Due today'
-  const abs = daysMagnitude(days)
-  const unit = abs === 1 ? 'day' : 'days'
-  return days > 0 ? `${abs} ${unit} late` : `${abs} ${unit} ahead`
-}
-
 export function formatLogCycleDays(
   days: number | null | undefined,
   tradeCycleDays?: number | null | undefined,

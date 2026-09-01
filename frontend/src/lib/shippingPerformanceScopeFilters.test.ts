@@ -9,23 +9,23 @@ describe('applyShippingPerfSourceProductFilter', () => {
     { id: '4', source_type: null, product: 'POME' },
   ]
 
-  it('returns all rows when Source and Product are All', () => {
-    expect(applyShippingPerfSourceProductFilter(rows, 'All', 'All')).toHaveLength(4)
+  it('returns all rows when Source and Product selections are empty (All)', () => {
+    expect(applyShippingPerfSourceProductFilter(rows, [], [])).toHaveLength(4)
   })
 
   it('filters Interco without refetch semantics (client only)', () => {
-    const filtered = applyShippingPerfSourceProductFilter(rows, 'Interco', 'All')
+    const filtered = applyShippingPerfSourceProductFilter(rows, ['Interco'], [])
     expect(filtered.map((r) => r.id)).toEqual(['1', '3'])
   })
 
   it('filters Product tab with Source combined', () => {
-    const filtered = applyShippingPerfSourceProductFilter(rows, 'Interco', 'CPO')
+    const filtered = applyShippingPerfSourceProductFilter(rows, ['Interco'], ['CPO'])
     expect(filtered.map((r) => r.id)).toEqual(['1', '3'])
   })
 
   it('excludes blank source from Interco / 3rd Party', () => {
-    expect(applyShippingPerfSourceProductFilter(rows, '3rd Party', 'All').map((r) => r.id)).toEqual([
-      '2',
-    ])
+    expect(
+      applyShippingPerfSourceProductFilter(rows, ['3rd Party'], []).map((r) => r.id),
+    ).toEqual(['2'])
   })
 })

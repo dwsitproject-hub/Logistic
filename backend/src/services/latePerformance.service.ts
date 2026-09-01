@@ -34,9 +34,17 @@ import {
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 } from '../utils/truckingQuantitySql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
-import { sqlContractInActiveLogisticsOpenOsExpr } from '../utils/contractLogisticsOpenOsSql';
+import {
+  buildLogisticsGrStatusPrecomputeCte,
+  sqlContractInActiveLogisticsOpenOsExpr,
+} from '../utils/contractLogisticsOpenOsSql';
 import { sqlActiveSeaStoSiblingContractIdsCte } from '../utils/seaStoSiblingSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import {
+  sqlB2bEndingCompanyAgg,
+  sqlB2bEndingPlantCodeAgg,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -281,7 +289,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
       ${contractsQtyMoveCte},
       ${contractsStoAggCte},
       ${sqlActiveSeaStoSiblingContractIdsCte()},
-      base AS (
+      base AS MATERIALIZED (
         SELECT
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
@@ -293,9 +301,11 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.source_type) AS source_type,
           MAX(c.status) AS status,
-          -- Origin plant (same grain as Shipments/Trucking status cards + OS strips).
-          MAX(c.plant_code) AS plant_code,
-          MAX(c.company_name) AS company_name,
+          -- B2B pass-through contracts roll up under the *ending* leg's plant/company so the
+          -- drilldown card groups the same way the View table does (sqlB2bEndingPlantCodeAgg),
+          -- keeping the Contract Performance card's OS total in sync with the table's OS sum.
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
@@ -379,9 +389,11 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         WHERE 1=1
         GROUP BY c.contract_id
-      )
+      ),
+      ${buildLogisticsGrStatusPrecomputeCte({ sourceCte: 'base', idColumn: 'id' })}
       SELECT
         base.*,
         COALESCE(
@@ -395,8 +407,12 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           incotermExpr: 'base.incoterm',
           sharesActiveSeaStoExpr:
             'EXISTS (SELECT 1 FROM active_sea_sto_sibling_ids sib WHERE sib.contract_id = base.id)',
+          grClosedPrecomputed: 'COALESCE(lgs.is_closed, false)',
+          cancelledPrecomputed: 'COALESCE(lgs.is_cancelled, false)',
+          closedForShipmentBacklogPrecomputed: 'COALESCE(lgs.is_closed_for_shipment_backlog, false)',
         })}) AS in_logistics_open_os
       FROM base
+      LEFT JOIN logistics_gr_status lgs ON lgs.id = base.id
       LEFT JOIN LATERAL (
         SELECT mp.group_plant, mp.plant_name
         FROM master_plants mp
@@ -424,12 +440,15 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     if (sqlStatusNorm === 'Open' || sqlStatusNorm === 'ACTIVE') {
       queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
         'base.import_status',
-        'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+        // Matches the JS-side fallback used to bucket rows into Open/Close below
+        // (row.import_status || row.status) — keeps this SQL-level filter (used by the
+        // non-combined 'open'/'close' parts) consistent with the View table's Open filter.
+        'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
       )}`;
     } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
       queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
         'base.import_status',
-        'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+        'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
       )}`;
     } else {
       queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;

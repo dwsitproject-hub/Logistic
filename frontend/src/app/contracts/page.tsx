@@ -23,7 +23,6 @@ import {
   contextPerformanceClass,
   formatAvgDays,
   statusCardAvgDaysClass,
-  formatContractAgingDays,
   formatLogCycleDays,
   formatLogCycleDaysCompact,
   formatSignedCycleDays,
@@ -177,15 +176,11 @@ const API_SORTABLE_COLUMN_IDS = new Set([
   'sto_count',
   'contract_qty',
   'outstanding_qty_mt',
-  'created_at',
   'log_cycle_days',
   'trade_cycle_days',
   'cash_cycle_days',
   'dp_cycle_days',
-  'contract_aging',
-  'delivery_status',
   'status_overall',
-  'unusual_status',
   'delivery_qty',
   'received_qty',
   'over_under_delivery_status',
@@ -208,13 +203,6 @@ function resolveApiSortKey(columnId: string): string | null {
 }
 
 /**
- * Temporarily hide SEA/LAND/MIX contracts-without-logistics cards.
- * Keep the implementation available for re-enable, but disable rendering and
- * every related API/list-filter path while this flag is false.
- */
-const CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED = false
-
-/**
  * Contracts Outstanding Qty display — no sign prefix.
  * Over-delivery (kept green via outstandingQtyMtColorClass) and 0 MT (gray) show
  * the plain value without a leading "+" or "-".
@@ -227,7 +215,6 @@ const DATE_SORT_COLUMN_IDS = new Set([
   'contract_date',
   'delivery_start',
   'delivery_end',
-  'created_at',
   'cargo_readiness_date',
   'eta_vessel_completed_loading',
   'eta_vessel_complete_discharge',
@@ -329,21 +316,9 @@ interface Contract {
   last_planning_delivery_date?: string | null
 }
 
-type ContractsUnassignedCardFilter = 'sea' | 'land' | 'mix'
-
 function contractsListTableScopeLabel(
-  unassignedFilter: ContractsUnassignedCardFilter | null,
   statusFilter: string,
 ): { text: string; emphasized: boolean } {
-  if (unassignedFilter === 'sea') {
-    return { text: 'SEA · Without shipment · Open', emphasized: true }
-  }
-  if (unassignedFilter === 'land') {
-    return { text: 'LAND · Without trucking · Open', emphasized: true }
-  }
-  if (unassignedFilter === 'mix') {
-    return { text: 'MIX · Without logistics · Open', emphasized: true }
-  }
   if (statusFilter !== 'All Status') {
     return { text: `Table · ${statusFilter}`, emphasized: false }
   }
@@ -401,7 +376,6 @@ const CONTRACTS_HIDDEN_COLUMN_IDS = new Set([
   'cash_cycle_days',
   'log_cycle_days',
   'trade_cycle_days',
-  'contract_aging',
 ])
 
 /** Default left-to-right order on `/contracts` when no saved column order (Supplier & Buyer after PO Number). */
@@ -1147,11 +1121,6 @@ function ContractsPageContent() {
   const [totalPages, setTotalPages] = useState(1)
   const [totalContracts, setTotalContracts] = useState(0)
   const contractsPerPage = 20
-  const [unassignedSeaContracts, setUnassignedSeaContracts] = useState(0)
-  const [unassignedLandContracts, setUnassignedLandContracts] = useState(0)
-  const [unassignedMixContracts, setUnassignedMixContracts] = useState(0)
-  const [unassignedCountsFetching, setUnassignedCountsFetching] = useState(false)
-  const [unassignedFilter, setUnassignedFilter] = useState<'sea' | 'land' | 'mix' | null>(null)
   /** Monotonic id — only the latest GET /contracts response may update table state. */
   const contractsFetchGenRef = useRef(0)
   const appliedContractsUrlFiltersRef = useRef(false)
@@ -1402,8 +1371,8 @@ function ContractsPageContent() {
   )
 
   const contractsTableScope = useMemo(
-    () => contractsListTableScopeLabel(unassignedFilter, statusFilter),
-    [unassignedFilter, statusFilter],
+    () => contractsListTableScopeLabel(statusFilter),
+    [statusFilter],
   )
 
   const contractPerfTableFetchScope = contractPerfPipeline.tableFetchScope
@@ -1415,20 +1384,10 @@ function ContractsPageContent() {
 
   const displayTotalContracts = totalContracts
 
-  /** Section 1 logistics cards — Open unassigned counts; hidden (0) when table status is Close. */
-  const contractsLogisticsSection1Active =
-    CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED &&
-    !isContractPerformance &&
-    statusFilter !== 'Close'
-  const displayUnassignedSeaCount = contractsLogisticsSection1Active ? unassignedSeaContracts : 0
-  const displayUnassignedLandCount = contractsLogisticsSection1Active ? unassignedLandContracts : 0
-  const displayUnassignedMixCount = contractsLogisticsSection1Active ? unassignedMixContracts : 0
-
   /** Debug: track Section 3 filter + pagination sync (summary card vs table). */
   useEffect(() => {
     if (isContractPerformance) return
     console.log('[Contracts] Section 3 table state', {
-      unassignedFilter,
       statusFilter,
       currentPage,
       totalContracts,
@@ -1439,7 +1398,6 @@ function ContractsPageContent() {
     })
   }, [
     isContractPerformance,
-    unassignedFilter,
     statusFilter,
     currentPage,
     totalContracts,
@@ -1682,10 +1640,8 @@ function ContractsPageContent() {
         'delivery_start',
         'delivery_end',
         'cargo_readiness_date',
-        'created_at',
         'contract_qty',
         'outstanding_qty',
-        'delivery_status',
       ]),
     []
   )
@@ -1794,7 +1750,6 @@ function ContractsPageContent() {
     presenceFilter,
     perfTransportMode,
     lateOnTimeFilter,
-    unassignedFilter,
     columnFilters,
     sortKey,
     sortDir,
@@ -1878,9 +1833,6 @@ function ContractsPageContent() {
   ) => {
     const fetchGen = ++contractsFetchGenRef.current
     let trackContractPerfTableLoad = false
-    const activeUnassignedFilter = CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED
-      ? unassignedFilter
-      : null
     try {
       if (!authReady) return
       if (isContractPerformance) {
@@ -1926,10 +1878,8 @@ function ContractsPageContent() {
         }
       }
 
-      // Status: summary-card drilldown always Open; contracts list respects toolbar status only.
-      if (!isContractPerformance && activeUnassignedFilter) {
-        params.append('status', 'Open')
-      } else if (!isContractPerformance && statusFilter && statusFilter !== 'All Status') {
+      // Status: contracts list respects toolbar status only.
+      if (!isContractPerformance && statusFilter && statusFilter !== 'All Status') {
         params.append('status', statusFilter)
       }
       if (!isContractPerformance) {
@@ -1957,9 +1907,6 @@ function ContractsPageContent() {
       if (outstandingParam === 'true') {
         params.append('outstanding', 'true')
       }
-      if (activeUnassignedFilter) {
-        params.append('unassigned', activeUnassignedFilter)
-      }
       const activeSortCol = sortKeyOverride || sortKey
       const activeSortDir = sortDirOverride || sortDir
       const apiSortKey = resolveApiSortKey(activeSortCol)
@@ -1971,7 +1918,6 @@ function ContractsPageContent() {
       console.log('[Contracts] fetchContracts request', {
         fetchGen,
         page,
-        unassigned: activeUnassignedFilter,
         status: params.get('status'),
         search: params.get('search'),
       })
@@ -2017,7 +1963,6 @@ function ContractsPageContent() {
           fetchGen,
           latestGen: contractsFetchGenRef.current,
           page,
-          unassigned: activeUnassignedFilter,
         })
         return
       }
@@ -2027,7 +1972,6 @@ function ContractsPageContent() {
       console.log('[Contracts] fetchContracts applied', {
         fetchGen,
         page,
-        unassigned: activeUnassignedFilter,
         total: responseData?.data?.pagination?.total,
         rows: loadedContracts.length,
       })
@@ -2226,86 +2170,6 @@ function ContractsPageContent() {
     }
   }, [authReady, isContractPerformance])
 
-  // Summary alert cards — always Open status; other toolbar filters sync counts to the table scope.
-  const fetchUnassignedCounts = useCallback(async () => {
-    if (!CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED || !authReady || !userScopeReady) return
-    setUnassignedCountsFetching(true)
-    try {
-      const params = new URLSearchParams()
-      if (searchTerm.trim().length >= 2) params.append('search', searchTerm.trim())
-      if (b2bFlagFilter && b2bFlagFilter !== 'ALL') params.append('b2bFlag', b2bFlagFilter)
-      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-        selectedProducts,
-        selectedGroups,
-        selectedSuppliers,
-        selectedIncoterms,
-      })
-      const cfKeys = Object.keys(mergedColumnFilters)
-      if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
-      }
-      if (transportModeFilter && transportModeFilter !== 'ALL') params.append('transportMode', transportModeFilter)
-      if (presenceFilter !== 'ALL') params.append('presence', presenceFilter)
-      if (dateFrom) params.append('dateFrom', dateFrom)
-      if (dateTo) params.append('dateTo', dateTo)
-      if (selectedGroupPlants.length > 0) {
-        selectedGroupPlants.forEach((p) => params.append('plant', p))
-      }
-      const res = await api.get<{
-        success: boolean
-        data: { seaWithoutShipments: number; landWithoutTrucking: number; mixWithoutLogistics: number }
-      }>(`/contracts/unassigned-counts?${params.toString()}`)
-      if (res.data?.success && res.data?.data) {
-        setUnassignedSeaContracts(res.data.data.seaWithoutShipments ?? 0)
-        setUnassignedLandContracts(res.data.data.landWithoutTrucking ?? 0)
-        setUnassignedMixContracts(res.data.data.mixWithoutLogistics ?? 0)
-      }
-    } catch (err) {
-      console.error('Failed to fetch unassigned counts:', err)
-    } finally {
-      setUnassignedCountsFetching(false)
-    }
-  }, [
-    authReady,
-    userScopeReady,
-    searchTerm,
-    b2bFlagFilter,
-    selectedProducts,
-    selectedGroups,
-    selectedSuppliers,
-    selectedGroupPlants,
-    selectedIncoterms,
-    transportModeFilter,
-    presenceFilter,
-    dateFrom,
-    dateTo,
-    columnFilters,
-  ])
-
-  useEffect(() => {
-    if (
-      !CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED ||
-      isContractPerformance ||
-      !userScopeReady
-    ) return
-    fetchUnassignedCounts()
-  }, [fetchUnassignedCounts, isContractPerformance, userScopeReady])
-
-  const toggleContractsUnassignedFilter = useCallback((mode: ContractsUnassignedCardFilter) => {
-    if (!CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED || statusFilter === 'Close') return
-    setUnassignedFilter((prev) => {
-      const next = prev === mode ? null : mode
-      setCurrentPage(1)
-      if (next) {
-        window.setTimeout(
-          () => contractsTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
-          100,
-        )
-      }
-      return next
-    })
-  }, [statusFilter])
-
   const clearContractsPageFilters = useCallback(() => {
     markUserScopeFiltersCleared('contracts')
     setDateFrom('')
@@ -2320,7 +2184,6 @@ function ContractsPageContent() {
     setSelectedSuppliers([])
     setB2bFlagFilter('ALL')
     setStatusFilter('All Status')
-    setUnassignedFilter(null)
     setColumnFilters({})
     setCurrentPage(1)
   }, [resetUserScopeFilters])
@@ -2338,7 +2201,6 @@ function ContractsPageContent() {
     selectedGroupPlants.length > 0 ||
     b2bFlagFilter !== 'ALL' ||
     statusFilter !== 'All Status' ||
-    unassignedFilter !== null ||
     hasActiveSectionOneColumnFilters(columnFilters)
 
   const formatDate = (dateStr: string) => formatDateDMY(dateStr)
@@ -2364,31 +2226,6 @@ function ContractsPageContent() {
     const mon = d.toLocaleString('en-US', { month: 'short' })
     return `${mon}-${d.getFullYear()}`
   }, [])
-
-  const getContractStatusRaw = (c: Contract) => {
-    return (c.import_status || c.status || '').toUpperCase()
-  }
-
-  const getContractAgingDays = (c: Contract): number | null => {
-    if (!c.delivery_end_date) return null
-    const statusRaw = getContractStatusRaw(c)
-    // Do not age closed/completed contracts
-    if (['CLOSE', 'CLOSED', 'COMPLETED'].includes(statusRaw)) return null
-    const end = new Date(c.delivery_end_date)
-    if (Number.isNaN(end.getTime())) return null
-    const today = new Date()
-    const diffMs = today.getTime() - end.getTime()
-    return Math.floor(diffMs / (1000 * 60 * 60 * 24))
-  }
-
-  const getContractAgingInfo = (c: Contract) => {
-    const days = getContractAgingDays(c)
-    if (days === null) return null
-    return {
-      days,
-      isOverdue: days >= 0,
-    }
-  }
 
   const handleFilterChange = () => {
     setCurrentPage(1)
@@ -2503,8 +2340,8 @@ function ContractsPageContent() {
   }
 
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'contract_aging' || colId === 'delivery_qty' || colId === 'received_qty' || colId === 'outstanding_qty_mt') return 'number'
-    if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'created_at' || colId === 'last_planning_delivery_date') return 'date'
+    if (colId === 'contract_qty' || colId === 'outstanding_qty' || colId === 'delivery_qty' || colId === 'received_qty' || colId === 'outstanding_qty_mt') return 'number'
+    if (colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'last_planning_delivery_date') return 'date'
     if (colId === 'product' || colId === 'status' || colId === 'company_name' || colId === 'lt_spot' || colId === 'group_name' || colId === 'supplier') return 'multi'
     if (colId === 'month_delivery_end') return 'text'
     return 'text'
@@ -2534,10 +2371,6 @@ function ContractsPageContent() {
         return c.source_type || ''
       case 'sto_number':
         return c.sto_numbers || c.sto_number || ''
-      case 'contract_aging': {
-        const days = getContractAgingDays(c)
-        return days === null ? null : days
-      }
       case 'contract_qty':
         return typeof c.quantity_ordered === 'number' ? c.quantity_ordered : null
       case 'outstanding_qty':
@@ -2556,8 +2389,6 @@ function ContractsPageContent() {
         return formatMonthDeliveryEnd(c.delivery_end_date) || ''
       case 'last_planning_delivery_date':
         return c.last_planning_delivery_date || ''
-      case 'created_at':
-        return c.created_at || ''
       default:
         return (c as any)[colId] ?? ''
     }
@@ -2628,7 +2459,7 @@ function ContractsPageContent() {
     return true
   }
 
-  // Search + most column filters run on the server. Summary-card unassigned filter is server-side only (GET ?unassigned=).
+  // Search + most column filters run on the server.
   const filteredContracts = useMemo(() => {
     let rows = contracts.filter((contract) => passesColumnFilters(contract, clientOnlyColumnFilters))
     if (isContractPerformance) {
@@ -2646,7 +2477,6 @@ function ContractsPageContent() {
   useEffect(() => {
     if (isContractPerformance) return
     console.log('[Contracts] Section 3 filtered rows before render', {
-      unassignedFilter,
       filteredRows: filteredContracts.length,
       displayTotalContracts,
       currentPage,
@@ -2654,7 +2484,6 @@ function ContractsPageContent() {
     })
   }, [
     isContractPerformance,
-    unassignedFilter,
     filteredContracts.length,
     displayTotalContracts,
     currentPage,
@@ -2715,26 +2544,6 @@ function ContractsPageContent() {
           },
           poNumberColumn,
         ] as CompactColumn[]),
-    {
-      id: 'contract_aging',
-      label: 'Contract Aging',
-      formulaHelp: FIELD_HELP.contractAging,
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (c) => getContractAgingDays(c) ?? 0,
-      render: (c) => {
-        const info = getContractAgingInfo(c)
-        if (!info) {
-          return <span className="text-sm text-gray-500">-</span>
-        }
-        return (
-          <span className={`text-sm ${signedCycleDaysClass(info.days)}`}>
-            {formatContractAgingDays(info.days)}
-          </span>
-        )
-      },
-      className: 'whitespace-nowrap'
-    },
     {
       id: 'contract_ext_no',
       label: 'Contract Ext No',
@@ -2809,18 +2618,6 @@ function ContractsPageContent() {
         ] as CompactColumn[])
       : []),
     {
-      id: 'delivery_status',
-      label: 'Delivery Status',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (c) => (c.import_status || c.status || ''),
-      render: (c) => (
-        <Badge className={contractStatusBadgeClass(c)}>
-          {formatContractDeliveryStatusLabel(c.import_status || c.status) || '—'}
-        </Badge>
-      )
-    },
-    {
       id: 'status_overall',
       label: isContractPerformance ? 'Status Contract' : 'Status',
       defaultVisible: false,
@@ -2838,31 +2635,6 @@ function ContractsPageContent() {
           </Badge>
         )
       }
-    },
-    {
-      id: 'unusual_status',
-      label: 'Unusual Status',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (c) => {
-        const isUnusual =
-          (c.log_cycle_days != null && Math.abs(c.log_cycle_days) >= 35) ||
-          (c.trade_cycle_days != null && c.trade_cycle_days >= 35) ||
-          (c.cash_cycle_days != null && c.cash_cycle_days >= 35)
-        return isUnusual ? 1 : 0
-      },
-      render: (c) => {
-        const isUnusual =
-          (c.log_cycle_days != null && Math.abs(c.log_cycle_days) >= 35) ||
-          (c.trade_cycle_days != null && c.trade_cycle_days >= 35) ||
-          (c.cash_cycle_days != null && c.cash_cycle_days >= 35)
-        return isUnusual ? (
-          <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Unusual</Badge>
-        ) : (
-          <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">Normal</Badge>
-        )
-      },
-      className: 'whitespace-nowrap'
     },
     {
       id: 'contract_qty',
@@ -3077,12 +2849,10 @@ function ContractsPageContent() {
       getSortValue: (c) => c.sto_numbers || c.sto_number || '',
       render: (c) => {
         const val = c.sto_numbers || c.sto_number || ''
-        return isContractPerformance ? (
-          <span className="text-sm truncate block" title={val}>
+        return (
+          <span className="text-sm truncate block cursor-help" title={val}>
             {formatOperationalTableTextDisplay(val)}
           </span>
-        ) : (
-          <OperationalNowrapCell value={val} title={val} />
         )
       },
     },
@@ -3139,14 +2909,6 @@ function ContractsPageContent() {
           {c.cargo_readiness_date ? formatShortDate(c.cargo_readiness_date) : '-'}
         </span>
       ),
-    },
-    {
-      id: 'created_at',
-      label: 'Created',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (c) => c.created_at || '',
-      render: (c) => <span className="text-sm">{formatShortDate(c.created_at)}</span>
     },
     ...(isContractPerformance
       ? ([
@@ -3724,9 +3486,6 @@ function ContractsPageContent() {
             <div>
               <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
                 <span>Contracts</span>
-                {unassignedCountsFetching ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-                ) : null}
               </h1>
             </div>
             <div className="flex items-center gap-2">
@@ -4120,101 +3879,6 @@ function ContractsPageContent() {
           </Card>
         )}
 
-        {CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED && !isContractPerformance && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card
-              className={`transition-all hover:shadow-md ${
-                statusFilter === 'Close'
-                  ? 'opacity-60 cursor-not-allowed'
-                  : 'cursor-pointer'
-              } ${unassignedFilter === 'sea' ? 'ring-2 ring-blue-500 bg-blue-50/50' : ''}`}
-              onClick={() => {
-                if (statusFilter !== 'Close') toggleContractsUnassignedFilter('sea')
-              }}
-            >
-              <CardContent className="pt-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm text-gray-500">SEA contracts without shipments</div>
-                    <div className="text-2xl font-semibold text-gray-900 mt-1">
-                      {displayUnassignedSeaCount}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {statusFilter === 'Close'
-                        ? 'Hidden while table status is Close'
-                        : unassignedFilter === 'sea'
-                          ? 'Click again to clear'
-                          : 'Click to filter table'}
-                    </div>
-                  </div>
-                  <Ship className="h-8 w-8 text-blue-500" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card
-              className={`transition-all hover:shadow-md ${
-                statusFilter === 'Close'
-                  ? 'opacity-60 cursor-not-allowed'
-                  : 'cursor-pointer'
-              } ${unassignedFilter === 'land' ? 'ring-2 ring-amber-500 bg-amber-50/50' : ''}`}
-              onClick={() => {
-                if (statusFilter !== 'Close') toggleContractsUnassignedFilter('land')
-              }}
-            >
-              <CardContent className="pt-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm text-gray-500">LAND contracts without trucking</div>
-                    <div className="text-2xl font-semibold text-gray-900 mt-1">
-                      {displayUnassignedLandCount}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {statusFilter === 'Close'
-                        ? 'Hidden while table status is Close'
-                        : unassignedFilter === 'land'
-                          ? 'Click again to clear'
-                          : 'Click to filter table'}
-                    </div>
-                  </div>
-                  <Truck className="h-8 w-8 text-amber-500" />
-                </div>
-              </CardContent>
-            </Card>
-            <Card
-              className={`transition-all hover:shadow-md ${
-                statusFilter === 'Close'
-                  ? 'opacity-60 cursor-not-allowed'
-                  : 'cursor-pointer'
-              } ${unassignedFilter === 'mix' ? 'ring-2 ring-green-500 bg-green-50/50' : ''}`}
-              onClick={() => {
-                if (statusFilter !== 'Close') toggleContractsUnassignedFilter('mix')
-              }}
-            >
-              <CardContent className="pt-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm text-gray-500">MIX contracts without shipment or trucking</div>
-                    <div className="text-2xl font-semibold text-gray-900 mt-1">
-                      {displayUnassignedMixCount}
-                    </div>
-                    <div className="text-xs text-gray-400 mt-1">
-                      {statusFilter === 'Close'
-                        ? 'Hidden while table status is Close'
-                        : unassignedFilter === 'mix'
-                          ? 'Click again to clear'
-                          : 'Click to filter table'}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Ship className="h-7 w-7 text-green-500" />
-                    <Truck className="h-7 w-7 text-green-500" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            </div>
-        )}
-
         {/* Filters — hidden on Contract Performance; state (dateFrom, searchTerm, etc.) still drives API */}
         {!isContractPerformance && (
         <Card>
@@ -4223,12 +3887,6 @@ function ContractsPageContent() {
           </CardHeader>
           <CardContent className="pt-0">
             <div className="space-y-4">
-              {CONTRACTS_UNASSIGNED_LOGISTICS_CARDS_ENABLED ? (
-                <p className="text-xs text-gray-500">
-                  Section 1 logistics cards always count <span className="font-medium text-gray-700">Open</span>{' '}
-                  contracts. Status below controls the Section 3 table only (All / Open / Close).
-                </p>
-              ) : null}
               <div className="flex gap-4">
                 <div className="flex-1 relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -4252,9 +3910,6 @@ function ContractsPageContent() {
                     setStatusFilter(value)
                     if (!isContractPerformance) {
                       setCurrentPage(1)
-                      if (unassignedFilter && value === 'Close') {
-                        setUnassignedFilter(null)
-                      }
                     }
                     if (isContractPerformance) {
                       setSummaryCardStatus(value === 'Open' || value === 'Close' ? value : 'All')
@@ -4491,13 +4146,7 @@ function ContractsPageContent() {
                 <div>
                   <CardTitle className="flex items-center gap-2">
                     <span>
-                      {unassignedFilter === 'sea'
-                        ? 'SEA Contracts Without Shipments'
-                        : unassignedFilter === 'land'
-                        ? 'LAND Contracts Without Trucking'
-                        : unassignedFilter === 'mix'
-                        ? 'MIX Contracts Without Shipment or Trucking'
-                        : isContractPerformance
+                      {isContractPerformance
                         ? 'Contract Performance'
                         : 'All Contracts'}
                     </span>
@@ -4567,21 +4216,6 @@ function ContractsPageContent() {
                     </p>
                   )}
                 </div>
-                {unassignedFilter && (
-                  <Badge
-                    className={`hidden md:inline-flex cursor-pointer ${
-                      unassignedFilter === 'sea'
-                        ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                        : unassignedFilter === 'land'
-                          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                          : 'bg-green-100 text-green-700 hover:bg-green-200'
-                    }`}
-                    onClick={() => toggleContractsUnassignedFilter(unassignedFilter)}
-                  >
-                    <X className="h-3 w-3 mr-1" />
-                    Clear filter
-                  </Badge>
-                )}
               </div>
               <div className="flex items-center gap-2">
                 {isContractPerformance && (

@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Droplets, Eye, GripVertical, Loader2, SlidersHorizontal, X } from 'lucide-react'
-import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
@@ -21,10 +20,7 @@ import {
   fetchContractForDetailModal,
   type ContractDetailModalContract,
 } from '@/components/contracts/ContractDetailModal'
-import {
-  filterOilLossEligibleRows,
-  OIL_LOSS_MODE_FILTER_OPTIONS,
-} from '@/lib/oilLossEligibility'
+import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
 import {
   buildOilLossSummaryForDateRange,
   type ROilLossKey,
@@ -1132,9 +1128,6 @@ export default function OilLossPage() {
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
-  const [selectedModes, setSelectedModes] = useState<string[]>([])
-  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
-  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const {
@@ -1219,13 +1212,11 @@ export default function OilLossPage() {
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
-      api.get('/contracts/filter-options/incoterms'),
       api.get('/dashboard/filter-options/products'),
     ])
-      .then(([plantRes, incRes, productRes]) => {
+      .then(([plantRes, productRes]) => {
         if (cancelled) return
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
-        const incs = (incRes.data?.data?.incoterms || []) as string[]
         const productPayload = productRes.data?.data
         const products = (Array.isArray(productPayload)
           ? productPayload
@@ -1233,14 +1224,12 @@ export default function OilLossPage() {
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
         setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
         setAvailableProducts(Array.isArray(products) ? products : [])
       })
       .catch((e) => {
         if (cancelled) return
         console.error('Failed to fetch oil loss filter options:', e)
         setAvailableGroupPlants([])
-        setAvailableIncoterms([])
         setAvailableProducts([])
       })
     return () => {
@@ -1480,17 +1469,6 @@ export default function OilLossPage() {
     }
   }, [columnPrefsByView])
 
-  const ytdRange = useMemo(() => resolveOilLossPeriodDateRange('YTD'), [])
-  const hasActiveOilLossFilters =
-    globalPeriod !== 'YTD' ||
-    dateFrom !== ytdRange.dateFrom ||
-    dateTo !== ytdRange.dateTo ||
-    globalTransport !== 'All' ||
-    selectedModes.length > 0 ||
-    selectedIncoterms.length > 0 ||
-    selectedProducts.length > 0 ||
-    selectedGroupPlants.length > 0
-
   const resetGlobalBarFilters = useCallback(() => {
     const ytd = resolveOilLossPeriodDateRange('YTD')
     setGlobalPeriod('YTD')
@@ -1499,31 +1477,15 @@ export default function OilLossPage() {
     setGlobalTransport('All')
     handleProductsChange([])
     handleGroupPlantsChange([])
+    resetUserScopeFilters()
     setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [handleGroupPlantsChange, handleProductsChange])
-
-  const resetOilLossDrilldown = useCallback(() => {
-    setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
-    setCurrentPage(1)
-  }, [])
+  }, [handleGroupPlantsChange, handleProductsChange, resetUserScopeFilters])
 
   const applyOilLossDrilldownChange = useCallback((next: OilLossDrilldownFilters) => {
     setDrilldownFilters(next)
     setCurrentPage(1)
   }, [])
-
-  const clearOilLossFilters = useCallback(() => {
-    setSelectedModes([])
-    setSelectedIncoterms([])
-    resetUserScopeFilters()
-    resetGlobalBarFilters()
-    resetOilLossDrilldown()
-    const ytd = resolveOilLossPeriodDateRange('YTD')
-    setDateFrom(ytd.dateFrom)
-    setDateTo(ytd.dateTo)
-    setCurrentPage(1)
-  }, [resetUserScopeFilters, resetGlobalBarFilters, resetOilLossDrilldown])
 
   useEffect(() => {
     setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
@@ -1533,8 +1495,6 @@ export default function OilLossPage() {
     dateFrom,
     dateTo,
     globalTransport,
-    selectedModes,
-    selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
   ])
@@ -1550,8 +1510,6 @@ export default function OilLossPage() {
       transport: globalTransport,
       selectedProducts,
       selectedGroupPlants,
-      selectedModes,
-      selectedIncoterms,
       dateFrom,
       dateTo,
     })
@@ -1561,8 +1519,6 @@ export default function OilLossPage() {
     globalTransport,
     selectedProducts,
     selectedGroupPlants,
-    selectedModes,
-    selectedIncoterms,
     dateFrom,
     dateTo,
   ])
@@ -1703,8 +1659,6 @@ export default function OilLossPage() {
     setCurrentPage(1)
   }, [
     filteredRows.length,
-    selectedModes,
-    selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
     dateFrom,
@@ -1923,57 +1877,6 @@ export default function OilLossPage() {
           loading={showBlockingLoad}
           dataFetching={dataFetching}
         />
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-end gap-4">
-                <div className="w-52 min-w-[180px]">
-                  <SearchableMultiSelect
-                    label="Mode"
-                    options={[...OIL_LOSS_MODE_FILTER_OPTIONS]}
-                    selected={selectedModes}
-                    onChange={setSelectedModes}
-                    placeholder="All modes"
-                    emptyMessage="SEA, LAND, MIX"
-                  />
-                </div>
-              </div>
-
-              <PerformanceScopeFilters
-                hideGroupPlantFilter
-                incotermOptions={availableIncoterms}
-                selectedIncoterms={selectedIncoterms}
-                onIncotermsChange={setSelectedIncoterms}
-                showProductFilter={false}
-                groupPlantOptions={availableGroupPlants}
-                selectedGroupPlants={[]}
-                onGroupPlantsChange={() => {}}
-                dateFrom={dateFrom}
-                dateTo={dateTo}
-                onDateFromChange={setDateFrom}
-                onDateToChange={setDateTo}
-                showDateRange={false}
-                incotermEmptyMessage="Loading incoterms..."
-              />
-
-              <div className="flex flex-wrap items-center gap-4">
-                {hasActiveOilLossFilters ? (
-                  <Button
-                    type="button"
-                    onClick={clearOilLossFilters}
-                    variant="ghost"
-                    size="sm"
-                    className="text-gray-500"
-                  >
-                    <X className="h-4 w-4 mr-1" />
-                    Clear
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
         <Card>
           <CardHeader className="space-y-3">

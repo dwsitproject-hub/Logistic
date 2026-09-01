@@ -61,7 +61,6 @@ const BASE_COL_SQL: Record<string, string> = {
   delivery_start: 'base.delivery_start_date',
   delivery_end: 'base.delivery_end_date',
   cargo_readiness_date: 'base.cargo_readiness_date',
-  created_at: 'base.created_at',
   contract_qty: 'base.quantity_ordered',
   outstanding_qty: sqlContractOutstandingSignedExpr({
     contractQtyExpr: 'base.quantity_ordered',
@@ -69,7 +68,6 @@ const BASE_COL_SQL: Record<string, string> = {
     receiveExpr: 'base.quantity_receive',
     deliveryExpr: 'base.quantity_delivery',
   }),
-  delivery_status: `COALESCE(base.import_status, base.status::text, '')`,
 }
 
 export function appendGlobalSearchBase(

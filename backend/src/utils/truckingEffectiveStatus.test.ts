@@ -8,6 +8,7 @@ import {
 import {
   isTruckingPipelineCompleted,
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+  sqlTruckingOutstandingWithinToleranceExpr,
   sqlTruckingPipelineIsCompletedExpr,
 } from './truckingQuantitySql';
 
@@ -114,9 +115,15 @@ describe('truckingEffectiveStatus', () => {
   });
 
   it('sqlTruckingPipelineIsCompletedExpr uses OR between GR Close and OS tolerance', () => {
-    const sql = sqlTruckingPipelineIsCompletedExpr('c');
-    expect(sql).toContain(' OR ');
-    expect(sql).not.toMatch(/\)\s*AND\s*\(/);
+    // sqlIsContractSapClosedExpr (the GR-close operand) legitimately contains its own
+    // internal ") AND (" combinations, so assert on the top-level combinator structurally
+    // (immediately before the OS-tolerance clause) instead of scanning the whole string.
+    const outstandingExpr = 'test_outstanding_expr';
+    const sql = sqlTruckingPipelineIsCompletedExpr('c', outstandingExpr);
+    const toleranceClause = sqlTruckingOutstandingWithinToleranceExpr(outstandingExpr);
+    const idx = sql.indexOf(toleranceClause);
+    expect(idx).toBeGreaterThan(-1);
+    expect(sql.slice(0, idx).trimEnd().endsWith('OR')).toBe(true);
   });
 
   it('hasTruckingKlipPlanning requires dated rows with qty', () => {

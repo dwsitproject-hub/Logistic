@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareContractsListSortRows,
-  computeContractAgingDays,
   computeStatusOverallSortValue,
-  computeUnusualStatusSortValue,
   CONTRACTS_LIST_NODE_SORT_KEYS,
   CONTRACTS_LIST_SQL_SORT_COLUMNS,
   resolveContractsListSort,
@@ -65,34 +63,6 @@ describe('compareContractsListSortRows', () => {
       compareContractsListSortRows(a, b, 'trade_cycle_days', 1, today),
     );
     expect(sorted.map((r) => r.contract_id)).toEqual(['C', 'A', 'B']);
-  });
-
-  it('sorts contract aging for open rows and puts closed/null last', () => {
-    const rows = [
-      { contract_id: 'closed', import_status: 'CLOSE', delivery_end_date: '2026-08-01' },
-      { contract_id: 'late', import_status: 'OPEN', delivery_end_date: '2026-08-01' },
-      { contract_id: 'ok', import_status: 'OPEN', delivery_end_date: '2026-08-20' },
-    ];
-    expect(computeContractAgingDays(rows[0], today)).toBeNull();
-    expect(computeContractAgingDays(rows[1], today)).toBe(27);
-    expect(computeContractAgingDays(rows[2], today)).toBe(8);
-    const sorted = [...rows].sort((a, b) =>
-      compareContractsListSortRows(a, b, 'contract_aging', -1, today),
-    );
-    expect(sorted.map((r) => r.contract_id)).toEqual(['late', 'ok', 'closed']);
-  });
-
-  it('sorts unusual status using the same 35-day rule as the table', () => {
-    expect(computeUnusualStatusSortValue({ log_cycle_days: 40 })).toBe(1);
-    expect(computeUnusualStatusSortValue({ trade_cycle_days: 10 })).toBe(0);
-    const rows = [
-      { contract_id: 'n', trade_cycle_days: 1 },
-      { contract_id: 'u', trade_cycle_days: 40 },
-    ];
-    const sorted = [...rows].sort((a, b) =>
-      compareContractsListSortRows(a, b, 'unusual_status', -1, today),
-    );
-    expect(sorted.map((r) => r.contract_id)).toEqual(['u', 'n']);
   });
 
   it('sorts status overall Close+PAID ahead of raw CLOSE when ascending Close…', () => {

@@ -306,13 +306,12 @@ export async function replaceTruckingDailyActuals(
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(executor, truckingOperationId);
-  setImmediate(() => {
-    import('./contractQtyMoveSnapshot.service')
-      .then(({ ContractQtyMoveSnapshotService }) =>
-        ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]),
-      )
-      .catch(() => {});
-  });
+  try {
+    const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
+    await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]);
+  } catch {
+    // best-effort; snapshot fallback (is_stale) covers correctness if this fails
+  }
 }
 
 export async function upsertTruckingDailyActualRows(
@@ -338,13 +337,12 @@ export async function upsertTruckingDailyActualRows(
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(executor, truckingOperationId);
-  setImmediate(() => {
-    import('./contractQtyMoveSnapshot.service')
-      .then(({ ContractQtyMoveSnapshotService }) =>
-        ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]),
-      )
-      .catch(() => {});
-  });
+  try {
+    const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
+    await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]);
+  } catch {
+    // best-effort; snapshot fallback (is_stale) covers correctness if this fails
+  }
 }
 
 /** Derive DB status column from realization dates only (not planning). Last receive alone does not complete. */

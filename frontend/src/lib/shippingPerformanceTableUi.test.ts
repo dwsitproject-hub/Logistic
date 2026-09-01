@@ -27,9 +27,11 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
     'discharge_delta_eta_etb_days',
     'discharge_delta_etb_etc_days',
     'total_delta_days',
+    'lp_flow_rate',
+    'dp_flow_rate',
   ]
 
-  it('defines 16 default visible columns in prescribed order', () => {
+  it('defines 18 default visible columns in prescribed order', () => {
     expect(ALL_SHIPMENTS_PRESET_COLUMN_ORDER).toEqual([
       'vessel_name',
       'sto_number',
@@ -47,6 +49,8 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
       'discharge_delta_eta_etb_days',
       'discharge_delta_etb_etc_days',
       'total_delta_days',
+      'lp_flow_rate',
+      'dp_flow_rate',
     ])
   })
 
@@ -80,7 +84,7 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
   })
 
   it('uses preset order when saved order is empty', () => {
-    expect(ensureAllShipmentsPresetColumnOrder([], allKeys).slice(0, 16)).toEqual([
+    expect(ensureAllShipmentsPresetColumnOrder([], allKeys).slice(0, 18)).toEqual([
       ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
     ])
   })

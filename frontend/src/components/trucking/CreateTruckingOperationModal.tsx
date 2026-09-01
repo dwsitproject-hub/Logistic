@@ -24,6 +24,12 @@ import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FAST_ENTRY_ROOT_ATTR } from '@/lib/fastEntryFocus'
 import { formatDateTimeDMY } from '@/lib/dateFormat'
+import {
+  DECIMAL_DOT_HINT,
+  blockCommaDecimalKeyDown,
+  parseDecimalDotInput,
+  sanitizeDecimalDotInput,
+} from '@/lib/decimalDotInput'
 
 const fmtIsoDate = (iso: string) => {
   const d = (iso || '').slice(0, 10)
@@ -822,22 +828,28 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       <div>
         <label className="mb-1.5 block text-xs font-semibold text-gray-600">SFAL Qty (MT)</label>
         {canEditSfalSfbd ? (
-          <Input
-            type="number"
-            step="0.01"
-            value={sfalQtyKg == null ? '' : String(sfalQtyKg / 1000)}
-            onChange={(e) => {
-              const raw = e.target.value
-              if (raw === '') {
-                setSfalQtyKg(null)
-                return
-              }
-              const mt = parseFloat(raw)
-              setSfalQtyKg(Number.isNaN(mt) ? null : mt * 1000)
-            }}
-            className="h-9 text-right"
-            placeholder="—"
-          />
+          <>
+            <Input
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              value={sfalQtyKg == null ? '' : String(sfalQtyKg / 1000)}
+              onKeyDown={blockCommaDecimalKeyDown}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') {
+                  setSfalQtyKg(null)
+                  return
+                }
+                if (sanitizeDecimalDotInput(raw) === null) return
+                const mt = parseDecimalDotInput(raw)
+                setSfalQtyKg(mt === null ? null : mt * 1000)
+              }}
+              className="h-9 text-right"
+              placeholder="—"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+          </>
         ) : (
           <div className={`flex h-9 items-center rounded-md border border-gray-200 px-3 text-sm tabular-nums ${READONLY_FIELD_CLASS}`}>
             {formatSfalSfbdMtDisplay(sfalQtyKg)}
@@ -847,22 +859,28 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       <div>
         <label className="mb-1.5 block text-xs font-semibold text-gray-600">SFBD Qty (MT)</label>
         {canEditSfalSfbd ? (
-          <Input
-            type="number"
-            step="0.01"
-            value={sfbdQtyKg == null ? '' : String(sfbdQtyKg / 1000)}
-            onChange={(e) => {
-              const raw = e.target.value
-              if (raw === '') {
-                setSfbdQtyKg(null)
-                return
-              }
-              const mt = parseFloat(raw)
-              setSfbdQtyKg(Number.isNaN(mt) ? null : mt * 1000)
-            }}
-            className="h-9 text-right"
-            placeholder="—"
-          />
+          <>
+            <Input
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              value={sfbdQtyKg == null ? '' : String(sfbdQtyKg / 1000)}
+              onKeyDown={blockCommaDecimalKeyDown}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') {
+                  setSfbdQtyKg(null)
+                  return
+                }
+                if (sanitizeDecimalDotInput(raw) === null) return
+                const mt = parseDecimalDotInput(raw)
+                setSfbdQtyKg(mt === null ? null : mt * 1000)
+              }}
+              className="h-9 text-right"
+              placeholder="—"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+          </>
         ) : (
           <div className={`flex h-9 items-center rounded-md border border-gray-200 px-3 text-sm tabular-nums ${READONLY_FIELD_CLASS}`}>
             {formatSfalSfbdMtDisplay(sfbdQtyKg)}

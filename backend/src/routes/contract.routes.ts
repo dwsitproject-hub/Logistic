@@ -2,7 +2,6 @@ import express from 'express';
 import multer from 'multer';
 import {
   getContracts,
-  getUnassignedCounts,
   getContract,
   getContractStoInformation,
   getContractLogisticsStoDetail,
@@ -80,7 +79,6 @@ router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/filter-options/group-plants', getContractFilterGroupPlants);
 router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);
-router.get('/unassigned-counts', getUnassignedCounts);
 router.get('/buyers', getDistinctBuyers);
 
 /**
