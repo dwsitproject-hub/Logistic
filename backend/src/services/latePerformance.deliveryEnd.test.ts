@@ -356,7 +356,7 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
 })
 
 describe('resolveOpenPerfOutstandingQtyKg', () => {
-  it('prefers qty_move outstanding_quantity and floors over-delivery at 0', () => {
+  it('prefers qty_move outstanding_quantity and keeps signed over-delivery', () => {
     expect(
       resolveOpenPerfOutstandingQtyKg({
         outstanding_quantity: -12000,
@@ -364,7 +364,7 @@ describe('resolveOpenPerfOutstandingQtyKg', () => {
         incoterm: 'FRC',
         quantity_receive: 0,
       }),
-    ).toBe(0)
+    ).toBe(-12000)
     expect(
       resolveOpenPerfOutstandingQtyKg({
         outstanding_quantity: 45000,
@@ -387,9 +387,9 @@ describe('resolveOpenPerfOutstandingQtyKg', () => {
       resolveOpenPerfOutstandingQtyKg({
         quantity_ordered: 100000,
         incoterm: 'FOB',
-        quantity_delivery_sap: 110000,
+        quantity_delivery: 110000,
       }),
-    ).toBe(0)
+    ).toBe(-10000)
     expect(
       resolveOpenPerfOutstandingQtyKg({
         quantity_ordered: 1500000,

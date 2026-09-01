@@ -17,8 +17,8 @@ export const FIELD_HELP = {
 
   dpCycle: `Completion Date vs DP Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
 
-  /** Contract Performance — view table signed OS; Open card + drilldown use max(0, same qty_move OS). Over-delivery: +MT (green) in the table. Remaining outstanding: MT (black). */
-  contractPerfOutstandingQty: `Open card + Section 2 drilldown = Shipments OS (FOB/CIF/CFR, Unplanned–At DP) + Trucking OS (FRC/LCO, Unplanned+Planned+In Progress), qty_move floored at 0. SAP Open but pipeline Completed/Cancelled is excluded. Table column is signed (over-delivery +MT green). B2B origin (empty Contract Reff PO): when parent Delivery/Receive is NULL or 0, qty_move uses SUM of children capped at origin Contract Qty (parent > 0 replaces, never parent+child). GR STO Open/Close on FOB/LCO follows children when parent GR STO is blank (any Open / all Close).`,
+  /** Contract Performance — Open card, Section 2 drilldown, and View table share signed qty_move OS for all SAP Open contracts. Over-delivery: +MT (green). Remaining outstanding: MT (black). */
+  contractPerfOutstandingQty: `Open card + Section 2 drilldown + View table use the same signed Outstanding Qty as Contracts list (qty_move / incoterm Delivery vs Receive). All SAP Open contracts in scope are included — not limited to Shipments/Trucking active strips. Over-delivery shows as +MT (green) and reduces Open card totals. B2B origin (empty Contract Reff PO): when parent Delivery/Receive is NULL or 0, qty_move uses SUM of children capped at origin Contract Qty (parent > 0 replaces, never parent+child). GR STO Open/Close on FOB/LCO follows children when parent GR STO is blank (any Open / all Close).`,
   contractPerfTradeCycle: `Completion Date vs Due Date Delivery End. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
   contractPerfDpCycle: `Completion Date vs DP Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
   contractPerfCashCycle: `Completion Date vs Payoff Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,

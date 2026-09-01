@@ -774,13 +774,13 @@ export function resolveLandOutstandingKgForCycleCompletion(row: any): number | n
 
 /**
  * Open Contract Performance qty (Section 1 Open card + Section 2 drilldown).
- * Same qty_move OS as Contracts/Trucking/Shipments lists, floored at 0 so
- * over-delivery does not shrink Open / drilldown totals.
+ * Same signed qty_move OS as Contract Performance / Contracts View table
+ * (over-delivery is negative and reduces Open totals, matching the table column).
  */
 export function resolveOpenPerfOutstandingQtyKg(row: any): number {
   const signed = resolveLandOutstandingKgForCycleCompletion(row);
   if (signed == null || !Number.isFinite(signed)) return 0;
-  return Math.max(0, signed);
+  return signed;
 }
 
 /** SAP Open contract that still sits on Shipments or Trucking active OS strips. */
@@ -1087,9 +1087,6 @@ export function aggregateLatePerformanceRows(
   const includeTree = part === 'tree' || part === 'all';
   const includeRowInTree = (row: any) => {
     if (!includeTree || !rowMatchesContractPerfStatusFilter(row, filters.statusNorm)) return false;
-    const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
-    const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
-    if (isOpen && !isContractInLogisticsOpenOs(row)) return false;
     return true;
   };
   const todayMid = new Date();
@@ -1234,7 +1231,7 @@ export function aggregateLatePerformanceRows(
       }
       const _qtyOrderedNoDue = Number(row.quantity_ordered || 0);
       const _outstandingQtyNoDue =
-        isOpenNoDue && isContractInLogisticsOpenOs(row) ? resolveOpenPerfOutstandingQtyKg(row) : 0;
+        isOpenNoDue ? resolveOpenPerfOutstandingQtyKg(row) : 0;
       const _qtyForPerfNoDue = isClosedNoDue ? _qtyOrderedNoDue : _outstandingQtyNoDue;
       if (includeSummary) {
         if (isOpenNoDue) openStatusOutstandingQty += _outstandingQtyNoDue;
@@ -1318,7 +1315,7 @@ export function aggregateLatePerformanceRows(
 
     const _qtyOrdered = Number(row.quantity_ordered || 0);
     const _outstandingQty =
-      isOpen && isContractInLogisticsOpenOs(row) ? resolveOpenPerfOutstandingQtyKg(row) : 0;
+      isOpen ? resolveOpenPerfOutstandingQtyKg(row) : 0;
     /** Open Section 1/2: logistics-strip OS (qty_move, floor 0). Close: total contract qty. */
     const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 
