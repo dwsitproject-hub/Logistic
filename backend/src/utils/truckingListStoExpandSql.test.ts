@@ -84,9 +84,11 @@ describe('truckingListStoExpandSql', () => {
     });
     expect(withSnap).toContain('LEFT JOIN trucking_list_stage_snapshot sn');
     expect(withSnap).toContain('ON sn.operation_id = e.id');
-    expect(withSnap).toContain('COALESCE(sn.stage,');
+    expect(withSnap).toContain('COALESCE(');
+    expect(withSnap).toContain("NULLIF(sn.stage, 'COMPLETED')");
     // Live COMPLETED (OS ≈ 0 MT / GR Close) must win over a stale snapshot stage.
-    expect(withSnap).toMatch(/WHEN[\s\S]*THEN 'COMPLETED'[\s\S]*ELSE COALESCE\(sn\.stage,/);
+    // Stale snapshot COMPLETED must not stick when live GR/OS no longer qualifies.
+    expect(withSnap).toMatch(/WHEN[\s\S]*THEN 'COMPLETED'[\s\S]*ELSE COALESCE\(/);
 
     const withoutSnap = buildTruckingListExpansionSql(inner, { skipSapJoin: true });
     expect(withoutSnap).not.toContain('trucking_list_stage_snapshot');

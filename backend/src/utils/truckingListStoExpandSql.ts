@@ -365,11 +365,14 @@ export function buildTruckingListExpansionSql(
           useStageSnapshot
             ? `CASE
           WHEN ${sqlTruckingPageIsCompletedExpr('c', qty.outstandingForStage)} THEN 'COMPLETED'
-          ELSE COALESCE(sn.stage, ${sqlTruckingPagePipelineStageExpr(
-            'c',
-            `NULLIF(TRIM((${stoDisplay})::text), '')`,
-            qty.outstandingForStage,
-          )})
+          ELSE COALESCE(
+            NULLIF(sn.stage, 'COMPLETED'),
+            ${sqlTruckingPagePipelineStageExpr(
+              'c',
+              `NULLIF(TRIM((${stoDisplay})::text), '')`,
+              qty.outstandingForStage,
+            )}
+          )
         END`
             : sqlTruckingPagePipelineStageExpr(
                 'c',

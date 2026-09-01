@@ -1,4 +1,5 @@
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
+import { oilLossContractGroupKey } from '@/lib/oilLossAllContractColumns'
 
 export type OilLossDrilldownCategory = 'product' | 'plant' | 'incoterm' | 'transporter' | 'supplier'
 
@@ -38,11 +39,7 @@ export type OilLossDrilldownTreeNode = {
 }
 
 function contractGroupKey(row: OilLossSourceRow): string {
-  const cn = String(row.contract_number ?? '').trim()
-  if (cn) return `cn:${cn}`
-  const ext = String(row.contract_ext_no ?? '').trim()
-  if (ext) return `ext:${ext}`
-  return `row:${row.id}`
+  return oilLossContractGroupKey(row)
 }
 
 function normalizeGroupLabel(value: unknown, fallback = 'Blank'): string {
@@ -56,12 +53,19 @@ function parseQty(v: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-/** R4 basis (Qty Receive − Qty Delivery) — matches Section 1 R4 totalMt aggregation. */
+/** R4 basis (Qty Receive − Qty Delivery) — Contracts-level qty (same as View Table / Section 1). */
 function rowR4OilLossKg(row: OilLossSourceRow): number {
-  const delivery = parseQty(row.quantity_sent)
+  const delivery = parseQty(row.quantity_sent ?? row.quantity_delivery)
   const receive = parseQty(row.quantity_received)
   if (receive == null || delivery == null || delivery <= 0) return 0
   return receive - delivery
+}
+
+function touchAgg(agg: { contracts: Set<string>; totalOilLossKg: number }, contractKey: string, lossKg: number) {
+  // Count each contract once — delivery/receive are contract-level (Contracts formula).
+  if (agg.contracts.has(contractKey)) return
+  agg.contracts.add(contractKey)
+  agg.totalOilLossKg += lossKg
 }
 
 export function groupLabelForRow(row: OilLossSourceRow, category: OilLossDrilldownCategory): string {
@@ -219,11 +223,6 @@ type IncotermAcc = { contracts: Set<string>; totalOilLossKg: number; transporter
 type PlantAcc = { contracts: Set<string>; totalOilLossKg: number; incoterms: Map<string, IncotermAcc> }
 type ProductAcc = { contracts: Set<string>; totalOilLossKg: number; plants: Map<string, PlantAcc> }
 
-function touchAgg(agg: { contracts: Set<string>; totalOilLossKg: number }, contractKey: string, lossKg: number) {
-  agg.contracts.add(contractKey)
-  agg.totalOilLossKg += lossKg
-}
-
 function sortTreeNodes(nodes: OilLossDrilldownTreeNode[]): OilLossDrilldownTreeNode[] {
   return [...nodes].sort(
     (a, b) => Math.abs(b.totalOilLossKg) - Math.abs(a.totalOilLossKg) || b.contractCount - a.contractCount,
@@ -342,7 +341,15 @@ export function countUniqueOilLossContracts(rows: OilLossSourceRow[]): number {
 }
 
 export function sumOilLossKgFromRows(rows: OilLossSourceRow[]): number {
-  return rows.reduce((sum, row) => sum + rowR4OilLossKg(row), 0)
+  const seen = new Set<string>()
+  let sum = 0
+  for (const row of rows) {
+    const key = contractGroupKey(row)
+    if (seen.has(key)) continue
+    seen.add(key)
+    sum += rowR4OilLossKg(row)
+  }
+  return sum
 }
 
 export const OIL_LOSS_DRILLDOWN_LEVEL_STYLES: Record<

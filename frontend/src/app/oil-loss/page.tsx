@@ -5,11 +5,10 @@ import Layout from '@/components/Layout'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, Eye, GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
+import { Droplets, Eye, GripVertical, Loader2, SlidersHorizontal, X } from 'lucide-react'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
@@ -200,6 +199,13 @@ function computeRowROilLossKg(row: OilLossTableRow, kind: ROilLossKey): number |
     return receive - delivery
   }
   return null
+}
+
+function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
+  if (kg == null || !Number.isFinite(Number(kg))) {
+    return <span className="text-sm text-gray-400">—</span>
+  }
+  return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
 }
 
 function renderROilLossCell(kg: number | null): ReactNode {
@@ -429,20 +435,16 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       label: 'Qty SFAL',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => r.quantity_sfal || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_sfal)}</span>
-      ),
+      getSortValue: (r) => r.quantity_sfal ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell(r.quantity_sfal),
     },
     {
       id: 'quantity_sfbd',
       label: 'Qty SFBD',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => r.quantity_sfbd || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_sfbd)}</span>
-      ),
+      getSortValue: (r) => r.quantity_sfbd ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell(r.quantity_sfbd),
     },
   ]
 }
@@ -687,24 +689,18 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       label: 'Qty SFAL',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfal' in r ? r.quantity_sfal : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfal' in r ? r.quantity_sfal : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfal' in r ? r.quantity_sfal : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfal' in r ? r.quantity_sfal : null),
     },
     {
       id: 'quantity_sfbd',
       label: 'Qty SFBD',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfbd' in r ? r.quantity_sfbd : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfbd' in r ? r.quantity_sfbd : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfbd' in r ? r.quantity_sfbd : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfbd' in r ? r.quantity_sfbd : null),
     },
   ]
 }
@@ -955,24 +951,18 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       label: 'Qty SFAL',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfal' in r ? r.quantity_sfal : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfal' in r ? r.quantity_sfal : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfal' in r ? r.quantity_sfal : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfal' in r ? r.quantity_sfal : null),
     },
     {
       id: 'quantity_sfbd',
       label: 'Qty SFBD',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfbd' in r ? r.quantity_sfbd : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfbd' in r ? r.quantity_sfbd : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfbd' in r ? r.quantity_sfbd : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfbd' in r ? r.quantity_sfbd : null),
     },
   ]
 }
@@ -1102,7 +1092,6 @@ export default function OilLossPage() {
   /** Background refresh while cached rows stay visible. */
   const [dataFetching, setDataFetching] = useState(false)
   const [viewTransitionLoading, setViewTransitionLoading] = useState(false)
-  const [search, setSearch] = useState('')
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [columnPrefsByView, setColumnPrefsByView] = useState<Record<OilLossTableViewMode, ViewColumnPrefs>>({
     all_contract: initialAllContractPrefs,
@@ -1686,34 +1675,10 @@ export default function OilLossPage() {
   }, [viewMode, visibleColumnIds, columnOrderIds])
 
   const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    const searched = !q
-      ? aggregatedRows
-      : aggregatedRows.filter((row) => {
-          if (viewMode === 'all_contract') {
-            const contractRow = row as OilLossAllContractRow
-            return [
-              contractRow.contract_ext_no,
-              contractRow.contract_number,
-              contractRow.po_number,
-              contractRow.sto_number,
-              contractRow.product,
-              contractRow.supplier,
-              contractRow.incoterm,
-            ].some((v) => String(v || '').toLowerCase().includes(q))
-          }
-          if (viewMode === 'by_transporter') {
-            const transporterRow = row as OilLossByTransporterRow
-            return [transporterRow.transporter].some((v) => String(v || '').toLowerCase().includes(q))
-          }
-          const supplierRow = row as OilLossBySupplierRow
-          return [supplierRow.supplier].some((v) => String(v || '').toLowerCase().includes(q))
-        })
-
     const sortCol = activeCompactColumns.find((c) => c.id === sortKey)
-    if (!sortCol) return searched
+    if (!sortCol) return aggregatedRows
 
-    return [...searched].sort((a, b) => {
+    return [...aggregatedRows].sort((a, b) => {
       const aVal = sortCol.getSortValue(a)
       const bVal = sortCol.getSortValue(b)
       if (typeof aVal === 'number' && typeof bVal === 'number') {
@@ -1723,7 +1688,7 @@ export default function OilLossPage() {
       const bS = String(bVal).toLowerCase()
       return sortDir === 'asc' ? aS.localeCompare(bS) : bS.localeCompare(aS)
     })
-  }, [aggregatedRows, search, sortKey, sortDir, viewMode, activeCompactColumns])
+  }, [aggregatedRows, sortKey, sortDir, activeCompactColumns])
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -1738,7 +1703,6 @@ export default function OilLossPage() {
     setCurrentPage(1)
   }, [
     filteredRows.length,
-    search,
     selectedModes,
     selectedIncoterms,
     selectedProducts,
@@ -1964,24 +1928,6 @@ export default function OilLossPage() {
           <CardContent className="pt-6">
             <div className="space-y-4">
               <div className="flex flex-wrap items-end gap-4">
-                <div className="flex-1 min-w-[200px]">
-                  <label className="text-sm font-medium text-gray-700 mb-1 block">Search</label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder={
-                        viewMode === 'all_contract'
-                          ? 'Search contract, PO, STO, product, supplier...'
-                          : viewMode === 'by_transporter'
-                            ? 'Search transporter...'
-                            : 'Search supplier...'
-                      }
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      className="pl-10 h-10"
-                    />
-                  </div>
-                </div>
                 <div className="w-52 min-w-[180px]">
                   <SearchableMultiSelect
                     label="Mode"
@@ -2371,9 +2317,7 @@ export default function OilLossPage() {
                             >
                               <Droplets className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p className="font-medium text-gray-700">No Data Available</p>
-                              {search && (
-                                <p className="text-sm mt-2">Try adjusting your search or filter criteria</p>
-                              )}
+                              <p className="text-sm mt-2">Try adjusting your filter criteria</p>
                             </td>
                           </tr>
                         ) : (
@@ -2545,10 +2489,10 @@ export default function OilLossPage() {
 
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
-                    ? 'Aggregated by contract. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
+                    ? 'Aggregated by contract. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
                     : viewMode === 'by_transporter'
-                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
-                      : 'Aggregated by supplier. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
+                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
+                      : 'Aggregated by supplier. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
                 </p>
               </div>
           </CardContent>

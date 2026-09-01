@@ -123,6 +123,20 @@ function parseNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * Sum SFAL/SFBD across rows without coercing missing values to 0.
+ * All null/undefined → null (so R1–R3 stay —); genuine 0 is kept and summed.
+ */
+export function sumNullableOilLossQtyKg(
+  existing: number | null | undefined,
+  incoming: number | null | undefined,
+): number | null {
+  const a = parseNum(existing)
+  const b = parseNum(incoming)
+  if (a == null && b == null) return null
+  return (a ?? 0) + (b ?? 0)
+}
+
 function mergeDistinctTokens(existing: string | null | undefined, incoming: string | null | undefined): string {
   const parts = new Set<string>()
   for (const raw of [existing, incoming]) {
@@ -152,6 +166,13 @@ function contractGroupKey(row: OilLossSourceRow): string {
   return `row:${row.id}`
 }
 
+/** Group key for All Contract / drilldown / R summary — prefer contract_number. */
+export function oilLossContractGroupKey(
+  row: Pick<OilLossSourceRow, 'id' | 'contract_number' | 'contract_ext_no'>,
+): string {
+  return contractGroupKey(row as OilLossSourceRow)
+}
+
 function resolveContractDate(row: OilLossSourceRow): string | null {
   const d = String(row.contract_date ?? row.operation_date ?? '').slice(0, 10)
   return d || null
@@ -162,7 +183,7 @@ export function aggregateOilLossByContract(rows: OilLossSourceRow[]): OilLossAll
 
   for (const row of rows) {
     const key = contractGroupKey(row)
-    const delivery = parseNum(row.quantity_sent) ?? 0
+    const delivery = parseNum(row.quantity_sent ?? row.quantity_delivery) ?? 0
     const received = parseNum(row.quantity_received) ?? 0
     const contractDate = resolveContractDate(row)
 
@@ -213,16 +234,16 @@ export function aggregateOilLossByContract(rows: OilLossSourceRow[]): OilLossAll
           ? contractQty
           : Math.max(existing.quantity_contract, contractQty)
     }
-    existing.quantity_delivery = (existing.quantity_delivery ?? 0) + delivery
-    existing.quantity_received = (existing.quantity_received ?? 0) + received
+    existing.quantity_delivery = existing.quantity_delivery ?? delivery
+    existing.quantity_received = existing.quantity_received ?? received
     existing.gain_loss_amount = (existing.quantity_received ?? 0) - (existing.quantity_delivery ?? 0)
     const totalDelivery = existing.quantity_delivery ?? 0
     existing.gain_loss_percentage =
       totalDelivery > 0
         ? Number((((existing.gain_loss_amount ?? 0) / totalDelivery) * 100).toFixed(4))
         : 0
-    existing.quantity_sfal = (existing.quantity_sfal ?? 0) + (parseNum(row.quantity_sfal) ?? 0)
-    existing.quantity_sfbd = (existing.quantity_sfbd ?? 0) + (parseNum(row.quantity_sfbd) ?? 0)
+    existing.quantity_sfal = sumNullableOilLossQtyKg(existing.quantity_sfal, row.quantity_sfal)
+    existing.quantity_sfbd = sumNullableOilLossQtyKg(existing.quantity_sfbd, row.quantity_sfbd)
     existing.row_count += 1
   }
 

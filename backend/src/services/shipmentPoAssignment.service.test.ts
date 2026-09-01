@@ -65,6 +65,18 @@ describe('shipmentPoAssignment.service', () => {
     expect(src).not.toContain('poLineHasSapStoSql');
   });
 
+  it('always upserts assignment on attach including plan qty 0 (keeps Edit PO list link)', () => {
+    const src = readFileSync(
+      resolve(__dirname, 'shipmentPoAssignment.service.ts'),
+      'utf8',
+    );
+    expect(src).toContain('await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg)');
+    expect(src).not.toMatch(/if \(qtyKg > 0\) \{\s*await upsertPoQtyAssignment/);
+    // upsert itself must persist zero-qty link rows
+    expect(src).toContain('Always keep a row (including 0 kg)');
+    expect(src).not.toMatch(/if \(qtyKg > 0\) \{\s*await query\(\s*`\s*INSERT INTO user_sto_contract_assignments/);
+  });
+
   it('lookupPoLineMetricKg falls back to the unique contract when PO key misses', () => {
     const byKey = new Map<string, number>([[poLineKey('1014003118', '1001030001'), 500_000]]);
     expect(lookupPoLineMetricKg(byKey, '1014003118', null)).toBe(500_000);

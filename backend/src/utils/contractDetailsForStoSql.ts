@@ -132,6 +132,83 @@ function stoScopedOutstandingActualSql(opts: {
 }
 
 /**
+ * Group membership for a sibling shipment `s` (joined to contracts `c`) under a STO /
+ * operation lookup key. Keep in sync with findSiblingShipmentIdForContract.
+ */
+export function sqlSiblingShipmentGroupMatchSql(opts: {
+  lookupKeySql: string;
+  contractNumberSql: string;
+  anchorShipmentIdSql?: string;
+}): string {
+  const lk = opts.lookupKeySql;
+  const cn = opts.contractNumberSql;
+  const parts: string[] = [
+    `TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${lk})`,
+    `TRIM(COALESCE(s.shipment_id::text, '')) = TRIM(${lk})`,
+    // Add-PO siblings often use "{STO}-{contract}" as shipment_id while lookup is STO only.
+    `TRIM(COALESCE(s.shipment_id::text, '')) LIKE TRIM(${lk}) || '-%'`,
+    `EXISTS (
+              SELECT 1
+              FROM contract_stos cs
+              WHERE cs.contract_id = c.id
+                AND TRIM(cs.sto_number::text) = TRIM(${lk})
+            )`,
+    // User Add-PO link under this lookup key + same vessel as another group member.
+    `(
+              EXISTS (
+                SELECT 1
+                FROM user_sto_contract_assignments usa
+                WHERE TRIM(usa.sto_number::text) = TRIM(${lk})
+                  AND TRIM(usa.contract_number) = TRIM(${cn})
+              )
+              AND (
+                TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${lk})
+                OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM(${lk})
+                OR TRIM(COALESCE(s.shipment_id::text, '')) LIKE TRIM(${lk}) || '-%'
+                OR EXISTS (
+                  SELECT 1
+                  FROM shipments s2
+                  WHERE COALESCE(s2.status, '') <> 'CANCELLED'
+                    AND LOWER(TRIM(COALESCE(s2.vessel_name, ''))) = LOWER(TRIM(COALESCE(s.vessel_name, '')))
+                    AND (
+                      TRIM(COALESCE(s2.operation_id::text, '')) = TRIM(${lk})
+                      OR TRIM(COALESCE(s2.shipment_id::text, '')) = TRIM(${lk})
+                    )
+                )
+              )
+            )`,
+  ];
+
+  if (opts.anchorShipmentIdSql) {
+    const anchor = opts.anchorShipmentIdSql;
+    parts.push(`s.id = ${anchor}`);
+    parts.push(`(
+              NULLIF(TRIM(COALESCE(s.operation_id::text, '')), '') IS NOT NULL
+              AND TRIM(s.operation_id::text) = (
+                SELECT NULLIF(TRIM(COALESCE(a.operation_id::text, '')), '')
+                FROM shipments a
+                WHERE a.id = ${anchor}
+              )
+            )`);
+    parts.push(`(
+              EXISTS (
+                SELECT 1
+                FROM user_sto_contract_assignments usa
+                WHERE TRIM(usa.sto_number::text) = TRIM(${lk})
+                  AND TRIM(usa.contract_number) = TRIM(${cn})
+              )
+              AND LOWER(TRIM(COALESCE(s.vessel_name, ''))) = (
+                SELECT LOWER(TRIM(COALESCE(a.vessel_name, '')))
+                FROM shipments a
+                WHERE a.id = ${anchor}
+              )
+            )`);
+  }
+
+  return parts.join('\n            OR ');
+}
+
+/**
  * Sibling shipment under the same lookup key (operation_id / shipment_id / STO)
  * for a contract_number — source of per-PO Delivered/Received Qty (KLIP).
  */
@@ -143,6 +220,10 @@ export function sqlSiblingShipmentKlipQtyExpr(
     field === 'delivered'
       ? `COALESCE(s.quantity_delivered_klip, s.quantity_delivered)`
       : `s.actual_vessel_qty_receive`;
+  const matchSql = sqlSiblingShipmentGroupMatchSql({
+    lookupKeySql: '$1::text',
+    contractNumberSql: contractNumberExpr,
+  });
   return `(
           SELECT ${valueExpr}
           FROM shipments s
@@ -150,14 +231,7 @@ export function sqlSiblingShipmentKlipQtyExpr(
           WHERE COALESCE(s.status, '') <> 'CANCELLED'
             AND TRIM(c.contract_id) = TRIM(${contractNumberExpr})
             AND (
-              TRIM(COALESCE(s.operation_id::text, '')) = TRIM($1::text)
-              OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($1::text)
-              OR EXISTS (
-                SELECT 1
-                FROM contract_stos cs
-                WHERE cs.contract_id = c.id
-                  AND TRIM(cs.sto_number::text) = TRIM($1::text)
-              )
+              ${matchSql}
             )
           ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
           LIMIT 1
@@ -283,6 +357,12 @@ export function buildContractDetailsForStoSql(): string {
           WHERE TRIM(COALESCE(s.operation_id::text, '')) = TRIM($1::text)
             AND c.contract_id IS NOT NULL
             AND TRIM(c.contract_id) != ''
+          UNION
+          SELECT DISTINCT u.contract_number
+          FROM user_sto_contract_assignments u
+          WHERE TRIM(u.sto_number::text) = TRIM($1::text)
+            AND u.contract_number IS NOT NULL
+            AND TRIM(u.contract_number) != ''
           UNION
           SELECT DISTINCT spd.contract_number
           FROM sap_processed_data spd

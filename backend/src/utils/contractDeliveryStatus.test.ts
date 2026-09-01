@@ -111,6 +111,19 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain('child_gr_sto_status');
     expect(sql).toContain("'LCO'");
     expect(sql).toContain("'FOB'");
+    // LCO/FOB: blank GR STO must not fall back to contracts.status (would force Completed)
+    expect(sql).toMatch(
+      /IN \('LCO', 'FOB'\) THEN NULL[\s\S]*ELSE[\s\S]*c\.status/s,
+    );
+  });
+
+  it('keeps contracts.status fallback for FRC/CIF/CFR when GR PO is blank', () => {
+    const sql = sqlContractImportStatusExpr('c', 'c.po_number');
+    expect(sql).toContain("'FRC'");
+    expect(sql).toContain("'CIF'");
+    expect(sql).toContain("'CFR'");
+    // Non-LCO/FOB still normalize commercial status as last COALESCE arm
+    expect(sql).toMatch(/WHEN[\s\S]*IN \('LCO', 'FOB'\) THEN NULL[\s\S]*ELSE[\s\S]*c\.status/s);
   });
 
   it('prefers Delete PO / all-STO Delete → Cancelled over GR Open (partial Delete STO does not)', () => {

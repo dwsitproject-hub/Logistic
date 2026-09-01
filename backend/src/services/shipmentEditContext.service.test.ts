@@ -14,6 +14,13 @@ describe('shipmentEditContext.service (legacy file checks)', () => {
     ).toBe(true);
   });
 
+  it('links Add-PO assignments into linked_contracts for edit context', () => {
+    const src = readFileSync(resolve(__dirname, 'shipmentEditContext.service.ts'), 'utf8');
+    expect(src).toContain('user_sto_contract_assignments');
+    expect(src).toContain('linked_contracts AS');
+    expect(src).toContain('TRIM(u.sto_number::text) = a.lookup_key');
+  });
+
   it('prefers FOB Type V STO, then numeric shipment_id, then operation_id, over unrelated contract_stos', () => {
     const src = readFileSync(resolve(__dirname, 'shipmentEditContext.service.ts'), 'utf8');
     const anchorBlock = src.slice(src.indexOf('WITH anchor AS'), src.indexOf('linked_contracts AS'));

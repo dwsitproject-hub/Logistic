@@ -9,9 +9,13 @@ export type ROilLossSummary = {
 };
 
 export type OilLossSummaryRow = {
+  id?: string | null;
+  contract_number?: string | null;
+  contract_ext_no?: string | null;
   contract_date?: string | null;
   operation_date?: string | null;
   quantity_sent?: number | string | null;
+  quantity_delivery?: number | string | null;
   quantity_received?: number | string | null;
   quantity_sfal?: number | string | null;
   quantity_sfbd?: number | string | null;
@@ -56,7 +60,7 @@ export function filterYtdOilLossRows(
   });
 }
 
-function contractGroupKey(row: OilLossSummaryRow & { id?: string; contract_number?: string | null; contract_ext_no?: string | null }): string {
+function contractGroupKey(row: OilLossSummaryRow): string {
   const cn = String(row.contract_number ?? '').trim();
   if (cn) return `cn:${cn}`;
   const ext = String(row.contract_ext_no ?? '').trim();
@@ -94,16 +98,17 @@ function aggregateOilLossQuantitiesByContract(rows: OilLossSummaryRow[]): Map<st
       };
       map.set(key, agg);
     }
-    const delivery = parseQty(row.quantity_sent);
+    const delivery = parseQty(row.quantity_sent ?? row.quantity_delivery);
     const receive = parseQty(row.quantity_received);
     const sfal = parseQty(row.quantity_sfal);
     const sfbd = parseQty(row.quantity_sfbd);
-    if (delivery != null) {
-      agg.quantity_sent += delivery;
+    // Contracts-level delivery/receive — take once per contract (do not sum SPD rows).
+    if (delivery != null && !agg.has_sent) {
+      agg.quantity_sent = delivery;
       agg.has_sent = true;
     }
-    if (receive != null) {
-      agg.quantity_received += receive;
+    if (receive != null && !agg.has_received) {
+      agg.quantity_received = receive;
       agg.has_received = true;
     }
     if (sfal != null) {

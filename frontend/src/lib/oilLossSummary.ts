@@ -1,4 +1,5 @@
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
+import { oilLossContractGroupKey } from '@/lib/oilLossAllContractColumns'
 
 export type ROilLossKey = 'r1' | 'r2' | 'r3' | 'r4'
 
@@ -78,11 +79,7 @@ export function buildOilLossSummaryForDateRange(
 }
 
 function contractGroupKey(row: OilLossSourceRow): string {
-  const cn = String(row.contract_number ?? '').trim()
-  if (cn) return `cn:${cn}`
-  const ext = String(row.contract_ext_no ?? '').trim()
-  if (ext) return `ext:${ext}`
-  return `row:${row.id}`
+  return oilLossContractGroupKey(row)
 }
 
 type ContractQuantityAgg = {
@@ -115,16 +112,17 @@ function aggregateOilLossQuantitiesByContract(rows: OilLossSourceRow[]): Map<str
       }
       map.set(key, agg)
     }
-    const delivery = parseQty(row.quantity_sent)
+    const delivery = parseQty(row.quantity_sent ?? row.quantity_delivery)
     const receive = parseQty(row.quantity_received)
     const sfal = parseQty(row.quantity_sfal)
     const sfbd = parseQty(row.quantity_sfbd)
-    if (delivery != null) {
-      agg.quantity_sent += delivery
+    // Contracts-level delivery/receive — take once per contract (do not sum SPD rows).
+    if (delivery != null && !agg.has_sent) {
+      agg.quantity_sent = delivery
       agg.has_sent = true
     }
-    if (receive != null) {
-      agg.quantity_received += receive
+    if (receive != null && !agg.has_received) {
+      agg.quantity_received = receive
       agg.has_received = true
     }
     if (sfal != null) {

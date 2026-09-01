@@ -4,6 +4,7 @@
  */
 
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
+import { sumNullableOilLossQtyKg } from '@/lib/oilLossAllContractColumns'
 import { mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { sumR4OilLossPctByContract } from '@/lib/oilLossSummary'
@@ -113,19 +114,30 @@ export function oilLossTransporterLabel(row: Pick<OilLossSourceRow, 'transporter
 }
 
 export function aggregateOilLossByTransporter(rows: OilLossSourceRow[]): OilLossByTransporterRow[] {
-  const buckets = new Map<string, { row: OilLossByTransporterRow; groupRows: OilLossSourceRow[] }>()
+  const buckets = new Map<
+    string,
+    { row: OilLossByTransporterRow; groupRows: OilLossSourceRow[]; seenContracts: Set<string> }
+  >()
 
   for (const row of rows) {
     const key = oilLossTransporterGroupKey(row)
-    const delivery = parseNum(row.quantity_sent) ?? 0
+    const delivery = parseNum(row.quantity_sent ?? row.quantity_delivery) ?? 0
     const received = parseNum(row.quantity_received) ?? 0
     const contractQty = parseNum(row.quantity_contract) ?? 0
     const transporterLabel = oilLossTransporterLabel(row)
+    const contractKey = [
+      String(row.contract_number ?? '').trim(),
+      String(row.contract_ext_no ?? '').trim(),
+      String(row.id ?? '').trim(),
+    ]
+      .filter(Boolean)
+      .join('|')
 
     const bucket = buckets.get(key)
     if (!bucket) {
       buckets.set(key, {
         groupRows: [row],
+        seenContracts: new Set([contractKey]),
         row: {
           id: key,
           transporter: transporterLabel,
@@ -166,12 +178,16 @@ export function aggregateOilLossByTransporter(rows: OilLossSourceRow[]): OilLoss
       mergeDistinctTokens(existing.unloading_location, row.unloading_location) || null
     existing.contract_ext_no = mergeDistinctTokens(existing.contract_ext_no, row.contract_ext_no) || null
     existing.sto_number = mergeDistinctTokens(existing.sto_number, row.sto_number) || null
-    existing.quantity_delivery = (existing.quantity_delivery ?? 0) + delivery
-    existing.quantity_received = (existing.quantity_received ?? 0) + received
+    // Contracts-level delivery/receive: count each contract once (not per SPD/STO row).
+    if (!bucket.seenContracts.has(contractKey)) {
+      bucket.seenContracts.add(contractKey)
+      existing.quantity_delivery = (existing.quantity_delivery ?? 0) + delivery
+      existing.quantity_received = (existing.quantity_received ?? 0) + received
+      existing.quantity_contract = (existing.quantity_contract ?? 0) + contractQty
+    }
     existing.gain_loss_amount = (existing.quantity_received ?? 0) - (existing.quantity_delivery ?? 0)
-    existing.quantity_contract = (existing.quantity_contract ?? 0) + contractQty
-    existing.quantity_sfal = (existing.quantity_sfal ?? 0) + (parseNum(row.quantity_sfal) ?? 0)
-    existing.quantity_sfbd = (existing.quantity_sfbd ?? 0) + (parseNum(row.quantity_sfbd) ?? 0)
+    existing.quantity_sfal = sumNullableOilLossQtyKg(existing.quantity_sfal, row.quantity_sfal)
+    existing.quantity_sfbd = sumNullableOilLossQtyKg(existing.quantity_sfbd, row.quantity_sfbd)
     existing.row_count += 1
   }
 

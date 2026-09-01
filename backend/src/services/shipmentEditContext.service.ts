@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { poLineHasSapStoSql } from '../utils/poLineSapStoSql';
 import { contractSeaVesselStoNumberPickExpr } from '../utils/shipmentStoTypeSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
@@ -164,6 +165,8 @@ export async function resolveShipmentEditContext(
   shipmentUuid: string,
   preferredSto?: string | null,
 ): Promise<ShipmentEditContext | null> {
+  await ensureUserStoContractAssignmentsTable();
+
   const seaVesselStoSql = contractSeaVesselStoNumberPickExpr('c');
   const result = await query(
     `
@@ -230,6 +233,11 @@ export async function resolveShipmentEditContext(
       INNER JOIN contracts c ON c.id = s.contract_id
       WHERE COALESCE(s.status, '') <> 'CANCELLED'
       UNION
+      SELECT DISTINCT c.contract_id, COALESCE(NULLIF(TRIM(u.po_number), ''), c.po_number) AS po_number
+      FROM anchor a
+      INNER JOIN user_sto_contract_assignments u ON TRIM(u.sto_number::text) = a.lookup_key
+      INNER JOIN contracts c ON TRIM(c.contract_id) = TRIM(u.contract_number)
+      UNION
       SELECT DISTINCT c.contract_id, c.po_number
       FROM anchor a
       INNER JOIN shipments s ON s.id = a.id
@@ -272,7 +280,32 @@ export async function resolveShipmentEditContext(
       : [],
   });
 
-  const contractNumbers = row.contract_numbers?.trim() || '';
+  // Preferred STO may differ from CTE lookup_key — pull assignment-linked contracts for the
+  // final key so Add PO (plan qty 0) still appears in editContext.contract_numbers.
+  let contractNumbers = row.contract_numbers?.trim() || '';
+  if (lookupKey && lookupKey !== String(row.lookup_key ?? '').trim()) {
+    const assignRes = await query(
+      `
+      SELECT DISTINCT TRIM(u.contract_number) AS contract_number
+      FROM user_sto_contract_assignments u
+      WHERE TRIM(u.sto_number::text) = TRIM($1::text)
+        AND NULLIF(TRIM(u.contract_number), '') IS NOT NULL
+      `,
+      [lookupKey],
+    );
+    const merged = new Set(
+      contractNumbers
+        .split(',')
+        .map((c: string) => c.trim())
+        .filter(Boolean),
+    );
+    for (const r of assignRes.rows as Array<{ contract_number?: string }>) {
+      const cn = String(r.contract_number ?? '').trim();
+      if (cn) merged.add(cn);
+    }
+    contractNumbers = [...merged].sort().join(', ');
+  }
+
   const hasSapSto = await shipmentGroupHasSapSto({
     shipmentUuid,
     lookupKey,

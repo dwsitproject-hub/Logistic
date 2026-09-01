@@ -84,6 +84,7 @@ import {
   truckingOperationIdIsAssigned,
 } from '../utils/truckingOperationUniqueness';
 import { getOrCreateActiveTruckingOp, isPgUniqueViolation } from '../utils/truckingActiveOp';
+import { invalidateOilLossCache } from '../services/oilLoss.service';
 import {
   buildDailyDeliverablesFromKgEntries,
   collectEffectivePlanningClearDates,
@@ -416,7 +417,9 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
       oa_budget,
       oa_actual,
       status: statusInput,
-      daily_deliverables
+      daily_deliverables,
+      sfal_qty,
+      sfbd_qty,
     } = req.body;
 
     // Validate required fields
@@ -531,6 +534,12 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         ? dd.rows.reduce((max, row) => ((row.date || '') > max ? row.date : max), dd.rows[0].date)
         : null;
 
+    const parseOptionalQtyKg = (raw: unknown): number | null => {
+      if (raw === undefined || raw === null || raw === '') return null;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    };
+
     // Insert new trucking operation
     const result = await query(
       `INSERT INTO trucking_operations (
@@ -541,7 +550,8 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         eta_delivery_start_date, eta_delivery_end_date,
         quantity_sent, quantity_delivered,
         gain_loss_percentage, gain_loss_amount, oa_budget, oa_actual, status,
-        daily_deliverables, last_daily_deliverable_date
+        daily_deliverables, last_daily_deliverable_date,
+        sfal_qty, sfbd_qty
       ) VALUES (
         $1::uuid, $2, $3, $4, $5, $6, $7::date,
         $8::date, $9::date,
@@ -549,7 +559,8 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         $12::date, $13::date,
         $14::numeric, $15::numeric, $16::numeric,
         $17::numeric, $18::numeric, $19::numeric, $20,
-        $21::jsonb, $22::date
+        $21::jsonb, $22::date,
+        $23::numeric, $24::numeric
       ) RETURNING *`,
       [
         contractId,
@@ -574,11 +585,14 @@ export const createTruckingOperation = async (req: AuthRequest, res: Response) =
         status,
         JSON.stringify(dd.rows),
         lastDdDate,
+        parseOptionalQtyKg(sfal_qty),
+        parseOptionalQtyKg(sfbd_qty),
       ]
     );
 
     logger.info('Trucking operation created:', { id: result.rows[0].id, operation_id: finalOperationId });
     invalidateTruckingListCache();
+    invalidateOilLossCache();
 
     return res.json({
       success: true,
@@ -920,7 +934,8 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
       'trucking_start_date', 'trucking_completion_date',
       'quantity_sent', 'quantity_delivered', 'gain_loss_percentage',
       'gain_loss_amount', 'oa_budget', 'oa_actual', 'status',
-      'daily_deliverables'
+      'daily_deliverables',
+      'sfal_qty', 'sfbd_qty',
     ];
 
     // Date fields that need casting
@@ -960,11 +975,17 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
         if (dateFields.includes(key) && value) {
           // Cast date fields explicitly
           updateFields.push(`${key} = $${paramIndex}::date`);
+        } else if (key === 'sfal_qty' || key === 'sfbd_qty') {
+          updateFields.push(`${key} = $${paramIndex}::numeric`);
         } else {
           updateFields.push(`${key} = $${paramIndex}`);
         }
-        // Convert empty strings to null for date fields
-        updateValues.push(dateFields.includes(key) && value === '' ? null : value);
+        // Convert empty strings to null for date / SFAL / SFBD fields
+        if ((key === 'sfal_qty' || key === 'sfbd_qty') && (value === '' || value === undefined)) {
+          updateValues.push(null);
+        } else {
+          updateValues.push(dateFields.includes(key) && value === '' ? null : value);
+        }
         paramIndex++;
       }
     }
@@ -998,6 +1019,12 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
 
     logger.info('Trucking operation updated:', { id, updatedFields: updateFields.length });
     invalidateTruckingListCache();
+    if (
+      Object.prototype.hasOwnProperty.call(updateData, 'sfal_qty') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'sfbd_qty')
+    ) {
+      invalidateOilLossCache();
+    }
 
     return res.json({
       success: true,

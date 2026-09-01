@@ -106,13 +106,13 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
           contractNumber: '1004030778',
           poNumber: '1001030778',
           quantityDeliveredKlipKg: 111_000,
-          quantityReceiveKlipKg: 90_000,
+          quantityReceiveKlipKg: null,
         },
         {
           contractNumber: '1014003113',
           poNumber: '1011003113',
           quantityDeliveredKlipKg: 222_000,
-          quantityReceiveKlipKg: 180_000,
+          quantityReceiveKlipKg: null,
         },
       ],
     })

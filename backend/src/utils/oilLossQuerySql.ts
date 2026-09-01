@@ -24,6 +24,8 @@ import {
   SAP_SFBD_NUMERIC_EXPR,
   sqlOilLossUatQtyDeliveryExpr,
 } from './oilLossSapSql';
+import { buildQtyMoveCte } from './contractGlobalOutstandingSql';
+import { sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 
 /** Pre-aggregated lookups — avoids per-row LATERAL scans over full SAP dataset. */
 export const OIL_LOSS_LOOKUP_CTES = `
@@ -75,7 +77,9 @@ export const OIL_LOSS_LOOKUP_CTES = `
       TRIM(operation_id) AS sto_key,
       trucking_owner,
       loading_location,
-      unloading_location
+      unloading_location,
+      sfal_qty,
+      sfbd_qty
     FROM trucking_operations
     WHERE NULLIF(TRIM(operation_id), '') IS NOT NULL
     ORDER BY TRIM(operation_id), updated_at DESC NULLS LAST
@@ -85,7 +89,9 @@ export const OIL_LOSS_LOOKUP_CTES = `
       c.contract_id,
       t.trucking_owner,
       t.loading_location,
-      t.unloading_location
+      t.unloading_location,
+      t.sfal_qty,
+      t.sfbd_qty
     FROM trucking_operations t
     INNER JOIN contracts c ON c.id = t.contract_id
     WHERE NULLIF(TRIM(c.contract_id), '') IS NOT NULL
@@ -201,6 +207,8 @@ export function buildOilLossWithQtyCtes(): string {
           tr_sto.unloading_location,
           tr_ct.unloading_location
         ) AS unloading_location_db,
+        COALESCE(tr_sto.sfal_qty, tr_ct.sfal_qty) AS trucking_sfal_kg,
+        COALESCE(tr_sto.sfbd_qty, tr_ct.sfbd_qty) AS trucking_sfbd_kg,
         COALESCE(
           NULLIF(TRIM(pbc.group_plant), ''),
           NULLIF(TRIM(pbco.group_plant), ''),
@@ -254,8 +262,63 @@ export function buildOilLossWithQtyCtes(): string {
 }
 
 export function buildOilLossMainSql(): string {
+  // Align Qty Delivery with Contracts View Table: qty_move + UAT Incoterm×Mode matrix.
+  const contractsListDeliveryExpr = sqlQtyMoveJoinIncotermDelivery(
+    `COALESCE(NULLIF(TRIM(oil_loss_eligible.incoterm), ''), '')`,
+    'qm',
+    `UPPER(TRIM(COALESCE(NULLIF(TRIM(oil_loss_eligible.transport_mode), ''), 'LAND')))`,
+  );
+
   return `
-    WITH ${buildOilLossWithQtyCtes()}
+    WITH ${buildOilLossWithQtyCtes()},
+    oil_loss_eligible AS (
+      SELECT
+        id,
+        transport_mode,
+        sto_type,
+        operation_id,
+        contract_number,
+        contract_ext_no,
+        sto_number,
+        po_number,
+        supplier,
+        COALESCE(NULLIF(TRIM(b2b_ending_buyer), ''), buyer) AS buyer,
+        product,
+        group_name,
+        COALESCE(NULLIF(TRIM(b2b_ending_unload), ''), plant_site) AS plant_site,
+        COALESCE(NULLIF(TRIM(vessel_name_raw), ''), '') AS vessel_name,
+        COALESCE(
+          TO_CHAR(contract_date_db, 'YYYY-MM-DD'),
+          operation_date
+        ) AS contract_date,
+        operation_date,
+        COALESCE(NULLIF(contract_incoterm, ''), NULLIF(incoterm_raw, ''), '') AS incoterm,
+        group_plant_resolved AS group_plant,
+        COALESCE(contract_qty_kg, qty_contract_raw) AS quantity_contract,
+        ${OIL_LOSS_TRANSPORTER_EXPR} AS transporter,
+        COALESCE(NULLIF(loading_location_db, ''), NULLIF(loading_location_raw, ''), '') AS loading_location,
+        COALESCE(
+          NULLIF(TRIM(b2b_ending_unload), ''),
+          NULLIF(unloading_location_db, ''),
+          NULLIF(unloading_location_raw, ''),
+          plant_site,
+          ''
+        ) AS unloading_location,
+        status,
+        qty_delivery_resolved,
+        qty_receive_resolved,
+        ${OIL_LOSS_SFAL_QTY_EXPR} AS quantity_sfal,
+        ${OIL_LOSS_SFBD_QTY_EXPR} AS quantity_sfbd
+      FROM with_qty
+      WHERE ${OIL_LOSS_ELIGIBILITY_WHERE_SQL}
+        AND qty_receive_resolved < qty_delivery_resolved
+    ),
+    oil_loss_contract_scope AS (
+      SELECT DISTINCT TRIM(contract_number) AS contract_id
+      FROM oil_loss_eligible
+      WHERE NULLIF(TRIM(contract_number), '') IS NOT NULL
+    ),
+    ${buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'oil_loss_contract_scope' })}
     SELECT
       id,
       transport_mode,
@@ -266,46 +329,71 @@ export function buildOilLossMainSql(): string {
       sto_number,
       po_number,
       supplier,
-      COALESCE(NULLIF(TRIM(b2b_ending_buyer), ''), buyer) AS buyer,
+      buyer,
       product,
       group_name,
-      COALESCE(NULLIF(TRIM(b2b_ending_unload), ''), plant_site) AS plant_site,
-      COALESCE(NULLIF(TRIM(vessel_name_raw), ''), '') AS vessel_name,
-      COALESCE(
-        TO_CHAR(contract_date_db, 'YYYY-MM-DD'),
-        operation_date
-      )                                           AS contract_date,
+      plant_site,
+      vessel_name,
+      contract_date,
       operation_date,
-      COALESCE(NULLIF(contract_incoterm, ''), NULLIF(incoterm_raw, ''), '') AS incoterm,
-      group_plant_resolved                        AS group_plant,
-      COALESCE(contract_qty_kg, qty_contract_raw) AS quantity_contract,
-      ${OIL_LOSS_TRANSPORTER_EXPR}                AS transporter,
-      COALESCE(NULLIF(loading_location_db, ''), NULLIF(loading_location_raw, ''), '') AS loading_location,
-      COALESCE(
-        NULLIF(TRIM(b2b_ending_unload), ''),
-        NULLIF(unloading_location_db, ''),
-        NULLIF(unloading_location_raw, ''),
-        plant_site,
-        ''
-      )                                             AS unloading_location,
+      incoterm,
+      group_plant,
+      quantity_contract,
+      transporter,
+      loading_location,
+      unloading_location,
       status,
-      qty_delivery_resolved                         AS quantity_delivery,
-      qty_receive_resolved                          AS quantity_received,
-      qty_delivery_resolved                         AS quantity_sent,
-      ${OIL_LOSS_SFAL_QTY_EXPR}                   AS quantity_sfal,
-      ${OIL_LOSS_SFBD_QTY_EXPR}                   AS quantity_sfbd,
-      (qty_receive_resolved - qty_delivery_resolved) AS gain_loss_amount,
+      quantity_delivery,
+      quantity_received,
+      quantity_delivery AS quantity_sent,
+      quantity_sfal,
+      quantity_sfbd,
+      (quantity_received - quantity_delivery) AS gain_loss_amount,
       CASE
-        WHEN qty_delivery_resolved > 0
-        THEN ROUND((qty_receive_resolved - qty_delivery_resolved) / qty_delivery_resolved * 100, 4)
+        WHEN quantity_delivery > 0
+        THEN ROUND((quantity_received - quantity_delivery) / quantity_delivery * 100, 4)
         ELSE 0
-      END                                         AS gain_loss_percentage
-    FROM with_qty
-    WHERE ${OIL_LOSS_ELIGIBILITY_WHERE_SQL}
-      AND qty_receive_resolved < qty_delivery_resolved
-    -- id tiebreaker: the loss amount has duplicate values, so without it row order
-    -- among ties is plan-dependent (nondeterministic). Ties keep a stable order now.
-    ORDER BY (qty_receive_resolved - qty_delivery_resolved) ASC, id ASC
+      END AS gain_loss_percentage
+    FROM (
+      SELECT
+        oil_loss_eligible.id,
+        oil_loss_eligible.transport_mode,
+        oil_loss_eligible.sto_type,
+        oil_loss_eligible.operation_id,
+        oil_loss_eligible.contract_number,
+        oil_loss_eligible.contract_ext_no,
+        oil_loss_eligible.sto_number,
+        oil_loss_eligible.po_number,
+        oil_loss_eligible.supplier,
+        oil_loss_eligible.buyer,
+        oil_loss_eligible.product,
+        oil_loss_eligible.group_name,
+        oil_loss_eligible.plant_site,
+        oil_loss_eligible.vessel_name,
+        oil_loss_eligible.contract_date,
+        oil_loss_eligible.operation_date,
+        oil_loss_eligible.incoterm,
+        oil_loss_eligible.group_plant,
+        oil_loss_eligible.quantity_contract,
+        oil_loss_eligible.transporter,
+        oil_loss_eligible.loading_location,
+        oil_loss_eligible.unloading_location,
+        oil_loss_eligible.status,
+        oil_loss_eligible.quantity_sfal,
+        oil_loss_eligible.quantity_sfbd,
+        CASE
+          WHEN qm.contract_number IS NOT NULL THEN COALESCE((${contractsListDeliveryExpr}), 0)
+          ELSE COALESCE(oil_loss_eligible.qty_delivery_resolved, 0)
+        END AS quantity_delivery,
+        CASE
+          WHEN qm.contract_number IS NOT NULL THEN COALESCE(qm.quantity_receive, 0)
+          ELSE COALESCE(oil_loss_eligible.qty_receive_resolved, 0)
+        END AS quantity_received
+      FROM oil_loss_eligible
+      LEFT JOIN qty_move qm
+        ON qm.contract_number = TRIM(oil_loss_eligible.contract_number)
+    ) oil_loss_with_contracts_qty
+    ORDER BY (quantity_received - quantity_delivery) ASC, id ASC
   `;
 }
 

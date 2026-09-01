@@ -1,6 +1,9 @@
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
-import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import {
+  buildContractDetailsForStoSql,
+  sqlSiblingShipmentGroupMatchSql,
+} from '../utils/contractDetailsForStoSql';
 import {
   buildSeaContractsQtyMoveCte,
   PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR,
@@ -102,6 +105,7 @@ export async function upsertPoQtyAssignment(
 ): Promise<void> {
   await ensureUserStoContractAssignmentsTable();
   const poKey = poNumber ? String(poNumber).trim() : '';
+  const qty = Number.isFinite(qtyKg) && qtyKg > 0 ? qtyKg : 0;
   await query(
     `
     DELETE FROM user_sto_contract_assignments
@@ -111,15 +115,15 @@ export async function upsertPoQtyAssignment(
     `,
     [assignmentKey, contractNumber, poKey],
   );
-  if (qtyKg > 0) {
-    await query(
-      `
-      INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
-      VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
-      `,
-      [assignmentKey, contractNumber, poKey || null, qtyKg],
-    );
-  }
+  // Always keep a row (including 0 kg) so Add PO links the contract into the STO group
+  // for Edit Shipment Section 2 discovery — previously qty 0 deleted the link and the PO vanished.
+  await query(
+    `
+    INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
+    VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
+    `,
+    [assignmentKey, contractNumber, poKey || null, qty],
+  );
 }
 
 /** @deprecated Prefer upsertPoQtyAssignment with kg. */
@@ -432,9 +436,8 @@ export async function attachPurchaseOrderToShipment(args: {
     resultShipmentUuid = String(insertRes.rows[0].id);
   }
 
-  if (qtyKg > 0) {
-    await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
-  }
+  // Always link PO to STO group (plan qty may be 0 until user sets Shipment Plan Qty).
+  await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
 
   return {
     ok: true,
@@ -496,6 +499,11 @@ async function findSiblingShipmentIdForContract(
   contractNumber: string,
   anchorShipmentUuid: string,
 ): Promise<string | null> {
+  const groupMatch = sqlSiblingShipmentGroupMatchSql({
+    lookupKeySql: '$2::text',
+    contractNumberSql: '$1::text',
+    anchorShipmentIdSql: '$3::uuid',
+  });
   const result = await query(
     `
     SELECT s.id::text AS shipment_id
@@ -504,17 +512,7 @@ async function findSiblingShipmentIdForContract(
     WHERE COALESCE(s.status, '') <> 'CANCELLED'
       AND TRIM(c.contract_id) = TRIM($1::text)
       AND (
-        TRIM(COALESCE(s.operation_id::text, '')) = TRIM($2::text)
-        OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM($2::text)
-        OR s.id = $3::uuid
-        OR (
-          NULLIF(TRIM(COALESCE(s.operation_id::text, '')), '') IS NOT NULL
-          AND TRIM(s.operation_id::text) = (
-            SELECT NULLIF(TRIM(COALESCE(a.operation_id::text, '')), '')
-            FROM shipments a
-            WHERE a.id = $3::uuid
-          )
-        )
+        ${groupMatch}
       )
     ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
     LIMIT 1

@@ -174,6 +174,6 @@ export const SAP_OIL_LOSS_VESSEL_NAME_RAW = `COALESCE(
   ''
 )`;
 
-/** SFAL/SFBD: SAP raw first, then shipments.sfal_qty / sfbd_qty (Kg). */
-export const OIL_LOSS_SFAL_QTY_EXPR = `COALESCE(qty_sfal_raw, shipment_sfal_kg)`;
-export const OIL_LOSS_SFBD_QTY_EXPR = `COALESCE(qty_sfbd_raw, shipment_sfbd_kg)`;
+/** SFAL/SFBD: SAP raw → trucking modal qty → shipment (ignore zero stubs). */
+export const OIL_LOSS_SFAL_QTY_EXPR = `COALESCE(qty_sfal_raw, trucking_sfal_kg, NULLIF(shipment_sfal_kg, 0))`;
+export const OIL_LOSS_SFBD_QTY_EXPR = `COALESCE(qty_sfbd_raw, trucking_sfbd_kg, NULLIF(shipment_sfbd_kg, 0))`;

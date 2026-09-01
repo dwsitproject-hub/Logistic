@@ -7,29 +7,36 @@ import {
 } from './oilLossSapSql';
 
 describe('buildOilLossMainSql', () => {
-  it('resolves qty from shipments when manual differs from SAP', () => {
+  it('resolves qty from Contracts qty_move (same as Contracts View Table)', () => {
     const sql = buildOilLossMainSql();
     expect(sql).toContain('oil_loss_closed');
-    expect(sql).toContain('shipment_qty_delivered_kg');
-    expect(sql).toContain('shipment_qty_receive_kg');
-    expect(sql).toContain('with_qty');
+    expect(sql).toContain('oil_loss_eligible');
+    expect(sql).toContain('oil_loss_contract_scope');
+    expect(sql).toContain('qty_move');
     expect(sql).toContain('qty_delivery_resolved');
     expect(sql).toContain('qty_receive_resolved');
     expect(sql).toContain('qty_receive_resolved < qty_delivery_resolved');
     expect(sql).toContain('b2b_end');
     expect(sql).toContain('Truck Discharge Location');
     expect(sql).toContain('b2b_ending_buyer');
-    expect(sql).toContain('ABS');
+    expect(sql).toContain('quantity_delivery_trucking');
+    expect(sql).toContain('quantity_delivery_vessel');
   });
 
-  it('uses SAP UAT quantity delivery trucking/vessel matrix', () => {
+  it('resolves SFAL/SFBD via SAP then trucking then non-zero shipment', () => {
     const sql = buildOilLossMainSql();
-    expect(sql).toContain('qty_trucking');
-    expect(sql).toContain('qty_vessel');
-    expect(sql).toContain('Quantity Delivery Trucking');
-    expect(sql).toContain('Quantity Delivery Vessel');
-    expect(sql).toContain('import_status');
-    expect(sql).toContain('GR STO Status');
+    expect(sql).toContain('trucking_sfal_kg');
+    expect(sql).toContain('trucking_sfbd_kg');
+    expect(sql).toContain('NULLIF(shipment_sfal_kg, 0)');
+    expect(sql).toContain('NULLIF(shipment_sfbd_kg, 0)');
+    expect(sql).toContain('sfal_qty');
+    expect(sql).toContain('sfbd_qty');
+    expect(sql).toContain(
+      'COALESCE(qty_sfal_raw, trucking_sfal_kg, NULLIF(shipment_sfal_kg, 0))',
+    );
+    expect(sql).toContain(
+      'COALESCE(qty_sfbd_raw, trucking_sfbd_kg, NULLIF(shipment_sfbd_kg, 0))',
+    );
   });
 });
 

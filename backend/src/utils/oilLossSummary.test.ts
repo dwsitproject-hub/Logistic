@@ -60,4 +60,36 @@ describe('computeROilLossSummary', () => {
       sampleCount: 0,
     });
   });
+
+  it('skips R1 when SFAL is null', () => {
+    const summary = computeROilLossSummary(
+      [
+        {
+          contract_number: 'CN-1',
+          quantity_sent: 100_000,
+          quantity_received: 90_000,
+          quantity_sfal: null,
+        },
+      ],
+      'r1',
+    );
+    expect(summary.sampleCount).toBe(0);
+    expect(summary.totalMt).toBeNull();
+  });
+
+  it('computes R1 when SFAL is genuine zero', () => {
+    const summary = computeROilLossSummary(
+      [
+        {
+          contract_number: 'CN-1',
+          quantity_sent: 100_000,
+          quantity_received: 90_000,
+          quantity_sfal: 0,
+        },
+      ],
+      'r1',
+    );
+    expect(summary.sampleCount).toBe(1);
+    expect(summary.totalMt).toBe(-100);
+  });
 });

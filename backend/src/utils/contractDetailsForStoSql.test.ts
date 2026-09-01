@@ -11,6 +11,8 @@ describe('sqlSiblingShipmentKlipQtyExpr', () => {
     expect(delivered).toContain('operation_id');
     expect(delivered).toContain('shipment_id');
     expect(delivered).toContain('contract_stos');
+    expect(delivered).toContain('user_sto_contract_assignments');
+    expect(delivered).toContain("LIKE TRIM($1::text) || '-%'");
     expect(delivered).toContain('pl.contract_number');
     const receive = sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'receive');
     expect(receive).toContain('actual_vessel_qty_receive');
@@ -24,6 +26,7 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('c.sto_number::text');
     expect(sql).toContain('GREATEST');
     expect(sql).toContain('s.shipment_id::text');
+    expect(sql).toContain('user_sto_contract_assignments');
     expect(sql).toContain('po_lines');
     expect(sql).toContain('pl.po_number');
     expect(sql).toContain('pl.incoterm');

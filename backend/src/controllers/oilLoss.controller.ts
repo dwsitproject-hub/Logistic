@@ -19,8 +19,8 @@ export const getOilLoss = async (_req: AuthRequest, res: Response) => {
       },
       dataSources: {
         quantityDelivery:
-          'sap_processed_data (UAT: Quantity Delivery Trucking/Vessel by incoterm×transport)|shipments.quantity_delivered',
-        quantityReceive: 'sap_processed_data|shipments.actual_vessel_qty_receive',
+          'Contracts qty_move + UAT Incoterm×Mode (same as Contracts View Table)|fallback SPD resolved',
+        quantityReceive: 'Contracts qty_move.quantity_receive (same as Contracts View Table)|fallback SPD resolved',
         quantitySfal: 'sap_processed_data|shipments.sfal_qty',
         quantitySfbd: 'sap_processed_data|shipments.sfbd_qty',
       },

@@ -109,7 +109,9 @@ function sqlSpdHasRealSapStoKeyExpr(spdAlias = 'spd'): string {
  * Important: do NOT take LIMIT 1 with per-row fallback to contracts.status.
  * A blank GR STO/PO on the newest row used to become COMPLETED/Close via that
  * fallback while sibling STO rows still had GR Open — Trucking then used Σ SAP
- * instead of WB. Aggregate: any Open wins; else any Close; else contract.status.
+ * instead of WB. Aggregate: any Open wins; else any Close; else (FRC/CIF/CFR only)
+ * contracts.status. LCO/FOB never fall back to contracts.status or GR PO when
+ * GR STO is blank — UI still shows "-" and pipeline must not treat that as Close.
  *
  * Per SPD row, Open if the incoterm GR field is Open (stale Close in
  * `contract.gr_*` must not hide Open in raw). Do not use commercial Status.
@@ -307,7 +309,10 @@ export function sqlContractImportStatusExpr(
         THEN ${sqlB2bChildGrStoStatusLookup(poNumberRef)}
         ELSE NULL
       END,
-      ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
+      CASE
+        WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)}) THEN NULL
+        ELSE ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
+      END
     )`.trim();
 }
 

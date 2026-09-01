@@ -43,7 +43,7 @@ describe('hasVesselPortsQuantityUserEdits', () => {
 })
 
 describe('buildPoKlipQtySaveRows', () => {
-  it('emits one row per PO with effective delivered/receive (edits win)', () => {
+  it('emits only changed PO fields (not untouched sibling rows)', () => {
     const qtyRows = [
       {
         rowKey: 'a',
@@ -69,14 +69,23 @@ describe('buildPoKlipQtySaveRows', () => {
         contractNumber: '1004030778',
         poNumber: '1001030778',
         quantityDeliveredKlipKg: 111_000,
-        quantityReceiveKlipKg: 90_000,
+        quantityReceiveKlipKg: null,
       },
       {
         contractNumber: '1014003113',
         poNumber: '1011003113',
-        quantityDeliveredKlipKg: 200_000,
+        quantityDeliveredKlipKg: null,
         quantityReceiveKlipKg: 222_000,
       },
     ])
+  })
+
+  it('skips rows whose edit matches the loaded baseline', () => {
+    expect(
+      buildPoKlipQtySaveRows(
+        [{ rowKey: 'a', contract_ext_no: '1004030778', quantity_delivered: 100_000, quantity_receive: null }],
+        { a: { quantity_delivered: 100_000 } },
+      ),
+    ).toEqual([])
   })
 })

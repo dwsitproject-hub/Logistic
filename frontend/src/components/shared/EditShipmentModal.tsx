@@ -1701,7 +1701,6 @@ export function EditShipmentModal({
         })
       }
 
-      const qtyUserEdited = hasVesselPortsQuantityUserEdits(qtyTableRows, qtyEdits)
       await saveEditShipmentChanges({
         shipmentId,
         vesselName,
@@ -1799,6 +1798,9 @@ export function EditShipmentModal({
         return
       }
 
+      // KLIP Delivered/Receive already persisted per PO via /po-klip-qty in
+      // saveEditShipmentChanges — do not re-PUT a summed qty onto the anchor row
+      // (that overwrote sibling per-PO values and made edits look unsaved).
       await onSubmit({
         kind: 'update',
         shipmentId,
@@ -1812,12 +1814,6 @@ export function EditShipmentModal({
               charter_type: vesselMeta.charter_type || undefined,
               master_vessel_id: pendingMasterVessel?.id ?? undefined,
             }
-          : {}),
-        ...(qtyUserEdited && qtyTotals.quantity_delivered !== null
-          ? { quantity_delivered: qtyTotals.quantity_delivered }
-          : {}),
-        ...(qtyUserEdited && qtyTotals.quantity_receive !== null
-          ? { actual_vessel_qty_receive: qtyTotals.quantity_receive }
           : {}),
         sfal_qty: sfalQty,
         sfbd_qty: sfbdQty,

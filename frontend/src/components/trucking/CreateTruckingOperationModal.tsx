@@ -168,6 +168,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     qty_receive: number | null
   }>({ qty_delivery: null, qty_receive: null })
 
+  /** KLIP SFAL/SFBD in Kg (displayed as MT). Null = missing → Oil Loss R1–R3 shows —. */
+  const [sfalQtyKg, setSfalQtyKg] = useState<number | null>(null)
+  const [sfbdQtyKg, setSfbdQtyKg] = useState<number | null>(null)
+
   const [contractValidation, setContractValidation] = useState<{
     checking: boolean
     exists: boolean
@@ -360,6 +364,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     setContractDueDates({ delivery_start_date: '', delivery_end_date: '' })
     setSapReceiveDates({ start_receive_date: '', last_receive_date: '' })
     setSapQty({ qty_delivery: null, qty_receive: null })
+    setSfalQtyKg(null)
+    setSfbdQtyKg(null)
     setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
     setPoNumber('')
     setPoSuggestions([])
@@ -490,6 +496,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         qty_delivery: toNullableNumber(op.sap_qty_delivery),
         qty_receive: toNullableNumber(op.sap_qty_receive),
       })
+      setSfalQtyKg(toNullableNumber(op.sfal_qty))
+      setSfbdQtyKg(toNullableNumber(op.sfbd_qty))
 
       const fromDetail = normalizeStoActuals(op.sto_actuals)
       const fromValidated = normalizeStoActuals(validated?.sto_actuals)
@@ -630,6 +638,8 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         cargo_readiness_date: newOperation.cargo_readiness_date || null,
         status: newOperation.status || 'UNPLANNED',
         daily_deliverables: [],
+        sfal_qty: sfalQtyKg,
+        sfbd_qty: sfbdQtyKg,
       }
 
       const response = await api.post('/trucking', payload)
@@ -648,13 +658,40 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     }
   }
 
+  const handleSaveSfalSfbd = async () => {
+    if (!editOperationId) {
+      showNotification('error', 'No trucking operation loaded to save SFAL/SFBD.')
+      return
+    }
+    if (readOnly || isContractRecordClosed(contractValidation.contractData)) return
+    setCreating(true)
+    try {
+      const response = await api.put(`/trucking/${editOperationId}`, {
+        sfal_qty: sfalQtyKg,
+        sfbd_qty: sfbdQtyKg,
+      })
+      if (response.data.success) {
+        showNotification('success', 'SFAL/SFBD saved. Oil Loss will refresh on next load.')
+        onCreated()
+      }
+    } catch (error: any) {
+      console.error('Save trucking SFAL/SFBD error:', error)
+      const errorMessage = error.response?.data?.error?.message || 'Failed to save SFAL/SFBD'
+      showNotification('error', errorMessage)
+    } finally {
+      setCreating(false)
+    }
+  }
+
   if (!open) return null
 
   const cd = contractValidation.contractData
   const isContractClosedEditLocked = isEditMode && isContractRecordClosed(cd)
   const isViewOnly = readOnly || isContractClosedEditLocked
-  /** Save only in Add mode — planning/actuals come from uploads; edit is display + log. */
+  /** Save create only in Add mode — planning/actuals come from uploads. */
   const canSave = !isViewOnly && !isEditMode && !isPlotMode
+  /** Edit mode can update SFAL/SFBD for Oil Loss R1–R3. */
+  const canSaveSfalSfbd = !isViewOnly && isEditMode && Boolean(editOperationId)
 
   const step1Done = contractValidation.exists
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
@@ -772,6 +809,68 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       </div>
     )
   }
+
+  const formatSfalSfbdMtDisplay = (kg: number | null): string => {
+    if (kg == null) return '—'
+    return `${formatQtyKgAsMt(kg)} MT`
+  }
+
+  const canEditSfalSfbd = !isViewOnly
+
+  const renderSfalSfbdFields = () => (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label className="mb-1.5 block text-xs font-semibold text-gray-600">SFAL Qty (MT)</label>
+        {canEditSfalSfbd ? (
+          <Input
+            type="number"
+            step="0.01"
+            value={sfalQtyKg == null ? '' : String(sfalQtyKg / 1000)}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw === '') {
+                setSfalQtyKg(null)
+                return
+              }
+              const mt = parseFloat(raw)
+              setSfalQtyKg(Number.isNaN(mt) ? null : mt * 1000)
+            }}
+            className="h-9 text-right"
+            placeholder="—"
+          />
+        ) : (
+          <div className={`flex h-9 items-center rounded-md border border-gray-200 px-3 text-sm tabular-nums ${READONLY_FIELD_CLASS}`}>
+            {formatSfalSfbdMtDisplay(sfalQtyKg)}
+          </div>
+        )}
+      </div>
+      <div>
+        <label className="mb-1.5 block text-xs font-semibold text-gray-600">SFBD Qty (MT)</label>
+        {canEditSfalSfbd ? (
+          <Input
+            type="number"
+            step="0.01"
+            value={sfbdQtyKg == null ? '' : String(sfbdQtyKg / 1000)}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw === '') {
+                setSfbdQtyKg(null)
+                return
+              }
+              const mt = parseFloat(raw)
+              setSfbdQtyKg(Number.isNaN(mt) ? null : mt * 1000)
+            }}
+            className="h-9 text-right"
+            placeholder="—"
+          />
+        ) : (
+          <div className={`flex h-9 items-center rounded-md border border-gray-200 px-3 text-sm tabular-nums ${READONLY_FIELD_CLASS}`}>
+            {formatSfalSfbdMtDisplay(sfbdQtyKg)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 
   const renderSapActualFields = (block: {
     start_receive_date: string
@@ -1277,6 +1376,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       </p>
                       {renderDailyActualsTable(actualRows)}
                     </div>
+                    {renderSfalSfbdFields()}
                   </>
                 ) : (
                   <>
@@ -1297,6 +1397,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           })
                         : actualRows,
                     )}
+                    {renderSfalSfbdFields()}
                   </>
                 )}
               </div>
@@ -1382,6 +1483,22 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                           <Truck className="h-4 w-4 mr-2" />
                           Create Trucking
                         </>
+                      )}
+                    </Button>
+                  )}
+                  {canSaveSfalSfbd && (
+                    <Button
+                      onClick={handleSaveSfalSfbd}
+                      disabled={creating || loadingEdit}
+                      className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                    >
+                      {creating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save SFAL/SFBD'
                       )}
                     </Button>
                   )}
