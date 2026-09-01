@@ -32,7 +32,10 @@ import {
   type ROilLossKey,
 } from '@/lib/oilLossSummary'
 import { StyledNativeSelect } from '@/components/shared/StyledNativeSelect'
-import { PerformancePeriodDateRow } from '@/components/performance/PerformancePeriodDateRow'
+import {
+  formatContractDateScopeLabel,
+  PerformanceContractDateControl,
+} from '@/components/performance/PerformanceContractDateControl'
 import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
@@ -1830,12 +1833,15 @@ export default function OilLossPage() {
             ) : null}
           </h1>
           <div className="flex items-center gap-6 flex-wrap">
-            <StyledNativeSelect
-              label="Period:"
-              value={globalPeriod}
-              onChange={setGlobalPeriod}
+            <PerformanceContractDateControl
+              period={globalPeriod}
               options={globalPeriodOptions}
-              uppercaseLabels
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onPeriodChange={setGlobalPeriod}
+              onDateFromChange={setDateFrom}
+              onDateToChange={setDateTo}
+              resolvePeriodRange={resolveOilLossPeriodDateRange}
             />
             <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
@@ -1872,22 +1878,14 @@ export default function OilLossPage() {
                   />
                 </div>
               </div>
+            <button
+              type="button"
+              onClick={resetGlobalBarFilters}
+              className="text-sm text-blue-700 hover:underline shrink-0"
+            >
+              Reset selection
+            </button>
           </div>
-          <PerformancePeriodDateRow
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onDateFromChange={setDateFrom}
-            onDateToChange={setDateTo}
-            trailingAction={
-              <button
-                type="button"
-                onClick={resetGlobalBarFilters}
-                className="text-sm text-blue-700 hover:underline shrink-0"
-              >
-                Reset selection
-              </button>
-            }
-          />
 
           <div
             className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
@@ -1953,7 +1951,9 @@ export default function OilLossPage() {
           filters={drilldownFilters}
           onFiltersChange={applyOilLossDrilldownChange}
           scopeSegments={[
-            globalPeriodMeta.label,
+            formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) =>
+              resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
+            ),
             ...(globalTransport !== 'All' ? [globalTransport] : []),
             ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
             ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),

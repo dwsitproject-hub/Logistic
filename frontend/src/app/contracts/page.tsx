@@ -62,8 +62,10 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
-import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
-import { PerformancePeriodDateRow } from '@/components/performance/PerformancePeriodDateRow'
+import {
+  formatContractDateScopeLabel,
+  PerformanceContractDateControl,
+} from '@/components/performance/PerformanceContractDateControl'
 import {
   type ContractPerfColumnFilter,
   type ContractPerfDrilldownFilters,
@@ -92,6 +94,7 @@ import {
   sumHotspotQtyKg,
 } from '@/lib/contractPerformanceFilters'
 import {
+  buildPerformancePeriodOptions,
   resolvePerformancePeriodDateRange,
   type PerformancePeriodKey,
 } from '@/lib/performancePeriodFilters'
@@ -1325,7 +1328,11 @@ function ContractsPageContent() {
   /** Section 2 title subtitle: period, Open/Close, and non-empty global filters. */
   const contractPerfDrilldownScopeSegments = useMemo(() => {
     if (!isContractPerformance) return [] as string[]
-    const parts: string[] = [resolvePerformancePeriodDateRange(performancePeriod).label]
+    const parts: string[] = [
+      formatContractDateScopeLabel(performancePeriod, dateFrom, dateTo, (p) =>
+        resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
+      ),
+    ]
     if (summaryCardStatus === 'Open' || summaryCardStatus === 'Close') {
       parts.push(summaryCardStatus)
     }
@@ -1350,6 +1357,8 @@ function ContractsPageContent() {
   }, [
     isContractPerformance,
     performancePeriod,
+    dateFrom,
+    dateTo,
     summaryCardStatus,
     contractPerfSelectedGroupPlants,
     contractPerfSelectedIncoterms,
@@ -3765,13 +3774,27 @@ function ContractsPageContent() {
               ) : null}
             </h1>
             <div className="flex items-center gap-6 flex-wrap">
-              <PerformancePeriodSelect
-                value={performancePeriod}
-                onChange={(value) => {
+              <PerformanceContractDateControl
+                period={performancePeriod}
+                options={buildPerformancePeriodOptions()}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onPeriodChange={(value) => {
                   lockSection1FilterChange()
                   setPerformancePeriod(value)
                   setCurrentPage(1)
                 }}
+                onDateFromChange={(iso) => {
+                  lockSection1FilterChange()
+                  setDateFrom(iso)
+                  setCurrentPage(1)
+                }}
+                onDateToChange={(iso) => {
+                  lockSection1FilterChange()
+                  setDateTo(iso)
+                  setCurrentPage(1)
+                }}
+                resolvePeriodRange={resolvePerformancePeriodDateRange}
               />
               <div className="flex items-center gap-3">
                   <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
@@ -3845,30 +3868,14 @@ function ContractsPageContent() {
                     />
                   </div>
                 </div>
+              <button
+                type="button"
+                onClick={resetContractPerformancePage}
+                className="text-sm text-blue-700 hover:underline shrink-0"
+              >
+                Reset selection
+              </button>
             </div>
-            <PerformancePeriodDateRow
-              dateFrom={dateFrom}
-              dateTo={dateTo}
-              onDateFromChange={(iso) => {
-                lockSection1FilterChange()
-                setDateFrom(iso)
-                setCurrentPage(1)
-              }}
-              onDateToChange={(iso) => {
-                lockSection1FilterChange()
-                setDateTo(iso)
-                setCurrentPage(1)
-              }}
-              trailingAction={
-                <button
-                  type="button"
-                  onClick={resetContractPerformancePage}
-                  className="text-sm text-blue-700 hover:underline shrink-0"
-                >
-                  Reset selection
-                </button>
-              }
-            />
           </div>
         )}
 

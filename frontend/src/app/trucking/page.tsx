@@ -3772,28 +3772,28 @@ function TruckingPageContent() {
   return (
     <Layout>
       <div className="space-y-6">
-        <input
-          type="file"
-          accept=".csv,.xlsx,.xls"
-          className="hidden"
-          id="bulk-create-trucking-input"
-          onChange={handleBulkCreateFileChange}
-          disabled={bulkCreateUploading || sapImportActive}
-        />
-        <input
-          type="file"
-          accept=".xlsx,.xls"
-          className="hidden"
-          id="wb-rekap-upload-input"
-          onChange={handleWbRekapFileChange}
-          disabled={wbUploading || sapImportActive}
-        />
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
             <h1 className="text-3xl font-bold">Trucking</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              className="hidden"
+              id="bulk-create-trucking-input"
+              onChange={handleBulkCreateFileChange}
+              disabled={bulkCreateUploading || sapImportActive}
+            />
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              id="wb-rekap-upload-input"
+              onChange={handleWbRekapFileChange}
+              disabled={wbUploading || sapImportActive}
+            />
             <Button
               size="sm"
               variant="outline"

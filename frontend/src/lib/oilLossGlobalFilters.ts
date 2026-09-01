@@ -5,7 +5,7 @@ import {
   matchesOilLossVesselSegment,
 } from '@/lib/oilLossEligibility'
 
-export type OilLossGlobalPeriodKey = 'YTD' | `month-${number}`
+export type OilLossGlobalPeriodKey = 'YTD' | 'MTD' | `month-${number}`
 
 export type OilLossGlobalTransportFilter = 'All' | 'Vessel' | 'Truck'
 
@@ -41,17 +41,25 @@ export type OilLossPeriodOption = {
   label: string
 }
 
+/**
+ * YTD + MTD + calendar months before the current month (descending),
+ * same order as Contract / Shipping Performance.
+ * Current month is covered by MTD — not listed separately.
+ */
 export function buildOilLossPeriodOptions(referenceDate = new Date()): OilLossPeriodOption[] {
-  const year = referenceDate.getFullYear()
   const currentMonthIndex = referenceDate.getMonth()
   const monthOptions: OilLossPeriodOption[] = []
-  for (let m = 0; m <= currentMonthIndex; m += 1) {
+  for (let m = currentMonthIndex - 1; m >= 0; m -= 1) {
     monthOptions.push({
       value: `month-${m}`,
       label: MONTH_NAMES[m],
     })
   }
-  return [{ value: 'YTD', label: 'YTD' }, ...monthOptions]
+  return [
+    { value: 'YTD', label: 'YTD' },
+    { value: 'MTD', label: 'MTD' },
+    ...monthOptions,
+  ]
 }
 
 export function resolveOilLossPeriodDateRange(
@@ -64,6 +72,13 @@ export function resolveOilLossPeriodDateRange(
   const pad = (n: number) => String(n).padStart(2, '0')
   const today = `${year}-${pad(month + 1)}-${pad(day)}`
 
+  if (period === 'MTD') {
+    return {
+      dateFrom: `${year}-${pad(month + 1)}-01`,
+      dateTo: today,
+      label: 'MTD',
+    }
+  }
   if (period === 'YTD') {
     return {
       dateFrom: `${year}-01-01`,

@@ -108,8 +108,10 @@ import {
   type ShippingPerfColumnPrefsByMode,
 } from '@/lib/shippingPerformanceColumnPrefs'
 import { resolveShipmentApiLookupKey } from '@/lib/shipmentStoDisplay'
-import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
-import { PerformancePeriodDateRow } from '@/components/performance/PerformancePeriodDateRow'
+import {
+  formatContractDateScopeLabel,
+  PerformanceContractDateControl,
+} from '@/components/performance/PerformanceContractDateControl'
 import {
   CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
   CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
@@ -119,6 +121,7 @@ import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { applyShippingPerfSourceProductFilter } from '@/lib/shippingPerformanceScopeFilters'
 import {
+  buildPerformancePeriodOptions,
   resolvePerformancePeriodDateRange,
   rowMatchesPerformancePeriod,
   type PerformancePeriodKey,
@@ -1453,7 +1456,16 @@ function ShippingPerformancePageContent() {
     setDateTo(to)
   }, [performancePeriod])
 
-  const shippingPerfListUrl = '/shipments/performance?scope=ytd'
+  /** Include date range so backend filterGlobalRows returns the selected contract_date window (not only current YTD). */
+  const shippingPerfListUrl = useMemo(() => {
+    const params = new URLSearchParams()
+    params.set('scope', 'ytd')
+    if (dateFrom) params.set('dateFrom', dateFrom)
+    if (dateTo) params.set('dateTo', dateTo)
+    return `/shipments/performance?${params.toString()}`
+  }, [dateFrom, dateTo])
+
+  const shippingPerfFetchGenRef = useRef(0)
 
   const fetchShippingPerformanceDashboard = useCallback(async () => {
     const cacheKey = buildCacheKey('GET', shippingPerfListUrl)
@@ -1462,6 +1474,7 @@ function ShippingPerformancePageContent() {
     if (hadRows && cached?.data) {
       setRows(cached.data)
     }
+    const gen = ++shippingPerfFetchGenRef.current
     try {
       if (!hadRows) setSummaryLoading(true)
       setSummaryFetching(true)
@@ -1470,27 +1483,27 @@ function ShippingPerformancePageContent() {
         () => api.get(shippingPerfListUrl, { timeout: 120000 }).then((r) => r.data),
         {
           onRevalidate: (fresh) => {
+            if (gen !== shippingPerfFetchGenRef.current) return
             setRows(Array.isArray(fresh?.data) ? fresh.data : [])
             setSummaryFetching(false)
           },
         },
       )
+      if (gen !== shippingPerfFetchGenRef.current) return
       setRows(Array.isArray(data?.data) ? data.data : [])
       if (!revalidating) setSummaryFetching(false)
     } catch (error) {
       console.error('Failed to load shipping performance dashboard:', error)
+      if (gen !== shippingPerfFetchGenRef.current) return
       if (!hadRows) setRows([])
       setSummaryFetching(false)
     } finally {
-      setSummaryLoading(false)
+      if (gen === shippingPerfFetchGenRef.current) setSummaryLoading(false)
     }
   }, [shippingPerfListUrl])
 
-  const fetchStartedRef = useRef(false)
-
   useEffect(() => {
-    if (!authReady || canViewPage !== true || fetchStartedRef.current) return
-    fetchStartedRef.current = true
+    if (!authReady || canViewPage !== true) return
     void fetchShippingPerformanceDashboard()
   }, [authReady, canViewPage, fetchShippingPerformanceDashboard])
 
@@ -1666,7 +1679,9 @@ function ShippingPerformancePageContent() {
   /** Section 2 title subtitle: period, card mode, and non-empty global filters. */
   const shippingPerfDrilldownScopeSegments = useMemo(() => {
     const parts: string[] = [
-      resolvePerformancePeriodDateRange(performancePeriod).label,
+      formatContractDateScopeLabel(performancePeriod, dateFrom, dateTo, (p) =>
+        resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
+      ),
       SHIPPING_PERF_CARD_TITLES[perfCardFilter],
     ]
     if (selectedSources.length > 0) parts.push(selectedSources.join(', '))
@@ -1678,6 +1693,8 @@ function ShippingPerformancePageContent() {
     return parts
   }, [
     performancePeriod,
+    dateFrom,
+    dateTo,
     perfCardFilter,
     selectedSources,
     selectedProducts,
@@ -1955,7 +1972,15 @@ function ShippingPerformancePageContent() {
         parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
       }
       if (dateFrom || dateTo) {
-        parts.push(`Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`)
+        parts.push(
+          formatContractDateScopeLabel(
+            performancePeriod,
+            dateFrom,
+            dateTo,
+            (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
+            { prefix: true },
+          ),
+        )
       }
       if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
     }
@@ -1969,6 +1994,7 @@ function ShippingPerformancePageContent() {
     selectedIncoterms,
     selectedGroupPlants,
     selectedVessels,
+    performancePeriod,
     dateFrom,
     dateTo,
     drilldownFilters,
@@ -2118,12 +2144,24 @@ function ShippingPerformancePageContent() {
             </div>
           </div>
           <div className="flex items-center gap-6 flex-wrap">
-            <PerformancePeriodSelect
-              value={performancePeriod}
-              onChange={(value) => {
+            <PerformanceContractDateControl
+              period={performancePeriod}
+              options={buildPerformancePeriodOptions()}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onPeriodChange={(value) => {
                 setPerformancePeriod(value)
                 setCurrentPage(1)
               }}
+              onDateFromChange={(iso) => {
+                setDateFrom(iso)
+                setCurrentPage(1)
+              }}
+              onDateToChange={(iso) => {
+                setDateTo(iso)
+                setCurrentPage(1)
+              }}
+              resolvePeriodRange={resolvePerformancePeriodDateRange}
             />
             <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
@@ -2190,28 +2228,14 @@ function ShippingPerformancePageContent() {
                   />
                 </div>
               </div>
+            <button
+              type="button"
+              onClick={resetPerfSelections}
+              className="text-sm text-blue-700 hover:underline shrink-0"
+            >
+              Reset selection
+            </button>
           </div>
-          <PerformancePeriodDateRow
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onDateFromChange={(iso) => {
-              setDateFrom(iso)
-              setCurrentPage(1)
-            }}
-            onDateToChange={(iso) => {
-              setDateTo(iso)
-              setCurrentPage(1)
-            }}
-            trailingAction={
-              <button
-                type="button"
-                onClick={resetPerfSelections}
-                className="text-sm text-blue-700 hover:underline shrink-0"
-              >
-                Reset selection
-              </button>
-            }
-          />
         </div>
 
         {/* Section 1: Summary Cards */}
