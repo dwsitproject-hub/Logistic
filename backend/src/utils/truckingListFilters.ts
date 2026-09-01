@@ -3,6 +3,7 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
 import { TRUCKING_LIST_CONTRACT_EXT_NO_FULL } from './truckingListSelectSql'
 import { sqlB2bEndingBuyerExpr, sqlB2bEndingUnloadExpr } from './b2bOriginEndingSql'
@@ -223,4 +224,14 @@ export function appendTruckingLateIndicatorFilter(
     }
   }
   return { sql: '', params: [], nextIndex: startIndex }
+}
+
+/** Toolbar source filter (Interco / 3rd Party) on contracts.source_type. */
+export function appendTruckingSourceTypeFilter(
+  sourceType: string | undefined,
+  startIndex: number,
+  columnExpr = 'c.source_type',
+): { sql: string; params: any[]; nextIndex: number } {
+  const sql = appendContractPerfSourceTypeFilter(sourceType, columnExpr)
+  return { sql, params: [], nextIndex: startIndex }
 }

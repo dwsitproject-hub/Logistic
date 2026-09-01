@@ -9,6 +9,7 @@ import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
   appendTruckingLateIndicatorFilter,
+  appendTruckingSourceTypeFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
 import {
@@ -192,6 +193,7 @@ function buildTruckingListCacheKey(input: {
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
+  sourceType?: string;
   skipSapJoin: boolean;
   page?: number;
   limit?: number;
@@ -211,6 +213,7 @@ function buildTruckingListCacheKey(input: {
     globalSearch: input.globalSearch,
     columnFilters: stableColumnFiltersKey(input.colFilters),
     lateIndicator: input.lateIndicator != null ? String(input.lateIndicator) : '',
+    sourceType: input.sourceType != null ? String(input.sourceType) : '',
     skipSapJoin: input.skipSapJoin,
     page: input.page ?? 1,
     limit: input.limit ?? 20,
@@ -233,6 +236,7 @@ export function buildTruckingListFilterCacheKey(input: {
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
+  sourceType?: string;
 }): string {
   return buildTruckingListCacheKey({
     ...input,
@@ -427,6 +431,7 @@ function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFi
       : '';
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
   return {
@@ -436,6 +441,7 @@ function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFi
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam != null ? String(lateIndicatorParam) : undefined,
+    sourceType: sourceTypeParam != null ? String(sourceTypeParam) : undefined,
     status: status != null ? String(status) : undefined,
     sto: sto != null ? String(sto) : undefined,
     contract: contract != null ? String(contract) : undefined,
@@ -708,6 +714,7 @@ export function buildTruckingListQuery(
       : '';
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
 
   let queryText = `
       SELECT 
@@ -825,9 +832,11 @@ export function buildTruckingListQuery(
   fp = cCol.nextIndex;
   const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp);
   fp = li.nextIndex;
+  const src = appendTruckingSourceTypeFilter(sourceTypeParam, fp);
+  fp = src.nextIndex;
 
-  const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}`;
-  const outerParams = [...gSearch.params, ...cCol.params, ...li.params];
+  const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}${src.sql}`;
+  const outerParams = [...gSearch.params, ...cCol.params, ...li.params, ...src.params];
 
   const filterCacheKey = buildTruckingListFilterCacheKey({
     status,
@@ -842,6 +851,7 @@ export function buildTruckingListQuery(
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam,
+    sourceType: sourceTypeParam,
   });
 
   const cacheKey = buildTruckingListCacheKey({
@@ -857,6 +867,7 @@ export function buildTruckingListQuery(
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam,
+    sourceType: sourceTypeParam,
     skipSapJoin,
     page: Number(page),
     limit: Number(limit),
@@ -1649,6 +1660,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
       : '';
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
   const { location, loadingLocation, unloadingLocation, sto, contract } = req.query;
 
   const listUsesStoPaging = canUseTruckingStoKeyPaging({
@@ -1660,6 +1672,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     loadingLocation: typeof loadingLocation === 'string' ? loadingLocation : undefined,
     unloadingLocation: typeof unloadingLocation === 'string' ? unloadingLocation : undefined,
     lateIndicator: lateIndicatorParam,
+    sourceType: sourceTypeParam,
     globalSearch,
     colFilters,
     unplannedHybrid: isUnplannedHybrid,

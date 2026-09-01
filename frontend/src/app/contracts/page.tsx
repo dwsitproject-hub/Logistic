@@ -61,7 +61,9 @@ import { hasEntityRemarks } from '@/lib/entityRemarks'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
+import { PerformancePeriodDateRow } from '@/components/performance/PerformancePeriodDateRow'
 import {
   type ContractPerfColumnFilter,
   type ContractPerfDrilldownFilters,
@@ -3762,17 +3764,16 @@ function ContractsPageContent() {
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
               ) : null}
             </h1>
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div className="flex items-center gap-6 flex-wrap">
-                <PerformancePeriodSelect
-                  value={performancePeriod}
-                  onChange={(value) => {
-                    lockSection1FilterChange()
-                    setPerformancePeriod(value)
-                    setCurrentPage(1)
-                  }}
-                />
-                <div className="flex items-center gap-3">
+            <div className="flex items-center gap-6 flex-wrap">
+              <PerformancePeriodSelect
+                value={performancePeriod}
+                onChange={(value) => {
+                  lockSection1FilterChange()
+                  setPerformancePeriod(value)
+                  setCurrentPage(1)
+                }}
+              />
+              <div className="flex items-center gap-3">
                   <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
                   <div className="w-48">
                     <SearchableMultiSelect
@@ -3844,15 +3845,30 @@ function ContractsPageContent() {
                     />
                   </div>
                 </div>
-              </div>
-              <button
-                type="button"
-                onClick={resetContractPerformancePage}
-                className="text-sm text-blue-700 hover:underline shrink-0"
-              >
-                Reset selection
-              </button>
             </div>
+            <PerformancePeriodDateRow
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onDateFromChange={(iso) => {
+                lockSection1FilterChange()
+                setDateFrom(iso)
+                setCurrentPage(1)
+              }}
+              onDateToChange={(iso) => {
+                lockSection1FilterChange()
+                setDateTo(iso)
+                setCurrentPage(1)
+              }}
+              trailingAction={
+                <button
+                  type="button"
+                  onClick={resetContractPerformancePage}
+                  className="text-sm text-blue-700 hover:underline shrink-0"
+                >
+                  Reset selection
+                </button>
+              }
+            />
           </div>
         )}
 
@@ -4222,10 +4238,9 @@ function ContractsPageContent() {
                     className="pl-10"
                   />
                 </div>
-                <select
+                <FilterSingleSelect
                   value={statusFilter}
-                  onChange={(e) => {
-                    const value = e.target.value
+                  onChange={(value) => {
                     if (isContractPerformance) lockSection1FilterChange()
                     setStatusFilter(value)
                     if (!isContractPerformance) {
@@ -4239,86 +4254,74 @@ function ContractsPageContent() {
                       setCurrentPage(1)
                     }
                   }}
-                  className="px-4 py-2 text-sm border rounded-lg"
-                >
-                  <option value="All Status">All Status</option>
-                  <option value="Open">Open</option>
-                  <option value="Close">Close</option>
-                </select>
+                  options={[
+                    { value: 'All Status', label: 'All Status' },
+                    { value: 'Open', label: 'Open' },
+                    { value: 'Close', label: 'Close' },
+                  ]}
+                  ariaLabel="Contract status filter"
+                  className="min-w-[10rem]"
+                />
                 {!isContractPerformance && (
-                  <select
+                  <FilterSingleSelect
                     value={b2bFlagFilter}
-                    onChange={(e) => setB2bFlagFilter(e.target.value)}
-                    className="px-4 py-2 text-sm border rounded-lg"
-                  >
-                    <option value="ALL">All Contract Type</option>
-                    {availableB2bFlags.map(flag => (
-                      <option key={flag} value={flag}>{flag}</option>
-                    ))}
-                  </select>
+                    onChange={setB2bFlagFilter}
+                    options={[
+                      { value: 'ALL', label: 'All Contract Type' },
+                      ...availableB2bFlags.map((flag) => ({ value: flag, label: flag })),
+                    ]}
+                    ariaLabel="Contract type filter"
+                    className="min-w-[10rem]"
+                  />
                 )}
                 {!isContractPerformance && (
-                  <select
+                  <FilterSingleSelect
                     value={transportModeFilter}
-                    onChange={(e) => setTransportModeFilter(e.target.value)}
-                    className="px-4 py-2 text-sm border rounded-lg"
-                  >
-                    <option value="ALL">All Transport</option>
-                    <option value="SEA">Sea</option>
-                    <option value="LAND">Land</option>
-                    <option value="MIX">Mix</option>
-                  </select>
+                    onChange={setTransportModeFilter}
+                    options={[
+                      { value: 'ALL', label: 'All Transport' },
+                      { value: 'SEA', label: 'Sea' },
+                      { value: 'LAND', label: 'Land' },
+                      { value: 'MIX', label: 'Mix' },
+                    ]}
+                    ariaLabel="Transport mode filter"
+                    className="min-w-[10rem]"
+                  />
                 )}
                 {!isContractPerformance && (
-                  <select
-                    value={presenceFilter}
-                    onChange={(e) =>
-                      setPresenceFilter(e.target.value as 'ALL' | 'present' | 'withdrawn')
-                    }
-                    className="px-4 py-2 text-sm border rounded-lg"
-                    title="Contracts whose PO SAP no longer reports are excluded from totals but stay listed for reference."
-                  >
-                    <option value="ALL">All SAP Status</option>
-                    <option value="present">In SAP only</option>
-                    <option value="withdrawn">Not in SAP only</option>
-                  </select>
-                )}
-                {!isContractPerformance && (
-                  <select
+                  <FilterSingleSelect
                     value={selectedIncoterms[0] ?? 'ALL'}
-                    onChange={(e) => {
-                      const value = e.target.value
+                    onChange={(value) => {
                       setSelectedIncoterms(value === 'ALL' ? [] : [value])
                       setCurrentPage(1)
                     }}
-                    className="px-4 py-2 text-sm border rounded-lg"
-                  >
-                    <option value="ALL">All Incoterm</option>
-                    {availableIncoterms.map((inc) => (
-                      <option key={inc} value={inc}>
-                        {inc}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: 'ALL', label: 'All Incoterm' },
+                      ...availableIncoterms.map((inc) => ({ value: inc, label: inc })),
+                    ]}
+                    ariaLabel="Incoterm filter"
+                    className="min-w-[10rem]"
+                  />
                 )}
                 {isContractPerformance && (
-                  <select
+                  <FilterSingleSelect
                     value={lateOnTimeFilter}
-                    onChange={(e) => {
-                      const value = e.target.value as 'ALL' | 'LATE' | 'ON_TIME'
+                    onChange={(value) => {
+                      const next = value as 'ALL' | 'LATE' | 'ON_TIME'
                       lockSection1FilterChange()
-                      setLateOnTimeFilter(value)
-                      if (value === 'ON_TIME') setPerfDashMode('ontrack')
-                      else if (value === 'LATE') setPerfDashMode('late')
+                      setLateOnTimeFilter(next)
+                      if (next === 'ON_TIME') setPerfDashMode('ontrack')
+                      else if (next === 'LATE') setPerfDashMode('late')
                       setCurrentPage(1)
                     }}
-                    className="px-4 py-2 text-sm border rounded-lg"
-                    title="Late: Trade Cycle > 0. On Time: Trade Cycle ≤ 0."
-                  >
-                    <option value="ALL">Late/On Time: All</option>
-                    <option value="LATE">Late</option>
-                    <option value="ON_TIME">On Time</option>
-                  </select>
+                    options={[
+                      { value: 'ALL', label: 'Late/On Time: All' },
+                      { value: 'LATE', label: 'Late' },
+                      { value: 'ON_TIME', label: 'On Time' },
+                    ]}
+                    ariaLabel="Late or on-time filter"
+                    className="min-w-[11rem]"
+                  />
                 )}
                 {isContractPerformance && (
                   <select

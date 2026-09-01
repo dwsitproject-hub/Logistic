@@ -63,6 +63,23 @@ describe('shipmentPagePipelineSql', () => {
     expect(unplanned.params).toEqual([]);
   });
 
+  it('builds OPEN/CLOSE global status bucket filters', () => {
+    const open = appendShipmentPipelineStageFilter('OPEN', 2);
+    expect(open.sql).toContain('IN (');
+    expect(open.params).toEqual(
+      expect.arrayContaining(['PLANNED', 'ARRIVED_LP', 'SAILED', 'ARRIVED_DP']),
+    );
+    expect(open.params).not.toContain('COMPLETED');
+    expect(open.params).not.toContain('CANCELLED');
+
+    const close = appendShipmentPipelineStageFilter('CLOSE', 4);
+    expect(close.sql).toContain('IN ($4, $5)');
+    expect(close.params).toEqual(['COMPLETED', 'CANCELLED']);
+
+    expect(normalizeShipmentPagePipelineStageParam('OPEN')).toBeNull();
+    expect(normalizeShipmentPagePipelineStageParam('CLOSE')).toBeNull();
+  });
+
   it('builds display vessel key from master, SAP, and KLIP fallbacks', () => {
     const key = shipmentPipelineDisplayVesselKeyExpr(
       'mv.vessel_name_master',

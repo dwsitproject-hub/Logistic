@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyOilLossGlobalFilters,
+  buildOilLossPeriodOptions,
   matchesOilLossGlobalProductsMultiFilter,
   matchesOilLossGlobalTransportFilter,
 } from '@/lib/oilLossGlobalFilters'
@@ -42,6 +43,28 @@ describe('oilLossGlobalFilters', () => {
     })
     expect(filtered).toHaveLength(1)
     expect(filtered[0].product).toBe('CPO')
+  })
+
+  it('applyOilLossGlobalFilters uses dateFrom/dateTo overrides when provided', () => {
+    const rows = [
+      row({ contract_date: '2026-01-10' }),
+      row({ contract_date: '2026-07-15' }),
+    ]
+    const filtered = applyOilLossGlobalFilters({
+      rows,
+      period: 'YTD',
+      transport: 'All',
+      dateFrom: '2026-07-01',
+      dateTo: '2026-07-31',
+    })
+    expect(filtered).toHaveLength(1)
+    expect(filtered[0].contract_date).toBe('2026-07-15')
+  })
+
+  it('buildOilLossPeriodOptions has YTD and no MTD', () => {
+    const opts = buildOilLossPeriodOptions(new Date('2026-08-15'))
+    expect(opts.map((o) => o.value)).not.toContain('MTD')
+    expect(opts[0]).toEqual({ value: 'YTD', label: 'YTD' })
   })
 
   it('matchesOilLossGlobalTransportFilter unchanged', () => {

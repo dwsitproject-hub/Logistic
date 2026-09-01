@@ -33,7 +33,9 @@ import { mapTruckingAttentionInsights } from '@/lib/truckingAttentionInsights'
 import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { LOGISTICS_SOURCE_FILTER_OPTIONS } from '@/lib/logisticsSourceFilter'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useSapImportInFlight } from '@/hooks/useSapImportInFlight'
 import {
@@ -118,6 +120,8 @@ const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
 const TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED = false
 
 const TRUCKING_STATUS_LABELS: Record<string, string> = {
+  OPEN: 'Open',
+  CLOSE: 'Close',
   UNPLANNED: 'Unplanned',
   PLANNED: 'Planned',
   IN_PROGRESS: 'Planned',
@@ -125,9 +129,36 @@ const TRUCKING_STATUS_LABELS: Record<string, string> = {
   CANCELLED: 'Cancelled',
 }
 
+const TRUCKING_GLOBAL_STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All Status' },
+  { value: 'OPEN', label: 'Open' },
+  { value: 'CLOSE', label: 'Close' },
+] as const
+
+const TRUCKING_LATE_INDICATOR_OPTIONS = [
+  { value: 'ALL', label: 'All Late Indicator' },
+  { value: 'ON_TIME', label: 'On Time' },
+  { value: 'LATE', label: 'Late' },
+  { value: 'NA', label: 'N/A' },
+] as const
+
+const TRUCKING_OPEN_STAGES = new Set(['UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'OPEN'])
+const TRUCKING_CLOSE_STAGES = new Set(['COMPLETED', 'CANCELLED', 'CLOSE'])
+
 function normalizeTruckingSummaryStatusFilter(status: string): string {
   const stage = String(status ?? '').trim().toUpperCase()
-  return stage === 'IN_PROGRESS' ? 'PLANNED' : stage
+  if (stage === 'IN_PROGRESS') return 'PLANNED'
+  return stage
+}
+
+/** Map granular Section 2 card → Global Filters Open/Close display value. */
+function mapTruckingStatusToGlobalBucket(status: string): 'ALL' | 'OPEN' | 'CLOSE' {
+  const stage = normalizeTruckingSummaryStatusFilter(status)
+  if (!stage || stage === 'ALL') return 'ALL'
+  if (stage === 'OPEN' || stage === 'CLOSE') return stage
+  if (TRUCKING_CLOSE_STAGES.has(stage)) return 'CLOSE'
+  if (TRUCKING_OPEN_STAGES.has(stage)) return 'OPEN'
+  return 'ALL'
 }
 
 /** Parse API qty (kg) — handles numeric strings with commas. */
@@ -1033,6 +1064,7 @@ function TruckingPageContent() {
   const [editedData, setEditedData] = useState<Partial<TruckingOperation>>({})
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('ALL')
   const [loadingLocationFilter, setLoadingLocationFilter] = useState('')
   const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
   type ColumnFilter =
@@ -1348,6 +1380,7 @@ function TruckingPageContent() {
       if (dateFrom) params.set('dateFrom', dateFrom)
       if (dateTo) params.set('dateTo', dateTo)
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') params.set('lateIndicator', lateIndicatorFilter)
+      if (sourceTypeFilter && sourceTypeFilter !== 'ALL') params.set('sourceType', sourceTypeFilter)
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
         selectedProducts,
@@ -1397,6 +1430,7 @@ function TruckingPageContent() {
     dateFrom,
     dateTo,
     lateIndicatorFilter,
+    sourceTypeFilter,
     columnFilters,
     selectedIncoterms,
     selectedProducts,
@@ -1422,6 +1456,7 @@ function TruckingPageContent() {
     dateFrom,
     dateTo,
     lateIndicatorFilter,
+    sourceTypeFilter,
     columnFilters,
     selectedIncoterms,
     selectedProducts,
@@ -1751,6 +1786,9 @@ function TruckingPageContent() {
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
       }
+      if (sourceTypeFilter && sourceTypeFilter !== 'ALL') {
+        params.append('sourceType', sourceTypeFilter)
+      }
       const stoParam = searchParams.get('sto')
       if (stoParam) {
         params.append('sto', stoParam)
@@ -1786,6 +1824,7 @@ function TruckingPageContent() {
       selectedProducts,
       selectedSuppliers,
       lateIndicatorFilter,
+      sourceTypeFilter,
       searchParams,
       selectedGroupPlants,
     ],
@@ -2016,6 +2055,17 @@ function TruckingPageContent() {
     fetchTruckingOperations(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lateIndicatorFilter])
+
+  const isFirstSourceTypeEffect = useRef(true)
+  useEffect(() => {
+    if (isFirstSourceTypeEffect.current) {
+      isFirstSourceTypeEffect.current = false
+      return
+    }
+    setPage(1)
+    fetchTruckingOperations(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceTypeFilter])
 
   const applySearch = useCallback(() => {
     setPage(1)
@@ -2684,6 +2734,7 @@ function TruckingPageContent() {
       searchTerm.trim() !== '' ||
       statusFilter !== 'ALL' ||
       lateIndicatorFilter !== 'ALL' ||
+      sourceTypeFilter !== 'ALL' ||
       !!loadingLocationFilter.trim() ||
       !!unloadingLocationFilter.trim() ||
       selectedGroupPlants.length > 0 ||
@@ -2699,6 +2750,7 @@ function TruckingPageContent() {
     searchTerm,
     statusFilter,
     lateIndicatorFilter,
+    sourceTypeFilter,
     loadingLocationFilter,
     unloadingLocationFilter,
     selectedGroupPlants,
@@ -2717,6 +2769,7 @@ function TruckingPageContent() {
     setSearchTerm('')
     setStatusFilter('ALL')
     setLateIndicatorFilter('ALL')
+    setSourceTypeFilter('ALL')
     setLoadingLocationFilter('')
     setUnloadingLocationFilter('')
     resetUserScopeFilters()
@@ -2748,6 +2801,9 @@ function TruckingPageContent() {
     if (lateIndicatorFilter !== 'ALL') {
       const lateLabels: Record<string, string> = { ON_TIME: 'On Time', LATE: 'Late', NA: 'N/A' }
       parts.push(`Late: ${lateLabels[lateIndicatorFilter] ?? lateIndicatorFilter}`)
+    }
+    if (sourceTypeFilter !== 'ALL') {
+      parts.push(`Source: ${sourceTypeFilter}`)
     }
     if (searchTerm.trim().length >= 2) {
       parts.push(`Search "${searchTerm.trim()}"`)
@@ -2786,6 +2842,7 @@ function TruckingPageContent() {
   }, [
     statusFilter,
     lateIndicatorFilter,
+    sourceTypeFilter,
     searchTerm,
     selectedIncoterms,
     selectedProducts,
@@ -2849,6 +2906,18 @@ function TruckingPageContent() {
   const filteredOperations = useMemo(() => {
     if (!statusFilter || statusFilter === 'ALL') return truckingOperations
     const stage = statusFilter.trim().toUpperCase()
+    if (stage === 'OPEN') {
+      return truckingOperations.filter((op) => {
+        const s = String(op.status ?? '').trim().toUpperCase()
+        return s === 'UNPLANNED' || s === 'PLANNED' || s === 'IN_PROGRESS'
+      })
+    }
+    if (stage === 'CLOSE') {
+      return truckingOperations.filter((op) => {
+        const s = String(op.status ?? '').trim().toUpperCase()
+        return s === 'COMPLETED' || s === 'CANCELLED'
+      })
+    }
     // Planned card includes In Progress rows (backend filter + client safety net).
     if (stage === 'PLANNED') {
       return truckingOperations.filter((op) => {
@@ -3830,32 +3899,32 @@ function TruckingPageContent() {
                     className="pl-10"
                   />
                 </div>
-                <select
-                  value={normalizeTruckingSummaryStatusFilter(statusFilter) || 'ALL'}
-                  onChange={(e) => {
+                <FilterSingleSelect
+                  value={mapTruckingStatusToGlobalBucket(statusFilter)}
+                  onChange={(value) => {
                     beginTableScopeRefresh()
                     setPage(1)
                     setHasMore(true)
-                    setStatusFilter(normalizeTruckingSummaryStatusFilter(e.target.value) || 'ALL')
+                    setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
                   }}
-                  className="rounded-lg border px-4 py-2 text-sm"
-                >
-                  <option value="ALL">All Status</option>
-                  <option value="UNPLANNED">Unplanned</option>
-                  <option value="PLANNED">Planned</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="CANCELLED">Cancelled</option>
-                </select>
-                <select
+                  options={[...TRUCKING_GLOBAL_STATUS_OPTIONS]}
+                  ariaLabel="Trucking status filter"
+                  className="min-w-[10rem]"
+                />
+                <FilterSingleSelect
                   value={lateIndicatorFilter}
-                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                  className="rounded-lg border px-4 py-2 text-sm"
-                >
-                  <option value="ALL">All Late Indicator</option>
-                  <option value="ON_TIME">On Time</option>
-                  <option value="LATE">Late</option>
-                  <option value="NA">N/A</option>
-                </select>
+                  onChange={setLateIndicatorFilter}
+                  options={[...TRUCKING_LATE_INDICATOR_OPTIONS]}
+                  ariaLabel="Late indicator filter"
+                  className="min-w-[11rem]"
+                />
+                <FilterSingleSelect
+                  value={sourceTypeFilter}
+                  onChange={setSourceTypeFilter}
+                  options={[...LOGISTICS_SOURCE_FILTER_OPTIONS]}
+                  ariaLabel="Source filter"
+                  className="min-w-[11rem]"
+                />
               </div>
 
               <PerformanceScopeFilters

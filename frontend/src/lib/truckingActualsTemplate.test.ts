@@ -37,9 +37,11 @@ describe('truckingActualsTemplate', () => {
     expect(isActualsTemplateDownloadEnabled('UNPLANNED')).toBe(true)
     expect(isActualsTemplateDownloadEnabled('PLANNED')).toBe(true)
     expect(isActualsTemplateDownloadEnabled('IN_PROGRESS')).toBe(true)
+    expect(isActualsTemplateDownloadEnabled('OPEN')).toBe(true)
     expect(isActualsTemplateDownloadEnabled('ALL')).toBe(false)
     expect(isActualsTemplateDownloadEnabled('COMPLETED')).toBe(false)
     expect(isActualsTemplateDownloadEnabled('CANCELLED')).toBe(false)
+    expect(isActualsTemplateDownloadEnabled('CLOSE')).toBe(false)
   })
 
   it('flags unplanned planning template mode', () => {

@@ -16,6 +16,7 @@ export type TruckingStoPagingFilterInput = {
   loadingLocation?: string;
   unloadingLocation?: string;
   lateIndicator?: string;
+  sourceType?: string;
   globalSearch?: string;
   colFilters?: ColumnFilterPayload;
   unplannedHybrid?: boolean;
@@ -37,6 +38,7 @@ export function canUseTruckingStoKeyPaging(input: TruckingStoPagingFilterInput):
   if (String(input.globalSearch ?? '').trim().length >= 2) return false;
   if (hasColumnFilters(input.colFilters)) return false;
   if (input.lateIndicator && String(input.lateIndicator).toUpperCase() !== 'ALL') return false;
+  if (input.sourceType && String(input.sourceType).toUpperCase() !== 'ALL') return false;
   if (input.location?.trim()) return false;
   if (input.loadingLocation?.trim()) return false;
   if (input.unloadingLocation?.trim()) return false;

@@ -43,6 +43,7 @@ export interface PipelineDailySummaryFilterInput extends PipelineDailySummarySco
   colFilters?: ColumnFilterPayload;
   lateIndicator?: string;
   charterType?: string;
+  sourceType?: string;
   viewOption?: string;
   viewQuery?: string;
   status?: string;
@@ -89,6 +90,7 @@ export function isPipelineDailySummaryEligible(
   if (hasColumnFilters(filters.colFilters)) return false;
   if (filters.lateIndicator && String(filters.lateIndicator).toUpperCase() !== 'ALL') return false;
   if (filters.charterType && String(filters.charterType).toUpperCase() !== 'ALL') return false;
+  if (filters.sourceType && String(filters.sourceType).toUpperCase() !== 'ALL') return false;
   if (filters.viewOption || filters.viewQuery) return false;
   if (filters.scopeStatus && String(filters.scopeStatus).trim().toUpperCase() !== 'ALL') return false;
   if (filters.status && String(filters.status).trim().toUpperCase() !== 'ALL') return false;

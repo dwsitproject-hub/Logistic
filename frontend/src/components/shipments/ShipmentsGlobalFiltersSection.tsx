@@ -7,12 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
-import {
-  SHIPMENT_PAGE_PIPELINE_CARDS,
-  type ShipmentPagePipelineStage,
-} from '@/lib/shipmentPagePipeline'
 import type { ShipmentsPipelineStageFilter } from '@/lib/shipmentsPageFilterState'
+import {
+  mapShipmentPipelineStageToGlobalStatusBucket,
+  SHIPMENT_GLOBAL_STATUS_OPTIONS,
+} from '@/lib/shipmentsPageFilterState'
 import { SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS } from '@/lib/shipmentCharterTypeFilter'
+import { LOGISTICS_SOURCE_FILTER_OPTIONS } from '@/lib/logisticsSourceFilter'
 
 export interface ShipmentsGlobalFiltersSectionProps {
   searchDraft: string
@@ -24,6 +25,8 @@ export interface ShipmentsGlobalFiltersSectionProps {
   onLateIndicatorChange: (value: string) => void
   charterTypeFilter: string
   onCharterTypeChange: (value: string) => void
+  sourceTypeFilter: string
+  onSourceTypeChange: (value: string) => void
   availableIncoterms: string[]
   selectedIncoterms: string[]
   onIncotermsChange: (values: string[]) => void
@@ -44,14 +47,6 @@ export interface ShipmentsGlobalFiltersSectionProps {
   onClearFilters: () => void
 }
 
-const PIPELINE_STATUS_OPTIONS = [
-  { value: 'ALL', label: 'All Status' },
-  ...SHIPMENT_PAGE_PIPELINE_CARDS.map((card) => ({
-    value: card.status,
-    label: card.label,
-  })),
-]
-
 const LATE_INDICATOR_OPTIONS = [
   { value: 'ALL', label: 'All Late Indicator' },
   { value: 'ON_TIME', label: 'On Time' },
@@ -69,6 +64,8 @@ export function ShipmentsGlobalFiltersSection({
   onLateIndicatorChange,
   charterTypeFilter,
   onCharterTypeChange,
+  sourceTypeFilter,
+  onSourceTypeChange,
   availableIncoterms,
   selectedIncoterms,
   onIncotermsChange,
@@ -88,6 +85,8 @@ export function ShipmentsGlobalFiltersSection({
   hasActiveFilters,
   onClearFilters,
 }: ShipmentsGlobalFiltersSectionProps) {
+  const globalStatusValue = mapShipmentPipelineStageToGlobalStatusBucket(pipelineStage)
+
   return (
     <Card aria-label="Global filters">
       <CardHeader className="pb-3">
@@ -112,9 +111,9 @@ export function ShipmentsGlobalFiltersSection({
               />
             </div>
             <FilterSingleSelect
-              value={pipelineStage}
+              value={globalStatusValue}
               onChange={(value) => onPipelineStageChange(value as ShipmentsPipelineStageFilter)}
-              options={PIPELINE_STATUS_OPTIONS}
+              options={[...SHIPMENT_GLOBAL_STATUS_OPTIONS]}
               ariaLabel="Pipeline status filter"
               className="min-w-[11rem]"
             />
@@ -130,6 +129,13 @@ export function ShipmentsGlobalFiltersSection({
               onChange={onCharterTypeChange}
               options={SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS}
               ariaLabel="Charter type filter"
+              className="min-w-[11rem]"
+            />
+            <FilterSingleSelect
+              value={sourceTypeFilter}
+              onChange={onSourceTypeChange}
+              options={[...LOGISTICS_SOURCE_FILTER_OPTIONS]}
+              ariaLabel="Source filter"
               className="min-w-[11rem]"
             />
           </div>

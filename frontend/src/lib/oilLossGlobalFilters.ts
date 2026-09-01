@@ -5,7 +5,7 @@ import {
   matchesOilLossVesselSegment,
 } from '@/lib/oilLossEligibility'
 
-export type OilLossGlobalPeriodKey = 'MTD' | 'YTD' | `month-${number}`
+export type OilLossGlobalPeriodKey = 'YTD' | `month-${number}`
 
 export type OilLossGlobalTransportFilter = 'All' | 'Vessel' | 'Truck'
 
@@ -51,7 +51,7 @@ export function buildOilLossPeriodOptions(referenceDate = new Date()): OilLossPe
       label: MONTH_NAMES[m],
     })
   }
-  return [{ value: 'MTD', label: 'MTD' }, { value: 'YTD', label: 'YTD' }, ...monthOptions]
+  return [{ value: 'YTD', label: 'YTD' }, ...monthOptions]
 }
 
 export function resolveOilLossPeriodDateRange(
@@ -64,13 +64,6 @@ export function resolveOilLossPeriodDateRange(
   const pad = (n: number) => String(n).padStart(2, '0')
   const today = `${year}-${pad(month + 1)}-${pad(day)}`
 
-  if (period === 'MTD') {
-    return {
-      dateFrom: `${year}-${pad(month + 1)}-01`,
-      dateTo: today,
-      label: 'MTD',
-    }
-  }
   if (period === 'YTD') {
     return {
       dateFrom: `${year}-01-01`,
@@ -133,6 +126,9 @@ export type ApplyOilLossGlobalFiltersInput = {
   selectedGroupPlants?: string[]
   selectedModes?: string[]
   selectedIncoterms?: string[]
+  /** When set, overrides dates resolved from `period`. */
+  dateFrom?: string
+  dateTo?: string
   referenceDate?: Date
 }
 
@@ -145,9 +141,13 @@ export function applyOilLossGlobalFilters({
   selectedGroupPlants = [],
   selectedModes = [],
   selectedIncoterms = [],
+  dateFrom: dateFromOverride,
+  dateTo: dateToOverride,
   referenceDate = new Date(),
 }: ApplyOilLossGlobalFiltersInput): OilLossSourceRow[] {
-  const { dateFrom, dateTo } = resolveOilLossPeriodDateRange(period, referenceDate)
+  const resolved = resolveOilLossPeriodDateRange(period, referenceDate)
+  const dateFrom = dateFromOverride || resolved.dateFrom
+  const dateTo = dateToOverride || resolved.dateTo
 
   return rows.filter((row) => {
     if (!matchesOilLossModeFilter(row.transport_mode, selectedModes)) return false

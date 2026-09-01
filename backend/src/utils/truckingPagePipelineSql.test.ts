@@ -77,4 +77,22 @@ describe('truckingPagePipelineSql', () => {
     expect(scoped.sql).toContain("IN ('PLANNED', 'IN_PROGRESS')");
     expect(scoped.params).toEqual([]);
   });
+
+  it('OPEN/CLOSE global status buckets', () => {
+    expect(normalizeTruckingPagePipelineStageParam('OPEN')).toBeNull();
+    expect(normalizeTruckingPagePipelineStageParam('CLOSE')).toBeNull();
+
+    const open = appendTruckingPipelineStageFilter('OPEN', 'sto.sto', 5);
+    expect(open.sql).toContain("IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')");
+    expect(open.params).toEqual([]);
+
+    const close = appendTruckingPipelineStageFilter('CLOSE', 'sto.sto', 5);
+    expect(close.sql).toContain("IN ('COMPLETED', 'CANCELLED')");
+    expect(close.params).toEqual([]);
+
+    const openExpanded = buildTruckingExpandedStatusFilterWhere('tf.status', 'OPEN', 2);
+    expect(openExpanded.sql).toContain("IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')");
+    const closeExpanded = buildTruckingExpandedStatusFilterWhere('tf.status', 'CLOSE', 2);
+    expect(closeExpanded.sql).toContain("IN ('COMPLETED', 'CANCELLED')");
+  });
 });

@@ -177,6 +177,7 @@ export function buildShipmentListFilterCacheKey(input: {
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
   charterType?: string;
+  sourceType?: string;
   viewOption?: string;
   viewQuery?: string;
   status?: string;
@@ -206,6 +207,7 @@ export function buildShipmentListCacheKey(input: {
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
   charterType?: string;
+  sourceType?: string;
   viewOption?: string;
   viewQuery?: string;
   skipSapJoin: boolean;
@@ -230,6 +232,7 @@ export function buildShipmentListCacheKey(input: {
     columnFilters: stableColumnFiltersKey(input.colFilters),
     lateIndicator: input.lateIndicator != null ? String(input.lateIndicator) : '',
     charterType: input.charterType != null ? String(input.charterType) : '',
+    sourceType: input.sourceType != null ? String(input.sourceType) : '',
     viewOption: input.viewOption != null ? String(input.viewOption) : '',
     viewQuery: input.viewQuery != null ? String(input.viewQuery) : '',
     skipSapJoin: input.skipSapJoin,
@@ -717,6 +720,7 @@ export function buildShipmentPipelineDailyFilterInput(req: AuthRequest): Pipelin
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
   const charterTypeParam = (req.query as { charterType?: string }).charterType;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
   const viewOptionParam = (req.query as { viewOption?: string }).viewOption;
   const viewQueryParam = (req.query as { viewQuery?: string }).viewQuery;
   const scopeStatusParam = (req.query as { scopeStatus?: string }).scopeStatus;
@@ -732,6 +736,7 @@ export function buildShipmentPipelineDailyFilterInput(req: AuthRequest): Pipelin
     colFilters,
     lateIndicator: lateIndicatorParam != null ? String(lateIndicatorParam) : undefined,
     charterType: charterTypeParam != null ? String(charterTypeParam) : undefined,
+    sourceType: sourceTypeParam != null ? String(sourceTypeParam) : undefined,
     viewOption: viewOptionParam != null ? String(viewOptionParam) : undefined,
     viewQuery: viewQueryParam != null ? String(viewQueryParam) : undefined,
     scopeStatus: scopeStatusParam != null ? String(scopeStatusParam) : undefined,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appendShipmentGlobalSearch,
   appendShipmentCharterTypeFilter,
+  appendShipmentSourceTypeFilter,
   buildExactNumericGlobalSearchInnerSql,
   isExactStoGlobalSearch,
   shipmentEffectiveStatusExpr,
@@ -121,5 +122,29 @@ describe('appendShipmentCharterTypeFilter', () => {
     expect(result.sql).toBe('');
     expect(result.params).toEqual([]);
     expect(result.nextIndex).toBe(2);
+  });
+});
+
+describe('appendShipmentSourceTypeFilter', () => {
+  it('returns empty SQL for ALL', () => {
+    const result = appendShipmentSourceTypeFilter('ALL', 3);
+    expect(result.sql).toBe('');
+    expect(result.params).toEqual([]);
+    expect(result.nextIndex).toBe(3);
+  });
+
+  it('filters Interco on contract_source_type', () => {
+    const result = appendShipmentSourceTypeFilter('Interco', 3);
+    expect(result.sql).toContain('sb.contract_source_type');
+    expect(result.sql).toMatch(/INTERCO|INHOUSE/);
+    expect(result.params).toEqual([]);
+    expect(result.nextIndex).toBe(3);
+  });
+
+  it('filters 3rd Party on contract_source_type', () => {
+    const result = appendShipmentSourceTypeFilter('3rd Party', 3);
+    expect(result.sql).toContain('sb.contract_source_type');
+    expect(result.sql).toMatch(/3RD.*PARTY/);
+    expect(result.params).toEqual([]);
   });
 });

@@ -1044,6 +1044,7 @@ function ShipmentsPageContent() {
   const [statusFilter, setStatusFilter] = useState<ShipmentsPipelineStageFilter>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [charterTypeFilter, setCharterTypeFilter] = useState<string>('ALL')
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('ALL')
   const [etaLoadingFilter, setEtaLoadingFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
@@ -1314,6 +1315,7 @@ function ShipmentsPageContent() {
       selectedGroupPlants: debouncedSelectedGroupPlants,
       lateIndicatorFilter,
       charterTypeFilter,
+      sourceTypeFilter,
       viewOption,
       viewFilterValue,
       columnFiltersJson: JSON.stringify(
@@ -1337,6 +1339,7 @@ function ShipmentsPageContent() {
       debouncedSelectedGroupPlants,
       lateIndicatorFilter,
       charterTypeFilter,
+      sourceTypeFilter,
       viewOption,
       viewFilterValue,
       columnFilters,
@@ -1523,6 +1526,14 @@ function ShipmentsPageContent() {
     [resetPageForGlobalFilter],
   )
 
+  const onSourceTypeChange = useCallback(
+    (value: string) => {
+      resetPageForGlobalFilter()
+      setSourceTypeFilter(value)
+    },
+    [resetPageForGlobalFilter],
+  )
+
   const onProductsChangeWithPageReset = useCallback(
     (values: string[]) => {
       resetPageForGlobalFilter()
@@ -1674,6 +1685,9 @@ function ShipmentsPageContent() {
     }
     if (charterTypeFilter && charterTypeFilter !== 'ALL') {
       params.append('charterType', charterTypeFilter)
+    }
+    if (sourceTypeFilter && sourceTypeFilter !== 'ALL') {
+      params.append('sourceType', sourceTypeFilter)
     }
     if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
       params.append('viewOption', viewOption)
@@ -3165,6 +3179,7 @@ function ShipmentsPageContent() {
     statusFilter !== 'ALL' ||
     lateIndicatorFilter !== 'ALL' ||
     charterTypeFilter !== 'ALL' ||
+    sourceTypeFilter !== 'ALL' ||
     viewFilterValue !== '' ||
     viewOption !== 'all' ||
     selectedGroupPlants.length > 0 ||
@@ -3182,6 +3197,7 @@ function ShipmentsPageContent() {
     setStatusFilter('ALL')
     setLateIndicatorFilter('ALL')
     setCharterTypeFilter('ALL')
+    setSourceTypeFilter('ALL')
     setViewOption('all')
     setViewFilterValue('')
     resetUserScopeFilters()
@@ -3340,6 +3356,8 @@ function ShipmentsPageContent() {
 
   const section2EtaScopeLabel = useMemo(() => {
     if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED || statusFilter === 'ALL') return null
+    if (statusFilter === 'OPEN') return 'Open'
+    if (statusFilter === 'CLOSE') return 'Close'
     return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
   }, [statusFilter])
   const tableShipmentCount = useMemo(() => totalCount, [totalCount])
@@ -3388,6 +3406,8 @@ function ShipmentsPageContent() {
 
   const shipmentsTableScopeLabel = useMemo(() => {
     if (statusFilter !== 'ALL') {
+      if (statusFilter === 'OPEN') return 'Open'
+      if (statusFilter === 'CLOSE') return 'Close'
       return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
     }
     if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') {
@@ -5981,6 +6001,8 @@ function ShipmentsPageContent() {
           onLateIndicatorChange={onLateIndicatorChange}
           charterTypeFilter={charterTypeFilter}
           onCharterTypeChange={onCharterTypeChange}
+          sourceTypeFilter={sourceTypeFilter}
+          onSourceTypeChange={onSourceTypeChange}
           availableIncoterms={availableIncoterms}
           selectedIncoterms={selectedIncoterms}
           onIncotermsChange={onIncotermsChange}

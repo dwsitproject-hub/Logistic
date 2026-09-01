@@ -23,6 +23,7 @@ import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
   appendTruckingLateIndicatorFilter,
+  appendTruckingSourceTypeFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
 import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
@@ -1024,6 +1025,7 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
     const lateIndicatorParam = (req.query as any).lateIndicator as string | undefined;
+    const sourceTypeParam = (req.query as any).sourceType as string | undefined;
     const status = (req.query as any).status as string | undefined;
     const loadingLocation = (req.query as any).loadingLocation as string | undefined;
     const unloadingLocation = (req.query as any).unloadingLocation as string | undefined;
@@ -1110,6 +1112,11 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     extraWhere += li.sql;
     params.push(...li.params);
     idx = li.nextIndex;
+
+    const src = appendTruckingSourceTypeFilter(sourceTypeParam, idx);
+    extraWhere += src.sql;
+    params.push(...src.params);
+    idx = src.nextIndex;
 
     const qtySentSql = sqlTruckingQuantitySentCoalesce();
     const qtyDelSql = sqlTruckingQuantityDeliveredCoalesce();

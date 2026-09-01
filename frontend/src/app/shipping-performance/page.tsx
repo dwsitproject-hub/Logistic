@@ -109,6 +109,7 @@ import {
 } from '@/lib/shippingPerformanceColumnPrefs'
 import { resolveShipmentApiLookupKey } from '@/lib/shipmentStoDisplay'
 import { PerformancePeriodSelect } from '@/components/performance/PerformancePeriodSelect'
+import { PerformancePeriodDateRow } from '@/components/performance/PerformancePeriodDateRow'
 import {
   CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
   CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
@@ -1817,6 +1818,9 @@ function ShippingPerformancePageContent() {
     markUserScopeFiltersCleared('shipping-performance')
     setPerfCardFilter('all')
     setPerformancePeriod('YTD')
+    const { dateFrom: ytdFrom, dateTo: ytdTo } = resolvePerformancePeriodDateRange('YTD')
+    setDateFrom(ytdFrom)
+    setDateTo(ytdTo)
     setSelectedSources([])
     resetUserScopeFilters()
     setSelectedIncoterms([])
@@ -2113,16 +2117,15 @@ function ShippingPerformancePageContent() {
               </h1>
             </div>
           </div>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-6 flex-wrap">
-              <PerformancePeriodSelect
-                value={performancePeriod}
-                onChange={(value) => {
-                  setPerformancePeriod(value)
-                  setCurrentPage(1)
-                }}
-              />
-              <div className="flex items-center gap-3">
+          <div className="flex items-center gap-6 flex-wrap">
+            <PerformancePeriodSelect
+              value={performancePeriod}
+              onChange={(value) => {
+                setPerformancePeriod(value)
+                setCurrentPage(1)
+              }}
+            />
+            <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
                 <div className="w-48">
                   <SearchableMultiSelect
@@ -2187,15 +2190,28 @@ function ShippingPerformancePageContent() {
                   />
                 </div>
               </div>
-            </div>
-            <button
-              type="button"
-              onClick={resetPerfSelections}
-              className="text-sm text-blue-700 hover:underline shrink-0"
-            >
-              Reset selection
-            </button>
           </div>
+          <PerformancePeriodDateRow
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFromChange={(iso) => {
+              setDateFrom(iso)
+              setCurrentPage(1)
+            }}
+            onDateToChange={(iso) => {
+              setDateTo(iso)
+              setCurrentPage(1)
+            }}
+            trailingAction={
+              <button
+                type="button"
+                onClick={resetPerfSelections}
+                className="text-sm text-blue-700 hover:underline shrink-0"
+              >
+                Reset selection
+              </button>
+            }
+          />
         </div>
 
         {/* Section 1: Summary Cards */}

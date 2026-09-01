@@ -3,6 +3,7 @@
  */
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import {
   LEGACY_SHIPMENT_STATUS_ALIASES,
   SHIPMENT_AUTO_STATUSES,
@@ -389,6 +390,18 @@ export function appendShipmentCharterTypeFilter(
     params: [bucket],
     nextIndex: startIndex + 1,
   }
+}
+
+/**
+ * Toolbar source filter (Interco / 3rd Party) on grouped shipment_base.
+ * Uses MAX(c.source_type) projected as sb.contract_source_type.
+ */
+export function appendShipmentSourceTypeFilter(
+  sourceType: string | undefined,
+  startIndex: number,
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const sql = appendContractPerfSourceTypeFilter(sourceType, 'sb.contract_source_type')
+  return { sql, params: [], nextIndex: startIndex }
 }
 
 /** View-by dropdown: narrow to one dimension (optional). */

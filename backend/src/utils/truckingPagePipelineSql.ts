@@ -28,9 +28,28 @@ export function normalizeTruckingPagePipelineStageParam(
   const s = String(raw ?? '')
     .trim()
     .toUpperCase();
-  if (!s || s === 'ALL') return null;
+  if (!s || s === 'ALL' || s === 'OPEN' || s === 'CLOSE') return null;
   return PIPELINE_SET.has(s) ? (s as TruckingPagePipelineStage) : null;
 }
+
+export function isTruckingPageOpenCloseStatusParam(raw: string | undefined): 'OPEN' | 'CLOSE' | null {
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (s === 'OPEN' || s === 'CLOSE') return s;
+  return null;
+}
+
+export const TRUCKING_PAGE_OPEN_STAGES: readonly TruckingPagePipelineStage[] = [
+  'UNPLANNED',
+  'PLANNED',
+  'IN_PROGRESS',
+] as const;
+
+export const TRUCKING_PAGE_CLOSE_STAGES: readonly TruckingPagePipelineStage[] = [
+  'COMPLETED',
+  'CANCELLED',
+] as const;
 
 /** KLIP ETA columns or Daily Planning (Add New Trucking) — not SAP receive / completion dates. */
 export function sqlTruckingPageHasEtaOrPlanning(truckingAlias = 't'): string {
@@ -121,17 +140,34 @@ export function sqlTruckingPagePipelineStageExpr(
 
 /** Filter list rows by pipeline card (same expression as summary).
  * Planned card is special: includes PLANNED + IN_PROGRESS (In Progress card stays exact).
+ * Global Filters OPEN = Unplanned+Planned+In Progress; CLOSE = Completed+Cancelled.
  */
 export function appendTruckingPipelineStageFilter(
   stage: string | undefined,
   stoExpr: string,
   startIndex: number,
 ): { sql: string; params: string[]; nextIndex: number } {
+  const openClose = isTruckingPageOpenCloseStatusParam(stage);
+  const stageExpr = sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined);
+  if (openClose === 'OPEN') {
+    return {
+      sql: ` AND ${stageExpr} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+  if (openClose === 'CLOSE') {
+    return {
+      sql: ` AND ${stageExpr} IN ('COMPLETED', 'CANCELLED')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+
   const normalized = normalizeTruckingPagePipelineStageParam(stage);
   if (!normalized) {
     return { sql: '', params: [], nextIndex: startIndex };
   }
-  const stageExpr = sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined);
   if (normalized === 'PLANNED') {
     return {
       sql: ` AND ${stageExpr} IN ('PLANNED', 'IN_PROGRESS')`,
@@ -149,12 +185,29 @@ export function appendTruckingPipelineStageFilter(
 /**
  * Status-scoped WHERE for expanded list rows (`tf.status`).
  * Planned card → PLANNED + IN_PROGRESS; other cards exact match.
+ * Global Filters OPEN/CLOSE use the same buckets as list filter.
  */
 export function buildTruckingExpandedStatusFilterWhere(
   statusColumnExpr: string,
   stageFilter: string | null | undefined,
   startIndex: number,
 ): { sql: string; params: string[]; nextIndex: number } {
+  const openClose = isTruckingPageOpenCloseStatusParam(stageFilter ?? undefined);
+  if (openClose === 'OPEN') {
+    return {
+      sql: ` WHERE ${statusColumnExpr} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+  if (openClose === 'CLOSE') {
+    return {
+      sql: ` WHERE ${statusColumnExpr} IN ('COMPLETED', 'CANCELLED')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+
   const normalized = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
   if (!normalized) {
     return { sql: '', params: [], nextIndex: startIndex };

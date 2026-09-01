@@ -32,6 +32,7 @@ import {
   type ROilLossKey,
 } from '@/lib/oilLossSummary'
 import { StyledNativeSelect } from '@/components/shared/StyledNativeSelect'
+import { PerformancePeriodDateRow } from '@/components/performance/PerformancePeriodDateRow'
 import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
@@ -1163,7 +1164,7 @@ export default function OilLossPage() {
     userScopeReady,
   } = useUserScopeFilterDefaults('oil-loss')
   const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
-  const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('MTD')
+  const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('YTD')
   const [globalTransport, setGlobalTransport] = useState<OilLossGlobalTransportFilter>('All')
   const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
     EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
@@ -1182,14 +1183,8 @@ export default function OilLossPage() {
     () => resolveOilLossPeriodDateRange(globalPeriod),
     [globalPeriod],
   )
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [dateFrom, setDateFrom] = useState(() => resolveOilLossPeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolveOilLossPeriodDateRange('YTD').dateTo)
 
   useEffect(() => {
     setDateFrom(globalPeriodMeta.dateFrom)
@@ -1503,8 +1498,11 @@ export default function OilLossPage() {
     }
   }, [columnPrefsByView])
 
+  const ytdRange = useMemo(() => resolveOilLossPeriodDateRange('YTD'), [])
   const hasActiveOilLossFilters =
-    globalPeriod !== 'MTD' ||
+    globalPeriod !== 'YTD' ||
+    dateFrom !== ytdRange.dateFrom ||
+    dateTo !== ytdRange.dateTo ||
     globalTransport !== 'All' ||
     selectedModes.length > 0 ||
     selectedIncoterms.length > 0 ||
@@ -1512,7 +1510,10 @@ export default function OilLossPage() {
     selectedGroupPlants.length > 0
 
   const resetGlobalBarFilters = useCallback(() => {
-    setGlobalPeriod('MTD')
+    const ytd = resolveOilLossPeriodDateRange('YTD')
+    setGlobalPeriod('YTD')
+    setDateFrom(ytd.dateFrom)
+    setDateTo(ytd.dateTo)
     setGlobalTransport('All')
     handleProductsChange([])
     handleGroupPlantsChange([])
@@ -1536,11 +1537,9 @@ export default function OilLossPage() {
     resetUserScopeFilters()
     resetGlobalBarFilters()
     resetOilLossDrilldown()
-    const d = new Date()
-    setDateFrom(`${d.getFullYear()}-01-01`)
-    setDateTo(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-    )
+    const ytd = resolveOilLossPeriodDateRange('YTD')
+    setDateFrom(ytd.dateFrom)
+    setDateTo(ytd.dateTo)
     setCurrentPage(1)
   }, [resetUserScopeFilters, resetGlobalBarFilters, resetOilLossDrilldown])
 
@@ -1549,6 +1548,8 @@ export default function OilLossPage() {
     setCurrentPage(1)
   }, [
     globalPeriod,
+    dateFrom,
+    dateTo,
     globalTransport,
     selectedModes,
     selectedIncoterms,
@@ -1558,7 +1559,7 @@ export default function OilLossPage() {
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [globalPeriod, globalTransport, selectedProducts])
+  }, [globalPeriod, dateFrom, dateTo, globalTransport, selectedProducts])
 
   const globallyFilteredRows = useMemo(() => {
     return applyOilLossGlobalFilters({
@@ -1569,6 +1570,8 @@ export default function OilLossPage() {
       selectedGroupPlants,
       selectedModes,
       selectedIncoterms,
+      dateFrom,
+      dateTo,
     })
   }, [
     rows,
@@ -1578,16 +1581,14 @@ export default function OilLossPage() {
     selectedGroupPlants,
     selectedModes,
     selectedIncoterms,
+    dateFrom,
+    dateTo,
   ])
 
   const periodSummary = useMemo(() => {
     if (!userScopeReady) return null
-    return buildOilLossSummaryForDateRange(
-      globallyFilteredRows,
-      globalPeriodMeta.dateFrom,
-      globalPeriodMeta.dateTo,
-    )
-  }, [userScopeReady, globallyFilteredRows, globalPeriodMeta.dateFrom, globalPeriodMeta.dateTo])
+    return buildOilLossSummaryForDateRange(globallyFilteredRows, dateFrom, dateTo)
+  }, [userScopeReady, globallyFilteredRows, dateFrom, dateTo])
 
   const drilldownFilteredRows = useMemo(
     () => applyOilLossDrilldownFilters(globallyFilteredRows, drilldownFilters),
@@ -1828,16 +1829,15 @@ export default function OilLossPage() {
               <Loader2 className="h-5 w-5 shrink-0 animate-spin text-gray-400" aria-hidden />
             ) : null}
           </h1>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-6 flex-wrap">
-              <StyledNativeSelect
-                label="Period:"
-                value={globalPeriod}
-                onChange={setGlobalPeriod}
-                options={globalPeriodOptions}
-                uppercaseLabels
-              />
-              <div className="flex items-center gap-3">
+          <div className="flex items-center gap-6 flex-wrap">
+            <StyledNativeSelect
+              label="Period:"
+              value={globalPeriod}
+              onChange={setGlobalPeriod}
+              options={globalPeriodOptions}
+              uppercaseLabels
+            />
+            <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
                 <div className="w-48">
                   <SearchableMultiSelect
@@ -1872,16 +1872,22 @@ export default function OilLossPage() {
                   />
                 </div>
               </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={resetGlobalBarFilters}
-              className="text-sm text-blue-700 hover:underline shrink-0"
-            >
-              Reset selection
-            </button>
           </div>
+          <PerformancePeriodDateRow
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFromChange={setDateFrom}
+            onDateToChange={setDateTo}
+            trailingAction={
+              <button
+                type="button"
+                onClick={resetGlobalBarFilters}
+                className="text-sm text-blue-700 hover:underline shrink-0"
+              >
+                Reset selection
+              </button>
+            }
+          />
 
           <div
             className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
@@ -2008,24 +2014,18 @@ export default function OilLossPage() {
               />
 
               <div className="flex flex-wrap items-center gap-4">
-                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
-                  <span className="font-medium text-gray-700">Period range:</span>
-                  <span className="tabular-nums">
-                    {formatShortDate(globalPeriodMeta.dateFrom)} — {formatShortDate(globalPeriodMeta.dateTo)}
-                  </span>
-                  {hasActiveOilLossFilters ? (
-                    <Button
-                      type="button"
-                      onClick={clearOilLossFilters}
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-500"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  ) : null}
-                </div>
+                {hasActiveOilLossFilters ? (
+                  <Button
+                    type="button"
+                    onClick={clearOilLossFilters}
+                    variant="ghost"
+                    size="sm"
+                    className="text-gray-500"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Clear
+                  </Button>
+                ) : null}
               </div>
             </div>
           </CardContent>

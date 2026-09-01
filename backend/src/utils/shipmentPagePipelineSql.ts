@@ -49,11 +49,50 @@ export function normalizeShipmentPagePipelineStageParam(
   const normalized = String(raw ?? '')
     .trim()
     .toUpperCase();
-  if (!normalized || normalized === 'ALL') return null;
+  if (!normalized || normalized === 'ALL' || normalized === 'OPEN' || normalized === 'CLOSE') {
+    return null;
+  }
   if (PIPELINE_STAGE_SET.has(normalized)) {
     return normalized as ShipmentPagePipelineStage;
   }
   return LEGACY_STATUS_TO_PIPELINE[normalized] ?? null;
+}
+
+/** Global Filters Open/Close buckets (Shipments page). */
+export const SHIPMENT_PAGE_OPEN_PIPELINE_STAGES: readonly ShipmentPagePipelineStage[] = [
+  'UNPLANNED',
+  'PREPLANNED',
+  'PLANNED',
+  'AT_LOADING_PORT',
+  'SAILED',
+  'AT_DISCHARGE_PORT',
+] as const;
+
+export const SHIPMENT_PAGE_CLOSE_PIPELINE_STAGES: readonly ShipmentPagePipelineStage[] = [
+  'COMPLETED',
+  'CANCELLED',
+] as const;
+
+/** Effective-status values included when Global Filters status = OPEN (shipment rows only). */
+export function shipmentPageOpenEffectiveStatuses(): string[] {
+  return [
+    'PLANNED',
+    ...SHIPMENT_AT_LOADING_PORT_STATUSES,
+    ...SHIPMENT_SAILED_STATUSES,
+    ...SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
+  ];
+}
+
+export function shipmentPageCloseEffectiveStatuses(): string[] {
+  return ['COMPLETED', 'CANCELLED'];
+}
+
+export function isShipmentPageOpenCloseStatusParam(raw: string | undefined): 'OPEN' | 'CLOSE' | null {
+  const normalized = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (normalized === 'OPEN' || normalized === 'CLOSE') return normalized;
+  return null;
 }
 
 /** Summary-only pipeline cards → view-table detail statuses (last ATA / effective status). */
@@ -291,6 +330,14 @@ export function appendShipmentPipelineStageFilter(
   statusParam: string | undefined,
   startIndex: number,
 ): { sql: string; params: unknown[]; nextIndex: number } {
+  const openClose = isShipmentPageOpenCloseStatusParam(statusParam);
+  if (openClose === 'OPEN') {
+    return shipmentEffectiveStatusInListSql('sb', shipmentPageOpenEffectiveStatuses(), startIndex);
+  }
+  if (openClose === 'CLOSE') {
+    return shipmentEffectiveStatusInListSql('sb', shipmentPageCloseEffectiveStatuses(), startIndex);
+  }
+
   const stage = normalizeShipmentPagePipelineStageParam(statusParam);
   if (!stage) {
     return { sql: '', params: [], nextIndex: startIndex };

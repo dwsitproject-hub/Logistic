@@ -84,7 +84,8 @@ export function isActualsTemplateDownloadEnabled(statusFilter: string): boolean 
   return (
     statusFilter === 'UNPLANNED' ||
     statusFilter === 'PLANNED' ||
-    statusFilter === 'IN_PROGRESS'
+    statusFilter === 'IN_PROGRESS' ||
+    statusFilter === 'OPEN'
   )
 }
 
