@@ -4,6 +4,7 @@ import logger from '../utils/logger';
 import { isPrePlannedGroupingEnabled } from '../config/prePlannedConfig';
 import {
   acceptPrePlannedGroupLink,
+  createManualPrePlannedGroup,
   dismissPrePlannedGroup,
   getPrePlannedGroupById,
   getPrePlannedMetrics,
@@ -96,6 +97,34 @@ export const postPrePlannedAccept = async (req: AuthRequest, res: Response): Pro
   } catch (error) {
     logger.error('postPrePlannedAccept failed', error);
     res.status(500).json({ success: false, error: { message: 'Failed to accept pre-planned group' } });
+  }
+};
+
+export const postPrePlannedManualCreate = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!isPrePlannedGroupingEnabled()) {
+      disabled(res);
+      return;
+    }
+    const rawIds = Array.isArray(req.body?.contractIds) ? req.body.contractIds : [];
+    const contractIds = rawIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0);
+    if (contractIds.length < 2) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Select at least 2 contracts to create a manual Preplanned group' },
+      });
+      return;
+    }
+    const group = await createManualPrePlannedGroup(contractIds, req.user?.id);
+    res.json({ success: true, data: { group } });
+  } catch (error) {
+    logger.error('postPrePlannedManualCreate failed', error);
+    res.status(400).json({
+      success: false,
+      error: {
+        message: error instanceof Error ? error.message : 'Failed to create manual pre-planned group',
+      },
+    });
   }
 };
 

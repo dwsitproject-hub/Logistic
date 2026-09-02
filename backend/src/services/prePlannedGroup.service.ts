@@ -2,6 +2,7 @@ import { query } from '../database/connection';
 import pool from '../database/connection';
 import { getPrePlannedConfig, isPrePlannedGroupingEnabled } from '../config/prePlannedConfig';
 import { buildPrePlannedEligibleContractsQuery } from '../utils/prePlannedEligibilitySql';
+import { buildManualPrePlannedEligibleContractsByIdsQuery } from '../utils/prePlannedManualEligibilitySql';
 import {
   buildClusterBins,
   computeMergeHints,
@@ -339,6 +340,182 @@ export async function rebuildPrePlannedGroups(triggeredBy: string): Promise<{
   } finally {
     client.release();
   }
+}
+
+async function nextManualGroupCode(groupPlant: string): Promise<string> {
+  const prefix = plantCodePrefix(groupPlant);
+  const pattern = `PPM-${prefix}-%`;
+  const res = await query(
+    `SELECT MAX(group_code) AS max_code FROM pre_planned_groups WHERE group_code LIKE $1`,
+    [pattern],
+  );
+  const maxCode = res.rows[0]?.max_code;
+  let seq = 1;
+  if (maxCode) {
+    const parts = String(maxCode).split('-');
+    const last = Number(parts[parts.length - 1]);
+    if (Number.isFinite(last)) seq = last + 1;
+  }
+  return `PPM-${prefix}-${String(seq).padStart(3, '0')}`;
+}
+
+/** Unplanned backlog rows (unlike AUTO-eligibility rows) may have no delivery window yet. */
+function safeDateOrFallback(d: Date, fallback: Date): Date {
+  return Number.isNaN(d.getTime()) ? fallback : d;
+}
+
+function aggregateOrMixed(values: string[]): string {
+  const distinct = [...new Set(values.map((v) => v.trim()).filter((v) => v.length > 0))];
+  if (distinct.length === 0) return 'Blank';
+  if (distinct.length === 1) return distinct[0]!;
+  return 'Mixed';
+}
+
+/**
+ * Manually create a Preplanned group from a user-selected set of Unplanned
+ * contracts (Shipments View Table "Select" column). Unlike auto-clustering,
+ * no partition (plant/buyer/incoterm/product) match is required — contracts
+ * are re-validated against the core eligibility rules only, then inserted
+ * directly with status ACCEPTED (skipping the SUGGESTED step, since the user
+ * has already made the grouping decision explicitly).
+ *
+ * If a selected contract is currently an active member of a different
+ * auto-SUGGESTED group, that membership is released so it can join the new
+ * manual group.
+ */
+export async function createManualPrePlannedGroup(
+  contractIds: string[],
+  userId: string | undefined,
+): Promise<PrePlannedGroupDto> {
+  const dedupedIds = [...new Set(contractIds.map((id) => id.trim()).filter(Boolean))];
+  if (dedupedIds.length < 2) {
+    throw new Error('Select at least 2 contracts to create a manual Preplanned group');
+  }
+
+  const { sql, params } = buildManualPrePlannedEligibleContractsByIdsQuery(dedupedIds);
+  const res = await query(sql, params);
+  const eligible = res.rows.map(mapEligibleRow);
+
+  if (eligible.length !== dedupedIds.length) {
+    const eligibleIdSet = new Set(eligible.map((c) => c.id));
+    const missing = dedupedIds.filter((id) => !eligibleIdSet.has(id));
+    throw new Error(
+      `${missing.length} of ${dedupedIds.length} selected contract(s) are no longer eligible for grouping (already shipped, closed, or otherwise assigned). Please refresh and try again.`,
+    );
+  }
+
+  const groupPlant = aggregateOrMixed(eligible.map((c) => c.groupPlant));
+  const buyer = aggregateOrMixed(eligible.map((c) => c.buyer));
+  const incoterm = aggregateOrMixed(eligible.map((c) => c.incoterm));
+  const product = aggregateOrMixed(eligible.map((c) => c.product));
+  const supplier = aggregateOrMixed(eligible.map((c) => c.supplier));
+  const supplierGroupValues = eligible.map((c) => c.supplierGroup ?? '');
+  const supplierGroup = aggregateOrMixed(supplierGroupValues);
+  const now = new Date();
+  const windowStart = new Date(
+    Math.min(
+      ...eligible.map((c) => safeDateOrFallback(c.deliveryStart, safeDateOrFallback(c.contractDate, now)).getTime()),
+    ),
+  );
+  const windowEnd = new Date(
+    Math.max(
+      ...eligible.map((c) => safeDateOrFallback(c.deliveryEnd, safeDateOrFallback(c.contractDate, now)).getTime()),
+    ),
+  );
+  const totalOsMt = eligible.reduce((sum, c) => sum + c.osMt, 0);
+
+  const client = await pool.connect();
+  let groupId: string;
+  try {
+    await client.query('BEGIN');
+
+    // Release any active membership in an auto-SUGGESTED group so these
+    // contracts can join the new manual group without violating the
+    // "one active group per contract" unique index.
+    await client.query(
+      `
+      UPDATE pre_planned_group_members pgm
+      SET released_at = now()
+      FROM pre_planned_groups pg
+      WHERE pgm.group_id = pg.id
+        AND pg.status = 'SUGGESTED'
+        AND pgm.contract_id = ANY($1::uuid[])
+        AND pgm.released_at IS NULL
+      `,
+      [dedupedIds],
+    );
+    // Any auto-SUGGESTED group left with zero active members is now stale.
+    await client.query(`
+      UPDATE pre_planned_groups pg
+      SET status = 'SUPERSEDED', updated_at = now()
+      WHERE pg.status = 'SUGGESTED'
+        AND NOT EXISTS (
+          SELECT 1 FROM pre_planned_group_members pgm
+          WHERE pgm.group_id = pg.id AND pgm.released_at IS NULL
+        )
+    `);
+
+    const groupCode = await nextManualGroupCode(groupPlant);
+    const ins = await client.query(
+      `
+      INSERT INTO pre_planned_groups (
+        group_code, partition_key, group_plant, buyer, incoterm, product,
+        supplier, supplier_group, window_start, window_end,
+        bin_capacity_mt, total_os_mt, is_partial, status, source, created_by_user_id
+      ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,false,'ACCEPTED','MANUAL',$11)
+      RETURNING id
+      `,
+      [
+        groupCode,
+        groupPlant,
+        buyer,
+        incoterm,
+        product,
+        supplier,
+        supplierGroup === 'Blank' ? null : supplierGroup,
+        windowStart,
+        windowEnd,
+        totalOsMt,
+        userId ?? null,
+      ],
+    );
+    groupId = ins.rows[0]!.id;
+
+    for (const m of eligible) {
+      await client.query(
+        `
+        INSERT INTO pre_planned_group_members (group_id, contract_id, contract_number, os_mt_at_grouping)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (group_id, contract_id) DO UPDATE SET
+          contract_number = EXCLUDED.contract_number,
+          os_mt_at_grouping = EXCLUDED.os_mt_at_grouping,
+          released_at = NULL
+        `,
+        [groupId, m.id, m.contractId, m.osMt],
+      );
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await AuditService.log({
+    userId: userId ?? '00000000-0000-0000-0000-000000000000',
+    action: 'PRE_PLANNED_MANUAL_CREATE',
+    entityType: 'PRE_PLANNED_GROUP',
+    entityId: groupId,
+    afterData: { contractIds: dedupedIds },
+  });
+
+  const created = await getPrePlannedGroupById(groupId);
+  if (!created) {
+    throw new Error('Manual group was created but could not be reloaded');
+  }
+  return created;
 }
 
 export async function listPrePlannedGroups(filters: {

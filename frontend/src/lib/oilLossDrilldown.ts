@@ -1,5 +1,5 @@
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
-import { oilLossContractGroupKey } from '@/lib/oilLossAllContractColumns'
+import { aggregateOilLossRowsByGroup, type OilLossMergedRow } from '@/lib/oilLossGroupAggregation'
 
 export type OilLossDrilldownCategory = 'product' | 'plant' | 'incoterm' | 'transporter' | 'supplier'
 
@@ -38,33 +38,24 @@ export type OilLossDrilldownTreeNode = {
   children: OilLossDrilldownTreeNode[]
 }
 
-function contractGroupKey(row: OilLossSourceRow): string {
-  return oilLossContractGroupKey(row)
-}
-
 function normalizeGroupLabel(value: unknown, fallback = 'Blank'): string {
   const trimmed = String(value ?? '').trim()
   return trimmed || fallback
 }
 
-function parseQty(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
+/**
+ * R4 basis (Qty Receive − Qty Delivery) on an already-merged group (one row per contract, or
+ * one row per SEA voyage when it spans multiple contracts — quantities are pre-summed).
+ */
+function groupR4OilLossKg(group: OilLossMergedRow): number {
+  if (group.quantity_delivery <= 0) return 0
+  return group.quantity_received - group.quantity_delivery
 }
 
-/** R4 basis (Qty Receive − Qty Delivery) — Contracts-level qty (same as View Table / Section 1). */
-function rowR4OilLossKg(row: OilLossSourceRow): number {
-  const delivery = parseQty(row.quantity_sent ?? row.quantity_delivery)
-  const receive = parseQty(row.quantity_received)
-  if (receive == null || delivery == null || delivery <= 0) return 0
-  return receive - delivery
-}
-
-function touchAgg(agg: { contracts: Set<string>; totalOilLossKg: number }, contractKey: string, lossKg: number) {
-  // Count each contract once — delivery/receive are contract-level (Contracts formula).
-  if (agg.contracts.has(contractKey)) return
-  agg.contracts.add(contractKey)
+function touchAgg(agg: { contracts: Set<string>; totalOilLossKg: number }, groupKey: string, lossKg: number) {
+  // Count each group (voyage/contract) once — delivery/receive are already group-level totals.
+  if (agg.contracts.has(groupKey)) return
+  agg.contracts.add(groupKey)
   agg.totalOilLossKg += lossKg
 }
 
@@ -277,18 +268,23 @@ function plantsToNodes(map: Map<string, PlantAcc>): OilLossDrilldownTreeNode[] {
   )
 }
 
-/** Hierarchical drilldown tree — Product → Plant → Incoterm → Transporter → Supplier. */
+/**
+ * Hierarchical drilldown tree — Product → Plant → Incoterm → Transporter → Supplier.
+ * Rows are first merged into one row per group (SEA voyage or LAND contract/PO) so a
+ * multi-PO SEA voyage contributes its summed R4 loss once, not once per member PO.
+ */
 export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDrilldownTreeNode[] {
+  const groups = aggregateOilLossRowsByGroup(rows)
   const root = new Map<string, ProductAcc>()
 
-  for (const row of rows) {
-    const contractKey = contractGroupKey(row)
-    const lossKg = rowR4OilLossKg(row)
-    const prod = groupLabelForRow(row, 'product')
-    const plant = groupLabelForRow(row, 'plant')
-    const incoterm = groupLabelForRow(row, 'incoterm')
-    const transporter = groupLabelForRow(row, 'transporter')
-    const supplier = groupLabelForRow(row, 'supplier')
+  for (const group of groups) {
+    const contractKey = group.id
+    const lossKg = groupR4OilLossKg(group)
+    const prod = groupLabelForRow(group, 'product')
+    const plant = groupLabelForRow(group, 'plant')
+    const incoterm = groupLabelForRow(group, 'incoterm')
+    const transporter = groupLabelForRow(group, 'transporter')
+    const supplier = groupLabelForRow(group, 'supplier')
 
     if (!root.has(prod)) {
       root.set(prod, { contracts: new Set(), totalOilLossKg: 0, plants: new Map() })
@@ -332,22 +328,16 @@ export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDril
   )
 }
 
+/** Counts distinct groups (SEA voyages / LAND contracts) — not raw SAP rows. */
 export function countUniqueOilLossContracts(rows: OilLossSourceRow[]): number {
-  const keys = new Set<string>()
-  for (const row of rows) {
-    keys.add(contractGroupKey(row))
-  }
-  return keys.size
+  return aggregateOilLossRowsByGroup(rows).length
 }
 
 export function sumOilLossKgFromRows(rows: OilLossSourceRow[]): number {
-  const seen = new Set<string>()
+  const groups = aggregateOilLossRowsByGroup(rows)
   let sum = 0
-  for (const row of rows) {
-    const key = contractGroupKey(row)
-    if (seen.has(key)) continue
-    seen.add(key)
-    sum += rowR4OilLossKg(row)
+  for (const group of groups) {
+    sum += groupR4OilLossKg(group)
   }
   return sum
 }

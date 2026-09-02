@@ -7,15 +7,22 @@ import {
 
 export type OilLossGlobalPeriodKey = 'YTD' | 'MTD' | `month-${number}`
 
-export type OilLossGlobalTransportFilter = 'All' | 'Vessel' | 'Truck'
+/**
+ * No "All" option on purpose: Vessel (SEA) and Truck (LAND) group Section 1 (R1-R4),
+ * the view table, and the drilldown differently — SEA merges by STO/Operation ID
+ * (a voyage can span multiple POs), LAND stays per-PO. Mixing both under "All" would
+ * make those totals/groupings inconsistent and confusing, so the user must pick one.
+ */
+export type OilLossGlobalTransportFilter = 'Vessel' | 'Truck'
 
 export type OilLossGlobalProductFilter = 'All' | 'CPO' | 'PK' | 'POME' | 'SHELL PALM'
 
 export const OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS: readonly OilLossGlobalTransportFilter[] = [
-  'All',
   'Vessel',
   'Truck',
 ] as const
+
+export const OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT: OilLossGlobalTransportFilter = 'Vessel'
 
 export const OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS = ['CPO', 'PK', 'POME', 'SHELL PALM'] as const
 
@@ -109,10 +116,8 @@ export function matchesOilLossGlobalTransportFilter(
   row: OilLossSourceRow,
   filter: OilLossGlobalTransportFilter,
 ): boolean {
-  if (filter === 'All') return true
   if (filter === 'Vessel') return matchesOilLossVesselSegment(row)
-  if (filter === 'Truck') return matchesOilLossTruckSegment(row)
-  return true
+  return matchesOilLossTruckSegment(row)
 }
 
 export function matchesOilLossGlobalProductsMultiFilter(

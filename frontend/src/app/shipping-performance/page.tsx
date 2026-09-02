@@ -583,6 +583,8 @@ type LatePerfNode = {
   count: number
   /** Shipment (STO) count; UI label stays “Vessels”. */
   vesselCount: number
+  /** OS Qty (kg) for this node — same PO-level de-duped aggregate as the view table / By Vessel total. */
+  outstandingQtyKg: number
   children: LatePerfNode[]
 }
 
@@ -795,13 +797,13 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
 }
 
 function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
-  type VesAcc = { contracts: Set<string>; stoKeys: Set<string> }
+  type VesAcc = { contracts: Set<string>; stoKeys: Set<string>; outstandingQtyKg: number }
   type VesMap = Map<string, VesAcc>
-  type IncAcc = { contracts: Set<string>; stoKeys: Set<string>; vesselsMap: VesMap }
+  type IncAcc = { contracts: Set<string>; stoKeys: Set<string>; outstandingQtyKg: number; vesselsMap: VesMap }
   type IncMap = Map<string, IncAcc>
-  type PlantAcc = { contracts: Set<string>; stoKeys: Set<string>; incoterms: IncMap }
+  type PlantAcc = { contracts: Set<string>; stoKeys: Set<string>; outstandingQtyKg: number; incoterms: IncMap }
   type PlantMap = Map<string, PlantAcc>
-  type ProdAcc = { contracts: Set<string>; stoKeys: Set<string>; plants: PlantMap }
+  type ProdAcc = { contracts: Set<string>; stoKeys: Set<string>; outstandingQtyKg: number; plants: PlantMap }
   type ProdMap = Map<string, ProdAcc>
   const root: ProdMap = new Map()
 
@@ -810,25 +812,31 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
     const plant = normalizeGroupKey(row.plant_site)
     const inc = normalizeGroupKey(row.incoterm)
     const ves = normalizeVesselKey(row.vessel_name)
+    // PO-level OS de-duped across sibling STOs — same source as the view table / By Vessel total.
+    const rowOsKg = shippingPerfOutstandingQtyKgForAggregate(row)
 
-    if (!root.has(prod)) root.set(prod, { contracts: new Set(), stoKeys: new Set(), plants: new Map() })
+    if (!root.has(prod)) root.set(prod, { contracts: new Set(), stoKeys: new Set(), outstandingQtyKg: 0, plants: new Map() })
     const pN = root.get(prod)!
     addDistinctContract(pN.contracts, row)
     addDistinctShippingPerfStoKey(pN.stoKeys, row)
-    if (!pN.plants.has(plant)) pN.plants.set(plant, { contracts: new Set(), stoKeys: new Set(), incoterms: new Map() })
+    pN.outstandingQtyKg += rowOsKg
+    if (!pN.plants.has(plant)) pN.plants.set(plant, { contracts: new Set(), stoKeys: new Set(), outstandingQtyKg: 0, incoterms: new Map() })
     const plN = pN.plants.get(plant)!
     addDistinctContract(plN.contracts, row)
     addDistinctShippingPerfStoKey(plN.stoKeys, row)
-    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { contracts: new Set(), stoKeys: new Set(), vesselsMap: new Map() })
+    plN.outstandingQtyKg += rowOsKg
+    if (!plN.incoterms.has(inc)) plN.incoterms.set(inc, { contracts: new Set(), stoKeys: new Set(), outstandingQtyKg: 0, vesselsMap: new Map() })
     const iN = plN.incoterms.get(inc)!
     addDistinctContract(iN.contracts, row)
     addDistinctShippingPerfStoKey(iN.stoKeys, row)
+    iN.outstandingQtyKg += rowOsKg
     if (!iN.vesselsMap.has(ves)) {
-      iN.vesselsMap.set(ves, { contracts: new Set(), stoKeys: new Set() })
+      iN.vesselsMap.set(ves, { contracts: new Set(), stoKeys: new Set(), outstandingQtyKg: 0 })
     }
     const vN = iN.vesselsMap.get(ves)!
     addDistinctContract(vN.contracts, row)
     addDistinctShippingPerfStoKey(vN.stoKeys, row)
+    vN.outstandingQtyKg += rowOsKg
   }
 
   const srtByVesselCount = <T,>(m: Map<string, T & { stoKeys: Set<string> }>) =>
@@ -841,18 +849,22 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
     key: prod,
     count: pN.contracts.size,
     vesselCount: pN.stoKeys.size,
+    outstandingQtyKg: pN.outstandingQtyKg,
     children: srtByVesselCount(pN.plants).map(([plant, plN]) => ({
       key: plant,
       count: plN.contracts.size,
       vesselCount: plN.stoKeys.size,
+      outstandingQtyKg: plN.outstandingQtyKg,
       children: srtByVesselCount(plN.incoterms).map(([inc, iN]) => ({
         key: inc,
         count: iN.contracts.size,
         vesselCount: iN.stoKeys.size,
+        outstandingQtyKg: iN.outstandingQtyKg,
         children: srtVesselLeaves(iN.vesselsMap).map(([ves, vN]) => ({
           key: ves,
           count: vN.contracts.size,
           vesselCount: vN.stoKeys.size,
+          outstandingQtyKg: vN.outstandingQtyKg,
           children: [],
         })),
       })),
@@ -2328,9 +2340,19 @@ function ShippingPerformancePageContent() {
                                 <div className="mt-1 h-1.5 rounded bg-gray-100 overflow-hidden">
                                   <div className={`h-full ${style.bar}`} style={{ width: `${vesselPct}%` }} />
                                 </div>
-                                <div className="mt-1 text-xs text-gray-700 flex items-center gap-2">
-                                  <span className="font-semibold">{node.vesselCount.toLocaleString('en-US')}</span>
-                                  <span className="text-gray-500">Vessels</span>
+                                <div className="mt-1 text-xs text-gray-700 flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-2">
+                                    <span className="font-semibold">{node.vesselCount.toLocaleString('en-US')}</span>
+                                    <span className="text-gray-500">Vessels</span>
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      'shrink-0 font-semibold tabular-nums',
+                                      outstandingQtyMtColorClass(node.outstandingQtyKg),
+                                    )}
+                                  >
+                                    {formatSapOutstandingQtyMtDisplay(node.outstandingQtyKg)}
+                                  </span>
                                 </div>
                               </div>
                               {isTotal && (

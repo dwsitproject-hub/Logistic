@@ -13,6 +13,16 @@ import {
 
 export const SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID = 'pre_planned_group' as const
 
+/**
+ * Manual grouping "Select" checkbox column — lets the user multi-select
+ * Unplanned contract-backlog rows and bulk-accept them into a manual
+ * Preplanned group. Opt-in (hidden by default) and, unlike the Grouping
+ * Suggestion column, NOT hidden/shown based on pipeline stage — it stays in
+ * the visible-columns set regardless of the active status card; only the
+ * checkbox interactivity itself is gated by the active stage (see page.tsx).
+ */
+export const SHIPMENT_MANUAL_SELECT_COLUMN_ID = 'select_group' as const
+
 /** Default visible columns in left-to-right table order. */
 export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'status',
@@ -44,6 +54,7 @@ export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayou
 
 /** Compact fixed px widths — header longest-word logic may expand via resolveCompactColumnWidthPx. */
 export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
+  select_group: 64,
   late_indicator: 100,
   vessel_name: 88,
   shipment_id: 72,

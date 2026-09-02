@@ -38,6 +38,7 @@ import {
 } from '@/components/contracts/ContractDetailModal'
 import {
   acceptPrePlannedGroup,
+  createManualPrePlannedGroup,
   dismissPrePlannedGroup,
   fetchPrePlannedGroups,
   filterPrePlannedGroupsByGlobalScope,
@@ -120,6 +121,7 @@ import {
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
   SHIPMENT_EXPAND_COL_WIDTH_PX,
   SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
+  SHIPMENT_MANUAL_SELECT_COLUMN_ID,
   buildShipmentVisibleColumns,
   filterShipmentVisibleColumnIdsForStage,
   isShipmentGroupingSuggestionColumnEligible,
@@ -1272,6 +1274,9 @@ function ShipmentsPageContent() {
   const [prePlannedUngroupedCount, setPrePlannedUngroupedCount] = useState(0)
   const [acceptingPrePlannedGroupId, setAcceptingPrePlannedGroupId] = useState<string | null>(null)
   const [revertingPrePlannedGroupId, setRevertingPrePlannedGroupId] = useState<string | null>(null)
+  /** Manual grouping "Select" column — contract_row_id set of user-checked Unplanned rows. */
+  const [selectedManualGroupContractIds, setSelectedManualGroupContractIds] = useState<Set<string>>(new Set())
+  const [creatingManualPrePlannedGroup, setCreatingManualPrePlannedGroup] = useState(false)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -2436,6 +2441,52 @@ function ShipmentsPageContent() {
 
   const isContractBacklogRow = (shipment: Shipment): boolean =>
     String(shipment.row_kind ?? '').trim() === 'contract_backlog'
+
+  // Manual grouping selection only makes sense while viewing the Unplanned card —
+  // clear it whenever the user navigates away so it never carries stale ids.
+  useEffect(() => {
+    if (statusFilter !== 'UNPLANNED') {
+      setSelectedManualGroupContractIds((prev) => (prev.size === 0 ? prev : new Set()))
+    }
+  }, [statusFilter])
+
+  const toggleManualGroupRowSelection = useCallback((shipment: Shipment) => {
+    const key = String(shipment.contract_row_id || shipment.id || '').trim()
+    if (!key) return
+    setSelectedManualGroupContractIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const handleCreateManualPrePlannedGroup = useCallback(async () => {
+    const contractIds = [...selectedManualGroupContractIds]
+    if (contractIds.length < 2 || creatingManualPrePlannedGroup) return
+    setCreatingManualPrePlannedGroup(true)
+    try {
+      await createManualPrePlannedGroup(contractIds)
+      setSelectedManualGroupContractIds(new Set())
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipments(page, undefined, { force: true })
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error?.message ||
+        (error instanceof Error ? error.message : 'Failed to create Preplanned group')
+      alert(message)
+    } finally {
+      setCreatingManualPrePlannedGroup(false)
+    }
+  }, [
+    selectedManualGroupContractIds,
+    creatingManualPrePlannedGroup,
+    page,
+    refetchPrePlannedAcceptedGroups,
+    refetchPrePlannedGroups,
+  ])
 
   const contractBacklogRowToPoOption = (shipment: Shipment): ShipmentPoOption => {
     const contractId = String(shipment.contract_number || shipment.contract_numbers || '').trim()
@@ -3875,6 +3926,37 @@ function ShipmentsPageContent() {
 
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
+      id: SHIPMENT_MANUAL_SELECT_COLUMN_ID,
+      label: 'Select',
+      formulaHelp:
+        'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Only enabled while the Unplanned card is active.',
+      defaultVisible: false,
+      sortable: false,
+      render: (s) => {
+        if (!isContractBacklogRow(s)) return null
+        const key = String(s.contract_row_id || s.id || '').trim()
+        if (!key) return null
+        const enabled = statusFilter === 'UNPLANNED'
+        const checkbox = (
+          <Checkbox
+            checked={selectedManualGroupContractIds.has(key)}
+            onCheckedChange={() => toggleManualGroupRowSelection(s)}
+            disabled={!enabled}
+            aria-label="Select for manual Preplanned grouping"
+          />
+        )
+        if (enabled) return checkbox
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex cursor-not-allowed">{checkbox}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top">Select the Unplanned card to enable</TooltipContent>
+          </Tooltip>
+        )
+      },
+    },
+    {
       id: 'late_indicator',
       label: 'Late Indicators',
       formulaHelp: FIELD_HELP.shipmentLateIndicator,
@@ -4654,7 +4736,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.ata_vessel_start_discharging || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
     },
-  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, revertingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup])
+  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, revertingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup, statusFilter, selectedManualGroupContractIds, toggleManualGroupRowSelection])
 
   const defaultVisibleColumnIds = useMemo(() => {
     const allIds = compactColumns.map((c) => c.id)
@@ -6661,6 +6743,47 @@ function ShipmentsPageContent() {
                   </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
+                  <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5">
+                    <span className="text-xs font-medium text-blue-800 whitespace-nowrap">
+                      {selectedManualGroupContractIds.size} selected
+                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button
+                            size="sm"
+                            className="h-7 bg-blue-600 hover:bg-blue-700 text-white text-xs"
+                            onClick={() => void handleCreateManualPrePlannedGroup()}
+                            disabled={selectedManualGroupContractIds.size < 2 || creatingManualPrePlannedGroup}
+                          >
+                            {creatingManualPrePlannedGroup ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                Creating…
+                              </>
+                            ) : (
+                              'Accept as Preplanned Group'
+                            )}
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {selectedManualGroupContractIds.size < 2 ? (
+                        <TooltipContent side="top">Select at least 2 contracts</TooltipContent>
+                      ) : null}
+                    </Tooltip>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-blue-700 hover:bg-blue-100"
+                      aria-label="Clear selection"
+                      onClick={() => setSelectedManualGroupContractIds(new Set())}
+                      disabled={creatingManualPrePlannedGroup}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : null}
                 <Button
                   variant="outline"
                   size="sm"

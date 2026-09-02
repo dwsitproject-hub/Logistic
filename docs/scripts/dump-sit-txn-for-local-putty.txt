@@ -1,0 +1,147 @@
+================================================================================
+KLIP — Backup DB transaksi SIT → restore ke DB local (Docker)
+================================================================================
+Tujuan: salin data domain (contracts, shipments, trucking, SAP, …) dari
+SIT ke laptop tanpa menimpa users/RBAC local.
+
+Arsitektur SIT:
+  Backend app     172.28.92.57  (/opt/klip)     ← jalankan dump di sini (PuTTY)
+  DB Postgres     172.28.92.60:5442 (klip_db)   ← sumber data
+  Frontend        172.28.92.56 / test-klip.kpndomain.com
+
+Local:
+  Docker postgres klip-postgres (localhost:5433)
+  UI              http://localhost:3001
+  API             http://localhost:5001/health
+
+Script repo:
+  SIT dump        docs/scripts/dump-sit-transactional-data.sh
+  Local restore   docs/scripts/restore-sit-txn-dump-local.ps1
+  Laptop otomatis docs/scripts/dump-sit-to-sql.ps1 -Mode transactional
+
+================================================================================
+STEP A — PuTTY → backend SIT (172.28.92.57)
+================================================================================
+
+  cd /opt/klip
+  git fetch upstream SIT && git merge upstream/SIT
+
+  # Prasyarat (sekali saja di host .57):
+  sudo apt-get update
+  sudo apt-get install -y postgresql-client
+  nc -vz 172.28.92.60 5442
+
+  # Verifikasi backend mengarah ke DB .60 (bukan postgres Docker lokal):
+  docker compose -f docker-compose.backend.yml exec -T backend printenv DB_HOST DB_PORT DB_NAME
+
+  # Dump data transaksi (format .dump — recommended untuk restore local):
+  bash docs/scripts/dump-sit-transactional-data.sh
+
+  # Opsional: plain SQL (file lebih besar, untuk inspeksi manual):
+  # FORMAT=plain bash docs/scripts/dump-sit-transactional-data.sh
+
+Output (contoh):
+  /opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS.dump
+  /opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS_counts.txt
+
+Pastikan baris dump target menunjukkan:
+  === Dump target postgres@172.28.92.60:5442/klip_db [host] ===
+
+Spot-check counts (harus > 0 untuk tabel utama):
+  cat /opt/klip/backups/klip_sit_txn_*_counts.txt | tail -20
+  grep -E 'trucking_operations|shipments|contracts|sap_processed' \
+    /opt/klip/backups/klip_sit_txn_*_counts.txt | tail -4
+
+List backup terbaru:
+  ls -lt /opt/klip/backups/klip_sit_txn_*.dump | head -3
+
+================================================================================
+STEP B — Copy dump ke laptop (Windows)
+================================================================================
+
+Opsi 1 — WinSCP (disarankan):
+  Session: Import PuTTY session "172.28.92.57" (atau root@172.28.92.57)
+  Remote:  /opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS.dump
+           /opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS_counts.txt
+  Local:   D:\Project\Klip\docs\
+
+Opsi 2 — pscp (PuTTY):
+  "C:\Program Files\PuTTY\pscp.exe" -load "172.28.92.57" ^
+    root@172.28.92.57:/opt/klip/backups/klip_sit_txn_YYYYMMDD_HHMMSS.dump ^
+    D:\Project\Klip\docs\
+
+Opsi 3 — Satu perintah dari laptop (VPN + SSH key):
+  cd D:\Project\Klip
+  powershell -ExecutionPolicy Bypass -File docs\scripts\dump-sit-to-sql.ps1 -Mode transactional
+
+  (Script remote dump + download ke docs\ — perlu plink/pscp + VPN)
+
+================================================================================
+STEP C — Restore ke DB local (PowerShell, repo root)
+================================================================================
+
+  cd D:\Project\Klip
+
+  # Pastikan Docker local jalan:
+  docker compose ps
+  # klip-postgres + klip-backend harus running
+
+  # Restore (pakai dump terbaru di docs\ jika -DumpPath tidak diisi):
+  powershell -ExecutionPolicy Bypass -File docs\scripts\restore-sit-txn-dump-local.ps1 `
+    -DumpPath "D:\Project\Klip\docs\klip_sit_txn_YYYYMMDD_HHMMSS.dump"
+
+  # Rebuild pipeline summary (Section 1 cards shipments + trucking):
+  docker compose exec -T backend npm run pipeline-summary:refresh:prod
+
+  # Clear trucking list cache + restart (opsional jika UI stale):
+  docker compose exec -T backend node -e "require('./dist/services/truckingList.service').invalidateTruckingListCache(); console.log('ok');"
+  docker compose restart backend
+
+  # Atau pakai helper local:
+  powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -Target all
+
+Verifikasi:
+  http://localhost:3001/trucking   (Ctrl+Shift+R)
+  http://localhost:3001/shipments
+  http://localhost:5001/health
+
+================================================================================
+Tabel yang DI-BACKUP (data transaksi)
+================================================================================
+  contracts, contract_stos, shipments, vessel_loading_ports
+  trucking_operations, trucking_daily_actuals, trucking_realizations, trucking_wb_imports
+  sap_data_imports, sap_raw_data, sap_processed_data
+  payments, documents, remarks, quality_surveys
+  master_vessels, master_loading_ports, master_plants, suppliers, products, …
+
+Tabel yang TIDAK di-backup (tetap local):
+  users, roles, permissions, audit_logs, agent_ai_memory, …
+
+================================================================================
+Troubleshooting
+================================================================================
+
+ERROR: pg_dump not on PATH (.57)
+  sudo apt-get install -y postgresql-client
+
+ERROR: cannot connect to DB / nc failed (.57 → .60)
+  Cek security group: TCP 5442 dari 172.28.92.57 ke 172.28.92.60
+  Cek /opt/klip/.env: DB_HOST=172.28.92.60 DB_PORT=5442
+
+Dump target salah (klip-postgres lokal di .57)
+  Perbaiki backend/.env atau /opt/klip/.env → DB_HOST=172.28.92.60
+
+Local restore: "unsupported version" / pg_restore format
+  restore-sit-txn-dump-local.ps1 sudah convert via postgres:16 — pastikan Docker Desktop jalan
+
+Local restore: duplicate key
+  Script otomatis TRUNCATE tabel transaksi dulu — jangan restore ke DB production
+
+UI local masih angka lama setelah restore
+  npm run pipeline-summary:refresh:prod + restart backend + hard refresh browser
+
+================================================================================
+Quick copy-paste (PuTTY .57 — dump saja)
+================================================================================
+
+  cd /opt/klip && bash docs/scripts/dump-sit-transactional-data.sh && ls -lt backups/klip_sit_txn_*.dump | head -1

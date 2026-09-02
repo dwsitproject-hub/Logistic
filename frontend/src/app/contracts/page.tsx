@@ -1068,7 +1068,6 @@ function ContractsPageContent() {
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
   const [availableSuppliers, setAvailableSuppliers] = useState<string[]>([])
-  const [transportModeFilter, setTransportModeFilter] = useState<string>('ALL')
   // 'ALL' keeps SAP-withdrawn contracts listed (their history stays reachable); 'present' hides
   // them; 'withdrawn' shows only them. Totals always exclude withdrawn, server-side.
   const [presenceFilter, setPresenceFilter] = useState<'ALL' | 'present' | 'withdrawn'>('ALL')
@@ -1746,7 +1745,6 @@ function ContractsPageContent() {
     selectedIncoterms,
     dateFrom,
     dateTo,
-    transportModeFilter,
     presenceFilter,
     perfTransportMode,
     lateOnTimeFilter,
@@ -1885,9 +1883,6 @@ function ContractsPageContent() {
       if (!isContractPerformance) {
         if (b2bFlagFilter && b2bFlagFilter !== 'ALL') {
           params.append('b2bFlag', b2bFlagFilter)
-        }
-        if (transportModeFilter && transportModeFilter !== 'ALL') {
-          params.append('transportMode', transportModeFilter)
         }
         if (presenceFilter !== 'ALL') {
           params.append('presence', presenceFilter)
@@ -2176,7 +2171,6 @@ function ContractsPageContent() {
     setDateTo('')
     setSearchDraft('')
     setSearchTerm('')
-    setTransportModeFilter('ALL')
     setPresenceFilter('ALL')
     resetUserScopeFilters()
     setSelectedIncoterms([])
@@ -2192,7 +2186,6 @@ function ContractsPageContent() {
     Boolean(dateFrom) ||
     Boolean(dateTo) ||
     searchTerm.trim().length > 0 ||
-    transportModeFilter !== 'ALL' ||
     presenceFilter !== 'ALL' ||
     selectedProducts.length > 0 ||
     selectedGroups.length > 0 ||
@@ -3938,20 +3931,6 @@ function ContractsPageContent() {
                 )}
                 {!isContractPerformance && (
                   <FilterSingleSelect
-                    value={transportModeFilter}
-                    onChange={setTransportModeFilter}
-                    options={[
-                      { value: 'ALL', label: 'All Transport' },
-                      { value: 'SEA', label: 'Sea' },
-                      { value: 'LAND', label: 'Land' },
-                      { value: 'MIX', label: 'Mix' },
-                    ]}
-                    ariaLabel="Transport mode filter"
-                    className="min-w-[10rem]"
-                  />
-                )}
-                {!isContractPerformance && (
-                  <FilterSingleSelect
                     value={selectedIncoterms[0] ?? 'ALL'}
                     onChange={(value) => {
                       setSelectedIncoterms(value === 'ALL' ? [] : [value])
@@ -4092,7 +4071,6 @@ function ContractsPageContent() {
                     dateTo ||
                     searchDraft ||
                     searchTerm ||
-                    transportModeFilter !== 'ALL' ||
                     presenceFilter !== 'ALL' ||
                     selectedProducts.length > 0 ||
                     selectedGroups.length > 0 ||

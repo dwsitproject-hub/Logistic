@@ -40,7 +40,7 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'YTD',
-      transport: 'All',
+      transport: 'Vessel',
       selectedProducts: ['CPO'],
       selectedGroupPlants: ['PLANT-A'],
     })
@@ -56,7 +56,7 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'YTD',
-      transport: 'All',
+      transport: 'Vessel',
       dateFrom: '2026-07-01',
       dateTo: '2026-07-31',
     })
@@ -72,7 +72,7 @@ describe('oilLossGlobalFilters', () => {
     const filtered = applyOilLossGlobalFilters({
       rows,
       period: 'MTD',
-      transport: 'All',
+      transport: 'Vessel',
       referenceDate: augRef,
     })
     expect(filtered).toHaveLength(1)
@@ -124,7 +124,13 @@ describe('oilLossGlobalFilters', () => {
     })
   })
 
-  it('matchesOilLossGlobalTransportFilter unchanged', () => {
-    expect(matchesOilLossGlobalTransportFilter(row(), 'All')).toBe(true)
+  it('matchesOilLossGlobalTransportFilter — no more "All": must pick Vessel or Truck', () => {
+    // Default row is SEA + CIF => a Vessel-segment row.
+    expect(matchesOilLossGlobalTransportFilter(row(), 'Vessel')).toBe(true)
+    expect(matchesOilLossGlobalTransportFilter(row(), 'Truck')).toBe(false)
+
+    const truckRow = row({ transport_mode: 'LAND', incoterm: 'FRC' })
+    expect(matchesOilLossGlobalTransportFilter(truckRow, 'Truck')).toBe(true)
+    expect(matchesOilLossGlobalTransportFilter(truckRow, 'Vessel')).toBe(false)
   })
 })

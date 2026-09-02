@@ -40,6 +40,26 @@ describe('buildOilLossMainSql', () => {
   });
 });
 
+describe('operation_id derivation (SEA voyage / LAND trucking op id, with fallback)', () => {
+  it('prefers shipment/trucking Operation ID over the legacy Contract Ext No fallback', () => {
+    const sql = buildOilLossMainSql();
+    expect(sql).toContain('operation_id_sap_fallback');
+    expect(sql).toContain('sh_sto.operation_id');
+    expect(sql).toContain('sh_sto.sto_key');
+    expect(sql).toContain('sh_ct.operation_id');
+    expect(sql).toContain('tr_sto.operation_id');
+    expect(sql).toContain('tr_ct.operation_id');
+    // Final fallback is still the pre-existing SAP Contract Ext No value, so rows with no
+    // shipment/trucking match never lose their operation_id.
+    expect(sql).toContain("NULLIF(TRIM(p.operation_id_sap_fallback), '')");
+  });
+
+  it('selects operation_id from shipments and trucking lookup CTEs', () => {
+    const sql = buildOilLossMainSql();
+    expect(sql).toContain('NULLIF(TRIM(operation_id), \'\') AS operation_id');
+  });
+});
+
 describe('buildOilLossGainSql', () => {
   it('uses UAT delivery and incoterm-aware close filter', () => {
     const sql = buildOilLossGainSql();

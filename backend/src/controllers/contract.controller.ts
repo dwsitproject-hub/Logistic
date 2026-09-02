@@ -246,7 +246,6 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         : sourceTypeFilter?.trim()
           ? [sourceTypeFilter.trim()]
           : [];
-    const transportMode = (req.query as any).transportMode as string | undefined;
     const plant = (req.query as any).plant as string | string[] | undefined;
     const sortKeyRaw = String((req.query as any).sortKey || 'contract_date');
     const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
@@ -428,12 +427,6 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     if (incotermsFilter.length > 0) {
       queryText += ` AND UPPER(TRIM(COALESCE(base.incoterm, ''))) = ANY($${paramIndex}::text[])`;
       queryParams.push(incotermsFilter);
-      paramIndex++;
-    }
-
-    if (transportMode) {
-      queryText += ` AND UPPER(base.transport_mode) = $${paramIndex}`;
-      queryParams.push(String(transportMode).toUpperCase());
       paramIndex++;
     }
 

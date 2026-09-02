@@ -52,6 +52,7 @@ export const OIL_LOSS_LOOKUP_CTES = `
   shipments_by_sto AS (
     SELECT DISTINCT ON (TRIM(shipment_id))
       TRIM(shipment_id) AS sto_key,
+      NULLIF(TRIM(operation_id), '') AS operation_id,
       sfal_qty,
       sfbd_qty,
       quantity_delivered,
@@ -63,6 +64,7 @@ export const OIL_LOSS_LOOKUP_CTES = `
   shipments_by_contract AS (
     SELECT DISTINCT ON (c.contract_id)
       c.contract_id,
+      NULLIF(TRIM(s.operation_id), '') AS operation_id,
       s.sfal_qty,
       s.sfbd_qty,
       s.quantity_delivered,
@@ -75,6 +77,7 @@ export const OIL_LOSS_LOOKUP_CTES = `
   trucking_by_sto AS (
     SELECT DISTINCT ON (TRIM(operation_id))
       TRIM(operation_id) AS sto_key,
+      NULLIF(TRIM(operation_id), '') AS operation_id,
       trucking_owner,
       loading_location,
       unloading_location,
@@ -87,6 +90,7 @@ export const OIL_LOSS_LOOKUP_CTES = `
   trucking_by_contract AS (
     SELECT DISTINCT ON (c.contract_id)
       c.contract_id,
+      NULLIF(TRIM(t.operation_id), '') AS operation_id,
       t.trucking_owner,
       t.loading_location,
       t.unloading_location,
@@ -133,7 +137,7 @@ export function buildOilLossWithQtyCtes(): string {
           ''
         )))                                                       AS sto_type,
         COALESCE(spd.data->'raw'->>'Contract Ext No',
-                 spd.data->'raw'->>'Contract No', '')              AS operation_id,
+                 spd.data->'raw'->>'Contract No', '')              AS operation_id_sap_fallback,
         COALESCE(
           NULLIF(TRIM(spd.contract_number), ''),
           NULLIF(TRIM(spd.data->'raw'->>'Contract No'), ''),
@@ -191,6 +195,18 @@ export function buildOilLossWithQtyCtes(): string {
     enriched AS (
       SELECT
         p.*,
+        -- Real execution/voyage grouping key (matches Shipments/Trucking "Operation ID"):
+        -- SEA -> shipments.operation_id (fallback: shipment_id/STO key); LAND -> trucking_operations.operation_id.
+        -- Falls back to the old SAP Contract Ext No value when no shipment/trucking match exists,
+        -- so rows are never left without a group key.
+        COALESCE(
+          sh_sto.operation_id,
+          sh_sto.sto_key,
+          sh_ct.operation_id,
+          tr_sto.operation_id,
+          tr_ct.operation_id,
+          NULLIF(TRIM(p.operation_id_sap_fallback), '')
+        ) AS operation_id,
         COALESCE(sh_sto.sfal_qty, sh_ct.sfal_qty) AS shipment_sfal_kg,
         COALESCE(sh_sto.sfbd_qty, sh_ct.sfbd_qty) AS shipment_sfbd_kg,
         ct.quantity_ordered AS contract_qty_kg,

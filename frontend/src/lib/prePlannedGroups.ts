@@ -67,6 +67,17 @@ export async function rebuildPrePlannedGroups(): Promise<void> {
   await api.post('/pre-planned/rebuild');
 }
 
+/**
+ * Manually create a Preplanned group from user-selected Unplanned contracts
+ * (Shipments View Table "Select" column). Requires at least 2 contract ids;
+ * the group is created directly with status ACCEPTED (Preplanned), no
+ * intermediate SUGGESTED step.
+ */
+export async function createManualPrePlannedGroup(contractIds: string[]): Promise<PrePlannedGroup> {
+  const res = await api.post('/pre-planned/groups/manual', { contractIds });
+  return res.data.data.group as PrePlannedGroup;
+}
+
 /** Toolbar scope used to narrow pre-planned suggestions on the Shipments page. */
 export interface PrePlannedGlobalScopeFilters {
   dateFrom: string;

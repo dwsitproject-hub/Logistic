@@ -1,5 +1,9 @@
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
-import { oilLossContractGroupKey } from '@/lib/oilLossAllContractColumns'
+import {
+  aggregateOilLossQuantitiesByContract,
+  aggregateOilLossQuantitiesByOuterGroup,
+  type OilLossQuantityAgg,
+} from '@/lib/oilLossGroupAggregation'
 
 export type ROilLossKey = 'r1' | 'r2' | 'r3' | 'r4'
 
@@ -19,12 +23,6 @@ export type YtdOilLossSummary = {
   r2: ROilLossSummary
   r3: ROilLossSummary
   r4: ROilLossSummary
-}
-
-function parseQty(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null
-  const n = Number(v)
-  return Number.isFinite(n) ? n : null
 }
 
 function resolveContractDate(row: OilLossSourceRow): string {
@@ -78,68 +76,8 @@ export function buildOilLossSummaryForDateRange(
   }
 }
 
-function contractGroupKey(row: OilLossSourceRow): string {
-  return oilLossContractGroupKey(row)
-}
-
-type ContractQuantityAgg = {
-  quantity_sent: number
-  quantity_received: number
-  quantity_sfal: number
-  quantity_sfbd: number
-  has_sent: boolean
-  has_received: boolean
-  has_sfal: boolean
-  has_sfbd: boolean
-}
-
-function aggregateOilLossQuantitiesByContract(rows: OilLossSourceRow[]): Map<string, ContractQuantityAgg> {
-  const map = new Map<string, ContractQuantityAgg>()
-
-  for (const row of rows) {
-    const key = contractGroupKey(row)
-    let agg = map.get(key)
-    if (!agg) {
-      agg = {
-        quantity_sent: 0,
-        quantity_received: 0,
-        quantity_sfal: 0,
-        quantity_sfbd: 0,
-        has_sent: false,
-        has_received: false,
-        has_sfal: false,
-        has_sfbd: false,
-      }
-      map.set(key, agg)
-    }
-    const delivery = parseQty(row.quantity_sent ?? row.quantity_delivery)
-    const receive = parseQty(row.quantity_received)
-    const sfal = parseQty(row.quantity_sfal)
-    const sfbd = parseQty(row.quantity_sfbd)
-    // Contracts-level delivery/receive — take once per contract (do not sum SPD rows).
-    if (delivery != null && !agg.has_sent) {
-      agg.quantity_sent = delivery
-      agg.has_sent = true
-    }
-    if (receive != null && !agg.has_received) {
-      agg.quantity_received = receive
-      agg.has_received = true
-    }
-    if (sfal != null) {
-      agg.quantity_sfal += sfal
-      agg.has_sfal = true
-    }
-    if (sfbd != null) {
-      agg.quantity_sfbd += sfbd
-      agg.has_sfbd = true
-    }
-  }
-
-  return map
-}
-
 function sampleFromContractAgg(
-  agg: ContractQuantityAgg,
+  agg: OilLossQuantityAgg,
   kind: ROilLossKey,
 ): { lossKg: number; baseKg: number; pct: number; deliveryKg: number } | null {
   const delivery = agg.quantity_sent
@@ -173,11 +111,16 @@ function sampleFromContractAgg(
   }
 }
 
+/**
+ * Section 1 R1–R4 cards. Uses the two-level (contract-then-voyage) aggregation: a SEA voyage
+ * spanning multiple POs contributes one merged sample (summed quantities), so `sampleCount`
+ * counts voyages (not POs) for SEA — an intended, visible change when a voyage spans >1 PO.
+ */
 export function computeROilLossSummary(rows: OilLossSourceRow[], kind: ROilLossKey): ROilLossSummary {
-  const byContract = aggregateOilLossQuantitiesByContract(rows)
+  const byGroup = aggregateOilLossQuantitiesByOuterGroup(rows)
   const samples: { lossKg: number; baseKg: number; pct: number; deliveryKg: number }[] = []
 
-  for (const agg of byContract.values()) {
+  for (const agg of byGroup.values()) {
     const sample = sampleFromContractAgg(agg, kind)
     if (sample) samples.push(sample)
   }

@@ -669,7 +669,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       showNotification('error', 'No trucking operation loaded to save SFAL/SFBD.')
       return
     }
-    if (readOnly || isContractRecordClosed(contractValidation.contractData)) return
+    if (readOnly) return
     setCreating(true)
     try {
       const response = await api.put(`/trucking/${editOperationId}`, {
@@ -696,8 +696,12 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   const isViewOnly = readOnly || isContractClosedEditLocked
   /** Save create only in Add mode — planning/actuals come from uploads. */
   const canSave = !isViewOnly && !isEditMode && !isPlotMode
-  /** Edit mode can update SFAL/SFBD for Oil Loss R1–R3. */
-  const canSaveSfalSfbd = !isViewOnly && isEditMode && Boolean(editOperationId)
+  /**
+   * SFAL/SFBD stay editable even when the contract's GR PO/STO is Close — these figures
+   * are often entered/corrected after closing. Only the explicit View modal (readOnly)
+   * is truly non-editable; the contract-closed lock does not apply to SFAL/SFBD.
+   */
+  const canSaveSfalSfbd = !readOnly && isEditMode && Boolean(editOperationId)
 
   const step1Done = contractValidation.exists
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
@@ -821,7 +825,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     return `${formatQtyKgAsMt(kg)} MT`
   }
 
-  const canEditSfalSfbd = !isViewOnly
+  const canEditSfalSfbd = !readOnly
 
   const renderSfalSfbdFields = () => (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -976,7 +980,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 </h3>
                 <p className="text-xs text-gray-500">
                   {isContractClosedEditLocked
-                    ? 'Contract is Close — read-only view'
+                    ? readOnly
+                      ? 'Contract is Close — read-only view'
+                      : 'Contract is Close — other fields locked (SFAL/SFBD still editable)'
                     : readOnly || isEditMode
                       ? 'Read-only planning & actuals (from Daily Planning / WB upload)'
                       : isPlotMode

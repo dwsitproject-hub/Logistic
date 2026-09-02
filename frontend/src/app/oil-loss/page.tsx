@@ -34,6 +34,7 @@ import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
   OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
+  OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT,
   OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
   resolveOilLossPeriodDateRange,
   type OilLossGlobalPeriodKey,
@@ -1140,7 +1141,8 @@ export default function OilLossPage() {
   } = useUserScopeFilterDefaults('oil-loss')
   const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
   const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('YTD')
-  const [globalTransport, setGlobalTransport] = useState<OilLossGlobalTransportFilter>('All')
+  const [globalTransport, setGlobalTransport] =
+    useState<OilLossGlobalTransportFilter>(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT)
   const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
     EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
   )
@@ -1150,7 +1152,7 @@ export default function OilLossPage() {
     () =>
       OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({
         value,
-        label: value === 'All' ? 'All transports' : value,
+        label: value,
       })),
     [],
   )
@@ -1474,7 +1476,7 @@ export default function OilLossPage() {
     setGlobalPeriod('YTD')
     setDateFrom(ytd.dateFrom)
     setDateTo(ytd.dateTo)
-    setGlobalTransport('All')
+    setGlobalTransport(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT)
     handleProductsChange([])
     handleGroupPlantsChange([])
     resetUserScopeFilters()
@@ -1793,7 +1795,6 @@ export default function OilLossPage() {
                 value={globalTransport}
                 onChange={setGlobalTransport}
                 options={globalTransportOptions}
-                selectClassName={globalTransport === 'All' ? 'text-gray-500' : undefined}
               />
               <div className="flex items-center gap-3">
                 <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
@@ -1870,7 +1871,7 @@ export default function OilLossPage() {
             formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) =>
               resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
             ),
-            ...(globalTransport !== 'All' ? [globalTransport] : []),
+            globalTransport,
             ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
             ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
           ]}

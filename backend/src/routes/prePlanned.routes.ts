@@ -7,6 +7,7 @@ import {
   getPrePlannedMetricsHandler,
   postPrePlannedAccept,
   postPrePlannedDismiss,
+  postPrePlannedManualCreate,
   postPrePlannedRebuild,
   postPrePlannedRevert,
 } from '../controllers/prePlanned.controller';
@@ -23,6 +24,12 @@ router.post(
   authorize('ADMIN', 'MANAGEMENT', 'LOGISTICS'),
   auditLog('REBUILD', 'PRE_PLANNED'),
   postPrePlannedRebuild,
+);
+router.post(
+  '/groups/manual',
+  authorize('ADMIN', 'MANAGEMENT', 'LOGISTICS'),
+  auditLog('MANUAL_CREATE', 'PRE_PLANNED_GROUP'),
+  postPrePlannedManualCreate,
 );
 router.post(
   '/groups/:id/dismiss',
