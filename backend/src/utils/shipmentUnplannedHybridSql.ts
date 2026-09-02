@@ -347,6 +347,33 @@ export function unplannedContractBacklogRowSelectSql(
     (${outstandingExpr}) AS outstanding_quantity`;
 }
 
+/** LEFT JOIN active SUGGESTED pre-planned group (Grouping Suggestion column + sort). */
+export function sqlSuggestedPrePlannedGroupJoin(contractAlias = 'c'): string {
+  return `
+    LEFT JOIN pre_planned_group_members pgm_sugg
+      ON pgm_sugg.contract_id = ${contractAlias}.id
+     AND pgm_sugg.released_at IS NULL
+    LEFT JOIN pre_planned_groups pg_sugg
+      ON pg_sugg.id = pgm_sugg.group_id
+     AND pg_sugg.status = 'SUGGESTED'`;
+}
+
+export function backlogQueryNeedsSuggestedGroupJoin(sortKey: string): boolean {
+  return sortKey === 'pre_planned_group';
+}
+
+function sqlUnplannedSuggestedGroupIdExpr(sortKey: string): string {
+  return backlogQueryNeedsSuggestedGroupJoin(sortKey)
+    ? 'pg_sugg.id::text'
+    : 'NULL::text';
+}
+
+function sqlUnplannedSuggestedGroupCodeExpr(sortKey: string): string {
+  return backlogQueryNeedsSuggestedGroupJoin(sortKey)
+    ? 'pg_sugg.group_code'
+    : 'NULL::text';
+}
+
 export function buildUnplannedContractBacklogLatestSpdCte(): string {
   return `
       latest_spd_contract AS (
@@ -531,10 +558,11 @@ export function buildAllHybridContractBacklogPageQuery(
         COALESCE(NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''), '') AS contract_ext_no,
         'UNPLANNED'::text AS status,
         'UNPLANNED'::text AS backlog_status,
-        NULL::text AS pre_planned_group_id,
-        NULL::text AS pre_planned_group_code
+        ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
+        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
       WHERE ${unplannedWhere}
       UNION ALL
       SELECT
@@ -619,10 +647,11 @@ export function buildAllHybridContractBacklogPageQuery(
     ${qtyMoveCte},
     all_contract_backlog AS (
       SELECT ${unplannedSelect},
-        NULL::text AS pre_planned_group_id,
-        NULL::text AS pre_planned_group_code
+        ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
+        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
       WHERE ${unplannedWhere}
       UNION ALL
       SELECT ${preplannedSelect},
@@ -669,9 +698,12 @@ export function buildUnplannedContractBacklogPageQuery(
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     unplanned_contract_backlog AS (
-      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED')}
+      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED')},
+        ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
+        ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
       WHERE ${backlogWhere}
         AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
       ORDER BY ${pageOrder}

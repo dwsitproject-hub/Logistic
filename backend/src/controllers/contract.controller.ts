@@ -535,12 +535,15 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       deliveryExpr: 'quantity_delivery',
     })})`;
 
-    // Schedulable = due-end present + known status + cycle Completion Date
-    // (LAND: OS≈0 → Last Receive/WB else planning/ETA; SEA: ATC → ETA at LP). No Today.
+    // Schedulable = due-end present + known status + (Open OR completion milestone).
+    // Open with no ETA uses today vs due end (Condition B); Close still needs completion.
     const schedulableCondition = `
       ${sqlEffectiveDeliveryEndPresent()}
       AND ${_statusExpr} IN ('OPEN','ACTIVE','CLOSE','CLOSED','COMPLETED')
-      AND ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}`;
+      AND (
+        ${_statusExpr} IN ('OPEN','ACTIVE')
+        OR ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}
+      )`;
 
     // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
     // Open Condition A/B share the same on-time threshold (trade_cycle <= 0); trade cycle
@@ -564,7 +567,11 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
               THEN (last_ata_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
               THEN (open_standard_eta_vessel_loading::date - ${effectiveDeliveryEndDateSql})
-            ELSE NULL END
+            ELSE CASE
+              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
+                THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
+              ELSE NULL
+            END END
         ELSE NULL
       END`;
 

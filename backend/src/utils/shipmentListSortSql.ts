@@ -84,6 +84,12 @@ export const SHIPMENT_LIST_SORT_COLUMNS: Record<string, string> = {
   contract_ext_no: "LOWER(COALESCE(NULLIF(TRIM(fs.contract_ext_no::text), ''), ''))",
 };
 
+/**
+ * Sort keys valid for contract-backlog rows only (Grouping Suggestion).
+ * Execution/shipment SQL must not ORDER BY these — hybrid merge-sort applies them in memory.
+ */
+export const SHIPMENT_CONTRACT_BACKLOG_ONLY_SORT_KEYS = new Set<string>(['pre_planned_group']);
+
 /** Sort keys that require SAP/qty enrichment before ORDER BY (match list column display). */
 export const SHIPMENT_LIST_ENRICHED_SORT_KEYS = new Set<string>([
   'quantity_delivered',
@@ -144,6 +150,7 @@ export const SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS: Record<string, string> = {
   sto_quantity: 'c.contract_date',
   b2b_flag: 'c.contract_date',
   contract_ext_no: 'c.contract_id',
+  pre_planned_group: 'pg_sugg.group_code',
 };
 
 export function parseShipmentListSort(
@@ -154,7 +161,8 @@ export function parseShipmentListSort(
   const sortKey =
     keyTrim &&
     (SHIPMENT_LIST_SORT_COLUMNS[keyTrim] ||
-      SHIPMENT_LIST_ENRICHED_ORDER_COLUMNS[keyTrim])
+      SHIPMENT_LIST_ENRICHED_ORDER_COLUMNS[keyTrim] ||
+      SHIPMENT_CONTRACT_BACKLOG_ONLY_SORT_KEYS.has(keyTrim))
       ? keyTrim
       : 'created_at';
   const sortDir =
@@ -164,6 +172,11 @@ export function parseShipmentListSort(
 
 export function shipmentListSortUsesEnrichedPath(sortKey: string): boolean {
   return SHIPMENT_LIST_ENRICHED_SORT_KEYS.has(sortKey);
+}
+
+/** SQL ORDER BY key for shipment execution rows (backlog-only keys fall back to created_at). */
+export function shipmentListExecutionSortKey(sortKey: string): string {
+  return SHIPMENT_CONTRACT_BACKLOG_ONLY_SORT_KEYS.has(sortKey) ? 'created_at' : sortKey;
 }
 
 function withRowPrefix(expr: string, prefix: string): string {
@@ -196,6 +209,7 @@ export const SHIPMENT_LIST_SKIP_STO_PRIORITY_SORT_KEYS = new Set<string>([
   'contract_qty',
   'sto_quantity',
   'quantity_shipped',
+  'pre_planned_group',
 ]);
 
 /**
@@ -214,11 +228,13 @@ export function buildShipmentListPageOrderBy(
   tableStatusFilter?: string,
   rowPrefix = 'fs',
 ): string {
+  const executionSortKey = shipmentListExecutionSortKey(sortKey);
   const field =
     rowPrefix === 'le'
-      ? resolveEnrichedOrderExpr(sortKey)
+      ? resolveEnrichedOrderExpr(executionSortKey)
       : withRowPrefix(
-          SHIPMENT_LIST_SORT_COLUMNS[sortKey] ?? SHIPMENT_LIST_SORT_COLUMNS.created_at,
+          SHIPMENT_LIST_SORT_COLUMNS[executionSortKey] ??
+            SHIPMENT_LIST_SORT_COLUMNS.created_at,
           rowPrefix,
         );
   const createdAtExpr = withRowPrefix('fs.created_at', rowPrefix);
@@ -241,7 +257,7 @@ export function buildShipmentListPageOrderBy(
    */
   const idExpr = withRowPrefix('fs.id', rowPrefix);
   const primaryOrder = `${field} ${sortDir} NULLS LAST, ${createdAtExpr} DESC, ${idExpr} ASC`;
-  if (SHIPMENT_LIST_SKIP_STO_PRIORITY_SORT_KEYS.has(sortKey)) {
+  if (SHIPMENT_LIST_SKIP_STO_PRIORITY_SORT_KEYS.has(executionSortKey)) {
     return primaryOrder;
   }
   return buildListOrderByWithSapStoPriority(stoExpr, primaryOrder, tableStatusFilter);
@@ -494,6 +510,7 @@ export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
   contract_ext_no: 'contract_ext_no',
+  pre_planned_group: 'pre_planned_group_code',
 };
 
 const BACKLOG_OUTER_DEFAULT_ORDER = (sortDir: 'ASC' | 'DESC') =>

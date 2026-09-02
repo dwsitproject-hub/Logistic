@@ -3,6 +3,7 @@ import {
   hasCalendarDate,
   isLegacyTradeCycleOnTime,
   isOpenConditionBOnTime,
+  openDueDateTradeCycleDays,
 } from '../utils/calendarDays';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -813,8 +814,7 @@ export function isContractInLogisticsOpenOs(row: any): boolean {
  * LAND:
  *   - OS ≤ 499 kg (≈ 0 MT / over-delivery): Last Receive → WB Actuals → Last Planning → ETA
  *   - OS still open: skip Last Receive & WB → Last Planning Delivery Date → ETA trucking
- * SEA: ATC at Discharge Port → ETA at LP → null
- * No Today fallback.
+ * SEA: ATC at Discharge Port → ETA at LP → null (Open Trade Cycle uses today fallback separately).
  */
 export function resolveCycleCompletionDate(row: any, transport: string): Date | null {
   const t = String(transport || '').trim().toUpperCase();
@@ -974,16 +974,19 @@ export function isContractPerfOnTimeTradeCycle(row: any, tradeCycle: number): bo
 
 /**
  * Open Trade Cycle: Due Date Delivery End vs completion date
- * (LAND Last Receive → WB → planning; SEA ATC → ETA at LP). No Today.
+ * (LAND Last Receive → WB → planning; SEA ATC → ETA at LP).
+ * When no completion milestone exists (Condition B), fallback to today vs due end.
  */
 function computeOpenTradeCycleDays(
   row: any,
   transport: string,
-  _todayMid: Date,
+  todayMid: Date,
   deliveryEnd: Date,
 ): number | null {
   const end = resolveCycleCompletionDate(row, transport);
-  if (!end) return null;
+  if (!end) {
+    return openDueDateTradeCycleDays(deliveryEnd, todayMid);
+  }
   return diffCalendarDays(deliveryEnd, end);
 }
 
@@ -1048,7 +1051,7 @@ export function isContractIncludedInPerfDrilldownTree(
   todayMid.setHours(0, 0, 0, 0);
 
   const tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
-  // No completion date → unscheduled (Open and Closed). Do not coerce Open to -1.
+  // No completion milestone and not Open schedulable → unscheduled (Close without completion).
   if (tradeCycle == null || Number.isNaN(tradeCycle)) return false;
 
   const filter = String(options.lateOnTimeFilter || 'ALL').toUpperCase();

@@ -12,6 +12,7 @@ import {
   rebuildPrePlannedGroups,
   revertPrePlannedGroupToSuggested,
 } from '../services/prePlannedGroup.service';
+import { invalidateShipmentsListCache } from '../services/shipmentList.service';
 
 function disabled(res: Response): void {
   res.status(503).json({
@@ -62,6 +63,7 @@ export const postPrePlannedRebuild = async (req: AuthRequest, res: Response): Pr
     }
     const triggeredBy = req.user?.username ? `user:${req.user.username}` : 'api';
     const result = await rebuildPrePlannedGroups(triggeredBy);
+    invalidateShipmentsListCache();
     res.json({ success: true, data: result });
   } catch (error) {
     logger.error('postPrePlannedRebuild failed', error);
@@ -77,6 +79,7 @@ export const postPrePlannedDismiss = async (req: AuthRequest, res: Response): Pr
     }
     const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
     await dismissPrePlannedGroup(req.params.id, reason, req.user?.id);
+    invalidateShipmentsListCache();
     res.json({ success: true, data: { dismissed: true } });
   } catch (error) {
     logger.error('postPrePlannedDismiss failed', error);
@@ -93,6 +96,7 @@ export const postPrePlannedAccept = async (req: AuthRequest, res: Response): Pro
     const rawShipmentId = typeof req.body?.shipmentId === 'string' ? req.body.shipmentId.trim() : '';
     const shipmentId = rawShipmentId || undefined;
     await acceptPrePlannedGroupLink(req.params.id, shipmentId, req.user?.id);
+    invalidateShipmentsListCache();
     res.json({ success: true, data: { accepted: true, shipmentId: shipmentId ?? null } });
   } catch (error) {
     logger.error('postPrePlannedAccept failed', error);
@@ -116,6 +120,7 @@ export const postPrePlannedManualCreate = async (req: AuthRequest, res: Response
       return;
     }
     const group = await createManualPrePlannedGroup(contractIds, req.user?.id);
+    invalidateShipmentsListCache();
     res.json({ success: true, data: { group } });
   } catch (error) {
     logger.error('postPrePlannedManualCreate failed', error);
@@ -135,6 +140,7 @@ export const postPrePlannedRevert = async (req: AuthRequest, res: Response): Pro
       return;
     }
     await revertPrePlannedGroupToSuggested(req.params.id, req.user?.id);
+    invalidateShipmentsListCache();
     res.json({ success: true, data: { reverted: true } });
   } catch (error) {
     logger.error('postPrePlannedRevert failed', error);

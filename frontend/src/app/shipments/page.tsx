@@ -3927,7 +3927,7 @@ function ShipmentsPageContent() {
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
       id: SHIPMENT_MANUAL_SELECT_COLUMN_ID,
-      label: 'Select',
+      label: 'Grouping Manual',
       formulaHelp:
         'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Only enabled while the Unplanned card is active.',
       defaultVisible: false,

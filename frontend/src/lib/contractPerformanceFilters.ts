@@ -506,7 +506,8 @@ export function contractMeetsPerformanceTreeInclusion(
   const isOpen = status === 'OPEN' || status === 'ACTIVE'
   if (!isClosed && !isOpen) return false
 
-  // No Completion Date → unscheduled in Section 2; exclude from late/on-time table.
+  // No Completion Date on payload → unscheduled for Section 3 client guard when backend
+  // has not computed trade_cycle_days. Open rows with due end get today fallback at compute time.
   if (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days))) {
     return false
   }

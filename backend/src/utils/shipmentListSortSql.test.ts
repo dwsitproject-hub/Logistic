@@ -43,7 +43,10 @@ describe('shipmentListSortSql', () => {
 
     it('falls back for unknown sort keys', () => {
       expect(parseShipmentListSort('not_a_column', 'desc').sortKey).toBe('created_at');
-      expect(parseShipmentListSort('pre_planned_group', 'desc').sortKey).toBe('created_at');
+    });
+
+    it('accepts pre_planned_group sort key', () => {
+      expect(parseShipmentListSort('pre_planned_group', 'desc').sortKey).toBe('pre_planned_group');
     });
   });
 
@@ -99,6 +102,12 @@ describe('shipmentListSortSql', () => {
       const orderBy = buildShipmentListPageOrderBy('contract_date', 'ASC', 'UNPLANNED');
       expect(orderBy).toBe('fs.contract_date ASC NULLS LAST, fs.created_at DESC, fs.id ASC');
       expect(orderBy).not.toContain('CASE');
+    });
+
+    it('falls back to created_at for execution rows when sortKey is pre_planned_group', () => {
+      const orderBy = buildShipmentListPageOrderBy('pre_planned_group', 'ASC');
+      expect(orderBy).toBe('fs.created_at ASC NULLS LAST, fs.created_at DESC, fs.id ASC');
+      expect(orderBy).not.toContain('pre_planned_group_code');
     });
   });
 
@@ -179,6 +188,12 @@ describe('shipmentListSortSql', () => {
       );
       expect(buildShipmentContractBacklogOrderBy('quantity_receive', 'ASC')).toContain(
         'quantity_receive ASC',
+      );
+    });
+
+    it('sorts contract backlog by suggested group code when requested', () => {
+      expect(buildShipmentContractBacklogOrderBy('pre_planned_group', 'ASC')).toContain(
+        'pg_sugg.group_code ASC',
       );
     });
 

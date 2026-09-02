@@ -54,7 +54,7 @@ export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayou
 
 /** Compact fixed px widths — header longest-word logic may expand via resolveCompactColumnWidthPx. */
 export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
-  select_group: 64,
+  select_group: 120,
   late_indicator: 100,
   vessel_name: 88,
   shipment_id: 72,
