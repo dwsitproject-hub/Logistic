@@ -888,10 +888,17 @@ export function ContractDetailModal({
     [contract, fetchStoDetailData, openStoDetail],
   )
 
-  /** Operation ID → Add New / Edit / View / Plot Trucking or Shipment (same actions as list pages). */
+  /** STO No / Operation ID → Add / Edit / View / Plot (open statuses → Edit). */
   const openStoLogisticsOperation = useCallback(
     async (row: StoInfoRow) => {
-      if (!contract?.id || !stoOperationIdIsOpenable(row)) return
+      if (!contract?.id) return
+      const sto = String(row.sto_number ?? '').trim()
+      const operationId = String(row.operation_id ?? '').trim()
+      const hasSto = Boolean(sto && sto !== '-' && sto !== '—')
+      const hasOp =
+        stoOperationIdIsOpenable(row) ||
+        Boolean(operationId && operationId !== '-' && operationId !== '—')
+      if (!hasSto && !hasOp) return
       setStoLogisticsOpLoading(true)
       try {
         const data = await fetchStoDetailData(row)
@@ -994,10 +1001,14 @@ export function ContractDetailModal({
           truckMode = entityId ? (canEditTrucking ? 'edit' : 'view') : 'add'
         }
 
+        if ((truckMode === 'edit' || truckMode === 'view' || truckMode === 'plot') && !entityId) {
+          truckMode = 'add'
+        }
+
         setLogisticsOpModal({
           kind: 'trucking',
           mode: truckMode,
-          operationId: entityId,
+          operationId: entityId || operationId || null,
           contractId: contractId || null,
           contractExtNo,
           poNumber,
@@ -1297,11 +1308,13 @@ export function ContractDetailModal({
                             <td className="p-2">
                               <button
                                 type="button"
-                                onClick={() => void openStoLogisticsView(row)}
-                                disabled={stoLogisticsViewLoading}
+                                onClick={() => void openStoLogisticsOperation(row)}
+                                disabled={stoLogisticsOpLoading}
                                 className="text-left text-blue-600 hover:underline font-medium cursor-pointer disabled:opacity-50"
                                 title={
-                                  row.type === 'shipment' ? 'View shipment' : 'View trucking'
+                                  row.type === 'shipment'
+                                    ? 'Open Add / Edit / View Shipment'
+                                    : 'Open Add / Edit / View Trucking'
                                 }
                               >
                                 {formatSapDisplayValue(row.sto_number)}

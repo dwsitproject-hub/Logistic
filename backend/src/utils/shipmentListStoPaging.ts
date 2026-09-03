@@ -21,6 +21,8 @@ export type ShipmentStoPagingFilterInput = {
   allHybrid?: boolean;
   /** List ORDER BY key — paging is only safe when ranked_sto can ORDER BY the same column. */
   sortKey?: string;
+  /** Pending ATC (Overdue / Due ≤7d) list filter — not safe for pre-group STO paging. */
+  etcNoAtcDueWithin7d?: boolean | string;
 };
 
 /**
@@ -79,6 +81,14 @@ export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput):
   if (input.lateIndicator && String(input.lateIndicator).toUpperCase() !== 'ALL') return false;
   if (input.charterType && String(input.charterType).toUpperCase() !== 'ALL') return false;
   if (input.sourceType && String(input.sourceType).toUpperCase() !== 'ALL') return false;
+  if (
+    input.etcNoAtcDueWithin7d === true ||
+    String(input.etcNoAtcDueWithin7d ?? '')
+      .trim()
+      .toLowerCase() === 'true'
+  ) {
+    return false;
+  }
   const viewOpt = String(input.viewOption ?? 'all').toLowerCase();
   if (viewOpt !== 'all' && String(input.viewQuery ?? '').trim().length > 0) return false;
   const status = String(input.status ?? 'ALL').trim().toUpperCase();

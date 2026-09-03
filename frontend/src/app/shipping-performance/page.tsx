@@ -2157,7 +2157,7 @@ function ShippingPerformancePageContent() {
               </h1>
             </div>
           </div>
-          <div className="flex items-center gap-6 flex-wrap">
+          <div className="flex items-end gap-6 flex-wrap">
             <PerformanceContractDateControl
               period={performancePeriod}
               options={buildPerformancePeriodOptions()}
@@ -2177,77 +2177,65 @@ function ShippingPerformancePageContent() {
               }}
               resolvePeriodRange={resolvePerformancePeriodDateRange}
             />
-            <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
-                <div className="w-48">
-                  <SearchableMultiSelect
-                    label=""
-                    options={availableGroupPlants}
-                    selected={selectedGroupPlants}
-                    onChange={(values) => {
-                      handleGroupPlantsChange(values)
-                      setCurrentPage(1)
-                    }}
-                    placeholder="All group plants"
-                    emptyMessage="No group plants"
-                    uppercaseOptionLabels
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Source:</span>
-                <div className="w-48">
-                  <SearchableMultiSelect
-                    label=""
-                    options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
-                    selected={selectedSources}
-                    onChange={(values) => {
-                      setSelectedSources(values)
-                      setCurrentPage(1)
-                    }}
-                    placeholder="All sources"
-                    emptyMessage="No sources"
-                    uppercaseOptionLabels
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Incoterm:</span>
-                <div className="w-48">
-                  <SearchableMultiSelect
-                    label=""
-                    options={availableIncoterms}
-                    selected={selectedIncoterms}
-                    onChange={setSelectedIncoterms}
-                    placeholder="All incoterms"
-                    emptyMessage="No incoterms"
-                    uppercaseOptionLabels
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
-                <div className="w-48">
-                  <SearchableMultiSelect
-                    label=""
-                    options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
-                    selected={selectedProducts}
-                    onChange={(values) => {
-                      handleProductsChange(values)
-                      setCurrentPage(1)
-                    }}
-                    placeholder="All products"
-                    emptyMessage="No products"
-                    uppercaseOptionLabels
-                  />
-                </div>
-              </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Plant"
+                options={availableGroupPlants}
+                selected={selectedGroupPlants}
+                onChange={(values) => {
+                  handleGroupPlantsChange(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All group plants"
+                emptyMessage="No group plants"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Source"
+                options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                selected={selectedSources}
+                onChange={(values) => {
+                  setSelectedSources(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All sources"
+                emptyMessage="No sources"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Incoterm"
+                options={availableIncoterms}
+                selected={selectedIncoterms}
+                onChange={setSelectedIncoterms}
+                placeholder="All incoterms"
+                emptyMessage="No incoterms"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Product"
+                options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                selected={selectedProducts}
+                onChange={(values) => {
+                  handleProductsChange(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All products"
+                emptyMessage="No products"
+                uppercaseOptionLabels
+              />
+            </div>
             <button
               type="button"
               onClick={resetPerfSelections}
-              className="text-sm text-blue-700 hover:underline shrink-0"
+              className="text-sm text-blue-700 hover:underline shrink-0 pb-2.5"
             >
-              Reset selection
+              Reset
             </button>
           </div>
         </div>

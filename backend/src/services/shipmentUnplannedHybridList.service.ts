@@ -690,8 +690,20 @@ export function isCancelledHybridListRequest(status: unknown): boolean {
 /**
  * ALL table merges execution + Unplanned/Preplanned/Completed-OS backlog.
  * Keep this true for 10-digit PO/STO search — otherwise Unplanned POs vanish from ALL.
+ * Pending ATC list filter uses execution-only path with cardOuterSql — not ALL hybrid.
  */
-export function shouldResolveAllHybridShipmentsList(status: unknown): boolean {
+export function shouldResolveAllHybridShipmentsList(
+  status: unknown,
+  etcNoAtcDueWithin7d?: unknown,
+): boolean {
+  if (
+    etcNoAtcDueWithin7d === true ||
+    String(etcNoAtcDueWithin7d ?? '')
+      .trim()
+      .toLowerCase() === 'true'
+  ) {
+    return false;
+  }
   return isAllHybridListRequest(status);
 }
 

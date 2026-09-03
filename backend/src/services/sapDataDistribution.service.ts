@@ -202,6 +202,25 @@ export class SapDataDistributionService {
     };
     
     try {
+      // Concurrency guard for parallel chunked import workers (sapMasterV2Import.service.ts
+      // partitions rows so every row sharing a PO or contract number lands in the same worker
+      // chunk, which already prevents two chunks from touching the same contract concurrently
+      // in the common case). A PO can still be linked to a contract_number that a *different*
+      // row resolves to before that link is known, so take both locks for the WHOLE per-row
+      // distribution - not just the contract upsert - up front: two workers that do collide on
+      // the same underlying contract then serialize safely (the second blocks until the first's
+      // entire transaction commits) instead of racing on the same shipment/trucking rows.
+      const lockPoNumber = normalizePoNumber(parsedData?.contract?.po_no);
+      const lockContractNumber = parsedData?.contract?.contract_no
+        ? String(parsedData.contract.contract_no).trim() || null
+        : null;
+      if (lockPoNumber) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [`po:${lockPoNumber}`]);
+      }
+      if (lockContractNumber) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [`contract:${lockContractNumber}`]);
+      }
+
       // Normalize: in some files STO lives under shipment (not contract). Ensure contract upsert receives it.
       if (parsedData?.contract && parsedData?.shipment) {
         if (!parsedData.contract.sto_no && parsedData.shipment.sto_no) {

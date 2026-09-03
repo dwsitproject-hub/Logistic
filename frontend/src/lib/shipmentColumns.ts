@@ -1,242 +1,543 @@
 /**
+
  * Shipments compact table — default column order, visibility, and compact widths.
+
  * Matches Contract Performance compact header sizing behavior.
+
  */
 
+
+
 import { migrateSavedColumnLayout, mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
+
 import type { ShipmentsPipelineStageFilter } from '@/lib/shipmentsPageFilterState'
+
 import {
+
   buildCompactTableColumnWidthTracks,
+
   resolveCompactColumnWidthPx,
+
   type CompactTableColumnWidthInput,
+
 } from '@/lib/compactTableUi'
+
+
 
 export const SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID = 'pre_planned_group' as const
 
+
+
 /**
- * Manual grouping "Select" checkbox column — lets the user multi-select
- * Unplanned contract-backlog rows and bulk-accept them into a manual
- * Preplanned group. Opt-in (hidden by default) and, unlike the Grouping
- * Suggestion column, NOT hidden/shown based on pipeline stage — it stays in
- * the visible-columns set regardless of the active status card; only the
- * checkbox interactivity itself is gated by the active stage (see page.tsx).
+
+ * Manual grouping checkbox column — multi-select Unplanned contracts into a manual
+
+ * Preplanned group. Opt-in (hidden by default); shown only on Unplanned / Preplanned
+
+ * cards, same stage gate as Grouping Suggestion.
+
  */
+
 export const SHIPMENT_MANUAL_SELECT_COLUMN_ID = 'select_group' as const
 
-/** Default visible columns in left-to-right table order. */
-export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
-  'status',
-  'pre_planned_group',
-  'late_indicator',
-  'vessel_name',
-  'shipment_id',
-  'loading_port',
-  'discharge_port',
-  'supplier',
-  'incoterm',
-  'product',
-  'contract_qty',
-  'outstanding_quantity',
-  'outstanding_qty_planning',
-  'sfal_qty',
-  'sfbd_qty',
-  'ata_vessel_completed_loading',
-  'ata_vessel_complete_discharge',
+
+
+export const SHIPMENT_TRADE_CYCLE_COLUMN_ID = 'trade_cycle_days' as const
+
+
+
+/** Columns hidden outside Unplanned / Preplanned pipeline cards. */
+
+export const SHIPMENT_STAGE_GATED_COLUMN_IDS: readonly string[] = [
+
+  SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
+
+  SHIPMENT_MANUAL_SELECT_COLUMN_ID,
+
 ] as const
 
-/** Removed from column picker — use loading_port / discharge_port (SAP-resolved). */
-export const SHIPMENT_OBSOLETE_COLUMN_IDS = ['port_of_loading', 'port_of_discharge'] as const
+
+
+/** Columns available only when the Unplanned card is selected. */
+
+export const SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS: readonly string[] = [
+
+  SHIPMENT_TRADE_CYCLE_COLUMN_ID,
+
+] as const
+
+
+
+/** Default visible columns in left-to-right table order. */
+
+export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
+
+  'status',
+
+  'pre_planned_group',
+
+  'late_indicator',
+
+  'vessel_name',
+
+  'shipment_id',
+
+  'loading_port',
+
+  'discharge_port',
+
+  'supplier',
+
+  'incoterm',
+
+  'product',
+
+  'contract_qty',
+
+  'outstanding_quantity',
+
+  SHIPMENT_TRADE_CYCLE_COLUMN_ID,
+
+  'sfal_qty',
+
+  'sfbd_qty',
+
+  'ata_vessel_completed_loading',
+
+  'ata_vessel_complete_discharge',
+
+] as const
+
+
+
+/**
+
+ * Removed from column picker:
+
+ * - port_of_loading / port_of_discharge → use loading_port / discharge_port (SAP-resolved)
+
+ * - outstanding_qty_planning → removed from Shipments View table
+
+ */
+
+export const SHIPMENT_OBSOLETE_COLUMN_IDS = [
+
+  'port_of_loading',
+
+  'port_of_discharge',
+
+  'outstanding_qty_planning',
+
+] as const
+
+
 
 /** Bump when default column order/visibility changes — triggers one-time layout migration. */
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v10'
+
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v11'
+
+
 
 export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayoutVersion'
 
+
+
 /** Compact fixed px widths — header longest-word logic may expand via resolveCompactColumnWidthPx. */
+
 export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
+
   select_group: 120,
+
   late_indicator: 100,
+
   vessel_name: 88,
+
   shipment_id: 72,
+
   loading_port: 100,
+
   discharge_port: 100,
+
   supplier: 152,
+
   incoterm: 72,
+
   product: 88,
+
   status: 80,
+
   contract_qty: 96,
+
   outstanding_quantity: 104,
-  outstanding_qty_planning: 112,
+
+  trade_cycle_days: 96,
+
   sfal_qty: 88,
+
   sfbd_qty: 88,
+
   ata_vessel_completed_loading: 88,
+
   ata_vessel_complete_discharge: 88,
+
   contract_date: 100,
+
   contract_ext_no: 120,
+
   po_numbers: 72,
+
   pre_planned_group: 168,
+
   sto_quantity: 96,
+
   quantity_delivered: 96,
+
   quantity_receive: 96,
+
   operation_id: 120,
+
   contract_numbers: 120,
+
   contract_reference_po: 120,
+
   delivery_start: 108,
+
   delivery_end: 108,
+
   b2b_flag: 80,
+
   vessel_code: 88,
+
   estimated_nautical_miles: 96,
+
   vessel_draft: 88,
+
   vessel_loa: 72,
+
   vessel_capacity: 96,
+
   vessel_hull_type: 96,
+
   vessel_registration_year: 96,
+
   charter_type: 88,
+
   average_vessel_speed: 96,
+
   fuel_consumption: 128,
+
   freight: 120,
+
   freight_budget: 128,
+
   pump_rate: 104,
+
   sailing_speed: 96,
+
   shortage: 104,
+
   eta_arrival: 88,
+
   eta_berthed: 88,
+
   eta_loading_start: 88,
+
   eta_loading_complete: 88,
+
   eta_sailed: 88,
+
   eta_discharge_arrival: 88,
+
   eta_discharge_berthed: 88,
+
   eta_discharge_start: 88,
+
   eta_discharge_complete: 88,
+
   eta_vessel_complete_discharge: 88,
+
   ata_vessel_arrival_at_loading_port: 88,
+
   ata_vessel_berthed_at_loading_port: 88,
+
   ata_vessel_start_loading: 88,
+
   ata_vessel_sailed_from_loading_port: 88,
+
   ata_vessel_arrive_at_discharge_port: 88,
+
   ata_vessel_berthed_at_discharge_port: 88,
+
   ata_vessel_start_discharging: 88,
+
 }
+
+
 
 export function shipmentDefaultVisibleColumnIds(allIds: string[]): string[] {
+
   return SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
+
 }
 
-/** Grouping Suggestion is eligible on Unplanned (Accept/Dismiss) and Preplanned (Revert). */
+
+
+/** Grouping Suggestion + Grouping Manual — eligible on Unplanned and Preplanned only. */
+
 export function isShipmentGroupingSuggestionColumnEligible(
+
+  pipelineStage: ShipmentsPipelineStageFilter,
+
+): boolean {
+
+  return pipelineStage === 'UNPLANNED' || pipelineStage === 'PREPLANNED'
+
+}
+
+
+
+/** Trade Cycle — Visible Columns / table when Unplanned card or Pending ATC filter is active. */
+export interface ShipmentColumnStageOptions {
+  pendingAtcDueWithin7d?: boolean;
+}
+
+export function isShipmentUnplannedOnlyColumnEligible(
   pipelineStage: ShipmentsPipelineStageFilter,
 ): boolean {
-  return pipelineStage === 'UNPLANNED' || pipelineStage === 'PREPLANNED'
+  return pipelineStage === 'UNPLANNED';
 }
 
-/** Default visible set — omits Grouping Suggestion unless Unplanned or Preplanned is active. */
+export function isShipmentTradeCycleColumnEligible(
+  pipelineStage: ShipmentsPipelineStageFilter,
+  options?: ShipmentColumnStageOptions,
+): boolean {
+  return (
+    isShipmentUnplannedOnlyColumnEligible(pipelineStage) ||
+    options?.pendingAtcDueWithin7d === true
+  );
+}
+
+
+
+/** Columns hidden from picker + table for the current pipeline card. */
+
+export function shipmentColumnsHiddenForStage(
+  pipelineStage: ShipmentsPipelineStageFilter,
+  options?: ShipmentColumnStageOptions,
+): string[] {
+  const hidden: string[] = [];
+  if (!isShipmentGroupingSuggestionColumnEligible(pipelineStage)) {
+    hidden.push(...SHIPMENT_STAGE_GATED_COLUMN_IDS);
+  }
+  if (!isShipmentTradeCycleColumnEligible(pipelineStage, options)) {
+    hidden.push(...SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS);
+  }
+  return hidden;
+}
+
+
+
+/** Default visible set — omits stage-gated / Unplanned-only columns unless eligible. */
+
 export function shipmentDefaultVisibleColumnIdsForStage(
   allIds: string[],
   pipelineStage: ShipmentsPipelineStageFilter,
+  options?: ShipmentColumnStageOptions,
 ): string[] {
-  const base = shipmentDefaultVisibleColumnIds(allIds)
-  if (isShipmentGroupingSuggestionColumnEligible(pipelineStage)) {
-    return base
-  }
-  return base.filter((id) => id !== SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)
+  const hidden = new Set(shipmentColumnsHiddenForStage(pipelineStage, options));
+  return shipmentDefaultVisibleColumnIds(allIds).filter((id) => !hidden.has(id));
 }
 
-/** Hide Grouping Suggestion from the rendered table when the stage filter is not eligible. */
+
+
+/** Hide stage-gated / Unplanned-only columns from the rendered table when ineligible. */
+
 export function filterShipmentVisibleColumnIdsForStage(
   visibleIds: ReadonlySet<string>,
   pipelineStage: ShipmentsPipelineStageFilter,
+  options?: ShipmentColumnStageOptions,
 ): Set<string> {
-  if (isShipmentGroupingSuggestionColumnEligible(pipelineStage)) {
-    return new Set(visibleIds)
+  const hidden = shipmentColumnsHiddenForStage(pipelineStage, options);
+  if (hidden.length === 0) return new Set(visibleIds);
+  const next = new Set(visibleIds);
+  for (const id of hidden) {
+    next.delete(id);
   }
-  const next = new Set(visibleIds)
-  next.delete(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)
-  return next
+  return next;
 }
+
+
 
 /** Primary columns first (default visible order), then remaining definition order. */
+
 export function shipmentCompactColumnFallbackOrder(allIds: string[]): string[] {
+
   const seen = new Set<string>()
+
   const out: string[] = []
+
   for (const id of SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS) {
+
     if (allIds.includes(id) && !seen.has(id)) {
+
       out.push(id)
+
       seen.add(id)
+
     }
+
   }
+
   for (const id of allIds) {
+
     if (!seen.has(id)) {
+
       out.push(id)
+
       seen.add(id)
+
     }
+
   }
+
   return out
+
 }
+
+
 
 export function mergeShipmentColumnOrder(saved: string[], allIds: string[]): string[] {
+
   return mergePreservedColumnOrder(saved, allIds, shipmentCompactColumnFallbackOrder(allIds))
+
 }
 
+
+
 export function buildShipmentVisibleColumns<T extends { id: string }>(
+
   columns: T[],
+
   visibleIds: ReadonlySet<string>,
+
   columnOrderIds: string[],
+
 ): T[] {
+
   const byId = new Map(columns.map((c) => [c.id, c]))
+
   const allIds = columns.map((c) => c.id)
+
   const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : shipmentCompactColumnFallbackOrder(allIds)).filter(
+
     (id) => byId.has(id),
+
   )
+
   return orderedIds.map((id) => byId.get(id)!).filter((c) => visibleIds.has(c.id))
+
 }
+
+
 
 const SHIPMENT_DEFAULT_COLUMN_WIDTH_PX = 96
 
+
+
 /** Match Contract/Shipping Performance: base map + header longest-word floor. */
+
 export function shipmentTableColumnWidthPx(
+
   colId: string,
+
   headerLabel?: string,
+
   options?: { hasFormulaHelp?: boolean },
+
 ): number {
+
   const base = SHIPMENT_COLUMN_WIDTH_PX[colId] ?? SHIPMENT_DEFAULT_COLUMN_WIDTH_PX
+
   return resolveCompactColumnWidthPx(base, headerLabel, {
+
     hasFormulaHelp: options?.hasFormulaHelp,
+
     hasSort: true,
+
   })
+
 }
+
+
 
 export function buildShipmentColumnWidthTracks(
+
   visibleColumns: ReadonlyArray<string | CompactTableColumnWidthInput>,
+
   labelById?: ReadonlyMap<string, string>,
+
 ): Record<string, string> {
+
   return buildCompactTableColumnWidthTracks(visibleColumns, (id, label, formulaHelp) =>
+
     shipmentTableColumnWidthPx(id, label ?? labelById?.get(id), {
+
       hasFormulaHelp: Boolean(formulaHelp),
+
     }),
+
   )
+
 }
+
+
 
 /** Expand/collapse spacer before data columns (Tailwind w-10). */
+
 export const SHIPMENT_EXPAND_COL_WIDTH_PX = 40
 
-/** Migrate saved shipment column prefs: drop raw port columns, ensure SAP port columns visible. */
+
+
+/** Migrate saved shipment column prefs: drop obsolete columns, ensure SAP port columns visible. */
+
 export function migrateShipmentColumnLayout(
+
   visibleColumnIds: readonly string[],
+
   columnOrderIds: readonly string[],
+
   allColumnIds?: readonly string[],
+
 ): { visibleColumnIds: string[]; columnOrderIds: string[] } {
+
   const migrated = migrateSavedColumnLayout({
+
     visibleColumnIds,
+
     columnOrderIds,
+
     obsoleteColumnIds: SHIPMENT_OBSOLETE_COLUMN_IDS,
+
     ensureVisibleIds: ['loading_port', 'discharge_port'],
+
   })
+
   const allIds =
+
     allColumnIds && allColumnIds.length > 0
+
       ? [...allColumnIds]
+
       : [...new Set([...migrated.visibleColumnIds, ...migrated.columnOrderIds])]
+
   return {
+
     visibleColumnIds: migrated.visibleColumnIds,
+
     columnOrderIds: mergeShipmentColumnOrder(migrated.columnOrderIds, allIds),
+
   }
+
 }
+
+

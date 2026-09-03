@@ -24,6 +24,10 @@ import {
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import {
+  formatSignedCycleDaysCompact,
+  signedCycleDaysClass,
+} from '@/lib/cycleDaysDisplay'
 import { resolvePerformancePeriodDateRange } from '@/lib/performancePeriodFilters'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
@@ -122,9 +126,13 @@ import {
   SHIPMENT_EXPAND_COL_WIDTH_PX,
   SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
   SHIPMENT_MANUAL_SELECT_COLUMN_ID,
+  SHIPMENT_TRADE_CYCLE_COLUMN_ID,
+  SHIPMENT_STAGE_GATED_COLUMN_IDS,
+  SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS,
   buildShipmentVisibleColumns,
   filterShipmentVisibleColumnIdsForStage,
   isShipmentGroupingSuggestionColumnEligible,
+  isShipmentTradeCycleColumnEligible,
   mergeShipmentColumnOrder,
   migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
@@ -177,6 +185,7 @@ import {
   type PrePlannedTableGroup,
 } from '@/lib/prePlannedGroupTableRows'
 import {
+  EMPTY_SHIPMENT_ETC_NO_ATC_DUE,
   EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
   ShipmentOutstandingQtySummary,
   reconcileOutstandingQtyStripForDisplay,
@@ -349,6 +358,8 @@ interface Shipment {
   quantity_receive?: number
   outstanding_quantity?: number
   outstanding_qty_planning?: number
+  /** Same Trade Cycle days as Contract Performance (Unplanned card only in UI). */
+  trade_cycle_days?: number | null
   contract_qty?: number
   loading_ports?: string
   discharge_ports?: string
@@ -1004,6 +1015,7 @@ function ShipmentsPageContent() {
     }
     statusContractQty?: Partial<ShipmentPagePipelineContractQtyKg>
     statusOutstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg>
+    etcNoAtcDueWithin7d?: { count: number; outstandingQtyKg: number }
     attentionInsights?: ReturnType<typeof mapShipmentAttentionInsights>
     etaLoading?: Record<string, number>
     etaDischarge?: Record<string, number>
@@ -1044,6 +1056,7 @@ function ShipmentsPageContent() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
   const [statusFilter, setStatusFilter] = useState<ShipmentsPipelineStageFilter>('ALL')
+  const [etcNoAtcDueWithin7dFilter, setEtcNoAtcDueWithin7dFilter] = useState(false)
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
   const [charterTypeFilter, setCharterTypeFilter] = useState<string>('ALL')
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('ALL')
@@ -1354,14 +1367,14 @@ function ShipmentsPageContent() {
 
   const listQueryKey = useMemo(
     () =>
-      buildShipmentsListQueryKey({
+      `${buildShipmentsListQueryKey({
         ...globalFilterScope,
         pipelineStage: statusFilter,
         page,
         sortKey,
         sortDir,
-      }),
-    [globalFilterScope, statusFilter, page, sortKey, sortDir],
+      })}|etc7:${etcNoAtcDueWithin7dFilter ? '1' : '0'}`,
+    [globalFilterScope, statusFilter, etcNoAtcDueWithin7dFilter, page, sortKey, sortDir],
   )
 
   // Desktop table horizontal scroll sync (top + bottom)
@@ -1636,6 +1649,7 @@ function ShipmentsPageContent() {
       setEtaDischargeFilter('ALL')
     }
     setStatusFilter(stage)
+    setEtcNoAtcDueWithin7dFilter(false)
   }, [beginTableScopeRefresh])
 
   const handleStatusCardClick = useCallback(
@@ -1644,6 +1658,23 @@ function ShipmentsPageContent() {
     },
     [handlePipelineStageChange, statusFilter],
   )
+
+  const handleEtcNoAtcDueCardClick = useCallback(() => {
+    beginTableScopeRefresh()
+    setEtcNoAtcDueWithin7dFilter((prev) => {
+      const next = !prev
+      if (next) {
+        setStatusFilter('ALL')
+        if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+          setSection2EtaSummary(null)
+          setEtaLoadingFilter('ALL')
+          setEtaDischargeFilter('ALL')
+        }
+      }
+      return next
+    })
+    setPage(1)
+  }, [beginTableScopeRefresh])
 
   // Column header filters apply only when user presses Enter inside the filter popover.
 
@@ -1661,6 +1692,9 @@ function ShipmentsPageContent() {
     params.append('includeSummary', 'false')
     if (statusFilter && statusFilter !== 'ALL') {
       params.append('status', statusFilter)
+    }
+    if (etcNoAtcDueWithin7dFilter) {
+      params.append('etcNoAtcDueWithin7d', 'true')
     }
     if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
       if (etaLoadingFilter !== 'ALL') {
@@ -3228,6 +3262,7 @@ function ShipmentsPageContent() {
     dateFrom !== shipmentYtdRange.dateFrom ||
     dateTo !== shipmentYtdRange.dateTo ||
     statusFilter !== 'ALL' ||
+    etcNoAtcDueWithin7dFilter ||
     lateIndicatorFilter !== 'ALL' ||
     charterTypeFilter !== 'ALL' ||
     sourceTypeFilter !== 'ALL' ||
@@ -3246,6 +3281,7 @@ function ShipmentsPageContent() {
     setSearchDraft('')
     setSearchTerm('')
     setStatusFilter('ALL')
+    setEtcNoAtcDueWithin7dFilter(false)
     setLateIndicatorFilter('ALL')
     setCharterTypeFilter('ALL')
     setSourceTypeFilter('ALL')
@@ -3456,6 +3492,7 @@ function ShipmentsPageContent() {
     summaryFetching || (userScopeReady && shipmentsSection1Summary == null)
 
   const shipmentsTableScopeLabel = useMemo(() => {
+    if (etcNoAtcDueWithin7dFilter) return 'Pending ATC (Overdue / Due ≤7d)'
     if (statusFilter !== 'ALL') {
       if (statusFilter === 'OPEN') return 'Open'
       if (statusFilter === 'CLOSE') return 'Close'
@@ -3468,7 +3505,7 @@ function ShipmentsPageContent() {
       return ETA_DISCHARGE_FILTER_LABELS[etaDischargeFilter]
     }
     return null
-  }, [statusFilter, etaLoadingFilter, etaDischargeFilter])
+  }, [etcNoAtcDueWithin7dFilter, statusFilter, etaLoadingFilter, etaDischargeFilter])
 
   // Helper function to calculate late indicator for shipments
   const getLateIndicator = (shipment: Shipment): { color: string; text: string } =>
@@ -3480,7 +3517,7 @@ function ShipmentsPageContent() {
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'freight_budget' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'trade_cycle_days' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'freight_budget' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
     if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
@@ -3519,6 +3556,7 @@ function ShipmentsPageContent() {
       case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
       case 'contract_qty': return typeof s.contract_qty === 'number' ? s.contract_qty : null
       case 'outstanding_qty_planning': return typeof s.outstanding_qty_planning === 'number' ? s.outstanding_qty_planning : null
+      case 'trade_cycle_days': return typeof s.trade_cycle_days === 'number' ? s.trade_cycle_days : null
       case 'outstanding_quantity': return shipmentListOutstandingKgForViewTable(s)
       case 'sfal_qty': return typeof s.sfal_qty === 'number' ? s.sfal_qty : null
       case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
@@ -3929,7 +3967,7 @@ function ShipmentsPageContent() {
       id: SHIPMENT_MANUAL_SELECT_COLUMN_ID,
       label: 'Grouping Manual',
       formulaHelp:
-        'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Only enabled while the Unplanned card is active.',
+        'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Shown only on Unplanned / Preplanned cards; checkboxes are enabled on Unplanned only.',
       defaultVisible: false,
       sortable: false,
       render: (s) => {
@@ -4311,23 +4349,21 @@ function ShipmentsPageContent() {
       }
     },
     {
-      id: 'outstanding_qty_planning',
-      label: 'Outstanding Qty (Plan)',
-      formulaHelp: FIELD_HELP.shipmentOutstandingQtyPlanning,
+      id: SHIPMENT_TRADE_CYCLE_COLUMN_ID,
+      label: 'Trade Cycle',
+      formulaHelp: FIELD_HELP.contractPerfTradeCycle,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_qty_planning) ?? 0,
+      getSortValue: (s) => s.trade_cycle_days ?? 0,
       render: (s) => {
-        if (!qtyFieldsReady) return <QtyLoadingDots />
-        const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
+        if (s.trade_cycle_days == null) return <span className="text-sm font-normal">-</span>
         return (
-          <span
-            className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
-          >
-            {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          <span className={`text-sm font-normal tabular-nums ${signedCycleDaysClass(s.trade_cycle_days)}`}>
+            {formatSignedCycleDaysCompact(s.trade_cycle_days)}
           </span>
         )
       },
+      className: 'whitespace-nowrap',
     },
     {
       id: 'sfal_qty',
@@ -4738,17 +4774,29 @@ function ShipmentsPageContent() {
     },
   ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, revertingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup, statusFilter, selectedManualGroupContractIds, toggleManualGroupRowSelection])
 
+  const shipmentColumnStageOptions = useMemo(
+    () => ({ pendingAtcDueWithin7d: etcNoAtcDueWithin7dFilter }),
+    [etcNoAtcDueWithin7dFilter],
+  )
+
   const defaultVisibleColumnIds = useMemo(() => {
     const allIds = compactColumns.map((c) => c.id)
-    return shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter)
-  }, [compactColumns, statusFilter])
+    return shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter, shipmentColumnStageOptions)
+  }, [compactColumns, statusFilter, shipmentColumnStageOptions])
 
   const compactColumnPickerColumns = useMemo(
-    () =>
-      isShipmentGroupingSuggestionColumnEligible(statusFilter)
-        ? compactColumns
-        : compactColumns.filter((c) => c.id !== SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID),
-    [compactColumns, statusFilter],
+    () => {
+      const hidden = new Set<string>()
+      if (!isShipmentGroupingSuggestionColumnEligible(statusFilter)) {
+        for (const id of SHIPMENT_STAGE_GATED_COLUMN_IDS) hidden.add(id)
+      }
+      if (!isShipmentTradeCycleColumnEligible(statusFilter, shipmentColumnStageOptions)) {
+        for (const id of SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS) hidden.add(id)
+      }
+      if (hidden.size === 0) return compactColumns
+      return compactColumns.filter((c) => !hidden.has(c.id))
+    },
+    [compactColumns, statusFilter, shipmentColumnStageOptions],
   )
 
   useEffect(() => {
@@ -4760,6 +4808,16 @@ function ShipmentsPageContent() {
       return next
     })
   }, [statusFilter])
+
+  useEffect(() => {
+    if (!isShipmentTradeCycleColumnEligible(statusFilter, shipmentColumnStageOptions)) return
+    setVisibleColumnIds((prev) => {
+      if (prev.has(SHIPMENT_TRADE_CYCLE_COLUMN_ID)) return prev
+      const next = new Set(prev)
+      next.add(SHIPMENT_TRADE_CYCLE_COLUMN_ID)
+      return next
+    })
+  }, [statusFilter, shipmentColumnStageOptions])
 
   const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
 
@@ -4846,8 +4904,8 @@ function ShipmentsPageContent() {
   }, [compactColumnIdsKey])
 
   const effectiveVisibleColumnIds = useMemo(
-    () => filterShipmentVisibleColumnIdsForStage(visibleColumnIds, statusFilter),
-    [visibleColumnIds, statusFilter],
+    () => filterShipmentVisibleColumnIdsForStage(visibleColumnIds, statusFilter, shipmentColumnStageOptions),
+    [visibleColumnIds, statusFilter, shipmentColumnStageOptions],
   )
 
   const visibleColumns = useMemo(
@@ -5060,7 +5118,7 @@ function ShipmentsPageContent() {
 
   const resetCompactColumnView = useCallback(() => {
     const allIds = compactColumns.map((c) => c.id)
-    const vis = new Set(shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter))
+    const vis = new Set(shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter, shipmentColumnStageOptions))
     const order = shipmentCompactColumnFallbackOrder(allIds)
     setVisibleColumnIds(vis)
     setColumnOrderIds(order)
@@ -5072,7 +5130,7 @@ function ShipmentsPageContent() {
         // ignore
       }
     }
-  }, [compactColumns, columnStorageKey, columnOrderStorageKey, statusFilter])
+  }, [compactColumns, columnStorageKey, columnOrderStorageKey, statusFilter, shipmentColumnStageOptions])
 
   const allVisibleIds = useMemo(() => sortedShipments.map(s => s.id), [sortedShipments])
   const expandedCount = expandedShipmentIds.size
@@ -6674,6 +6732,10 @@ function ShipmentsPageContent() {
         <ShipmentOutstandingQtySummary
           loading={outstandingQtyFetching}
           data={shipmentsSection1Summary?.outstandingQty}
+          etcNoAtcDue={shipmentsSection1Summary?.etcNoAtcDueWithin7d ?? EMPTY_SHIPMENT_ETC_NO_ATC_DUE}
+          etcNoAtcDueLoading={summaryFetching}
+          etcNoAtcDueActive={etcNoAtcDueWithin7dFilter}
+          onEtcNoAtcDueClick={handleEtcNoAtcDueCardClick}
         />
 
         {/* Shipments List */}

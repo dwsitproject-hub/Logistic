@@ -47,6 +47,12 @@ describe('shipmentUnplannedHybridList.service', () => {
       expect(shouldResolveAllHybridShipmentsList('UNPLANNED')).toBe(false);
       expect(shouldResolveAllHybridShipmentsList('PLANNED')).toBe(false);
     });
+
+    it('uses execution list path when Pending ATC filter is active', () => {
+      expect(shouldResolveAllHybridShipmentsList('ALL', true)).toBe(false);
+      expect(shouldResolveAllHybridShipmentsList('ALL', 'true')).toBe(false);
+      expect(shouldResolveAllHybridShipmentsList('', 'true')).toBe(false);
+    });
   });
 
   describe('shouldResolveCancelledHybridShipmentsList', () => {
@@ -165,7 +171,7 @@ describe('shipmentUnplannedHybridList.service', () => {
         join(__dirname, '../controllers/shipment.controller.ts'),
         'utf8',
       );
-      expect(src).toContain('if (shouldResolveAllHybridShipmentsList(status))');
+      expect(src).toContain('if (shouldResolveAllHybridShipmentsList(status, etcNoAtcDueWithin7dParam))');
       expect(src).toContain('if (shouldResolveCompletedHybridShipmentsList(status))');
       expect(src).toContain('if (shouldResolveCancelledHybridShipmentsList(status))');
       expect(src).not.toMatch(/shouldResolveAllHybridShipmentsList\(status\)\s*&&\s*!exactStoKey/);

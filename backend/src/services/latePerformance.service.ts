@@ -4,6 +4,7 @@ import {
   isLegacyTradeCycleOnTime,
   isOpenConditionBOnTime,
   openDueDateTradeCycleDays,
+  toCalendarDateKey,
 } from '../utils/calendarDays';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -955,9 +956,13 @@ export function computeClosedTradeCycleDays(
   row: any,
   transport: string,
   deliveryEnd: unknown,
+  todayMid: Date = new Date(),
 ): number | null {
   if (!hasCalendarDate(deliveryEnd)) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const t = String(transport || '').trim().toUpperCase();
+  const end = t.startsWith('SEA')
+    ? resolveSeaTradeCycleCompletionDate(row, todayMid)
+    : resolveCycleCompletionDate(row, transport);
   if (!end) return null;
   return diffCalendarDays(deliveryEnd, end);
 }
@@ -968,14 +973,37 @@ export function isContractPerfOnTimeTradeCycle(row: any, tradeCycle: number): bo
   const transport = String(row.transport_mode || '').trim().toUpperCase();
   const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
   if (!isOpen) return isLegacyTradeCycleOnTime(tradeCycle);
+  // SEA Open without ETA has null Trade Cycle (no Condition B). LAND may still use Condition B.
+  if (transport.startsWith('SEA') && !hasCalendarDate(resolveOpenStandardEta(row, transport))) {
+    return isLegacyTradeCycleOnTime(tradeCycle);
+  }
   const openUsesConditionB = !hasCalendarDate(resolveOpenStandardEta(row, transport));
   return openUsesConditionB ? isOpenConditionBOnTime(tradeCycle) : isLegacyTradeCycleOnTime(tradeCycle);
 }
 
 /**
- * Open Trade Cycle: Due Date Delivery End vs completion date
- * (LAND Last Receive → WB → planning; SEA ATC → ETA at LP).
- * When no completion milestone exists (Condition B), fallback to today vs due end.
+ * SEA Trade Cycle completion date:
+ * ATA vessel complete discharge when present; otherwise ETA at LP.
+ * When ATA is null: if ETA &lt; today → today; if ETA null → null (UI shows "-").
+ * Uses local calendar for "today" so callers' local midnight Date matches ISO date strings.
+ */
+export function resolveSeaTradeCycleCompletionDate(row: any, todayMid: Date): Date | null {
+  if (hasCalendarDate(row.last_ata_vessel_complete_discharge)) {
+    return due(row.last_ata_vessel_complete_discharge);
+  }
+  const etaKey = toCalendarDateKey(row.open_standard_eta_vessel_loading);
+  if (!etaKey) return null;
+  const todayKey = `${todayMid.getFullYear()}-${String(todayMid.getMonth() + 1).padStart(2, '0')}-${String(todayMid.getDate()).padStart(2, '0')}`;
+  if (etaKey < todayKey) {
+    return due(todayKey);
+  }
+  return due(etaKey);
+}
+
+/**
+ * Open Trade Cycle: Due Date Delivery End vs completion date.
+ * SEA: ATA → else ETA (or today when ETA &lt; today); ETA null → null (no Condition B).
+ * LAND: Last Receive → WB → planning → ETA; when none, Condition B (today vs due end).
  */
 function computeOpenTradeCycleDays(
   row: any,
@@ -983,6 +1011,12 @@ function computeOpenTradeCycleDays(
   todayMid: Date,
   deliveryEnd: Date,
 ): number | null {
+  const t = String(transport || '').trim().toUpperCase();
+  if (t.startsWith('SEA')) {
+    const end = resolveSeaTradeCycleCompletionDate(row, todayMid);
+    if (!end) return null;
+    return diffCalendarDays(deliveryEnd, end);
+  }
   const end = resolveCycleCompletionDate(row, transport);
   if (!end) {
     return openDueDateTradeCycleDays(deliveryEnd, todayMid);
@@ -1021,7 +1055,7 @@ export function computePerfTradeCycleDaysForRow(row: any, todayMid: Date = new D
   if (!deliveryEnd) return null;
 
   if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-    return computeClosedTradeCycleDays(row, transport, deliveryEnd);
+    return computeClosedTradeCycleDays(row, transport, deliveryEnd, todayMid);
   }
   if (statusText === 'OPEN' || statusText === 'ACTIVE') {
     return computeOpenTradeCycleDays(row, transport, todayMid, deliveryEnd);

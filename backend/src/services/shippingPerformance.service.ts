@@ -8,6 +8,7 @@ import {
 import { mergePoMetricsFromRows } from '../utils/shippingPerformancePoMetrics';
 import {
   buildShippingPerfStoMetricsCte,
+  buildShippingPerfViewTableQtySelectSql,
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
 import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
@@ -24,12 +25,7 @@ import { SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselD
 import {
   aggregateImportStatusForStoGroup,
   sqlContractImportStatusForStoExpr,
-  sqlIsContractSapClosedForStoExpr,
 } from '../utils/contractDeliveryStatus';
-import {
-  sqlShipmentResolvedDeliveryKg,
-  sqlShipmentResolvedReceiveKg,
-} from '../utils/shipmentManualQtyResolveSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
@@ -399,6 +395,8 @@ export function invalidateShippingPerformanceRowCache(): void {
 
 const SHIPPING_PERF_SEA_ROW_SCOPE = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
 
+const SHIPPING_PERF_VIEW_TABLE_QTY = buildShippingPerfViewTableQtySelectSql();
+
 const SHIPPING_PERFORMANCE_SQL = `
       WITH latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
@@ -655,26 +653,13 @@ const SHIPPING_PERFORMANCE_SQL = `
         END AS ata_total_delta_days,
         sa.remark,
         COALESCE(sm.sto_qty, 0)::numeric AS sto_qty,
-        COALESCE((
-          ${sqlShipmentResolvedReceiveKg(
-            sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR),
-            's.actual_vessel_qty_receive',
-            'COALESCE(sm.received_qty, 0)',
-          )}
-        ), 0)::numeric AS received_qty,
-        COALESCE((
-          ${sqlShipmentResolvedDeliveryKg(
-            sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR),
-            's.quantity_delivered_klip',
-            'COALESCE(sm.delivered_qty, 0)',
-            's.quantity_delivered',
-          )}
-        ), 0)::numeric AS delivered_qty,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.receivedQtySql} AS received_qty,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.deliveredQtySql} AS delivered_qty,
         COALESCE(sm.planning_qty, 0)::numeric AS planning_qty,
         COALESCE(sm.po_sto_count, 1)::int AS po_sto_count,
-        COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty_actual,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingActualSql} AS outstanding_qty_actual,
         COALESCE(sm.outstanding_qty_planning, 0)::numeric AS outstanding_qty_planning,
-        COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingActualSql} AS outstanding_qty
       FROM shipments s
       INNER JOIN contracts c ON s.contract_id = c.id
       ${SHIPMENT_ATA_OVERRIDES_JOIN}

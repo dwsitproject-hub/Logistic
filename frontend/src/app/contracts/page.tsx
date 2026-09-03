@@ -3525,7 +3525,7 @@ function ContractsPageContent() {
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
               ) : null}
             </h1>
-            <div className="flex items-center gap-6 flex-wrap">
+            <div className="flex items-end gap-6 flex-wrap">
               <PerformanceContractDateControl
                 period={performancePeriod}
                 options={buildPerformancePeriodOptions()}
@@ -3548,84 +3548,72 @@ function ContractsPageContent() {
                 }}
                 resolvePeriodRange={resolvePerformancePeriodDateRange}
               />
-              <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Plant:</span>
-                  <div className="w-48">
-                    <SearchableMultiSelect
-                      label=""
-                      options={availableGroupPlants}
-                      selected={contractPerfSelectedGroupPlants}
-                      onChange={(values) => {
-                        lockSection1FilterChange()
-                        handleContractPerfGroupPlantsChange(values)
-                        setCurrentPage(1)
-                      }}
-                      placeholder="All group plants"
-                      emptyMessage="No group plants"
-                      uppercaseOptionLabels
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Source:</span>
-                  <div className="w-48">
-                    <SearchableMultiSelect
-                      label=""
-                      options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
-                      selected={contractPerfSelectedSources}
-                      onChange={(values) => {
-                        lockSection1FilterChange()
-                        setContractPerfSelectedSources(values)
-                        setCurrentPage(1)
-                      }}
-                      placeholder="All sources"
-                      emptyMessage="No sources"
-                      uppercaseOptionLabels
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Incoterm:</span>
-                  <div className="w-48">
-                    <SearchableMultiSelect
-                      label=""
-                      options={availableIncoterms}
-                      selected={contractPerfSelectedIncoterms}
-                      onChange={(values) => {
-                        lockSection1FilterChange()
-                        setContractPerfSelectedIncoterms(values)
-                        setCurrentPage(1)
-                      }}
-                      placeholder="All incoterms"
-                      emptyMessage="No incoterms"
-                      uppercaseOptionLabels
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
-                  <div className="w-48">
-                    <SearchableMultiSelect
-                      label=""
-                      options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
-                      selected={contractPerfSelectedProducts}
-                      onChange={(values) => {
-                        lockSection1FilterChange()
-                        handleContractPerfProductsChange(values)
-                        setCurrentPage(1)
-                      }}
-                      placeholder="All products"
-                      emptyMessage="No products"
-                      uppercaseOptionLabels
-                    />
-                  </div>
-                </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Plant"
+                  options={availableGroupPlants}
+                  selected={contractPerfSelectedGroupPlants}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    handleContractPerfGroupPlantsChange(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All group plants"
+                  emptyMessage="No group plants"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Source"
+                  options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                  selected={contractPerfSelectedSources}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setContractPerfSelectedSources(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All sources"
+                  emptyMessage="No sources"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Incoterm"
+                  options={availableIncoterms}
+                  selected={contractPerfSelectedIncoterms}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setContractPerfSelectedIncoterms(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All incoterms"
+                  emptyMessage="No incoterms"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Product"
+                  options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                  selected={contractPerfSelectedProducts}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    handleContractPerfProductsChange(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All products"
+                  emptyMessage="No products"
+                  uppercaseOptionLabels
+                />
+              </div>
               <button
                 type="button"
                 onClick={resetContractPerformancePage}
-                className="text-sm text-blue-700 hover:underline shrink-0"
+                className="text-sm text-blue-700 hover:underline shrink-0 pb-2.5"
               >
-                Reset selection
+                Reset
               </button>
             </div>
           </div>

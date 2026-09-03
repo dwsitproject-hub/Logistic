@@ -20,6 +20,7 @@ import {
   formatSapQtyMtDisplay,
   formatVesselTableDisplay,
 } from '@/lib/sapDisplayValue'
+import { formatSignedCycleDaysCompact } from '@/lib/cycleDaysDisplay'
 
 export interface ShipmentViewTableExportColumn {
   id: string
@@ -160,6 +161,13 @@ export function resolveShipmentViewTableExportCell(
       rec.outstanding_qty_planning as number | string | null,
       QTY_MT_OPTS,
     )
+  }
+  if (id === 'trade_cycle_days') {
+    const raw = rec.trade_cycle_days
+    if (raw == null || raw === '') return '-'
+    const n = typeof raw === 'number' ? raw : Number(raw)
+    if (!Number.isFinite(n)) return '-'
+    return formatSignedCycleDaysCompact(n)
   }
   if (id === 'sfal_qty' || id === 'sfbd_qty') {
     return formatSapQtyMtDisplay(rec[id] as number | string | null, QTY_MT_OPTS)

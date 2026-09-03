@@ -16,6 +16,8 @@ import {
   sqlIsContractSapInactiveForOsExpr,
   sqlIsContractSapInactiveForShipmentBacklogExpr,
   sqlNormalizeContractDeliveryStatusExpr,
+  sqlContractPoGrStoStatusExpr,
+  sqlContractListGrStoStatusAggExpr,
   sqlShipmentBacklogSpdSeaLegFilterSql,
 } from './contractDeliveryStatus';
 
@@ -225,5 +227,29 @@ describe('sqlShipmentBacklogSpdSeaLegFilterSql / sqlIsContractSapClosedForShipme
     expect(sql).toContain("<> 'FOB'");
     expect(sql).toContain("= 'V'");
     expect(sql).toContain('BOOL_OR');
+  });
+});
+
+describe('sqlContractPoGrStoStatusExpr', () => {
+  it('aggregates GR STO with any-Open wins (not latest SPD only)', () => {
+    const sql = sqlContractPoGrStoStatusExpr('c', 'c.po_number');
+    expect(sql).toContain('GR STO Status');
+    expect(sql).toContain('BOOL_OR');
+    expect(sql).toContain("'OPEN'");
+    expect(sql).toContain('spd_li.import_id');
+    expect(sql).toContain('IS NOT DISTINCT FROM');
+  });
+
+  it('scopes to one STO when stoKey is set and ignores synthetic OP keys', () => {
+    const sql = sqlContractPoGrStoStatusExpr('c', 'c.po_number', 'sk.sto_key');
+    expect(sql).toContain('sk.sto_key');
+    expect(sql).toContain('OP-');
+    expect(sql).toContain('BOOL_OR');
+  });
+
+  it('list agg wraps PO GR STO for GROUP BY contracts', () => {
+    const sql = sqlContractListGrStoStatusAggExpr('c');
+    expect(sql).toContain('array_agg');
+    expect(sql).toContain('GR STO Status');
   });
 });

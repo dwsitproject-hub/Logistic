@@ -88,7 +88,10 @@ export const SHIPMENT_LIST_SORT_COLUMNS: Record<string, string> = {
  * Sort keys valid for contract-backlog rows only (Grouping Suggestion).
  * Execution/shipment SQL must not ORDER BY these — hybrid merge-sort applies them in memory.
  */
-export const SHIPMENT_CONTRACT_BACKLOG_ONLY_SORT_KEYS = new Set<string>(['pre_planned_group']);
+export const SHIPMENT_CONTRACT_BACKLOG_ONLY_SORT_KEYS = new Set<string>([
+  'pre_planned_group',
+  'trade_cycle_days',
+]);
 
 /** Sort keys that require SAP/qty enrichment before ORDER BY (match list column display). */
 export const SHIPMENT_LIST_ENRICHED_SORT_KEYS = new Set<string>([
@@ -145,6 +148,7 @@ export const SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS: Record<string, string> = {
   quantity_receive: 'quantity_receive',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
+  trade_cycle_days: '(CURRENT_DATE - c.delivery_end_date)',
   loading_port: 'c.contract_date',
   discharge_port: 'c.contract_date',
   sto_quantity: 'c.contract_date',
@@ -381,6 +385,8 @@ function shipmentListRowSortNumeric(row: Record<string, unknown>, sortKey: strin
     case 'outstanding_quantity':
     case 'outstanding_qty_planning':
       return pick('outstanding_quantity', 'outstanding_qty_planning');
+    case 'trade_cycle_days':
+      return pick('trade_cycle_days');
     case 'quantity_delivered':
       return pick(
         'resolved_quantity_delivered',
@@ -509,6 +515,7 @@ export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string
   quantity_receive: 'quantity_receive',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
+  trade_cycle_days: '(CURRENT_DATE - delivery_end_date)',
   contract_ext_no: 'contract_ext_no',
   pre_planned_group: 'pre_planned_group_code',
 };

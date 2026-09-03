@@ -3,9 +3,11 @@
 import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
 import {
   sqlIncotermQuantityDeliveryCase,
+  sqlSapGrStoStatusFromJson,
   sqlSapQtyTruckingFromSpd,
   sqlSapQtyVesselFromSpd,
 } from './sapIncotermMetrics';
+import { sqlNormalizeContractDeliveryStatusExpr } from './contractDeliveryStatus';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import { sqlSapIncotermFromJsonb } from './sapSourceTypeSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
@@ -123,6 +125,58 @@ export function sqlStoLookupKeyMatchExpr(
     )
     ${contractScopedBlankSto}
   )`;
+}
+
+/**
+ * Contract Detail List STO — attach shipment rows to a SAP/manual sto_key.
+ * Aligns with getContractLogisticsStoDetail: shipment_id, operation_id, contracts.sto_number,
+ * or SAP SPD effective STO for this contract (not only exact id equality).
+ */
+export function sqlContractStoListShipmentMatchPred(
+  shipmentAlias = 's',
+  stoKeyExpr = 'sk.sto_key',
+  contractUuidParam = '$1',
+): string {
+  return `(
+    TRIM(COALESCE(${shipmentAlias}.shipment_id::text, '')) = TRIM(${stoKeyExpr}::text)
+    OR TRIM(COALESCE(${shipmentAlias}.operation_id::text, '')) = TRIM(${stoKeyExpr}::text)
+    OR EXISTS (
+      SELECT 1
+      FROM contracts cx
+      WHERE cx.id = ${shipmentAlias}.contract_id
+        AND cx.id = ${contractUuidParam}::uuid
+        AND TRIM(COALESCE(cx.sto_number::text, '')) = TRIM(${stoKeyExpr}::text)
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM contract_stos cst
+      WHERE cst.contract_id = ${shipmentAlias}.contract_id
+        AND cst.contract_id = ${contractUuidParam}::uuid
+        AND TRIM(cst.sto_number::text) = TRIM(${stoKeyExpr}::text)
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM contracts cx
+      INNER JOIN sap_processed_data spd ON spd.contract_number = cx.contract_id
+      WHERE cx.id = ${shipmentAlias}.contract_id
+        AND cx.id = ${contractUuidParam}::uuid
+        AND ${SPD_EFFECTIVE_STO_SQL} = TRIM(${stoKeyExpr}::text)
+    )
+  )`;
+}
+
+/**
+ * Prefer exact shipment_id / operation_id matches, then contract/SAP-linked rows.
+ */
+export function sqlContractStoListShipmentMatchRank(
+  shipmentAlias = 's',
+  stoKeyExpr = 'sk.sto_key',
+): string {
+  return `CASE
+    WHEN TRIM(COALESCE(${shipmentAlias}.shipment_id::text, '')) = TRIM(${stoKeyExpr}::text) THEN 0
+    WHEN TRIM(COALESCE(${shipmentAlias}.operation_id::text, '')) = TRIM(${stoKeyExpr}::text) THEN 1
+    ELSE 2
+  END`;
 }
 
 export const SPD_SEA_LAND_SQL = `UPPER(TRIM(COALESCE(
@@ -595,6 +649,7 @@ export const CONTRACT_SAP_ONLY_STOS_SQL = `
       NULLIF(TRIM(s.data->'contract'->>'status'), ''),
       '-'
     ) AS status,
+    ${sqlNormalizeContractDeliveryStatusExpr(sqlSapGrStoStatusFromJson('s.data'))} AS gr_sto_status,
     COALESCE(
       NULLIF(${sqlSapStoQtyForContractPoExpr({
         contractAlias: 'c_po',

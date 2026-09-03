@@ -20,6 +20,8 @@ describe('contract.controller sto-information shipment qty scope', () => {
     expect(src).toContain('sqlShipmentResolvedReceiveKg');
     expect(src).toContain('sqlIsContractSapClosedForStoExpr');
     expect(src).toContain('CONTRACT_REAL_STO_KEYS_SQL');
+    expect(src).toContain('sqlContractStoListShipmentMatchPred');
+    expect(src).toContain('sp.id');
   });
 
   it('resolves trucking STO Delivery/Receive with Open→WB / Close→SAP helpers', () => {

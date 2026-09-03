@@ -69,6 +69,13 @@ router.get(
   sapMasterV2Controller.getAllImports
 );
 
+router.post(
+  '/imports/:importId/cancel',
+  authenticateToken,
+  authorizeSapImportsUpload,
+  catchAsync(sapMasterV2Controller.cancelMasterV2Import),
+);
+
 router.get(
   '/imports/:importId',
   authenticateToken,

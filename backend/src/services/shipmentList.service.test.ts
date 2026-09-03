@@ -234,4 +234,69 @@ describe('normalizeShipmentListRows', () => {
     ] as Parameters<typeof normalizeShipmentListRows>[0]);
     expect(rows[0]?.status).toBe('PREPLANNED');
   });
+
+  it('attaches SEA Trade Cycle on contract_backlog when ETA present; null without ETA', () => {
+    const yesterday = new Date();
+    yesterday.setHours(0, 0, 0, 0);
+    yesterday.setDate(yesterday.getDate() - 2);
+    const dueIso = yesterday.toISOString().slice(0, 10);
+    const etaPast = new Date();
+    etaPast.setHours(0, 0, 0, 0);
+    etaPast.setDate(etaPast.getDate() - 1);
+    const etaPastIso = etaPast.toISOString().slice(0, 10);
+
+    const withoutEta = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'UNPLANNED',
+        import_status: 'Open',
+        transport_mode: 'SEA',
+        delivery_end_date: dueIso,
+        contract_number: '1014000099',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(withoutEta[0]?.status).toBe('UNPLANNED');
+    expect(withoutEta[0]?.trade_cycle_days).toBeNull();
+
+    const withPastEta = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'UNPLANNED',
+        import_status: 'Open',
+        transport_mode: 'SEA',
+        delivery_end_date: dueIso,
+        open_standard_eta_vessel_loading: etaPastIso,
+        last_ata_vessel_complete_discharge: null,
+        contract_number: '1014000100',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(typeof withPastEta[0]?.trade_cycle_days).toBe('number');
+    expect(Number(withPastEta[0]?.trade_cycle_days)).toBeGreaterThan(0);
+  });
+
+  it('attaches SEA Trade Cycle on shipment execution rows', () => {
+    const yesterday = new Date();
+    yesterday.setHours(0, 0, 0, 0);
+    yesterday.setDate(yesterday.getDate() - 2);
+    const dueIso = yesterday.toISOString().slice(0, 10);
+    const etaPast = new Date();
+    etaPast.setHours(0, 0, 0, 0);
+    etaPast.setDate(etaPast.getDate() - 1);
+    const etaPastIso = etaPast.toISOString().slice(0, 10);
+
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'shipment_execution',
+        status: 'UNLOADING',
+        effective_status: 'UNLOADING',
+        is_contract_sap_closed: false,
+        delivery_end_date: dueIso,
+        ata_vessel_complete_discharge: null,
+        eta_vessel_arrival_at_loading_port: etaPastIso,
+        contract_number: '1014000101',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(typeof rows[0]?.trade_cycle_days).toBe('number');
+    expect(Number(rows[0]?.trade_cycle_days)).toBeGreaterThan(0);
+  });
 });

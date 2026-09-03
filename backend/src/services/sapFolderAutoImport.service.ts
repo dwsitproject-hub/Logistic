@@ -317,6 +317,7 @@ export async function runSapFolderAutoImport(
       try {
         const importResult = await SapMasterV2ImportService.importMasterV2File(meta.filePath, {
           source: 'scheduler',
+          fileName: meta.fileName,
         });
 
         const successRows = importResult.successIdentities ?? [];

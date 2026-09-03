@@ -19,6 +19,7 @@ import {
   invalidateShipmentsListCache,
   loadShipmentOutstandingQtyForRequest,
   loadShipmentAttentionInsightsForRequest,
+  loadShipmentEtcNoAtcDueWithin7dForRequest,
   loadShipmentStatusCardQtyForRequest,
   loadShipmentSummaryBundle,
   mergeShipmentStatusCardQtyFromCombinedSummaryRow,
@@ -27,6 +28,7 @@ import {
   buildShipmentListStatusFilteredCountQuery,
   seedShipmentListFilteredTotal,
   summaryRowHasCombinedStatusCardQty,
+  type ShipmentEtcNoAtcDueWithin7d,
   type ShipmentOutstandingQtySummary,
   type ShipmentStatusCardQtyBacklogParts,
   type ShipmentStatusContractQtyKg,
@@ -42,6 +44,10 @@ import {
   sumShipmentStatusOutstandingQtyKg,
 } from '../utils/shipmentStatusCardQtySql';
 import type { ShipmentAttentionInsightsRow } from '../utils/shipmentAttentionInsightsSql';
+import {
+  EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D,
+  appendShipmentEtcNoAtcDueWithin7dFilter,
+} from '../utils/shipmentEtcNoAtcDueSql';
 import {
   isPipelineDailySummaryEligible,
   loadShipmentStagePageFromSnapshot,
@@ -367,6 +373,7 @@ function shipmentListSummaryPayload(
   } | null,
   completedBreakdown?: CompletedContractBacklogBreakdown | null,
   cancelledBreakdown?: CancelledContractBacklogBreakdown | null,
+  etcNoAtcDueWithin7d?: ShipmentEtcNoAtcDueWithin7d | null,
 ) {
   /** Unplanned card = PO backlog only (STO open rows are Planned). */
   const unplannedContractRows = unplannedBreakdown
@@ -472,6 +479,12 @@ function shipmentListSummaryPayload(
       ? { outstandingQty: resolvedOutstandingQty }
       : {}),
     ...(attentionInsights !== undefined ? { attentionInsights: attentionInsights ?? null } : {}),
+    ...(etcNoAtcDueWithin7d !== undefined
+      ? {
+          etcNoAtcDueWithin7d:
+            etcNoAtcDueWithin7d ?? EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D,
+        }
+      : {}),
     ...(guardedQty.statusContractQty != null
       ? { statusContractQty: guardedQty.statusContractQty }
       : {}),
@@ -537,6 +550,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const sourceTypeParam = (req.query as any).sourceType as string | undefined;
     const viewOptionParam = (req.query as any).viewOption as string | undefined;
     const viewQueryParam = (req.query as any).viewQuery as string | undefined;
+    const etcNoAtcDueWithin7dParam = (req.query as { etcNoAtcDueWithin7d?: string })
+      .etcNoAtcDueWithin7d;
     const etaLoadingBucket = normalizeShipmentEtaBucketParam((req.query as any).etaLoading);
     const etaDischargeBucket = normalizeShipmentEtaBucketParam((req.query as any).etaDischarge);
     const { sortKey: listSortKey, sortDir: listSortDir } = parseShipmentListSort(
@@ -590,7 +605,8 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           ata_vessel_arrival::date AS vlp_disc_ata_va,
           ata_vessel_berthed::date AS vlp_disc_ata_vb,
           ata_loading_start::date AS vlp_disc_ata_ls,
-          ata_loading_completed::date AS vlp_disc_ata_lc
+          ata_loading_completed::date AS vlp_disc_ata_lc,
+          eta_vessel_complete_discharge::date AS vlp_disc_eta_edc
         FROM vessel_loading_ports
         WHERE COALESCE(is_discharge_port, false) = true
         ORDER BY shipment_id, port_sequence NULLS LAST, id
@@ -598,14 +614,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
 
     const ataSelect = buildShipmentListAtaSelectSql();
 
-    const etaExtraSelect = compact
-      ? `
-          -- ETA discharge complete (compact): shipment-level only
-          MAX(s.eta_discharge_complete) as eta_vessel_complete_discharge,`
-      : `
-          -- Get ETA dates from shipments or vessel_loading_ports
-          MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,`;
-
+    const etaExtraSelect = `
+          -- ETA discharge complete (ETC): shipment-level or discharge VLP
+          MAX(COALESCE(s.eta_discharge_complete, vlp_d.vlp_disc_eta_edc)) as eta_vessel_complete_discharge,`;
     const listStoKeySql = shipmentListSeaStoKeyExpr('c', 'l', 's');
     const listStoDisplaySql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's');
 
@@ -999,9 +1010,11 @@ ${contractMetaSelectCore}
       fp,
     );
     fp = statusFilter.nextIndex;
+    const etcNoAtcDueFilter = appendShipmentEtcNoAtcDueWithin7dFilter(etcNoAtcDueWithin7dParam);
 
     const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${ct.sql}${st.sql}${vo.sql}`;
-    const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}`;
+    /** List-only layers (status / ETA / Pending ATC) — excluded from summaryOnly toolbar scope. */
+    const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}${etcNoAtcDueFilter.sql}`;
     const outerSql = `${toolbarOuterSql}${cardOuterSql}`;
     const outerParams = [
       ...gSearch.params,
@@ -1041,6 +1054,7 @@ ${contractMetaSelectCore}
       status: typeof status === 'string' ? status : 'ALL',
       etaLoading: etaLoadingBucket ?? 'ALL',
       etaDischarge: etaDischargeBucket ?? 'ALL',
+      etcNoAtcDueWithin7d: etcNoAtcDueWithin7dParam,
     });
 
     const isUnplannedHybridList = isUnplannedHybridListRequest(status);
@@ -1064,6 +1078,7 @@ ${contractMetaSelectCore}
         unplannedHybrid: isUnplannedHybridList,
         allHybrid: isAllHybridList,
         sortKey: listSortKey,
+        etcNoAtcDueWithin7d: etcNoAtcDueWithin7dParam,
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
@@ -1382,9 +1397,16 @@ ${contractMetaSelectCore}
             return null;
           })
         : Promise.resolve(undefined);
-      const [statusCardQty, attentionInsights] = await Promise.all([
+      const etcNoAtcDuePromise = loadShipmentEtcNoAtcDueWithin7dForRequest(attentionOpts).catch(
+        (err) => {
+          logger.error('Shipment etcNoAtcDueWithin7d failed (summaryOnly-compact)', err);
+          return EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D;
+        },
+      );
+      const [statusCardQty, attentionInsights, etcNoAtcDueWithin7d] = await Promise.all([
         statusCardQtyPromise,
         attentionInsightsPromise,
+        etcNoAtcDuePromise,
       ]);
       timingsMs.dbSummaryCombined = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
@@ -1414,6 +1436,7 @@ ${contractMetaSelectCore}
             statusCardQty,
             completedBreakdownForSummary,
             cancelledBreakdownForSummary,
+            etcNoAtcDueWithin7d,
           ),
           pagination: {
             total: tc,
@@ -1454,7 +1477,7 @@ ${contractMetaSelectCore}
       });
 
       // Keep ALL hybrid even for 10-digit PO/STO search — Unplanned backlog has no shipments row.
-      if (shouldResolveAllHybridShipmentsList(status)) {
+      if (shouldResolveAllHybridShipmentsList(status, etcNoAtcDueWithin7dParam)) {
         const hybrid = await resolveAllHybridShipmentsList(
           req,
           buildShipmentAllHybridListContext({
@@ -2019,6 +2042,16 @@ ${contractMetaSelectCore}
             logger.error('Shipment status card qty failed (summaryOnly)', err);
             return null;
           });
+      const etcNoAtcDueWithin7d = await loadShipmentEtcNoAtcDueWithin7dForRequest({
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      }).catch((err) => {
+        logger.error('Shipment etcNoAtcDueWithin7d failed (summaryOnly)', err);
+        return EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D;
+      });
       timingsMs.dbSummaryCombined = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
@@ -2045,6 +2078,7 @@ ${contractMetaSelectCore}
             statusCardQty,
             completedBreakdownForSummary,
             cancelledBreakdownForSummary,
+            etcNoAtcDueWithin7d,
           ),
           pagination: {
             total: tc,

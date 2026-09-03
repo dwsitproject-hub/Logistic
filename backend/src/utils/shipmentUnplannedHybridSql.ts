@@ -5,6 +5,7 @@
 import {
   sqlIsContractSapCancelledExpr,
   sqlIsContractSapInactiveForShipmentBacklogExpr,
+  sqlContractImportStatusExpr,
 } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
@@ -314,6 +315,8 @@ export function unplannedContractBacklogRowSelectSql(
     0::numeric AS gain_loss_amount,
     ${statusSql} AS status,
     FALSE AS is_contract_sap_closed,
+    c.transport_mode AS transport_mode,
+    (${sqlContractImportStatusExpr('c')}) AS import_status,
     c.created_at AS created_at,
     c.id::text AS contract_row_id,
     ${contractExtNoExpr} AS contract_ext_no,

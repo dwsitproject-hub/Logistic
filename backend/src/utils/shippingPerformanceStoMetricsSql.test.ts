@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildShipmentListStoMetricsCte,
   buildShippingPerfStoMetricsCte,
+  buildShippingPerfViewTableQtySelectSql,
 } from './shippingPerformanceStoMetricsSql';
 
 describe('shippingPerformanceStoMetricsSql', () => {
@@ -52,5 +53,17 @@ describe('shippingPerformanceStoMetricsSql', () => {
     expect(sql).toContain("= 'B2B'");
     expect(sql).toContain('contract_reference_po');
     expect(linksSection).not.toContain('sap_processed_data');
+  });
+
+  it('View Table qty select prefers STO-summed KLIP then SAP (matches Shipments list)', () => {
+    const qty = buildShippingPerfViewTableQtySelectSql();
+    expect(qty.deliveredQtySql).toContain('sm.klip_delivery_kg');
+    expect(qty.deliveredQtySql).toContain('quantity_delivered_klip');
+    expect(qty.deliveredQtySql).toContain('sm.delivered_qty');
+    expect(qty.receivedQtySql).toContain('sm.klip_receive_kg');
+    expect(qty.receivedQtySql).toContain('actual_vessel_qty_receive');
+    expect(qty.receivedQtySql).toContain('sm.received_qty');
+    expect(qty.outstandingActualSql).toContain('po_sto_count');
+    expect(qty.outstandingActualSql).toContain('sm.contract_numbers');
   });
 });

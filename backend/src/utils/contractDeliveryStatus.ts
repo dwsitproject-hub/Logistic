@@ -4,6 +4,7 @@ import {
   INCOTERM_GR_PO_STATUS,
   INCOTERM_GR_STO_STATUS,
   sqlIncotermImportStatusFromJson,
+  sqlSapGrStoStatusFromJson,
 } from './sapIncotermMetrics';
 import {
   sqlSpdHasDeletePoFlagExpr,
@@ -319,6 +320,118 @@ export function sqlContractImportStatusExpr(
 /** Contracts list / performance — PO-aware SAP status (not latest_spd-only). */
 export function sqlContractListImportStatusAggExpr(contractAlias = 'c'): string {
   const inner = sqlContractImportStatusExpr(contractAlias);
+  return `(array_agg((${inner}) ORDER BY ${contractAlias}.created_at DESC NULLS LAST))[1]`;
+}
+
+/**
+ * GR STO Status across SPD rows for a PO (or one STO when stoKeyExpr is set).
+ * Any Open wins; Close only when every scoped row is Close — not latest-SPD-only.
+ * Synthetic OP-/MNL-/MSEA- sto keys return NULL (no SAP GR STO).
+ * B2B child overlay stays in the contracts list outer COALESCE.
+ */
+export function sqlContractPoGrStoStatusExpr(
+  contractAlias = 'c',
+  poNumberRef = `${contractAlias}.po_number`,
+  stoKeyExpr?: string | null,
+): string {
+  const grNorm = sqlNormalizeContractDeliveryStatusExpr(sqlSapGrStoStatusFromJson('spd.data'));
+  const openNorm = (expr: string) =>
+    `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('OPEN', 'ACTIVE')`;
+  const stoOpen = `(
+    ${openNorm("spd.data->'raw'->>'GR STO Status'")}
+    OR ${openNorm("spd.data->'contract'->>'gr_sto_status'")}
+  )`;
+  const lineGrStatusRaw = sqlSapGrStoStatusFromJson('spd_gr.data');
+
+  const poMatch = (spdAlias: string) => `
+            AND (
+              NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+            )`;
+
+  const latestImportIdSubquery = `(
+            SELECT spd_li.import_id
+            FROM sap_processed_data spd_li
+            WHERE spd_li.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_li')}
+            ORDER BY spd_li.created_at DESC NULLS LAST
+            LIMIT 1
+          )`;
+  const latestImportOnly = (alias: string) =>
+    `AND ${alias}.import_id IS NOT DISTINCT FROM ${latestImportIdSubquery}`;
+
+  const preferSapStoLinesOverDirtyHeader = `
+            AND (
+              ${sqlSpdHasRealSapStoKeyExpr('spd')}
+              OR NOT EXISTS (
+                SELECT 1
+                FROM sap_processed_data spd_gr
+                WHERE spd_gr.contract_number = ${contractAlias}.contract_id
+                  ${poMatch('spd_gr')}
+                  ${latestImportOnly('spd_gr')}
+                  AND ${sqlSpdHasRealSapStoKeyExpr('spd_gr')}
+                  AND NULLIF(TRIM(COALESCE(${lineGrStatusRaw}, '')), '') IS NOT NULL
+              )
+            )`;
+
+  const stoKeyTrimmed = stoKeyExpr && String(stoKeyExpr).trim() ? String(stoKeyExpr).trim() : '';
+  if (stoKeyTrimmed) {
+    const syntheticGuard = `
+      CASE
+        WHEN NULLIF(TRIM((${stoKeyTrimmed})::text), '') IS NULL THEN NULL
+        WHEN TRIM((${stoKeyTrimmed})::text) ~ '^(OP-|MNL-|MSEA-)' THEN NULL
+        ELSE (
+          SELECT CASE
+            WHEN BOOL_OR(s.row_open) OR BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+            WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')) THEN 'Close'
+            WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+            ELSE NULL
+          END
+          FROM (
+            SELECT
+              ${grNorm} AS st,
+              ${stoOpen} AS row_open
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd')}
+              ${latestImportOnly('spd')}
+              AND ${sapStoNumberKeyExpr('spd')} = TRIM((${stoKeyTrimmed})::text)
+          ) s
+          WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
+            OR s.row_open
+        )
+      END`;
+    return syntheticGuard.trim();
+  }
+
+  return `
+    (
+      SELECT CASE
+        WHEN BOOL_OR(s.row_open) OR BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+        WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')) THEN 'Close'
+        WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+        ELSE NULL
+      END
+      FROM (
+        SELECT
+          ${grNorm} AS st,
+          ${stoOpen} AS row_open
+        FROM sap_processed_data spd
+        WHERE spd.contract_number = ${contractAlias}.contract_id
+          ${poMatch('spd')}
+          ${preferSapStoLinesOverDirtyHeader}
+          ${latestImportOnly('spd')}
+          AND NOT (${sqlSpdHasDeleteStoFlagExpr('spd.data')})
+      ) s
+      WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
+        OR s.row_open
+    )`.trim();
+}
+
+/** Contracts list — GR STO any-Open across STOs on the PO (not latest_spd-only). */
+export function sqlContractListGrStoStatusAggExpr(contractAlias = 'c'): string {
+  const inner = sqlContractPoGrStoStatusExpr(contractAlias);
   return `(array_agg((${inner}) ORDER BY ${contractAlias}.created_at DESC NULLS LAST))[1]`;
 }
 

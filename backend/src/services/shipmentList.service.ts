@@ -11,6 +11,7 @@ import {
 } from './pipelineDailySummary.service';
 import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/shipmentListFilters';
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
+import { computePerfTradeCycleDaysForRow } from './latePerformance.service';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
 import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
 import {
@@ -69,6 +70,11 @@ import {
   parseShipmentAttentionInsights,
   type ShipmentAttentionInsightsRow,
 } from '../utils/shipmentAttentionInsightsSql';
+import {
+  buildShipmentEtcNoAtcDueWithin7dQuery,
+  parseShipmentEtcNoAtcDueWithin7dRow,
+  type ShipmentEtcNoAtcDueWithin7d,
+} from '../utils/shipmentEtcNoAtcDueSql';
 import logger from '../utils/logger';
 
 /**
@@ -183,6 +189,7 @@ export function buildShipmentListFilterCacheKey(input: {
   status?: string;
   etaLoading?: string;
   etaDischarge?: string;
+  etcNoAtcDueWithin7d?: string;
   sortKey?: string;
   sortDir?: string;
 }): string {
@@ -216,6 +223,7 @@ export function buildShipmentListCacheKey(input: {
   status?: string;
   etaLoading?: string;
   etaDischarge?: string;
+  etcNoAtcDueWithin7d?: string;
   sortKey?: string;
   sortDir?: string;
 }): string {
@@ -241,6 +249,7 @@ export function buildShipmentListCacheKey(input: {
     status: input.status != null ? String(input.status) : 'ALL',
     etaLoading: input.etaLoading != null ? String(input.etaLoading) : 'ALL',
     etaDischarge: input.etaDischarge != null ? String(input.etaDischarge) : 'ALL',
+    etcNoAtcDueWithin7d: input.etcNoAtcDueWithin7d != null ? String(input.etcNoAtcDueWithin7d) : '',
     sortKey: input.sortKey != null ? String(input.sortKey) : 'created_at',
     sortDir: input.sortDir != null ? String(input.sortDir) : 'DESC',
   };
@@ -592,6 +601,59 @@ export async function loadShipmentOutstandingQtyForRequest(
 }
 
 export type { ShipmentAttentionInsightsRow };
+export type { ShipmentEtcNoAtcDueWithin7d };
+
+const ETC_NO_ATC_DUE_CACHE = new Map<
+  string,
+  { value: ShipmentEtcNoAtcDueWithin7d; expiresAt: number }
+>();
+const ETC_NO_ATC_DUE_IN_FLIGHT = new Map<string, Promise<ShipmentEtcNoAtcDueWithin7d>>();
+
+export function buildShipmentEtcNoAtcDueCacheKey(filterCacheKey: string): string {
+  return `etcNoAtcDue:${filterCacheKey}`;
+}
+
+/**
+ * Pending ATC (Overdue / Due ≤7d) KPI — toolbar-scoped live SQL (count + OS kg).
+ */
+export async function loadShipmentEtcNoAtcDueWithin7dForRequest(opts: {
+  shipmentBaseCteSql: string;
+  toolbarOuterSql: string;
+  innerParams: unknown[];
+  toolbarOuterParams: unknown[];
+  filterCacheKey: string;
+}): Promise<ShipmentEtcNoAtcDueWithin7d> {
+  const cacheKey = buildShipmentEtcNoAtcDueCacheKey(opts.filterCacheKey);
+  const cached = ETC_NO_ATC_DUE_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.value;
+  }
+  if (cached) ETC_NO_ATC_DUE_CACHE.delete(cacheKey);
+
+  const inFlight = ETC_NO_ATC_DUE_IN_FLIGHT.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const run = (async () => {
+    const text = buildShipmentEtcNoAtcDueWithin7dQuery(
+      opts.shipmentBaseCteSql,
+      opts.toolbarOuterSql,
+    );
+    const params = [...opts.innerParams, ...opts.toolbarOuterParams];
+    const res = await query(text, params);
+    const value = parseShipmentEtcNoAtcDueWithin7dRow(
+      (res.rows[0] || {}) as Record<string, unknown>,
+    );
+    ETC_NO_ATC_DUE_CACHE.set(cacheKey, {
+      value,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(ETC_NO_ATC_DUE_CACHE, MAX_CACHE_ENTRIES);
+    return value;
+  })().finally(() => ETC_NO_ATC_DUE_IN_FLIGHT.delete(cacheKey));
+
+  ETC_NO_ATC_DUE_IN_FLIGHT.set(cacheKey, run);
+  return run;
+}
 
 /**
  * Attention Needed + Aging Overdue for Section 1 (toolbar-scoped, live SQL).
@@ -973,6 +1035,7 @@ export function invalidateShipmentsListCache(): void {
   SUMMARY_CACHE.clear();
   OUTSTANDING_QTY_CACHE.clear();
   STATUS_CARD_QTY_CACHE.clear();
+  ETC_NO_ATC_DUE_CACHE.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
   // Oil Loss reads shipment quantities (sfal/sfbd/delivered/receive) — refresh its
   // cache after any shipment mutation so the page reflects the edit immediately.
@@ -985,7 +1048,29 @@ export function invalidateShipmentsListCache(): void {
   SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
 }
 
+function attachShipmentExecutionTradeCycleDays(
+  row: ShipmentListRow,
+  todayMid: Date,
+): void {
+  row.trade_cycle_days = computePerfTradeCycleDaysForRow(
+    {
+      import_status: row.is_contract_sap_closed
+        ? 'Close'
+        : (row.contract_import_status ?? 'Open'),
+      transport_mode: 'SEA',
+      delivery_end_date: row.delivery_end_date,
+      last_ata_vessel_complete_discharge: row.ata_vessel_complete_discharge,
+      open_standard_eta_vessel_loading:
+        row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
+    },
+    todayMid,
+  );
+}
+
 export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentListRow[] {
+  const todayMid = new Date();
+  todayMid.setHours(0, 0, 0, 0);
+
   for (const row of rows) {
     if (String(row.row_kind ?? '').trim() === 'contract_backlog') {
       const statusUpper = String(row.status ?? '').trim().toUpperCase();
@@ -996,6 +1081,8 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       ) {
         row.status = 'UNPLANNED';
       }
+      // Same Trade Cycle as Contract Performance (Open: ETA/ATC or today vs due end).
+      row.trade_cycle_days = computePerfTradeCycleDaysForRow(row, todayMid);
       continue;
     }
     delete (row as { __filter_total?: unknown }).__filter_total;
@@ -1034,43 +1121,41 @@ export function normalizeShipmentListRows(rows: ShipmentListRow[]): ShipmentList
       delete (row as { effective_status?: unknown }).effective_status;
       delete (row as { group_status_floor?: unknown }).group_status_floor;
       delete (row as { group_active_status_count?: unknown }).group_active_status_count;
-      continue;
-    }
-
-    if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
+    } else if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
       row.status = 'CANCELLED';
-      continue;
+    } else {
+      row.status = deriveShipmentStatus({
+        eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
+        eta_berthed_at_loading_port: row.eta_vessel_berthed_at_loading_port ?? row.eta_berthed,
+        eta_start_loading: row.eta_vessel_start_loading ?? row.eta_loading_start,
+        eta_completed_loading: row.eta_vessel_completed_loading ?? row.eta_loading_complete,
+        eta_sailed_from_loading_port: row.eta_vessel_sailed_from_loading_port ?? row.eta_sailed,
+        eta_arrive_at_discharge_port: row.eta_vessel_arrive_at_discharge_port ?? row.eta_discharge_arrival,
+        eta_berthed_at_discharge_port: row.eta_vessel_berthed_at_discharge_port ?? row.eta_discharge_berthed,
+        eta_start_discharging: row.eta_vessel_start_discharging ?? row.eta_discharge_start,
+        eta_complete_discharge: row.eta_vessel_complete_discharge ?? row.eta_discharge_complete,
+        ata_arrival_at_loading_port: row.ata_vessel_arrival_at_loading_port,
+        ata_berthed_at_loading_port: row.ata_vessel_berthed_at_loading_port,
+        ata_start_loading: row.ata_vessel_start_loading,
+        ata_completed_loading: row.ata_vessel_completed_loading,
+        ata_sailed_from_loading_port: row.ata_vessel_sailed_from_loading_port,
+        ata_arrive_at_discharge_port: row.ata_vessel_arrive_at_discharge_port,
+        ata_berthed_at_discharge_port: row.ata_vessel_berthed_at_discharge_port,
+        ata_start_discharging: row.ata_vessel_start_discharging,
+        ata_complete_discharge: row.ata_vessel_complete_discharge,
+        contract_import_status: row.is_contract_sap_closed
+          ? 'Close'
+          : row.contract_import_status,
+        quantity_delivered: row.quantity_delivered,
+        quantity_delivered_klip: row.quantity_delivered_klip,
+        quantity_delivered_sap: row.quantity_delivered_sap,
+      });
+
+      delete (row as { group_status_floor?: unknown }).group_status_floor;
+      delete (row as { group_active_status_count?: unknown }).group_active_status_count;
     }
 
-    row.status = deriveShipmentStatus({
-      eta_arrival_at_loading_port: row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
-      eta_berthed_at_loading_port: row.eta_vessel_berthed_at_loading_port ?? row.eta_berthed,
-      eta_start_loading: row.eta_vessel_start_loading ?? row.eta_loading_start,
-      eta_completed_loading: row.eta_vessel_completed_loading ?? row.eta_loading_complete,
-      eta_sailed_from_loading_port: row.eta_vessel_sailed_from_loading_port ?? row.eta_sailed,
-      eta_arrive_at_discharge_port: row.eta_vessel_arrive_at_discharge_port ?? row.eta_discharge_arrival,
-      eta_berthed_at_discharge_port: row.eta_vessel_berthed_at_discharge_port ?? row.eta_discharge_berthed,
-      eta_start_discharging: row.eta_vessel_start_discharging ?? row.eta_discharge_start,
-      eta_complete_discharge: row.eta_vessel_complete_discharge ?? row.eta_discharge_complete,
-      ata_arrival_at_loading_port: row.ata_vessel_arrival_at_loading_port,
-      ata_berthed_at_loading_port: row.ata_vessel_berthed_at_loading_port,
-      ata_start_loading: row.ata_vessel_start_loading,
-      ata_completed_loading: row.ata_vessel_completed_loading,
-      ata_sailed_from_loading_port: row.ata_vessel_sailed_from_loading_port,
-      ata_arrive_at_discharge_port: row.ata_vessel_arrive_at_discharge_port,
-      ata_berthed_at_discharge_port: row.ata_vessel_berthed_at_discharge_port,
-      ata_start_discharging: row.ata_vessel_start_discharging,
-      ata_complete_discharge: row.ata_vessel_complete_discharge,
-      contract_import_status: row.is_contract_sap_closed
-        ? 'Close'
-        : row.contract_import_status,
-      quantity_delivered: row.quantity_delivered,
-      quantity_delivered_klip: row.quantity_delivered_klip,
-      quantity_delivered_sap: row.quantity_delivered_sap,
-    });
-
-    delete (row as { group_status_floor?: unknown }).group_status_floor;
-    delete (row as { group_active_status_count?: unknown }).group_active_status_count;
+    attachShipmentExecutionTradeCycleDays(row, todayMid);
   }
   return rows;
 }

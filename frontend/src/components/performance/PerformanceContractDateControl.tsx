@@ -84,7 +84,7 @@ export function PerformanceContractDateControl<T extends string>({
   onDateToChange,
   resolvePeriodRange,
   trailingAction,
-  dateLabel = 'Contract Date:',
+  dateLabel = 'Contract Date',
   className,
 }: PerformanceContractDateControlProps<T>) {
   const [open, setOpen] = useState(false)
@@ -115,9 +115,9 @@ export function PerformanceContractDateControl<T extends string>({
   }, [open])
 
   return (
-    <div className={`flex items-center gap-3 flex-wrap ${className ?? ''}`.trim()}>
-      <div className="flex items-center gap-2 min-w-0">
-        <label className="text-sm font-medium text-gray-700 shrink-0">{dateLabel}</label>
+    <div className={`flex items-end gap-3 flex-wrap ${className ?? ''}`.trim()}>
+      <div className="min-w-0">
+        <label className="text-sm font-medium text-gray-700 mb-1 block">{dateLabel}</label>
         <div ref={containerRef} className="relative">
           <button
             type="button"

@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import AppLayout from '@/components/Layout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { Loader2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Loader2 } from 'lucide-react';
 import api from '@/lib/api';
 import { formatDateDMY, formatDateTimeDMY, formatTimeHMS } from '@/lib/dateFormat';
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue';
@@ -48,6 +48,54 @@ interface ImportRecord {
   created_at: string;
   processed_data?: any;
   raw_data?: any;
+  display_contract_po?: string | null;
+  display_shipment_sto?: string | null;
+  display_supplier_name?: string | null;
+  display_product?: string | null;
+  display_vessel_name?: string | null;
+}
+
+interface ImportFailure {
+  id: string;
+  row_number: number | null;
+  po_number: string | null;
+  sto_number: string | null;
+  contract_number: string | null;
+  contract_ext_no: string | null;
+  contract_date: string | null;
+  supplier: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+type ImportedSortKey =
+  | 'row'
+  | 'contractPo'
+  | 'shipmentSto'
+  | 'supplier'
+  | 'product'
+  | 'vessel'
+  | 'status';
+
+function importedRecordSortValue(record: ImportRecord, key: ImportedSortKey): string | number {
+  switch (key) {
+    case 'row':
+      return Number(record.row_number) || 0;
+    case 'contractPo':
+      return String(record.display_contract_po || record.po_number || record.contract_number || '').toLowerCase();
+    case 'shipmentSto':
+      return String(record.display_shipment_sto || record.sto_number || record.shipment_id || '').toLowerCase();
+    case 'supplier':
+      return String(record.display_supplier_name || record.supplier_name || '').toLowerCase();
+    case 'product':
+      return String(record.display_product || record.product || '').toLowerCase();
+    case 'vessel':
+      return String(record.display_vessel_name || record.vessel_name || '').toLowerCase();
+    case 'status':
+      return String(record.record_status || '').toLowerCase();
+    default:
+      return '';
+  }
 }
 
 interface FieldMapping {
@@ -68,8 +116,11 @@ export default function ImportDetailPage() {
   const router = useRouter();
   const [importData, setImportData] = useState<ImportDetail | null>(null);
   const [records, setRecords] = useState<ImportRecord[]>([]);
+  const [failures, setFailures] = useState<ImportFailure[]>([]);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<string[]>([]);
+  const [importedSortKey, setImportedSortKey] = useState<ImportedSortKey>('row');
+  const [importedSortDir, setImportedSortDir] = useState<'asc' | 'desc'>('asc');
   const [fieldMappings, setFieldMappings] = useState<FieldMapping[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<ImportRecord | null>(null);
   const [userRole, setUserRole] = useState<string>('ADMIN'); // Get from auth context in production
@@ -113,7 +164,8 @@ export default function ImportDetailPage() {
       const response = await api.get(`/sap-master-v2/imports/${params.id}`);
       setImportData(response.data.data.import);
       setRecords(response.data.data.records || []);
-      
+      setFailures(response.data.data.failures || []);
+
       // Parse error log if exists
       if (response.data.data.import.error_log) {
         try {
@@ -295,6 +347,49 @@ export default function ImportDetailPage() {
     return <Badge variant={statusInfo.variant}>{statusInfo.label}</Badge>;
   };
 
+  const sortedRecords = useMemo(() => {
+    const dirMul = importedSortDir === 'asc' ? 1 : -1;
+    return [...records].sort((a, b) => {
+      const av = importedRecordSortValue(a, importedSortKey);
+      const bv = importedRecordSortValue(b, importedSortKey);
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return (av - bv) * dirMul;
+      }
+      return String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' }) * dirMul;
+    });
+  }, [records, importedSortKey, importedSortDir]);
+
+  const onImportedSortClick = (key: ImportedSortKey) => {
+    if (importedSortKey === key) {
+      setImportedSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setImportedSortKey(key);
+    setImportedSortDir('asc');
+  };
+
+  const renderImportedSortHeader = (key: ImportedSortKey, label: string) => {
+    const active = importedSortKey === key;
+    return (
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 font-semibold hover:text-blue-700"
+        onClick={() => onImportedSortClick(key)}
+      >
+        <span>{label}</span>
+        {active ? (
+          importedSortDir === 'asc' ? (
+            <ArrowUp className="h-3.5 w-3.5 text-blue-600" />
+          ) : (
+            <ArrowDown className="h-3.5 w-3.5 text-blue-600" />
+          )
+        ) : (
+          <ArrowUpDown className="h-3.5 w-3.5 text-gray-400" />
+        )}
+      </button>
+    );
+  };
+
   if (loading) {
     return (
       <AppLayout>
@@ -469,8 +564,50 @@ export default function ImportDetailPage() {
           </CardContent>
         </Card>
 
-        {/* Error Log */}
-        {errors.length > 0 && (
+        {failures.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Failed Records ({failures.length})</CardTitle>
+              <CardDescription>
+                PO No and Contract No that failed during this import
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left p-3">PO No</th>
+                      <th className="text-left p-3">Contract No</th>
+                      <th className="text-left p-3">STO</th>
+                      <th className="text-left p-3">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {failures.map((failure) => (
+                      <tr key={failure.id} className="border-b align-top">
+                        <td className="p-3 font-medium">
+                          {formatSapDisplayValue(failure.po_number)}
+                        </td>
+                        <td className="p-3 font-medium">
+                          {formatSapDisplayValue(failure.contract_number)}
+                        </td>
+                        <td className="p-3 text-sm">
+                          {formatSapDisplayValue(failure.sto_number)}
+                        </td>
+                        <td className="p-3 text-sm text-red-600">
+                          {failure.error_message || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {errors.length > 0 && failures.length === 0 && (
           <Card>
             <CardHeader>
               <CardTitle>Error Log ({errors.length} errors)</CardTitle>
@@ -533,7 +670,7 @@ export default function ImportDetailPage() {
           <CardHeader>
             <CardTitle>Imported Records ({records.length})</CardTitle>
             <CardDescription>
-              All records from this import (success and failed)
+              All records from this import (success and failed). Click a column header to sort.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -541,17 +678,17 @@ export default function ImportDetailPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left p-3">Row</th>
-                    <th className="text-left p-3">Contract/PO</th>
-                    <th className="text-left p-3">Shipment/STO</th>
-                    <th className="text-left p-3">Supplier</th>
-                    <th className="text-left p-3">Product</th>
-                    <th className="text-left p-3">Vessel</th>
-                    <th className="text-left p-3">Status</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('row', 'Row')}</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('contractPo', 'Contract/PO')}</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('shipmentSto', 'Shipment/STO')}</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('supplier', 'Supplier')}</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('product', 'Product')}</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('vessel', 'Vessel')}</th>
+                    <th className="text-left p-3">{renderImportedSortHeader('status', 'Status')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {records.map((record) => (
+                  {sortedRecords.map((record) => (
                     <tr 
                       key={record.id} 
                       className="border-b hover:bg-gray-50 cursor-pointer"
@@ -559,19 +696,19 @@ export default function ImportDetailPage() {
                     >
                       <td className="p-3 text-sm font-mono">{record.row_number}</td>
                       <td className="p-3">
-                        <div className="font-medium">{formatSapDisplayValue((record as any).display_contract_po)}</div>
+                        <div className="font-medium">{formatSapDisplayValue(record.display_contract_po)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="font-medium">{formatSapDisplayValue((record as any).display_shipment_sto)}</div>
+                        <div className="font-medium">{formatSapDisplayValue(record.display_shipment_sto)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="text-sm">{formatSapDisplayValue((record as any).display_supplier_name)}</div>
+                        <div className="text-sm">{formatSapDisplayValue(record.display_supplier_name)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="text-sm">{formatSapDisplayValue((record as any).display_product)}</div>
+                        <div className="text-sm">{formatSapDisplayValue(record.display_product)}</div>
                       </td>
                       <td className="p-3">
-                        <div className="text-sm">{formatSapDisplayValue((record as any).display_vessel_name)}</div>
+                        <div className="text-sm">{formatSapDisplayValue(record.display_vessel_name)}</div>
                       </td>
                       <td className="p-3">
                         {record.record_status === 'processed' ? (

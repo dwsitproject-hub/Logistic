@@ -9,6 +9,7 @@ import {
 } from './shippingPerformanceStoSql';
 import {
   sqlShipmentListOutstandingKgExpr,
+  sqlCoalesceNonZeroQty,
 } from './shipmentListQtySql';
 import {
   sqlShipmentResolvedDeliveryKg,
@@ -315,6 +316,85 @@ export function buildShipmentListStoMetricsCte(pageCte = 'shipment_page'): strin
         WHERE sto_key IS NOT NULL AND TRIM(sto_key::text) != ''
       )`;
   return buildStoPoMetricsCte(perfStoKeysCte);
+}
+
+/**
+ * Shipping Performance View Table Delivery / Receive / OS — same Open→KLIP / Close→SAP
+ * grain as Shipments list (`shipmentListPageQtySelectSql`).
+ *
+ * Expects aliases: `s` (shipments), `c` (contracts), `sm` (sto_metrics), `sa` (sap_agg).
+ */
+export function buildShippingPerfViewTableQtySelectSql(): {
+  deliveredQtySql: string;
+  receivedQtySql: string;
+  outstandingActualSql: string;
+} {
+  const closedExpr = sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR);
+  const klipDelivery = sqlCoalesceNonZeroQty(
+    'sm.klip_delivery_kg',
+    's.quantity_delivered_klip',
+  );
+  const klipReceive = sqlCoalesceNonZeroQty(
+    'sm.klip_receive_kg',
+    's.actual_vessel_qty_receive',
+  );
+  const sapDelivery = sqlCoalesceNonZeroQty(
+    'sm.delivered_qty',
+    'sa.quantity_delivered_sap',
+  );
+  const sapReceive = sqlCoalesceNonZeroQty('sm.received_qty', 'sa.quantity_receive');
+
+  const deliveryResolved = sqlShipmentResolvedDeliveryKg(
+    closedExpr,
+    klipDelivery,
+    sapDelivery,
+    's.quantity_delivered',
+  );
+  const receiveResolved = sqlShipmentResolvedReceiveKg(
+    closedExpr,
+    klipReceive,
+    sapReceive,
+  );
+
+  const contractQtyExpr = 'COALESCE(sm.contract_qty, c.quantity_ordered)';
+  const incotermExpr = `COALESCE(NULLIF(TRIM(c.incoterm::text), ''), '')`;
+  const listOutstanding = sqlShipmentListOutstandingKgExpr({
+    contractQtyExpr,
+    incotermExpr,
+    receiveExpr: receiveResolved,
+    deliveryExpr: deliveryResolved,
+    clampAtZero: false,
+  });
+  // Multi-STO PO: repeat PO-level OS (same as Shipments View Table).
+  // Use sm.contract_numbers when present so the unnest grain matches sto_metrics.
+  const poLevelOutstanding = `(
+    SELECT COALESCE(SUM(${sqlContractGlobalOutstandingExpr({
+      contractQtyExpr: 'cx.quantity_ordered',
+      incotermExpr: 'cx.incoterm',
+      contractNumberExpr: 'cx.contract_id',
+    })}), 0)
+    FROM contracts cx
+    WHERE cx.contract_id IS NOT NULL
+      AND TRIM(cx.contract_id) <> ''
+      AND EXISTS (
+        SELECT 1
+        FROM unnest(regexp_split_to_array(
+          COALESCE(NULLIF(TRIM(sm.contract_numbers), ''), c.contract_id::text),
+          E'\\\\s*,\\\\s*'
+        )) AS cn
+        WHERE TRIM(cn) = TRIM(cx.contract_id)
+      )
+  )`;
+
+  return {
+    deliveredQtySql: `COALESCE((${deliveryResolved}), 0)::numeric`,
+    receivedQtySql: `COALESCE((${receiveResolved}), 0)::numeric`,
+    outstandingActualSql: `CASE
+          WHEN COALESCE((sm.po_sto_count)::int, 1) > 1
+            THEN COALESCE((${poLevelOutstanding}), sm.outstanding_qty_actual, 0)::numeric
+          ELSE COALESCE((${listOutstanding}), sm.outstanding_qty_actual, 0)::numeric
+        END`,
+  };
 }
 
 export { SHIPPING_PERF_STO_GROUP_KEY_EXPR };

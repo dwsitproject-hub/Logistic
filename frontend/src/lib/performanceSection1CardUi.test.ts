@@ -13,7 +13,9 @@ describe('performanceSection1CardUi', () => {
       expect(accent.surface).toContain('bg-white')
       expect(accent.surface).toContain('border-')
       expect(accent.chip).toMatch(/bg-/)
+      expect(accent.selected).toContain('border-2')
       expect(accent.selected).toContain('ring-2')
+      expect(accent.selected).toContain('bg-gradient-to-r')
       expect(accent.focus).toMatch(/focus-visible:ring-/)
     }
   })
@@ -29,5 +31,25 @@ describe('performanceSection1CardUi', () => {
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.completed.focus).toContain('amber')
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.close.selected).toContain('amber')
     expect(PERFORMANCE_SECTION1_CARD_ACCENTS.completed.selected).toContain('amber')
+  })
+
+  it('selected open/ongoing follows App Tour blue gradient', () => {
+    for (const variant of ['open', 'ongoing'] as const) {
+      const selected = PERFORMANCE_SECTION1_CARD_ACCENTS[variant].selected
+      expect(selected).toContain('from-blue-50')
+      expect(selected).toContain('to-indigo-50')
+      expect(selected).toContain('border-2')
+      expect(selected).toContain('border-blue-400')
+    }
+  })
+
+  it('selected close/completed follows Logout amber gradient', () => {
+    for (const variant of ['close', 'completed'] as const) {
+      const selected = PERFORMANCE_SECTION1_CARD_ACCENTS[variant].selected
+      expect(selected).toContain('from-amber-50')
+      expect(selected).toContain('to-orange-50')
+      expect(selected).toContain('border-2')
+      expect(selected).toContain('border-amber-400')
+    }
   })
 })

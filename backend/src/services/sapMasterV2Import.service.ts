@@ -1,5 +1,7 @@
 import * as XLSX from 'xlsx';
 import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
 import pool from '../database/connection';
 import logger from '../utils/logger';
 import {
@@ -17,6 +19,13 @@ import { normalizePoNumber } from '../utils/contractPoIdentity';
 import { applyAbsenceForImport, evaluateImportTrust } from './sapAbsenceTracking.service';
 import { applyPresenceState } from './sapPresence.service';
 import { identityFromParsedSapRow, type SapAutoImportIdentityRow } from '../utils/sapAutoImportIdentity';
+import {
+  dedupeImportRetryRows,
+  formatSapImportRowError,
+  isFollowOnAbortedTransactionError,
+  isRetryableFollowOnImportError,
+  mergeFollowOnRetryCounts,
+} from '../utils/sapImportRowError';
 
 export interface MasterV2Config {
   filePath: string;
@@ -34,11 +43,77 @@ export type SapImportSource = 'manual' | 'scheduler';
 export interface QueueMasterV2FileImportOptions {
   source?: SapImportSource;
   keepSourceFile?: boolean;
+  /** SHA-256 of the uploaded file, persisted so a future identical re-upload can short-circuit. */
+  fileSha256?: string;
+  /** Original uploaded file name (basename), shown on the SAP Data import history. */
+  fileName?: string;
 }
 
 export interface ImportMasterV2FileOptions {
   source?: SapImportSource;
+  /** SHA-256 of the file, persisted so findCompletedImportByFileHash can find this import later. */
+  fileSha256?: string;
+  /** Original uploaded file name (basename), shown on the SAP Data import history. */
+  fileName?: string;
 }
+
+/** Result of looking up a prior completed import by file hash (manual-upload short-circuit). */
+export interface CompletedImportByFileHash {
+  importId: string;
+  totalRecords: number;
+  processedRecords: number;
+  failedRecords: number;
+  skippedRecords: number;
+}
+
+/** Pure, in-memory parse of one Excel row, plus the identity keys used to batch-prefetch/skip. */
+interface RowImportContext {
+  rowIndex: number;
+  row: any[];
+  parsedData: any;
+  rowIdentity: SapAutoImportIdentityRow | null;
+  contractNumber: string | null;
+  poNumber: string | null;
+  stoKey: string;
+  /** SHA-256 of parsedData; null when poNumber is missing (row will fail validation anyway). */
+  contentHash: string | null;
+}
+
+/** Per-chunk accumulator, aggregated across all parallel workers once every chunk finishes. */
+interface ChunkImportResult {
+  processedRecords: number;
+  failedRecords: number;
+  skippedRecords: number;
+  /** Rows this chunk never got to because a cancel request came in mid-chunk (see runImportChunk). */
+  cancelledRecords: number;
+  /** True if this chunk stopped early because the import was cancelled, rather than finishing all its rows. */
+  wasCancelled: boolean;
+  errors: string[];
+  successIdentities: SapAutoImportIdentityRow[];
+  failedIdentities: SapAutoImportIdentityRow[];
+  /** Already-counted failures caused only by an aborted sibling row — safe to retry once. */
+  retryableFailedRows: RowImportContext[];
+  /** Rows never attempted after the chunk TX aborted — also safe to retry once. */
+  unprocessedAfterAbortRows: RowImportContext[];
+  summary: {
+    contractsCreated: number;
+    shipmentsCreated: number;
+    qualitySurveysCreated: number;
+    truckingOperationsCreated: number;
+    paymentsCreated: number;
+  };
+}
+
+const emptyChunkSummary = () => ({
+  contractsCreated: 0,
+  shipmentsCreated: 0,
+  qualitySurveysCreated: 0,
+  truckingOperationsCreated: 0,
+  paymentsCreated: 0,
+});
+
+/** In-process cancel flags for in-flight imports. Workers poll this between rows (no DB round trip). */
+const cancelRequestedImportIds = new Set<string>();
 
 export interface SapMasterV2ImportResult {
   success: boolean;
@@ -47,6 +122,7 @@ export interface SapMasterV2ImportResult {
   processedRecords: number;
   failedRecords: number;
   skippedRecords?: number;
+  cancelled?: boolean;
   errors?: string[];
   successIdentities?: SapAutoImportIdentityRow[];
   failedIdentities?: SapAutoImportIdentityRow[];
@@ -149,13 +225,74 @@ export class SapMasterV2ImportService {
     return { ...this.DEFAULT_CONFIG };
   }
 
+  private static isCancelRequested(importId: string): boolean {
+    return cancelRequestedImportIds.has(importId);
+  }
+
+  private static clearCancelRequest(importId: string): void {
+    cancelRequestedImportIds.delete(importId);
+  }
+
+  /**
+   * Ask an in-flight import to stop. Status is flipped to `cancelled` immediately so the
+   * dashboard / in-flight guard unblocks without waiting for the worker to finish the
+   * current parse/prefetch/bulk-insert (those steps cannot be aborted mid-query). The
+   * in-memory flag then lets the worker exit as soon as it next checks, skip
+   * absence/presence, and leave already-committed SAVEPOINTs as-is.
+   */
+  static async requestCancelImport(importId: string): Promise<{
+    accepted: boolean;
+    status: string;
+    message: string;
+  }> {
+    const result = await pool.query(
+      `SELECT id, status FROM sap_data_imports WHERE id = $1::uuid`,
+      [importId],
+    );
+    if (result.rows.length === 0) {
+      return { accepted: false, status: 'not_found', message: 'Import not found' };
+    }
+    const status = String(result.rows[0].status || '');
+    if (status === 'cancelled') {
+      cancelRequestedImportIds.add(importId);
+      return {
+        accepted: true,
+        status: 'cancelled',
+        message: 'Import is already cancelled.',
+      };
+    }
+    if (status !== 'processing' && status !== 'pending') {
+      return {
+        accepted: false,
+        status,
+        message: `Import is already ${status} and cannot be cancelled.`,
+      };
+    }
+    cancelRequestedImportIds.add(importId);
+    await pool.query(
+      `UPDATE sap_data_imports
+          SET status = 'cancelled',
+              error_log = COALESCE(error_log, $1)
+        WHERE id = $2::uuid
+          AND status IN ('processing', 'pending')`,
+      [JSON.stringify(['Import cancelled by user. Remaining rows will stop shortly.']), importId],
+    );
+    logger.info('SAP MASTER v2 import cancel requested', { importId, previousStatus: status });
+    return {
+      accepted: true,
+      status: 'cancelled',
+      message: 'Import cancelled. Remaining rows will stop shortly.',
+    };
+  }
+
   private static async markImportFailed(importId: string, error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     try {
       await pool.query(
         `UPDATE sap_data_imports
          SET status = 'failed', error_log = $1
-         WHERE id = $2`,
+         WHERE id = $2
+           AND status IN ('processing', 'pending')`,
         [JSON.stringify([message]), importId]
       );
     } catch (updateErr) {
@@ -163,18 +300,25 @@ export class SapMasterV2ImportService {
     }
   }
 
+  private static sanitizeImportFileName(fileName: string | null | undefined): string | null {
+    const base = path.basename(String(fileName || '').trim());
+    return base.length > 0 ? base.slice(0, 512) : null;
+  }
+
   private static async createProcessingImport(
     totalRecords: number,
     source: SapImportSource = 'manual',
+    fileSha256: string | null = null,
+    fileName: string | null = null,
   ): Promise<string> {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       const importResult = await client.query(
-        `INSERT INTO sap_data_imports (import_date, status, total_records, source)
-         VALUES (CURRENT_DATE, 'processing', $1, $2)
+        `INSERT INTO sap_data_imports (import_date, status, total_records, source, file_sha256, file_name)
+         VALUES (CURRENT_DATE, 'processing', $1, $2, $3, $4)
          RETURNING id`,
-        [totalRecords, source === 'scheduler' ? 'scheduler' : 'manual'],
+        [totalRecords, source === 'scheduler' ? 'scheduler' : 'manual', fileSha256, fileName],
       );
       await client.query('COMMIT');
       return importResult.rows[0].id as string;
@@ -184,6 +328,40 @@ export class SapMasterV2ImportService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Look up a previously *completed* (zero failed rows) import that already processed this
+   * exact file, by SHA-256. Manual-upload equivalent of the scheduler folder auto-import's
+   * sap_auto_import_files dedupe. Callers use this to short-circuit before even parsing/queuing
+   * a re-upload of a file nothing has changed in.
+   */
+  static async findCompletedImportByFileHash(
+    fileSha256: string,
+  ): Promise<CompletedImportByFileHash | null> {
+    const result = await pool.query(
+      `SELECT id, total_records, processed_records, failed_records
+       FROM sap_data_imports
+       WHERE file_sha256 = $1
+         AND status = 'completed'
+         AND failed_records = 0
+       ORDER BY import_timestamp DESC NULLS LAST, created_at DESC NULLS LAST
+       LIMIT 1`,
+      [fileSha256],
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    const totalRecords = Number(row.total_records) || 0;
+    const processedRecords = Number(row.processed_records) || 0;
+    return {
+      importId: row.id as string,
+      totalRecords,
+      processedRecords,
+      failedRecords: Number(row.failed_records) || 0,
+      // processed_records already folds in hash-skipped rows (see maybeRefreshImportProgress /
+      // the final sap_data_imports update below); there is no separate stored skipped count.
+      skippedRecords: Math.max(0, totalRecords - processedRecords),
+    };
   }
 
   /**
@@ -197,7 +375,12 @@ export class SapMasterV2ImportService {
     const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
     const source = options.source === 'scheduler' ? 'scheduler' : 'manual';
     const keepSourceFile = options.keepSourceFile === true;
-    const importId = await this.createProcessingImport(validDataRows.length, source);
+    const importId = await this.createProcessingImport(
+      validDataRows.length,
+      source,
+      options.fileSha256 ?? null,
+      this.sanitizeImportFileName(options.fileName ?? filePath),
+    );
 
     setImmediate(() => {
       void (async () => {
@@ -231,218 +414,407 @@ export class SapMasterV2ImportService {
   ): Promise<SapMasterV2ImportResult> {
     const { fieldMetadata, validDataRows } = this.loadMasterV2WorkbookData(filePath);
     const source = options.source === 'scheduler' ? 'scheduler' : 'manual';
-    const importId = await this.createProcessingImport(validDataRows.length, source);
+    const importId = await this.createProcessingImport(
+      validDataRows.length,
+      source,
+      options.fileSha256 ?? null,
+      this.sanitizeImportFileName(options.fileName ?? filePath),
+    );
     return this.processMasterV2Import(importId, validDataRows, fieldMetadata);
   }
 
-  private static async processMasterV2Import(
-    importId: string,
+  /** SHA-256 of parsedData; deterministic for a fixed sheet layout (same field iteration order). */
+  private static computeRowContentHash(parsedData: any): string {
+    return crypto.createHash('sha256').update(JSON.stringify(parsedData)).digest('hex');
+  }
+
+  private static processedDataKey(poNumber: string, stoKey: string): string {
+    return `${poNumber}\u0000${stoKey}`;
+  }
+
+  /** Pure, in-memory parse of every row up front (no DB calls) so prefetch/bulk-insert below can run before any per-row work starts. */
+  private static buildRowContexts(
     validDataRows: any[][],
-    fieldMetadata: FieldMetadata[]
-  ): Promise<SapMasterV2ImportResult> {
+    fieldMetadata: FieldMetadata[],
+    importId?: string,
+  ): RowImportContext[] {
+    const contexts: RowImportContext[] = [];
+    for (let i = 0; i < validDataRows.length; i++) {
+      if (importId && i > 0 && i % 200 === 0 && this.isCancelRequested(importId)) {
+        break;
+      }
+      const row = validDataRows[i];
+      const parsedData = this.parseDataRow(row, fieldMetadata);
+      const rowIdentity = identityFromParsedSapRow(parsedData);
+      const contractNumber = parsedData.contract?.contract_no
+        ? String(parsedData.contract.contract_no).trim() || null
+        : null;
+      const poNumber = normalizePoNumber(parsedData.contract?.po_no);
+      const stoNumberRaw = parsedData.shipment?.sto_no || parsedData.contract?.sto_no || null;
+      const stoKey = String(stoNumberRaw ?? '').trim();
+      const contentHash = poNumber ? this.computeRowContentHash(parsedData) : null;
+      contexts.push({ rowIndex: i, row, parsedData, rowIdentity, contractNumber, poNumber, stoKey, contentHash });
+    }
+    return contexts;
+  }
+
+  /**
+   * One query for every distinct PO+STO in the file instead of one SELECT per row (this used
+   * to run inside the per-row loop). Safe to run before any writes: rows sharing a PO+STO are
+   * always kept in the same parallel chunk (see partitionRowContextsByContractIdentity), so no
+   * chunk can race another to update the same sap_processed_data row within one import run.
+   */
+  private static async prefetchExistingProcessedData(
+    rows: RowImportContext[],
+    importId?: string,
+  ): Promise<Map<string, { id: string; contentHash: string | null }>> {
+    const map = new Map<string, { id: string; contentHash: string | null }>();
+    if (importId && this.isCancelRequested(importId)) return map;
+    const uniquePairs = new Map<string, { po: string; sto: string }>();
+    for (const r of rows) {
+      if (!r.poNumber) continue;
+      const key = this.processedDataKey(r.poNumber, r.stoKey);
+      if (!uniquePairs.has(key)) uniquePairs.set(key, { po: r.poNumber, sto: r.stoKey });
+    }
+    if (uniquePairs.size === 0) return map;
+
+    const pos: string[] = [];
+    const stos: string[] = [];
+    for (const { po, sto } of uniquePairs.values()) {
+      pos.push(po);
+      stos.push(sto);
+    }
+
+    const result = await pool.query(
+      `SELECT spd.id, spd.content_hash,
+              TRIM(COALESCE(spd.po_number::text, '')) AS po_key,
+              COALESCE(NULLIF(TRIM(COALESCE(spd.sto_number::text, '')), ''), '') AS sto_key
+       FROM sap_processed_data spd
+       JOIN unnest($1::text[], $2::text[]) AS k(po, sto)
+         ON TRIM(COALESCE(spd.po_number::text, '')) = k.po
+        AND COALESCE(NULLIF(TRIM(COALESCE(spd.sto_number::text, '')), ''), '') = k.sto`,
+      [pos, stos],
+    );
+
+    for (const row of result.rows as Array<{
+      id: string;
+      content_hash: string | null;
+      po_key: string;
+      sto_key: string;
+    }>) {
+      map.set(this.processedDataKey(row.po_key, row.sto_key), {
+        id: row.id,
+        contentHash: row.content_hash ?? null,
+      });
+    }
+    return map;
+  }
+
+  /**
+   * One (or a few, chunked) multi-row INSERT for every row's sap_raw_data instead of one INSERT
+   * per row. Deliberately runs via `pool` (auto-committed), decoupled from every row's own
+   * SAVEPOINT: a row that later fails now keeps its raw JSON (the failure UPDATE below actually
+   * matches it, instead of silently no-op'ing because ROLLBACK TO SAVEPOINT already erased the
+   * insert) - a strict audit improvement, not a change to any calculation. One side effect: if
+   * the import fails outright before finishing, these staging rows persist tagged to a 'failed'
+   * sap_data_imports row, instead of vanishing with the rest of that one aborted transaction.
+   */
+  private static async bulkInsertRawData(
+    importId: string,
+    rows: RowImportContext[],
+  ): Promise<string[]> {
+    const rawDataIds: string[] = new Array(rows.length);
+    const BATCH_SIZE = 500;
+    for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+      if (this.isCancelRequested(importId)) {
+        break;
+      }
+      const batch = rows.slice(start, start + BATCH_SIZE);
+      const valueClauses: string[] = [];
+      const params: unknown[] = [];
+      batch.forEach((ctx, idx) => {
+        const base = idx * 3;
+        valueClauses.push(`($${base + 1}, $${base + 2}, $${base + 3}, 'pending')`);
+        params.push(importId, ctx.rowIndex + 1, JSON.stringify(ctx.row));
+      });
+      const result = await pool.query(
+        `INSERT INTO sap_raw_data (import_id, row_number, data, status)
+         VALUES ${valueClauses.join(', ')}
+         RETURNING id`,
+        params,
+      );
+      result.rows.forEach((row, idx) => {
+        rawDataIds[batch[idx].rowIndex] = row.id as string;
+      });
+    }
+    return rawDataIds;
+  }
+
+  /** How many parallel chunk workers to run. `SAP_IMPORT_PARALLELISM=1` restores the old fully-serial path. */
+  private static resolveImportParallelism(rowCount: number): number {
+    if (rowCount < 50) return 1; // not worth extra connections/coordination for a tiny file
+    const raw = parseInt(process.env.SAP_IMPORT_PARALLELISM || '4', 10);
+    const configured = Number.isFinite(raw) && raw > 0 ? raw : 4;
+    return Math.max(1, Math.min(8, configured));
+  }
+
+  /**
+   * Group rows so every row sharing a PO or contract number lands in the same worker chunk -
+   * each chunk then processes its rows sequentially (today's per-row SAVEPOINT logic,
+   * unchanged) in its own transaction, concurrently with the other chunks. This is what makes
+   * the pg_advisory_xact_lock in SapDataDistributionService.distributeData actually mean
+   * "never contends within one import run" instead of "usually doesn't".
+   */
+  private static partitionRowContextsByContractIdentity(
+    rows: RowImportContext[],
+    numChunks: number,
+  ): RowImportContext[][] {
+    if (numChunks <= 1) return rows.length > 0 ? [rows] : [];
+    const buckets: RowImportContext[][] = Array.from({ length: numChunks }, () => []);
+    const identityToChunk = new Map<string, number>();
+    let nextChunk = 0;
+    for (const ctx of rows) {
+      const identityKey = ctx.contractNumber || ctx.poNumber || `__row_${ctx.rowIndex}`;
+      let chunkIdx = identityToChunk.get(identityKey);
+      if (chunkIdx === undefined) {
+        chunkIdx = nextChunk % numChunks;
+        identityToChunk.set(identityKey, chunkIdx);
+        nextChunk++;
+      }
+      buckets[chunkIdx].push(ctx);
+    }
+    return buckets.filter((b) => b.length > 0);
+  }
+
+  /**
+   * Process one chunk of rows in its own connection/transaction. Body is the same per-row
+   * SAVEPOINT/hash-skip/distribute logic that used to run inline in the single big transaction;
+   * only the orchestration around it changed. Never throws - a fatal (non-row) error rolls back
+   * just this chunk and is reported as every one of its rows failing, so a connection blip in
+   * one worker cannot discard rows already committed by sibling chunks.
+   */
+  private static async runImportChunk(
+    importId: string,
+    chunkRows: RowImportContext[],
+    rawDataIds: string[],
+    existingProcessedMap: Map<string, { id: string; contentHash: string | null }>,
+    chunkLabel: string,
+  ): Promise<ChunkImportResult> {
+    const chunkResult: ChunkImportResult = {
+      processedRecords: 0,
+      failedRecords: 0,
+      skippedRecords: 0,
+      cancelledRecords: 0,
+      wasCancelled: false,
+      errors: [],
+      successIdentities: [],
+      failedIdentities: [],
+      retryableFailedRows: [],
+      unprocessedAfterAbortRows: [],
+      summary: emptyChunkSummary(),
+    };
+
+    let lastFlushedDone = 0;
+    let lastFlushedFailed = 0;
+    const flushProgress = async (force = false) => {
+      const done = chunkResult.processedRecords + chunkResult.skippedRecords;
+      const failed = chunkResult.failedRecords;
+      const doneDelta = done - lastFlushedDone;
+      const failedDelta = failed - lastFlushedFailed;
+      if (!force && doneDelta === 0 && failedDelta === 0) return;
+      if (!force && doneDelta < 25 && failedDelta === 0) return;
+      lastFlushedDone = done;
+      lastFlushedFailed = failed;
+      try {
+        // Atomic increment: several chunk workers write this same sap_data_imports row
+        // concurrently, so SET processed_records = <computed total> would lose sibling updates.
+        await pool.query(
+          `UPDATE sap_data_imports SET processed_records = processed_records + $1, failed_records = failed_records + $2 WHERE id = $3`,
+          [doneDelta, failedDelta, importId],
+        );
+      } catch (progressErr) {
+        logger.error('Failed to flush SAP import progress for chunk', { importId, chunkLabel, progressErr });
+      }
+    };
+
     const client = await pool.connect();
-
     try {
-      logger.info('Processing SAP MASTER v2 import rows', { importId, totalRows: validDataRows.length });
-
       await client.query('BEGIN');
 
-      // 6. Process each data row
-      let processedRecords = 0;
-      let failedRecords = 0;
-      let skippedRecords = 0;
-      const errors: string[] = [];
-      const successIdentities: SapAutoImportIdentityRow[] = [];
-      const failedIdentities: SapAutoImportIdentityRow[] = [];
-      
-      const summary = {
-        contractsCreated: 0,
-        shipmentsCreated: 0,
-        qualitySurveysCreated: 0,
-        truckingOperationsCreated: 0,
-        paymentsCreated: 0
-      };
-
-      const maybeRefreshImportProgress = async () => {
-        const rowsDone = processedRecords + failedRecords + skippedRecords;
-        if (rowsDone === 1 || rowsDone % 25 === 0) {
-          if (rowsDone % 100 === 0) {
-            logger.info(`Progress: ${rowsDone}/${validDataRows.length} records processed`);
-          }
-          await pool.query(
-            `UPDATE sap_data_imports SET processed_records = $1, failed_records = $2 WHERE id = $3`,
-            [processedRecords + skippedRecords, failedRecords, importId],
-          );
+      for (let rowPos = 0; rowPos < chunkRows.length; rowPos++) {
+        // Cheap in-memory check (no DB round trip) between rows, so a cancel request takes
+        // effect within one row of being issued instead of only at the next chunk boundary.
+        // Rows already released past their SAVEPOINT stay committed below; everything from
+        // here on is left untouched and reported as cancelled, not failed.
+        if (this.isCancelRequested(importId)) {
+          chunkResult.wasCancelled = true;
+          chunkResult.cancelledRecords = chunkRows.length - rowPos;
+          break;
         }
-      };
-      
-      for (let i = 0; i < validDataRows.length; i++) {
-        const savepointName = `sp_mv2_${i}`;
-        // Track the rawDataId so we can mark failures with specific error messages
-        let rawDataId!: string;
-        // Keep the row's identity outside the try: rolling back to the SAVEPOINT also undoes
-        // the sap_raw_data insert, so the only way to report which PO/STO failed is to hold
-        // it here and write it to sap_import_failures after the rollback.
-        let failurePo: string | null = null;
-        let failureSto: string | null = null;
-        let rowIdentity: SapAutoImportIdentityRow | null = null;
+
+        const ctx = chunkRows[rowPos];
+        const i = ctx.rowIndex;
+        const savepointName = `sp_mv2_${chunkLabel}_${i}`;
+        const rawDataId = rawDataIds[i];
+        const failurePo = ctx.poNumber;
+        const failureSto = ctx.stoKey || null;
+        const rowIdentity = ctx.rowIdentity;
+
         try {
-          const row = validDataRows[i];
-
-          // Create a SAVEPOINT per row to avoid aborting the whole transaction
           await client.query(`SAVEPOINT ${savepointName}`);
-
-          // Store raw data
-          const rawDataResult = await client.query(
-            `INSERT INTO sap_raw_data (import_id, row_number, data, status) 
-             VALUES ($1, $2, $3, 'pending') RETURNING id`,
-            [importId, i + 1, JSON.stringify(row)]
-          );
-          rawDataId = rawDataResult.rows[0].id;
-
-          // Parse row into structured data
-          const parsedData = this.parseDataRow(row, fieldMetadata);
-          rowIdentity = identityFromParsedSapRow(parsedData);
-
-          // Match processed SAP rows by PO + STO (contract_no may be null or change over time).
-          const contractNumber = parsedData.contract?.contract_no || null;
-          const poNumber = normalizePoNumber(parsedData.contract?.po_no);
-          const stoNumber =
-            parsedData.shipment?.sto_no || parsedData.contract?.sto_no || null;
-          const stoKey = String(stoNumber ?? '').trim();
-          failurePo = poNumber || null;
-          failureSto = stoKey || null;
+          const { parsedData, poNumber, stoKey, contentHash } = ctx;
 
           if (!poNumber) {
             throw new Error('Row skipped: PO number is required');
           }
 
-          const existingProcessed = await client.query(
-            `SELECT id FROM sap_processed_data
-             WHERE TRIM(COALESCE(po_number::text, '')) = TRIM($1::text)
-               AND COALESCE(NULLIF(TRIM(COALESCE(sto_number::text, '')), ''), '') = COALESCE(NULLIF(TRIM($2::text), ''), '')
-             LIMIT 1`,
-            [poNumber, stoKey],
-          );
+          const existing = existingProcessedMap.get(this.processedDataKey(poNumber, stoKey));
 
-          if (existingProcessed.rows.length > 0) {
-              const existingId = existingProcessed.rows[0].id;
-              logger.info(`Updating existing processed data for PO+STO (po=${poNumber}, sto=${stoKey || '(empty)'})`);
+          if (existing) {
+            const unchanged = !!contentHash && !!existing.contentHash && contentHash === existing.contentHash;
 
-              // Update the processed record with latest parsed data and key attributes
-              const supplierName = parsedData.contract?.supplier || null;
-              const product = parsedData.contract?.product || null;
-              const vesselName = parsedData.vessel?.vessel_name || parsedData.shipment?.vessel || null;
-              const incoterm = parsedData.contract?.incoterm || null;
-              const transportMode = parsedData.contract?.sea_land || parsedData.contract?.transport_mode || null;
-              const shipmentId =
-                parsedData.shipment?.shipment_id || parsedData.shipment?.id || stoKey || null;
-
+            if (unchanged) {
+              // Hash-skip: byte-identical to what's already stored for this PO+STO, so skip the
+              // full data rewrite AND distributeToTables (the 20-60+ query fan-out) entirely.
+              // Bookkeeping columns still get touched so absence/presence tracking sees this row
+              // as "seen" this import.
               await client.query(
                 `UPDATE sap_processed_data
-                   SET data = $1,
-                       import_id = $2,
-                       raw_data_id = $3,
-                       contract_number = $4,
-                       shipment_id = $5,
-                       po_number = $6,
-                       sto_number = $7,
-                       supplier_name = $8,
-                       product = $9,
-                       vessel_name = $10,
-                       incoterm = $11,
-                       transport_mode = $12
-                 WHERE id = $13`,
-                [
-                  JSON.stringify(parsedData),
-                  importId,
-                  rawDataId,
-                  contractNumber,
-                  shipmentId,
-                  poNumber,
-                  stoKey || null,
-                  supplierName,
-                  product,
-                  vesselName,
-                  incoterm,
-                  transportMode,
-                  existingId
-                ]
+                   SET import_id = $1, raw_data_id = $2, last_seen_at = CURRENT_TIMESTAMP
+                 WHERE id = $3`,
+                [importId, rawDataId, existing.id],
               );
-
-              // Distribute to domain tables (acts as upsert in distribution service)
-              const distributionResult = await this.distributeToTables(client, parsedData);
-
-              summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
-              summary.shipmentsCreated += distributionResult.shipmentCreated ? 1 : 0;
-              summary.qualitySurveysCreated += distributionResult.qualitySurveysCreated;
-              summary.truckingOperationsCreated += distributionResult.truckingOperationsCreated;
-              summary.paymentsCreated += distributionResult.paymentCreated ? 1 : 0;
-
-              // Mark current raw row as processed
-              await client.query(
-                'UPDATE sap_raw_data SET status = $1 WHERE id = $2',
-                ['processed', rawDataId]
-              );
-
+              await client.query(`UPDATE sap_raw_data SET status = 'skipped' WHERE id = $1`, [rawDataId]);
               await client.query(`RELEASE SAVEPOINT ${savepointName}`);
-              processedRecords++;
-              if (rowIdentity) successIdentities.push(rowIdentity);
-              await maybeRefreshImportProgress();
+              chunkResult.skippedRecords++;
+              if (rowIdentity) chunkResult.successIdentities.push(rowIdentity);
+              await flushProgress();
               continue;
+            }
+
+            // Changed row: identical to the pre-optimization full update + distribute path.
+            const supplierName = parsedData.contract?.supplier || null;
+            const product = parsedData.contract?.product || null;
+            const vesselName = parsedData.vessel?.vessel_name || parsedData.shipment?.vessel || null;
+            const incoterm = parsedData.contract?.incoterm || null;
+            const transportMode = parsedData.contract?.sea_land || parsedData.contract?.transport_mode || null;
+            const shipmentId = parsedData.shipment?.shipment_id || parsedData.shipment?.id || stoKey || null;
+
+            await client.query(
+              `UPDATE sap_processed_data
+                 SET data = $1,
+                     import_id = $2,
+                     raw_data_id = $3,
+                     contract_number = $4,
+                     shipment_id = $5,
+                     po_number = $6,
+                     sto_number = $7,
+                     supplier_name = $8,
+                     product = $9,
+                     vessel_name = $10,
+                     incoterm = $11,
+                     transport_mode = $12,
+                     content_hash = $13,
+                     last_seen_at = CURRENT_TIMESTAMP
+               WHERE id = $14`,
+              [
+                JSON.stringify(parsedData),
+                importId,
+                rawDataId,
+                ctx.contractNumber,
+                shipmentId,
+                poNumber,
+                stoKey || null,
+                supplierName,
+                product,
+                vesselName,
+                incoterm,
+                transportMode,
+                contentHash,
+                existing.id,
+              ],
+            );
+
+            const distributionResult = await this.distributeToTables(client, parsedData);
+            chunkResult.summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
+            chunkResult.summary.shipmentsCreated += distributionResult.shipmentCreated ? 1 : 0;
+            chunkResult.summary.qualitySurveysCreated += distributionResult.qualitySurveysCreated;
+            chunkResult.summary.truckingOperationsCreated += distributionResult.truckingOperationsCreated;
+            chunkResult.summary.paymentsCreated += distributionResult.paymentCreated ? 1 : 0;
+
+            await client.query('UPDATE sap_raw_data SET status = $1 WHERE id = $2', ['processed', rawDataId]);
+            await client.query(`RELEASE SAVEPOINT ${savepointName}`);
+
+            chunkResult.processedRecords++;
+            if (rowIdentity) chunkResult.successIdentities.push(rowIdentity);
+            await flushProgress();
+            continue;
           }
 
-          // Store in sap_processed_data
-          await this.storeProcessedData(client, importId, rawDataId, parsedData);
+          // New PO+STO: store + distribute (same as before), now also persisting content_hash.
+          await this.storeProcessedData(client, importId, rawDataId, parsedData, contentHash);
 
-          // Distribute to main tables
           const distributionResult = await this.distributeToTables(client, parsedData);
+          chunkResult.summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
+          chunkResult.summary.shipmentsCreated += distributionResult.shipmentCreated ? 1 : 0;
+          chunkResult.summary.qualitySurveysCreated += distributionResult.qualitySurveysCreated;
+          chunkResult.summary.truckingOperationsCreated += distributionResult.truckingOperationsCreated;
+          chunkResult.summary.paymentsCreated += distributionResult.paymentCreated ? 1 : 0;
 
-          summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
-          summary.shipmentsCreated += distributionResult.shipmentCreated ? 1 : 0;
-          summary.qualitySurveysCreated += distributionResult.qualitySurveysCreated;
-          summary.truckingOperationsCreated += distributionResult.truckingOperationsCreated;
-          summary.paymentsCreated += distributionResult.paymentCreated ? 1 : 0;
-
-          // Update raw data status
-          await client.query(
-            'UPDATE sap_raw_data SET status = $1 WHERE id = $2',
-            ['processed', rawDataId]
-          );
-
-          // Release savepoint on success
+          await client.query('UPDATE sap_raw_data SET status = $1 WHERE id = $2', ['processed', rawDataId]);
           await client.query(`RELEASE SAVEPOINT ${savepointName}`);
 
-          processedRecords++;
-          if (rowIdentity) successIdentities.push(rowIdentity);
-          await maybeRefreshImportProgress();
-
+          chunkResult.processedRecords++;
+          if (rowIdentity) chunkResult.successIdentities.push(rowIdentity);
+          await flushProgress();
         } catch (error) {
-          // Rollback only this row's changes and continue
+          let savepointRecovered = false;
           try {
             await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
             await client.query(`RELEASE SAVEPOINT ${savepointName}`);
+            savepointRecovered = true;
           } catch (spErr) {
             logger.error('Failed to rollback to savepoint', { rowNumber: i + 1, error: spErr });
           }
 
-          failedRecords++;
+          chunkResult.failedRecords++;
           const errObj: any = error as any;
-          const detailedMsg = errObj?.detail ? ` - ${errObj.detail}` : '';
-          const errorMsg = `Row ${i + 1}: ${error instanceof Error ? error.message : 'Unknown error'}${detailedMsg}`;
-          errors.push(errorMsg);
+          const rawMessage = [
+            error instanceof Error ? error.message : 'Unknown error',
+            errObj?.detail,
+          ]
+            .filter((part) => typeof part === 'string' && part.trim().length > 0)
+            .join(' - ');
+          const errorMsg = formatSapImportRowError({
+            poNumber: failurePo ?? rowIdentity?.poNumber ?? null,
+            contractNumber: ctx.contractNumber ?? rowIdentity?.contractNumber ?? null,
+            stoNumber: failureSto ?? rowIdentity?.stoNumber ?? null,
+            rawMessage,
+          });
+          chunkResult.errors.push(errorMsg);
+          if (isFollowOnAbortedTransactionError(rawMessage) || isRetryableFollowOnImportError(errorMsg)) {
+            chunkResult.retryableFailedRows.push(ctx);
+          }
           logger.error('Failed to process row', { rowNumber: i + 1, error });
 
-          // Persist failure status and specific error message for this row.
-          // NOTE: when the row failed after its sap_raw_data insert, that insert was undone by
-          // ROLLBACK TO SAVEPOINT, so this UPDATE matches nothing. sap_import_failures below is
-          // what actually survives - without it a failed row leaves no trace but a counter, and
-          // is then indistinguishable from a PO that SAP cancelled.
+          const failedIdentity: SapAutoImportIdentityRow = {
+            contractDate: rowIdentity?.contractDate ?? null,
+            contractNumber: ctx.contractNumber ?? rowIdentity?.contractNumber ?? null,
+            contractExtNo: rowIdentity?.contractExtNo ?? null,
+            poNumber: failurePo ?? rowIdentity?.poNumber ?? null,
+            stoNumber: failureSto ?? rowIdentity?.stoNumber ?? null,
+            supplier: rowIdentity?.supplier ?? null,
+            remarks: errorMsg,
+          };
+
+          // Isolated connection: bookkeeping must not abort the chunk transaction.
+          // Writing these on `client` after a failed row was the source of
+          // "current transaction is aborted" follow-on errors for later rows.
           if (rawDataId) {
             try {
-              await client.query(
+              await pool.query(
                 `UPDATE sap_raw_data SET status = 'failed', error_message = $1 WHERE id = $2`,
-                [errorMsg, rawDataId]
+                [errorMsg, rawDataId],
               );
             } catch (updateErr) {
               logger.error('Failed to record row error to sap_raw_data', { rawDataId, updateErr });
@@ -450,17 +822,8 @@ export class SapMasterV2ImportService {
           }
 
           try {
-            const failedIdentity: SapAutoImportIdentityRow = {
-              contractDate: rowIdentity?.contractDate ?? null,
-              contractNumber: rowIdentity?.contractNumber ?? null,
-              contractExtNo: rowIdentity?.contractExtNo ?? null,
-              poNumber: failurePo ?? rowIdentity?.poNumber ?? null,
-              stoNumber: failureSto ?? rowIdentity?.stoNumber ?? null,
-              supplier: rowIdentity?.supplier ?? null,
-              remarks: errorMsg,
-            };
-            failedIdentities.push(failedIdentity);
-            await client.query(
+            chunkResult.failedIdentities.push(failedIdentity);
+            await pool.query(
               `INSERT INTO sap_import_failures (
                  import_id, row_number, po_number, sto_number, error_message,
                  contract_date, contract_number, contract_ext_no, supplier
@@ -484,44 +847,386 @@ export class SapMasterV2ImportService {
               failLogErr,
             });
           }
-          await maybeRefreshImportProgress();
-        }
-      }
-      
-      // 7. Update import status
-      await client.query(
-        `UPDATE sap_data_imports 
-         SET status = $1, processed_records = $2, failed_records = $3, error_log = $4 
-         WHERE id = $5`,
-        [
-          failedRecords === 0 ? 'completed' : 'completed_with_errors',
-          processedRecords,
-          failedRecords,
-          errors.length > 0 ? JSON.stringify(errors) : null,
-          importId
-        ]
-      );
 
-      // 7b. Snapshot-absence tracking (observe only - changes no total and no list).
-      // The SAP Report is a full snapshot: a PO stays while Open and after Close, and drops
-      // out only when cancelled/deleted. Absence is therefore meaningful - but only from an
-      // import that actually completed. A partly-failed import looks identical to a mass
-      // cancellation (2026-07-27: 1,250 failed rows would have withdrawn 585 live POs).
-      try {
-        const totalRecords = processedRecords + failedRecords;
-        const trusted = await evaluateImportTrust(client, importId, totalRecords, failedRecords);
-        if (trusted) {
-          await applyAbsenceForImport(client, importId);
-          // Phase 2: turn the counters into presence state. Withdraws POs cancelled in SAP,
-          // restores any that came back, supersedes stale STO rows. Nothing is deleted.
-          await applyPresenceState(client, { importId });
+          if (!savepointRecovered) {
+            // Chunk TX is likely aborted; do not keep issuing queries on it.
+            for (let rest = rowPos + 1; rest < chunkRows.length; rest++) {
+              chunkResult.unprocessedAfterAbortRows.push(chunkRows[rest]);
+            }
+            break;
+          }
+          await flushProgress();
         }
-      } catch (absenceErr) {
-        // Never let bookkeeping fail an import that already succeeded.
-        logger.error('SAP absence tracking failed (import itself is unaffected)', { absenceErr });
       }
 
       await client.query('COMMIT');
+      await flushProgress(true);
+    } catch (fatalError) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // connection may already be dead
+      }
+      const message = fatalError instanceof Error ? fatalError.message : 'Unknown error';
+      logger.error('SAP import chunk failed unexpectedly - chunk transaction rolled back', {
+        importId,
+        chunkLabel,
+        fatalError,
+      });
+      // The whole chunk transaction (including every per-row SAVEPOINT release inside it) is
+      // gone, so every row in this chunk is failed - not just the one row that triggered this.
+      chunkResult.processedRecords = 0;
+      chunkResult.skippedRecords = 0;
+      chunkResult.failedRecords = chunkRows.length;
+      chunkResult.successIdentities = [];
+      chunkResult.summary = emptyChunkSummary();
+      chunkResult.retryableFailedRows = [...chunkRows];
+      chunkResult.unprocessedAfterAbortRows = [];
+      chunkResult.errors = chunkRows.map((ctx) =>
+        formatSapImportRowError({
+          poNumber: ctx.poNumber,
+          contractNumber: ctx.contractNumber ?? ctx.rowIdentity?.contractNumber ?? null,
+          stoNumber: ctx.stoKey || null,
+          rawMessage: `chunk failed - ${message}`,
+        }),
+      );
+      chunkResult.failedIdentities = chunkRows.map((ctx) => ({
+        contractDate: ctx.rowIdentity?.contractDate ?? null,
+        contractNumber: ctx.contractNumber ?? ctx.rowIdentity?.contractNumber ?? null,
+        contractExtNo: ctx.rowIdentity?.contractExtNo ?? null,
+        poNumber: ctx.poNumber,
+        stoNumber: ctx.stoKey || null,
+        supplier: ctx.rowIdentity?.supplier ?? null,
+        remarks: formatSapImportRowError({
+          poNumber: ctx.poNumber,
+          contractNumber: ctx.contractNumber ?? ctx.rowIdentity?.contractNumber ?? null,
+          stoNumber: ctx.stoKey || null,
+          rawMessage: `chunk failed - ${message}`,
+        }),
+      }));
+    } finally {
+      client.release();
+    }
+
+    return chunkResult;
+  }
+
+  private static async finalizeCancelledBeforeChunks(
+    importId: string,
+    totalRecords: number,
+  ): Promise<SapMasterV2ImportResult> {
+    const finalClient = await pool.connect();
+    try {
+      await finalClient.query('BEGIN');
+      await finalClient.query(
+        `UPDATE sap_raw_data
+            SET status = 'cancelled',
+                error_message = COALESCE(error_message, 'Import cancelled by user')
+          WHERE import_id = $1::uuid AND status = 'pending'`,
+        [importId],
+      );
+      await finalClient.query(
+        `UPDATE sap_data_imports
+            SET status = 'cancelled',
+                error_log = COALESCE(error_log, $1)
+          WHERE id = $2`,
+        [JSON.stringify(['Import cancelled by user before row processing started.']), importId],
+      );
+      await finalClient.query('COMMIT');
+    } catch (earlyCancelErr) {
+      await finalClient.query('ROLLBACK');
+      throw earlyCancelErr;
+    } finally {
+      finalClient.release();
+      this.clearCancelRequest(importId);
+    }
+    logger.info('SAP MASTER v2 import cancelled before chunk processing', { importId });
+    return {
+      success: false,
+      importId,
+      totalRecords,
+      processedRecords: 0,
+      failedRecords: 0,
+      skippedRecords: 0,
+      cancelled: true,
+      errors: ['Import cancelled by user before row processing started.'],
+    };
+  }
+
+  private static async processMasterV2Import(
+    importId: string,
+    validDataRows: any[][],
+    fieldMetadata: FieldMetadata[]
+  ): Promise<SapMasterV2ImportResult> {
+    try {
+      logger.info('Processing SAP MASTER v2 import rows', { importId, totalRows: validDataRows.length });
+
+      if (this.isCancelRequested(importId)) {
+        return this.finalizeCancelledBeforeChunks(importId, validDataRows.length);
+      }
+
+      // Pure, in-memory parsing (no DB) up front, so the batch prefetch/bulk insert below run
+      // before any per-row work starts instead of interleaved with it.
+      const rowContexts = this.buildRowContexts(validDataRows, fieldMetadata, importId);
+      if (this.isCancelRequested(importId)) {
+        return this.finalizeCancelledBeforeChunks(importId, validDataRows.length);
+      }
+
+      const [existingProcessedMap, rawDataIds] = await Promise.all([
+        this.prefetchExistingProcessedData(rowContexts, importId),
+        this.bulkInsertRawData(importId, rowContexts),
+      ]);
+
+      if (this.isCancelRequested(importId)) {
+        return this.finalizeCancelledBeforeChunks(importId, validDataRows.length);
+      }
+
+      const numChunks = this.resolveImportParallelism(rowContexts.length);
+      const chunks = this.partitionRowContextsByContractIdentity(rowContexts, numChunks);
+
+      logger.info('SAP MASTER v2 import chunk plan', {
+        importId,
+        totalRows: rowContexts.length,
+        chunkCount: chunks.length,
+        chunkSizes: chunks.map((c) => c.length),
+      });
+
+      const chunkResults = await Promise.all(
+        chunks.map((chunkRows, idx) =>
+          this.runImportChunk(importId, chunkRows, rawDataIds, existingProcessedMap, String(idx)),
+        ),
+      );
+
+      const aggregate = chunkResults.reduce<ChunkImportResult>(
+        (acc, r) => ({
+          processedRecords: acc.processedRecords + r.processedRecords,
+          failedRecords: acc.failedRecords + r.failedRecords,
+          skippedRecords: acc.skippedRecords + r.skippedRecords,
+          cancelledRecords: acc.cancelledRecords + r.cancelledRecords,
+          wasCancelled: acc.wasCancelled || r.wasCancelled,
+          errors: acc.errors.concat(r.errors),
+          successIdentities: acc.successIdentities.concat(r.successIdentities),
+          failedIdentities: acc.failedIdentities.concat(r.failedIdentities),
+          retryableFailedRows: acc.retryableFailedRows.concat(r.retryableFailedRows),
+          unprocessedAfterAbortRows: acc.unprocessedAfterAbortRows.concat(r.unprocessedAfterAbortRows),
+          summary: {
+            contractsCreated: acc.summary.contractsCreated + r.summary.contractsCreated,
+            shipmentsCreated: acc.summary.shipmentsCreated + r.summary.shipmentsCreated,
+            qualitySurveysCreated: acc.summary.qualitySurveysCreated + r.summary.qualitySurveysCreated,
+            truckingOperationsCreated: acc.summary.truckingOperationsCreated + r.summary.truckingOperationsCreated,
+            paymentsCreated: acc.summary.paymentsCreated + r.summary.paymentsCreated,
+          },
+        }),
+        {
+          processedRecords: 0,
+          failedRecords: 0,
+          skippedRecords: 0,
+          cancelledRecords: 0,
+          wasCancelled: false,
+          errors: [],
+          successIdentities: [],
+          failedIdentities: [],
+          retryableFailedRows: [],
+          unprocessedAfterAbortRows: [],
+          summary: emptyChunkSummary(),
+        },
+      );
+
+      let {
+        processedRecords,
+        failedRecords,
+        skippedRecords,
+        cancelledRecords,
+        wasCancelled,
+        errors,
+        successIdentities,
+        failedIdentities,
+        summary,
+      } = aggregate;
+      let importWasCancelled = wasCancelled || this.isCancelRequested(importId);
+
+      const retryRows = importWasCancelled
+        ? []
+        : dedupeImportRetryRows([
+            ...aggregate.retryableFailedRows,
+            ...aggregate.unprocessedAfterAbortRows,
+          ]);
+      if (retryRows.length > 0) {
+        logger.info('Retrying follow-on aborted SAP import rows in isolated transactions', {
+          importId,
+          retryCount: retryRows.length,
+        });
+        const retryFailedIndexSet = new Set(aggregate.retryableFailedRows.map((row) => row.rowIndex));
+        let retriedFollowOnCount = 0;
+        let retryProcessed = 0;
+        let retrySkipped = 0;
+        let retryFailed = 0;
+        const retryErrors: string[] = [];
+        const retrySuccessIdentities: SapAutoImportIdentityRow[] = [];
+        const retryFailedIdentities: SapAutoImportIdentityRow[] = [];
+        const retrySummary = emptyChunkSummary();
+
+        for (const ctx of retryRows) {
+          if (this.isCancelRequested(importId)) {
+            break;
+          }
+          if (retryFailedIndexSet.has(ctx.rowIndex)) {
+            try {
+              await pool.query(
+                `DELETE FROM sap_import_failures
+                  WHERE import_id = $1::uuid AND row_number = $2`,
+                [importId, ctx.rowIndex + 1],
+              );
+            } catch (cleanupErr) {
+              logger.error('Failed to clear prior sap_import_failures before retry', {
+                importId,
+                rowNumber: ctx.rowIndex + 1,
+                cleanupErr,
+              });
+            }
+          }
+          const retryResult = await this.runImportChunk(
+            importId,
+            [ctx],
+            rawDataIds,
+            existingProcessedMap,
+            `retry_${ctx.rowIndex}`,
+          );
+          if (retryFailedIndexSet.has(ctx.rowIndex)) {
+            retriedFollowOnCount += 1;
+          }
+          retryProcessed += retryResult.processedRecords;
+          retrySkipped += retryResult.skippedRecords;
+          retryFailed += retryResult.failedRecords;
+          retryErrors.push(...retryResult.errors);
+          retrySuccessIdentities.push(...retryResult.successIdentities);
+          retryFailedIdentities.push(...retryResult.failedIdentities);
+          retrySummary.contractsCreated += retryResult.summary.contractsCreated;
+          retrySummary.shipmentsCreated += retryResult.summary.shipmentsCreated;
+          retrySummary.qualitySurveysCreated += retryResult.summary.qualitySurveysCreated;
+          retrySummary.truckingOperationsCreated += retryResult.summary.truckingOperationsCreated;
+          retrySummary.paymentsCreated += retryResult.summary.paymentsCreated;
+
+          if (retryResult.processedRecords + retryResult.skippedRecords > 0) {
+            try {
+              await pool.query(
+                `DELETE FROM sap_import_failures
+                  WHERE import_id = $1::uuid AND row_number = $2`,
+                [importId, ctx.rowIndex + 1],
+              );
+            } catch (cleanupErr) {
+              logger.error('Failed to clear sap_import_failures after successful retry', {
+                importId,
+                rowNumber: ctx.rowIndex + 1,
+                cleanupErr,
+              });
+            }
+          }
+        }
+
+        const merged = mergeFollowOnRetryCounts({
+          originalProcessed: processedRecords,
+          originalSkipped: skippedRecords,
+          originalFailed: failedRecords,
+          retriedFollowOnCount,
+          retryProcessed,
+          retrySkipped,
+          retryFailed,
+        });
+        processedRecords = merged.processedRecords;
+        skippedRecords = merged.skippedRecords;
+        failedRecords = merged.failedRecords;
+        errors = errors.filter((msg) => !isRetryableFollowOnImportError(msg)).concat(retryErrors);
+        successIdentities = successIdentities.concat(retrySuccessIdentities);
+        failedIdentities = failedIdentities
+          .filter((row) => !isRetryableFollowOnImportError(row.remarks || ''))
+          .concat(retryFailedIdentities);
+        summary = {
+          contractsCreated: summary.contractsCreated + retrySummary.contractsCreated,
+          shipmentsCreated: summary.shipmentsCreated + retrySummary.shipmentsCreated,
+          qualitySurveysCreated: summary.qualitySurveysCreated + retrySummary.qualitySurveysCreated,
+          truckingOperationsCreated:
+            summary.truckingOperationsCreated + retrySummary.truckingOperationsCreated,
+          paymentsCreated: summary.paymentsCreated + retrySummary.paymentsCreated,
+        };
+      }
+
+      importWasCancelled = importWasCancelled || this.isCancelRequested(importId);
+
+      // Final bookkeeping pass, once, after every chunk has committed (or rolled back) its own
+      // transaction - same status-update + absence/presence logic as before (7/7b below), just
+      // no longer sharing a single connection with the per-row work.
+      const finalClient = await pool.connect();
+      try {
+        await finalClient.query('BEGIN');
+
+        // 7. Update import status
+        if (importWasCancelled) {
+          // Remaining sap_raw_data rows were inserted as pending before chunking; mark them so
+          // history does not look hung. Do not treat them as failed — the user asked to stop.
+          await finalClient.query(
+            `UPDATE sap_raw_data
+                SET status = 'cancelled',
+                    error_message = COALESCE(error_message, 'Import cancelled by user')
+              WHERE import_id = $1::uuid AND status = 'pending'`,
+            [importId],
+          );
+        }
+        const cancelNote = importWasCancelled
+          ? `Import cancelled by user. ${cancelledRecords} remaining row(s) were not processed.`
+          : null;
+        const finalErrors = importWasCancelled
+          ? [cancelNote, ...errors].filter((e): e is string => !!e)
+          : errors;
+        await finalClient.query(
+          `UPDATE sap_data_imports 
+           SET status = CASE
+                 WHEN $6::boolean OR status = 'cancelled' THEN 'cancelled'
+                 ELSE $1
+               END,
+               processed_records = $2,
+               failed_records = $3,
+               error_log = $4 
+           WHERE id = $5`,
+          [
+            failedRecords === 0 ? 'completed' : 'completed_with_errors',
+            processedRecords + skippedRecords,
+            failedRecords,
+            finalErrors.length > 0 ? JSON.stringify(finalErrors) : null,
+            importId,
+            importWasCancelled,
+          ]
+        );
+
+        // 7b. Snapshot-absence tracking (observe only - changes no total and no list).
+        // The SAP Report is a full snapshot: a PO stays while Open and after Close, and drops
+        // out only when cancelled/deleted. Absence is therefore meaningful - but only from an
+        // import that actually completed. A partly-failed import looks identical to a mass
+        // cancellation (2026-07-27: 1,250 failed rows would have withdrawn 585 live POs).
+        // A user-cancelled import is also an incomplete snapshot — never withdraw from it.
+        try {
+          if (!importWasCancelled) {
+            const totalRecords = processedRecords + skippedRecords + failedRecords;
+            const trusted = await evaluateImportTrust(finalClient, importId, totalRecords, failedRecords);
+            if (trusted) {
+              await applyAbsenceForImport(finalClient, importId);
+              // Phase 2: turn the counters into presence state. Withdraws POs cancelled in SAP,
+              // restores any that came back, supersedes stale STO rows. Nothing is deleted.
+              await applyPresenceState(finalClient, { importId });
+            }
+          }
+        } catch (absenceErr) {
+          // Never let bookkeeping fail an import that already succeeded.
+          logger.error('SAP absence tracking failed (import itself is unaffected)', { absenceErr });
+        }
+
+        await finalClient.query('COMMIT');
+      } catch (finalErr) {
+        await finalClient.query('ROLLBACK');
+        throw finalErr;
+      } finally {
+        finalClient.release();
+      }
 
       if (processedRecords > 0) {
         invalidateShipmentsListCache();
@@ -548,21 +1253,26 @@ export class SapMasterV2ImportService {
         });
       }
       
-      logger.info('SAP MASTER v2 import completed', {
+      logger.info(importWasCancelled ? 'SAP MASTER v2 import cancelled' : 'SAP MASTER v2 import completed', {
         importId,
         processedRecords,
         failedRecords,
         skippedRecords,
+        cancelledRecords,
+        cancelled: importWasCancelled,
         summary
       });
+
+      this.clearCancelRequest(importId);
       
       return {
-        success: true,
+        success: !importWasCancelled,
         importId,
         totalRecords: validDataRows.length,
         processedRecords,
         failedRecords,
         skippedRecords,
+        cancelled: importWasCancelled,
         errors: errors.length > 0 ? errors.slice(0, 100) : undefined, // Limit to first 100 errors
         successIdentities,
         failedIdentities,
@@ -570,12 +1280,10 @@ export class SapMasterV2ImportService {
       };
       
     } catch (error) {
-      await client.query('ROLLBACK');
       logger.error('SAP MASTER v2 import failed', { importId, error });
+      this.clearCancelRequest(importId);
       await this.markImportFailed(importId, error);
       throw error;
-    } finally {
-      client.release();
     }
   }
   
@@ -1266,7 +1974,8 @@ export class SapMasterV2ImportService {
     client: any,
     importId: string,
     rawDataId: string,
-    parsedData: any
+    parsedData: any,
+    contentHash: string | null = null,
   ): Promise<void> {
     // Use normalized contract data instead of raw field names
     const contract = parsedData.contract || {};
@@ -1290,8 +1999,8 @@ export class SapMasterV2ImportService {
     await client.query(
       `INSERT INTO sap_processed_data 
        (import_id, raw_data_id, contract_number, shipment_id, po_number, sto_number,
-        supplier_name, product, vessel_name, incoterm, transport_mode, data) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        supplier_name, product, vessel_name, incoterm, transport_mode, data, content_hash, last_seen_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)`,
       [
         importId,
         rawDataId,
@@ -1304,7 +2013,8 @@ export class SapMasterV2ImportService {
         vesselName,
         incoterm,
         transportMode,
-        JSON.stringify(parsedData)
+        JSON.stringify(parsedData),
+        contentHash,
       ]
     );
   }
@@ -1345,6 +2055,47 @@ export class SapMasterV2ImportService {
   /** Normalize Excel header → DB key (for tests). */
   static normalizeFieldNameForTest(fieldName: string): string {
     return this.normalizeFieldName(fieldName);
+  }
+
+  /** SHA-256 of parsedData (for tests). */
+  static computeRowContentHashForTest(parsedData: any): string {
+    return this.computeRowContentHash(parsedData);
+  }
+
+  /** Contract-identity chunk partitioning (for tests). */
+  static partitionRowContextsByContractIdentityForTest(
+    rows: Array<{ rowIndex: number; contractNumber: string | null; poNumber: string | null }>,
+    numChunks: number,
+  ): Array<Array<{ rowIndex: number; contractNumber: string | null; poNumber: string | null }>> {
+    const asContexts = rows.map((r) => ({
+      ...r,
+      row: [],
+      parsedData: {},
+      rowIdentity: null,
+      stoKey: '',
+      contentHash: null,
+    })) as unknown as RowImportContext[];
+    return this.partitionRowContextsByContractIdentity(asContexts, numChunks) as unknown as Array<
+      Array<{ rowIndex: number; contractNumber: string | null; poNumber: string | null }>
+    >;
+  }
+
+  /** Parallelism resolution (for tests). */
+  static resolveImportParallelismForTest(rowCount: number): number {
+    return this.resolveImportParallelism(rowCount);
+  }
+
+  /** In-memory cancel flag (for tests). */
+  static markCancelRequestedForTest(importId: string): void {
+    cancelRequestedImportIds.add(importId);
+  }
+
+  static isCancelRequestedForTest(importId: string): boolean {
+    return this.isCancelRequested(importId);
+  }
+
+  static clearCancelRequestForTest(importId: string): void {
+    this.clearCancelRequest(importId);
   }
 }
 

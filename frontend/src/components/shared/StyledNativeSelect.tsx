@@ -67,8 +67,8 @@ export function StyledNativeSelect<T extends string = string>({
   }
 
   return (
-    <div className="space-y-1">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
+    <div>
+      <span className="text-sm font-medium text-gray-700 mb-1 block">{label}</span>
       {control}
     </div>
   )

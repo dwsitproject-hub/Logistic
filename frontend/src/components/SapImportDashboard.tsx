@@ -81,6 +81,15 @@ interface SapImport {
   processed_records: number;
   failed_records: number;
   source?: string;
+  file_name?: string | null;
+}
+
+/** History display: "CPO 3 Sep 2026.xlsx" → "CPO 3 Sep 2026". */
+function displayImportFileName(fileName: string | null | undefined): string {
+  const raw = String(fileName || '').trim();
+  if (!raw) return '—';
+  const withoutExt = raw.replace(/\.(xlsx|xlsm|xlsb|xls)$/i, '').trim();
+  return withoutExt || raw;
 }
 
 type UploadPhase = 'idle' | 'uploading' | 'processing';
@@ -102,6 +111,8 @@ const SapImportDashboard: React.FC = () => {
   const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null);
   const pollTimerRef = useRef<number | null>(null);
   const pendingImportIdRef = useRef<string | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
 
   const activeImport = useMemo(() => {
@@ -112,10 +123,12 @@ const SapImportDashboard: React.FC = () => {
   }, [imports, activeImportId]);
 
   const processingProgress = activeImport ? computeProcessingProgress(activeImport) : 0;
-  const showProgressBar =
-    uploadPhase === 'uploading' ||
-    uploadPhase === 'processing' ||
-    (!!activeImport && (activeImport.status === 'processing' || activeImport.status === 'pending'));
+  const showUploadingCard = uploadPhase === 'uploading';
+  const showProcessingCard =
+    !!activeImport &&
+    (activeImport.status === 'processing' || activeImport.status === 'pending') &&
+    uploadPhase !== 'uploading';
+  const showProgressBar = showUploadingCard || showProcessingCard;
   const isProcessingLive =
     (uploadPhase === 'processing' || (uploadPhase === 'idle' && !!activeImport)) &&
     !!activeImport &&
@@ -171,10 +184,15 @@ const SapImportDashboard: React.FC = () => {
   const loadImports = async (fromPoll = false) => {
     try {
       const response = await api.get('/sap-master-v2/imports');
-      const nextImports: SapImport[] = response.data.data;
-      setImports(nextImports);
-
+      const nextImports: SapImport[] = response.data.data || [];
       const pendingId = pendingImportIdRef.current;
+      setImports((prev) => {
+        if (!pendingId) return nextImports;
+        if (nextImports.some((imp) => imp.id === pendingId)) return nextImports;
+        const optimistic = prev.find((imp) => imp.id === pendingId);
+        return optimistic ? [optimistic, ...nextImports] : nextImports;
+      });
+
       if (pendingId) {
         const pendingImport = nextImports.find((imp) => imp.id === pendingId);
         if (
@@ -187,6 +205,7 @@ const SapImportDashboard: React.FC = () => {
           setUploadPhase('idle');
           setUploadProgress(0);
           setImporting(false);
+          setCancelling(false);
           await showImportResultModal(pendingId);
         }
       }
@@ -209,6 +228,7 @@ const SapImportDashboard: React.FC = () => {
           setUploadPhase('idle');
           setUploadProgress(0);
           setImporting(false);
+          setCancelling(false);
         }
       }
     } catch (error) {
@@ -252,8 +272,11 @@ const SapImportDashboard: React.FC = () => {
       formData.append('file', file);
 
       // Do not set Content-Type: FormData needs multipart boundary from the browser/axios.
+      const abortController = new AbortController();
+      uploadAbortRef.current = abortController;
       const response = await api.post('/sap-master-v2/import-upload', formData, {
         timeout: 120000,
+        signal: abortController.signal,
         onUploadProgress: (event) => {
           const total = event.total ?? 0;
           if (total > 0) {
@@ -261,12 +284,25 @@ const SapImportDashboard: React.FC = () => {
           }
         },
       });
+      uploadAbortRef.current = null;
 
       const data = response.data?.data;
       const importId = data?.importId;
       const startedAsync = response.status === 202 || data?.status === 'processing';
 
       if (startedAsync && importId) {
+        const optimistic: SapImport = {
+          id: importId,
+          import_date: new Date().toISOString().slice(0, 10),
+          import_timestamp: new Date().toISOString(),
+          status: 'processing',
+          total_records: Number(data?.totalRecords) || 0,
+          processed_records: 0,
+          failed_records: 0,
+          source: 'manual',
+          file_name: (typeof data?.fileName === 'string' && data.fileName) || file.name,
+        };
+        setImports((prev) => (prev.some((imp) => imp.id === importId) ? prev : [optimistic, ...prev]));
         setUploadProgress(100);
         setUploadPhase('processing');
         setActiveImportId(importId);
@@ -289,20 +325,87 @@ const SapImportDashboard: React.FC = () => {
         await loadImports();
       }
     } catch (error: unknown) {
-      const err = error as { response?: { status?: number; data?: unknown }; message?: string };
-      console.error('Failed to start import:', formatImportFailureMessage(error));
-      console.error('Import upload response:', err.response?.status, err.response?.data);
+      uploadAbortRef.current = null;
+      const err = error as { response?: { status?: number; data?: unknown }; message?: string; code?: string; name?: string };
+      const aborted =
+        err.code === 'ERR_CANCELED' ||
+        err.name === 'CanceledError' ||
+        /cancel/i.test(err.message || '');
       pendingImportIdRef.current = null;
       setActiveImportId(null);
       setUploadPhase('idle');
       setUploadProgress(0);
+      setImporting(false);
+      setCancelling(false);
+      if (aborted) {
+        setBulkUploadResult({
+          created: 0,
+          updated: 0,
+          failed: 0,
+          errors: ['Upload cancelled. The file was not imported.'],
+        });
+        return;
+      }
+      console.error('Failed to start import:', formatImportFailureMessage(error));
+      console.error('Import upload response:', err.response?.status, err.response?.data);
       setBulkUploadResult({
         created: 0,
         updated: 0,
         failed: 1,
         errors: [formatImportFailureMessage(error)],
       });
+    }
+  };
+
+  const handleCancelUpload = async () => {
+    if (cancelling) return;
+    setCancelling(true);
+
+    if (uploadPhase === 'uploading' && uploadAbortRef.current) {
+      uploadAbortRef.current.abort();
+      return;
+    }
+
+    const importId = activeImportId || pendingImportIdRef.current || activeImport?.id;
+    if (!importId) {
+      setCancelling(false);
+      return;
+    }
+
+    try {
+      await api.post(`/sap-master-v2/imports/${importId}/cancel`);
+      pendingImportIdRef.current = null;
+      setActiveImportId(null);
+      setUploadPhase('idle');
+      setUploadProgress(0);
       setImporting(false);
+      setCancelling(false);
+      stopImportPolling();
+      setBulkUploadResult({
+        created: 0,
+        updated: 0,
+        failed: 0,
+        errors: ['Import cancelled. Remaining rows will stop shortly.'],
+      });
+      await loadImports();
+    } catch (error: unknown) {
+      const err = error as { response?: { status?: number; data?: { error?: { status?: string } } } };
+      const alreadyFinished = err.response?.status === 409;
+      const alreadyCancelled = err.response?.data?.error?.status === 'cancelled';
+      if (alreadyFinished || alreadyCancelled) {
+        pendingImportIdRef.current = null;
+        setActiveImportId(null);
+        setUploadPhase('idle');
+        setUploadProgress(0);
+        setImporting(false);
+        setCancelling(false);
+        stopImportPolling();
+        await loadImports();
+        return;
+      }
+      console.error('Failed to cancel import:', formatImportFailureMessage(error));
+      alert(formatImportFailureMessage(error));
+      setCancelling(false);
     }
   };
 
@@ -317,6 +420,7 @@ const SapImportDashboard: React.FC = () => {
       'processing': { variant: 'default', label: 'Processing' },
       'completed': { variant: 'default', label: 'Completed' },
       'completed_with_errors': { variant: 'destructive', label: 'Completed with Errors' },
+      'cancelled': { variant: 'secondary', label: 'Cancelled' },
       'failed': { variant: 'destructive', label: 'Failed' }
     };
 
@@ -363,7 +467,7 @@ const SapImportDashboard: React.FC = () => {
                 {importing ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
+                    {uploadPhase === 'processing' ? 'Processing...' : 'Uploading...'}
                   </>
                 ) : (
                   '📁 Browse & Import File'
@@ -381,7 +485,7 @@ const SapImportDashboard: React.FC = () => {
       {showProgressBar && (
         <Card className="border-blue-200 bg-blue-50/50">
           <CardContent className="pt-6 space-y-3">
-            {uploadPhase === 'uploading' && (
+            {showUploadingCard && (
               <>
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-medium text-blue-900 flex items-center gap-2">
@@ -394,10 +498,23 @@ const SapImportDashboard: React.FC = () => {
                 <p className="text-xs text-blue-800/80">
                   Please keep this page open until the upload completes.
                 </p>
+                {canUploadSap && (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleCancelUpload()}
+                      disabled={cancelling}
+                    >
+                      {cancelling ? 'Cancelling...' : 'Cancel upload'}
+                    </Button>
+                  </div>
+                )}
               </>
             )}
 
-            {(uploadPhase === 'processing' || (uploadPhase === 'idle' && activeImport)) && activeImport && (
+            {showProcessingCard && activeImport && (
               <>
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-medium text-blue-900 flex items-center gap-2">
@@ -445,6 +562,19 @@ const SapImportDashboard: React.FC = () => {
                     server and Import History will update when it&apos;s done.
                   </p>
                 )}
+                {canUploadSap && (
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleCancelUpload()}
+                      disabled={cancelling}
+                    >
+                      {cancelling ? 'Cancelling...' : 'Cancel upload'}
+                    </Button>
+                  </div>
+                )}
               </>
             )}
           </CardContent>
@@ -462,6 +592,7 @@ const SapImportDashboard: React.FC = () => {
               <thead>
                 <tr className="border-b">
                   <th className="text-left p-3">Import Date</th>
+                  <th className="text-left p-3">File Name</th>
                   <th className="text-left p-3">Status</th>
                   <th className="text-left p-3">Source</th>
                   <th className="text-right p-3">Total Records</th>
@@ -485,6 +616,11 @@ const SapImportDashboard: React.FC = () => {
                         </div>
                         <div className="text-xs text-gray-500">
                           {imp.import_date}
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-medium" title={imp.file_name || undefined}>
+                          {displayImportFileName(imp.file_name)}
                         </div>
                       </td>
                       <td className="p-3">{getStatusBadge(imp.status)}</td>

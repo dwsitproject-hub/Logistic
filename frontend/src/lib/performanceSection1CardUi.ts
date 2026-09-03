@@ -9,7 +9,10 @@ export interface PerformanceSection1CardAccent {
   surface: string
   /** Icon chip background + icon color. */
   chip: string
-  /** Selected ring / border emphasis. */
+  /**
+   * Selected chrome — replaces `surface` (bold border + App Tour / Logout gradient).
+   * Open / On Going → App Tour blue; Close / Completed → Logout amber.
+   */
   selected: string
   /** Unselected hover border. */
   hover: string
@@ -19,8 +22,8 @@ export interface PerformanceSection1CardAccent {
 
 /**
  * Visual tokens for Contract / Shipping Performance Section 1 status cards.
- * White background; accent only on border (and matching icon chip).
- * Open / On Going = blue; Close / Completed = amber.
+ * Unselected: white surface + colored border. Selected: bold outline + header-button gradient.
+ * Open / On Going = blue (App Tour); Close / Completed = amber (Logout).
  */
 export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
   PerformanceSection1CardVariant,
@@ -30,7 +33,8 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     icon: FolderOpen,
     surface: 'border-blue-400 bg-white',
     chip: 'bg-blue-50 text-blue-700',
-    selected: 'border-blue-600 ring-2 ring-blue-200',
+    selected:
+      'border-2 border-blue-400 bg-gradient-to-r from-blue-50 to-indigo-50 ring-2 ring-blue-200 shadow-sm',
     hover: 'hover:border-blue-500',
     focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
   },
@@ -38,7 +42,8 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     icon: CheckCircle2,
     surface: 'border-amber-400 bg-white',
     chip: 'bg-amber-50 text-amber-700',
-    selected: 'border-amber-600 ring-2 ring-amber-200',
+    selected:
+      'border-2 border-amber-400 bg-gradient-to-r from-amber-50 to-orange-50 ring-2 ring-amber-200 shadow-sm',
     hover: 'hover:border-amber-500',
     focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
   },
@@ -46,7 +51,8 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     icon: Ship,
     surface: 'border-blue-400 bg-white',
     chip: 'bg-blue-50 text-blue-700',
-    selected: 'border-blue-600 ring-2 ring-blue-200',
+    selected:
+      'border-2 border-blue-400 bg-gradient-to-r from-blue-50 to-indigo-50 ring-2 ring-blue-200 shadow-sm',
     hover: 'hover:border-blue-500',
     focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
   },
@@ -54,7 +60,8 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     icon: BadgeCheck,
     surface: 'border-amber-400 bg-white',
     chip: 'bg-amber-50 text-amber-700',
-    selected: 'border-amber-600 ring-2 ring-amber-200',
+    selected:
+      'border-2 border-amber-400 bg-gradient-to-r from-amber-50 to-orange-50 ring-2 ring-amber-200 shadow-sm',
     hover: 'hover:border-amber-500',
     focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
   },

@@ -11,6 +11,8 @@ import {
   sqlStoLookupKeyMatchExpr,
   sqlStoScopedDeliveredKgSql,
   sqlStoScopedReceiveKgSql,
+  sqlContractStoListShipmentMatchPred,
+  sqlContractStoListShipmentMatchRank,
 } from './contractLogisticsStoDetailSql';
 
 describe('contractLogisticsStoDetailSql', () => {
@@ -122,6 +124,8 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('eta_discharge_complete');
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('sap_trucking_start_receive_date');
     expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('NULL::date AS daily_plan_start_date');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('gr_sto_status');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('GR STO Status');
   });
 
   it('CONTRACT_SAP_ONLY_STOS_SQL uses latest SAP import only (not full history)', () => {
@@ -148,5 +152,15 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('sap_processed_data');
     expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('contract_stos');
     expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('NOT EXISTS (SELECT 1 FROM sap_latest_keys)');
+  });
+
+  it('sqlContractStoListShipmentMatchPred links via shipment_id, operation_id, contract STO, and SPD', () => {
+    const pred = sqlContractStoListShipmentMatchPred('s', 'sk.sto_key', '$1');
+    expect(pred).toContain('shipment_id');
+    expect(pred).toContain('operation_id');
+    expect(pred).toContain('sto_number');
+    expect(pred).toContain('contract_stos');
+    expect(pred).toContain('sap_processed_data');
+    expect(sqlContractStoListShipmentMatchRank('s', 'sk.sto_key')).toContain('THEN 0');
   });
 });

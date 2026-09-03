@@ -2,7 +2,6 @@ import { groupPlantExpr } from '../utils/groupPlantSql';
 import {
   sqlContractOutstandingSignedExpr,
   sqlSapGrPoStatusFromJson,
-  sqlSapGrStoStatusFromJson,
 } from '../utils/sapIncotermMetrics';
 import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
 import { sqlContractImportStatusIsCancelledExpr } from '../utils/contractDeliveryStatus';
@@ -101,7 +100,7 @@ function buildContractsListRowProjection(options: ContractsListOuterSqlOptions =
         COALESCE(base.latest_spd_data->'contract'->>'ltc_spot', base.contract_type::text) AS lt_spot,
         ${sqlSapGrPoStatusFromJson('base.latest_spd_data')} AS gr_po_status,
         COALESCE(
-          NULLIF(TRIM(${sqlSapGrStoStatusFromJson('base.latest_spd_data')}), ''),
+          NULLIF(TRIM(base.gr_sto_status_agg), ''),
           NULLIF(TRIM(base.b2b_child_gr_sto_status), '')
         ) AS gr_sto_status,
         base.import_status,

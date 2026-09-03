@@ -20,7 +20,8 @@ export interface PerformanceSection1CardShellProps {
 
 /**
  * Shared chrome for Contract / Shipping Performance Section 1 cards.
- * Owns icon chip + white surface + colored border + title typography; metric body stays in children.
+ * Owns icon chip + surface/selected chrome + title typography; metric body stays in children.
+ * Selected replaces unselected surface so white bg does not clash with App Tour / Logout gradients.
  */
 export function PerformanceSection1CardShell({
   variant,
@@ -39,10 +40,9 @@ export function PerformanceSection1CardShell({
       type="button"
       onClick={onClick}
       className={cn(
-        'w-full rounded-xl border p-4 shadow-sm text-left transition-all focus:outline-none',
-        accent.surface,
+        'w-full rounded-xl p-4 text-left transition-all focus:outline-none',
+        selected ? accent.selected : cn('border shadow-sm', accent.surface, accent.hover),
         accent.focus,
-        selected ? accent.selected : accent.hover,
         className,
       )}
     >

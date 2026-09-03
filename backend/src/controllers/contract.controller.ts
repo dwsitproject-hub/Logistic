@@ -95,6 +95,8 @@ import {
   SHIPMENT_SAP_STO_DETAIL_SQL,
   SPD_EFFECTIVE_STO_SQL,
   TRUCKING_SAP_STO_DETAIL_SQL,
+  sqlContractStoListShipmentMatchPred,
+  sqlContractStoListShipmentMatchRank,
   sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
   sqlSapQtyReceiveForStoKeyExpr,
@@ -112,6 +114,8 @@ import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractImportStatusIsOpenExpr,
   sqlContractListImportStatusAggExpr,
+  sqlContractListGrStoStatusAggExpr,
+  sqlContractPoGrStoStatusExpr,
   normalizeContractDeliveryStatusForDisplay,
   sqlIsContractSapClosedExpr,
   sqlIsContractSapClosedForStoExpr,
@@ -349,6 +353,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
+          ${sqlContractListGrStoStatusAggExpr('c')} AS gr_sto_status_agg,
           MAX(b2b_end.child_gr_sto_status) AS b2b_child_gr_sto_status,
           MAX(${sqlIncotermQuantityDeliveryCase(
             'c.incoterm',
@@ -536,7 +541,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     })})`;
 
     // Schedulable = due-end present + known status + (Open OR completion milestone).
-    // Open with no ETA uses today vs due end (Condition B); Close still needs completion.
+    // Open LAND with no ETA uses today vs due end (Condition B); SEA Open needs ATA or ETA.
+    // Close still needs completion.
     const schedulableCondition = `
       ${sqlEffectiveDeliveryEndPresent()}
       AND ${_statusExpr} IN ('OPEN','ACTIVE','CLOSE','CLOSED','COMPLETED')
@@ -545,9 +551,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         OR ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}
       )`;
 
-    // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
-    // Open Condition A/B share the same on-time threshold (trade_cycle <= 0); trade cycle
-    // uses effective due-end + completion milestones aligned with latePerformance.service.
+    // Open Condition A/B (LAND only Condition B) share on-time threshold (trade_cycle <= 0).
+    // SEA: ATA → else ETA, or today when ETA < today; ETA null → null (no Condition B).
     const effectiveDeliveryEndDateSql = sqlEffectiveDeliveryEndDateExpr();
     const landOsFulfilled = `(${filteredOutstandingSql} IS NOT NULL AND ${filteredOutstandingSql}::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
     const tradeCycleSqlExpr = `
@@ -566,9 +571,15 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
             WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
               THEN (last_ata_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
-              THEN (open_standard_eta_vessel_loading::date - ${effectiveDeliveryEndDateSql})
+              THEN (
+                CASE
+                  WHEN open_standard_eta_vessel_loading::date < CURRENT_DATE
+                    THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
+                  ELSE (open_standard_eta_vessel_loading::date - ${effectiveDeliveryEndDateSql})
+                END
+              )
             ELSE CASE
-              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
+              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE') AND ${_transportExpr} LIKE 'LAND%'
                 THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
               ELSE NULL
             END END
@@ -1935,6 +1946,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       SELECT
         sk.sto_key,
         sk.sto_key AS sto_number,
+        sp.id,
         sp.operation_id,
         sp.status,
         COALESCE(NULLIF(${sqlSapStoQtyForContractPoExpr({
@@ -1970,7 +1982,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         sp.ata_arrival_loading,
         sp.ata_discharge_complete,
         sp.eta_discharge_complete,
-        (${sqlContractImportStatusForStoExpr('c_po', 'sk.sto_key')}) AS sto_import_status
+        (${sqlContractImportStatusForStoExpr('c_po', 'sk.sto_key')}) AS sto_import_status,
+        (${sqlContractPoGrStoStatusExpr('c_po', 'c_po.po_number', 'sk.sto_key')}) AS gr_sto_status
       FROM sto_keys sk
       CROSS JOIN contracts c_po
       LEFT JOIN LATERAL (
@@ -1982,37 +1995,51 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           s.quantity_delivered_klip,
           s.actual_vessel_qty_receive,
           s.vessel_name,
-          s.ata_discharge_complete,
-          s.eta_discharge_complete,
-          (
-            SELECT vlp.eta_vessel_arrival::date
-            FROM vessel_loading_ports vlp
-            WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = false
-            ORDER BY vlp.port_sequence ASC
-            LIMIT 1
+          COALESCE(
+            s.ata_discharge_complete,
+            (
+              SELECT vlp.ata_loading_completed::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = true
+              ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.id
+              LIMIT 1
+            )
+          ) AS ata_discharge_complete,
+          COALESCE(
+            s.eta_discharge_complete,
+            (
+              SELECT vlp.eta_vessel_complete_discharge::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = true
+              ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.id
+              LIMIT 1
+            )
+          ) AS eta_discharge_complete,
+          COALESCE(
+            s.eta_arrival,
+            (
+              SELECT vlp.eta_vessel_arrival::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = false
+              ORDER BY vlp.port_sequence ASC
+              LIMIT 1
+            )
           ) AS eta_loading_port,
           COALESCE(
             s.ata_arrival,
             (
               SELECT vlp.ata_vessel_arrival::date
               FROM vessel_loading_ports vlp
-              WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = false
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = false
               ORDER BY vlp.port_sequence ASC
               LIMIT 1
             )
           ) AS ata_arrival_loading
         FROM shipments s
         WHERE s.contract_id = $1
-          AND (
-            TRIM(COALESCE(s.shipment_id::text, '')) = sk.sto_key
-            OR TRIM(COALESCE(s.operation_id::text, '')) = sk.sto_key
-            OR (
-              sk.sto_key ~ '^(OP-|MNL-|MSEA-)'
-              AND TRIM(COALESCE(s.operation_id::text, '')) = sk.sto_key
-            )
-          )
+          AND ${sqlContractStoListShipmentMatchPred('s', 'sk.sto_key', '$1')}
         ORDER BY
-          CASE WHEN TRIM(COALESCE(s.shipment_id::text, '')) = sk.sto_key THEN 0 ELSE 1 END,
+          ${sqlContractStoListShipmentMatchRank('s', 'sk.sto_key')},
           -- Prefer non-cancelled when both exist; still attach Cancelled for Delete STO rows
           CASE WHEN UPPER(TRIM(COALESCE(s.status, ''))) IN ('CANCELLED', 'CANCELED') THEN 1 ELSE 0 END,
           s.updated_at DESC NULLS LAST,
@@ -2149,7 +2176,8 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         COALESCE(
           (SELECT tr.realization_start_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
           ${sqlSapTruckingStartReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
-        ) AS trucking_start_date
+        ) AS trucking_start_date,
+        (${sqlContractPoGrStoStatusExpr('c', 'c.po_number', 'sk.sto_key')}) AS gr_sto_status
       FROM sto_keys sk
       CROSS JOIN contracts c
       LEFT JOIN LATERAL (
@@ -2196,6 +2224,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         operation_id: resolveContractLogisticsOperationId(r.operation_id, r.sto_key),
         late_indicator: lateIndicator,
         status,
+        gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
         sto_quantity: toSapDisplayNumber(r.sto_quantity),
         quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
         quantity_receive: toSapDisplayNumber(r.quantity_receive),
@@ -2238,6 +2267,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         operation_id: resolveContractLogisticsOperationId(r.operation_id),
         late_indicator: lateIndicator,
         status,
+        gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
         sto_quantity: toSapDisplayNumber(r.sto_quantity),
         quantity_receive: toSapDisplayNumber(r.quantity_receive),
         quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
@@ -2301,6 +2331,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             operation_id: resolveContractLogisticsOperationId(r.operation_id),
             late_indicator: lateIndicator,
             status,
+            gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
             sto_quantity: toSapDisplayNumber(r.sto_quantity),
             quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
             quantity_receive: toSapDisplayNumber(r.quantity_receive),
@@ -2335,6 +2366,7 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           operation_id: resolveContractLogisticsOperationId(r.operation_id),
           late_indicator: lateIndicator,
           status,
+          gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
           sto_quantity: toSapDisplayNumber(r.sto_quantity),
           quantity_receive: toSapDisplayNumber(r.quantity_receive),
           quantity_delivered: toSapDisplayNumber(r.quantity_delivered),

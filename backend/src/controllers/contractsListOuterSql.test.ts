@@ -9,6 +9,7 @@ describe('buildContractsListOuterSql', () => {
     expect(sql).toContain('document_count');
     expect(sql).toContain('remarks_count');
     expect(sql).toContain('b2b_child_gr_sto_status');
+    expect(sql).toContain('gr_sto_status_agg');
   });
 
   it('compact projection keeps SAP qty and outstanding but skips payments table and counts', () => {

@@ -167,6 +167,24 @@ export const getImportStatus = async (req: Request, res: Response): Promise<void
       skippedRecords = Number(countsResult.rows[0].skipped) || 0;
     }
 
+    const failuresResult = await pool.query(
+      `SELECT
+         id,
+         row_number,
+         po_number,
+         sto_number,
+         contract_number,
+         contract_ext_no,
+         contract_date,
+         supplier,
+         error_message,
+         created_at
+       FROM sap_import_failures
+       WHERE import_id = $1
+       ORDER BY row_number NULLS LAST, created_at`,
+      [importId],
+    );
+
     res.json({
       success: true,
       data: {
@@ -176,7 +194,8 @@ export const getImportStatus = async (req: Request, res: Response): Promise<void
           failed_records: failedRecords,
           skipped_records: skippedRecords
         },
-        records: recordsResult.rows
+        records: recordsResult.rows,
+        failures: failuresResult.rows,
       }
     });
     
@@ -254,7 +273,8 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
            THEN COALESCE(i.failed_records, 0)
            ELSE COALESCE(rc.failed, 0)
          END::int AS failed_records,
-         COALESCE(i.source, 'manual') AS source
+         COALESCE(i.source, 'manual') AS source,
+         i.file_name
        FROM sap_data_imports i
        LEFT JOIN LATERAL (
          SELECT
@@ -332,18 +352,56 @@ export const importMasterV2Upload = async (req: Request, res: Response): Promise
     }
 
     const filePath = req.file.path;
+
+    // File-level short-circuit, mirroring the scheduler folder auto-import's sap_auto_import_files
+    // dedupe: if this exact file (by SHA-256) already completed cleanly before, skip queuing a
+    // whole re-run and just point back at that result.
+    const { sha256File } = await import('../utils/sapAutoImportPaths');
+    const fileSha256 = await sha256File(filePath);
+    const priorCompleted = await SapMasterV2ImportService.findCompletedImportByFileHash(fileSha256);
+
+    if (priorCompleted) {
+      logger.info('SAP MASTER v2 upload skipped: identical file already imported', {
+        fileName: req.file.originalname,
+        fileSha256,
+        priorImportId: priorCompleted.importId,
+      });
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      res.status(200).json({
+        success: true,
+        data: {
+          importId: priorCompleted.importId,
+          totalRecords: priorCompleted.totalRecords,
+          processedRecords: priorCompleted.processedRecords,
+          failedRecords: priorCompleted.failedRecords,
+          skippedRecords: priorCompleted.skippedRecords,
+          status: 'completed',
+          alreadyImported: true,
+          message: 'This file is identical to one already imported - showing that result instead of re-running the import.',
+        },
+      });
+      return;
+    }
+
     logger.info('Queueing SAP MASTER v2 import from uploaded file', {
       fileName: req.file.originalname,
       filePath,
+      fileSha256,
     });
 
-    const queued = await SapMasterV2ImportService.queueMasterV2FileImport(filePath);
+    const queued = await SapMasterV2ImportService.queueMasterV2FileImport(filePath, {
+      fileSha256,
+      fileName: req.file.originalname,
+    });
 
     res.status(202).json({
       success: true,
       data: {
         importId: queued.importId,
         totalRecords: queued.totalRecords,
+        fileName: req.file.originalname,
         status: 'processing',
         message: `Import started for ${queued.totalRecords.toLocaleString()} records. Monitor progress in Import History.`,
       },
@@ -355,6 +413,50 @@ export const importMasterV2Upload = async (req: Request, res: Response): Promise
       fs.unlinkSync(req.file.path);
     }
 
+    res.status(500).json({
+      success: false,
+      error: sapImportHttpError(error),
+    });
+  }
+};
+
+/**
+ * Cancel an in-flight manual (or scheduler) import. Already-written rows stay;
+ * remaining rows stop after the current SAVEPOINT.
+ */
+export const cancelMasterV2Import = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { importId } = req.params;
+    if (!importId) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'importId is required' },
+      });
+      return;
+    }
+
+    const result = await SapMasterV2ImportService.requestCancelImport(importId);
+    if (result.status === 'not_found') {
+      res.status(404).json({
+        success: false,
+        error: { message: result.message },
+      });
+      return;
+    }
+    if (!result.accepted) {
+      res.status(409).json({
+        success: false,
+        error: { message: result.message, status: result.status },
+      });
+      return;
+    }
+
+    res.status(202).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Failed to cancel SAP MASTER v2 import', error);
     res.status(500).json({
       success: false,
       error: sapImportHttpError(error),
