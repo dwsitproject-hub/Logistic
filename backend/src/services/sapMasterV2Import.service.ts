@@ -155,6 +155,366 @@ interface MasterV2WorkbookData {
 
 export class SapMasterV2ImportService {
   
+  /**
+   * Comprehensive field mapping with exact Excel column names. Hoisted out of
+   * normalizeFieldName (which is called once per non-empty CELL, not once per column -
+   * ~900k times for an 80-column x 10,920-row file) so this ~200-entry object literal is
+   * built once per process instead of once per cell. Previously this alone accounted for
+   * the multi-minute freeze observed importing a real production file (2026-09-03) -
+   * object-literal allocation + GC pressure at that call volume, not a query or I/O cost.
+   * Content is unchanged from the old inline version - purely a hoist, no mapping changed.
+   */
+  private static readonly FIELD_MAPPING: { [key: string]: string } = {
+    // TRADING FIELDS
+    'group': 'group',
+    'supplier (vendor -> name 1))': 'supplier',
+    'supplier': 'supplier',
+    'vendor': 'supplier',
+    'name 1': 'supplier',
+    'vendor group': 'group',
+    
+    'contract date (sama dengan po date)': 'contract_date',
+    'contract date': 'contract_date',
+    'po date': 'contract_date',
+    
+    'product (material desc)': 'product',
+    'product': 'product',
+    'material desc': 'product',
+    'material': 'product',
+    
+    // CRITICAL: Contract No and PO No are DIFFERENT fields!
+    'contract no. (no contract) ini nomer kontrak auto generate': 'contract_no',
+    'contract no.': 'contract_no',
+    'contract no': 'contract_no',
+    'contract number': 'contract_no',
+    'no contract': 'contract_no',
+    'contract ext no': 'contract_ext_no',
+    'contract ext no.': 'contract_ext_no',
+    
+    'po no.': 'po_no',
+    'po no': 'po_no',
+    'po number': 'po_no',
+    
+    // NEW: Buyer field (Column F)
+    'buyer': 'buyer',
+    
+    // UPDATED: B2B Flag → Contract Type (Column J)
+    'b2b flag': 'contract_type',
+    'contract type': 'contract_type',
+    
+    // UPDATED: CONTRACT REFF PO → Contract Reff PO Ini (Column K)
+    'contract reff po': 'contract_reference_po',
+    'contract reff po ini': 'contract_reference_po',
+    'contract ref po': 'contract_reference_po',
+    
+    // NEW: Contract Reff SO Ini (Column L)
+    'contract reff so ini': 'contract_reference_so',
+    'contract ref so ini': 'contract_reference_so',
+    'contract reff so': 'contract_reference_so',
+    
+    'company code': 'company_code',
+    'company code.': 'company_code',
+
+    'plant code': 'plant_code',
+    'plant code.': 'plant_code',
+    
+    'incoterm at starting point 1': 'incoterm_starting_1',
+    'incoterm at starting point 2': 'incoterm_starting_2',
+    'incoterm at starting point 3': 'incoterm_starting_3',
+    'incoterm at loading port 2': 'incoterm_loading_2',
+    'incoterm': 'incoterm',
+    'incoterms': 'incoterm', // Handle plural form
+    
+    'sea / land': 'sea_land',
+    'sea/land': 'sea_land', // Handle without spaces
+    'transport': 'sea_land',
+    
+    'contract quantity (or po qty)': 'contract_quantity',
+    'contract quantity': 'contract_quantity',
+    'po qty': 'contract_quantity',
+    'contract qty uom': 'contract_qty_uom',
+    
+    'unit price': 'unit_price',
+    'price': 'unit_price',
+    'currency unit price': 'currency_unit_price',
+    
+    'due date delivery (start)': 'due_date_delivery_start',
+    'due date delivery (end)': 'due_date_delivery_end',
+    'due date delivery': 'due_date_delivery_start',
+    
+    'source (3rd party/inhouse)': 'source',
+    'source': 'source',
+    '3rd party': 'source',
+    'inhouse': 'source',
+    
+    'ltc / spot': 'ltc_spot',
+    'lt/spot': 'ltc_spot', // Handle without space
+    'ltc': 'ltc_spot',
+    'spot': 'ltc_spot',
+    
+    'status': 'status',
+    'delete po status': 'delete_po_status',
+    'delete sto status': 'delete_sto_status',
+    
+    // LOGISTICS FIELDS
+    'sto no.': 'sto_no',
+    'sto no': 'sto_no',
+    'sto number': 'sto_no',
+    'sto type': 'sto_type',
+    
+    // NEW: STO Item (Column W)
+    'sto item': 'sto_item',
+    
+    'sto quantity': 'sto_quantity',
+    'sto qty uom': 'sto_qty_uom',
+    
+    'logistics area classification': 'logistics_area_classification',
+    // UPDATED: PO Classification → STO Classification (Column Z)
+    'po classification': 'sto_classification',
+    'sto classification': 'sto_classification',
+    
+    // FINANCE FIELDS
+    'due date payment': 'due_date_payment',
+    'dp date': 'dp_date',
+    'payoff date': 'payoff_date',
+    'payment date deviation (days)': 'payment_date_deviation_days',
+    // UPDATED: Simplified field names and new positions
+    'dp date deviation (days) dp date - due date': 'dp_date_deviation_days',
+    'dp date - due date': 'dp_date_deviation_days', // New position (Column AF)
+    'payoff date deviation (days) payoff date - due date': 'payoff_date_deviation_days',
+    'payoff date - due date': 'payoff_date_deviation_days', // New position (Column AG)
+    
+    // TRUCKING FIELDS
+    'cargo readiness at starting location': 'cargo_readiness_at_starting_location',
+    'cargo readiness at starting location 2': 'cargo_readiness_at_starting_location_2',
+    'cargo readiness at starting location 3': 'cargo_readiness_at_starting_location_3',
+    'cargo readiness at loading port 1': 'cargo_readiness_at_loading_port_1',
+    'cargo readiness at loading port 2': 'cargo_readiness_at_loading_port_2',
+    'cargo readiness at loading port 3': 'cargo_readiness_at_loading_port_3',
+    
+    'truck loading at starting location': 'truck_loading_at_starting_location',
+    'truck loading at starting location 2': 'truck_loading_at_starting_location_2',
+    'truck loading at starting location 3': 'truck_loading_at_starting_location_3',
+    'truck loading at discharge location': 'truck_loading_at_discharge_location',
+    
+    'truck unloading at starting location': 'truck_unloading_at_starting_location',
+    'truck unloading at starting location 2': 'truck_unloading_at_starting_location_2',
+    'truck unloading at starting location 3': 'truck_unloading_at_starting_location_3',
+    'truck unloading at discharge location': 'truck_unloading_at_discharge_location',
+    // UPDATED: Column positions changed (AH, AI, AJ, AK, AL, AM)
+    'truck loading location': 'truck_loading_at_starting_location', // Column AH
+    'truck discharge location': 'truck_unloading_at_starting_location', // Column AI
+    
+    'trucking owner at starting location': 'trucking_owner_at_starting_location',
+    'trucking owner at starting location 2': 'trucking_owner_at_starting_location_2',
+    'trucking owner at starting location 3': 'trucking_owner_at_starting_location_3',
+    'truck owner at discharge': 'truck_owner_at_discharge',
+    'truck transporter': 'trucking_owner_at_starting_location', // Column AJ
+    
+    'trucking oa budget at starting location': 'trucking_oa_budget_at_starting_location',
+    'trucking oa budget at starting location 2': 'trucking_oa_budget_at_starting_location_2',
+    'trucking oa budget at starting location 3': 'trucking_oa_budget_at_starting_location_3',
+    'trucking oa budget at discharge': 'trucking_oa_budget_at_discharge',
+    'truck oa budget': 'trucking_oa_budget_at_starting_location', // Column AL
+    'trucking oa budget': 'trucking_oa_budget_at_starting_location', // Column AL
+    'currency trucking oa budget': 'currency_trucking_oa_budget',
+    'estimated km': 'estimated_km', // Column AM
+    'esimated km': 'estimated_km',
+    
+    'trucking oa actual at starting location': 'trucking_oa_actual_at_starting_location',
+    'trucking oa actual at starting location 2': 'trucking_oa_actual_at_starting_location_2',
+    'trucking oa actual at starting location 3': 'trucking_oa_actual_at_starting_location_3',
+    'trucking oa actual at discharge': 'trucking_oa_actual_at_discharge',
+    'trucking oa actual': 'trucking_oa_actual_at_starting_location', // Column AK
+    'currency trucking oa actual': 'currency_trucking_oa_actual',
+    
+    'quantity sent via trucking (based on surat jalan)': 'quantity_sent_via_trucking_based_on_surat_jalan',
+    'quantity delivered via trucking': 'quantity_delivered_via_trucking',
+    'selisih': 'trucking_gain_loss',
+    'trucking gain/loss at starting location': 'trucking_gain_loss_at_starting_location',
+    // UPDATED: QTY DELIVER → Quantity Delivery (Column AD)
+    'qty deliver': 'quantity_delivery',
+    'quantity delivery': 'quantity_delivery',
+    'delivery vessel uom': 'quantity_delivery_uom',
+    'delivery trucking uom': 'quantity_delivery_trucking_uom',
+    'receive uom': 'quantity_receive_uom',
+    'b/l qty uom': 'bl_quantity_uom',
+    'qty receive': 'quantity_delivered_via_trucking',
+    'selisih qty receive vs qty deliver': 'trucking_gain_loss_at_starting_location',
+    
+    'trucking starting date at starting location': 'trucking_starting_date_at_starting_location',
+    'trucking starting date at starting location 2': 'trucking_starting_date_at_starting_location_2',
+    'trucking starting date at starting location 3': 'trucking_starting_date_at_starting_location_3',
+    // UPDATED: Trucking Load Port Start Date → Trucking Start Receive Date (Column AV)
+    'trucking load port start date': 'trucking_start_receive_date',
+    'trucking start receive date': 'trucking_start_receive_date', // Column AV
+    
+    'trucking completion date at starting location': 'trucking_completion_date_at_starting_location',
+    'trucking completion date at starting location 2': 'trucking_completion_date_at_starting_location_2',
+    'trucking completion date at starting location 3': 'trucking_completion_date_at_starting_location_3',
+    // UPDATED: Trucking Load Port End Date → Trucking Last Receive Date (Column AW)
+    'trucking load port end date': 'trucking_last_receive_date',
+    'trucking last receive date': 'trucking_last_receive_date', // Column AW
+    'last receive date': 'last_receive_date',
+    
+    // SHIPPING/VESSEL FIELDS
+    'loading method (pipeline / trucking)': 'loading_method',
+    // UPDATED: Column positions changed (AN, AO, AP, AQ, AR, AS, AT, AU)
+    'vessel loading port': 'vessel_loading_port_1',
+    'vessel loading port 1': 'vessel_loading_port_1', // Column AN
+    'vessel loading port 2': 'vessel_loading_port_2',
+    'vessel loading port 3': 'vessel_loading_port_3',
+    'vessel discharge port': 'vessel_discharge_port', // Column AO
+    'discharge method (pipeline / trucking)': 'discharge_method',
+    
+    'voyage no.': 'voyage_no',
+    // UPDATED: Vessel fields moved (AP, AQ, AR, AS, AT, AU)
+    'vessel name': 'vessel_name', // Column AP
+    'vessel company': 'vessel_owner', // Column AQ
+    'vessel owner': 'vessel_owner',
+    'vessel oa actual': 'vessel_oa_actual', // Column AR
+    'vessel oa actual ': 'vessel_oa_actual',
+    'vessel oa budget': 'vessel_oa_budget', // Column AS
+    'vessell oa budget': 'vessel_oa_budget',
+    'estimated nm': 'estimated_nautical_miles', // Column AT
+    'estimated nautical miles': 'estimated_nautical_miles',
+    'vessel code': 'vessel_code', // Column AU
+    // Vessel physical properties moved later (BT-BX)
+    'vessel draft': 'vessel_draft',
+    'loa': 'vessel_loa',
+    'vessel loa': 'vessel_loa',
+    'vessel capacity': 'vessel_capacity',
+    'vessel cappacity': 'vessel_capacity', // Typo handling
+    'vessel hull type': 'vessel_hull_type',
+    'vessel registration year': 'vessel_registration_year',
+    'charter type (vc / tc / mix)': 'charter_type',
+    'average vessel speed': 'average_vessel_speed', // Column BY
+    
+    // QUANTITY FIELDS
+    'quantity at loading port 1 (based on bast)': 'quantity_at_loading_port_1_based_on_bast',
+    'quantity at loading port 2': 'quantity_at_loading_port_2',
+    'quantity at loading port 3': 'quantity_at_loading_port_3',
+    'quantity at starting location 2': 'quantity_at_starting_location_2',
+    'quantity at starting location 3': 'quantity_at_starting_location_3',
+    'actual quantity (at final location)': 'actual_quantity_at_final_location',
+    // UPDATED: B/L Quantity moved to Column BG
+    'b/l quantity': 'bl_quantity', // Column BG
+    'b/l quantity ': 'bl_quantity',
+    'actual vessel qty receive': 'actual_vessel_qty_receive',
+    'difference final qty - bl qty': 'difference_final_qty_vs_bl_qty',
+    'difference  final qty - bl qty ': 'difference_final_qty_vs_bl_qty',
+    'ship figure after loading (sfal)': 'sfal',
+    'ship figure before discharge (sfbd)': 'sfbd',
+    
+    // ETA/ATA FIELDS - Loading Port 1
+    'eta vessel arrival loading port 1': 'eta_vessel_arrival_loading_port_1',
+    // UPDATED: ATA fields moved (AX, AY, AZ, BA, BB)
+    'ata vessel arrival at loading port': 'ata_vessel_arrival_at_loading_port_1', // Column AX
+    'ata vessel arrival at loading port 1': 'ata_vessel_arrival_at_loading_port_1',
+    'ata vessel berthed at loading port': 'ata_vessel_berthed_at_loading_port_1', // Column AY
+    'ata vessel berthed at loading port 1': 'ata_vessel_berthed_at_loading_port_1',
+    'eta loading start at loading port 1': 'eta_loading_start_at_loading_port_1',
+    'ata vessel start loading': 'ata_vessel_start_loading', // Column AZ
+    'ata loading start at loading port 1': 'ata_vessel_start_loading',
+    'eta loading completed at loading port 1': 'eta_loading_completed_at_loading_port_1',
+    'ata vessel completed loading': 'ata_vessel_completed_loading', // Column BA
+    'ata loading completed at loading port 1': 'ata_vessel_completed_loading',
+    'eta vessel sailed at loading port 1': 'eta_vessel_sailed_at_loading_port_1',
+    'ata vessel sailed from loading port': 'ata_vessel_sailed_from_loading_port', // Column BB
+    'ata vessel sailed at loading port 1': 'ata_vessel_sailed_from_loading_port',
+    'loading rate at loading port 1': 'loading_rate_at_loading_port_1',
+    
+    // ETA/ATA FIELDS - Loading Port 2
+    'eta vessel arrival at loading port 2': 'eta_vessel_arrival_at_loading_port_2',
+    'ata vessel arrival at loading port 2': 'ata_vessel_arrival_at_loading_port_2',
+    'eta vessel berthed at loading port 2': 'eta_vessel_berthed_at_loading_port_2',
+    'ata vessel berthed at loading port 2': 'ata_vessel_berthed_at_loading_port_2',
+    'eta loading start at loading port 2': 'eta_loading_start_at_loading_port_2',
+    'ata loading start at loading port 2': 'ata_loading_start_at_loading_port_2',
+    'eta loading completed at loading port 2': 'eta_loading_completed_at_loading_port_2',
+    'ata loading completed at loading port 2': 'ata_loading_completed_at_loading_port_2',
+    'eta vessel sailed at loading port 2': 'eta_vessel_sailed_at_loading_port_2',
+    'ata vessel sailed at loading port 2': 'ata_vessel_sailed_at_loading_port_2',
+    'loading rate at loading port 2': 'loading_rate_at_loading_port_2',
+    
+    // ETA/ATA FIELDS - Loading Port 3
+    'eta vessel arrival at loading port 3': 'eta_vessel_arrival_at_loading_port_3',
+    'ata vessel arrival at loading port 3': 'ata_vessel_arrival_at_loading_port_3',
+    'eta vessel berthed at loading port 3': 'eta_vessel_berthed_at_loading_port_3',
+    'ata vessel berthed at loading port 3': 'ata_vessel_berthed_at_loading_port_3',
+    'eta loading start at loading port 3': 'eta_loading_start_at_loading_port_3',
+    'ata loading start at loading port 3': 'ata_loading_start_at_loading_port_3',
+    'eta loading completed at loading port 3': 'eta_loading_completed_at_loading_port_3',
+    'ata loading completed at loading port 3': 'ata_loading_completed_at_loading_port_3',
+    'eta vessel sailed at loading port 3': 'eta_vessel_sailed_at_loading_port_3',
+    'ata vessel sailed at loading port 3': 'ata_vessel_sailed_at_loading_port_3',
+    'loading rate at loading port 3': 'loading_rate_at_loading_port_3',
+    
+    // ETA/ATA FIELDS - Discharge Port
+    'eta arrival at discharge port': 'eta_arrival_at_discharge_port',
+    // UPDATED: ATA discharge fields moved (BC, BD, BE, BF)
+    'ata vessel arrive at discharge port': 'ata_vessel_arrival_at_discharge_port', // Column BC
+    'ata vessel arrival at discharge port': 'ata_vessel_arrival_at_discharge_port',
+    'eta vessel berthed at discharge port': 'eta_vessel_berthed_at_discharge_port',
+    'ata vessel berthed at discharge port': 'ata_vessel_berthed_at_discharge_port', // Column BD
+    'eta discharging start at discharge port': 'eta_discharging_start_at_discharge_port',
+    'ata vessel start discharging': 'ata_vessel_start_discharging', // Column BE
+    'ata discharging start at discharge port': 'ata_vessel_start_discharging',
+    'eta discharging completed at discharge port': 'eta_discharging_completed_at_discharge_port',
+    'ata vessel complete discharge': 'ata_vessel_completed_discharge', // Column BF
+    'ata discharging completed at discharge port': 'ata_vessel_completed_discharge',
+    'discharge rate at discharging port': 'discharge_rate_at_discharging_port',
+    
+    // QUALITY FIELDS - Updated column positions
+    // Loading Loc 1 Quality (Columns BH-BM, moved from BL-BM)
+    'quality at loading loc 1 ffa': 'ffa',
+    'quality at loading location 1 ffa': 'ffa',
+    'quality at loading port 1 ffa': 'ffa',
+    'loading loc 1 ffa': 'ffa',
+    'quality at loading loc 1 m&i': 'moisture',
+    'quality at loading loc 1 m & i': 'moisture',
+    'quality at loading location 1 m&i': 'moisture',
+    'quality at loading location 1 m & i': 'moisture',
+    'quality at loading port 1 m&i': 'moisture',
+    'loading loc 1 m&i': 'moisture',
+    'quality at loading loc 1 dobi': 'dobi',
+    'quality at loading location 1 dobi': 'dobi',
+    'quality at loading port 1 dobi': 'dobi',
+    'loading loc 1 dobi': 'dobi',
+    'quality at loading loc 1 red': 'color_red',
+    'quality at loading location 1 red': 'color_red',
+    'quality at loading port 1 red': 'color_red',
+    'loading loc 1 red': 'color_red',
+    'quality at loading loc 1 d&s': 'd_and_s',
+    'quality at loading location 1 d&s': 'd_and_s',
+    'quality at loading port 1 d&s': 'd_and_s',
+    'loading loc 1 d&s': 'd_and_s',
+    'quality at loading loc 1 stone': 'stone',
+    'quality at loading location 1 stone': 'stone',
+    'quality at loading port 1 stone': 'stone',
+    'loading loc 1 stone': 'stone',
+    
+    // Discharge Port Quality (Columns BN-BS, moved from BR-BW)
+    'quality at discharge port ffa': 'ffa',
+    'discharge port ffa': 'ffa',
+    'quality at discharge port m&i': 'moisture',
+    'discharge port m&i': 'moisture',
+    'quality at discharge port dobi': 'dobi',
+    'discharge port dobi': 'dobi',
+    'quality at discharge port red': 'color_red',
+    'discharge port red': 'color_red',
+    'quality at discharge port d&s': 'd_and_s',
+    'discharge port d&s': 'd_and_s',
+    'quality at discharge port stone': 'stone',
+    'discharge port stone': 'stone'
+  };
+
+  /** FIELD_MAPPING merged with the UAT flat-header mapping, precomputed once for the same reason. */
+  private static readonly MERGED_FIELD_MAPPING: { [key: string]: string } = {
+    ...SapMasterV2ImportService.FIELD_MAPPING,
+    ...SAP_MASTER_V2_UAT_FIELD_MAPPING,
+  };
+
   private static DEFAULT_CONFIG: MasterV2Config = {
     filePath: '',
     sheetName: 'Logistic Report', // Updated to new template name - falls back to first sheet if not found
@@ -510,7 +870,6 @@ export class SapMasterV2ImportService {
         groups.set(key, [ctx]);
       }
     }
-
     for (const group of groups.values()) {
       if (group.length < 2) continue;
 
@@ -1740,354 +2099,9 @@ export class SapMasterV2ImportService {
       .trim()                  // Trim leading/trailing spaces
       .toLowerCase();
     
-    // Comprehensive field mapping with exact Excel column names
-    const fieldMapping: { [key: string]: string } = {
-      // TRADING FIELDS
-      'group': 'group',
-      'supplier (vendor -> name 1))': 'supplier',
-      'supplier': 'supplier',
-      'vendor': 'supplier',
-      'name 1': 'supplier',
-      'vendor group': 'group',
-      
-      'contract date (sama dengan po date)': 'contract_date',
-      'contract date': 'contract_date',
-      'po date': 'contract_date',
-      
-      'product (material desc)': 'product',
-      'product': 'product',
-      'material desc': 'product',
-      'material': 'product',
-      
-      // CRITICAL: Contract No and PO No are DIFFERENT fields!
-      'contract no. (no contract) ini nomer kontrak auto generate': 'contract_no',
-      'contract no.': 'contract_no',
-      'contract no': 'contract_no',
-      'contract number': 'contract_no',
-      'no contract': 'contract_no',
-      'contract ext no': 'contract_ext_no',
-      'contract ext no.': 'contract_ext_no',
-      
-      'po no.': 'po_no',
-      'po no': 'po_no',
-      'po number': 'po_no',
-      
-      // NEW: Buyer field (Column F)
-      'buyer': 'buyer',
-      
-      // UPDATED: B2B Flag → Contract Type (Column J)
-      'b2b flag': 'contract_type',
-      'contract type': 'contract_type',
-      
-      // UPDATED: CONTRACT REFF PO → Contract Reff PO Ini (Column K)
-      'contract reff po': 'contract_reference_po',
-      'contract reff po ini': 'contract_reference_po',
-      'contract ref po': 'contract_reference_po',
-      
-      // NEW: Contract Reff SO Ini (Column L)
-      'contract reff so ini': 'contract_reference_so',
-      'contract ref so ini': 'contract_reference_so',
-      'contract reff so': 'contract_reference_so',
-      
-      'company code': 'company_code',
-      'company code.': 'company_code',
-
-      'plant code': 'plant_code',
-      'plant code.': 'plant_code',
-      
-      'incoterm at starting point 1': 'incoterm_starting_1',
-      'incoterm at starting point 2': 'incoterm_starting_2',
-      'incoterm at starting point 3': 'incoterm_starting_3',
-      'incoterm at loading port 2': 'incoterm_loading_2',
-      'incoterm': 'incoterm',
-      'incoterms': 'incoterm', // Handle plural form
-      
-      'sea / land': 'sea_land',
-      'sea/land': 'sea_land', // Handle without spaces
-      'transport': 'sea_land',
-      
-      'contract quantity (or po qty)': 'contract_quantity',
-      'contract quantity': 'contract_quantity',
-      'po qty': 'contract_quantity',
-      'contract qty uom': 'contract_qty_uom',
-      
-      'unit price': 'unit_price',
-      'price': 'unit_price',
-      'currency unit price': 'currency_unit_price',
-      
-      'due date delivery (start)': 'due_date_delivery_start',
-      'due date delivery (end)': 'due_date_delivery_end',
-      'due date delivery': 'due_date_delivery_start',
-      
-      'source (3rd party/inhouse)': 'source',
-      'source': 'source',
-      '3rd party': 'source',
-      'inhouse': 'source',
-      
-      'ltc / spot': 'ltc_spot',
-      'lt/spot': 'ltc_spot', // Handle without space
-      'ltc': 'ltc_spot',
-      'spot': 'ltc_spot',
-      
-      'status': 'status',
-      'delete po status': 'delete_po_status',
-      'delete sto status': 'delete_sto_status',
-      
-      // LOGISTICS FIELDS
-      'sto no.': 'sto_no',
-      'sto no': 'sto_no',
-      'sto number': 'sto_no',
-      'sto type': 'sto_type',
-      
-      // NEW: STO Item (Column W)
-      'sto item': 'sto_item',
-      
-      'sto quantity': 'sto_quantity',
-      'sto qty uom': 'sto_qty_uom',
-      
-      'logistics area classification': 'logistics_area_classification',
-      // UPDATED: PO Classification → STO Classification (Column Z)
-      'po classification': 'sto_classification',
-      'sto classification': 'sto_classification',
-      
-      // FINANCE FIELDS
-      'due date payment': 'due_date_payment',
-      'dp date': 'dp_date',
-      'payoff date': 'payoff_date',
-      'payment date deviation (days)': 'payment_date_deviation_days',
-      // UPDATED: Simplified field names and new positions
-      'dp date deviation (days) dp date - due date': 'dp_date_deviation_days',
-      'dp date - due date': 'dp_date_deviation_days', // New position (Column AF)
-      'payoff date deviation (days) payoff date - due date': 'payoff_date_deviation_days',
-      'payoff date - due date': 'payoff_date_deviation_days', // New position (Column AG)
-      
-      // TRUCKING FIELDS
-      'cargo readiness at starting location': 'cargo_readiness_at_starting_location',
-      'cargo readiness at starting location 2': 'cargo_readiness_at_starting_location_2',
-      'cargo readiness at starting location 3': 'cargo_readiness_at_starting_location_3',
-      'cargo readiness at loading port 1': 'cargo_readiness_at_loading_port_1',
-      'cargo readiness at loading port 2': 'cargo_readiness_at_loading_port_2',
-      'cargo readiness at loading port 3': 'cargo_readiness_at_loading_port_3',
-      
-      'truck loading at starting location': 'truck_loading_at_starting_location',
-      'truck loading at starting location 2': 'truck_loading_at_starting_location_2',
-      'truck loading at starting location 3': 'truck_loading_at_starting_location_3',
-      'truck loading at discharge location': 'truck_loading_at_discharge_location',
-      
-      'truck unloading at starting location': 'truck_unloading_at_starting_location',
-      'truck unloading at starting location 2': 'truck_unloading_at_starting_location_2',
-      'truck unloading at starting location 3': 'truck_unloading_at_starting_location_3',
-      'truck unloading at discharge location': 'truck_unloading_at_discharge_location',
-      // UPDATED: Column positions changed (AH, AI, AJ, AK, AL, AM)
-      'truck loading location': 'truck_loading_at_starting_location', // Column AH
-      'truck discharge location': 'truck_unloading_at_starting_location', // Column AI
-      
-      'trucking owner at starting location': 'trucking_owner_at_starting_location',
-      'trucking owner at starting location 2': 'trucking_owner_at_starting_location_2',
-      'trucking owner at starting location 3': 'trucking_owner_at_starting_location_3',
-      'truck owner at discharge': 'truck_owner_at_discharge',
-      'truck transporter': 'trucking_owner_at_starting_location', // Column AJ
-      
-      'trucking oa budget at starting location': 'trucking_oa_budget_at_starting_location',
-      'trucking oa budget at starting location 2': 'trucking_oa_budget_at_starting_location_2',
-      'trucking oa budget at starting location 3': 'trucking_oa_budget_at_starting_location_3',
-      'trucking oa budget at discharge': 'trucking_oa_budget_at_discharge',
-      'truck oa budget': 'trucking_oa_budget_at_starting_location', // Column AL
-      'trucking oa budget': 'trucking_oa_budget_at_starting_location', // Column AL
-      'currency trucking oa budget': 'currency_trucking_oa_budget',
-      'estimated km': 'estimated_km', // Column AM
-      'esimated km': 'estimated_km',
-      
-      'trucking oa actual at starting location': 'trucking_oa_actual_at_starting_location',
-      'trucking oa actual at starting location 2': 'trucking_oa_actual_at_starting_location_2',
-      'trucking oa actual at starting location 3': 'trucking_oa_actual_at_starting_location_3',
-      'trucking oa actual at discharge': 'trucking_oa_actual_at_discharge',
-      'trucking oa actual': 'trucking_oa_actual_at_starting_location', // Column AK
-      'currency trucking oa actual': 'currency_trucking_oa_actual',
-      
-      'quantity sent via trucking (based on surat jalan)': 'quantity_sent_via_trucking_based_on_surat_jalan',
-      'quantity delivered via trucking': 'quantity_delivered_via_trucking',
-      'selisih': 'trucking_gain_loss',
-      'trucking gain/loss at starting location': 'trucking_gain_loss_at_starting_location',
-      // UPDATED: QTY DELIVER → Quantity Delivery (Column AD)
-      'qty deliver': 'quantity_delivery',
-      'quantity delivery': 'quantity_delivery',
-      'delivery vessel uom': 'quantity_delivery_uom',
-      'delivery trucking uom': 'quantity_delivery_trucking_uom',
-      'receive uom': 'quantity_receive_uom',
-      'b/l qty uom': 'bl_quantity_uom',
-      'qty receive': 'quantity_delivered_via_trucking',
-      'selisih qty receive vs qty deliver': 'trucking_gain_loss_at_starting_location',
-      
-      'trucking starting date at starting location': 'trucking_starting_date_at_starting_location',
-      'trucking starting date at starting location 2': 'trucking_starting_date_at_starting_location_2',
-      'trucking starting date at starting location 3': 'trucking_starting_date_at_starting_location_3',
-      // UPDATED: Trucking Load Port Start Date → Trucking Start Receive Date (Column AV)
-      'trucking load port start date': 'trucking_start_receive_date',
-      'trucking start receive date': 'trucking_start_receive_date', // Column AV
-      
-      'trucking completion date at starting location': 'trucking_completion_date_at_starting_location',
-      'trucking completion date at starting location 2': 'trucking_completion_date_at_starting_location_2',
-      'trucking completion date at starting location 3': 'trucking_completion_date_at_starting_location_3',
-      // UPDATED: Trucking Load Port End Date → Trucking Last Receive Date (Column AW)
-      'trucking load port end date': 'trucking_last_receive_date',
-      'trucking last receive date': 'trucking_last_receive_date', // Column AW
-      'last receive date': 'last_receive_date',
-      
-      // SHIPPING/VESSEL FIELDS
-      'loading method (pipeline / trucking)': 'loading_method',
-      // UPDATED: Column positions changed (AN, AO, AP, AQ, AR, AS, AT, AU)
-      'vessel loading port': 'vessel_loading_port_1',
-      'vessel loading port 1': 'vessel_loading_port_1', // Column AN
-      'vessel loading port 2': 'vessel_loading_port_2',
-      'vessel loading port 3': 'vessel_loading_port_3',
-      'vessel discharge port': 'vessel_discharge_port', // Column AO
-      'discharge method (pipeline / trucking)': 'discharge_method',
-      
-      'voyage no.': 'voyage_no',
-      // UPDATED: Vessel fields moved (AP, AQ, AR, AS, AT, AU)
-      'vessel name': 'vessel_name', // Column AP
-      'vessel company': 'vessel_owner', // Column AQ
-      'vessel owner': 'vessel_owner',
-      'vessel oa actual': 'vessel_oa_actual', // Column AR
-      'vessel oa actual ': 'vessel_oa_actual',
-      'vessel oa budget': 'vessel_oa_budget', // Column AS
-      'vessell oa budget': 'vessel_oa_budget',
-      'estimated nm': 'estimated_nautical_miles', // Column AT
-      'estimated nautical miles': 'estimated_nautical_miles',
-      'vessel code': 'vessel_code', // Column AU
-      // Vessel physical properties moved later (BT-BX)
-      'vessel draft': 'vessel_draft',
-      'loa': 'vessel_loa',
-      'vessel loa': 'vessel_loa',
-      'vessel capacity': 'vessel_capacity',
-      'vessel cappacity': 'vessel_capacity', // Typo handling
-      'vessel hull type': 'vessel_hull_type',
-      'vessel registration year': 'vessel_registration_year',
-      'charter type (vc / tc / mix)': 'charter_type',
-      'average vessel speed': 'average_vessel_speed', // Column BY
-      
-      // QUANTITY FIELDS
-      'quantity at loading port 1 (based on bast)': 'quantity_at_loading_port_1_based_on_bast',
-      'quantity at loading port 2': 'quantity_at_loading_port_2',
-      'quantity at loading port 3': 'quantity_at_loading_port_3',
-      'quantity at starting location 2': 'quantity_at_starting_location_2',
-      'quantity at starting location 3': 'quantity_at_starting_location_3',
-      'actual quantity (at final location)': 'actual_quantity_at_final_location',
-      // UPDATED: B/L Quantity moved to Column BG
-      'b/l quantity': 'bl_quantity', // Column BG
-      'b/l quantity ': 'bl_quantity',
-      'actual vessel qty receive': 'actual_vessel_qty_receive',
-      'difference final qty - bl qty': 'difference_final_qty_vs_bl_qty',
-      'difference  final qty - bl qty ': 'difference_final_qty_vs_bl_qty',
-      'ship figure after loading (sfal)': 'sfal',
-      'ship figure before discharge (sfbd)': 'sfbd',
-      
-      // ETA/ATA FIELDS - Loading Port 1
-      'eta vessel arrival loading port 1': 'eta_vessel_arrival_loading_port_1',
-      // UPDATED: ATA fields moved (AX, AY, AZ, BA, BB)
-      'ata vessel arrival at loading port': 'ata_vessel_arrival_at_loading_port_1', // Column AX
-      'ata vessel arrival at loading port 1': 'ata_vessel_arrival_at_loading_port_1',
-      'ata vessel berthed at loading port': 'ata_vessel_berthed_at_loading_port_1', // Column AY
-      'ata vessel berthed at loading port 1': 'ata_vessel_berthed_at_loading_port_1',
-      'eta loading start at loading port 1': 'eta_loading_start_at_loading_port_1',
-      'ata vessel start loading': 'ata_vessel_start_loading', // Column AZ
-      'ata loading start at loading port 1': 'ata_vessel_start_loading',
-      'eta loading completed at loading port 1': 'eta_loading_completed_at_loading_port_1',
-      'ata vessel completed loading': 'ata_vessel_completed_loading', // Column BA
-      'ata loading completed at loading port 1': 'ata_vessel_completed_loading',
-      'eta vessel sailed at loading port 1': 'eta_vessel_sailed_at_loading_port_1',
-      'ata vessel sailed from loading port': 'ata_vessel_sailed_from_loading_port', // Column BB
-      'ata vessel sailed at loading port 1': 'ata_vessel_sailed_from_loading_port',
-      'loading rate at loading port 1': 'loading_rate_at_loading_port_1',
-      
-      // ETA/ATA FIELDS - Loading Port 2
-      'eta vessel arrival at loading port 2': 'eta_vessel_arrival_at_loading_port_2',
-      'ata vessel arrival at loading port 2': 'ata_vessel_arrival_at_loading_port_2',
-      'eta vessel berthed at loading port 2': 'eta_vessel_berthed_at_loading_port_2',
-      'ata vessel berthed at loading port 2': 'ata_vessel_berthed_at_loading_port_2',
-      'eta loading start at loading port 2': 'eta_loading_start_at_loading_port_2',
-      'ata loading start at loading port 2': 'ata_loading_start_at_loading_port_2',
-      'eta loading completed at loading port 2': 'eta_loading_completed_at_loading_port_2',
-      'ata loading completed at loading port 2': 'ata_loading_completed_at_loading_port_2',
-      'eta vessel sailed at loading port 2': 'eta_vessel_sailed_at_loading_port_2',
-      'ata vessel sailed at loading port 2': 'ata_vessel_sailed_at_loading_port_2',
-      'loading rate at loading port 2': 'loading_rate_at_loading_port_2',
-      
-      // ETA/ATA FIELDS - Loading Port 3
-      'eta vessel arrival at loading port 3': 'eta_vessel_arrival_at_loading_port_3',
-      'ata vessel arrival at loading port 3': 'ata_vessel_arrival_at_loading_port_3',
-      'eta vessel berthed at loading port 3': 'eta_vessel_berthed_at_loading_port_3',
-      'ata vessel berthed at loading port 3': 'ata_vessel_berthed_at_loading_port_3',
-      'eta loading start at loading port 3': 'eta_loading_start_at_loading_port_3',
-      'ata loading start at loading port 3': 'ata_loading_start_at_loading_port_3',
-      'eta loading completed at loading port 3': 'eta_loading_completed_at_loading_port_3',
-      'ata loading completed at loading port 3': 'ata_loading_completed_at_loading_port_3',
-      'eta vessel sailed at loading port 3': 'eta_vessel_sailed_at_loading_port_3',
-      'ata vessel sailed at loading port 3': 'ata_vessel_sailed_at_loading_port_3',
-      'loading rate at loading port 3': 'loading_rate_at_loading_port_3',
-      
-      // ETA/ATA FIELDS - Discharge Port
-      'eta arrival at discharge port': 'eta_arrival_at_discharge_port',
-      // UPDATED: ATA discharge fields moved (BC, BD, BE, BF)
-      'ata vessel arrive at discharge port': 'ata_vessel_arrival_at_discharge_port', // Column BC
-      'ata vessel arrival at discharge port': 'ata_vessel_arrival_at_discharge_port',
-      'eta vessel berthed at discharge port': 'eta_vessel_berthed_at_discharge_port',
-      'ata vessel berthed at discharge port': 'ata_vessel_berthed_at_discharge_port', // Column BD
-      'eta discharging start at discharge port': 'eta_discharging_start_at_discharge_port',
-      'ata vessel start discharging': 'ata_vessel_start_discharging', // Column BE
-      'ata discharging start at discharge port': 'ata_vessel_start_discharging',
-      'eta discharging completed at discharge port': 'eta_discharging_completed_at_discharge_port',
-      'ata vessel complete discharge': 'ata_vessel_completed_discharge', // Column BF
-      'ata discharging completed at discharge port': 'ata_vessel_completed_discharge',
-      'discharge rate at discharging port': 'discharge_rate_at_discharging_port',
-      
-      // QUALITY FIELDS - Updated column positions
-      // Loading Loc 1 Quality (Columns BH-BM, moved from BL-BM)
-      'quality at loading loc 1 ffa': 'ffa',
-      'quality at loading location 1 ffa': 'ffa',
-      'quality at loading port 1 ffa': 'ffa',
-      'loading loc 1 ffa': 'ffa',
-      'quality at loading loc 1 m&i': 'moisture',
-      'quality at loading loc 1 m & i': 'moisture',
-      'quality at loading location 1 m&i': 'moisture',
-      'quality at loading location 1 m & i': 'moisture',
-      'quality at loading port 1 m&i': 'moisture',
-      'loading loc 1 m&i': 'moisture',
-      'quality at loading loc 1 dobi': 'dobi',
-      'quality at loading location 1 dobi': 'dobi',
-      'quality at loading port 1 dobi': 'dobi',
-      'loading loc 1 dobi': 'dobi',
-      'quality at loading loc 1 red': 'color_red',
-      'quality at loading location 1 red': 'color_red',
-      'quality at loading port 1 red': 'color_red',
-      'loading loc 1 red': 'color_red',
-      'quality at loading loc 1 d&s': 'd_and_s',
-      'quality at loading location 1 d&s': 'd_and_s',
-      'quality at loading port 1 d&s': 'd_and_s',
-      'loading loc 1 d&s': 'd_and_s',
-      'quality at loading loc 1 stone': 'stone',
-      'quality at loading location 1 stone': 'stone',
-      'quality at loading port 1 stone': 'stone',
-      'loading loc 1 stone': 'stone',
-      
-      // Discharge Port Quality (Columns BN-BS, moved from BR-BW)
-      'quality at discharge port ffa': 'ffa',
-      'discharge port ffa': 'ffa',
-      'quality at discharge port m&i': 'moisture',
-      'discharge port m&i': 'moisture',
-      'quality at discharge port dobi': 'dobi',
-      'discharge port dobi': 'dobi',
-      'quality at discharge port red': 'color_red',
-      'discharge port red': 'color_red',
-      'quality at discharge port d&s': 'd_and_s',
-      'discharge port d&s': 'd_and_s',
-      'quality at discharge port stone': 'stone',
-      'discharge port stone': 'stone'
-    };
-    
-    // Check for exact match first
-    const mergedMapping = { ...fieldMapping, ...SAP_MASTER_V2_UAT_FIELD_MAPPING };
+    // Check for exact match first (FIELD_MAPPING/MERGED_FIELD_MAPPING are precomputed
+    // once as static class fields, not rebuilt per call - see their declarations above).
+    const mergedMapping = SapMasterV2ImportService.MERGED_FIELD_MAPPING;
 
     if (mergedMapping[cleanFieldName]) {
       return mergedMapping[cleanFieldName];
