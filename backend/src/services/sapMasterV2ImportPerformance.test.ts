@@ -163,6 +163,127 @@ describe('SapMasterV2ImportService import parallelism', () => {
   });
 });
 
+describe('SapMasterV2ImportService duplicate PO+STO quantity summing (same-file split STO lines)', () => {
+  it('sums sto_quantity across rows sharing the exact same PO+STO and writes the same total to every row', () => {
+    const contexts = [
+      { poNumber: 'PO-1', stoKey: 'STO-1', parsedData: { contract: { sto_quantity: '100' }, shipment: {} } },
+      { poNumber: 'PO-1', stoKey: 'STO-1', parsedData: { contract: { sto_quantity: '50' }, shipment: {} } },
+    ];
+
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(contexts as any);
+
+    expect(contexts[0].parsedData.contract.sto_quantity).toBe(150);
+    expect(contexts[1].parsedData.contract.sto_quantity).toBe(150);
+  });
+
+  it('sums trucking delivery/receive quantity per location sequence across the group', () => {
+    const contexts = [
+      {
+        poNumber: 'PO-2',
+        stoKey: 'STO-2',
+        parsedData: {
+          contract: {},
+          shipment: {},
+          trucking: [
+            {
+              sequence: 1,
+              data: {
+                quantity_sent_via_trucking_based_on_surat_jalan: '30',
+                quantity_delivered_via_trucking: '28',
+              },
+            },
+          ],
+        },
+      },
+      {
+        poNumber: 'PO-2',
+        stoKey: 'STO-2',
+        parsedData: {
+          contract: {},
+          shipment: {},
+          trucking: [
+            {
+              sequence: 1,
+              data: {
+                quantity_sent_via_trucking_based_on_surat_jalan: '20',
+                quantity_delivered_via_trucking: '19',
+              },
+            },
+          ],
+        },
+      },
+    ];
+
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(contexts as any);
+
+    expect(contexts[0].parsedData.trucking[0].data.quantity_sent_via_trucking_based_on_surat_jalan).toBe(50);
+    expect(contexts[0].parsedData.trucking[0].data.quantity_delivered_via_trucking).toBe(47);
+    expect(contexts[1].parsedData.trucking[0].data.quantity_sent_via_trucking_based_on_surat_jalan).toBe(50);
+    expect(contexts[1].parsedData.trucking[0].data.quantity_delivered_via_trucking).toBe(47);
+  });
+
+  it('does not touch contract_quantity - only sto_quantity and trucking delivery/receive are summed', () => {
+    const contexts = [
+      {
+        poNumber: 'PO-3',
+        stoKey: 'STO-3',
+        parsedData: { contract: { sto_quantity: '10', contract_quantity: '1000' }, shipment: {} },
+      },
+      {
+        poNumber: 'PO-3',
+        stoKey: 'STO-3',
+        parsedData: { contract: { sto_quantity: '5', contract_quantity: '1000' }, shipment: {} },
+      },
+    ];
+
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(contexts as any);
+
+    expect(contexts[0].parsedData.contract.sto_quantity).toBe(15);
+    expect(contexts[0].parsedData.contract.contract_quantity).toBe('1000');
+    expect(contexts[1].parsedData.contract.contract_quantity).toBe('1000');
+  });
+
+  it('leaves a single row for a PO+STO untouched (no group to sum)', () => {
+    const contexts = [
+      { poNumber: 'PO-4', stoKey: 'STO-4', parsedData: { contract: { sto_quantity: '42' }, shipment: {} } },
+    ];
+
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(contexts as any);
+
+    expect(contexts[0].parsedData.contract.sto_quantity).toBe('42');
+  });
+
+  it('does not group rows with different STO under the same PO', () => {
+    const contexts = [
+      { poNumber: 'PO-5', stoKey: 'STO-A', parsedData: { contract: { sto_quantity: '10' }, shipment: {} } },
+      { poNumber: 'PO-5', stoKey: 'STO-B', parsedData: { contract: { sto_quantity: '20' }, shipment: {} } },
+    ];
+
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(contexts as any);
+
+    expect(contexts[0].parsedData.contract.sto_quantity).toBe('10');
+    expect(contexts[1].parsedData.contract.sto_quantity).toBe('20');
+  });
+
+  it('re-running on the same rows (simulating a re-upload) recomputes the same total rather than doubling it', () => {
+    const buildContexts = () => [
+      { poNumber: 'PO-6', stoKey: 'STO-6', parsedData: { contract: { sto_quantity: '100' }, shipment: {} } },
+      { poNumber: 'PO-6', stoKey: 'STO-6', parsedData: { contract: { sto_quantity: '50' }, shipment: {} } },
+    ];
+
+    const firstUpload = buildContexts();
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(firstUpload as any);
+    expect(firstUpload[0].parsedData.contract.sto_quantity).toBe(150);
+
+    // A second upload of the identical file parses fresh raw values from the sheet again
+    // (100 and 50), not the previously-summed 150 - summing must start from those raw values
+    // each time, not accumulate onto a prior total.
+    const secondUpload = buildContexts();
+    SapMasterV2ImportService.applyDuplicateStoQuantitySumsForTest(secondUpload as any);
+    expect(secondUpload[0].parsedData.contract.sto_quantity).toBe(150);
+  });
+});
+
 describe('SapMasterV2ImportService cancel request flag', () => {
   const importId = '00000000-0000-4000-8000-000000000099';
 

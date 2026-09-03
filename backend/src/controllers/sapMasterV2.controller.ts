@@ -257,7 +257,13 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
     // `failed_records` are instead updated every 25 rows via an independent connection
     // (see maybeRefreshImportProgress in sapMasterV2Import.service.ts), so they ARE live.
     // For finished imports both sources agree, so we keep the raw-data recount there for
-    // an extra accuracy check.
+    // an extra accuracy check — but only for imports that finished recently. This endpoint
+    // is polled every 2s while any import is active (SapImportDashboard.tsx), and every poll
+    // used to re-scan sap_raw_data for ALL 50 history rows, including imports finished days
+    // ago whose processed/failed counts are frozen forever — right when the DB is already
+    // busiest running the active import. The ON clause here only references sap_data_imports
+    // columns, so Postgres filters it before invoking the lateral subplan: old finished
+    // imports never touch sap_raw_data at all, they just read their own stored counts.
     const result = await pool.query(
       `SELECT
          i.id,
@@ -265,11 +271,11 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
          i.import_timestamp,
          i.status,
          i.total_records,
-         CASE WHEN i.status IN ('processing', 'pending')
+         CASE WHEN i.status IN ('processing', 'pending') OR rc.processed IS NULL
            THEN COALESCE(i.processed_records, 0)
            ELSE COALESCE(rc.processed, 0)
          END::int AS processed_records,
-         CASE WHEN i.status IN ('processing', 'pending')
+         CASE WHEN i.status IN ('processing', 'pending') OR rc.processed IS NULL
            THEN COALESCE(i.failed_records, 0)
            ELSE COALESCE(rc.failed, 0)
          END::int AS failed_records,
@@ -282,7 +288,8 @@ export const getAllImports = async (_req: Request, res: Response): Promise<void>
            COUNT(*) FILTER (WHERE status = 'failed') AS failed
          FROM sap_raw_data
          WHERE import_id = i.id
-       ) rc ON TRUE
+       ) rc ON i.status NOT IN ('processing', 'pending')
+            AND i.import_timestamp > NOW() - INTERVAL '10 minutes'
        ORDER BY i.import_timestamp DESC
        LIMIT 50`,
     );

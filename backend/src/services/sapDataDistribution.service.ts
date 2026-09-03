@@ -243,21 +243,21 @@ export class SapDataDistributionService {
       // 1. Create or update contract
       if (this.hasContractData(parsedData.contract, parsedData)) {
         try {
-          logger.info('Attempting to upsert contract with data:', {
+          logger.debug('Attempting to upsert contract with data:', {
             contract_no: parsedData.contract?.contract_no,
             po_no: parsedData.contract?.po_no,
             supplier: parsedData.contract?.supplier,
             product: parsedData.contract?.product
           });
           result.contractId = await this.upsertContract(client, parsedData.contract, userId, parsedData);
-          logger.info('Contract upserted successfully:', result.contractId);
+          logger.debug('Contract upserted successfully:', result.contractId);
         } catch (contractError) {
           logger.error('Failed to upsert contract:', contractError);
           logger.error('Contract data:', JSON.stringify(parsedData.contract, null, 2));
           throw contractError;
         }
       } else {
-        logger.info('No contract data found, attempting to resolve from prior processed data');
+        logger.debug('No contract data found, attempting to resolve from prior processed data');
         // Fallback: try to resolve existing contract id from prior processed data
         result.contractId = await this.resolveContractId(client, parsedData);
       }
@@ -303,7 +303,7 @@ export class SapDataDistributionService {
       const { seaLike, assumeSea, landSeaStoLeg, cifCfrSeaLike } =
         resolveSapDistributionSeaLike(routingCtx);
 
-      logger.info('Routing decision based on SEA / LAND:', {
+      logger.debug('Routing decision based on SEA / LAND:', {
         sea_land_raw: seaLandRaw,
         modeLabel,
         incotermLabel,
@@ -328,14 +328,14 @@ export class SapDataDistributionService {
           userId,
         );
       } else if (seaLike && hasShipment && !seaEligible) {
-        logger.info('Skipping SEA shipment upsert: not eligible by anchor fields', {
+        logger.debug('Skipping SEA shipment upsert: not eligible by anchor fields', {
           contractId: result.contractId,
           sto_no: parsedData.shipment?.sto_no,
         });
       } else if (isTruckIncoterm && isLandSapRowEligibleForTruckingCreation(parsedData)) {
         // 2b. FRC/LCO: use parsedData.trucking[] (columns AV/AW Last/Start Receive) — NOT vessel shipment dates.
         try {
-          logger.info('Creating trucking operation(s) from SAP trucking data (FRC/LCO):', {
+          logger.debug('Creating trucking operation(s) from SAP trucking data (FRC/LCO):', {
             sto_no: parsedData.shipment?.sto_no,
             contractId: result.contractId,
             truckingLegs: parsedData.trucking?.length ?? 0,
@@ -372,7 +372,7 @@ export class SapDataDistributionService {
               parsedData,
             );
             if (truckingId) result.truckingOperationIds.push(truckingId);
-            logger.info('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
+            logger.debug('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
           }
         } catch (truckingError) {
           logger.error('Failed to create trucking operation from SAP (FRC/LCO):', truckingError);
@@ -380,7 +380,7 @@ export class SapDataDistributionService {
           throw truckingError;
         }
       } else {
-        logger.info('No shipment/trucking data found to upsert or SEA/LAND value not set');
+        logger.debug('No shipment/trucking data found to upsert or SEA/LAND value not set');
       }
 
       // Delete PO/STO: force all linked live logistics rows Cancelled (Cancelled card),
@@ -541,7 +541,7 @@ export class SapDataDistributionService {
         charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
       };
 
-      logger.info('Attempting to upsert shipment with data (SEA):', {
+      logger.debug('Attempting to upsert shipment with data (SEA):', {
         sto_no: parsedData.shipment?.sto_no,
         vessel_name: vesselData.vessel_name,
         contractId,
@@ -566,7 +566,7 @@ export class SapDataDistributionService {
         return undefined;
       }
 
-      logger.info('Shipment upserted successfully:', shipmentUuid);
+      logger.debug('Shipment upserted successfully:', shipmentUuid);
 
       await this.upsertVesselLoadingPorts(client, shipmentUuid, parsedData);
       const klipProtectPorts = await hasKlipShipmentActivity(
@@ -577,7 +577,7 @@ export class SapDataDistributionService {
       await denormalizeShipmentPortsFromSap(client, shipmentUuid, parsedData, {
         protectKlip: klipProtectPorts,
       });
-      logger.info('Vessel loading ports processed for shipment:', shipmentUuid);
+      logger.debug('Vessel loading ports processed for shipment:', shipmentUuid);
       return shipmentUuid;
     } catch (shipmentError) {
       logger.error('Failed to upsert shipment:', shipmentError);
@@ -623,13 +623,13 @@ export class SapDataDistributionService {
     if (existingReal.rows.length > 0) {
       const realUuid = existingReal.rows[0].id as string;
       if (realUuid !== placeholderUuid) {
-        logger.info(`Merging placeholder contract ${placeholderId} into existing ${contractNumber}`);
+        logger.debug(`Merging placeholder contract ${placeholderId} into existing ${contractNumber}`);
         await this.mergeContractRecords(client, placeholderUuid, realUuid);
       }
       return;
     }
 
-    logger.info(`Renaming placeholder contract ${placeholderId} to ${contractNumber}`);
+    logger.debug(`Renaming placeholder contract ${placeholderId} to ${contractNumber}`);
     await client.query(
       `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
       [contractNumber, placeholderUuid]
@@ -660,7 +660,7 @@ export class SapDataDistributionService {
       [contractUuid],
     );
     if ((ship.rowCount ?? 0) > 0 || (truck.rowCount ?? 0) > 0) {
-      logger.info('Cancelled linked logistics for Delete PO/STO contract', {
+      logger.debug('Cancelled linked logistics for Delete PO/STO contract', {
         contractUuid,
         shipments: ship.rowCount ?? 0,
         trucking: truck.rowCount ?? 0,
@@ -1115,7 +1115,7 @@ export class SapDataDistributionService {
       );
       if (klipSupersedeId) {
         targetShipmentId = klipSupersedeId;
-        logger.info('upsertShipment: reusing KLIP-planned shipment for SAP STO change', {
+        logger.debug('upsertShipment: reusing KLIP-planned shipment for SAP STO change', {
           contractId,
           supersededShipmentUuid: klipSupersedeId,
           sapShipmentId: shipmentIdFromSap,
@@ -1132,7 +1132,7 @@ export class SapDataDistributionService {
       );
       if (supersedeId) {
         targetShipmentId = supersedeId;
-        logger.info('upsertShipment: reusing SAP-only shipment row for new STO from latest upload', {
+        logger.debug('upsertShipment: reusing SAP-only shipment row for new STO from latest upload', {
           contractId,
           supersededShipmentUuid: supersedeId,
           sapShipmentId: shipmentIdFromSap,
@@ -1184,7 +1184,7 @@ export class SapDataDistributionService {
       );
       if (existingPlanned.rows.length > 0) {
         targetShipmentId = existingPlanned.rows[0].id;
-        logger.info('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
+        logger.debug('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
           contractId,
           existingShipmentId: targetShipmentId,
           sapShipmentId: shipmentIdFromSap,
@@ -1214,14 +1214,14 @@ export class SapDataDistributionService {
           isSapSourcedShipmentId(existingSid) &&
           isSapSourcedShipmentId(newSid);
         if (bothDistinctSapSto) {
-          logger.info('upsertShipment: skipping sole-active reuse for parallel SAP STO', {
+          logger.debug('upsertShipment: skipping sole-active reuse for parallel SAP STO', {
             contractId,
             existingShipmentIdValue: existingSid,
             sapShipmentId: shipmentIdFromSap,
           });
         } else {
           targetShipmentId = sole.id;
-          logger.info('upsertShipment: reusing sole active shipment on contract for SAP update', {
+          logger.debug('upsertShipment: reusing sole active shipment on contract for SAP update', {
             contractId,
             existingShipmentId: targetShipmentId,
             sapShipmentId: shipmentIdFromSap,
@@ -1369,7 +1369,7 @@ export class SapDataDistributionService {
           contractPoNumber,
         );
         if (reconcile.cancelledShipmentIds.length > 0) {
-          logger.info('upsertShipment: cancelled superseded SAP shipment rows', {
+          logger.debug('upsertShipment: cancelled superseded SAP shipment rows', {
             contractId,
             keeperShipmentId: id,
             cancelled: reconcile.cancelledShipmentIds,
@@ -1545,7 +1545,7 @@ export class SapDataDistributionService {
           contractPoNumber,
         );
         if (reconcile.cancelledShipmentIds.length > 0) {
-          logger.info('upsertShipment: cancelled superseded SAP shipment rows after insert', {
+          logger.debug('upsertShipment: cancelled superseded SAP shipment rows after insert', {
             contractId,
             keeperShipmentId: newId,
             cancelled: reconcile.cancelledShipmentIds,

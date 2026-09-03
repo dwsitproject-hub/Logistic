@@ -452,10 +452,115 @@ export class SapMasterV2ImportService {
       const poNumber = normalizePoNumber(parsedData.contract?.po_no);
       const stoNumberRaw = parsedData.shipment?.sto_no || parsedData.contract?.sto_no || null;
       const stoKey = String(stoNumberRaw ?? '').trim();
-      const contentHash = poNumber ? this.computeRowContentHash(parsedData) : null;
-      contexts.push({ rowIndex: i, row, parsedData, rowIdentity, contractNumber, poNumber, stoKey, contentHash });
+      // contentHash is computed below, after applyDuplicateStoQuantitySums has had a chance to
+      // rewrite quantity fields - it must hash what actually gets stored, not the pre-sum values.
+      contexts.push({ rowIndex: i, row, parsedData, rowIdentity, contractNumber, poNumber, stoKey, contentHash: null });
     }
+
+    // Same-file split-STO rows: when 2+ rows share the exact same PO+STO (one STO's cargo
+    // reported across multiple lines, e.g. partial deliveries), sum their STO/trucking quantity
+    // fields into every row of the group. This must run before hashing below, and before the
+    // rows are ever sent to runImportChunk - see applyDuplicateStoQuantitySums for what is (and
+    // isn't) covered.
+    this.applyDuplicateStoQuantitySums(contexts);
+
+    for (const ctx of contexts) {
+      ctx.contentHash = ctx.poNumber ? this.computeRowContentHash(ctx.parsedData) : null;
+    }
+
     return contexts;
+  }
+
+  /** Numeric-safe parse tolerant of thousands separators/whitespace, matching parseNumber's leniency. */
+  private static parseNumberLoose(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') return null;
+    const cleaned = typeof value === 'string' ? value.replace(/[,\s]/g, '') : value;
+    const num = parseFloat(cleaned as any);
+    return Number.isNaN(num) ? null : num;
+  }
+
+  /**
+   * When 2+ rows in this file share the exact same PO+STO, SAP has reported that one STO's
+   * cargo across multiple lines (e.g. partial deliveries) rather than one line per STO. Left
+   * alone, only the row processed last would end up stored (see runImportChunk's "changed row"
+   * COALESCE-overwrite path) - or, before the existingProcessedMap fix above, every row after the
+   * first would fail outright on the sap_processed_po_sto_uidx unique index. Either way the other
+   * lines' quantities were lost. This sums those quantities across the whole group and writes the
+   * SAME total back into every row of the group, so whichever row is processed last (order is not
+   * guaranteed) always writes the correct total - and re-uploading the same file later recomputes
+   * the same total from scratch rather than adding onto whatever is already stored, so it stays
+   * safe to re-import.
+   *
+   * Scope, by explicit product decision: sums `sto_quantity` (contracts/contract_stos) and the
+   * trucking `quantity_sent_via_trucking_based_on_surat_jalan` / `quantity_delivered_via_trucking`
+   * fields (per location sequence - see addTruckingData). `contract.contract_quantity` is
+   * deliberately left untouched: it is one value per contract/PO, not per STO line. Rows that
+   * carry no parsedData.trucking[] entries at all (pure SEA rows relying only on shipment-level
+   * vessel delivery/receive fields) are not covered by this pass.
+   */
+  private static applyDuplicateStoQuantitySums(contexts: RowImportContext[]): void {
+    const groups = new Map<string, RowImportContext[]>();
+    for (const ctx of contexts) {
+      if (!ctx.poNumber) continue;
+      const key = this.processedDataKey(ctx.poNumber, ctx.stoKey);
+      const group = groups.get(key);
+      if (group) {
+        group.push(ctx);
+      } else {
+        groups.set(key, [ctx]);
+      }
+    }
+
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+
+      // 1. sto_quantity: one summed total, written onto every row's contract/shipment object.
+      let stoQtySum = 0;
+      let sawStoQty = false;
+      for (const ctx of group) {
+        const raw = ctx.parsedData.contract?.sto_quantity ?? ctx.parsedData.shipment?.sto_quantity;
+        const num = this.parseNumberLoose(raw);
+        if (num !== null) {
+          stoQtySum += num;
+          sawStoQty = true;
+        }
+      }
+      if (sawStoQty) {
+        for (const ctx of group) {
+          if (ctx.parsedData.contract) ctx.parsedData.contract.sto_quantity = stoQtySum;
+          if (ctx.parsedData.shipment) ctx.parsedData.shipment.sto_quantity = stoQtySum;
+        }
+      }
+
+      // 2. Trucking sent/delivered quantity, summed per location sequence across the whole group
+      // (sequence comes from addTruckingData: 1 unless the column says "Location 2"/"Location 3").
+      const sentBySeq = new Map<number, number>();
+      const deliveredBySeq = new Map<number, number>();
+      for (const ctx of group) {
+        const entries: any[] = Array.isArray(ctx.parsedData.trucking) ? ctx.parsedData.trucking : [];
+        for (const entry of entries) {
+          const seq = Number(entry?.sequence) || 1;
+          const sent = this.parseNumberLoose(entry?.data?.quantity_sent_via_trucking_based_on_surat_jalan);
+          if (sent !== null) sentBySeq.set(seq, (sentBySeq.get(seq) ?? 0) + sent);
+          const delivered = this.parseNumberLoose(entry?.data?.quantity_delivered_via_trucking);
+          if (delivered !== null) deliveredBySeq.set(seq, (deliveredBySeq.get(seq) ?? 0) + delivered);
+        }
+      }
+      if (sentBySeq.size === 0 && deliveredBySeq.size === 0) continue;
+      for (const ctx of group) {
+        const entries: any[] = Array.isArray(ctx.parsedData.trucking) ? ctx.parsedData.trucking : [];
+        for (const entry of entries) {
+          if (!entry?.data) continue;
+          const seq = Number(entry?.sequence) || 1;
+          if (sentBySeq.has(seq)) {
+            entry.data.quantity_sent_via_trucking_based_on_surat_jalan = sentBySeq.get(seq);
+          }
+          if (deliveredBySeq.has(seq)) {
+            entry.data.quantity_delivered_via_trucking = deliveredBySeq.get(seq);
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -752,7 +857,20 @@ export class SapMasterV2ImportService {
           }
 
           // New PO+STO: store + distribute (same as before), now also persisting content_hash.
-          await this.storeProcessedData(client, importId, rawDataId, parsedData, contentHash);
+          const newSpdId = await this.storeProcessedData(client, importId, rawDataId, parsedData, contentHash);
+
+          // existingProcessedMap is a point-in-time snapshot taken before any row in this run was
+          // processed, so it has no way to know about a row this same run just inserted. Without
+          // this update, a second Excel row sharing this exact PO+STO (a split/multi-line STO -
+          // common in the source data) would also see "not existing" here, also try to INSERT, and
+          // crash on the sap_processed_po_sto_uidx unique index - discarding that row's data
+          // entirely instead of updating the row just created. Rows sharing a PO+STO always land in
+          // the same chunk (see partitionRowContextsByContractIdentity), so mutating this shared map
+          // here is safe - no other concurrently-running chunk can hold the same key.
+          existingProcessedMap.set(this.processedDataKey(poNumber, stoKey), {
+            id: newSpdId,
+            contentHash,
+          });
 
           const distributionResult = await this.distributeToTables(client, parsedData);
           chunkResult.summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
@@ -1976,7 +2094,7 @@ export class SapMasterV2ImportService {
     rawDataId: string,
     parsedData: any,
     contentHash: string | null = null,
-  ): Promise<void> {
+  ): Promise<string> {
     // Use normalized contract data instead of raw field names
     const contract = parsedData.contract || {};
     const shipment = parsedData.shipment || {};
@@ -1996,11 +2114,12 @@ export class SapMasterV2ImportService {
     const incoterm = contract.incoterm || null;
     const transportMode = contract.sea_land || contract.transport_mode || null;
 
-    await client.query(
-      `INSERT INTO sap_processed_data 
+    const inserted = await client.query(
+      `INSERT INTO sap_processed_data
        (import_id, raw_data_id, contract_number, shipment_id, po_number, sto_number,
-        supplier_name, product, vessel_name, incoterm, transport_mode, data, content_hash, last_seen_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)`,
+        supplier_name, product, vessel_name, incoterm, transport_mode, data, content_hash, last_seen_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+       RETURNING id`,
       [
         importId,
         rawDataId,
@@ -2017,6 +2136,7 @@ export class SapMasterV2ImportService {
         contentHash,
       ]
     );
+    return inserted.rows[0].id as string;
   }
   
   /**
@@ -2060,6 +2180,13 @@ export class SapMasterV2ImportService {
   /** SHA-256 of parsedData (for tests). */
   static computeRowContentHashForTest(parsedData: any): string {
     return this.computeRowContentHash(parsedData);
+  }
+
+  /** Duplicate PO+STO quantity summing (for tests) - mutates and returns the same contexts. */
+  static applyDuplicateStoQuantitySumsForTest(
+    contexts: Array<{ poNumber: string | null; stoKey: string; parsedData: any }>,
+  ): void {
+    this.applyDuplicateStoQuantitySums(contexts as RowImportContext[]);
   }
 
   /** Contract-identity chunk partitioning (for tests). */
