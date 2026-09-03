@@ -9,7 +9,8 @@ import {
 } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
-import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
+import { appendRegionSiteFilter, sqlRegionSiteDisplayForContract, sqlRegionSiteRawForContract } from './regionSiteSql';
+import { sapDischargeDestinationFromJson } from './sapTruckingLoadingLocationSql';
 import { contractExtNoSubquery, resolvedPlantCodeSql } from './portDisplaySql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import {
@@ -43,7 +44,7 @@ const CB_COL: Record<string, string> = {
   product: 'c.product',
   group_name: 'c.group_name',
   incoterm: 'c.incoterm',
-  plant_site: groupPlantExpr('c.plant_code', 'c.company_name'),
+  plant_site: sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number'),
   contract_date: 'c.contract_date',
   delivery_start: 'c.delivery_start_date',
   delivery_end: 'c.delivery_end_date',
@@ -68,7 +69,7 @@ export function appendUnplannedContractBacklogGlobalSearch(
       OR COALESCE(c.po_number::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.product::text, '') ILIKE ${likeExpr}
-      OR COALESCE(${groupPlantExpr('c.plant_code', 'c.company_name')}::text, '') ILIKE ${likeExpr}
+      OR COALESCE(${sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number')}::text, '') ILIKE ${likeExpr}
     )`;
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 };
 }
@@ -264,7 +265,7 @@ export function unplannedContractBacklogRowSelectSql(
   options?: { promoteLowOsToCompleted?: boolean },
 ): string {
   const plantCode = resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code');
-  const plant = groupPlantExpr(plantCode, 'c.company_name');
+  const plant = sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number');
   const contractExtNoExpr = `COALESCE(
     NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''),
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')}
@@ -406,6 +407,7 @@ export function buildUnplannedContractBacklogLatestSpdCte(): string {
             spd.data->'raw'->>'Contract Ext No',
             spd.data->>'Contract Ext No'
           ) AS contract_ext_no_raw,
+          ${sapDischargeDestinationFromJson('spd.data')} AS discharge_destination,
           ${sqlSapSourceTypeFromJsonb('spd.data')} AS source_type_raw,
           spd.created_at
         FROM sap_processed_data spd
@@ -1059,11 +1061,10 @@ export function buildUnplannedContractToolbarScope(input: {
     params.push(input.contract);
     cp += 1;
   }
-  const groupPlantFilter = appendGroupPlantFilter(
+  const groupPlantFilter = appendRegionSiteFilter(
     input.plants,
     cp,
-    groupPlantExpr('c.plant_code', 'c.company_name'),
-    'c.plant_code',
+    sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
   );
   if (groupPlantFilter.sql) {
     parts.push(groupPlantFilter.sql.replace(/^ AND /, ''));

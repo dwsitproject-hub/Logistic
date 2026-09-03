@@ -1,5 +1,6 @@
-import { groupPlantExpr } from './groupPlantSql';
 import { documentTypesForCategory } from './commercialDocumentsConstants';
+import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
+import { appendRegionSiteFilter, sqlRegionSiteDisplayFromJsonAndB2b } from './regionSiteSql';
 
 /** Open contract status for summary card counts. */
 export const COMMERCIAL_DOCS_OPEN_STATUS_SQL = `(
@@ -19,7 +20,7 @@ export type CommercialDocumentsListParams = {
   incoterm?: string | null;
   product?: string | null;
   supplier?: string | null;
-  plant?: string | null;
+  plant?: string | string[] | null;
   page?: number;
   limit?: number;
 };
@@ -86,7 +87,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         c.status,
         c.transport_mode,
         COALESCE(NULLIF(TRIM(c.company_name), ''), latest_spd.data->'raw'->>'Buyer', latest_spd.data->>'Buyer') AS company_name,
-        ${groupPlantExpr('c.plant_code', 'c.company_name')} AS plant_site,
+        ${sqlRegionSiteDisplayFromJsonAndB2b('latest_spd.data')} AS plant_site,
         COALESCE(latest_spd.data->'contract'->>'contract_type', latest_spd.data->>'B2B Flag') AS b2b_flag,
         COALESCE(
           latest_spd.data->'contract'->>'contract_reference_po',
@@ -108,6 +109,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${COMMERCIAL_DOCS_OPEN_STATUS_SQL} AS is_open
       FROM contracts c
       LEFT JOIN latest_spd ON latest_spd.contract_number = c.contract_id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       LEFT JOIN mv_contract_payment_dates mv_pay ON mv_pay.contract_id = c.contract_id
       LEFT JOIN LATERAL (
         SELECT p.payment_due_date
@@ -220,9 +222,14 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     where.push(`TRIM(COALESCE(e.supplier, '')) = $${idx++}`);
     values.push(params.supplier.trim());
   }
-  if (params.plant?.trim()) {
-    where.push(`TRIM(COALESCE(e.plant_site, '')) = $${idx++}`);
-    values.push(params.plant.trim());
+  const plants = (Array.isArray(params.plant) ? params.plant : params.plant ? [params.plant] : [])
+    .map((p) => String(p).trim())
+    .filter(Boolean);
+  const regionSiteFilter = appendRegionSiteFilter(plants, idx, 'e.plant_site');
+  if (regionSiteFilter.sql) {
+    where.push(regionSiteFilter.sql.replace(/^ AND /, ''));
+    values.push(...regionSiteFilter.params);
+    idx = regionSiteFilter.nextIndex;
   }
   if (params.documentType && params.documentStatus) {
     where.push('e.is_open = true');

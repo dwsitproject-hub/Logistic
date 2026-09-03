@@ -3,8 +3,8 @@ import { AuthRequest } from '../middleware/auth';
 import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
 import logger from '../utils/logger';
 import { runQueriesInBatches } from '../utils/runQueriesInBatches';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
-import { sqlB2bEndingCompanyExpr, sqlB2bEndingPlantCodeExpr, sqlB2bEndingUnloadExpr } from '../utils/b2bOriginEndingSql';
+import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
+import { sqlB2bEndingUnloadExpr } from '../utils/b2bOriginEndingSql';
 import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
@@ -805,19 +805,11 @@ export function buildTruckingListQuery(
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
   const originGroupPlant = options?.originGroupPlant === true;
-  const groupPlantFilter = originGroupPlant
-    ? appendGroupPlantFilter(
-        plants,
-        paramIndex,
-        groupPlantExpr('c.plant_code', 'c.company_name'),
-        'c.plant_code',
-      )
-    : appendGroupPlantFilter(
-        plants,
-        paramIndex,
-        groupPlantExpr(sqlB2bEndingPlantCodeExpr('c.plant_code'), sqlB2bEndingCompanyExpr('c.company_name')),
-        sqlB2bEndingPlantCodeExpr('c.plant_code'),
-      );
+  const groupPlantFilter = appendRegionSiteFilter(
+    plants,
+    paramIndex,
+    sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
+  );
   queryText += groupPlantFilter.sql;
   queryParams.push(...groupPlantFilter.params);
   paramIndex = groupPlantFilter.nextIndex;

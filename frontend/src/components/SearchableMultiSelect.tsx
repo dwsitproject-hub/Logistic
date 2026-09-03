@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
+import { isBlankFilterOption, sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR).
 // Copied from Dashboard to keep Plant/Site and Incoterm UX consistent.
@@ -32,10 +32,10 @@ export function SearchableMultiSelect({
   const [search, setSearch] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const orderedOptions = useMemo(
-    () => (pinSelectedToTop ? sortFilterOptionsWithSelectedFirst(options, selected) : options),
-    [options, selected, pinSelectedToTop],
-  )
+  const orderedOptions = useMemo(() => {
+    const withoutBlank = options.filter((option) => !isBlankFilterOption(option))
+    return pinSelectedToTop ? sortFilterOptionsWithSelectedFirst(withoutBlank, selected) : withoutBlank
+  }, [options, selected, pinSelectedToTop])
 
   const filtered = search.trim()
     ? orderedOptions.filter((o) => o.toLowerCase().includes(search.toLowerCase().trim()))

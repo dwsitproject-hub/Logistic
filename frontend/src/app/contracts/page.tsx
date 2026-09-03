@@ -43,7 +43,7 @@ import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
-import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
   CARGO_READINESS_UPLOAD_ACCEPT,
   triggerCargoReadinessTemplateDownload,
@@ -461,7 +461,7 @@ function contractPerfDrilldownColumnSubtitle(
         : `Under ${d.product}`
     case 'incoterm':
       if (!isContractPerfDrilldownValueSet(d.product) || !isContractPerfDrilldownValueSet(d.plant)) {
-        return 'Pick plant first'
+        return 'Pick region/site first'
       }
       return isContractPerfDrilldownValueSet(d.incoterm)
         ? `${d.product} › ${d.plant} › ${d.incoterm}`
@@ -979,7 +979,7 @@ function ContractPerfDrilldownSectionHelp({
           </p>
         ) : null}
         <p>
-          Navigate as a tree: <span className="font-medium">Product → Plant → Incoterm → Supplier</span>. Card
+          Navigate as a tree: <span className="font-medium">Product → Region/Site → Incoterm → Supplier</span>. Card
           totals stay at branch level; only Section 3 narrows to your selected path and segment.
         </p>
         {summaryCardStatus === 'Open' ? (
@@ -2106,7 +2106,7 @@ function ContractsPageContent() {
       })
   }, [authReady])
 
-  // Contract Performance: Incoterm from contracts; Group Plant from master_plants (matches filter logic)
+  // Contract Performance: Incoterm from contracts; Region/Site from SAP Discharge Destination
   useEffect(() => {
     if (!authReady) return
     let cancelled = false
@@ -2130,7 +2130,7 @@ function ContractsPageContent() {
         const incs = (incRes.data?.data?.incoterms || []) as string[]
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
         setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
@@ -3550,7 +3550,7 @@ function ContractsPageContent() {
               />
               <div className="w-48">
                 <SearchableMultiSelect
-                  label="Plant"
+                  label="Region/Site"
                   options={availableGroupPlants}
                   selected={contractPerfSelectedGroupPlants}
                   onChange={(values) => {
@@ -3558,8 +3558,8 @@ function ContractsPageContent() {
                     handleContractPerfGroupPlantsChange(values)
                     setCurrentPage(1)
                   }}
-                  placeholder="All group plants"
-                  emptyMessage="No group plants"
+                  placeholder="Select region/site(s)"
+                  emptyMessage="No region/site values"
                   uppercaseOptionLabels
                 />
               </div>
@@ -3780,7 +3780,7 @@ function ContractsPageContent() {
                     >
                       {([
                         { title: 'Product', level: 'product' as const, nodes: unifiedProductNodes },
-                        { title: 'Plant', level: 'plant' as const, nodes: unifiedPlantNodes },
+                        { title: 'Region/Site', level: 'plant' as const, nodes: unifiedPlantNodes },
                         { title: 'Incoterm', level: 'incoterm' as const, nodes: unifiedIncotermNodes },
                         { title: 'Supplier', level: 'supplier' as const, nodes: unifiedSupplierNodes },
                       ] as const).map((col) => {
@@ -4029,8 +4029,8 @@ function ContractsPageContent() {
                   productEmptyMessage="Loading products..."
                   groupEmptyMessage="Loading groups..."
                   supplierEmptyMessage="Loading suppliers..."
-                  groupPlantPlaceholder="Select group plant(s)"
-                  groupPlantEmptyMessage="No group plants"
+                  groupPlantPlaceholder="Select region/site(s)"
+                  groupPlantEmptyMessage="No region/site values"
                 />
               )}
               

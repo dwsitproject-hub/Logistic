@@ -21,6 +21,7 @@ import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
 import {
+  filterRegionSiteOptions,
   normalizeScopeGroupKey,
   rowMatchesGlobalSearch,
   rowMatchesToolbarMultiFilters,
@@ -1556,7 +1557,7 @@ function ShippingPerformancePageContent() {
   )
   const availableIncoterms = useMemo(() => distinctScopeOptions('incoterm'), [distinctScopeOptions])
   const availableGroupPlants = useMemo(
-    () => distinctScopeOptions('plant_site'),
+    () => filterRegionSiteOptions(distinctScopeOptions('plant_site')),
     [distinctScopeOptions],
   )
   const availableProducts = useMemo(() => distinctScopeOptions('product'), [distinctScopeOptions])
@@ -1980,7 +1981,7 @@ function ShippingPerformancePageContent() {
         parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
       }
       if (selectedGroupPlants.length > 0) {
-        parts.push(`Group Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
+        parts.push(`Region/Site: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
       }
       if (selectedVessels.length > 0) {
         parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
@@ -1999,7 +2000,7 @@ function ShippingPerformancePageContent() {
       if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
     }
     if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
-    if (drilldownFilters.plant) parts.push(`Group Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
+    if (drilldownFilters.plant) parts.push(`Region/Site node: ${displayGroupLabel(drilldownFilters.plant)}`)
     if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
     return parts
@@ -2179,15 +2180,15 @@ function ShippingPerformancePageContent() {
             />
             <div className="w-48">
               <SearchableMultiSelect
-                label="Plant"
+                label="Region/Site"
                 options={availableGroupPlants}
                 selected={selectedGroupPlants}
                 onChange={(values) => {
                   handleGroupPlantsChange(values)
                   setCurrentPage(1)
                 }}
-                placeholder="All group plants"
-                emptyMessage="No group plants"
+                placeholder="All region/sites"
+                emptyMessage="No region/site values"
                 uppercaseOptionLabels
               />
             </div>
@@ -2299,7 +2300,7 @@ function ShippingPerformancePageContent() {
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                   {([
                       { title: 'Product',     subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick one',                             level: 'product'  as const },
-                      { title: 'Group Plant', subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',                 level: 'plant'    as const },
+                      { title: 'Region/Site', subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',                 level: 'plant'    as const },
                       { title: 'Incoterm',    subtitle: drilldownFilters.plant    ? `Under ${displayGroupLabel(drilldownFilters.plant)}`    : 'Pick group plant first',             level: 'incoterm' as const },
                       { title: 'Vessel',   subtitle: drilldownFilters.incoterm ? `Under ${displayGroupLabel(drilldownFilters.incoterm)}` : 'Pick incoterm first',             level: 'vessel'   as const },
                     ] as const).map((col) => {
@@ -2505,8 +2506,8 @@ function ShippingPerformancePageContent() {
               }}
               incotermEmptyMessage="No incoterms"
               productEmptyMessage="No products"
-              groupPlantPlaceholder="Select group plant(s)"
-              groupPlantEmptyMessage="No group plants"
+              groupPlantPlaceholder="Select region/site(s)"
+              groupPlantEmptyMessage="No region/site values"
             />
           </CardContent>
         </Card>

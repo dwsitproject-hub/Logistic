@@ -17,6 +17,7 @@
  */
 
 import { sqlSapGrStoStatusFromJson } from './sapIncotermMetrics';
+import { sapDischargeDestinationFromJson } from './sapTruckingLoadingLocationSql';
 
 export const SQL_SPD_CONTRACT_REFF_PO = (dataExpr: string): string => `NULLIF(TRIM(COALESCE(
   ${dataExpr}->'contract'->>'contract_reference_po',
@@ -64,7 +65,8 @@ export function sqlB2bEndingChildMapSelect(): string {
         plant_code,
         company_name,
         buyer,
-        unload_location
+        unload_location,
+        discharge_destination
       FROM (
         SELECT
           ${SQL_SPD_CONTRACT_REFF_PO('ch_spd.data')} AS origin_po,
@@ -78,6 +80,7 @@ export function sqlB2bEndingChildMapSelect(): string {
             ${SQL_SPD_TRUCK_DISCHARGE_LOCATION('ch_spd.data')},
             ${SQL_CHILD_BUYER}
           ) AS unload_location,
+          ${sapDischargeDestinationFromJson('ch_spd.data')} AS discharge_destination,
           ch.contract_date,
           ch.created_at
         FROM contracts ch
@@ -117,6 +120,10 @@ export function sqlB2bEndingUnloadExpr(fallbackExpr: string, alias = 'b2b_end'):
 
 export function sqlB2bEndingBuyerExpr(originBuyerExpr: string, alias = 'b2b_end'): string {
   return `COALESCE(NULLIF(TRIM(${alias}.buyer), ''), ${originBuyerExpr})`;
+}
+
+export function sqlB2bEndingDischargeDestExpr(originDestExpr: string, alias = 'b2b_end'): string {
+  return `COALESCE(NULLIF(TRIM(${alias}.discharge_destination), ''), ${originDestExpr})`;
 }
 
 /** Scalar lookup against the snapshot PK (not a sap_processed_data scan). */
@@ -240,6 +247,7 @@ export function buildB2bEndingChildSnapshotRefreshSql(): string {
       company_name,
       buyer,
       unload_location,
+      discharge_destination,
       child_gr_sto_status,
       child_count,
       refreshed_at
@@ -250,6 +258,7 @@ export function buildB2bEndingChildSnapshotRefreshSql(): string {
       latest.company_name,
       latest.buyer,
       latest.unload_location,
+      latest.discharge_destination,
       agg.child_gr_sto_status,
       agg.child_count,
       NOW()

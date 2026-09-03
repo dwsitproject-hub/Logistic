@@ -42,12 +42,14 @@ export const sapTruckingListDischargeLocationSql = `
 
 /**
  * SAP Discharge Destination — source of truth for Trucking modal Plant/Site
- * (e.g. PO 9231000077 → BONTANG). Prefer shipment JSON, then raw column.
+ * and operational Region/Site filters. Prefer shipment JSON, then raw column.
  */
-export const sapDischargeDestinationSql = `
-  NULLIF(TRIM(COALESCE(
-    NULLIF(TRIM(spd.data->'shipment'->>'discharge_destination'), ''),
-    NULLIF(TRIM(spd.data->'raw'->>'Discharge Destination'), ''),
-    NULLIF(TRIM(spd.data->>'discharge_destination'), '')
-  )), '')
-`;
+export function sapDischargeDestinationFromJson(dataExpr: string): string {
+  return `NULLIF(TRIM(COALESCE(
+    NULLIF(TRIM(${dataExpr}->'shipment'->>'discharge_destination'), ''),
+    NULLIF(TRIM(${dataExpr}->'raw'->>'Discharge Destination'), ''),
+    NULLIF(TRIM(${dataExpr}->>'discharge_destination'), '')
+  )), '')`;
+}
+
+export const sapDischargeDestinationSql = sapDischargeDestinationFromJson('spd.data');

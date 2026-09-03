@@ -5,6 +5,7 @@ import {
   sqlB2bEndingBuyerAgg,
   sqlB2bEndingBuyerExpr,
   sqlB2bEndingChildMapSelect,
+  sqlB2bEndingDischargeDestExpr,
   sqlB2bEndingPlantCodeAgg,
   sqlB2bEndingPlantCodeExpr,
   sqlB2bEndingUnloadExpr,
@@ -32,6 +33,8 @@ describe('b2bOriginEndingSql', () => {
     expect(sql).toContain('DISTINCT ON (origin_po)');
     expect(sql).toContain('DISTINCT ON (spd.contract_number)');
     expect(sql).toContain('ORDER BY origin_po, contract_date DESC');
+    expect(sql).toContain('discharge_destination');
+    expect(sql).toContain('Discharge Destination');
   });
 
   it('snapshot refresh inserts the origin_po map', () => {
@@ -40,15 +43,19 @@ describe('b2bOriginEndingSql', () => {
     expect(sql).toContain('DISTINCT ON (origin_po)');
     expect(sql).toContain('child_gr_sto_status');
     expect(sql).toContain('child_count');
+    expect(sql).toContain('discharge_destination');
   });
 
-  it('prefers child plant, unload, and buyer over origin fallbacks', () => {
+  it('prefers child plant, unload, destinasi, and buyer over origin fallbacks', () => {
     expect(sqlB2bEndingPlantCodeExpr('c.plant_code')).toContain('b2b_end.plant_code');
     expect(sqlB2bEndingPlantCodeExpr('c.plant_code')).toContain('c.plant_code');
     expect(sqlB2bEndingUnloadExpr('t.unloading_location')).toContain('b2b_end.unload_location');
     expect(sqlB2bEndingUnloadExpr('t.unloading_location')).toContain('t.unloading_location');
     expect(sqlB2bEndingBuyerExpr('c.buyer')).toContain('b2b_end.buyer');
     expect(sqlB2bEndingBuyerExpr('c.buyer')).toContain('c.buyer');
+    expect(sqlB2bEndingDischargeDestExpr("spd.data->'shipment'->>'discharge_destination'")).toContain(
+      'b2b_end.discharge_destination',
+    );
     expect(sqlB2bEndingPlantCodeAgg()).toContain('MAX(');
     expect(sqlB2bEndingBuyerAgg()).toContain('b2b_end.buyer');
   });

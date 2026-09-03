@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { buildOilLossDrilldownTree, countUniqueOilLossContracts, sumOilLossKgFromRows } from '@/lib/oilLossDrilldown'
+import {
+  buildOilLossDrilldownTree,
+  countUniqueOilLossContracts,
+  EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
+  groupLabelForRow,
+  OIL_LOSS_DRILLDOWN_CATEGORIES,
+  oilLossDrilldownColumnSubtitle,
+  sumOilLossKgFromRows,
+} from '@/lib/oilLossDrilldown'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 
 describe('oilLossDrilldown contract-level qty', () => {
@@ -137,5 +145,35 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
     ]
     expect(countUniqueOilLossContracts(landRows)).toBe(2)
     expect(sumOilLossKgFromRows(landRows)).toBe(-4_000)
+  })
+})
+
+describe('oilLossDrilldown Region/Site (Discharge Destination)', () => {
+  it('labels the plant level Region/Site', () => {
+    expect(OIL_LOSS_DRILLDOWN_CATEGORIES.find((c) => c.level === 'plant')?.title).toBe('Region/Site')
+    expect(
+      oilLossDrilldownColumnSubtitle('incoterm', {
+        ...EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
+        product: 'CPO',
+      }),
+    ).toBe('Pick region/site first')
+  })
+
+  it('uses plant_site destinasi over master group_plant', () => {
+    expect(
+      groupLabelForRow(
+        {
+          id: '1',
+          contract_number: 'CN-1',
+          product: 'CPO',
+          group_plant: 'Master Area',
+          plant_site: 'BONTANG',
+          incoterm: 'FOB',
+          quantity_delivery: 100,
+          quantity_received: 90,
+        } as OilLossSourceRow,
+        'plant',
+      ),
+    ).toBe('BONTANG')
   })
 })

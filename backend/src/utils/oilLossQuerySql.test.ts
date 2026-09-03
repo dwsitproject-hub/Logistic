@@ -18,7 +18,10 @@ describe('buildOilLossMainSql', () => {
     expect(sql).toContain('qty_receive_resolved < qty_delivery_resolved');
     expect(sql).toContain('b2b_end');
     expect(sql).toContain('Truck Discharge Location');
+    expect(sql).toContain('Discharge Destination');
     expect(sql).toContain('b2b_ending_buyer');
+    expect(sql).not.toContain('plants_by_code');
+    expect(sql).not.toContain('master_plants');
     expect(sql).toContain('quantity_delivery_trucking');
     expect(sql).toContain('quantity_delivery_vessel');
   });

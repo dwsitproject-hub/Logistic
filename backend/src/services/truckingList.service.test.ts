@@ -38,7 +38,7 @@ describe('truckingList.service', () => {
     expect(deferred.preOuterQuery).not.toContain(innerStage);
   });
 
-  it('originGroupPlant filters by contract plant, not B2B ending overlay', () => {
+  it('plant toolbar filters by SAP Discharge Destination (Region/Site)', () => {
     const req = {
       query: { plant: 'Bontang', page: '1', limit: '20' },
     } as Parameters<typeof buildTruckingListQuery>[0];
@@ -52,20 +52,20 @@ describe('truckingList.service', () => {
       { omitStatusFilter: true, originGroupPlant: true },
     );
 
-    expect(overlay.preOuterQuery).toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
-    expect(origin.preOuterQuery).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
-    expect(unplannedHybrid.preOuterQuery).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(overlay.preOuterQuery).toContain('Discharge Destination');
+    expect(origin.preOuterQuery).toContain('Discharge Destination');
+    expect(unplannedHybrid.preOuterQuery).toContain('Discharge Destination');
     expect(origin.filterCacheKey).toContain('originPlant=1');
     expect(unplannedHybrid.filterCacheKey).toContain('originPlant=1');
     expect(overlay.filterCacheKey).not.toContain('originPlant=1');
   });
 
-  it('ALL list plant filter uses origin plant so Unplanned badges match the Unplanned card', () => {
+  it('ALL list plant filter uses Region/Site destinasi', () => {
     const req = {
       query: { plant: 'Bontang', status: 'ALL', page: '1', limit: '20' },
     } as Parameters<typeof buildTruckingListQuery>[0];
     const allList = buildTruckingListQuery(req, { omitStatusFilter: true, originGroupPlant: true });
-    expect(allList.preOuterQuery).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
+    expect(allList.preOuterQuery).toContain('Discharge Destination');
     expect(allList.filterCacheKey).toContain('originPlant=1');
   });
 

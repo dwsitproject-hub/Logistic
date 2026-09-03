@@ -78,7 +78,12 @@ import {
   sqlEffectiveDeliveryEndDateExpr,
   parseCommaSeparatedQuery,
 } from '../services/latePerformance.service';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import {
+  appendRegionSiteFilter,
+  filterRegionSiteOptionValues,
+  REGION_SITE_FILTER_OPTIONS_SQL,
+  sqlRegionSiteRawFromJsonAndB2b,
+} from '../utils/regionSiteSql';
 import {
   sqlB2bEndingBuyerAgg,
   sqlB2bEndingCompanyAgg,
@@ -344,6 +349,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           MAX(c.logistics_classification) AS logistics_classification,
           MAX(c.po_classification) AS po_classification,
           ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           MAX(c.created_at) AS created_at,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
@@ -493,14 +499,10 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       queryText += ` AND COALESCE(base.total_sto_quantity, 0) > 0`;
     }
 
-    // Group Plant filter via master_plants (matches contract performance / filter-options).
+    // Region/Site filter via SAP Discharge Destination (query param plant= unchanged).
     const plantArr = Array.isArray(plant) ? plant : (plant ? [plant] : []);
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    const groupPlantFilter = appendGroupPlantFilter(
-      plants,
-      paramIndex,
-      groupPlantExpr('base.plant_code', 'base.company_name'),
-    );
+    const groupPlantFilter = appendRegionSiteFilter(plants, paramIndex, 'base.plant_site');
     queryText += groupPlantFilter.sql;
     queryParams.push(...groupPlantFilter.params);
     paramIndex = groupPlantFilter.nextIndex;
@@ -939,23 +941,46 @@ export const getContractFilterIncoterms = async (_req: AuthRequest, res: Respons
   }
 };
 
-/** Contract Performance — Group Plant options from master_plants (same source as plant_site filter logic). */
+/** Operational Region/Site options = DISTINCT SAP Discharge Destination (no Blank). */
 export const getContractFilterGroupPlants = async (_req: AuthRequest, res: Response) => {
+  try {
+    const groupPlants = await ttlMemo('filter-options:region-sites', 5 * 60 * 1000, async () => {
+      const r = await query(REGION_SITE_FILTER_OPTIONS_SQL);
+      return filterRegionSiteOptionValues(
+        r.rows.map((x: { group_plant: string }) => String(x.group_plant)),
+      );
+    });
+    return res.json({
+      success: true,
+      data: { groupPlants },
+    });
+  } catch (error) {
+    logger.error('Get contract region/site filter options error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch region/site filter options' } });
+  }
+};
+
+/** Master Plant List group_plant values — Users assignment and commercial documents. */
+export const getContractFilterMasterGroupPlants = async (_req: AuthRequest, res: Response) => {
   try {
     const r = await query(
       `
-      SELECT DISTINCT COALESCE(NULLIF(TRIM(group_plant), ''), 'Blank') AS group_plant
+      SELECT DISTINCT NULLIF(TRIM(group_plant), '') AS group_plant
       FROM master_plants
-      WHERE group_plant IS NOT NULL
+      WHERE NULLIF(TRIM(group_plant), '') IS NOT NULL
       ORDER BY group_plant
       `,
     );
     return res.json({
       success: true,
-      data: { groupPlants: r.rows.map((x: { group_plant: string }) => String(x.group_plant)) },
+      data: {
+        groupPlants: r.rows
+          .map((x: { group_plant: string }) => String(x.group_plant))
+          .filter((name) => name.trim() !== '' && name.toLowerCase() !== 'blank'),
+      },
     });
   } catch (error) {
-    logger.error('Get contract group plant filter options error:', error);
+    logger.error('Get master group plant filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch group plant filter options' } });
   }
 };
@@ -1086,6 +1111,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
           ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
           ${sqlB2bEndingCompanyAgg()} AS company_name,
           -- Align with GET /contracts: incoterm-aware SAP import status (GR PO vs GR STO).
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
@@ -1181,31 +1207,8 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         GROUP BY c.contract_id
       )
       SELECT
-        base.*,
-        COALESCE(
-          NULLIF(TRIM(pnc.group_plant), ''),
-          NULLIF(TRIM(pna.group_plant), ''),
-          'Blank'
-        ) AS plant_site
+        base.*
       FROM base
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-          AND NULLIF(TRIM(base.company_name), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(base.company_name, '')))
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pnc ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pna ON TRUE
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
       ${PO_PLACEHOLDER_EXCLUSION_SQL}
@@ -1290,23 +1293,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
     }
 
-    // Plant filter is same as GET /contracts: exists in SEA discharge port or LAND location.
     const plantArr = scope === 'filtered' ? (Array.isArray(plant) ? plant : (plant ? [plant] : [])) : [];
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    if (plants.length > 0) {
-      const blankIncluded = plants.some((p) => p === 'Blank');
-      const nonBlank = plants.filter((p) => p !== 'Blank');
-      const parts: string[] = [];
-      if (blankIncluded) parts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
-      if (nonBlank.length > 0) {
-        const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-        parts.push(
-          `COALESCE(NULLIF(TRIM(pnc.group_plant), ''), NULLIF(TRIM(pna.group_plant), ''), 'Blank') IN (${ph})`
-        );
-        queryParams.push(...nonBlank);
-      }
-      queryText += ` AND (${parts.join(' OR ')})`;
-    }
+    const regionSiteFilter = appendRegionSiteFilter(plants, paramIndex, 'base.plant_site');
+    queryText += regionSiteFilter.sql;
+    queryParams.push(...regionSiteFilter.params);
+    paramIndex = regionSiteFilter.nextIndex;
 
     if (scope === 'filtered' && selectedIncoterms) {
       const incs = selectedIncoterms.split(',').map((s) => s.trim()).filter(Boolean);
@@ -1329,7 +1321,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         base.contract_id ${sqlIlikeParam(paramIndex)}
         OR COALESCE(base.product, '') ${sqlIlikeParam(paramIndex)}
         OR COALESCE(base.group_name, '') ${sqlIlikeParam(paramIndex)}
-        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(base.plant_site, base.plant_code, '') ${sqlIlikeParam(paramIndex)}
       )`;
       queryParams.push(likeContainsPattern(globalSearch));
       paramIndex++;

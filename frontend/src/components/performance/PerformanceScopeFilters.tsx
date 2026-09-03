@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/button'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { filterIncotermOptions } from '@/lib/globalScopeFilters'
+import { filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { X } from 'lucide-react'
 
 export type PerformanceStatusFilter = 'All' | 'Open' | 'Closed'
@@ -67,7 +67,7 @@ export type PerformanceScopeFiltersProps = {
 
 export function PerformanceScopeFilters({
   hideGroupPlantFilter = false,
-  groupPlantLabel = 'Group Plant',
+  groupPlantLabel = 'Region/Site',
   uppercaseGroupPlantLabels = false,
   incotermOptions,
   selectedIncoterms,
@@ -115,8 +115,8 @@ export function PerformanceScopeFilters({
   onClear,
   incotermPlaceholder = 'Select incoterm(s)',
   incotermEmptyMessage = 'No incoterms',
-  groupPlantPlaceholder = 'Select group plant(s)',
-  groupPlantEmptyMessage = 'No group plants',
+  groupPlantPlaceholder = 'Select region/site(s)',
+  groupPlantEmptyMessage = 'No region/site values',
 }: PerformanceScopeFiltersProps) {
   const showGroupPlant = !hideGroupPlantFilter
   const selectorCount =
@@ -206,7 +206,7 @@ export function PerformanceScopeFilters({
           {showGroupPlant && (
             <SearchableMultiSelect
               label={groupPlantLabel}
-              options={groupPlantOptions}
+              options={filterRegionSiteOptions(groupPlantOptions)}
               selected={selectedGroupPlants}
               onChange={onGroupPlantsChange}
               placeholder={groupPlantPlaceholder}

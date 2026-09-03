@@ -19,6 +19,29 @@ export function isBlankFilterOption(value: unknown): boolean {
   return text.length === 0 || text.toLowerCase() === 'blank'
 }
 
+export function filterRegionSiteOptions(options: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const option of options) {
+    if (isBlankFilterOption(option)) continue
+    const trimmed = String(option).trim()
+    const key = trimmed.toUpperCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
+}
+
+export function valueInRegionSiteList(value: unknown, selected: string[]): boolean {
+  const destSelected = selected.filter((item) => !isBlankFilterOption(item))
+  if (destSelected.length === 0) return true
+  const row = String(value ?? '').trim()
+  if (isBlankFilterOption(row)) return false
+  const rowKey = row.toUpperCase()
+  return destSelected.some((item) => String(item).trim().toUpperCase() === rowKey)
+}
+
 export function filterIncotermOptions(options: string[]): string[] {
   return options.filter((option) => !isBlankFilterOption(option))
 }
@@ -92,8 +115,7 @@ export function rowMatchesToolbarMultiFilters(
     if (!filters.selectedSuppliers.includes(sup)) return false
   }
   if (filters.selectedGroupPlants && filters.selectedGroupPlants.length > 0) {
-    const groupPlant = normalizeScopeGroupKey(row.group_plant ?? row.plant_site)
-    if (!filters.selectedGroupPlants.includes(groupPlant)) return false
+    if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
   }
   return true
 }

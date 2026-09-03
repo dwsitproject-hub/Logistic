@@ -34,7 +34,7 @@ export const FIELD_HELP = {
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 
-  companyName: `From Buyer in latest SAP data. For B2B origin (empty Contract Reff PO), Buyer / Company Name overlay the latest child PO (same as Group Plant and Truck Unload).`,
+  companyName: `From Buyer in latest SAP data. For B2B origin (empty Contract Reff PO), Buyer / Company Name overlay the latest child PO (same as Region/Site and Truck Unload).`,
   b2bBuyer: `SAP Buyer on this PO. For B2B origin (empty Contract Reff PO), Buyer overlays the latest child PO — not Truck Discharge Location.`,
 
   b2bParties: `Lists child POs whose Contract Reff PO matches this origin PO, with Buyer, Supplier, Delivery Qty, and Receive Qty.`,

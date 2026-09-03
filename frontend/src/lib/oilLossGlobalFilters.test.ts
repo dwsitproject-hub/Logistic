@@ -48,6 +48,21 @@ describe('oilLossGlobalFilters', () => {
     expect(filtered[0].product).toBe('CPO')
   })
 
+  it('matches Region/Site destinasi case-insensitively and ignores Blank', () => {
+    const rows = [
+      row({ product: 'CPO', group_plant: 'Bontang', plant_site: 'Bontang' }),
+      row({ product: 'CPO', group_plant: 'Blank', plant_site: 'Blank' }),
+    ]
+    const filtered = applyOilLossGlobalFilters({
+      rows,
+      period: 'YTD',
+      transport: 'Vessel',
+      selectedGroupPlants: ['BONTANG', 'Blank'],
+    })
+    expect(filtered).toHaveLength(1)
+    expect(filtered[0].plant_site || filtered[0].group_plant).toBe('Bontang')
+  })
+
   it('applyOilLossGlobalFilters uses dateFrom/dateTo overrides when provided', () => {
     const rows = [
       row({ contract_date: '2026-01-10' }),

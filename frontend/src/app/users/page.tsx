@@ -138,7 +138,7 @@ export default function UsersPage() {
       const [usersRes, rolesRes, groupPlantsRes, dashboardProductsRes, masterProductsRes] = await Promise.all([
         api.get('/users'),
         api.get('/roles'),
-        api.get('/contracts/filter-options/group-plants'),
+        api.get('/contracts/filter-options/master-group-plants'),
         api.get('/dashboard/filter-options/products'),
         api.get('/products', { params: { page: 1, limit: 500 } }),
       ])

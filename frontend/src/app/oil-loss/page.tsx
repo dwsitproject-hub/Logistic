@@ -21,6 +21,7 @@ import {
   type ContractDetailModalContract,
 } from '@/components/contracts/ContractDetailModal'
 import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
+import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
   buildOilLossSummaryForDateRange,
   type ROilLossKey,
@@ -401,7 +402,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant/Site',
+      label: 'Region/Site',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
@@ -649,7 +650,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant/Site',
+      label: 'Region/Site',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
@@ -911,7 +912,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant/Site',
+      label: 'Region/Site',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
@@ -1225,7 +1226,7 @@ export default function OilLossPage() {
           : productPayload && typeof productPayload === 'object' && 'products' in productPayload
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
       })
       .catch((e) => {
@@ -1778,12 +1779,12 @@ export default function OilLossPage() {
             />
             <div className="w-48">
               <SearchableMultiSelect
-                label="Plant"
+                label="Region/Site"
                 options={availableGroupPlants}
                 selected={selectedGroupPlants}
                 onChange={handleGroupPlantsChange}
-                placeholder="All group plants"
-                emptyMessage="No group plants"
+                placeholder="All region/sites"
+                emptyMessage="No region/site values"
                 uppercaseOptionLabels
               />
             </div>

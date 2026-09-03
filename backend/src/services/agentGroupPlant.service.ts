@@ -5,43 +5,30 @@ import {
   loadLatePerformanceRows,
   LatePerformanceFilters,
 } from './latePerformance.service'
+import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql'
+import { REGION_SITE_FILTER_OPTIONS_SQL, sqlRegionSiteDisplayFromJsonAndB2b } from '../utils/regionSiteSql'
 
 /**
- * "Bontang", "Karawang", ... are Group Plant values from the Master Plant List. Users refer
- * to them as area names across Contracts, Shipments, Trucking, Contract Performance,
- * Shipping Performance and Oil Loss, so the agent has to resolve them the same way.
- *
- * Contracts carry (company_name, plant_code); the area name lives on master_plants.group_plant.
+ * Region/Site = SAP Discharge Destination (same dimension as operational filters).
+ * Keep this in step with latePerformance.service plant_site.
  */
 
-/**
- * Canonical contract -> group plant resolution, mirroring latePerformance.service.ts
- * (which is the copy the Contract Performance page uses). Preferred match is
- * plant_code + company_name; falls back to plant_code alone; unresolved becomes 'Blank'.
- * Keep the two in step — if the page's join changes, this must change with it.
- */
 export const SQL_GROUP_PLANT_LATERAL_JOINS = `
   LEFT JOIN LATERAL (
-    SELECT mp.group_plant
-    FROM master_plants mp
-    WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
-      AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-      AND NULLIF(TRIM(c.company_name), '') IS NOT NULL
-      AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(c.company_name, '')))
-    ORDER BY mp.updated_at DESC NULLS LAST
+    SELECT spd.data
+    FROM sap_processed_data spd
+    WHERE spd.contract_number = c.contract_id
+    ORDER BY spd.created_at DESC NULLS LAST
     LIMIT 1
-  ) pnc ON TRUE
-  LEFT JOIN LATERAL (
-    SELECT mp.group_plant
-    FROM master_plants mp
-    WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
-      AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-    ORDER BY mp.updated_at DESC NULLS LAST
-    LIMIT 1
-  ) pna ON TRUE
+  ) spd_rs ON TRUE
+  ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number', alias: 'b2b_end_rs' })}
 `
 
-export const SQL_RESOLVED_GROUP_PLANT = `COALESCE(NULLIF(TRIM(pnc.group_plant), ''), NULLIF(TRIM(pna.group_plant), ''), 'Blank')`
+export const SQL_RESOLVED_GROUP_PLANT = sqlRegionSiteDisplayFromJsonAndB2b('spd_rs.data', 'b2b_end_rs')
+
+function sqlRegionSiteEqualsParam(paramSql: string): string {
+  return `UPPER(NULLIF(TRIM(${SQL_RESOLVED_GROUP_PLANT}), 'Blank')) = UPPER(${paramSql})`
+}
 
 /**
  * Delivered quantity by incoterm, matching the expression already used for the agent's
@@ -91,23 +78,18 @@ export type GroupPlantProductRow = {
 const GROUP_PLANT_TTL_MS = 10 * 60 * 1000
 let groupPlantCache: { names: string[]; expiresAt: number } | null = null
 
-/** Reset the memoized Group Plant list (tests, or after a Master Plant List edit). */
+/** Reset the memoized Region/Site list (tests, or after SAP import). */
 export function resetGroupPlantCache(): void {
   groupPlantCache = null
 }
 
-/** Group Plant values that actually exist in the Master Plant List. */
+/** Distinct SAP Discharge Destination values (operational Region/Site). */
 export async function listGroupPlants(): Promise<string[]> {
   if (groupPlantCache && Date.now() < groupPlantCache.expiresAt) {
     return groupPlantCache.names
   }
-  const res = await query(`
-    SELECT DISTINCT TRIM(group_plant) AS group_plant
-    FROM master_plants
-    WHERE NULLIF(TRIM(group_plant), '') IS NOT NULL
-    ORDER BY 1
-  `)
-  const names = (res.rows || []).map((r: any) => String(r.group_plant)).filter(Boolean)
+  const res = await query(REGION_SITE_FILTER_OPTIONS_SQL)
+  const names = (res.rows || []).map((r: { group_plant: string }) => String(r.group_plant)).filter(Boolean)
   groupPlantCache = { names, expiresAt: Date.now() + GROUP_PLANT_TTL_MS }
   return names
 }
@@ -148,7 +130,7 @@ export async function getGroupPlantProductBreakdown(
     LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
     ${SQL_GROUP_PLANT_LATERAL_JOINS}
     WHERE ${sqlContractIsPresent('c')}
-      AND ${SQL_RESOLVED_GROUP_PLANT} = $1
+      AND ${sqlRegionSiteEqualsParam('$1')}
     GROUP BY COALESCE(NULLIF(TRIM(c.product), ''), 'Blank')
     ORDER BY outstanding_quantity DESC NULLS LAST
     `,
@@ -336,7 +318,7 @@ export async function getContractAgingBuckets(opts?: {
   }
   if (opts?.groupPlant) {
     params.push(opts.groupPlant)
-    where += ` AND ${SQL_RESOLVED_GROUP_PLANT} = $${params.length}`
+    where += ` AND ${sqlRegionSiteEqualsParam(`$${params.length}`)}`
   }
 
   const res = await query(
@@ -435,7 +417,7 @@ const DIMENSION_SQL: Record<BreakdownDimension, { expr: string; label: string }>
   supplier: { expr: `COALESCE(NULLIF(TRIM(c.supplier), ''), 'Unknown')`, label: 'Supplier' },
   group_supplier: { expr: `COALESCE(NULLIF(TRIM(c.group_name), ''), 'Ungrouped')`, label: 'Group Supplier' },
   product: { expr: `COALESCE(NULLIF(TRIM(c.product), ''), 'Blank')`, label: 'Product' },
-  group_plant: { expr: SQL_RESOLVED_GROUP_PLANT, label: 'Group Plant' },
+  group_plant: { expr: SQL_RESOLVED_GROUP_PLANT, label: 'Region/Site' },
 };
 
 export type BreakdownRow = {
@@ -481,7 +463,7 @@ export async function getFlexibleBreakdown(req: BreakdownRequest): Promise<Break
   }
   if (req.groupPlant) {
     params.push(req.groupPlant)
-    where.push(`${SQL_RESOLVED_GROUP_PLANT} = $${params.length}`)
+    where.push(sqlRegionSiteEqualsParam(`$${params.length}`))
   }
   if (req.incoterm) {
     params.push(req.incoterm)

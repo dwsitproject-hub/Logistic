@@ -47,6 +47,7 @@ import {
   sqlB2bEndingPlantCodeAgg,
   sqlB2bOriginEndingChildLateralJoin,
 } from '../utils/b2bOriginEndingSql';
+import { appendRegionSiteFilter, sqlRegionSiteRawFromJsonAndB2b } from '../utils/regionSiteSql';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -307,6 +308,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           -- drilldown card groups the same way the View table does (sqlB2bEndingPlantCodeAgg),
           -- keeping the Contract Performance card's OS total in sync with the table's OS sum.
           ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
           ${sqlB2bEndingCompanyAgg()} AS company_name,
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -398,11 +400,6 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
       ${buildLogisticsGrStatusPrecomputeCte({ sourceCte: 'base', idColumn: 'id' })}
       SELECT
         base.*,
-        COALESCE(
-          NULLIF(TRIM(pnc.group_plant), ''),
-          NULLIF(TRIM(pna.group_plant), ''),
-          'Blank'
-        ) AS plant_site,
         (${sqlContractInActiveLogisticsOpenOsExpr({
           contractUuidExpr: 'base.id',
           contractNumberExpr: 'base.contract_id',
@@ -415,24 +412,6 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         })}) AS in_logistics_open_os
       FROM base
       LEFT JOIN logistics_gr_status lgs ON lgs.id = base.id
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-          AND NULLIF(TRIM(base.company_name), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(base.company_name, '')))
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pnc ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pna ON TRUE
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
       ${PO_PLACEHOLDER_EXCLUSION_SQL}
@@ -520,17 +499,10 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   }
 
   if (plants.length > 0) {
-    const blankIncluded = plants.some((p) => p === 'Blank');
-    const nonBlank = plants.filter((p) => p !== 'Blank');
-    const parts: string[] = [];
-    const groupPlantResolved = `COALESCE(NULLIF(TRIM(pnc.group_plant), ''), NULLIF(TRIM(pna.group_plant), ''), 'Blank')`;
-    if (blankIncluded) parts.push(`(${groupPlantResolved} = 'Blank')`);
-    if (nonBlank.length > 0) {
-      const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-      parts.push(`${groupPlantResolved} IN (${ph})`);
-      queryParams.push(...nonBlank);
-    }
-    queryText += ` AND (${parts.join(' OR ')})`;
+    const regionSiteFilter = appendRegionSiteFilter(plants, paramIndex, 'base.plant_site');
+    queryText += regionSiteFilter.sql;
+    queryParams.push(...regionSiteFilter.params);
+    paramIndex = regionSiteFilter.nextIndex;
   }
 
   if (scope === 'filtered' && selectedIncoterms) {
@@ -554,7 +526,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         base.contract_id ILIKE $${paramIndex}
         OR COALESCE(base.product, '') ILIKE $${paramIndex}
         OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
-        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ILIKE $${paramIndex}
+        OR COALESCE(base.plant_site, base.plant_code, '') ILIKE $${paramIndex}
       )`;
     queryParams.push(`%${globalSearch}%`);
     paramIndex++;

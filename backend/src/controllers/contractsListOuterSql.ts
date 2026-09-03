@@ -1,8 +1,4 @@
-import { groupPlantExpr } from '../utils/groupPlantSql';
-import {
-  sqlContractOutstandingSignedExpr,
-  sqlSapGrPoStatusFromJson,
-} from '../utils/sapIncotermMetrics';
+import { sqlContractOutstandingSignedExpr, sqlSapGrPoStatusFromJson } from '../utils/sapIncotermMetrics';
 import { buildContractsListOuterCycleFieldSelectSql } from '../utils/contractsListCycleSql';
 import { sqlContractImportStatusIsCancelledExpr } from '../utils/contractDeliveryStatus';
 
@@ -77,7 +73,7 @@ function buildContractsListRowProjection(options: ContractsListOuterSqlOptions =
         base.logistics_classification,
         base.po_classification,
         base.cargo_readiness_date,
-        ${groupPlantExpr('base.plant_code', 'base.company_name')} AS plant_site,
+        base.plant_site,
         base.created_at,
         base.po_numbers,
         base.sto_number,

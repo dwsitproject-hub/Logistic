@@ -4,6 +4,7 @@ import {
   matchesOilLossTruckSegment,
   matchesOilLossVesselSegment,
 } from '@/lib/oilLossEligibility'
+import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 
 export type OilLossGlobalPeriodKey = 'YTD' | 'MTD' | `month-${number}`
 
@@ -173,8 +174,9 @@ export function applyOilLossGlobalFilters({
     if (!matchesOilLossModeFilter(row.transport_mode, selectedModes)) return false
     const incoterm = String(row.incoterm || '').trim() || 'Blank'
     if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(incoterm)) return false
-    const groupPlant = String(row.group_plant || '').trim() || 'Blank'
-    if (selectedGroupPlants.length > 0 && !selectedGroupPlants.includes(groupPlant)) return false
+    if (selectedGroupPlants.length > 0 && !valueInRegionSiteList(row.group_plant || row.plant_site, selectedGroupPlants)) {
+      return false
+    }
     if (!matchesOilLossGlobalTransportFilter(row, transport)) return false
     if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)

@@ -5,7 +5,8 @@
 import { sqlIsContractSapInactiveForOsExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
-import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr } from './groupPlantSql';
+import { appendRegionSiteFilter, sqlRegionSiteDisplayForContract, sqlRegionSiteRawForContract } from './regionSiteSql';
 import {
   sqlB2bEndingBuyerExpr,
   sqlB2bEndingUnloadExpr,
@@ -193,7 +194,7 @@ export function appendTruckingUnplannedBacklogGlobalSearch(
       OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.product::text, '') ILIKE ${likeExpr}
       OR COALESCE(${contractExtNoSubquery('c.contract_id', 'c.po_number')}::text, '') ILIKE ${likeExpr}
-      OR COALESCE(${TRUCKING_UNPLANNED_GROUP_PLANT}::text, '') ILIKE ${likeExpr}
+      OR COALESCE(${sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number')}::text, '') ILIKE ${likeExpr}
     )`;
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 };
 }
@@ -271,11 +272,10 @@ export function buildTruckingUnplannedContractToolbarScope(input: {
     params.push(input.contract);
     cp += 1;
   }
-  const plantFilter = appendGroupPlantFilter(
+  const plantFilter = appendRegionSiteFilter(
     input.plants,
     cp,
-    groupPlantExpr('c.plant_code', 'c.company_name'),
-    'c.plant_code',
+    sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
   );
   if (plantFilter.sql) {
     parts.push(plantFilter.sql.replace(/^ AND /, ''));

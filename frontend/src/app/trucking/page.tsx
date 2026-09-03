@@ -109,7 +109,7 @@ import {
   operationalRowFieldTooltipText,
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
-import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
 
@@ -2027,7 +2027,7 @@ function TruckingPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
         setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
@@ -2825,7 +2825,7 @@ function TruckingPageContent() {
     }
     if (selectedGroupPlants.length > 0) {
       parts.push(
-        `Plant${selectedGroupPlants.length > 1 ? 's' : ''}: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
+        `Region/Site: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
       )
     }
     if (Object.keys(columnFilters).length > 0) {
@@ -3952,8 +3952,8 @@ function TruckingPageContent() {
                 incotermEmptyMessage="Loading incoterms..."
                 productEmptyMessage="Loading products..."
                 supplierEmptyMessage="Loading suppliers..."
-                groupPlantPlaceholder="Select group plant(s)"
-                groupPlantEmptyMessage="No group plants"
+                groupPlantPlaceholder="Select region/site(s)"
+                groupPlantEmptyMessage="No region/site values"
               />
 
               <div className="flex flex-wrap items-center gap-4">

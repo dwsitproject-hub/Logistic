@@ -30,6 +30,8 @@ import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
+import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
+import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -420,7 +422,8 @@ const SHIPPING_PERFORMANCE_SQL = `
             spd.data->>'Contract Reff PO Ini',
             spd.data->'raw'->>'Contract Reff PO Ini',
             spd.data->'raw'->>'CONTRACT REFF PO'
-          )), '') AS contract_reference_po
+          )), '') AS contract_reference_po,
+          ${sapDischargeDestinationFromJson('spd.data')} AS discharge_destination
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
@@ -487,7 +490,8 @@ const SHIPPING_PERFORMANCE_SQL = `
           )), '')) AS remark,
           MAX(${sapSpdLoadingPortTextExpr('sk2')}) AS sap_vessel_loading_port_1,
           MAX(${sapSpdDischargePortTextExpr('sk2')}) AS sap_vessel_discharge_port,
-          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap
+          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap,
+          MAX(${sapDischargeDestinationFromJson('sk2.data')}) AS discharge_destination
         FROM ship_keys sk
         LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
         GROUP BY sk.shipment_pk
@@ -564,8 +568,9 @@ const SHIPPING_PERFORMANCE_SQL = `
         s.shortage,
         s.vessel_oa_budget,
         COALESCE(
-          NULLIF(TRIM(pnc.group_plant), ''),
-          NULLIF(TRIM(pna.group_plant), ''),
+          NULLIF(TRIM(b2b_end.discharge_destination), ''),
+          NULLIF(TRIM(sa.discharge_destination), ''),
+          NULLIF(TRIM(l.discharge_destination), ''),
           'Blank'
         ) AS plant_site,
         NULLIF(TRIM(s.port_of_loading), '') AS port_of_loading,
@@ -664,29 +669,12 @@ const SHIPPING_PERFORMANCE_SQL = `
       INNER JOIN contracts c ON s.contract_id = c.id
       ${SHIPMENT_ATA_OVERRIDES_JOIN}
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
       ${SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN}
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-          AND NULLIF(TRIM(c.company_name), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(c.company_name, '')))
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pnc ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pna ON TRUE
       WHERE ${SHIPPING_PERF_SEA_ROW_SCOPE}
         AND COALESCE(s.status, '') <> 'CANCELLED'
         AND NOT (

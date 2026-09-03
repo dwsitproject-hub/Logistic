@@ -188,7 +188,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant Name',
+      label: 'Region/Site',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',

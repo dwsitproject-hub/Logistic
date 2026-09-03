@@ -6,6 +6,8 @@ import {
 import { sqlContractImportStatusIsClosedExpr } from './contractDeliveryStatus';
 import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
 import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
+import { sapDischargeDestinationSql } from './sapTruckingLoadingLocationSql';
+import { regionSiteDisplayExpr } from './regionSiteSql';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { buildUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import {
@@ -100,24 +102,6 @@ export const OIL_LOSS_LOOKUP_CTES = `
     INNER JOIN contracts c ON c.id = t.contract_id
     WHERE NULLIF(TRIM(c.contract_id), '') IS NOT NULL
     ORDER BY c.contract_id, t.updated_at DESC NULLS LAST
-  ),
-  plants_by_code_company AS (
-    SELECT DISTINCT ON (TRIM(UPPER(plant_code)), TRIM(UPPER(company_name)))
-      TRIM(UPPER(plant_code)) AS plant_code_key,
-      TRIM(UPPER(company_name)) AS company_name_key,
-      group_plant
-    FROM master_plants
-    WHERE NULLIF(TRIM(plant_name), '') IS NOT NULL
-      AND NULLIF(TRIM(company_name), '') IS NOT NULL
-    ORDER BY TRIM(UPPER(plant_code)), TRIM(UPPER(company_name)), updated_at DESC NULLS LAST
-  ),
-  plants_by_code AS (
-    SELECT DISTINCT ON (TRIM(UPPER(plant_code)))
-      TRIM(UPPER(plant_code)) AS plant_code_key,
-      group_plant
-    FROM master_plants
-    WHERE NULLIF(TRIM(plant_name), '') IS NOT NULL
-    ORDER BY TRIM(UPPER(plant_code)), updated_at DESC NULLS LAST
   )
 `;
 
@@ -150,11 +134,7 @@ export function buildOilLossWithQtyCtes(): string {
         COALESCE(spd.data->'raw'->>'Buyer', '')                    AS buyer,
         COALESCE(spd.data->'raw'->>'Product', '')                  AS product,
         COALESCE(spd.data->'raw'->>'Vendor Group', '')             AS group_name,
-        CASE
-          WHEN COALESCE(spd.data->'raw'->>'SEA / LAND', 'LAND') = 'SEA'
-          THEN COALESCE(spd.data->'raw'->>'Vessel Discharge Port', '')
-          ELSE COALESCE(spd.data->'raw'->>'Truck Discharge Location', '')
-        END                                                         AS plant_site,
+        ${sapDischargeDestinationSql} AS plant_site,
         CASE
           WHEN spd.data->'raw'->>'Contract Date' ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$'
           THEN TO_CHAR(TO_DATE(spd.data->'raw'->>'Contract Date', 'MM/DD/YY'), 'YYYY-MM-DD')
@@ -216,6 +196,7 @@ export function buildOilLossWithQtyCtes(): string {
         ct.company_name AS contract_company_name,
         b2b_end.unload_location AS b2b_ending_unload,
         b2b_end.buyer AS b2b_ending_buyer,
+        b2b_end.discharge_destination AS b2b_ending_dest,
         COALESCE(tr_sto.trucking_owner, tr_ct.trucking_owner) AS trucking_owner_db,
         COALESCE(tr_sto.loading_location, tr_ct.loading_location) AS loading_location_db,
         COALESCE(
@@ -225,11 +206,10 @@ export function buildOilLossWithQtyCtes(): string {
         ) AS unloading_location_db,
         COALESCE(tr_sto.sfal_qty, tr_ct.sfal_qty) AS trucking_sfal_kg,
         COALESCE(tr_sto.sfbd_qty, tr_ct.sfbd_qty) AS trucking_sfbd_kg,
-        COALESCE(
-          NULLIF(TRIM(pbc.group_plant), ''),
-          NULLIF(TRIM(pbco.group_plant), ''),
-          'Blank'
-        ) AS group_plant_resolved,
+        ${regionSiteDisplayExpr(`COALESCE(
+          NULLIF(TRIM(b2b_end.discharge_destination), ''),
+          NULLIF(TRIM(p.plant_site), '')
+        )`)} AS group_plant_resolved,
         COALESCE(sh_sto.quantity_delivered, sh_ct.quantity_delivered) AS shipment_qty_delivered_kg,
         COALESCE(sh_sto.actual_vessel_qty_receive, sh_ct.actual_vessel_qty_receive) AS shipment_qty_receive_kg
       FROM oil_loss_closed p
@@ -249,12 +229,6 @@ export function buildOilLossWithQtyCtes(): string {
       LEFT JOIN trucking_by_contract tr_ct
         ON NULLIF(TRIM(p.contract_number), '') IS NOT NULL
        AND tr_ct.contract_id = TRIM(p.contract_number)
-      LEFT JOIN plants_by_code_company pbc
-        ON pbc.plant_code_key = TRIM(UPPER(COALESCE(b2b_end.plant_code, ct.plant_code, '')))
-       AND pbc.company_name_key = TRIM(UPPER(COALESCE(b2b_end.company_name, ct.company_name, '')))
-       AND NULLIF(TRIM(COALESCE(b2b_end.company_name, ct.company_name)), '') IS NOT NULL
-      LEFT JOIN plants_by_code pbco
-        ON pbco.plant_code_key = TRIM(UPPER(COALESCE(b2b_end.plant_code, ct.plant_code, '')))
     ),
     with_qty_base AS (
       SELECT
@@ -301,7 +275,7 @@ export function buildOilLossMainSql(): string {
         COALESCE(NULLIF(TRIM(b2b_ending_buyer), ''), buyer) AS buyer,
         product,
         group_name,
-        COALESCE(NULLIF(TRIM(b2b_ending_unload), ''), plant_site) AS plant_site,
+        group_plant_resolved AS plant_site,
         COALESCE(NULLIF(TRIM(vessel_name_raw), ''), '') AS vessel_name,
         COALESCE(
           TO_CHAR(contract_date_db, 'YYYY-MM-DD'),
@@ -317,7 +291,6 @@ export function buildOilLossMainSql(): string {
           NULLIF(TRIM(b2b_ending_unload), ''),
           NULLIF(unloading_location_db, ''),
           NULLIF(unloading_location_raw, ''),
-          plant_site,
           ''
         ) AS unloading_location,
         status,

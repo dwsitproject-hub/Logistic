@@ -85,6 +85,12 @@ function parseDocumentStatus(value: string | undefined): 'checked' | 'unchecked'
   return null;
 }
 
+function parseQueryStringList(value: unknown): string[] {
+  if (value == null || value === '') return [];
+  const arr = Array.isArray(value) ? value : [value];
+  return arr.map((item) => String(item).trim()).filter(Boolean);
+}
+
 export const getCommercialDocuments = async (req: AuthRequest, res: Response) => {
   try {
     const ytd = defaultYtdRange();
@@ -103,7 +109,7 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       incoterm: q.incoterm || null,
       product: q.product || null,
       supplier: q.supplier || null,
-      plant: q.plant || null,
+      plant: parseQueryStringList(req.query.plant),
       page,
       limit,
     };

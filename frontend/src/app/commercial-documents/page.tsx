@@ -30,7 +30,7 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
-import { filterIncotermOptions } from '@/lib/globalScopeFilters'
+import { filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -212,7 +212,7 @@ function CommercialDocumentsPageContent() {
       if (selectedIncoterms.length === 1) params.set('incoterm', selectedIncoterms[0])
       if (selectedProducts.length === 1) params.set('product', selectedProducts[0])
       if (selectedSuppliers.length === 1) params.set('supplier', selectedSuppliers[0])
-      if (selectedPlants.length === 1) params.set('plant', selectedPlants[0])
+      selectedPlants.forEach((p) => params.append('plant', p))
 
       const url = `/commercial-documents?${params.toString()}`
       const cacheKey = buildCacheKey('GET', url)
@@ -301,7 +301,7 @@ function CommercialDocumentsPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailablePlants(Array.isArray(plants) ? plants : [])
+        setAvailablePlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
         setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
@@ -513,8 +513,9 @@ function CommercialDocumentsPageContent() {
               pinSelectedToTop
             />
             <SearchableMultiSelect
-              label="Group Plant"
-              placeholder="All group plants"
+              label="Region/Site"
+              placeholder="Select region/site(s)"
+              emptyMessage="No region/site values"
               options={availablePlants}
               selected={selectedPlants}
               onChange={handleGroupPlantsChange}

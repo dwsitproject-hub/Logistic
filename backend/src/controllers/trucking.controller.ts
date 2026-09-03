@@ -26,11 +26,9 @@ import {
   appendTruckingSourceTypeFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
 import {
   sqlB2bEndingBuyerExpr,
-  sqlB2bEndingCompanyExpr,
-  sqlB2bEndingPlantCodeExpr,
   sqlB2bEndingUnloadExpr,
   sqlB2bOriginEndingChildLateralJoin,
 } from '../utils/b2bOriginEndingSql';
@@ -1115,11 +1113,10 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
 
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    const groupPlantFilter = appendGroupPlantFilter(
+    const groupPlantFilter = appendRegionSiteFilter(
       plants,
       idx,
-      groupPlantExpr(sqlB2bEndingPlantCodeExpr('c.plant_code'), sqlB2bEndingCompanyExpr('c.company_name')),
-      sqlB2bEndingPlantCodeExpr('c.plant_code'),
+      sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
     );
     extraWhere += groupPlantFilter.sql;
     params.push(...groupPlantFilter.params);

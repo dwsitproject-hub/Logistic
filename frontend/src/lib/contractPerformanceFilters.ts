@@ -3,6 +3,8 @@
  * All sections MUST derive scope and row sets from this module — no localized filter() copies.
  */
 
+import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
+
 export type ContractPerfProductTab = 'All' | 'CPO' | 'PK' | 'POME' | 'Shell Palm'
 
 export const CONTRACT_PERF_PRODUCT_TABS: ContractPerfProductTab[] = ['All', 'CPO', 'PK', 'POME', 'Shell Palm']
@@ -314,7 +316,8 @@ export function matchesPerformanceDimensionFilter(
   }
   const filterKey =
     mode === 'product' ? normalizePerfProductGroupKey(filterValue) : filterValue
-  return rowKey === filterKey
+  if (mode === 'product') return rowKey === filterKey
+  return rowKey.toUpperCase() === String(filterKey).trim().toUpperCase()
 }
 
 export function resolveContractPerfTablePlants(
@@ -438,8 +441,7 @@ export function filterPerformanceHotspots(
       if (!scope.resolvedIncoterms.includes(inc)) return false
     }
     if (scope.resolvedPlants.length > 0) {
-      const plant = normalizePerfGroupKey(row.plant_site)
-      if (!scope.resolvedPlants.includes(plant)) return false
+      if (!valueInRegionSiteList(row.plant_site, scope.resolvedPlants)) return false
     }
     if (
       scope.resolvedProduct &&
@@ -559,8 +561,7 @@ export function filterContractsForPerformanceTable(
       if (!scope.resolvedIncoterms.includes(inc)) return false
     }
     if (scope.resolvedPlants.length > 0) {
-      const plant = normalizePerfGroupKey(c.plant_site)
-      if (!scope.resolvedPlants.includes(plant)) return false
+      if (!valueInRegionSiteList(c.plant_site, scope.resolvedPlants)) return false
     }
     if (
       !isContractPerfDrilldownValueSet(drilldown.product) &&
@@ -867,7 +868,7 @@ export function buildLatePerformanceApiParams(
 
 /**
  * Scope for Section 2 drilldown card totals — toolbar + Open/Close tab only.
- * Applied drilldown path (Product → Plant → Incoterm → Supplier) never narrows the tree API.
+ * Applied drilldown path (Product → Region/Site → Incoterm → Supplier) never narrows the tree API.
  */
 export function resolveContractPerformanceTreeScope(
   global: ContractPerformanceGlobalFilters,

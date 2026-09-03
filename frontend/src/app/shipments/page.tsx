@@ -215,7 +215,7 @@ import {
   operationalRowFieldTooltipText,
   shouldApplyOperationalTruncateTooltip,
 } from '@/lib/operationalTableTruncateUi'
-import { appendToolbarMultiToColumnFilters, filterIncotermOptions } from '@/lib/globalScopeFilters'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { readShipmentsCompactSort, writeShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
@@ -294,7 +294,7 @@ interface Shipment {
   arrival_date: string
   port_of_loading: string
   port_of_discharge: string
-  plant_site: string // Group Plant (resolved from master_plants via contract plant_code)
+  plant_site: string // Region/Site from SAP Discharge Destination
   /** SAP / contracts plant code (e.g. AM10) — used in Add New PO labels. */
   plant_code?: string | null
   quantity_shipped: number
@@ -1596,7 +1596,7 @@ function ShipmentsPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
         setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])

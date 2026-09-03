@@ -55,10 +55,12 @@ describe('truckingUnplannedHybridSql', () => {
     expect(sql).not.toMatch(/AND\s*$/);
   });
 
-  it('toolbar plant filter uses origin contract plant, not B2B ending overlay', () => {
+  it('toolbar plant filter uses Discharge Destination, not master plant code', () => {
     const { sql } = buildTruckingUnplannedContractToolbarScope({ plants: ['Bontang'] });
     expect(sql).not.toContain("NULLIF(TRIM(b2b_end.plant_code), '')");
-    expect(sql).toContain('c.plant_code');
+    expect(sql).toContain('Discharge Destination');
+    expect(sql).toContain('discharge_destination');
+    expect(sql).not.toContain('master_plants');
   });
 
   it('daily backlog summary groups by origin contract plant', () => {

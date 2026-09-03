@@ -231,7 +231,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                     <Info label="PO" value={row.po_number} />
                     <Info label="Incoterm" value={row.incoterm} />
                     <Info label="Product" value={row.product} />
-                    <Info label="Group Plant" value={row.plant_site} />
+                    <Info label="Region/Site" value={row.plant_site} />
                     <Info label="Contract Qty" value={formatCommercialQtyKg(row.quantity_ordered)} />
                     <Info label="Unit Price" value={formatCommercialIdr(row.unit_price)} />
                     <Info

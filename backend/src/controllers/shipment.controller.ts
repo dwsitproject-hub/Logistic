@@ -153,7 +153,13 @@ import {
   buildSyntheticOperationId,
   formatDDMMYYYY,
 } from '../utils/operationId';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { groupPlantExpr } from '../utils/groupPlantSql';
+import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
+import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
+import {
+  sqlB2bEndingDischargeDestExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
 import {
   contractExtNoSubquery,
   resolvedDischargePortNameSql,
@@ -767,11 +773,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     }
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    const groupPlantFilter = appendGroupPlantFilter(
+    const groupPlantFilter = appendRegionSiteFilter(
       plants,
       cp,
-      groupPlantExpr('c.plant_code', 'c.company_name'),
-      'c.plant_code',
+      sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
     );
     if (groupPlantFilter.sql) {
       const plantSql = groupPlantFilter.sql.replace(/^ AND /, '');
@@ -840,6 +845,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
             spd.data->'raw'->>'Contract Ext No',
             spd.data->>'Contract Ext No'
           ) AS contract_ext_no_raw,
+          ${sapDischargeDestinationFromJson('spd.data')} AS discharge_destination,
           spd.created_at`;
 
     const prelude = scopeLatestSpdToContracts
@@ -887,7 +893,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.arrival_date) as arrival_date,
           MAX(s.port_of_loading) as port_of_loading,
           MAX(s.port_of_discharge) as port_of_discharge,
-          MAX(${groupPlantExpr('c.plant_code', 'c.company_name')}) as plant_site,
+          COALESCE(MAX(${sqlB2bEndingDischargeDestExpr('l.discharge_destination')}), 'Blank') as plant_site,
           -- Basic ETA loading dates at shipment level (kept in sync with first loading port)
           MAX(s.eta_arrival) as eta_arrival,
           MAX(s.eta_berthed) as eta_berthed,
@@ -951,6 +957,7 @@ ${etaExtraSelect}
 ${contractMetaSelectCore}
         FROM shipments s
         ${sqlShipmentListB2bOriginContractJoins()}
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         ${sqlShipmentListExecutionCsStoJoin(listStoKeySql)}
         LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
         LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
