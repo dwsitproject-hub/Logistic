@@ -139,9 +139,9 @@ describe('SapMasterV2ImportService import parallelism', () => {
     expect(SapMasterV2ImportService.resolveImportParallelismForTest(10)).toBe(1);
   });
 
-  it('defaults to 4 workers for larger files when unset', () => {
+  it('defaults to 6 workers for larger files when unset', () => {
     delete process.env.SAP_IMPORT_PARALLELISM;
-    expect(SapMasterV2ImportService.resolveImportParallelismForTest(500)).toBe(4);
+    expect(SapMasterV2ImportService.resolveImportParallelismForTest(500)).toBe(6);
   });
 
   it('respects SAP_IMPORT_PARALLELISM=1 as the full serial fallback', () => {
@@ -156,10 +156,10 @@ describe('SapMasterV2ImportService import parallelism', () => {
     // 0 (and below) is not a usable worker count, so it falls back to the default like an
     // unset/invalid value would - it does not clamp up to 1.
     process.env.SAP_IMPORT_PARALLELISM = '0';
-    expect(SapMasterV2ImportService.resolveImportParallelismForTest(500)).toBe(4);
+    expect(SapMasterV2ImportService.resolveImportParallelismForTest(500)).toBe(6);
 
     process.env.SAP_IMPORT_PARALLELISM = 'not-a-number';
-    expect(SapMasterV2ImportService.resolveImportParallelismForTest(500)).toBe(4);
+    expect(SapMasterV2ImportService.resolveImportParallelismForTest(500)).toBe(6);
   });
 });
 

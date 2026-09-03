@@ -15,7 +15,7 @@ import { SapDataDistributionService } from './sapDataDistribution.service';
 import { invalidateShipmentsListCache } from './shipmentList.service';
 import { invalidateTruckingListCache } from './truckingList.service';
 import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
-import { normalizePoNumber } from '../utils/contractPoIdentity';
+import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
 import { applyAbsenceForImport, evaluateImportTrust } from './sapAbsenceTracking.service';
 import { applyPresenceState } from './sapPresence.service';
 import { identityFromParsedSapRow, type SapAutoImportIdentityRow } from '../utils/sapAutoImportIdentity';
@@ -616,6 +616,66 @@ export class SapMasterV2ImportService {
   }
 
   /**
+   * One query for every distinct (PO number, SAP shipment/STO id) pair in the file instead of one
+   * SELECT per row for upsertShipment's first, most common candidate-match step (exact
+   * shipment_id on the row's contract). Only this step is prefetched - the other 6 fallback
+   * cascade steps (KLIP-planned supersede, SAP-only supersede, vessel-name similarity, planned
+   * MNL/MSEA reuse, sole-active reuse) read sibling/global shipment state that earlier rows in
+   * this same chunk may have just changed, so they stay as live queries; only run when the exact
+   * match here misses (a minority of rows).
+   *
+   * Joins through contracts.po_number rather than a shipment's contract_id, because a row's own
+   * contractUuid is not resolved until upsertContract runs mid-row - po_number is known up front
+   * from the parsed row context, before any writes happen this run. Callers MUST still verify a
+   * hit's contract_id matches their own resolved contractUuid before trusting it (contract
+   * identity can still change mid-chunk via placeholder rename/merge in upsertContract) and fall
+   * back to the live query otherwise - see upsertShipment.
+   */
+  private static async prefetchExistingShipmentsByPoAndSapId(
+    rows: RowImportContext[],
+    importId?: string,
+  ): Promise<Map<string, { id: string; contractId: string }>> {
+    const map = new Map<string, { id: string; contractId: string }>();
+    if (importId && this.isCancelRequested(importId)) return map;
+    const uniquePairs = new Map<string, { po: string; sid: string }>();
+    for (const r of rows) {
+      if (!r.poNumber) continue;
+      const shipmentIdFromSap = (r.parsedData?.shipment?.shipment_id || r.parsedData?.shipment?.sto_no) as
+        | string
+        | undefined;
+      const sid = String(shipmentIdFromSap ?? '').trim();
+      if (!sid) continue;
+      const key = shipmentPoSapIdKey(r.poNumber, sid);
+      if (!uniquePairs.has(key)) uniquePairs.set(key, { po: r.poNumber, sid });
+    }
+    if (uniquePairs.size === 0) return map;
+
+    const pos: string[] = [];
+    const sids: string[] = [];
+    for (const { po, sid } of uniquePairs.values()) {
+      pos.push(po);
+      sids.push(sid);
+    }
+
+    const result = await pool.query(
+      `SELECT s.id, s.contract_id::text AS contract_id,
+              TRIM(COALESCE(c.po_number::text, '')) AS po_key,
+              s.shipment_id AS sid_key
+       FROM shipments s
+       JOIN contracts c ON c.id = s.contract_id
+       JOIN unnest($1::text[], $2::text[]) AS k(po, sid)
+         ON TRIM(COALESCE(c.po_number::text, '')) = k.po
+        AND s.shipment_id = k.sid`,
+      [pos, sids],
+    );
+
+    for (const row of result.rows as Array<{ id: string; contract_id: string; po_key: string; sid_key: string }>) {
+      map.set(shipmentPoSapIdKey(row.po_key, row.sid_key), { id: row.id, contractId: row.contract_id });
+    }
+    return map;
+  }
+
+  /**
    * One (or a few, chunked) multi-row INSERT for every row's sap_raw_data instead of one INSERT
    * per row. Deliberately runs via `pool` (auto-committed), decoupled from every row's own
    * SAVEPOINT: a row that later fails now keeps its raw JSON (the failure UPDATE below actually
@@ -658,8 +718,12 @@ export class SapMasterV2ImportService {
   /** How many parallel chunk workers to run. `SAP_IMPORT_PARALLELISM=1` restores the old fully-serial path. */
   private static resolveImportParallelism(rowCount: number): number {
     if (rowCount < 50) return 1; // not worth extra connections/coordination for a tiny file
-    const raw = parseInt(process.env.SAP_IMPORT_PARALLELISM || '4', 10);
-    const configured = Number.isFinite(raw) && raw > 0 ? raw : 4;
+    // Default raised 4 -> 6 now that the master_vessels deadlock (ensureMasterVesselFromSap
+    // racing across chunks - see masterVesselFromSap.service.ts) is fixed via advisory lock +
+    // savepoint; more concurrent chunks no longer means more deadlock risk. Cap stays 8 (pool
+    // max is 40 connections - see database/connection.ts - so headroom is not the constraint).
+    const raw = parseInt(process.env.SAP_IMPORT_PARALLELISM || '6', 10);
+    const configured = Number.isFinite(raw) && raw > 0 ? raw : 6;
     return Math.max(1, Math.min(8, configured));
   }
 
@@ -704,6 +768,7 @@ export class SapMasterV2ImportService {
     rawDataIds: string[],
     existingProcessedMap: Map<string, { id: string; contentHash: string | null }>,
     chunkLabel: string,
+    shipmentPrefetchMap: Map<string, { id: string; contractId: string }> = new Map(),
   ): Promise<ChunkImportResult> {
     const chunkResult: ChunkImportResult = {
       processedRecords: 0,
@@ -742,6 +807,13 @@ export class SapMasterV2ImportService {
       }
     };
 
+    // Batched quality-survey inserts for this chunk (see SapDataDistributionService.
+    // flushQualitySurveyQueue): entries queued by rows that succeed are flushed as one multi-row
+    // INSERT before COMMIT below; entries queued by a row that itself fails are discarded (see
+    // the catch block's qualitySurveyQueue.length truncation) so a rolled-back row never leaves
+    // an orphaned survey behind.
+    const qualitySurveyQueue: Array<{ shipmentId: string; qualityData: any }> = [];
+
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -765,6 +837,7 @@ export class SapMasterV2ImportService {
         const failureSto = ctx.stoKey || null;
         const rowIdentity = ctx.rowIdentity;
 
+        const qualityQueueStart = qualitySurveyQueue.length;
         try {
           await client.query(`SAVEPOINT ${savepointName}`);
           const { parsedData, poNumber, stoKey, contentHash } = ctx;
@@ -840,7 +913,7 @@ export class SapMasterV2ImportService {
               ],
             );
 
-            const distributionResult = await this.distributeToTables(client, parsedData);
+            const distributionResult = await this.distributeToTables(client, parsedData, shipmentPrefetchMap, qualitySurveyQueue);
             chunkResult.summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
             chunkResult.summary.shipmentsCreated += distributionResult.shipmentCreated ? 1 : 0;
             chunkResult.summary.qualitySurveysCreated += distributionResult.qualitySurveysCreated;
@@ -872,7 +945,7 @@ export class SapMasterV2ImportService {
             contentHash,
           });
 
-          const distributionResult = await this.distributeToTables(client, parsedData);
+          const distributionResult = await this.distributeToTables(client, parsedData, shipmentPrefetchMap, qualitySurveyQueue);
           chunkResult.summary.contractsCreated += distributionResult.contractCreated ? 1 : 0;
           chunkResult.summary.shipmentsCreated += distributionResult.shipmentCreated ? 1 : 0;
           chunkResult.summary.qualitySurveysCreated += distributionResult.qualitySurveysCreated;
@@ -886,6 +959,9 @@ export class SapMasterV2ImportService {
           if (rowIdentity) chunkResult.successIdentities.push(rowIdentity);
           await flushProgress();
         } catch (error) {
+          // This row's SAVEPOINT is being rolled back below - any quality-survey entries it
+          // queued (added before the failure) must not survive to the chunk-end flush.
+          qualitySurveyQueue.length = qualityQueueStart;
           let savepointRecovered = false;
           try {
             await client.query(`ROLLBACK TO SAVEPOINT ${savepointName}`);
@@ -975,6 +1051,10 @@ export class SapMasterV2ImportService {
           }
           await flushProgress();
         }
+      }
+
+      if (qualitySurveyQueue.length > 0) {
+        await SapDataDistributionService.flushQualitySurveyQueue(client, qualitySurveyQueue);
       }
 
       await client.query('COMMIT');
@@ -1090,8 +1170,9 @@ export class SapMasterV2ImportService {
         return this.finalizeCancelledBeforeChunks(importId, validDataRows.length);
       }
 
-      const [existingProcessedMap, rawDataIds] = await Promise.all([
+      const [existingProcessedMap, shipmentPrefetchMap, rawDataIds] = await Promise.all([
         this.prefetchExistingProcessedData(rowContexts, importId),
+        this.prefetchExistingShipmentsByPoAndSapId(rowContexts, importId),
         this.bulkInsertRawData(importId, rowContexts),
       ]);
 
@@ -1111,7 +1192,7 @@ export class SapMasterV2ImportService {
 
       const chunkResults = await Promise.all(
         chunks.map((chunkRows, idx) =>
-          this.runImportChunk(importId, chunkRows, rawDataIds, existingProcessedMap, String(idx)),
+          this.runImportChunk(importId, chunkRows, rawDataIds, existingProcessedMap, String(idx), shipmentPrefetchMap),
         ),
       );
 
@@ -1209,6 +1290,7 @@ export class SapMasterV2ImportService {
             rawDataIds,
             existingProcessedMap,
             `retry_${ctx.rowIndex}`,
+            shipmentPrefetchMap,
           );
           if (retryFailedIndexSet.has(ctx.rowIndex)) {
             retriedFollowOnCount += 1;
@@ -2142,13 +2224,20 @@ export class SapMasterV2ImportService {
   /**
    * Distribute data to main tables (contracts, shipments, etc.)
    */
-  private static async distributeToTables(client: any, parsedData: any): Promise<any> {
+  private static async distributeToTables(
+    client: any,
+    parsedData: any,
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
+    qualitySurveyQueue?: Array<{ shipmentId: string; qualityData: any }>,
+  ): Promise<any> {
     try {
       // Use the distribution service to create/update records
       const distributionResult = await SapDataDistributionService.distributeData(
         client,
         parsedData,
-        undefined // userId - can be passed from import context
+        undefined, // userId - can be passed from import context
+        shipmentPrefetchMap,
+        qualitySurveyQueue,
       );
 
       return {

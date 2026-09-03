@@ -33,6 +33,16 @@ export function poStoProcessedKey(po: unknown, sto: unknown): { po: string; sto:
   return { po: poNorm, sto: normalizeStoNumber(sto) };
 }
 
+/**
+ * Join key for the (PO number, SAP shipment/STO id) batch-prefetch used by
+ * upsertShipment's exact-match candidate step - see prefetchExistingShipmentsByPoAndSapId
+ * (sapMasterV2Import.service.ts) and its consumer in sapDataDistribution.service.ts. Both sides
+ * must build the key identically (including the same TRIM'd `po`), so this lives in one place.
+ */
+export function shipmentPoSapIdKey(po: string, sapShipmentId: string): string {
+  return `${po.trim()} ${sapShipmentId.trim()}`;
+}
+
 /** Prefer Open status, then most recently updated contract row. */
 export function contractSurvivorScore(row: {
   status?: string | null;

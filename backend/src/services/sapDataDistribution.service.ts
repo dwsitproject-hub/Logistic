@@ -51,7 +51,7 @@ import {
   formatDDMMYYYY,
 } from '../utils/operationId';
 import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
-import { normalizePoNumber } from '../utils/contractPoIdentity';
+import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
 
 export interface DistributionResult {
   contractId?: string;
@@ -193,7 +193,9 @@ export class SapDataDistributionService {
   static async distributeData(
     client: PoolClient,
     parsedData: any,
-    userId?: string
+    userId?: string,
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
+    qualitySurveyQueue?: Array<{ shipmentId: string; qualityData: any }>,
   ): Promise<DistributionResult> {
     const result: DistributionResult = {
       qualitySurveyIds: [],
@@ -326,6 +328,7 @@ export class SapDataDistributionService {
           parsedData,
           result.contractId,
           userId,
+          shipmentPrefetchMap,
         );
       } else if (seaLike && hasShipment && !seaEligible) {
         logger.debug('Skipping SEA shipment upsert: not eligible by anchor fields', {
@@ -392,12 +395,25 @@ export class SapDataDistributionService {
       // 3. Create quality surveys (multiple) - only for SEA shipments
       if (seaLike && parsedData.quality && parsedData.quality.length > 0) {
         for (const qualityData of parsedData.quality) {
-          const surveyId = await this.createQualitySurvey(
-            client,
-            result.shipmentId,
-            qualityData
-          );
-          if (surveyId) result.qualitySurveyIds.push(surveyId);
+          if (qualitySurveyQueue) {
+            // Batched path (see flushQualitySurveyQueue): defer the actual INSERT to one
+            // multi-row statement flushed once per chunk instead of one INSERT per entry here.
+            // Replicates createQualitySurvey's own validity guards so the queue only ever holds
+            // what would actually have been inserted.
+            const shipmentUuid = this.toUuid(result.shipmentId);
+            const data = qualityData?.data;
+            if (shipmentUuid && data && Object.keys(data).length > 0) {
+              qualitySurveyQueue.push({ shipmentId: shipmentUuid, qualityData });
+              result.qualitySurveyIds.push(`pending:${qualitySurveyQueue.length}`);
+            }
+          } else {
+            const surveyId = await this.createQualitySurvey(
+              client,
+              result.shipmentId,
+              qualityData
+            );
+            if (surveyId) result.qualitySurveyIds.push(surveyId);
+          }
         }
       }
       
@@ -518,6 +534,7 @@ export class SapDataDistributionService {
     parsedData: any,
     contractId: string | undefined,
     userId?: string,
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
   ): Promise<string | undefined> {
     if (!contractId) return undefined;
 
@@ -549,13 +566,14 @@ export class SapDataDistributionService {
       const shipmentPayload = { ...(parsedData.shipment || {}) };
       this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
 
-      const shipmentId = await this.upsertShipment(
+      const { id: shipmentId, klipProtectShipmentFields } = await this.upsertShipment(
         client,
         shipmentPayload,
         contractId,
         vesselData,
         userId,
         parsedData,
+        shipmentPrefetchMap,
       );
       const shipmentUuid = this.toUuid(shipmentId);
       if (!shipmentUuid) {
@@ -569,13 +587,13 @@ export class SapDataDistributionService {
       logger.debug('Shipment upserted successfully:', shipmentUuid);
 
       await this.upsertVesselLoadingPorts(client, shipmentUuid, parsedData);
-      const klipProtectPorts = await hasKlipShipmentActivity(
-        client,
-        shipmentUuid,
-        contractId,
-      );
+      // Reuses klipProtectShipmentFields from upsertShipment above instead of calling
+      // hasKlipShipmentActivity(client, shipmentUuid, contractId) again - same function, same
+      // arguments (this is the same shipmentUuid/contractId upsertShipment just resolved), so the
+      // live read it performed there already answers this check; no behavior change, one fewer
+      // query per SEA row.
       await denormalizeShipmentPortsFromSap(client, shipmentUuid, parsedData, {
-        protectKlip: klipProtectPorts,
+        protectKlip: klipProtectShipmentFields,
       });
       logger.debug('Vessel loading ports processed for shipment:', shipmentUuid);
       return shipmentUuid;
@@ -913,7 +931,8 @@ export class SapDataDistributionService {
     vesselData: any,
     _userId?: string,
     parsedData?: Record<string, unknown>,
-  ): Promise<string | null> {
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
+  ): Promise<{ id: string | null; klipProtectShipmentFields: boolean }> {
     const contractUuid = this.toUuid(contractId);
     const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
@@ -1087,14 +1106,29 @@ export class SapDataDistributionService {
     }
 
     if (shipmentIdFromSap && contractUuid) {
-      const existingByShipment = await client.query(
-        `SELECT id FROM shipments
-         WHERE contract_id = $1::uuid AND shipment_id = $2
-         LIMIT 1`,
-        [contractUuid, shipmentIdFromSap],
-      );
-      if (existingByShipment.rows.length > 0) {
-        targetShipmentId = existingByShipment.rows[0].id;
+      // Check the batch-prefetched exact-match map first (see
+      // prefetchExistingShipmentsByPoAndSapId in sapMasterV2Import.service.ts) before falling
+      // back to a live query. The prefetch is keyed by (contract's po_number, SAP shipment id) -
+      // resolved before any writes this run - so a hit must still be confirmed against THIS row's
+      // own resolved contractUuid: contract identity can change mid-chunk (placeholder rename/
+      // merge in upsertContract), which would make a stale prefetch hit point at the wrong
+      // contract. A miss or mismatch always falls through to the same live query as before.
+      const prefetchKey = contractPoNumber
+        ? shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap))
+        : null;
+      const prefetched = prefetchKey ? shipmentPrefetchMap?.get(prefetchKey) : undefined;
+      if (prefetched && prefetched.contractId === contractUuid) {
+        targetShipmentId = prefetched.id;
+      } else {
+        const existingByShipment = await client.query(
+          `SELECT id FROM shipments
+           WHERE contract_id = $1::uuid AND shipment_id = $2
+           LIMIT 1`,
+          [contractUuid, shipmentIdFromSap],
+        );
+        if (existingByShipment.rows.length > 0) {
+          targetShipmentId = existingByShipment.rows[0].id;
+        }
       }
     } else if (shipmentIdFromSap) {
       const existingByShipment = await client.query(
@@ -1376,7 +1410,18 @@ export class SapDataDistributionService {
           });
         }
       }
-      return id;
+      // Write-through: a later row in this same chunk sharing this exact PO+SAP-shipment-id must
+      // see this write without a round trip - mirrors existingProcessedMap's pattern in
+      // sapMasterV2Import.service.ts. finalizeSapShipmentAfterUpsert (above) may have just renamed
+      // shipments.shipment_id to shipmentIdFromSap, so this key is what a future lookup for this
+      // exact id will now correctly resolve to.
+      if (shipmentPrefetchMap && contractPoNumber && shipmentIdFromSap && contractUuid) {
+        shipmentPrefetchMap.set(shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap)), {
+          id,
+          contractId: contractUuid,
+        });
+      }
+      return { id, klipProtectShipmentFields };
     } else if (shipmentIdFromSap && contractUuid) {
       let klipProtectShipmentFields = false;
       const existingForConflict = await client.query(
@@ -1552,7 +1597,14 @@ export class SapDataDistributionService {
           });
         }
       }
-      return newId;
+      // Write-through - see the matching comment on the UPDATE branch's `return id;` above.
+      if (shipmentPrefetchMap && contractPoNumber) {
+        shipmentPrefetchMap.set(shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap)), {
+          id: newId,
+          contractId: contractUuid,
+        });
+      }
+      return { id: newId, klipProtectShipmentFields };
     }
 
     // If we reach here, we had neither a direct shipment_id nor a good vessel-name match.
@@ -1562,7 +1614,7 @@ export class SapDataDistributionService {
       contractId,
       vesselName
     });
-    return null;
+    return { id: null, klipProtectShipmentFields: false };
   }
   
   /**
@@ -1614,7 +1666,56 @@ export class SapDataDistributionService {
     
     return result.rows[0].id;
   }
-  
+
+  /**
+   * Batched counterpart to createQualitySurvey: one multi-row INSERT (chunked at 500 rows,
+   * matching bulkInsertRawData's batch size in sapMasterV2Import.service.ts) for every entry
+   * queued during a chunk's row loop, instead of one INSERT per entry. createQualitySurvey has no
+   * decision logic (plain INSERT, no ON CONFLICT, no dependency on other rows), so grouping
+   * entries from many rows into one statement changes nothing about which shipment a survey
+   * attaches to or its content - only how many round trips it costs. The caller (runImportChunk)
+   * is responsible for removing a row's queued-but-not-yet-flushed entries if that row's own
+   * SAVEPOINT is later rolled back.
+   */
+  static async flushQualitySurveyQueue(
+    client: PoolClient,
+    queue: Array<{ shipmentId: string; qualityData: any }>,
+  ): Promise<void> {
+    const BATCH_SIZE = 500;
+    for (let start = 0; start < queue.length; start += BATCH_SIZE) {
+      const batch = queue.slice(start, start + BATCH_SIZE);
+      const valueClauses: string[] = [];
+      const params: unknown[] = [];
+      batch.forEach((entry, idx) => {
+        const data = entry.qualityData?.data ?? {};
+        const base = idx * 10;
+        valueClauses.push(
+          `($${base + 1}::uuid, $${base + 2}, $${base + 3}::numeric, $${base + 4}::numeric, ` +
+            `$${base + 5}::numeric, $${base + 6}::numeric, $${base + 7}::numeric, $${base + 8}::numeric, ` +
+            `$${base + 9}::numeric, $${base + 10}::numeric)`,
+        );
+        params.push(
+          entry.shipmentId,
+          entry.qualityData?.location,
+          this.parseNumber(data.ffa),
+          this.parseNumber(data.m_i),
+          this.parseNumber(data.m_i), // M&I covers moisture and impurity
+          this.parseNumber(data.iv),
+          this.parseNumber(data.dobi),
+          this.parseNumber(data.color_red),
+          this.parseNumber(data.d_s),
+          this.parseNumber(data.stone),
+        );
+      });
+      await client.query(
+        `INSERT INTO quality_surveys (
+          shipment_id, location, ffa, moisture, impurity, iv, dobi, color_red, dirt_sand, stone
+        ) VALUES ${valueClauses.join(', ')}`,
+        params,
+      );
+    }
+  }
+
   /**
    * SAP upload uses "Trucking Start/Last Receive Date" (columns AV/AW), not
    * trucking_completion_date_at_starting_location. Resolve DB dates from all aliases.
