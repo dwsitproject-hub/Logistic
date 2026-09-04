@@ -12,7 +12,10 @@ import { AuthRequest } from '../middleware/auth';
 import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
-import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
+import {
+  isContractLatestSpdSnapshotFresh,
+  resolveContractsLatestSpdCte,
+} from '../services/contractLatestSpdSnapshot.service';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import {
@@ -42,6 +45,7 @@ import {
 import { sqlActiveSeaStoSiblingContractIdsCte } from '../utils/seaStoSiblingSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
+  B2B_ENDING_CHILD_SNAPSHOT_TABLE,
   sqlB2bEndingCompanyAgg,
   sqlB2bEndingPlantCodeAgg,
   sqlB2bOriginEndingChildLateralJoin,
@@ -317,11 +321,64 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
-  const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
-    resolveContractsQtyMoveCte('contract_scope'),
-    resolveContractsStoAggCte('contract_scope'),
-    resolveContractsLatestSpdCte('contract_scope'),
-  ]);
+  const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, latestSpdSnapshotFresh] =
+    await Promise.all([
+      resolveContractsQtyMoveCte('contract_scope'),
+      resolveContractsStoAggCte('contract_scope'),
+      resolveContractsLatestSpdCte('contract_scope'),
+      isContractLatestSpdSnapshotFresh(),
+    ]);
+
+  /*
+   * Region/Site pushdown - same idea as the product pushdown above, but this value is derived
+   * rather than a column: `base.plant_site` is MAX(sqlRegionSiteRawFromJsonAndB2b('l.data')),
+   * i.e. the B2B ending leg's discharge_destination when set, else the discharge destination
+   * pulled out of the latest SPD JSON. So the pre-filter has to reach the same two sources, and
+   * it reads them from the snapshot tables directly (it cannot join the `latest_spd` CTE, which
+   * is itself scoped BY contract_scope - that would be circular).
+   *
+   * Gated on snapshot freshness: `resolveContractsLatestSpdCte` swaps in a fully live fallback
+   * when the snapshot is stale, and a pre-filter reading a stale snapshot could exclude a
+   * contract the authoritative post-base filter would have kept - i.e. silently drop rows. When
+   * stale we simply skip the pushdown and keep today's behaviour (slower, still correct).
+   *
+   * Superset-safe even when fresh: a contract with no snapshot row at all stays in scope rather
+   * than being judged on missing data. Its authoritative value is then COALESCE(b2b, NULL) which
+   * the region filter drops anyway, so keeping it costs nothing and guarantees this pre-filter
+   * can never remove a row the post-base filter would keep. Built from the same
+   * `appendRegionSiteFilter` / `sqlRegionSiteRawFromJsonAndB2b` helpers as that filter so the
+   * matching semantics (trim, upper, 'Blank' handling) cannot drift apart.
+   *
+   * Selectivity in the YTD scope of 7,636 contracts (measured 2026-09-04): KIJING 2,424 -> 3.2x
+   * less downstream work, BONTANG 1,558 -> 4.9x, LUBUK GAUNG 1,355 -> 5.6x, TANJUNG MORAWA 761
+   * -> 10x, KARAWANG 432 -> 17.7x, and 28x or better below that.
+   */
+  if (plants.length > 0 && latestSpdSnapshotFresh) {
+    const scopeRegionSite = appendRegionSiteFilter(
+      plants,
+      paramIndex,
+      sqlRegionSiteRawFromJsonAndB2b('l_rs.data', 'b_rs'),
+    );
+    if (scopeRegionSite.sql) {
+      contractScopeWhere += ` AND (
+          EXISTS (
+            SELECT 1
+            FROM contract_latest_spd_snapshot l_rs
+            LEFT JOIN ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} b_rs
+              ON b_rs.origin_po = NULLIF(TRIM(c.po_number), '')
+            WHERE l_rs.contract_number = c.contract_id
+              ${scopeRegionSite.sql}
+          )
+          OR NOT EXISTS (
+            SELECT 1
+            FROM contract_latest_spd_snapshot l_rs_chk
+            WHERE l_rs_chk.contract_number = c.contract_id
+          )
+        )`;
+      queryParams.push(...scopeRegionSite.params);
+      paramIndex = scopeRegionSite.nextIndex;
+    }
+  }
 
   let queryText = `
       WITH contract_scope AS (
