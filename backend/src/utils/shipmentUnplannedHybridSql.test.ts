@@ -34,8 +34,8 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(sql).toContain('NOT (');
   });
 
-  it('builds contract backlog count query with contract qty in the same scan', () => {
-    const text = buildUnplannedContractBacklogCountQuery('AND c.contract_date >= $1', '');
+  it('builds contract backlog count query with contract qty in the same scan', async () => {
+    const text = await buildUnplannedContractBacklogCountQuery('AND c.contract_date >= $1', '');
     expect(text).toContain('unplanned_contract_backlog');
     expect(text).toContain('latest_spd_contract');
     expect(text).toContain('COUNT(*)::bigint AS c');
@@ -45,8 +45,8 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('> 1000');
   });
 
-  it('builds contract backlog page query with contract ext no and outstanding qty', () => {
-    const text = buildUnplannedContractBacklogPageQuery('AND c.contract_date >= $1', '', 20, 0);
+  it('builds contract backlog page query with contract ext no and outstanding qty', async () => {
+    const text = await buildUnplannedContractBacklogPageQuery('AND c.contract_date >= $1', '', 20, 0);
     expect(text).toContain('qty_move');
     expect(text).toContain('contract_ext_no_raw');
     expect(text).toContain('source_type_raw');
@@ -63,8 +63,8 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).not.toContain('NULL::numeric AS quantity_delivered_sap');
   });
 
-  it('applies server sort on contract backlog page query', () => {
-    const text = buildUnplannedContractBacklogPageQuery(
+  it('applies server sort on contract backlog page query', async () => {
+    const text = await buildUnplannedContractBacklogPageQuery(
       '',
       '',
       20,
@@ -75,8 +75,8 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('c.po_number ASC');
   });
 
-  it('accepts sortKey=status without ORDER BY string literal or missing column', () => {
-    const text = buildUnplannedContractBacklogPageQuery('', '', 20, 0, 'status', 'ASC');
+  it('accepts sortKey=status without ORDER BY string literal or missing column', async () => {
+    const text = await buildUnplannedContractBacklogPageQuery('', '', 20, 0, 'status', 'ASC');
     expect(text).not.toMatch(/ORDER BY[\s\S]{0,80}'UNPLANNED'/);
     expect(text).toContain('c.contract_date ASC NULLS LAST, c.contract_id ASC');
   });
@@ -132,7 +132,7 @@ describe('shipmentUnplannedHybridSql', () => {
 describe('buildAllHybridContractBacklogQuery', () => {
   it('counts unplanned and preplanned contract backlog together', async () => {
     const { buildAllHybridContractBacklogCountQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildAllHybridContractBacklogCountQuery('', '');
+    const text = await buildAllHybridContractBacklogCountQuery('', '');
     expect(text).toContain('unplanned_contract_backlog');
     expect(text).toContain('preplanned_contract_backlog');
     expect(text).toContain('all_contract_backlog');
@@ -142,7 +142,7 @@ describe('buildAllHybridContractBacklogQuery', () => {
 
   it('pages flat contract rows with both UNPLANNED and PREPLANNED statuses', async () => {
     const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0);
+    const text = await buildAllHybridContractBacklogPageQuery('', '', 20, 0);
     expect(text).toContain('UNPLANNED');
     expect(text).toContain('PREPLANNED');
     expect(text).toContain('COMPLETED');
@@ -161,14 +161,14 @@ describe('buildAllHybridContractBacklogQuery', () => {
 
   it('scopes qty_move to paged contracts for contract_date sort', async () => {
     const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'contract_date', 'ASC');
+    const text = await buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'contract_date', 'ASC');
     expect(text).toContain('paged_contracts');
     expect(text).toContain("SELECT contract_id FROM paged_contracts");
   });
 
   it('computes qty_move before LIMIT when sorting ALL-hybrid backlog by outstanding qty', async () => {
     const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'outstanding_quantity', 'DESC');
+    const text = await buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'outstanding_quantity', 'DESC');
     expect(text).not.toContain('paged_contracts');
     expect(text).toContain('qty_move');
     expect(text).toContain('ORDER BY outstanding_quantity DESC');
@@ -177,14 +177,14 @@ describe('buildAllHybridContractBacklogQuery', () => {
 
   it('computes qty_move before LIMIT when sorting ALL-hybrid backlog by delivery qty', async () => {
     const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'quantity_delivered', 'DESC');
+    const text = await buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'quantity_delivered', 'DESC');
     expect(text).not.toContain('paged_contracts');
     expect(text).toContain('ORDER BY quantity_delivered DESC');
   });
 
   it('projects status on ALL-hybrid candidates so sortKey=status is valid SQL', async () => {
     const { buildAllHybridContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'status', 'ASC');
+    const text = await buildAllHybridContractBacklogPageQuery('', '', 20, 0, 'status', 'ASC');
     expect(text).toContain("'UNPLANNED'::text AS status");
     expect(text).toContain("'PREPLANNED'::text AS status");
     expect(text).toContain('ORDER BY status ASC NULLS LAST');
@@ -206,7 +206,7 @@ describe('buildAllHybridContractBacklogQuery', () => {
 describe('buildPreplannedContractsPageQuery', () => {
   it('paginates by group_id and includes pre_planned_group_id on rows', async () => {
     const { buildPreplannedContractsPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildPreplannedContractsPageQuery('', '', 20, 0);
+    const text = await buildPreplannedContractsPageQuery('', '', 20, 0);
     expect(text).toContain('preplanned_groups_page');
     expect(text).toContain('pre_planned_group_id');
     expect(text).toContain('GROUP BY pre_planned_group_id');
@@ -217,7 +217,7 @@ describe('buildPreplannedContractsPageQuery', () => {
 describe('completed contract backlog OS gate', () => {
   it('keeps Unplanned page rows with remaining OS above 1 MT', async () => {
     const { buildUnplannedContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
-    const text = buildUnplannedContractBacklogPageQuery('', '', 20, 0);
+    const text = await buildUnplannedContractBacklogPageQuery('', '', 20, 0);
     expect(text).toContain('> 1000');
   });
 
@@ -226,10 +226,10 @@ describe('completed contract backlog OS gate', () => {
       buildCompletedContractBacklogCountQuery,
       buildCompletedContractBacklogPageQuery,
     } = await import('./shipmentUnplannedHybridSql');
-    const countSql = buildCompletedContractBacklogCountQuery('', '');
+    const countSql = await buildCompletedContractBacklogCountQuery('', '');
     expect(countSql).toContain('completed_contract_backlog');
     expect(countSql).toContain('<= 1000');
-    const pageSql = buildCompletedContractBacklogPageQuery('', '', 20, 0);
+    const pageSql = await buildCompletedContractBacklogPageQuery('', '', 20, 0);
     expect(pageSql).toContain("'COMPLETED'::text");
     expect(pageSql).toContain('<= 1000');
   });
@@ -246,10 +246,10 @@ describe('cancelled contract backlog', () => {
     expect(whereSql).toContain("'CANCELLED', 'CANCELED', 'CANCEL'");
     expect(whereSql).toContain('NOT EXISTS');
     expect(whereSql).toContain('s_ns.contract_id = c.id');
-    const countSql = buildCancelledContractBacklogCountQuery('', '');
+    const countSql = await buildCancelledContractBacklogCountQuery('', '');
     expect(countSql).toContain('cancelled_contract_backlog');
     expect(countSql).toContain('0::numeric AS outstanding_qty_kg');
-    const pageSql = buildCancelledContractBacklogPageQuery('', '', 20, 0);
+    const pageSql = await buildCancelledContractBacklogPageQuery('', '', 20, 0);
     expect(pageSql).toContain("'CANCELLED'::text");
     expect(pageSql).toContain('cancelled_contract_backlog');
   });

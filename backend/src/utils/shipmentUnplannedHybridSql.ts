@@ -433,26 +433,40 @@ export async function buildUnplannedContractBacklogCountQuery(
     deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
+  // The backlog predicate is the single most expensive thing in this query - EXPLAIN ANALYZE
+  // 2026-09-04 put its Seq Scan on contracts at 22.3s of the query's 60.9s, with a planner cost
+  // of 24.6M for an 18,612-row table (the predicate carries ~8 correlated SubPlans per row; the
+  // whole plan has 92 SubPlans and 97 scans of sap_processed_data). It used to appear twice -
+  // once scoping qty_move and once filtering the backlog rows - so all of that ran twice.
+  // Materialise the matching contracts once and have both consumers read the CTE.
+  //
+  // Rewrite only, no semantic change: the same predicate over the same tables, evaluated once.
+  // The final CTE keeps alias `c` so outstandingExpr and sqlBacklogOsStillActiveSql (both of
+  // which reference c./qm. directly) are untouched, and rejoins on the PRIMARY KEY so the join
+  // cannot fan out even if several contracts rows ever shared a contract_id. `l` is dropped from
+  // the final CTE because only the predicate referenced it.
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    ),
     ${qtyMoveCte},
     unplanned_contract_backlog AS (
       SELECT
         c.id,
         c.quantity_ordered,
         (${outstandingExpr})::numeric AS outstanding_qty
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-      WHERE ${backlogWhere}
-        AND ${sqlBacklogOsStillActiveSql()}
+      WHERE ${sqlBacklogOsStillActiveSql()}
     )
     SELECT
       COUNT(*)::bigint AS c,
