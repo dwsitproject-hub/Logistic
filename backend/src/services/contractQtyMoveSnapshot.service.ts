@@ -1,4 +1,4 @@
-import { query } from '../database/connection';
+import { getClient, query } from '../database/connection';
 import {
   buildContractQtyMoveSnapshotRefreshSql,
   buildContractQtyMoveSnapshotUpsertSql,
@@ -37,11 +37,55 @@ function scheduleContractQtyMoveSnapshotRefreshIfNeeded(): void {
 }
 
 export class ContractQtyMoveSnapshotService {
+  /**
+   * Rebuild the whole snapshot.
+   *
+   * This used to `TRUNCATE` and then `INSERT` as two separate autocommit statements while
+   * `is_stale` still said FALSE - and it failed exactly the way that invites. Found 2026-09-04:
+   * the table held **0 rows** while its meta claimed 18,583 and `is_stale = false`. A refresh had
+   * truncated it and then died (most likely a backend restart mid-rebuild), and the caller's
+   * `.catch(() => {})` swallowed the error, so nothing surfaced.
+   *
+   * The damage was not theoretical: every consumer read an empty snapshot for "eligible"
+   * contracts, so their delivery / receive came back as nothing. 15,394 of 15,593 Close contracts
+   * (98.7%) showed quantity_delivery = 0, quantity_receive = 0 and outstanding = the full contract
+   * quantity - i.e. as though nothing had ever shipped.
+   *
+   * So: mark stale BEFORE touching the data (readers fall back to live while the rebuild runs),
+   * do the delete and the insert in ONE transaction (readers never observe an empty or partial
+   * table), and on failure log loudly and leave `is_stale = TRUE` so the system degrades to slow
+   * rather than silently wrong. DELETE rather than TRUNCATE so readers keep seeing the previous
+   * contents until the swap commits instead of blocking on an ACCESS EXCLUSIVE lock.
+   */
   static async refreshAll(): Promise<number> {
     const start = Date.now();
-    await query('TRUNCATE contract_qty_move_snapshot');
-    const insertRes = await query(buildContractQtyMoveSnapshotRefreshSql());
-    const rowCount = insertRes.rowCount ?? 0;
+    await query(
+      `UPDATE contract_qty_move_snapshot_meta SET is_stale = TRUE WHERE id = 'global'`,
+    );
+
+    const client = await getClient();
+    let rowCount = 0;
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM contract_qty_move_snapshot');
+      const insertRes = await client.query(buildContractQtyMoveSnapshotRefreshSql());
+      rowCount = insertRes.rowCount ?? 0;
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // connection may already be unusable
+      }
+      logger.error('Contract qty_move snapshot refresh failed - snapshot left stale', {
+        err,
+        durationMs: Date.now() - start,
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+
     const durationMs = Date.now() - start;
     await query(
       `UPDATE contract_qty_move_snapshot_meta
