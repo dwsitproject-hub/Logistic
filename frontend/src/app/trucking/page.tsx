@@ -2825,7 +2825,7 @@ function TruckingPageContent() {
     }
     if (selectedGroupPlants.length > 0) {
       parts.push(
-        `Region/Site: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
+        `Region/Plant: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
       )
     }
     if (Object.keys(columnFilters).length > 0) {
@@ -3773,10 +3773,7 @@ function TruckingPageContent() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-3xl font-bold">Trucking</h1>
-          </div>
+        <div className="flex items-center justify-end gap-4">
           <div className="flex flex-wrap items-center justify-end gap-2">
             <input
               type="file"
@@ -3952,8 +3949,8 @@ function TruckingPageContent() {
                 incotermEmptyMessage="Loading incoterms..."
                 productEmptyMessage="Loading products..."
                 supplierEmptyMessage="Loading suppliers..."
-                groupPlantPlaceholder="Select region/site(s)"
-                groupPlantEmptyMessage="No region/site values"
+                groupPlantPlaceholder="Select region/plant(s)"
+                groupPlantEmptyMessage="No region/plant values"
               />
 
               <div className="flex flex-wrap items-center gap-4">
@@ -5492,7 +5489,6 @@ export default function TruckingPage() {
       fallback={
         <Layout>
           <div className="space-y-6">
-            <h1 className="text-3xl font-bold">Trucking</h1>
             <p className="text-sm text-gray-400">Loading…</p>
           </div>
         </Layout>

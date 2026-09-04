@@ -8,7 +8,7 @@ export const OIL_LOSS_DRILLDOWN_CATEGORIES: ReadonlyArray<{
   title: string
 }> = [
   { level: 'product', title: 'Product' },
-  { level: 'plant', title: 'Region/Site' },
+  { level: 'plant', title: 'Region/Plant' },
   { level: 'incoterm', title: 'Incoterm' },
   { level: 'transporter', title: 'Transporter' },
   { level: 'supplier', title: 'Supplier' },
@@ -142,7 +142,7 @@ export function oilLossDrilldownColumnSubtitle(
         : `Under ${displayOilLossGroupLabel(filters.product)}`
     case 'incoterm':
       if (!isOilLossDrilldownValueSet(filters.product) || !isOilLossDrilldownValueSet(filters.plant)) {
-        return 'Pick region/site first'
+        return 'Pick region/plant first'
       }
       return isOilLossDrilldownValueSet(filters.incoterm)
         ? `${displayOilLossGroupLabel(filters.product)} › ${displayOilLossGroupLabel(filters.plant)} › ${displayOilLossGroupLabel(filters.incoterm)}`
@@ -269,7 +269,7 @@ function plantsToNodes(map: Map<string, PlantAcc>): OilLossDrilldownTreeNode[] {
 }
 
 /**
- * Hierarchical drilldown tree — Product → Region/Site → Incoterm → Transporter → Supplier.
+ * Hierarchical drilldown tree — Product → Region/Plant → Incoterm → Transporter → Supplier.
  * Rows are first merged into one row per group (SEA voyage or LAND contract/PO) so a
  * multi-PO SEA voyage contributes its summed R4 loss once, not once per member PO.
  */

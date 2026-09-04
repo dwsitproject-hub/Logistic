@@ -417,7 +417,7 @@ const DIMENSION_SQL: Record<BreakdownDimension, { expr: string; label: string }>
   supplier: { expr: `COALESCE(NULLIF(TRIM(c.supplier), ''), 'Unknown')`, label: 'Supplier' },
   group_supplier: { expr: `COALESCE(NULLIF(TRIM(c.group_name), ''), 'Ungrouped')`, label: 'Group Supplier' },
   product: { expr: `COALESCE(NULLIF(TRIM(c.product), ''), 'Blank')`, label: 'Product' },
-  group_plant: { expr: SQL_RESOLVED_GROUP_PLANT, label: 'Region/Site' },
+  group_plant: { expr: SQL_RESOLVED_GROUP_PLANT, label: 'Region/Plant' },
 };
 
 export type BreakdownRow = {

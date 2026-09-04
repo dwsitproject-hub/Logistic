@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Layout from '@/components/Layout'
+import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -402,7 +403,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Region/Site',
+      label: 'Region/Plant',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
@@ -650,7 +651,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Region/Site',
+      label: 'Region/Plant',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
@@ -912,7 +913,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Region/Site',
+      label: 'Region/Plant',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
@@ -1089,6 +1090,7 @@ export default function OilLossPage() {
   const [loading, setLoading] = useState(true)
   /** Background refresh while cached rows stay visible. */
   const [dataFetching, setDataFetching] = useState(false)
+  usePageHeaderBusy(dataFetching && rows.length > 0)
   const [viewTransitionLoading, setViewTransitionLoading] = useState(false)
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [columnPrefsByView, setColumnPrefsByView] = useState<Record<OilLossTableViewMode, ViewColumnPrefs>>({
@@ -1760,12 +1762,6 @@ export default function OilLossPage() {
     <Layout>
       <div className="space-y-6">
         <div className="space-y-3">
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
-            <span>Oil Loss</span>
-            {dataFetching && rows.length > 0 ? (
-              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-gray-400" aria-hidden />
-            ) : null}
-          </h1>
           <div className="flex items-end gap-6 flex-wrap">
             <PerformanceContractDateControl
               period={globalPeriod}
@@ -1779,12 +1775,12 @@ export default function OilLossPage() {
             />
             <div className="w-48">
               <SearchableMultiSelect
-                label="Region/Site"
+                label="Region/Plant"
                 options={availableGroupPlants}
                 selected={selectedGroupPlants}
                 onChange={handleGroupPlantsChange}
-                placeholder="All region/sites"
-                emptyMessage="No region/site values"
+                placeholder="All region/plants"
+                emptyMessage="No region/plant values"
                 uppercaseOptionLabels
               />
             </div>

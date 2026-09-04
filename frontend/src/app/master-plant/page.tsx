@@ -280,8 +280,7 @@ export default function MasterPlantPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Master Plant</h1>
-            <p className="text-gray-500 text-sm mt-1">{templateHint}</p>
+            <p className="text-gray-500 text-sm">{templateHint}</p>
           </div>
           <div className="flex items-center gap-2">
             <Button

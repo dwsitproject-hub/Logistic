@@ -445,10 +445,7 @@ function CommercialDocumentsPageContent() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Commercial Documents</h1>
-        <p className="text-sm text-gray-600 mt-1">Document completeness checking for commercial contracts</p>
-      </div>
+      <p className="text-sm text-gray-600">Document completeness checking for commercial contracts</p>
 
       {/* Section 2 */}
       <Card>
@@ -513,9 +510,9 @@ function CommercialDocumentsPageContent() {
               pinSelectedToTop
             />
             <SearchableMultiSelect
-              label="Region/Site"
-              placeholder="Select region/site(s)"
-              emptyMessage="No region/site values"
+              label="Region/Plant"
+              placeholder="Select region/plant(s)"
+              emptyMessage="No region/plant values"
               options={availablePlants}
               selected={selectedPlants}
               onChange={handleGroupPlantsChange}

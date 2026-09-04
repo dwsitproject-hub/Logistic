@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, Sus
 import * as XLSX from 'xlsx'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
+import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -461,7 +462,7 @@ function contractPerfDrilldownColumnSubtitle(
         : `Under ${d.product}`
     case 'incoterm':
       if (!isContractPerfDrilldownValueSet(d.product) || !isContractPerfDrilldownValueSet(d.plant)) {
-        return 'Pick region/site first'
+        return 'Pick region/plant first'
       }
       return isContractPerfDrilldownValueSet(d.incoterm)
         ? `${d.product} › ${d.plant} › ${d.incoterm}`
@@ -979,7 +980,7 @@ function ContractPerfDrilldownSectionHelp({
           </p>
         ) : null}
         <p>
-          Navigate as a tree: <span className="font-medium">Product → Region/Site → Incoterm → Supplier</span>. Card
+          Navigate as a tree: <span className="font-medium">Product → Region/Plant → Incoterm → Supplier</span>. Card
           totals stay at branch level; only Section 3 narrows to your selected path and segment.
         </p>
         {summaryCardStatus === 'Open' ? (
@@ -1172,6 +1173,7 @@ function ContractsPageContent() {
   /** Force next Section 1 summary fetch after Staff scope defaults / toolbar scope changes. */
   const cardSummaryForceNextFetchRef = useRef(true)
   const [latePerfSummaryLoading, setLatePerfSummaryLoading] = useState(false)
+  usePageHeaderBusy(isContractPerformance && latePerfSummaryLoading)
   const [latePerfTreeLoading, setLatePerfTreeLoading] = useState(false)
   const [isTableLoading, setIsTableLoading] = useState(false)
   const contractPerfPendingLoadsRef = useRef(0)
@@ -2106,7 +2108,7 @@ function ContractsPageContent() {
       })
   }, [authReady])
 
-  // Contract Performance: Incoterm from contracts; Region/Site from SAP Discharge Destination
+  // Contract Performance: Incoterm from contracts; Region/Plant from SAP Discharge Destination
   useEffect(() => {
     if (!authReady) return
     let cancelled = false
@@ -3475,12 +3477,7 @@ function ContractsPageContent() {
       <div className="space-y-6">
         {/* Header */}
         {!isContractPerformance && (
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
-                <span>Contracts</span>
-              </h1>
-            </div>
+          <div className="flex items-center justify-end">
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500 font-medium border border-gray-200 rounded px-2 py-1 bg-gray-50">
                 Cargo Readiness Date
@@ -3519,12 +3516,6 @@ function ContractsPageContent() {
 
         {isContractPerformance && (
           <div className="space-y-3">
-            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
-              <span>Contract Performance</span>
-              {latePerfSummaryLoading ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-              ) : null}
-            </h1>
             <div className="flex items-end gap-6 flex-wrap">
               <PerformanceContractDateControl
                 period={performancePeriod}
@@ -3550,7 +3541,7 @@ function ContractsPageContent() {
               />
               <div className="w-48">
                 <SearchableMultiSelect
-                  label="Region/Site"
+                  label="Region/Plant"
                   options={availableGroupPlants}
                   selected={contractPerfSelectedGroupPlants}
                   onChange={(values) => {
@@ -3558,8 +3549,8 @@ function ContractsPageContent() {
                     handleContractPerfGroupPlantsChange(values)
                     setCurrentPage(1)
                   }}
-                  placeholder="Select region/site(s)"
-                  emptyMessage="No region/site values"
+                  placeholder="Select region/plant(s)"
+                  emptyMessage="No region/plant values"
                   uppercaseOptionLabels
                 />
               </div>
@@ -3780,7 +3771,7 @@ function ContractsPageContent() {
                     >
                       {([
                         { title: 'Product', level: 'product' as const, nodes: unifiedProductNodes },
-                        { title: 'Region/Site', level: 'plant' as const, nodes: unifiedPlantNodes },
+                        { title: 'Region/Plant', level: 'plant' as const, nodes: unifiedPlantNodes },
                         { title: 'Incoterm', level: 'incoterm' as const, nodes: unifiedIncotermNodes },
                         { title: 'Supplier', level: 'supplier' as const, nodes: unifiedSupplierNodes },
                       ] as const).map((col) => {
@@ -4029,8 +4020,8 @@ function ContractsPageContent() {
                   productEmptyMessage="Loading products..."
                   groupEmptyMessage="Loading groups..."
                   supplierEmptyMessage="Loading suppliers..."
-                  groupPlantPlaceholder="Select region/site(s)"
-                  groupPlantEmptyMessage="No region/site values"
+                  groupPlantPlaceholder="Select region/plant(s)"
+                  groupPlantEmptyMessage="No region/plant values"
                 />
               )}
               

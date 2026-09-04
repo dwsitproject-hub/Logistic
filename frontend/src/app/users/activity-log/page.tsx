@@ -160,11 +160,7 @@ function UserActivityLogPageContent() {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
-              <Activity className="h-8 w-8 text-blue-600" />
-              <h1 className="text-3xl font-bold text-gray-900">User Activity Log</h1>
-            </div>
-            <p className="text-gray-500 text-sm mt-1">
+            <p className="text-gray-500 text-sm">
               Daily summary of user actions and active time (idle after {USER_ACTIVITY_IDLE_MINUTES} minutes).
             </p>
           </div>

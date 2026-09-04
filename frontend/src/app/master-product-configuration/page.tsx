@@ -106,8 +106,7 @@ export default function MasterProductConfigurationPage() {
   return (
     <Layout>
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Master Product Configuration</h1>
+      <div className="flex items-center justify-end">
         <div className="flex items-center gap-2">
           <Input placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-sm" />
           <Button onClick={openAdd}>Add Product</Button>

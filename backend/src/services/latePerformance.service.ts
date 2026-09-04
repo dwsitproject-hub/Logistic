@@ -274,6 +274,49 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   // denominator. Plain column predicate - no extra join.
   contractScopeWhere += sqlExcludeWithdrawnContracts('c');
 
+  /*
+   * Product pushdown. The authoritative product filter still runs on `base.product` further down
+   * (unchanged); this narrows `contract_scope` to the same contracts up front so the expensive
+   * CTEs hanging off that scope - qty_move, latest_spd, sto_agg, the sibling set, and
+   * logistics_gr_status via `base` - do proportionally less work instead of computing every
+   * contract in the date range and discarding most of it at the very end.
+   *
+   * Safe by construction: this is a *narrowing pre-filter*, never the deciding one. `base.product`
+   * is MAX(c.product) grouped by contract_id, and scope-to-contracts is 1:1 here (measured
+   * 2026-09-04: 18,489 rows for 18,489 distinct contract_ids), so the two predicates select the
+   * same contracts; should duplicate contract rows ever appear, "any row matches" is a superset of
+   * "MAX matches", and the untouched post-base filter still decides. Built from the same helpers
+   * as that filter so the matching semantics cannot drift.
+   *
+   * Worth it because the filter is selective for everything but the dominant product (measured in
+   * the YTD scope of 7,636: CPO 4,887 -> ~1.6x less work, SHELL PALM 1,001 -> 7.6x, PK 727 ->
+   * 10.5x, WASTE OIL (POME) 546 -> 14x, RBDPS 165 -> 46x), and product is one of the filters
+   * users change most often - each change is otherwise a full cold recompute.
+   */
+  const scopeMultiProduct = appendContractPerfProductsMultiSql(
+    productFilters.length > 1 ? productFilters : undefined,
+    'c.product',
+    paramIndex,
+  );
+  if (scopeMultiProduct) {
+    contractScopeWhere += scopeMultiProduct.clause;
+    queryParams.push(...scopeMultiProduct.params);
+    paramIndex = scopeMultiProduct.nextParamIndex;
+  } else {
+    const scopeSingleProduct =
+      productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+    const scopeProductClause = appendContractPerfProductSubstringSql(
+      scopeSingleProduct,
+      'c.product',
+      paramIndex,
+    );
+    if (scopeProductClause) {
+      contractScopeWhere += scopeProductClause.clause;
+      queryParams.push(scopeProductClause.param);
+      paramIndex = scopeProductClause.nextParamIndex;
+    }
+  }
+
   const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
     resolveContractsQtyMoveCte('contract_scope'),
     resolveContractsStoAggCte('contract_scope'),

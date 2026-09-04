@@ -24,7 +24,7 @@ describe('valueInRegionSiteList', () => {
   })
 })
 
-describe('rowMatchesToolbarMultiFilters Region/Site', () => {
+describe('rowMatchesToolbarMultiFilters Region/Plant', () => {
   it('matches plant_site against selected destinasi without treating Blank as a filter value', () => {
     expect(
       rowMatchesToolbarMultiFilters(

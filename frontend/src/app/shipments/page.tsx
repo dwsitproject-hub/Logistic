@@ -294,7 +294,7 @@ interface Shipment {
   arrival_date: string
   port_of_loading: string
   port_of_discharge: string
-  plant_site: string // Region/Site from SAP Discharge Destination
+  plant_site: string // Region/Plant from SAP Discharge Destination
   /** SAP / contracts plant code (e.g. AM10) — used in Add New PO labels. */
   plant_code?: string | null
   quantity_shipped: number
@@ -6050,10 +6050,7 @@ function ShipmentsPageContent() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-            <h1 className="text-3xl font-bold">Shipments</h1>
-          </div>
+        <div className="flex items-center justify-end gap-4">
           <div className="flex flex-wrap items-center justify-end gap-2">
             <VesselIdleInsightChip
               count={vesselIdleCount}

@@ -67,7 +67,7 @@ export type PerformanceScopeFiltersProps = {
 
 export function PerformanceScopeFilters({
   hideGroupPlantFilter = false,
-  groupPlantLabel = 'Region/Site',
+  groupPlantLabel = 'Region/Plant',
   uppercaseGroupPlantLabels = false,
   incotermOptions,
   selectedIncoterms,
@@ -115,8 +115,8 @@ export function PerformanceScopeFilters({
   onClear,
   incotermPlaceholder = 'Select incoterm(s)',
   incotermEmptyMessage = 'No incoterms',
-  groupPlantPlaceholder = 'Select region/site(s)',
-  groupPlantEmptyMessage = 'No region/site values',
+  groupPlantPlaceholder = 'Select region/plant(s)',
+  groupPlantEmptyMessage = 'No region/plant values',
 }: PerformanceScopeFiltersProps) {
   const showGroupPlant = !hideGroupPlantFilter
   const selectorCount =

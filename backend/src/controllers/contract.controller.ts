@@ -966,8 +966,8 @@ export const getContractFilterGroupPlants = async (_req: AuthRequest, res: Respo
       data: { groupPlants },
     });
   } catch (error) {
-    logger.error('Get contract region/site filter options error:', error);
-    return res.status(500).json({ success: false, error: { message: 'Failed to fetch region/site filter options' } });
+    logger.error('Get contract region/plant filter options error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch region/plant filter options' } });
   }
 };
 

@@ -148,15 +148,15 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
   })
 })
 
-describe('oilLossDrilldown Region/Site (Discharge Destination)', () => {
-  it('labels the plant level Region/Site', () => {
-    expect(OIL_LOSS_DRILLDOWN_CATEGORIES.find((c) => c.level === 'plant')?.title).toBe('Region/Site')
+describe('oilLossDrilldown Region/Plant (Discharge Destination)', () => {
+  it('labels the plant level Region/Plant', () => {
+    expect(OIL_LOSS_DRILLDOWN_CATEGORIES.find((c) => c.level === 'plant')?.title).toBe('Region/Plant')
     expect(
       oilLossDrilldownColumnSubtitle('incoterm', {
         ...EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
         product: 'CPO',
       }),
-    ).toBe('Pick region/site first')
+    ).toBe('Pick region/plant first')
   })
 
   it('uses plant_site destinasi over master group_plant', () => {

@@ -13,7 +13,9 @@ export function SapImportInFlightBanner() {
     return null;
   }
 
-  const detailHref = activeImport.id ? `/sap-imports/${activeImport.id}` : '/sap-imports';
+  const detailHref = activeImport.id
+    ? `/sap-imports?import=${encodeURIComponent(activeImport.id)}`
+    : '/sap-imports';
 
   return (
     <Link

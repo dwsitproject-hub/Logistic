@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
+import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { canViewShippingPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import api from '@/lib/api'
 import { isAuthenticatedLocally } from '@/lib/authSession'
@@ -1365,6 +1366,7 @@ function ShippingPerformancePageContent() {
   const [rows, setRows] = useState<ShippingPerformanceRow[]>([])
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryFetching, setSummaryFetching] = useState(false)
+  usePageHeaderBusy(summaryLoading || summaryFetching)
   const section3TableLoading = summaryLoading && rows.length === 0
   const [authReady, setAuthReady] = useState(false)
 
@@ -1981,7 +1983,7 @@ function ShippingPerformancePageContent() {
         parts.push(`Incoterm: ${selectedIncoterms.map(displayGroupLabel).join(', ')}`)
       }
       if (selectedGroupPlants.length > 0) {
-        parts.push(`Region/Site: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
+        parts.push(`Region/Plant: ${selectedGroupPlants.map(displayGroupLabel).join(', ')}`)
       }
       if (selectedVessels.length > 0) {
         parts.push(`Vessel: ${selectedVessels.map(displayGroupLabel).join(', ')}`)
@@ -2000,7 +2002,7 @@ function ShippingPerformancePageContent() {
       if (statusFilter !== 'All') parts.push(`Status: ${statusFilter}`)
     }
     if (drilldownFilters.product) parts.push(`Product: ${displayGroupLabel(drilldownFilters.product)}`)
-    if (drilldownFilters.plant) parts.push(`Region/Site node: ${displayGroupLabel(drilldownFilters.plant)}`)
+    if (drilldownFilters.plant) parts.push(`Region/Plant node: ${displayGroupLabel(drilldownFilters.plant)}`)
     if (drilldownFilters.incoterm) parts.push(`Incoterm node: ${displayGroupLabel(drilldownFilters.incoterm)}`)
     if (drilldownFilters.vessel) parts.push(`Vessel: ${drilldownFilters.vessel}`)
     return parts
@@ -2148,16 +2150,6 @@ function ShippingPerformancePageContent() {
     <div className="space-y-6">
         {/* Header + Source / Product scope toggles (client-side only) */}
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
-                <span>Shipping Performance</span>
-                {summaryLoading || summaryFetching ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-                ) : null}
-              </h1>
-            </div>
-          </div>
           <div className="flex items-end gap-6 flex-wrap">
             <PerformanceContractDateControl
               period={performancePeriod}
@@ -2180,15 +2172,15 @@ function ShippingPerformancePageContent() {
             />
             <div className="w-48">
               <SearchableMultiSelect
-                label="Region/Site"
+                label="Region/Plant"
                 options={availableGroupPlants}
                 selected={selectedGroupPlants}
                 onChange={(values) => {
                   handleGroupPlantsChange(values)
                   setCurrentPage(1)
                 }}
-                placeholder="All region/sites"
-                emptyMessage="No region/site values"
+                placeholder="All region/plants"
+                emptyMessage="No region/plant values"
                 uppercaseOptionLabels
               />
             </div>
@@ -2300,8 +2292,8 @@ function ShippingPerformancePageContent() {
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                   {([
                       { title: 'Product',     subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick one',                             level: 'product'  as const },
-                      { title: 'Region/Site', subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',                 level: 'plant'    as const },
-                      { title: 'Incoterm',    subtitle: drilldownFilters.plant    ? `Under ${displayGroupLabel(drilldownFilters.plant)}`    : 'Pick group plant first',             level: 'incoterm' as const },
+                      { title: 'Region/Plant', subtitle: drilldownFilters.product  ? `Under ${displayGroupLabel(drilldownFilters.product)}`  : 'Pick product first',                 level: 'plant'    as const },
+                      { title: 'Incoterm',    subtitle: drilldownFilters.plant    ? `Under ${displayGroupLabel(drilldownFilters.plant)}`    : 'Pick region/plant first',             level: 'incoterm' as const },
                       { title: 'Vessel',   subtitle: drilldownFilters.incoterm ? `Under ${displayGroupLabel(drilldownFilters.incoterm)}` : 'Pick incoterm first',             level: 'vessel'   as const },
                     ] as const).map((col) => {
                       const activeTree = perfTree
@@ -2374,7 +2366,7 @@ function ShippingPerformancePageContent() {
                           )
                         }
                         if (col.level === 'plant') {
-                          if (!drilldownFilters.product) return <div className="text-sm text-gray-500">Select a product to see group plants.</div>
+                          if (!drilldownFilters.product) return <div className="text-sm text-gray-500">Select a product to see region/plants.</div>
                           return (
                             <div className="space-y-2">
                               {(productNode?.children || []).map((n) => renderNode(n, drilldownFilters.plant === n.key, () => {
@@ -2384,7 +2376,7 @@ function ShippingPerformancePageContent() {
                           )
                         }
                         if (col.level === 'incoterm') {
-                          if (!drilldownFilters.plant) return <div className="text-sm text-gray-500">Select a group plant to see incoterms.</div>
+                          if (!drilldownFilters.plant) return <div className="text-sm text-gray-500">Select a region/plant to see incoterms.</div>
                           return (
                             <div className="space-y-2">
                               {(plantNode?.children || []).map((n) => renderNode(n, drilldownFilters.incoterm === n.key, () => {
@@ -2424,7 +2416,7 @@ function ShippingPerformancePageContent() {
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Filters</CardTitle>
             <p className="text-sm text-gray-600 mt-1">
-              Apply incoterm, group plant, vessel, status, and contract date filters to the summary, drilldown, and shipment table.
+              Apply incoterm, region/plant, vessel, status, and contract date filters to the summary, drilldown, and shipment table.
             </p>
           </CardHeader>
           <CardContent className="pt-2 space-y-4">
@@ -2506,8 +2498,8 @@ function ShippingPerformancePageContent() {
               }}
               incotermEmptyMessage="No incoterms"
               productEmptyMessage="No products"
-              groupPlantPlaceholder="Select region/site(s)"
-              groupPlantEmptyMessage="No region/site values"
+              groupPlantPlaceholder="Select region/plant(s)"
+              groupPlantEmptyMessage="No region/plant values"
             />
           </CardContent>
         </Card>

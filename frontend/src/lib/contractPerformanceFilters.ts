@@ -868,7 +868,7 @@ export function buildLatePerformanceApiParams(
 
 /**
  * Scope for Section 2 drilldown card totals — toolbar + Open/Close tab only.
- * Applied drilldown path (Product → Region/Site → Incoterm → Supplier) never narrows the tree API.
+ * Applied drilldown path (Product → Region/Plant → Incoterm → Supplier) never narrows the tree API.
  */
 export function resolveContractPerformanceTreeScope(
   global: ContractPerformanceGlobalFilters,

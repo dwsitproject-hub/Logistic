@@ -328,11 +328,7 @@ export default function RolesPage() {
                 Back to Users
               </Button>
             </div>
-            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-              <Shield className="h-8 w-8 text-blue-600" />
-              Role & Permission Management
-            </h1>
-            <p className="text-gray-600 mt-2">
+            <p className="text-gray-600">
               Configure what each role can view, edit, and access in the system
             </p>
           </div>

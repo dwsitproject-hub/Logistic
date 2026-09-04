@@ -1984,8 +1984,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         {/* Welcome Section */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">{pageTitle}</h1>
-            <p className="text-gray-600 mt-2">
+            <p className="text-gray-600">
               Welcome to KPN Logistics Intelligence Platform
             </p>
           </div>

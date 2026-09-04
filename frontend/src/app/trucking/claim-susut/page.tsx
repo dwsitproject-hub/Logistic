@@ -391,8 +391,7 @@ export default function ClaimSusutPage() {
               </Link>
               <Badge variant="outline">SAP Excel</Badge>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mt-2">Claim Susut</h1>
-            <p className="text-sm text-gray-600 mt-1">
+            <p className="text-sm text-gray-600 mt-2">
               Upload the SAP Claim Susut excel and view outstanding claim rows.
             </p>
           </div>

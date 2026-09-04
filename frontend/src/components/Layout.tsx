@@ -8,7 +8,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/t
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import { UserActivityTracker } from './UserActivityTracker'
-import { LogOut, Menu, X, BookOpen } from 'lucide-react'
+import { BookOpen, Loader2, LogOut, Menu, X } from 'lucide-react'
+import { PageHeaderBusyProvider, usePageHeaderBusyState } from '@/components/PageHeaderBusyContext'
+import { resolvePageTitle } from '@/lib/resolvePageTitle'
 import {
   PermissionsProvider,
   clearPermissionsCache,
@@ -34,7 +36,6 @@ function LayoutChrome({
   children,
   user,
   pathname,
-  navigation,
   filteredNavigation,
   sidebarNavigationLoading,
   sidebarOpen,
@@ -45,7 +46,6 @@ function LayoutChrome({
   children: React.ReactNode
   user: UserLite
   pathname: string
-  navigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   filteredNavigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   sidebarNavigationLoading?: boolean
   sidebarOpen: boolean
@@ -54,7 +54,8 @@ function LayoutChrome({
   onNavHover: (href: string) => void
 }) {
   const { startTour } = useAppTour()
-  const pageTitle = navigation.find((item) => item.href === pathname)?.name || 'KLIP'
+  const pageTitle = resolvePageTitle(pathname)
+  const { busy } = usePageHeaderBusyState()
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -112,6 +113,9 @@ function LayoutChrome({
           <div className="flex w-full min-w-0 items-center justify-between gap-4">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               <h2 className="truncate text-xl font-semibold leading-snug text-gray-800">{pageTitle}</h2>
+              {busy ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-label="Loading" />
+              ) : null}
               <SapImportInFlightBanner />
             </div>
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
@@ -232,19 +236,20 @@ function LayoutWithPermissions({
   return (
     <TooltipProvider delayDuration={200}>
       <AppTourProvider userId={user.id ?? null}>
-        <LayoutChrome
-          user={user}
-          pathname={pathname}
-          navigation={NAV_ITEMS}
-          filteredNavigation={sidebarNavigation}
-          sidebarNavigationLoading={sidebarNavigationLoading}
-          sidebarOpen={sidebarOpen}
-          setSidebarOpen={setSidebarOpen}
-          handleLogout={handleLogout}
-          onNavHover={handleNavHover}
-        >
-          {children}
-        </LayoutChrome>
+        <PageHeaderBusyProvider>
+          <LayoutChrome
+            user={user}
+            pathname={pathname}
+            filteredNavigation={sidebarNavigation}
+            sidebarNavigationLoading={sidebarNavigationLoading}
+            sidebarOpen={sidebarOpen}
+            setSidebarOpen={setSidebarOpen}
+            handleLogout={handleLogout}
+            onNavHover={handleNavHover}
+          >
+            {children}
+          </LayoutChrome>
+        </PageHeaderBusyProvider>
       </AppTourProvider>
     </TooltipProvider>
   )

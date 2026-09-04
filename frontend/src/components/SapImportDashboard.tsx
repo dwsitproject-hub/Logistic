@@ -1,15 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Progress } from './ui/progress';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Upload } from 'lucide-react';
 import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal';
+import { SapImportDetailModal } from '@/components/SapImportDetailModal';
 import api from '../lib/api';
 import { canCreatePermission, usePermissions } from '@/components/PermissionsContext';
 import {
@@ -100,6 +102,8 @@ const computeProcessingProgress = computeSapImportProgress;
 const formatDuration = formatSapImportDuration;
 
 const SapImportDashboard: React.FC = () => {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const perms = usePermissions();
   const canUploadSap = canCreatePermission(perms, 'page.sap');
   const [imports, setImports] = useState<SapImport[]>([]);
@@ -114,6 +118,23 @@ const SapImportDashboard: React.FC = () => {
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const detailImportId = searchParams.get('import');
+
+  const openImportDetail = useCallback(
+    (id: string) => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.set('import', id);
+      router.replace(`/sap-imports?${next.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  const closeImportDetail = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('import');
+    const q = next.toString();
+    router.replace(q ? `/sap-imports?${q}` : '/sap-imports', { scroll: false });
+  }, [router, searchParams]);
 
   const activeImport = useMemo(() => {
     if (activeImportId) {
@@ -460,9 +481,11 @@ const SapImportDashboard: React.FC = () => {
             </div>
             {canUploadSap ? (
               <Button
+                size="sm"
+                variant="outline"
                 onClick={handleStartImport}
                 disabled={importing}
-                className="ml-4"
+                className="ml-4 border-indigo-600 text-indigo-700 hover:bg-indigo-50"
               >
                 {importing ? (
                   <>
@@ -470,7 +493,10 @@ const SapImportDashboard: React.FC = () => {
                     {uploadPhase === 'processing' ? 'Processing...' : 'Uploading...'}
                   </>
                 ) : (
-                  '📁 Browse & Import File'
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Import SAP Data
+                  </>
                 )}
               </Button>
             ) : (
@@ -645,7 +671,7 @@ const SapImportDashboard: React.FC = () => {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => window.location.href = `/sap-imports/${imp.id}`}
+                          onClick={() => openImportDetail(imp.id)}
                         >
                           View Details
                         </Button>
@@ -729,6 +755,7 @@ const SapImportDashboard: React.FC = () => {
         failedLabel="Failed"
         errorsTitle="Import issues"
       />
+      <SapImportDetailModal importId={detailImportId} onClose={closeImportDetail} />
     </div>
   );
 };

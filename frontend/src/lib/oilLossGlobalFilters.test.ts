@@ -48,7 +48,7 @@ describe('oilLossGlobalFilters', () => {
     expect(filtered[0].product).toBe('CPO')
   })
 
-  it('matches Region/Site destinasi case-insensitively and ignores Blank', () => {
+  it('matches Region/Plant destinasi case-insensitively and ignores Blank', () => {
     const rows = [
       row({ product: 'CPO', group_plant: 'Bontang', plant_site: 'Bontang' }),
       row({ product: 'CPO', group_plant: 'Blank', plant_site: 'Blank' }),

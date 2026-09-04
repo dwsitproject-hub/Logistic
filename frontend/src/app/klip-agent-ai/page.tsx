@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Bot, Upload, Sparkles } from 'lucide-react'
+import { Upload, Sparkles } from 'lucide-react'
 import api from '@/lib/api'
 import AgentReportView from './AgentReportView'
 
@@ -91,8 +91,6 @@ export default function KlipAgentAiPage() {
     <Layout>
       <div className="mx-auto max-w-5xl h-[calc(100vh-140px)] flex flex-col">
         <div className="mb-3 flex items-center gap-2">
-          <Bot className="h-5 w-5 text-blue-600" />
-          <h1 className="text-lg font-semibold">KLIP Agent AI</h1>
           <Badge variant="outline" className="text-[10px]">Beta</Badge>
         </div>
 

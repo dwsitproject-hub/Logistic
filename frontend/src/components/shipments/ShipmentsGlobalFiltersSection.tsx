@@ -165,8 +165,8 @@ export function ShipmentsGlobalFiltersSection({
             incotermEmptyMessage="Loading incoterms..."
             productEmptyMessage="Loading products..."
             supplierEmptyMessage="Loading suppliers..."
-            groupPlantPlaceholder="Select region/site(s)"
-            groupPlantEmptyMessage="No region/site values"
+            groupPlantPlaceholder="Select region/plant(s)"
+            groupPlantEmptyMessage="No region/plant values"
           />
 
           <div className="flex flex-wrap gap-4 items-center">

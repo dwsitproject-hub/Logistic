@@ -279,8 +279,7 @@ export default function FinancePage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Finance</h1>
-            <p className="text-gray-600 mt-2">Payment status and financial tracking</p>
+            <p className="text-gray-600">Payment status and financial tracking</p>
           </div>
           <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
             {refreshing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
