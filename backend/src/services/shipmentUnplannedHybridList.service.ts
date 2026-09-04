@@ -337,13 +337,13 @@ async function computeHybridBreakdown(
   const isCompletedHybrid = ctx.contractBacklogMode === 'completed';
   const isCancelledHybrid = ctx.contractBacklogMode === 'cancelled';
 
-  const contractCountSql = isCancelledHybrid
+  const contractCountSql = await (isCancelledHybrid
     ? buildCancelledContractBacklogCountQuery(contractScopeSql, toolbarSql)
     : isCompletedHybrid
       ? buildCompletedContractBacklogCountQuery(contractScopeSql, toolbarSql)
       : isAllHybrid
         ? buildAllHybridContractBacklogCountQuery(contractScopeSql, toolbarSql)
-        : buildUnplannedContractBacklogCountQuery(contractScopeSql, toolbarSql);
+        : buildUnplannedContractBacklogCountQuery(contractScopeSql, toolbarSql));
 
   const contractRes = await query(contractCountSql, contractParams);
 
@@ -396,7 +396,7 @@ async function fetchContractBacklogPage(
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
   const sortKey = ctx.shipmentCtx.sortKey ?? 'created_at';
   const sortDir = ctx.shipmentCtx.sortDir ?? 'DESC';
-  const text =
+  const text = await (
     ctx.contractBacklogMode === 'cancelled'
       ? buildCancelledContractBacklogPageQuery(
           contractScopeSql,
@@ -431,7 +431,7 @@ async function fetchContractBacklogPage(
               offset,
               sortKey,
               sortDir,
-            );
+            ));
   const result = await query(text, params);
   return result.rows as Record<string, unknown>[];
 }
@@ -735,7 +735,7 @@ async function computePreplannedContractsBreakdown(
 ): Promise<PreplannedContractsBreakdown> {
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
   const res = await query(
-    buildPreplannedContractsCountQuery(contractScopeSql, toolbarSql),
+    await buildPreplannedContractsCountQuery(contractScopeSql, toolbarSql),
     params,
   );
   const contractRows = parseInt(String(res.rows[0]?.contract_count ?? '0'), 10) || 0;
@@ -789,7 +789,7 @@ export async function resolvePreplannedContractsList(
 
   const breakdown = await countPreplannedContracts(ctx);
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
-  const text = buildPreplannedContractsPageQuery(
+  const text = await buildPreplannedContractsPageQuery(
     contractScopeSql,
     toolbarSql,
     limitNum,
@@ -835,7 +835,7 @@ async function computeCompletedContractBacklogBreakdown(
 ): Promise<CompletedContractBacklogBreakdown> {
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
   const res = await query(
-    buildCompletedContractBacklogCountQuery(contractScopeSql, toolbarSql),
+    await buildCompletedContractBacklogCountQuery(contractScopeSql, toolbarSql),
     params,
   );
   const contractRows = parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;

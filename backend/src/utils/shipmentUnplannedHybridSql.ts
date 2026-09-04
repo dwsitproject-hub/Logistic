@@ -7,7 +7,8 @@ import {
   sqlIsContractSapInactiveForShipmentBacklogExpr,
   sqlContractImportStatusExpr,
 } from './contractDeliveryStatus';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { appendRegionSiteFilter, sqlRegionSiteDisplayForContract, sqlRegionSiteRawForContract } from './regionSiteSql';
 import { sapDischargeDestinationFromJson } from './sapTruckingLoadingLocationSql';
@@ -419,10 +420,10 @@ export function buildUnplannedContractBacklogLatestSpdCte(): string {
 /**
  * Backlog count + contract qty + outstanding qty (kg) in one scan.
  */
-export function buildUnplannedContractBacklogCountQuery(
+export async function buildUnplannedContractBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   /** JOIN-based OS (same formula as correlated qty_move expr used on page rows). */
   const outstandingExpr = sqlContractOutstandingFromFields({
@@ -432,7 +433,7 @@ export function buildUnplannedContractBacklogCountQuery(
     deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -515,14 +516,14 @@ function backlogPageSortNeedsQtyMove(sortKey: string): boolean {
   );
 }
 
-export function buildAllHybridContractBacklogPageQuery(
+export async function buildAllHybridContractBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
-): string {
+): Promise<string> {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
@@ -605,7 +606,7 @@ export function buildAllHybridContractBacklogPageQuery(
       ORDER BY ${outerOrder}
       LIMIT ${limit} OFFSET ${offset}
     ),
-    ${buildQtyMoveCte({
+    ${await resolveContractsQtyMoveCte({
       kind: 'in_subquery',
       subquery: 'SELECT contract_id FROM paged_contracts',
     })},
@@ -630,7 +631,7 @@ export function buildAllHybridContractBacklogPageQuery(
     ORDER BY ${outerOrder}`;
   }
 
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -677,14 +678,14 @@ export function buildAllHybridContractBacklogPageQuery(
     LIMIT ${limit} OFFSET ${offset}`;
 }
 
-export function buildUnplannedContractBacklogPageQuery(
+export async function buildUnplannedContractBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
-): string {
+): Promise<string> {
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
@@ -692,7 +693,7 @@ export function buildUnplannedContractBacklogPageQuery(
     contractNumberExpr: 'c.contract_id',
   });
   const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -717,17 +718,17 @@ export function buildUnplannedContractBacklogPageQuery(
     SELECT * FROM unplanned_contract_backlog`;
 }
 
-export function buildPreplannedContractsCountQuery(
+export async function buildPreplannedContractsCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const backlogWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -772,19 +773,19 @@ export function buildPreplannedContractsCountQuery(
     FROM preplanned_contracts`;
 }
 
-export function buildPreplannedContractsPageQuery(
+export async function buildPreplannedContractsPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
-): string {
+): Promise<string> {
   const backlogWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -833,10 +834,10 @@ export function buildPreplannedContractsPageQuery(
              pc.contract_number ASC`;
 }
 
-export function buildCompletedContractBacklogCountQuery(
+export async function buildCompletedContractBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const backlogWhere = `${completedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractOutstandingFromFields({
     contractQtyExpr: 'c.quantity_ordered',
@@ -845,7 +846,7 @@ export function buildCompletedContractBacklogCountQuery(
     deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -873,14 +874,14 @@ export function buildCompletedContractBacklogCountQuery(
     FROM completed_contract_backlog`;
 }
 
-export function buildCompletedContractBacklogPageQuery(
+export async function buildCompletedContractBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
-): string {
+): Promise<string> {
   const backlogWhere = `${completedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
@@ -888,7 +889,7 @@ export function buildCompletedContractBacklogPageQuery(
     contractNumberExpr: 'c.contract_id',
   });
   const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -932,19 +933,19 @@ export function buildCancelledContractBacklogCountQuery(
     FROM cancelled_contract_backlog`;
 }
 
-export function buildCancelledContractBacklogPageQuery(
+export async function buildCancelledContractBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
   sortKey = 'created_at',
   sortDir: 'ASC' | 'DESC' = 'DESC',
-): string {
+): Promise<string> {
   const backlogWhere = `${cancelledContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   /** Cancelled POs contribute 0 OS on Shipments cards (same as Contracts OS gate). */
   const outstandingExpr = '0';
   const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c

@@ -436,9 +436,64 @@ function qtyMoveRouteOriginIdsSql(filter: QtyMoveContractFilter): string {
  * lower-latency reads for it. This filter is a cheap, non-authoritative heuristic to keep the
  * live path scoped to the small set of contracts most likely to be edited same-day.
  */
+/**
+ * Which contracts may read qty_move from the snapshot instead of computing it live.
+ *
+ * Contract status Close and prior-year contracts were the original rule. The problem: everything
+ * else - current-year Open - stays on the live branch, and that is exactly the population the
+ * Shipments / Trucking backlog queries are about, so they got no benefit from the snapshot at all.
+ * Measured 2026-09-04: the live qty_move CTE costs 42-75s over the full contract set, and those
+ * backlog queries ran 40-71s.
+ *
+ * Completed logistics is the missing third case. A contract whose shipments (or trucking
+ * operations) are all COMPLETED has finished moving quantity, so its qty is as settled as a
+ * Close contract's - measured to move **976 of the 1,804** live-branch contracts (54%) onto the
+ * snapshot.
+ *
+ * Safe because every way that qty can still change already invalidates the snapshot for that
+ * contract: KLIP shipment edits and creates call refreshForShipmentIds, trucking edits and WB
+ * imports call refreshForTruckingOperationIds, and a SAP import rebuilds the whole snapshot. So
+ * "settled" here does not have to mean "immutable" - it only has to mean "changes are noticed".
+ *
+ * Contracts with no logistics at all (331 of the 1,804) deliberately stay live: having no
+ * shipments and no trucking is not evidence that anything has settled.
+ */
 function qtyMoveSnapshotEligibleExpr(contractAlias = 'c'): string {
   const closedStatus = `UPPER(TRIM(COALESCE(${contractAlias}.status, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
-  return `(${closedStatus} OR ${contractAlias}.contract_date < date_trunc('year', now()))`;
+  // NOT EXISTS(active and not completed) AND EXISTS(active) - i.e. there is logistics, and all of
+  // it is done. Both predicates are indexed lookups on contract_id.
+  const allShipmentsCompleted = `(
+    EXISTS (
+      SELECT 1 FROM shipments s_el
+      WHERE s_el.contract_id = ${contractAlias}.id
+        AND UPPER(TRIM(COALESCE(s_el.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM shipments s_el2
+      WHERE s_el2.contract_id = ${contractAlias}.id
+        AND UPPER(TRIM(COALESCE(s_el2.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'COMPLETED')
+    )
+  )`;
+  const allTruckingCompleted = `(
+    EXISTS (
+      SELECT 1 FROM trucking_operations t_el
+      WHERE t_el.contract_id = ${contractAlias}.id
+        AND t_el.deduped_at IS NULL
+        AND UPPER(TRIM(COALESCE(t_el.status, ''))) <> 'CANCELLED'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM trucking_operations t_el2
+      WHERE t_el2.contract_id = ${contractAlias}.id
+        AND t_el2.deduped_at IS NULL
+        AND UPPER(TRIM(COALESCE(t_el2.status, ''))) NOT IN ('CANCELLED', 'COMPLETED')
+    )
+  )`;
+  return `(
+    ${closedStatus}
+    OR ${contractAlias}.contract_date < date_trunc('year', now())
+    OR ${allShipmentsCompleted}
+    OR ${allTruckingCompleted}
+  )`;
 }
 
 /**
