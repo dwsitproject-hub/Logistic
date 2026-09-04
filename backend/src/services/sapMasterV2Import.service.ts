@@ -1791,24 +1791,82 @@ export class SapMasterV2ImportService {
         invalidateShipmentsListCache();
         invalidateShippingPerformanceRowCache();
         invalidateTruckingListCache();
+
+        // Mark the Contract Performance snapshot stale synchronously, before the rebuild starts.
+        // A SAP import is exactly what changes the values it holds - GR PO/STO status, delivery
+        // and receive quantities - so between this point and the rebuild finishing, readers must
+        // fall back to the live computation. Slower for that window, but never showing figures
+        // from before the import as though they were current.
+        void import('./contractPerformanceSnapshot.service')
+          .then(({ markContractPerformanceSnapshotStale }) => markContractPerformanceSnapshotStale())
+          .catch((err) =>
+            logger.error('Failed to mark contract performance snapshot stale after import', { err }),
+          );
+
         setImmediate(() => {
-          import('./contractQtyMoveSnapshot.service')
-            .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
-            .catch(() => {});
-          import('./contractStoAggSnapshot.service')
-            .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
-            .catch(() => {});
-          import('./contractLatestSpdSnapshot.service')
-            .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
-            .catch(() => {});
-          import('./b2bEndingChildSnapshot.service')
-            .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
-            .catch(() => {});
-          import('./prePlannedGroup.service')
-            .then(({ schedulePrePlannedRebuildIfEnabled }) =>
-              schedulePrePlannedRebuildIfEnabled('sap-import'),
-            )
-            .catch(() => {});
+          void (async () => {
+            // The Contract Performance snapshot is computed FROM these four, so it has to wait for
+            // them - refreshing it in parallel would materialise pre-import qty/status values.
+            const upstream: Array<[string, () => Promise<unknown>]> = [
+              [
+                'qty_move',
+                async () =>
+                  (await import('./contractQtyMoveSnapshot.service')).ContractQtyMoveSnapshotService.refreshAll(),
+              ],
+              [
+                'sto_agg',
+                async () =>
+                  (await import('./contractStoAggSnapshot.service')).ContractStoAggSnapshotService.refreshAll(),
+              ],
+              [
+                'latest_spd',
+                async () =>
+                  (await import('./contractLatestSpdSnapshot.service')).ContractLatestSpdSnapshotService.refreshAll(),
+              ],
+              [
+                'b2b_ending_child',
+                async () =>
+                  (await import('./b2bEndingChildSnapshot.service')).B2bEndingChildSnapshotService.refreshAll(),
+              ],
+            ];
+
+            const results = await Promise.all(
+              upstream.map(async ([name, run]) => {
+                try {
+                  await run();
+                  return true;
+                } catch (err) {
+                  // Logged rather than swallowed: a failed upstream refresh means the Contract
+                  // Performance snapshot below would be built from pre-import data.
+                  logger.error('Snapshot refresh failed after SAP import', { snapshot: name, err });
+                  return false;
+                }
+              }),
+            );
+
+            if (results.every(Boolean)) {
+              try {
+                const { ContractPerformanceSnapshotService } = await import(
+                  './contractPerformanceSnapshot.service'
+                );
+                await ContractPerformanceSnapshotService.refreshAll();
+              } catch (err) {
+                logger.error('Contract performance snapshot refresh failed after SAP import', { err });
+              }
+            } else {
+              logger.error(
+                'Skipping contract performance snapshot refresh - an upstream snapshot failed, so it would hold pre-import values. Snapshot left stale; reads fall back to the live query.',
+                { importId },
+              );
+            }
+
+            try {
+              const { schedulePrePlannedRebuildIfEnabled } = await import('./prePlannedGroup.service');
+              schedulePrePlannedRebuildIfEnabled('sap-import');
+            } catch (err) {
+              logger.error('Pre-planned rebuild scheduling failed after SAP import', { err });
+            }
+          })();
         });
       }
       

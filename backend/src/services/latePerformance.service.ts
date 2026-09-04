@@ -11,6 +11,10 @@ import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import {
+  CONTRACT_PERFORMANCE_SNAPSHOT_TABLE,
+  isContractPerformanceSnapshotFresh,
+} from '../services/contractPerformanceSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import {
   isContractLatestSpdSnapshotFresh,
@@ -430,14 +434,29 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   const queryParams: any[] = [];
   let paramIndex = 1;
   let contractScopeWhere = '';
+  /** Same date predicates against the snapshot table, which stores contract_date unprefixed. */
+  let snapshotDateWhere = '';
+
+  /*
+   * When the precomputed snapshot is fresh, `base` is read from it instead of being recomputed.
+   * Everything after that point - the B2B-child / PO-placeholder exclusions and every user
+   * filter - is left completely untouched and still runs against `base`, so the two paths differ
+   * only in where the row set comes from.
+   *
+   * Checked up front because it decides whether the scope pushdowns are worth building at all:
+   * they exist to shrink the expensive CTEs, and the snapshot path has no CTEs to shrink.
+   */
+  const performanceSnapshotFresh = await isContractPerformanceSnapshotFresh();
 
   if (effectiveDateFrom) {
     contractScopeWhere += ` AND c.contract_date >= $${paramIndex}`;
+    snapshotDateWhere += ` AND contract_date >= $${paramIndex}`;
     queryParams.push(effectiveDateFrom);
     paramIndex++;
   }
   if (effectiveDateTo) {
     contractScopeWhere += ` AND c.contract_date <= $${paramIndex}`;
+    snapshotDateWhere += ` AND contract_date <= $${paramIndex}`;
     queryParams.push(effectiveDateTo);
     paramIndex++;
   }
@@ -445,7 +464,12 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   // Contracts whose PO was cancelled/deleted in SAP are out of scope for late/on-time
   // performance: keeping them would leave permanently-unfulfillable contracts in the
   // denominator. Plain column predicate - no extra join.
-  contractScopeWhere += sqlExcludeWithdrawnContracts('c');
+  //
+  // Not repeated on the snapshot path: the snapshot is built with this same exclusion applied,
+  // so those contracts are already absent from it (and sap_presence is not one of its columns).
+  if (!performanceSnapshotFresh) {
+    contractScopeWhere += sqlExcludeWithdrawnContracts('c');
+  }
 
   /*
    * Product pushdown. The authoritative product filter still runs on `base.product` further down
@@ -466,16 +490,18 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
    * 10.5x, WASTE OIL (POME) 546 -> 14x, RBDPS 165 -> 46x), and product is one of the filters
    * users change most often - each change is otherwise a full cold recompute.
    */
-  const scopeMultiProduct = appendContractPerfProductsMultiSql(
-    productFilters.length > 1 ? productFilters : undefined,
-    'c.product',
-    paramIndex,
-  );
+  const scopeMultiProduct = performanceSnapshotFresh
+    ? null
+    : appendContractPerfProductsMultiSql(
+        productFilters.length > 1 ? productFilters : undefined,
+        'c.product',
+        paramIndex,
+      );
   if (scopeMultiProduct) {
     contractScopeWhere += scopeMultiProduct.clause;
     queryParams.push(...scopeMultiProduct.params);
     paramIndex = scopeMultiProduct.nextParamIndex;
-  } else {
+  } else if (!performanceSnapshotFresh) {
     const scopeSingleProduct =
       productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
     const scopeProductClause = appendContractPerfProductSubstringSql(
@@ -522,7 +548,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
    * less downstream work, BONTANG 1,558 -> 4.9x, LUBUK GAUNG 1,355 -> 5.6x, TANJUNG MORAWA 761
    * -> 10x, KARAWANG 432 -> 17.7x, and 28x or better below that.
    */
-  if (plants.length > 0 && latestSpdSnapshotFresh) {
+  if (plants.length > 0 && latestSpdSnapshotFresh && !performanceSnapshotFresh) {
     const scopeRegionSite = appendRegionSiteFilter(
       plants,
       paramIndex,
@@ -549,7 +575,24 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
-  let queryText = `${buildLatePerformanceRowSetSql({
+  /*
+   * Deliberately aliased `base` on both paths so everything below - the exclusions and every user
+   * filter, all of which reference base.<column> - is shared verbatim rather than duplicated per
+   * path. The snapshot already stores in_logistics_open_os as a column, so `base.*` yields the
+   * same shape the live path builds with its projection.
+   */
+  const snapshotBaseSql = `
+      WITH base AS (
+        SELECT *
+        FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE}
+        WHERE 1=1
+        ${snapshotDateWhere}
+      )
+      SELECT base.*
+      FROM base
+`;
+
+  let queryText = `${performanceSnapshotFresh ? snapshotBaseSql : buildLatePerformanceRowSetSql({
     contractScopeWhere,
     contractsLatestSpdCte,
     contractsQtyMoveCte,
