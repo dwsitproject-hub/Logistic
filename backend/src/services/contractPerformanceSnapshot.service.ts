@@ -66,6 +66,15 @@ export class ContractPerformanceSnapshotService {
       client.release();
     }
 
+    // The whole table is replaced on every import, so each refresh leaves a full generation of
+    // dead tuples behind - observed growing the table to 75MB right after a rebuild whose live
+    // data is ~20MB. Reclaim it now rather than waiting on autovacuum, and ANALYZE in the same
+    // pass: the read path filters on contract_date / product / plant_site, and this page has
+    // already been bitten once by the planner working from stale statistics.
+    //
+    // Outside the transaction because VACUUM cannot run inside one, and after the meta update so
+    // a failure here leaves the snapshot usable - bloat is a housekeeping problem, not a
+    // correctness one.
     const durationMs = Date.now() - start;
     await query(
       `UPDATE contract_performance_snapshot_meta
@@ -73,6 +82,15 @@ export class ContractPerformanceSnapshotService {
        WHERE id = 'global'`,
       [rowCount, durationMs],
     );
+
+    try {
+      await query(`VACUUM (ANALYZE) ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE}`);
+    } catch (err) {
+      logger.warn('Contract performance snapshot VACUUM ANALYZE failed - snapshot still usable', {
+        err,
+      });
+    }
+
     logger.info('Contract performance snapshot refreshed', { rowCount, durationMs });
     return rowCount;
   }

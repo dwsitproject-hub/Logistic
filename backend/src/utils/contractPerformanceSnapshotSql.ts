@@ -4,6 +4,115 @@ import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.se
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
 import { sqlExcludeWithdrawnContracts } from './sapPresenceSql';
 
+/**
+ * Every `latest_spd_data` key the Contract Performance read path can reach, grouped by where it
+ * lives in the SAP row JSON. Enumerated from the codebase rather than guessed, and safe to
+ * enumerate because every access uses a literal key - nothing indexes the blob dynamically and
+ * nothing enumerates it with Object.keys/entries/values (checked 2026-09-04).
+ *
+ * Why prune at all: the raw SAP row carries 80-90 columns, and storing it whole made 53MB of the
+ * snapshot's 57MB TOAST. Selecting it cost ~980ms in the database plus JSON parsing in Node, so
+ * the unfiltered default view sat at 3.3s while the same rows without the blob read in 20ms.
+ *
+ * Why prune in place instead of promoting these to real columns: the column keeps its name and
+ * its shape, so every consumer - the SQL filters, the B2B-child exclusion, and the JS resolvers
+ * that read spd.contract / spd.payment / spd.raw - keeps working untouched. Promoting them to
+ * columns would mean rewiring all of those, on the code that decides delivery-end dates and
+ * therefore late/on-time.
+ *
+ * Adding a new `latest_spd_data->...` reference anywhere on this page means adding the key here
+ * too. The end-to-end check that catches a miss is comparing the aggregated summary/tree output
+ * between the live and snapshot paths - a missing key changes the numbers, not just a raw field.
+ */
+export const CONTRACT_PERFORMANCE_SNAPSHOT_SPD_KEYS = {
+  contract: [
+    'company_code',
+    'contract_reference_po',
+    'contract_type',
+    'due_date_delivery_end',
+    'ltc_spot',
+    'plant_code',
+    'sea_land',
+    'transport_mode',
+  ],
+  payment: [
+    'dp_date',
+    'dp_date_deviation_days',
+    'due_date_payment',
+    'payoff_date',
+    'payoff_date_deviation_days',
+  ],
+  raw: [
+    'Buyer',
+    'CONTRACT REFF PO',
+    'Company Code',
+    'Contract Ext No',
+    'Contract Reff PO Ini',
+    'DP Date',
+    'DP Date Deviation (Days) DP Date - Due Date',
+    'Due Date Delivery (End)',
+    'Due Date Delivery End',
+    'Due Date Delivery\r\n(End)',
+    'Due Date Payment',
+    'Payoff Date',
+    'Payoff Date Deviation (Days) Payoff Date - Due Date',
+    'Plant Code',
+    'Sea / Land',
+    'Sea_Land',
+    'Supplier',
+    'company code',
+    'plant code',
+  ],
+  top: [
+    'B2B Flag',
+    'Buyer',
+    'CONTRACT REFF PO',
+    'Company Code',
+    'Contract Ext No',
+    'Contract Reff PO Ini',
+    'Supplier',
+    'company code',
+    'dp date',
+    'due date payment',
+    'payoff date',
+  ],
+} as const;
+
+/**
+ * SQL literal for a JSON key. Always the E'' form: one of these keys really does contain a
+ * CR-LF ('Due Date Delivery\r\n(End)' - SAP exports it with the header wrapped), which a plain
+ * '...' literal cannot carry.
+ */
+function sqlJsonKeyLiteral(key: string): string {
+  const escaped = key
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "''")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n');
+  return `E'${escaped}'`;
+}
+
+/** Rebuilds `latest_spd_data` with only the keys above, preserving the original nesting. */
+export function sqlPrunedLatestSpdData(srcExpr: string): string {
+  const pairs = (keys: readonly string[], parentExpr: string) =>
+    keys
+      .map((k) => `${sqlJsonKeyLiteral(k)}, ${parentExpr}->>${sqlJsonKeyLiteral(k)}`)
+      .join(',\n        ');
+
+  return `jsonb_strip_nulls(jsonb_build_object(
+        'contract', jsonb_build_object(
+        ${pairs(CONTRACT_PERFORMANCE_SNAPSHOT_SPD_KEYS.contract, `${srcExpr}->'contract'`)}
+        ),
+        'payment', jsonb_build_object(
+        ${pairs(CONTRACT_PERFORMANCE_SNAPSHOT_SPD_KEYS.payment, `${srcExpr}->'payment'`)}
+        ),
+        'raw', jsonb_build_object(
+        ${pairs(CONTRACT_PERFORMANCE_SNAPSHOT_SPD_KEYS.raw, `${srcExpr}->'raw'`)}
+        ),
+        ${pairs(CONTRACT_PERFORMANCE_SNAPSHOT_SPD_KEYS.top, srcExpr)}
+      ))`;
+}
+
 /** Column order shared by the INSERT and the row-set SELECT - see the SELECT list note below. */
 export const CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS = [
   'contract_id',
@@ -74,7 +183,11 @@ export async function buildContractPerformanceSnapshotRefreshSql(): Promise<stri
   });
 
   const cols = CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS.join(', ');
-  const selectCols = CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS.map((c) => `rs.${c}`).join(', ');
+  const selectCols = CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS.map((c) =>
+    c === 'latest_spd_data'
+      ? `${sqlPrunedLatestSpdData('rs.latest_spd_data')} AS latest_spd_data`
+      : `rs.${c}`,
+  ).join(', ');
 
   return `
     INSERT INTO contract_performance_snapshot (${cols})
