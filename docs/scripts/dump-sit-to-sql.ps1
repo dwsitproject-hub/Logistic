@@ -60,8 +60,12 @@ DB_HOST="`$(docker exec klip-backend printenv DB_HOST)"
 DB_PORT="`$(docker exec klip-backend printenv DB_PORT)"
 DB_NAME="`$(docker exec klip-backend printenv DB_NAME)"
 DB_USER="`$(docker exec klip-backend printenv DB_USER)"
-echo "=== pg_dump full -> $remoteFile ==="
-pg_dump -h "`$DB_HOST" -p "`$DB_PORT" -U "`$DB_USER" -d "`$DB_NAME" \
+echo "=== pg_dump full via postgres:18 -> $remoteFile ==="
+docker run --rm --network host \
+  -e PGPASSWORD="`$PGPASSWORD" \
+  -v '$remoteDir:$remoteDir' \
+  postgres:18 \
+  pg_dump -h "`$DB_HOST" -p "`$DB_PORT" -U "`$DB_USER" -d "`$DB_NAME" \
   -Fp --no-owner --no-acl -f '$remoteFile'
 ls -lh '$remoteFile'
 "@

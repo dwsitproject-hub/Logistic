@@ -11,6 +11,7 @@
 #   - Prefer host-reachable DB from /opt/klip/.env or backend/.env (SIT Aliyun RDS :5432)
 #   - Ignore Docker-only hostnames (postgres, klip-postgres) when running pg_dump on the host
 #   - Fallback: pg_dump via docker exec klip-postgres when local stack holds data
+#   - If host pg_dump is older than the server (SIT RDS is PG18), dump via docker postgres:N
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -113,8 +114,13 @@ fi
 
 export PGPASSWORD="$DB_PASSWORD"
 
-DUMP_MODE="" # host_pg_dump | docker_exec | compose_exec
+DUMP_MODE="" # host_pg_dump | docker_pg_dump | docker_exec | compose_exec
 DUMP_LABEL=""
+PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-}"
+
+pg_major_from_text() {
+  echo "$1" | sed -n 's/^\([0-9][0-9]*\).*/\1/p' | head -1
+}
 
 resolve_dump_target() {
   if command -v psql >/dev/null 2>&1; then
@@ -155,7 +161,7 @@ resolve_dump_target() {
 run_psql_at() {
   local sql="$1"
   case "$DUMP_MODE" in
-    host_pg_dump)
+    host_pg_dump|docker_pg_dump)
       psql -h "$HOST_DB_HOST" -p "$HOST_DB_PORT" -U "$DB_USER" -d "$DB_NAME" -Atc "$sql"
       ;;
     docker_exec)
@@ -178,6 +184,14 @@ run_pg_dump() {
       pg_dump -h "$HOST_DB_HOST" -p "$HOST_DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
         "${extra_args[@]}" -f "$out_file"
       ;;
+    docker_pg_dump)
+      docker run --rm --network host \
+        -e PGPASSWORD="$DB_PASSWORD" \
+        -v "$OUT_DIR:$OUT_DIR" \
+        "$PG_DUMP_IMAGE" \
+        pg_dump -h "$HOST_DB_HOST" -p "$HOST_DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+        "${extra_args[@]}" -f "$out_file"
+      ;;
     docker_exec)
       docker exec -e PGPASSWORD="$DB_PASSWORD" klip-postgres \
         pg_dump -U "$DB_USER" -d "$DB_NAME" \
@@ -191,7 +205,32 @@ run_pg_dump() {
   esac
 }
 
+use_docker_pg_dump_if_host_client_too_old() {
+  [[ "$DUMP_MODE" == "host_pg_dump" ]] || return 0
+  local server_ver client_ver server_major client_major
+  server_ver="$(run_psql_at "SHOW server_version" || true)"
+  server_major="$(pg_major_from_text "$server_ver")"
+  client_ver="$(pg_dump --version 2>/dev/null || true)"
+  client_major="$(echo "$client_ver" | sed -n 's/.* \([0-9][0-9]*\)\..*/\1/p' | head -1)"
+  if [[ -z "$server_major" ]]; then
+    return 0
+  fi
+  if [[ -n "$client_major" && "$client_major" -ge "$server_major" ]]; then
+    return 0
+  fi
+  command -v docker >/dev/null 2>&1 || {
+    echo "ERROR: host pg_dump ($client_ver) cannot dump server $server_ver." >&2
+    echo "  Use Docker: docker pull postgres:${server_major}" >&2
+    echo "  Or install postgresql-client-${server_major}." >&2
+    exit 1
+  }
+  PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:${server_major}}"
+  DUMP_MODE="docker_pg_dump"
+  echo "=== Host $client_ver cannot dump server $server_ver → $PG_DUMP_IMAGE ==="
+}
+
 resolve_dump_target
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 if [[ "$DUMP_MODE" == "host_pg_dump" ]]; then
   PG_DUMP_BIN="${PG_DUMP_BIN:-pg_dump}"
@@ -199,6 +238,7 @@ if [[ "$DUMP_MODE" == "host_pg_dump" ]]; then
     echo "ERROR: pg_dump not on PATH. Install: apt-get install -y postgresql-client" >&2
     exit 1
   fi
+  use_docker_pg_dump_if_host_client_too_old
 fi
 
 TABLES=(

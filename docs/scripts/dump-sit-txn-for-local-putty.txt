@@ -124,6 +124,11 @@ Troubleshooting
 ERROR: pg_dump not on PATH (.57)
   sudo apt-get install -y postgresql-client
 
+ERROR: pg_dump: aborting because of server version mismatch
+  SIT RDS is PostgreSQL 18; Ubuntu host client is often 16.
+  dump-sit-transactional-data.sh falls back to docker postgres:18.
+  One-shot (no git pull): see "Quick copy-paste" docker postgres:18 block below.
+
 ERROR: cannot connect to DB / nc failed (.57 → .60)
   Cek security group: TCP 5442 dari 172.28.92.57 ke 172.28.92.60
   Cek /opt/klip/.env: DB_HOST=172.28.92.60 DB_PORT=5442
@@ -132,7 +137,7 @@ Dump target salah (klip-postgres lokal di .57)
   Perbaiki backend/.env atau /opt/klip/.env → DB_HOST=172.28.92.60
 
 Local restore: "unsupported version" / pg_restore format
-  restore-sit-txn-dump-local.ps1 sudah convert via postgres:16 — pastikan Docker Desktop jalan
+  restore-sit-txn-dump-local.ps1 convert via postgres:18 — pastikan Docker Desktop jalan
 
 Local restore: duplicate key
   Script otomatis TRUNCATE tabel transaksi dulu — jangan restore ke DB production
@@ -144,4 +149,36 @@ UI local masih angka lama setelah restore
 Quick copy-paste (PuTTY .57 — dump saja)
 ================================================================================
 
+  # Setelah git pull (skrip otomatis pakai docker postgres:18 jika host client 16):
   cd /opt/klip && bash docs/scripts/dump-sit-transactional-data.sh && ls -lt backups/klip_sit_txn_*.dump | head -1
+
+  # Tanpa git pull — pg_dump 18 via Docker (SIT RDS = PG18):
+  cd /opt/klip
+  export PGPASSWORD="$(docker exec klip-backend printenv DB_PASSWORD)"
+  DB_HOST="$(docker exec klip-backend printenv DB_HOST)"
+  DB_PORT="$(docker exec klip-backend printenv DB_PORT)"
+  DB_NAME="$(docker exec klip-backend printenv DB_NAME)"
+  DB_USER="$(docker exec klip-backend printenv DB_USER)"
+  STAMP=$(date +%Y%m%d_%H%M%S)
+  docker pull postgres:18
+  docker run --rm --network host \
+    -e PGPASSWORD \
+    -v /opt/klip/backups:/backups \
+    postgres:18 \
+    pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+      -Fc --data-only --no-owner --no-acl \
+      -t public.contracts -t public.contract_stos -t public.shipments \
+      -t public.vessel_loading_ports -t public.trucking_operations \
+      -t public.trucking_daily_actuals -t public.trucking_realizations \
+      -t public.trucking_wb_imports -t public.payments -t public.documents \
+      -t public.remarks -t public.quality_surveys -t public.sap_data_imports \
+      -t public.sap_raw_data -t public.sap_processed_data \
+      -t public.claim_mutu_imports -t public.claim_mutu_rows \
+      -t public.claim_susut_imports -t public.claim_susut_rows \
+      -t public.commercial_document_files -t public.commercial_document_history \
+      -t public.settlement_invoice_summaries -t public.shipment_ata_overrides \
+      -t public.alerts -t public.suppliers -t public.products -t public.surveyors \
+      -t public.loading_ports -t public.master_plants -t public.master_vessels \
+      -t public.master_loading_ports -t public.supplier_groups \
+      -f /backups/klip_sit_txn_${STAMP}.dump
+  ls -lh /opt/klip/backups/klip_sit_txn_${STAMP}.dump

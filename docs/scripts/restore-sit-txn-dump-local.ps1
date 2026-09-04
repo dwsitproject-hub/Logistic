@@ -1,5 +1,5 @@
 # Restore SIT transactional dump into local Docker Postgres (klip-postgres).
-# Handles pg_dump custom format newer than local PG 14 by converting via postgres:16.
+# Handles pg_dump custom format newer than local PG 14 by converting via postgres:18.
 #
 # Prerequisites:
 #   Copy dump to docs\, e.g. klip_sit_txn_YYYYMMDD_HHMMSS.dump
@@ -14,7 +14,7 @@ param(
   [string]$DbName = "klip_db",
   [string]$DbUser = "klip_user",
   [string]$SuperUser = "postgres",
-  [string]$PgClientImage = "postgres:16-alpine"
+  [string]$PgClientImage = "postgres:18-alpine"
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,7 +71,7 @@ $truncSql = "TRUNCATE TABLE " + (($tables | ForEach-Object { "public.$_" }) -joi
 Write-Host "=== Truncate local transactional tables ==="
 docker exec -i $Container psql -U $truncUser -d $DbName -v ON_ERROR_STOP=1 -c $truncSql
 
-Write-Host "=== Convert custom dump -> plain SQL (PG16 client; strips format mismatch) ==="
+Write-Host "=== Convert custom dump -> plain SQL (PG18 client; strips format mismatch) ==="
 if (Test-Path $sqlHost) { Remove-Item $sqlHost -Force }
 docker run --rm -v "${docsMount}:/dump" $PgClientImage `
   pg_restore --data-only --no-owner --no-acl -f "/dump/$sqlName" "/dump/$dumpName"
