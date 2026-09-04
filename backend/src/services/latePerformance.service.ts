@@ -235,6 +235,175 @@ export function rowMatchesContractPerfStatusFilter(
   return statusText === statusNorm.toUpperCase();
 }
 
+/**
+ * The Contract Performance row set: every CTE plus the `base` aggregate and the
+ * in_logistics_open_os projection, with no user filters and no exclusions applied.
+ *
+ * Single source of truth so the live query and the snapshot refresh cannot drift apart -
+ * the 30-column `base` aggregate is where every qty / status / date value on this page is
+ * decided, and maintaining two copies of it would be a correctness trap.
+ *
+ * `contractScopeWhere` narrows `contract_scope` (date range, presence, pushed-down filters).
+ * `extraBaseColumns` is injected at the top of the base SELECT list - the snapshot build uses
+ * it to also materialise contract_date, which the live query never needed because it filters
+ * on dates before this point rather than after.
+ */
+export function buildLatePerformanceRowSetSql(opts: {
+  contractScopeWhere: string;
+  contractsLatestSpdCte: string;
+  contractsQtyMoveCte: string;
+  contractsStoAggCte: string;
+  extraBaseColumns?: string;
+}): string {
+  const extraBaseColumns = opts.extraBaseColumns ?? '';
+  return `
+      WITH contract_scope AS (
+        SELECT DISTINCT c.contract_id
+        FROM contracts c
+        WHERE 1=1
+        ${opts.contractScopeWhere}
+      ),
+      -- One physical contracts row per contract_id (the newest one) - same row the old
+      -- (array_agg(c.id ORDER BY c.created_at DESC))[1] scalar picked, computed once here instead
+      -- of re-derived inside every aggregate expression below.
+      canonical_contract AS MATERIALIZED (
+        SELECT DISTINCT ON (c.contract_id) c.contract_id, c.id
+        FROM contracts c
+        INNER JOIN contract_scope cs ON cs.contract_id = c.contract_id
+        ORDER BY c.contract_id, c.created_at DESC
+      ),
+      ${opts.contractsLatestSpdCte},
+      ${opts.contractsQtyMoveCte},
+      ${opts.contractsStoAggCte},
+      ${sqlActiveSeaStoSiblingContractIdsCte('active_sea_sto_sibling_ids', 'contract_scope')},
+      base AS MATERIALIZED (
+        SELECT
+          c.contract_id,
+${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          MAX(c.product) AS product,
+          MAX(c.group_name) AS group_name,
+          MAX(c.supplier) AS supplier,
+          MAX(${contractEffectiveIncotermExpr('c')}) AS incoterm,
+          MAX(c.quantity_ordered) AS quantity_ordered,
+          MAX(c.transport_mode) AS transport_mode,
+          MAX(c.source_type) AS source_type,
+          MAX(c.status) AS status,
+          -- B2B pass-through contracts roll up under the *ending* leg's plant/company so the
+          -- drilldown card groups the same way the View table does (sqlB2bEndingPlantCodeAgg),
+          -- keeping the Contract Performance card's OS total in sync with the table's OS sum.
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
+          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
+          MAX(c.delivery_end_date) AS delivery_end_date,
+          MAX(c.cargo_readiness_date) AS cargo_readiness_date,
+          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
+          (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
+          MAX(${sqlIncotermQuantityDeliveryCase(
+            contractEffectiveIncotermExpr('c'),
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+          )}) AS quantity_delivery,
+          (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
+          MAX(${sqlContractOutstandingSignedExpr({
+            contractQtyExpr: 'c.quantity_ordered',
+            incotermExpr: contractEffectiveIncotermExpr('c'),
+            receiveExpr: 'qm.quantity_receive',
+            deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
+              contractEffectiveIncotermExpr('c'),
+              'qm',
+              sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+            ),
+          })}) AS outstanding_quantity,
+          -- ETA Trucking Completion = last Daily Planning date
+          MAX(trucking_agg.last_trucking_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
+          MAX(trucking_agg.last_trucking_completion_date) AS last_trucking_completion_date,
+          MAX(trucking_agg.last_trucking_wb_actuals_date) AS last_trucking_wb_actuals_date,
+          MAX(shipment_agg.last_ata_vessel_complete_discharge) AS last_ata_vessel_complete_discharge,
+          MAX(shipment_agg.last_eta_vessel_complete_discharge) AS last_eta_vessel_complete_discharge,
+          MAX(trucking_agg.open_standard_eta_trucking) AS open_standard_eta_trucking,
+          MAX(shipment_agg.open_standard_eta_vessel_loading) AS open_standard_eta_vessel_loading
+        FROM contract_scope cs
+        INNER JOIN contracts c ON c.contract_id = cs.contract_id
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+        INNER JOIN canonical_contract cc ON cc.contract_id = c.contract_id
+        -- Trucking-side aggregates: one scan of trucking_operations per contract (was 4 separate
+        -- correlated subqueries, one of which re-ran a sap_processed_data JSONB/regex date lookup
+        -- once per trucking-op row instead of once per contract - see sqlTruckingSapDatesLateral's
+        -- doc comment in truckingSapDates.ts for the same anti-pattern measured elsewhere in this
+        -- codebase: "cost was repetition, not the plan").
+        LEFT JOIN LATERAL (
+          SELECT ${sqlSapTruckingLastReceiveDateByContractNumber('cc.contract_id')} AS val
+        ) sap_last_receive ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            MAX(t.last_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
+            MAX(COALESCE(tr.realization_end_date, sap_last_receive.val)) AS last_trucking_completion_date,
+            MAX(da_agg.max_progress_date) AS last_trucking_wb_actuals_date,
+            MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date)) AS open_standard_eta_trucking
+          FROM trucking_operations t
+          LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
+          LEFT JOIN LATERAL (
+            SELECT MAX(da.progress_date) AS max_progress_date
+            FROM trucking_daily_actuals da
+            WHERE da.trucking_operation_id = t.id
+          ) da_agg ON TRUE
+          WHERE t.contract_id = cc.id
+        ) trucking_agg ON TRUE
+        -- Shipment-side aggregates: one scan of shipments per contract (was 3 separate correlated
+        -- subqueries, two of which ran a further per-shipment correlated subquery against
+        -- vessel_loading_ports) - now one LATERAL join, per-shipment vessel_loading_ports lookups
+        -- expressed as their own LATERAL joins (same cardinality, no per-row subplan re-execution).
+        LEFT JOIN LATERAL (
+          SELECT
+            MAX(s2.ata_discharge_complete::date) FILTER (WHERE s2.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge,
+            MAX(COALESCE(s2.eta_discharge_complete::date, vlp_discharge.eta_vessel_complete_discharge::date)) AS last_eta_vessel_complete_discharge,
+            MAX(vlp_load.eta_vessel_arrival::date) AS open_standard_eta_vessel_loading
+          FROM shipments s2
+          LEFT JOIN LATERAL (
+            SELECT vlpd.eta_vessel_complete_discharge
+            FROM vessel_loading_ports vlpd
+            WHERE vlpd.shipment_id = s2.id
+              AND vlpd.is_discharge_port = true
+            ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
+            LIMIT 1
+          ) vlp_discharge ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT vlp.eta_vessel_arrival
+            FROM vessel_loading_ports vlp
+            WHERE vlp.shipment_id = s2.id
+              AND COALESCE(vlp.is_discharge_port, false) = false
+            ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+            LIMIT 1
+          ) vlp_load ON TRUE
+          WHERE s2.contract_id = cc.id
+        ) shipment_agg ON TRUE
+        WHERE 1=1
+        GROUP BY c.contract_id
+      ),
+      ${buildLogisticsGrStatusPrecomputeCte({ sourceCte: 'base', idColumn: 'id' })}
+      SELECT
+        base.*,
+        (${sqlContractInActiveLogisticsOpenOsExpr({
+          contractUuidExpr: 'base.id',
+          contractNumberExpr: 'base.contract_id',
+          incotermExpr: 'base.incoterm',
+          sharesActiveSeaStoExpr:
+            'EXISTS (SELECT 1 FROM active_sea_sto_sibling_ids sib WHERE sib.contract_id = base.id)',
+          grClosedPrecomputed: 'COALESCE(lgs.is_closed, false)',
+          cancelledPrecomputed: 'COALESCE(lgs.is_cancelled, false)',
+          closedForShipmentBacklogPrecomputed: 'COALESCE(lgs.is_closed_for_shipment_backlog, false)',
+        })}) AS in_logistics_open_os
+      FROM base
+      LEFT JOIN logistics_gr_status lgs ON lgs.id = base.id
+`;
+}
+
 export async function buildLatePerformanceQuery(filters: LatePerformanceFilters): Promise<{
   queryText: string;
   queryParams: any[];
@@ -380,152 +549,12 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
-  let queryText = `
-      WITH contract_scope AS (
-        SELECT DISTINCT c.contract_id
-        FROM contracts c
-        WHERE 1=1
-        ${contractScopeWhere}
-      ),
-      -- One physical contracts row per contract_id (the newest one) - same row the old
-      -- (array_agg(c.id ORDER BY c.created_at DESC))[1] scalar picked, computed once here instead
-      -- of re-derived inside every aggregate expression below.
-      canonical_contract AS MATERIALIZED (
-        SELECT DISTINCT ON (c.contract_id) c.contract_id, c.id
-        FROM contracts c
-        INNER JOIN contract_scope cs ON cs.contract_id = c.contract_id
-        ORDER BY c.contract_id, c.created_at DESC
-      ),
-      ${contractsLatestSpdCte},
-      ${contractsQtyMoveCte},
-      ${contractsStoAggCte},
-      ${sqlActiveSeaStoSiblingContractIdsCte('active_sea_sto_sibling_ids', 'contract_scope')},
-      base AS MATERIALIZED (
-        SELECT
-          c.contract_id,
-          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
-          MAX(c.product) AS product,
-          MAX(c.group_name) AS group_name,
-          MAX(c.supplier) AS supplier,
-          MAX(${contractEffectiveIncotermExpr('c')}) AS incoterm,
-          MAX(c.quantity_ordered) AS quantity_ordered,
-          MAX(c.transport_mode) AS transport_mode,
-          MAX(c.source_type) AS source_type,
-          MAX(c.status) AS status,
-          -- B2B pass-through contracts roll up under the *ending* leg's plant/company so the
-          -- drilldown card groups the same way the View table does (sqlB2bEndingPlantCodeAgg),
-          -- keeping the Contract Performance card's OS total in sync with the table's OS sum.
-          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
-          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
-          ${sqlB2bEndingCompanyAgg()} AS company_name,
-          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
-          MAX(c.delivery_end_date) AS delivery_end_date,
-          MAX(c.cargo_readiness_date) AS cargo_readiness_date,
-          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
-          (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
-          MAX(${sqlIncotermQuantityDeliveryCase(
-            contractEffectiveIncotermExpr('c'),
-            'qm.quantity_delivery_trucking',
-            'qm.quantity_delivery_vessel',
-            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
-          )}) AS quantity_delivery,
-          (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
-          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
-          MAX(${sqlContractOutstandingSignedExpr({
-            contractQtyExpr: 'c.quantity_ordered',
-            incotermExpr: contractEffectiveIncotermExpr('c'),
-            receiveExpr: 'qm.quantity_receive',
-            deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
-              contractEffectiveIncotermExpr('c'),
-              'qm',
-              sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
-            ),
-          })}) AS outstanding_quantity,
-          -- ETA Trucking Completion = last Daily Planning date
-          MAX(trucking_agg.last_trucking_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
-          MAX(trucking_agg.last_trucking_completion_date) AS last_trucking_completion_date,
-          MAX(trucking_agg.last_trucking_wb_actuals_date) AS last_trucking_wb_actuals_date,
-          MAX(shipment_agg.last_ata_vessel_complete_discharge) AS last_ata_vessel_complete_discharge,
-          MAX(shipment_agg.last_eta_vessel_complete_discharge) AS last_eta_vessel_complete_discharge,
-          MAX(trucking_agg.open_standard_eta_trucking) AS open_standard_eta_trucking,
-          MAX(shipment_agg.open_standard_eta_vessel_loading) AS open_standard_eta_vessel_loading
-        FROM contract_scope cs
-        INNER JOIN contracts c ON c.contract_id = cs.contract_id
-        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
-        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
-        INNER JOIN canonical_contract cc ON cc.contract_id = c.contract_id
-        -- Trucking-side aggregates: one scan of trucking_operations per contract (was 4 separate
-        -- correlated subqueries, one of which re-ran a sap_processed_data JSONB/regex date lookup
-        -- once per trucking-op row instead of once per contract - see sqlTruckingSapDatesLateral's
-        -- doc comment in truckingSapDates.ts for the same anti-pattern measured elsewhere in this
-        -- codebase: "cost was repetition, not the plan").
-        LEFT JOIN LATERAL (
-          SELECT ${sqlSapTruckingLastReceiveDateByContractNumber('cc.contract_id')} AS val
-        ) sap_last_receive ON TRUE
-        LEFT JOIN LATERAL (
-          SELECT
-            MAX(t.last_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
-            MAX(COALESCE(tr.realization_end_date, sap_last_receive.val)) AS last_trucking_completion_date,
-            MAX(da_agg.max_progress_date) AS last_trucking_wb_actuals_date,
-            MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date)) AS open_standard_eta_trucking
-          FROM trucking_operations t
-          LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
-          LEFT JOIN LATERAL (
-            SELECT MAX(da.progress_date) AS max_progress_date
-            FROM trucking_daily_actuals da
-            WHERE da.trucking_operation_id = t.id
-          ) da_agg ON TRUE
-          WHERE t.contract_id = cc.id
-        ) trucking_agg ON TRUE
-        -- Shipment-side aggregates: one scan of shipments per contract (was 3 separate correlated
-        -- subqueries, two of which ran a further per-shipment correlated subquery against
-        -- vessel_loading_ports) - now one LATERAL join, per-shipment vessel_loading_ports lookups
-        -- expressed as their own LATERAL joins (same cardinality, no per-row subplan re-execution).
-        LEFT JOIN LATERAL (
-          SELECT
-            MAX(s2.ata_discharge_complete::date) FILTER (WHERE s2.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge,
-            MAX(COALESCE(s2.eta_discharge_complete::date, vlp_discharge.eta_vessel_complete_discharge::date)) AS last_eta_vessel_complete_discharge,
-            MAX(vlp_load.eta_vessel_arrival::date) AS open_standard_eta_vessel_loading
-          FROM shipments s2
-          LEFT JOIN LATERAL (
-            SELECT vlpd.eta_vessel_complete_discharge
-            FROM vessel_loading_ports vlpd
-            WHERE vlpd.shipment_id = s2.id
-              AND vlpd.is_discharge_port = true
-            ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
-            LIMIT 1
-          ) vlp_discharge ON TRUE
-          LEFT JOIN LATERAL (
-            SELECT vlp.eta_vessel_arrival
-            FROM vessel_loading_ports vlp
-            WHERE vlp.shipment_id = s2.id
-              AND COALESCE(vlp.is_discharge_port, false) = false
-            ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
-            LIMIT 1
-          ) vlp_load ON TRUE
-          WHERE s2.contract_id = cc.id
-        ) shipment_agg ON TRUE
-        WHERE 1=1
-        GROUP BY c.contract_id
-      ),
-      ${buildLogisticsGrStatusPrecomputeCte({ sourceCte: 'base', idColumn: 'id' })}
-      SELECT
-        base.*,
-        (${sqlContractInActiveLogisticsOpenOsExpr({
-          contractUuidExpr: 'base.id',
-          contractNumberExpr: 'base.contract_id',
-          incotermExpr: 'base.incoterm',
-          sharesActiveSeaStoExpr:
-            'EXISTS (SELECT 1 FROM active_sea_sto_sibling_ids sib WHERE sib.contract_id = base.id)',
-          grClosedPrecomputed: 'COALESCE(lgs.is_closed, false)',
-          cancelledPrecomputed: 'COALESCE(lgs.is_cancelled, false)',
-          closedForShipmentBacklogPrecomputed: 'COALESCE(lgs.is_closed_for_shipment_backlog, false)',
-        })}) AS in_logistics_open_os
-      FROM base
-      LEFT JOIN logistics_gr_status lgs ON lgs.id = base.id
-      WHERE 1=1
+  let queryText = `${buildLatePerformanceRowSetSql({
+    contractScopeWhere,
+    contractsLatestSpdCte,
+    contractsQtyMoveCte,
+    contractsStoAggCte,
+  })}      WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
       ${PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
