@@ -86,21 +86,6 @@ async function mergeStoSiblingAta(
       FROM shipments s
       INNER JOIN contracts c ON c.id = s.contract_id
       WHERE s.id = $1::uuid
-    ),
-    latest_spd_contract AS (
-      SELECT DISTINCT ON (spd.contract_number)
-        spd.contract_number,
-        NULLIF(TRIM(COALESCE(
-          spd.sto_number::text,
-          spd.data->'raw'->>'STO No.',
-          spd.data->'raw'->>'STO Number',
-          spd.data->'shipment'->>'sto_no',
-          spd.data->'contract'->>'sto_no'
-        )), '') AS effective_sto,
-        spd.created_at
-      FROM sap_processed_data spd
-      WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-      ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
     )
     SELECT
       MAX(${sqlEffectiveAtaArrivalLoading()})::text AS ata_vessel_arrival_at_loading_port,
@@ -115,7 +100,6 @@ async function mergeStoSiblingAta(
     FROM shipments s
     INNER JOIN contracts c ON c.id = s.contract_id
     INNER JOIN target t ON c.sto_number::text = t.sto
-    LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
     LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
     LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
     ${SHIPMENT_ATA_OVERRIDES_JOIN}
