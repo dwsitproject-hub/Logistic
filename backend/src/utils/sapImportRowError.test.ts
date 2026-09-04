@@ -3,6 +3,7 @@ import {
   dedupeImportRetryRows,
   formatSapImportIdentity,
   formatSapImportRowError,
+  isDeadlockError,
   isFollowOnAbortedTransactionError,
   isRetryableFollowOnImportError,
   mergeFollowOnRetryCounts,
@@ -72,6 +73,23 @@ describe('follow-on retry eligibility', () => {
       false,
     );
     expect(isRetryableFollowOnImportError('PO 1 (Contract 2): Invalid date value in this row.')).toBe(false);
+  });
+
+  it('retries a genuine deadlock on the row itself, not just follow-on victims', () => {
+    const deadlockMessage =
+      'PO 1001027015 (Contract 1004027015): deadlock detected - Process 20167 waits for ' +
+      'ShareLock on transaction 1178794; blocked by process 20521.';
+    expect(isDeadlockError(deadlockMessage)).toBe(true);
+    expect(isRetryableFollowOnImportError(deadlockMessage)).toBe(true);
+    expect(
+      formatSapImportRowError({
+        poNumber: '1001027015',
+        contractNumber: '1004027015',
+        rawMessage: 'deadlock detected - Process 20167 waits for ShareLock on transaction 1178794',
+      }),
+    ).toBe(
+      'PO 1001027015 (Contract 1004027015): deadlock detected - Process 20167 waits for ShareLock on transaction 1178794',
+    );
   });
 
   it('dedupes retry rows by rowIndex and merges counts after one retry pass', () => {

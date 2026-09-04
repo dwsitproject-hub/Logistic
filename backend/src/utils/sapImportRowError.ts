@@ -7,11 +7,25 @@ export function isFollowOnAbortedTransactionError(message: string): boolean {
   return /current transaction is aborted/i.test(message);
 }
 
+/**
+ * Postgres deadlock (SQLSTATE 40P01, message starts "deadlock detected"). Deadlocks are
+ * inherently transient - they require another concurrent transaction holding the conflicting
+ * lock at the same instant - so a row that failed only because it lost the deadlock-victim
+ * coin flip almost always succeeds when retried alone, same as a follow-on aborted-transaction
+ * row. Without this, a real deadlock on the row's own query (as opposed to a follow-on victim
+ * of an earlier row's aborted transaction) was reported as permanently failed even though
+ * nothing about the row itself was wrong.
+ */
+export function isDeadlockError(message: string): boolean {
+  return /deadlock detected/i.test(message);
+}
+
 /** Formatted or raw follow-on errors that are safe to retry once in a fresh transaction. */
 export function isRetryableFollowOnImportError(message: string): boolean {
   return (
     isFollowOnAbortedTransactionError(message) ||
-    /skipped because an earlier row in this batch failed/i.test(message)
+    /skipped because an earlier row in this batch failed/i.test(message) ||
+    isDeadlockError(message)
   );
 }
 
