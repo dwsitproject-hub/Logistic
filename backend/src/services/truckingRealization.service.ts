@@ -309,6 +309,10 @@ export async function replaceTruckingDailyActuals(
   try {
     const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
     await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]);
+    const { scheduleContractPerformanceRefreshForTruckingOps } = await import(
+      './contractPerformanceSnapshot.service'
+    );
+    scheduleContractPerformanceRefreshForTruckingOps([truckingOperationId]);
   } catch {
     // best-effort; snapshot fallback (is_stale) covers correctness if this fails
   }
@@ -340,6 +344,10 @@ export async function upsertTruckingDailyActualRows(
   try {
     const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
     await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]);
+    const { scheduleContractPerformanceRefreshForTruckingOps } = await import(
+      './contractPerformanceSnapshot.service'
+    );
+    scheduleContractPerformanceRefreshForTruckingOps([truckingOperationId]);
   } catch {
     // best-effort; snapshot fallback (is_stale) covers correctness if this fails
   }

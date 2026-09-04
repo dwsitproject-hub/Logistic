@@ -18,6 +18,44 @@ export async function markContractPerformanceSnapshotStale(): Promise<void> {
   );
 }
 
+/**
+ * Fire-and-forget targeted refresh after a KLIP edit, for the write paths that already refresh
+ * the qty_move snapshot.
+ *
+ * Not awaited on purpose. A targeted recompute measures ~3s (mostly fixed CTE setup, near enough
+ * the same for one contract or three), and those call sites sit on the user's save request, which
+ * already awaits the qty_move refresh. Blocking the save for another 3s to close a window that
+ * short is the worse trade: the view table converges within a few seconds, which is well inside
+ * the time it takes to navigate to it.
+ *
+ * The consequence to be honest about: for those few seconds the Contract Performance view table
+ * can still show the pre-edit delivery/receive quantity or status. Failures are logged, and the
+ * next SAP import rebuilds the whole snapshot regardless.
+ */
+export function scheduleContractPerformanceRefreshForShipments(shipmentIds: string[]): void {
+  if (shipmentIds.length === 0) return;
+  setImmediate(() => {
+    void ContractPerformanceSnapshotService.refreshForShipmentIds(shipmentIds).catch((err) =>
+      logger.error('Contract performance snapshot refresh after shipment edit failed', {
+        shipmentIds,
+        err,
+      }),
+    );
+  });
+}
+
+export function scheduleContractPerformanceRefreshForTruckingOps(opIds: string[]): void {
+  if (opIds.length === 0) return;
+  setImmediate(() => {
+    void ContractPerformanceSnapshotService.refreshForTruckingOperationIds(opIds).catch((err) =>
+      logger.error('Contract performance snapshot refresh after trucking edit failed', {
+        opIds,
+        err,
+      }),
+    );
+  });
+}
+
 export class ContractPerformanceSnapshotService {
   /**
    * Rebuild the whole snapshot.
@@ -93,5 +131,89 @@ export class ContractPerformanceSnapshotService {
 
     logger.info('Contract performance snapshot refreshed', { rowCount, durationMs });
     return rowCount;
+  }
+
+  /**
+   * Recompute just these contracts' rows.
+   *
+   * Needed because a SAP import is not the only thing that changes what this snapshot holds:
+   * editing delivery/receive quantities or shipment/trucking status from the KLIP Shipment and
+   * Trucking pages changes the same values, and the Contract Performance view table has to show
+   * the edit immediately. The qty_move snapshot already gets this treatment at every one of those
+   * write paths (refreshForShipmentIds / refreshForTruckingOperationIds); without the equivalent
+   * here, qty_move would be current while this snapshot still served the pre-edit figures.
+   *
+   * Targeted rather than marking the whole snapshot stale: staleness would drop the page back to
+   * the live query for everyone after any single save. Kept in one transaction so a reader never
+   * sees these contracts missing, and `is_stale` is deliberately left alone - the rest of the
+   * snapshot is still valid.
+   */
+  static async refreshForContracts(contractNumbers: string[]): Promise<number> {
+    const ids = Array.from(
+      new Set(contractNumbers.map((c) => String(c ?? '').trim()).filter(Boolean)),
+    );
+    if (ids.length === 0) return 0;
+
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} WHERE contract_id = ANY($1::text[])`,
+        [ids],
+      );
+      const res = await client.query(
+        await buildContractPerformanceSnapshotRefreshSql({ forContractNumbers: true }),
+        [ids],
+      );
+      await client.query('COMMIT');
+      return res.rowCount ?? 0;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // connection may already be unusable
+      }
+      // Loud, because the visible symptom is a stale figure on the view table rather than an
+      // error the user can see.
+      logger.error('Targeted contract performance snapshot refresh failed', {
+        contractNumbers: ids,
+        err,
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Contracts behind these shipment UUIDs - used after KLIP shipment qty/status edits. */
+  static async refreshForShipmentIds(shipmentIds: string[]): Promise<number> {
+    const ids = shipmentIds.map((id) => String(id ?? '').trim()).filter(Boolean);
+    if (ids.length === 0) return 0;
+    const res = await query(
+      `SELECT DISTINCT c.contract_id
+       FROM shipments s
+       INNER JOIN contracts c ON c.id = s.contract_id
+       WHERE s.id = ANY($1::uuid[])`,
+      [ids],
+    );
+    return this.refreshForContracts(
+      res.rows.map((r) => String((r as { contract_id?: string }).contract_id ?? '')),
+    );
+  }
+
+  /** Contracts behind these trucking operation UUIDs - used after KLIP trucking edits. */
+  static async refreshForTruckingOperationIds(truckingOperationIds: string[]): Promise<number> {
+    const ids = truckingOperationIds.map((id) => String(id ?? '').trim()).filter(Boolean);
+    if (ids.length === 0) return 0;
+    const res = await query(
+      `SELECT DISTINCT c.contract_id
+       FROM trucking_operations t
+       INNER JOIN contracts c ON c.id = t.contract_id
+       WHERE t.id = ANY($1::uuid[])`,
+      [ids],
+    );
+    return this.refreshForContracts(
+      res.rows.map((r) => String((r as { contract_id?: string }).contract_id ?? '')),
+    );
   }
 }

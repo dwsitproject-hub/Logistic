@@ -962,6 +962,10 @@ export async function processWbRekapWorkbookUpload(args: {
     try {
       const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
       await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds(opIds);
+      const { scheduleContractPerformanceRefreshForTruckingOps } = await import(
+        './contractPerformanceSnapshot.service'
+      );
+      scheduleContractPerformanceRefreshForTruckingOps(opIds);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[WB import] contract_qty_move_snapshot refresh failed', err);

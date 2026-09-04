@@ -214,6 +214,10 @@ export async function cancelKlipShipmentGroup(
     try {
       const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
       await ContractQtyMoveSnapshotService.refreshForShipmentIds(cancelledIds);
+      const { scheduleContractPerformanceRefreshForShipments } = await import(
+        './contractPerformanceSnapshot.service'
+      );
+      scheduleContractPerformanceRefreshForShipments(cancelledIds);
     } catch {
       // best-effort; snapshot fallback (is_stale) covers correctness if this fails
     }

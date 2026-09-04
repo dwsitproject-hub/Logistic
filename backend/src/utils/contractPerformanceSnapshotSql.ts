@@ -167,15 +167,24 @@ export const CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS = [
  * an INSERT that silently depended on that position would break the moment the base SELECT list
  * is reordered.
  */
-export async function buildContractPerformanceSnapshotRefreshSql(): Promise<string> {
+export async function buildContractPerformanceSnapshotRefreshSql(
+  opts: { forContractNumbers?: boolean } = {},
+): Promise<string> {
   const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
     resolveContractsQtyMoveCte('contract_scope'),
     resolveContractsStoAggCte('contract_scope'),
     resolveContractsLatestSpdCte('contract_scope'),
   ]);
 
+  // Targeted mode narrows the scope to $1, which narrows every CTE with it - a KLIP edit touches
+  // one or two contracts, so recomputing just those is fast enough to do inline on the save
+  // rather than marking the whole snapshot stale and dropping the page back to the live query.
+  const scopeWhere = `${sqlExcludeWithdrawnContracts('c')}${
+    opts.forContractNumbers ? ' AND c.contract_id = ANY($1::text[])' : ''
+  }`;
+
   const rowSet = buildLatePerformanceRowSetSql({
-    contractScopeWhere: sqlExcludeWithdrawnContracts('c'),
+    contractScopeWhere: scopeWhere,
     contractsLatestSpdCte,
     contractsQtyMoveCte,
     contractsStoAggCte,

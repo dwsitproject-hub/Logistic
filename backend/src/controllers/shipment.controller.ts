@@ -3151,6 +3151,10 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     try {
       const { ContractQtyMoveSnapshotService } = await import('../services/contractQtyMoveSnapshot.service');
       await ContractQtyMoveSnapshotService.refreshForShipmentIds([shipmentId]);
+      const { scheduleContractPerformanceRefreshForShipments } = await import(
+        '../services/contractPerformanceSnapshot.service'
+      );
+      scheduleContractPerformanceRefreshForShipments([shipmentId]);
     } catch (err) {
       logger.warn('Contract qty_move snapshot refresh after shipment update failed', { err, shipmentId });
     }
@@ -5370,6 +5374,10 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       try {
         const { ContractQtyMoveSnapshotService } = await import('../services/contractQtyMoveSnapshot.service');
         await ContractQtyMoveSnapshotService.refreshForShipmentIds(shipmentIds);
+        const { scheduleContractPerformanceRefreshForShipments } = await import(
+          '../services/contractPerformanceSnapshot.service'
+        );
+        scheduleContractPerformanceRefreshForShipments(shipmentIds);
       } catch (err) {
         logger.warn('Contract qty_move snapshot refresh after shipment create failed', {
           err,

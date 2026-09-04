@@ -44,6 +44,22 @@ describe('buildContractPerformanceSnapshotRefreshSql', () => {
     expect(CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS).toContain('contract_date');
   });
 
+  it('narrows to the given contracts in targeted mode, and only then', async () => {
+    // Targeted mode backs the post-edit refresh: editing delivery/receive qty or shipment /
+    // trucking status in KLIP has to show up on the view table, and recomputing just those
+    // contracts is what avoids marking the whole snapshot stale on every save.
+    const targeted = await buildContractPerformanceSnapshotRefreshSql({ forContractNumbers: true });
+    expect(targeted).toContain('c.contract_id = ANY($1::text[])');
+    // Still scoped to the same population - a targeted row must match what the global rebuild
+    // would have produced for it.
+    expect(targeted).toContain('sap_presence');
+    expect(targeted).not.toMatch(/contract_date\s*>=/);
+
+    // The global rebuild must not carry the parameter, or it would fail with no bind value.
+    const global = await buildContractPerformanceSnapshotRefreshSql();
+    expect(global).not.toContain('$1');
+  });
+
   it('names every column explicitly so the INSERT cannot depend on SELECT-list order', async () => {
     const sql = await buildContractPerformanceSnapshotRefreshSql();
     for (const col of CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS) {
