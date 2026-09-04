@@ -5,6 +5,7 @@ import {
   buildQtyMoveCte,
   buildQtyMoveFromSnapshotCte,
   buildQtyMoveHybridCte,
+  type QtyMoveContractFilter,
 } from '../utils/contractGlobalOutstandingSql';
 import logger from '../utils/logger';
 
@@ -103,11 +104,15 @@ export class ContractQtyMoveSnapshotService {
  * fall back to the fully-live computation for every contract, same as the sto_agg/latest_spd
  * snapshots do, so numbers never lag behind a stale snapshot.
  */
-export async function resolveContractsQtyMoveCte(scopeCteName = 'contract_scope'): Promise<string> {
+export async function resolveContractsQtyMoveCte(
+  filter: QtyMoveContractFilter | string = 'contract_scope',
+): Promise<string> {
+  const resolved: QtyMoveContractFilter =
+    typeof filter === 'string' ? { kind: 'join_scope', scopeCteName: filter } : filter;
   if (!(await isContractQtyMoveSnapshotFresh())) {
-    return buildQtyMoveCte({ kind: 'join_scope', scopeCteName });
+    return buildQtyMoveCte(resolved);
   }
-  return buildQtyMoveHybridCte({ kind: 'join_scope', scopeCteName });
+  return buildQtyMoveHybridCte(resolved);
 }
 
 export { buildQtyMoveFromSnapshotCte, buildQtyMoveCte };
