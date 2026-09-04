@@ -181,8 +181,19 @@ export function invalidateContractsListCache(): void {
 
 registerListCacheInvalidator(invalidateContractsListCache);
 
+// Cache-buster-only params: safe to strip before building the cache key. `_ts` is appended by
+// appendContractPerformanceApiParams (frontend/src/lib/contractPerformanceFilters.ts) on every
+// Section 3 table request on the Contract Performance page specifically, to force a fresh network
+// call for React Query. Left in, every call got a unique key and the 60s CONTRACTS_LIST_CACHE /
+// CONTRACTS_LIST_IN_FLIGHT dedup below never hit for that page (the plain Contracts page's params
+// builder never adds it, so it was never affected). Stripping it here is response-preserving: the
+// underlying SQL/filters are unchanged, only which requests get treated as "the same request".
+const CACHE_BUSTER_PARAM_KEYS = new Set(['_ts']);
+
 function contractsListCacheKey(query: Record<string, unknown>): string {
-  const keys = Object.keys(query).sort();
+  const keys = Object.keys(query)
+    .filter((k) => !CACHE_BUSTER_PARAM_KEYS.has(k))
+    .sort();
   const norm: Record<string, unknown> = {};
   for (const k of keys) norm[k] = query[k];
   return JSON.stringify(norm);

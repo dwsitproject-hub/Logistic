@@ -28,8 +28,7 @@ import {
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
 import {
-  sqlMaxTruckingLastReceiveDateForContract,
-  sqlMaxTruckingWbActualsDateForContract,
+  sqlSapTruckingLastReceiveDateByContractNumber,
 } from '../utils/truckingSapDates';
 import {
   isTruckingOutstandingWithinToleranceKg,
@@ -288,10 +287,19 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         WHERE 1=1
         ${contractScopeWhere}
       ),
+      -- One physical contracts row per contract_id (the newest one) - same row the old
+      -- (array_agg(c.id ORDER BY c.created_at DESC))[1] scalar picked, computed once here instead
+      -- of re-derived inside every aggregate expression below.
+      canonical_contract AS MATERIALIZED (
+        SELECT DISTINCT ON (c.contract_id) c.contract_id, c.id
+        FROM contracts c
+        INNER JOIN contract_scope cs ON cs.contract_id = c.contract_id
+        ORDER BY c.contract_id, c.created_at DESC
+      ),
       ${contractsLatestSpdCte},
       ${contractsQtyMoveCte},
       ${contractsStoAggCte},
-      ${sqlActiveSeaStoSiblingContractIdsCte()},
+      ${sqlActiveSeaStoSiblingContractIdsCte('active_sea_sto_sibling_ids', 'contract_scope')},
       base AS MATERIALIZED (
         SELECT
           c.contract_id,
@@ -334,66 +342,71 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
             ),
           })}) AS outstanding_quantity,
           -- ETA Trucking Completion = last Daily Planning date
-          (
-            SELECT MAX(t.last_daily_deliverable_date)
-            FROM trucking_operations t
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_trucking_daily_deliverable_date,
-          ${sqlMaxTruckingLastReceiveDateForContract(
-            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
-            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
-          )} AS last_trucking_completion_date,
-          ${sqlMaxTruckingWbActualsDateForContract(
-            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
-          )} AS last_trucking_wb_actuals_date,
-          (
-            SELECT MAX(s2.ata_discharge_complete::date)
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND s2.ata_discharge_complete IS NOT NULL
-          ) AS last_ata_vessel_complete_discharge,
-          (
-            SELECT MAX(
-              COALESCE(
-                s2.eta_discharge_complete::date,
-                (
-                  SELECT vlpd.eta_vessel_complete_discharge::date
-                  FROM vessel_loading_ports vlpd
-                  WHERE vlpd.shipment_id = s2.id
-                    AND vlpd.is_discharge_port = true
-                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
-                  LIMIT 1
-                )
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_eta_vessel_complete_discharge,
-          (
-            SELECT MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date))
-            FROM trucking_operations t
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS open_standard_eta_trucking,
-          (
-            SELECT MAX(
-              (
-                SELECT vlp.eta_vessel_arrival::date
-                FROM vessel_loading_ports vlp
-                WHERE vlp.shipment_id = s2.id
-                  AND COALESCE(vlp.is_discharge_port, false) = false
-                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
-                LIMIT 1
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS open_standard_eta_vessel_loading
+          MAX(trucking_agg.last_trucking_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
+          MAX(trucking_agg.last_trucking_completion_date) AS last_trucking_completion_date,
+          MAX(trucking_agg.last_trucking_wb_actuals_date) AS last_trucking_wb_actuals_date,
+          MAX(shipment_agg.last_ata_vessel_complete_discharge) AS last_ata_vessel_complete_discharge,
+          MAX(shipment_agg.last_eta_vessel_complete_discharge) AS last_eta_vessel_complete_discharge,
+          MAX(trucking_agg.open_standard_eta_trucking) AS open_standard_eta_trucking,
+          MAX(shipment_agg.open_standard_eta_vessel_loading) AS open_standard_eta_vessel_loading
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+        INNER JOIN canonical_contract cc ON cc.contract_id = c.contract_id
+        -- Trucking-side aggregates: one scan of trucking_operations per contract (was 4 separate
+        -- correlated subqueries, one of which re-ran a sap_processed_data JSONB/regex date lookup
+        -- once per trucking-op row instead of once per contract - see sqlTruckingSapDatesLateral's
+        -- doc comment in truckingSapDates.ts for the same anti-pattern measured elsewhere in this
+        -- codebase: "cost was repetition, not the plan").
+        LEFT JOIN LATERAL (
+          SELECT ${sqlSapTruckingLastReceiveDateByContractNumber('cc.contract_id')} AS val
+        ) sap_last_receive ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            MAX(t.last_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
+            MAX(COALESCE(tr.realization_end_date, sap_last_receive.val)) AS last_trucking_completion_date,
+            MAX(da_agg.max_progress_date) AS last_trucking_wb_actuals_date,
+            MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date)) AS open_standard_eta_trucking
+          FROM trucking_operations t
+          LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
+          LEFT JOIN LATERAL (
+            SELECT MAX(da.progress_date) AS max_progress_date
+            FROM trucking_daily_actuals da
+            WHERE da.trucking_operation_id = t.id
+          ) da_agg ON TRUE
+          WHERE t.contract_id = cc.id
+        ) trucking_agg ON TRUE
+        -- Shipment-side aggregates: one scan of shipments per contract (was 3 separate correlated
+        -- subqueries, two of which ran a further per-shipment correlated subquery against
+        -- vessel_loading_ports) - now one LATERAL join, per-shipment vessel_loading_ports lookups
+        -- expressed as their own LATERAL joins (same cardinality, no per-row subplan re-execution).
+        LEFT JOIN LATERAL (
+          SELECT
+            MAX(s2.ata_discharge_complete::date) FILTER (WHERE s2.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge,
+            MAX(COALESCE(s2.eta_discharge_complete::date, vlp_discharge.eta_vessel_complete_discharge::date)) AS last_eta_vessel_complete_discharge,
+            MAX(vlp_load.eta_vessel_arrival::date) AS open_standard_eta_vessel_loading
+          FROM shipments s2
+          LEFT JOIN LATERAL (
+            SELECT vlpd.eta_vessel_complete_discharge
+            FROM vessel_loading_ports vlpd
+            WHERE vlpd.shipment_id = s2.id
+              AND vlpd.is_discharge_port = true
+            ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
+            LIMIT 1
+          ) vlp_discharge ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT vlp.eta_vessel_arrival
+            FROM vessel_loading_ports vlp
+            WHERE vlp.shipment_id = s2.id
+              AND COALESCE(vlp.is_discharge_port, false) = false
+            ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+            LIMIT 1
+          ) vlp_load ON TRUE
+          WHERE s2.contract_id = cc.id
+        ) shipment_agg ON TRUE
         WHERE 1=1
         GROUP BY c.contract_id
       ),

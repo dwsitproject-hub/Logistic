@@ -1938,7 +1938,7 @@ function ContractsPageContent() {
 
       const { data: responseData, revalidating } = await cachedGet(
         listCacheKey,
-        () => api.get(listUrl).then((r) => r.data),
+        (signal) => api.get(listUrl, { signal }).then((r) => r.data),
         {
           force: options?.force,
           onRevalidate: (fresh) => {
@@ -2013,7 +2013,7 @@ function ContractsPageContent() {
       setLatePerfTreeLoading(true)
       const { data, revalidating } = await cachedGet(
         dataCacheKey,
-        () => api.get(dataUrl).then((r) => r.data),
+        (signal) => api.get(dataUrl, { signal }).then((r) => r.data),
         {
           force: forceFetch,
           onRevalidate: (fresh) => {

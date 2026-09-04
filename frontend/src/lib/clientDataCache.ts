@@ -15,6 +15,10 @@ type CacheEntry<T> = {
 
 const store = new Map<string, CacheEntry<unknown>>()
 const inFlight = new Map<string, Promise<unknown>>()
+/** AbortController for each in-flight fetch, keyed the same as `inFlight` - lets replaceInFlight
+ * actually cancel the superseded network request instead of only forgetting about it (see
+ * fetchAndStore). Populated only for callers that opt into the `(signal) => ...` fetcher shape. */
+const inFlightControllers = new Map<string, AbortController>()
 
 /** Normalize URL query (sorted keys, strip cache-bust params) for stable cache keys. */
 export function buildCacheKey(method: string, url: string): string {
@@ -51,14 +55,25 @@ function evictExpiredAndOverflow(): void {
 
 async function fetchAndStore<T>(
   cacheKey: string,
-  fetcher: () => Promise<T>,
+  fetcher: (signal?: AbortSignal) => Promise<T>,
   options?: { replaceInFlight?: boolean },
 ): Promise<T> {
   const existing = inFlight.get(cacheKey)
   if (existing && !options?.replaceInFlight) return existing as Promise<T>
-  if (options?.replaceInFlight) inFlight.delete(cacheKey)
+  if (options?.replaceInFlight) {
+    // Actually cancel the superseded request (not just stop tracking it) - without this, every
+    // forced refetch (filter change, explicit reload) left the previous network call - and the
+    // backend query behind it - running to completion unabandoned. Observed live piling up 8-13
+    // duplicate multi-minute queries on the Contract Performance page (2026-09-03).
+    inFlightControllers.get(cacheKey)?.abort()
+    inFlightControllers.delete(cacheKey)
+    inFlight.delete(cacheKey)
+  }
 
-  const promise = fetcher()
+  const controller = new AbortController()
+  inFlightControllers.set(cacheKey, controller)
+
+  const promise = fetcher(controller.signal)
     .then((data) => {
       store.set(cacheKey, { data, fetchedAt: Date.now() })
       evictExpiredAndOverflow()
@@ -66,6 +81,7 @@ async function fetchAndStore<T>(
     })
     .finally(() => {
       inFlight.delete(cacheKey)
+      if (inFlightControllers.get(cacheKey) === controller) inFlightControllers.delete(cacheKey)
     })
 
   inFlight.set(cacheKey, promise)
@@ -96,7 +112,7 @@ export type CachedGetResult<T> = {
 
 export async function cachedGet<T>(
   cacheKey: string,
-  fetcher: () => Promise<T>,
+  fetcher: (signal?: AbortSignal) => Promise<T>,
   options?: {
     force?: boolean
     onRevalidate?: (data: T) => void
