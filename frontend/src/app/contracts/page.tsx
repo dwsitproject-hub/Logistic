@@ -3549,7 +3549,7 @@ function ContractsPageContent() {
                     handleContractPerfGroupPlantsChange(values)
                     setCurrentPage(1)
                   }}
-                  placeholder="Select region/plant(s)"
+                  placeholder="All region/plants"
                   emptyMessage="No region/plant values"
                   uppercaseOptionLabels
                 />
