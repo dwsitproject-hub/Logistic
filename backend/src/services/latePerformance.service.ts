@@ -24,6 +24,7 @@ import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter
 import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import {
   sqlContractImportStatusIsClosedExpr,
+  sqlContractEffectivelyDoneExpr,
   resolveContractEffectiveStatusText,
   sqlContractImportStatusIsOpenExpr,
   sqlContractListImportStatusAggExpr,
@@ -611,11 +612,19 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         // (row.import_status || row.status) — keeps this SQL-level filter (used by the
         // non-combined 'open'/'close' parts) consistent with the View table's Open filter.
         'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+        sqlContractEffectivelyDoneExpr({
+          outstandingKgExpr: 'base.outstanding_quantity',
+          atcExpr: 'base.last_ata_vessel_complete_discharge',
+        }),
       )}`;
     } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
       queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
         'base.import_status',
         'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+        sqlContractEffectivelyDoneExpr({
+          outstandingKgExpr: 'base.outstanding_quantity',
+          atcExpr: 'base.last_ata_vessel_complete_discharge',
+        }),
       )}`;
     } else {
       queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
