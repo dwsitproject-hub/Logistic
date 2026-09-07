@@ -325,6 +325,11 @@ export function buildTruckingListExpansionSql(
   // correlated, text-duplicated subquery for every row below.
   const qtyResolutionCte = skipSapJoin ? '' : `,${buildTruckingQtyResolutionCtes('expanded')}`;
   const qtyResolutionJoin = skipSapJoin ? '' : TRUCKING_QTY_RESOLUTION_JOIN;
+  // grc comes from the qty-resolution CTEs, which are only emitted when skipSapJoin is false
+  // (qtyResolutionCte / qtyResolutionJoin above). Referencing grc.is_closed on the skip path
+  // makes Postgres reject the whole query with 42P01, and the page renders zero rows - which is
+  // exactly what happened. Same guard as the is_contract_sap_closed column below.
+  const grClosedExpr = skipSapJoin ? undefined : TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr;
 
   return `
       WITH trucking_source AS (
@@ -367,7 +372,7 @@ export function buildTruckingListExpansionSql(
           WHEN ${sqlTruckingPageIsCompletedExpr(
             'c',
             qty.outstandingForStage,
-            TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+            grClosedExpr,
           )} THEN 'COMPLETED'
           ELSE COALESCE(
             NULLIF(sn.stage, 'COMPLETED'),
@@ -375,7 +380,7 @@ export function buildTruckingListExpansionSql(
               'c',
               `NULLIF(TRIM((${stoDisplay})::text), '')`,
               qty.outstandingForStage,
-              TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+              grClosedExpr,
             )}
           )
         END`
@@ -383,7 +388,7 @@ export function buildTruckingListExpansionSql(
                 'c',
                 `NULLIF(TRIM((${stoDisplay})::text), '')`,
                 qty.outstandingForStage,
-                TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+                grClosedExpr,
               )
         } AS status,
         e.created_at,

@@ -93,4 +93,22 @@ describe('truckingListStoExpandSql', () => {
     const withoutSnap = buildTruckingListExpansionSql(inner, { skipSapJoin: true });
     expect(withoutSnap).not.toContain('trucking_list_stage_snapshot');
   });
+
+  /**
+   * Regression: the qty-resolution CTEs (and their `grc` alias) are only emitted when
+   * skipSapJoin is false. Referencing grc.is_closed on the shell path made Postgres reject the
+   * whole query with 42P01 and the Trucking page rendered "No Trucking operations found" - the
+   * shell is what the first paint requests, so the page was empty for every user.
+   */
+  it('never references the grc qty-resolution alias on the skipSapJoin shell path', () => {
+    const inner = 'SELECT 1 AS id';
+    const shell = buildTruckingListExpansionSql(inner, { skipSapJoin: true });
+    expect(shell).not.toContain('grc.');
+    expect(shell).not.toContain('gr_closed grc');
+
+    // The hydrate path joins the CTEs, so there the reference is correct and must stay.
+    const hydrate = buildTruckingListExpansionSql(inner, { skipSapJoin: false });
+    expect(hydrate).toContain('grc.');
+    expect(hydrate).toContain('LEFT JOIN gr_closed grc ON grc.contract_uuid = e.contract_id');
+  });
 });
