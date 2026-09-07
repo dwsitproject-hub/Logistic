@@ -9,7 +9,9 @@ import {
   sqlTruckingResolvedReceiveQty,
 } from './truckingQuantitySql';
 import {
+  buildTruckingGrClosedCteOnly,
   buildTruckingQtyResolutionCtes,
+  TRUCKING_GR_CLOSED_JOIN,
   TRUCKING_QTY_RESOLUTION_JOIN,
   TRUCKING_QTY_RESOLUTION_OVERRIDES,
 } from './truckingPoQtyResolutionCteSql';
@@ -323,13 +325,21 @@ export function buildTruckingListExpansionSql(
   // Delivery/receive/GR-closed/WB-actuals computed once per distinct contract or
   // operation (see truckingPoQtyResolutionCteSql.ts) instead of re-run as a
   // correlated, text-duplicated subquery for every row below.
-  const qtyResolutionCte = skipSapJoin ? '' : `,${buildTruckingQtyResolutionCtes('expanded')}`;
-  const qtyResolutionJoin = skipSapJoin ? '' : TRUCKING_QTY_RESOLUTION_JOIN;
-  // grc comes from the qty-resolution CTEs, which are only emitted when skipSapJoin is false
-  // (qtyResolutionCte / qtyResolutionJoin above). Referencing grc.is_closed on the skip path
-  // makes Postgres reject the whole query with 42P01, and the page renders zero rows - which is
-  // exactly what happened. Same guard as the is_contract_sap_closed column below.
-  const grClosedExpr = skipSapJoin ? undefined : TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr;
+  const qtyResolutionCte = skipSapJoin
+    ? `,${buildTruckingGrClosedCteOnly('expanded')}`
+    : `,${buildTruckingQtyResolutionCtes('expanded')}`;
+  /**
+   * The shell path skips the SAP *qty* dedup CTEs but still needs GR-close and SAP-cancelled -
+   * the stage expression is the same on both paths, and the shell is what the page's first
+   * paint requests, so dropping the flags here would show a different status than the hydrate.
+   * It used to inline them instead, which is how the shell statement reached 999KB and 529
+   * sap_processed_data scan nodes; gr_closed resolves them once per contract for both paths.
+   * (Referencing grc without emitting its CTE is a 42P01 that empties the whole page - that is
+   * why the join and the column always come from the same branch.)
+   */
+  const qtyResolutionJoin = skipSapJoin ? TRUCKING_GR_CLOSED_JOIN : TRUCKING_QTY_RESOLUTION_JOIN;
+  const grClosedExpr = TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr;
+  const grCancelledExpr = TRUCKING_QTY_RESOLUTION_OVERRIDES.grCancelledExpr;
 
   return `
       WITH trucking_source AS (
@@ -381,6 +391,9 @@ export function buildTruckingListExpansionSql(
               `NULLIF(TRIM((${stoDisplay})::text), '')`,
               qty.outstandingForStage,
               grClosedExpr,
+              undefined,
+              undefined,
+              grCancelledExpr,
             )}
           )
         END`
@@ -389,6 +402,9 @@ export function buildTruckingListExpansionSql(
                 `NULLIF(TRIM((${stoDisplay})::text), '')`,
                 qty.outstandingForStage,
                 grClosedExpr,
+                undefined,
+                undefined,
+                grCancelledExpr,
               )
         } AS status,
         e.created_at,
@@ -416,7 +432,11 @@ export function buildTruckingListExpansionSql(
         e.estimated_km,
         e.contract_ext_no,
         e.contract_import_status,
-        ${skipSapJoin ? 'FALSE' : TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr} AS is_contract_sap_closed${filterTotalCol}
+        ${/* Deliberately still FALSE on the shell path even though grc is now available
+            there: this column feeds summary exclusions, and the shell has always
+            reported FALSE for it (asserted by the shell-mode test above). Resolving it
+            here would change first-paint numbers, which is a separate decision. */
+          skipSapJoin ? 'FALSE' : grClosedExpr} AS is_contract_sap_closed${filterTotalCol}
       FROM expanded e
       INNER JOIN contracts c ON c.id = e.contract_id
       INNER JOIN trucking_operations t ON t.id = e.id${

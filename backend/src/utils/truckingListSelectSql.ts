@@ -5,7 +5,10 @@ import {
   sqlShellRealizationEndDate,
   sqlShellRealizationStartDate,
 } from './truckingRealizationSql';
-import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
+import {
+  sqlContractSapImportStatusFromLateral,
+  sqlContractSapStatusLateral,
+} from './contractDeliveryStatus';
 import {
   sqlTruckingPagePipelineStageExpr,
   sqlTruckingIsCompletedLateral,
@@ -18,6 +21,7 @@ import {
   sqlTruckingListResolvedReceiveQtyExpr,
   sqlTruckingQuantitySentCoalesce,
   sqlTruckingGrClosedLateral,
+  sqlTruckingGrCancelledFromLateral,
   sqlTruckingGrClosedFromLateral,
 } from './truckingQuantitySql';
 import {
@@ -155,8 +159,16 @@ export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
         )`;
 }
 
+/**
+ * The contract's SAP import status resolved once per row by sqlContractSapStatusLateral in
+ * the FROM. Everything status-derived below reads this column instead of re-expanding the
+ * 26KB expression: 529 sap_processed_data scan nodes in one plan, 58.2s of 99.9s.
+ */
+const IMPORT_STATUS_COL = sqlContractSapImportStatusFromLateral();
 /** The GR-close column resolved once per row by sqlTruckingGrClosedLateral in the FROM. */
 const GR_CLOSED_COL = sqlTruckingGrClosedFromLateral();
+/** The SAP-cancelled column from the same lateral as GR_CLOSED_COL. */
+const GR_CANCELLED_COL = sqlTruckingGrCancelledFromLateral();
 /** The completed test resolved once per row by sqlTruckingIsCompletedLateral. */
 const IS_COMPLETED_COL = sqlTruckingIsCompletedFromLateral();
 
@@ -199,6 +211,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
           GR_CLOSED_COL,
           undefined,
           IS_COMPLETED_COL,
+          GR_CANCELLED_COL,
         )} AS status,
         t.created_at,
         t.updated_at,
@@ -223,7 +236,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlTruckingListBaseOutstandingQtyExpr('c', GR_CLOSED_COL)} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
-        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
+        ${IMPORT_STATUS_COL} AS contract_import_status`;
   }
 
   return `
@@ -263,6 +276,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
           GR_CLOSED_COL,
           TRUCKING_LIST_SAP_DATES_ALIAS,
           IS_COMPLETED_COL,
+          GR_CANCELLED_COL,
         )} AS status,
         t.created_at,
         t.updated_at,
@@ -287,7 +301,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlTruckingListBaseOutstandingQtyExpr('c', GR_CLOSED_COL)} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
-        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
+        ${IMPORT_STATUS_COL} AS contract_import_status`;
 }
 
 export function buildTruckingListFromClause(skipSapJoin: boolean): string {
@@ -300,7 +314,8 @@ export function buildTruckingListFromClause(skipSapJoin: boolean): string {
   return `
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
-      ${sqlTruckingGrClosedLateral('c')}
+      ${sqlContractSapStatusLateral('c')}
+      ${sqlTruckingGrClosedLateral('c', undefined, IMPORT_STATUS_COL)}
       ${sqlTruckingIsCompletedLateral('c', undefined, GR_CLOSED_COL)}
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}

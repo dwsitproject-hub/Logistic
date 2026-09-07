@@ -21,7 +21,10 @@ import {
   appendTruckingPipelineStageFilter,
   sqlTruckingIsCompletedFromLateral,
 } from '../utils/truckingPagePipelineSql';
-import { sqlTruckingGrClosedFromLateral } from '../utils/truckingQuantitySql';
+import {
+  sqlTruckingGrCancelledFromLateral,
+  sqlTruckingGrClosedFromLateral,
+} from '../utils/truckingQuantitySql';
 
 describe('truckingList.service', () => {
   it('list query defers pipeline status filter until after STO expansion', () => {
@@ -43,6 +46,7 @@ describe('truckingList.service', () => {
       1,
       sqlTruckingGrClosedFromLateral(),
       sqlTruckingIsCompletedFromLateral(),
+      sqlTruckingGrCancelledFromLateral(),
     ).sql.trim();
 
     expect(withInner.preOuterQuery).toContain(innerStage);

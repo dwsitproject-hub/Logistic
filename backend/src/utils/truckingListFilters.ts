@@ -46,14 +46,22 @@ function lateIndicatorTruckingExpr(): string {
  *
  * Passing no grClosedExpr reproduces the previous map exactly.
  */
-function truckCol(grClosedExpr?: string): Record<string, string> {
+function truckCol(grClosedExpr?: string, cancelledExpr?: string): Record<string, string> {
   return {
   late_indicator: lateIndicatorTruckingExpr(),
   operation_id: 't.operation_id',
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   sto_number: 'c.sto_number',
-    status: sqlTruckingPagePipelineStageExpr('c', undefined, undefined, grClosedExpr),
+    status: sqlTruckingPagePipelineStageExpr(
+      'c',
+      undefined,
+      undefined,
+      grClosedExpr,
+      undefined,
+      undefined,
+      cancelledExpr,
+    ),
   location: 't.location',
   loading_location: 't.loading_location',
   unloading_location: sqlB2bEndingUnloadExpr('t.unloading_location'),
@@ -67,9 +75,9 @@ function truckCol(grClosedExpr?: string): Record<string, string> {
   contract_qty: 'c.quantity_ordered',
   sto_quantity: 'c.quantity_ordered',
   quantity_sent: 't.quantity_sent',
-  quantity_delivered: sqlTruckingListResolvedDeliveryQtyExpr(),
-  quantity_receive: sqlTruckingListResolvedReceiveQtyExpr(),
-  outstanding_quantity: sqlTruckingListBaseOutstandingQtyExpr(),
+  quantity_delivered: sqlTruckingListResolvedDeliveryQtyExpr('t.id', 'c', grClosedExpr),
+  quantity_receive: sqlTruckingListResolvedReceiveQtyExpr('t.id', 'c', grClosedExpr),
+  outstanding_quantity: sqlTruckingListBaseOutstandingQtyExpr('c', grClosedExpr),
   oa_budget: 't.oa_budget',
   oa_actual: 't.oa_actual',
   estimated_km: 's.estimated_km',
@@ -109,10 +117,11 @@ export function appendTruckingGlobalSearch(
 export function appendTruckingColumnFilters(
   filters: ColumnFilterPayload,
   startIndex: number,
-  /** Optional precomputed GR-close column; see truckCol(). */
+  /** Optional precomputed GR-close and SAP-cancelled columns; see truckCol(). */
   grClosedExpr?: string,
+  cancelledExpr?: string,
 ): { sql: string; params: any[]; nextIndex: number } {
-  const TRUCK_COL = truckCol(grClosedExpr)
+  const TRUCK_COL = truckCol(grClosedExpr, cancelledExpr)
   const parts: string[] = []
   const params: any[] = []
   let pi = startIndex

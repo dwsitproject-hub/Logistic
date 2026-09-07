@@ -100,15 +100,27 @@ describe('truckingListStoExpandSql', () => {
    * whole query with 42P01 and the Trucking page rendered "No Trucking operations found" - the
    * shell is what the first paint requests, so the page was empty for every user.
    */
-  it('never references the grc qty-resolution alias on the skipSapJoin shell path', () => {
+  it('only references the grc alias in a query that also joins gr_closed', () => {
     const inner = 'SELECT 1 AS id';
-    const shell = buildTruckingListExpansionSql(inner, { skipSapJoin: true });
-    expect(shell).not.toContain('grc.');
-    expect(shell).not.toContain('gr_closed grc');
+    for (const skipSapJoin of [true, false]) {
+      const sql = buildTruckingListExpansionSql(inner, { skipSapJoin });
+      if (sql.includes('grc.')) {
+        expect(sql).toContain('LEFT JOIN gr_closed grc ON grc.contract_uuid = e.contract_id');
+        expect(sql).toContain('gr_closed AS MATERIALIZED');
+      }
+    }
+  });
 
-    // The hydrate path joins the CTEs, so there the reference is correct and must stay.
-    const hydrate = buildTruckingListExpansionSql(inner, { skipSapJoin: false });
-    expect(hydrate).toContain('grc.');
-    expect(hydrate).toContain('LEFT JOIN gr_closed grc ON grc.contract_uuid = e.contract_id');
+  it('resolves GR-close and SAP-cancelled per contract on both paths, not inline per row', () => {
+    const inner = 'SELECT 1 AS id';
+    for (const skipSapJoin of [true, false]) {
+      const sql = buildTruckingListExpansionSql(inner, { skipSapJoin });
+      // The stage/completed expressions read the columns...
+      expect(sql).toContain('COALESCE(grc.is_closed, false)');
+      expect(sql).toContain('COALESCE(grc.is_cancelled, false)');
+      // ...and the 26KB status expression is expanded once, inside the CTE that defines them.
+      const expansions = (sql.match(/BOOL_OR\(s\.row_open\)/g) || []).length;
+      expect(expansions).toBeLessThanOrEqual(2);
+    }
   });
 });

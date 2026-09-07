@@ -24,7 +24,10 @@ import {
   normalizeTruckingPagePipelineStageParam,
   sqlTruckingIsCompletedFromLateral,
 } from '../utils/truckingPagePipelineSql';
-import { sqlTruckingGrClosedFromLateral } from '../utils/truckingQuantitySql';
+import {
+  sqlTruckingGrCancelledFromLateral,
+  sqlTruckingGrClosedFromLateral,
+} from '../utils/truckingQuantitySql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
 import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
@@ -752,6 +755,7 @@ export function buildTruckingListQuery(
       paramIndex,
       sqlTruckingGrClosedFromLateral(),
       sqlTruckingIsCompletedFromLateral(),
+      sqlTruckingGrCancelledFromLateral(),
     );
     queryText += stageFilter.sql;
     queryParams.push(...stageFilter.params);
@@ -834,7 +838,16 @@ export function buildTruckingListQuery(
   let fp = outerStart;
   const gSearch = appendTruckingGlobalSearch(globalSearch, fp);
   fp = gSearch.nextIndex;
-  const cCol = appendTruckingColumnFilters(colFilters, fp);
+  /**
+   * Same FROM as the stage filter above, so the laterals are in scope here too. Without
+   * these the map re-derived GR-close for status and for all three qty columns.
+   */
+  const cCol = appendTruckingColumnFilters(
+    colFilters,
+    fp,
+    sqlTruckingGrClosedFromLateral(),
+    sqlTruckingGrCancelledFromLateral(),
+  );
   fp = cCol.nextIndex;
   const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp);
   fp = li.nextIndex;

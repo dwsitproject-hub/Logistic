@@ -484,6 +484,40 @@ export function sqlContractEffectivelyDoneExpr(opts: {
   )`;
 }
 
+/**
+ * One lateral that resolves the contract's SAP import status once per row.
+ *
+ * `sqlContractImportStatusExpr` is ~26KB of SQL carrying seven correlated
+ * `sap_processed_data` subqueries, and the trucking list expands it ~28 times in a single
+ * 999KB statement. Measured 2026-09-07 on the shell page query: 529 `sap_processed_data`
+ * scan nodes in one plan, **every one** keyed on `contract_number = c.contract_id`, costing
+ * 58.2s of index scans plus 32.0s of correlated Aggregate on a 99.9s execution. The answer
+ * is per-contract, so one expansion per row is enough; every consumer then derives from this
+ * column through the cheap text predicates (`...IsClosedExpr` / `...IsCancelledExpr`), which
+ * is exactly what `sqlIsContractSapClosedExpr(alias)` already composes internally - so the
+ * substitution is output-preserving by construction.
+ *
+ * Join it before any lateral that needs the status: later laterals may reference earlier ones.
+ */
+export const CONTRACT_SAP_STATUS_ALIAS = 'csap_row';
+
+export function sqlContractSapStatusLateral(
+  contractAlias = 'c',
+  alias = CONTRACT_SAP_STATUS_ALIAS,
+): string {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT (${sqlContractImportStatusExpr(contractAlias)}) AS import_status
+      ) ${alias} ON TRUE`;
+}
+
+/** Column reference for the lateral above. */
+export function sqlContractSapImportStatusFromLateral(
+  alias = CONTRACT_SAP_STATUS_ALIAS,
+): string {
+  return `${alias}.import_status`;
+}
+
 /** SQL predicate: contract row matches Open import status (UAT GR PO/STO matrix). */
 export function sqlContractImportStatusIsOpenExpr(
   importStatusExpr: string,

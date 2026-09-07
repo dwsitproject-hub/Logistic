@@ -17,7 +17,11 @@
 
 import { sqlCoalesceB2bOriginParentOrChildQty } from './b2bOriginEndingSql';
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import {
+  sqlContractImportStatusExpr,
+  sqlContractImportStatusIsCancelledExpr,
+  sqlContractImportStatusIsClosedExpr,
+} from './contractDeliveryStatus';
 import {
   SAP_DELIVERY_RAW_COALESCE,
   SAP_RECEIVE_RAW_COALESCE,
@@ -121,8 +125,16 @@ function buildSapPoDedupCte(opts: {
 }
 
 /** Grouped translation of `sqlIsContractSapClosedExpr`, once per distinct contract. */
-function buildGrClosedCte(expandedRelation: string): string {
-  const closedExpr = sqlIsContractSapClosedExpr('c');
+/**
+ * GR-close and SAP-cancelled once per distinct contract in the expansion.
+ *
+ * Both flags come from the same `sqlContractImportStatusExpr` answer, so it is expanded once in
+ * an inner select and the two cheap text predicates read that column - deriving each flag
+ * separately expanded the 26KB expression twice per contract for no gain. Exported on its own
+ * (see buildTruckingGrClosedCteOnly) because the shell path needs these flags without the SAP
+ * qty dedup CTEs.
+ */
+export function buildGrClosedCte(expandedRelation: string): string {
   return `
     gr_closed_keys AS MATERIALIZED (
       SELECT DISTINCT e.contract_id AS contract_uuid
@@ -131,12 +143,27 @@ function buildGrClosedCte(expandedRelation: string): string {
     ),
     gr_closed AS MATERIALIZED (
       SELECT
-        k.contract_uuid,
-        (${closedExpr}) AS is_closed
-      FROM gr_closed_keys k
-      INNER JOIN contracts c ON c.id = k.contract_uuid
+        s.contract_uuid,
+        (${sqlContractImportStatusIsClosedExpr('s.import_status')}) AS is_closed,
+        (${sqlContractImportStatusIsCancelledExpr('s.import_status')}) AS is_cancelled
+      FROM (
+        SELECT
+          k.contract_uuid,
+          (${sqlContractImportStatusExpr('c')}) AS import_status
+        FROM gr_closed_keys k
+        INNER JOIN contracts c ON c.id = k.contract_uuid
+      ) s
     )`;
 }
+
+/** Just the GR-close/cancelled CTEs, for callers that skip the SAP qty joins. */
+export function buildTruckingGrClosedCteOnly(expandedRelation = 'expanded'): string {
+  return buildGrClosedCte(expandedRelation);
+}
+
+/** Join for {@link buildTruckingGrClosedCteOnly} alone (subset of TRUCKING_QTY_RESOLUTION_JOIN). */
+export const TRUCKING_GR_CLOSED_JOIN = `
+      LEFT JOIN gr_closed grc ON grc.contract_uuid = e.contract_id`;
 
 /** Grouped translation of the WB (`trucking_daily_actuals`) sums, once per distinct operation. */
 function buildWbActualsCte(expandedRelation: string): string {
@@ -195,6 +222,7 @@ export const TRUCKING_QTY_RESOLUTION_JOIN = `
 /** Column refs to feed into `sqlTruckingResolvedDeliveryQty`/`ReceiveQty` as overrides. */
 export const TRUCKING_QTY_RESOLUTION_OVERRIDES = {
   grClosedExpr: 'COALESCE(grc.is_closed, false)',
+  grCancelledExpr: 'COALESCE(grc.is_cancelled, false)',
   hasWbExpr: 'COALESCE(wb.has_actuals, false)',
   wbDeliveryExpr: 'COALESCE(wb.delivery_kg, 0)',
   wbReceiveExpr: 'COALESCE(wb.receive_kg, 0)',

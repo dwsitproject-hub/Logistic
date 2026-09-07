@@ -79,8 +79,10 @@ export function sqlTruckingPageUnplannedPredicate(
   outstandingQtyExpr?: string,
   grClosedExpr?: string,
   sapAlias?: string,
+  /** Precomputed SAP-cancelled column (see sqlTruckingGrClosedLateral's is_cancelled). */
+  cancelledExpr?: string,
 ): string {
-  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr)})`;
+  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr, cancelledExpr)})`;
   const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)})`;
   const noStartReceive = `${sqlRealizationStartDate(contractAlias, sapAlias)} IS NULL`;
   return `(
@@ -146,6 +148,11 @@ export function sqlTruckingPagePipelineStageExpr(
   sapAlias?: string,
   /** Precomputed is-completed column (see sqlTruckingIsCompletedLateral). */
   isCompletedExpr?: string,
+  /**
+   * Precomputed SAP-cancelled column. Without it `sqlIsContractSapInactiveForOsExpr` re-derives
+   * Cancelled from scratch - one 26KB status expansion per call, twice in this expression.
+   */
+  cancelledExpr?: string,
 ): string {
   const stoCheck = stoExpr ?? `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
   const realizationStart = sqlRealizationStartDate(contractAlias, sapAlias);
@@ -159,7 +166,7 @@ export function sqlTruckingPagePipelineStageExpr(
     isCompletedExpr ??
     sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
   const notCompleted = `NOT (${isCompleted})`;
-  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr)})`;
+  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr, cancelledExpr)})`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
     WHEN ${isCompleted} THEN 'COMPLETED'
@@ -170,7 +177,15 @@ export function sqlTruckingPagePipelineStageExpr(
       AND ${sqlTruckingPageHasEtaOrPlanning('t')}
       AND ${notCompleted}
       THEN 'PLANNED'
-    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr, grClosedExpr, sapAlias)} THEN 'UNPLANNED'
+    WHEN ${sqlTruckingPageUnplannedPredicate(
+      contractAlias,
+      stoCheck,
+      't',
+      outstandingQtyExpr,
+      grClosedExpr,
+      sapAlias,
+      cancelledExpr,
+    )} THEN 'UNPLANNED'
     ELSE CASE
       WHEN ${sqlTruckingPageHasEtaOrPlanning('t')} THEN 'PLANNED'
       ELSE 'UNPLANNED'
@@ -194,6 +209,7 @@ export function appendTruckingPipelineStageFilter(
    */
   grClosedExpr?: string,
   isCompletedExpr?: string,
+  cancelledExpr?: string,
 ): { sql: string; params: string[]; nextIndex: number } {
   const openClose = isTruckingPageOpenCloseStatusParam(stage);
   const stageExpr = sqlTruckingPagePipelineStageExpr(
@@ -203,6 +219,7 @@ export function appendTruckingPipelineStageFilter(
     grClosedExpr,
     undefined,
     isCompletedExpr,
+    cancelledExpr,
   );
   if (openClose === 'OPEN') {
     return {

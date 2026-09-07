@@ -1,7 +1,13 @@
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { sqlOverlayParentQtyOrQtyMoveSnapshot } from './b2bOriginEndingSql';
-import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import {
+  isContractDeliveryClosed,
+  sqlContractImportStatusIsCancelledExpr,
+  sqlContractImportStatusIsClosedExpr,
+  sqlIsContractSapCancelledExpr,
+  sqlIsContractSapClosedExpr,
+} from './contractDeliveryStatus';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import { sqlNormalizeSapQtyToKgWithUom } from './sapQtyUom';
@@ -469,8 +475,14 @@ export function sqlTruckingPipelineIsCompletedExpr(
   /** Optional precomputed GR-close column (see sqlIsContractSapClosedExpr). */
   grClosedExpr?: string,
 ): string {
+  /**
+   * Thread grClosedExpr into the OS fallback too. Without it the OS expression re-derived
+   * GR-close inside both the delivery and the receive resolver, so one call to this function
+   * expanded the 26KB status expression 8 extra times (traced 2026-09-07: 8 of the 27
+   * expansions in the 999KB trucking shell statement came from exactly this line).
+   */
   const outstanding =
-    outstandingQtyExpr ?? sqlTruckingListBaseOutstandingQtyExpr(contractAlias);
+    outstandingQtyExpr ?? sqlTruckingListBaseOutstandingQtyExpr(contractAlias, grClosedExpr);
   return `(
     ${sqlIsContractSapClosedExpr(contractAlias, grClosedExpr)}
     OR ${sqlTruckingOutstandingWithinToleranceExpr(outstanding)}
@@ -491,11 +503,33 @@ export const TRUCKING_LIST_GR_CLOSED_ALIAS = 'grc_row';
 export function sqlTruckingGrClosedLateral(
   contractAlias = 'c',
   alias = TRUCKING_LIST_GR_CLOSED_ALIAS,
+  importStatusExpr?: string,
 ): string {
+  /**
+   * With `importStatusExpr` (a column from sqlContractSapStatusLateral, joined earlier) both
+   * flags are plain text comparisons on an already-resolved value, so the 26KB status
+   * expression is expanded once per row instead of once per flag. Without it the behaviour is
+   * unchanged - each flag composes the full expression, exactly as before.
+   */
+  const isClosed = importStatusExpr
+    ? sqlContractImportStatusIsClosedExpr(importStatusExpr)
+    : sqlIsContractSapClosedExpr(contractAlias);
+  const isCancelled = importStatusExpr
+    ? sqlContractImportStatusIsCancelledExpr(importStatusExpr)
+    : sqlIsContractSapCancelledExpr(contractAlias);
   return `
       LEFT JOIN LATERAL (
-        SELECT (${sqlIsContractSapClosedExpr(contractAlias)}) AS is_closed
+        SELECT
+          (${isClosed}) AS is_closed,
+          (${isCancelled}) AS is_cancelled
       ) ${alias} ON TRUE`;
+}
+
+/** Cancelled column from the lateral above, safe when the contract row is missing. */
+export function sqlTruckingGrCancelledFromLateral(
+  alias = TRUCKING_LIST_GR_CLOSED_ALIAS,
+): string {
+  return `COALESCE(${alias}.is_cancelled, false)`;
 }
 
 /** Column reference for the lateral above, safe when the contract row is missing. */
