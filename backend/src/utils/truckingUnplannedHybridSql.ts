@@ -341,24 +341,37 @@ export async function buildTruckingUnplannedBacklogPageQuery(
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = await resolveContractsQtyMoveCte({
-    kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
-      WHERE ${backlogWhere}`,
-  });
-  const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir);
-  return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
-    ${qtyMoveCte},
-    unplanned_trucking_backlog AS (
-      SELECT ${truckingUnplannedContractBacklogRowSelectSql(outstandingExpr)}
+  /**
+   * The backlog predicate carries the GR-status expression and its correlated
+   * sap_processed_data subqueries, and it was written out twice - once to scope qty_move and
+   * once to select the rows - so Postgres evaluated it twice over every contract. Resolving
+   * the id set once in a MATERIALIZED CTE and joining it is access-path only: identical rows,
+   * one evaluation. Same pattern as the shipment backlog builders (measured up to 5.5x there).
+   * DISTINCT guards against the B2B ending lateral matching more than once; the outer query
+   * keeps that lateral, so any legitimate fan-out still happens exactly as before.
+   */
+  const backlogIdsCte = `backlog_contract_ids AS MATERIALIZED (
+      SELECT DISTINCT c.id, c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}
+    )`;
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
+  });
+  const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir);
+  return `
+    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    ${backlogIdsCte},
+    ${qtyMoveCte},
+    unplanned_trucking_backlog AS (
+      SELECT ${truckingUnplannedContractBacklogRowSelectSql(outstandingExpr)}
+      FROM contracts c
+      INNER JOIN backlog_contract_ids b ON b.id = c.id
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       ORDER BY ${orderBy}
       LIMIT ${limit} OFFSET ${offset}
     )
@@ -379,23 +392,28 @@ export async function buildTruckingUnplannedBacklogIdsWithOsQuery(
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = await resolveContractsQtyMoveCte({
-    kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
+  /** Same double evaluation as the page query above - see the note there. */
+  const backlogIdsCte = `backlog_contract_ids AS MATERIALIZED (
+      SELECT DISTINCT c.id, c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
-      WHERE ${backlogWhere}`,
+      WHERE ${backlogWhere}
+    )`;
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    ${backlogIdsCte},
     ${qtyMoveCte}
     SELECT c.id
     FROM contracts c
+    INNER JOIN backlog_contract_ids b ON b.id = c.id
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
     ${TRUCKING_UNPLANNED_B2B_END_JOIN}
-    WHERE ${backlogWhere}
-      AND (${outstandingExpr}) > 0
+    WHERE (${outstandingExpr}) > 0
     ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC`;
 }
 
