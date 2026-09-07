@@ -709,23 +709,26 @@ export async function buildUnplannedContractBacklogPageQuery(
   const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    ),
     ${qtyMoveCte},
     unplanned_contract_backlog AS (
       SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'UNPLANNED')},
         ${sqlUnplannedSuggestedGroupIdExpr(sortKey)} AS pre_planned_group_id,
         ${sqlUnplannedSuggestedGroupCodeExpr(sortKey)} AS pre_planned_group_code
-      FROM contracts c
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${backlogQueryNeedsSuggestedGroupJoin(sortKey) ? sqlSuggestedPrePlannedGroupJoin('c') : ''}
-      WHERE ${backlogWhere}
-        AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
+      WHERE ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
       ORDER BY ${pageOrder}
       LIMIT ${limit} OFFSET ${offset}
     )
@@ -744,19 +747,16 @@ export async function buildPreplannedContractsCountQuery(
   });
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      INNER JOIN pre_planned_group_members pgm
-        ON pgm.contract_id = c.id AND pgm.released_at IS NULL
-      INNER JOIN pre_planned_groups pg
-        ON pg.id = pgm.group_id
-       AND pg.status = 'ACCEPTED'
-       AND pg.shipment_id IS NULL
-      WHERE ${backlogWhere}`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    ),
     ${qtyMoveCte},
     preplanned_contracts AS (
       SELECT
@@ -774,10 +774,10 @@ export async function buildPreplannedContractsCountQuery(
           ORDER BY pg.group_code
           LIMIT 1
         ) AS group_id
-      FROM contracts c
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}
-        AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
+      WHERE ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
     )
     SELECT
       COUNT(*)::bigint AS contract_count,
@@ -801,26 +801,24 @@ export async function buildPreplannedContractsPageQuery(
   });
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      INNER JOIN pre_planned_group_members pgm
-        ON pgm.contract_id = c.id AND pgm.released_at IS NULL
-      INNER JOIN pre_planned_groups pg
-        ON pg.id = pgm.group_id
-       AND pg.status = 'ACCEPTED'
-       AND pg.shipment_id IS NULL
-      WHERE ${backlogWhere}`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    ),
     ${qtyMoveCte},
     preplanned_contracts AS (
       SELECT
         ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'PREPLANNED')},
         pg.id::text AS pre_planned_group_id,
         pg.group_code AS pre_planned_group_code
-      FROM contracts c
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       INNER JOIN pre_planned_group_members pgm
         ON pgm.contract_id = c.id AND pgm.released_at IS NULL
@@ -828,8 +826,7 @@ export async function buildPreplannedContractsPageQuery(
         ON pg.id = pgm.group_id
        AND pg.status = 'ACCEPTED'
        AND pg.shipment_id IS NULL
-      WHERE ${backlogWhere}
-        AND ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
+      WHERE ${sqlBacklogOsStillActiveCorrelated(outstandingExpr)}
     ),
     preplanned_groups_page AS (
       SELECT pre_planned_group_id AS group_id
@@ -860,26 +857,30 @@ export async function buildCompletedContractBacklogCountQuery(
     deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
     clampAtZero: true,
   });
+  // Same duplication and same fix as buildUnplannedContractBacklogCountQuery - see the note there
+  // for the measured cost of evaluating this predicate more than once.
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${backlogWhere}
+    ),
     ${qtyMoveCte},
     completed_contract_backlog AS (
       SELECT
         c.id,
         c.quantity_ordered,
         (${outstandingExpr})::numeric AS outstanding_qty
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-      WHERE ${backlogWhere}
-        AND ${sqlBacklogOsCompletedSql()}
+      WHERE ${sqlBacklogOsCompletedSql()}
     )
     SELECT
       COUNT(*)::bigint AS c,
@@ -905,20 +906,23 @@ export async function buildCompletedContractBacklogPageQuery(
   const pageOrder = buildShipmentContractBacklogOrderBy(sortKey, sortDir);
   const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
-    ${qtyMoveCte},
-    completed_contract_backlog AS (
-      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'COMPLETED')}
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE ${backlogWhere}
-        AND ${sqlBacklogOsCompletedCorrelated(outstandingExpr)}
+    ),
+    ${qtyMoveCte},
+    completed_contract_backlog AS (
+      SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'COMPLETED')}
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${sqlBacklogOsCompletedCorrelated(outstandingExpr)}
       ORDER BY ${pageOrder}
       LIMIT ${limit} OFFSET ${offset}
     )
