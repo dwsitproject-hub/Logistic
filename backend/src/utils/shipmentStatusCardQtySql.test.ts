@@ -113,7 +113,10 @@ describe('shipmentStatusCardQtySql', () => {
     expect(sql).not.toContain('LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key');
     expect(sql).not.toContain('po_sto_count');
     expect(sql).toContain('qty_move');
-    expect(sql).toContain('b2b_child_qty_rollup');
+    /* Values come from contract_qty_move_snapshot now; the B2B rollup and the WB / KLIP
+       overlays are applied when it is refreshed and guarded there
+       (contractGlobalOutstandingSql.test.ts), not in this read query. */
+    expect(sql).toContain('FROM contract_qty_move_snapshot');
   });
 
   it('sumShipmentStatusOutstandingQtyKg sums the six active stages', async () => {

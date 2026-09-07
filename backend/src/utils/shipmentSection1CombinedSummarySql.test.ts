@@ -21,7 +21,10 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).not.toContain('sap_agg sa');
     expect(sql).not.toContain('po_sto_count');
     expect(sql).toContain('qty_move');
-    expect(sql).toContain('b2b_child_qty_rollup');
+    /* Values come from contract_qty_move_snapshot now; the B2B rollup and the WB / KLIP
+       overlays are applied when it is refreshed and guarded there
+       (contractGlobalOutstandingSql.test.ts), not in this read query. */
+    expect(sql).toContain('FROM contract_qty_move_snapshot');
     expect(sql).toContain('unplanned_execution_contract_qty');
     expect(sql).toContain('unplanned_execution_outstanding_qty');
     expect(sql).toContain('0::numeric AS unplanned_execution_outstanding_qty');

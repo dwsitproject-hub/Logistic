@@ -106,7 +106,10 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(text).toContain('AS card_total_kg')
     expect(text).toContain('quantity_ordered')
     expect(text).toContain('qty_move')
-    expect(text).toContain('b2b_child_qty_rollup')
+    /* Values come from contract_qty_move_snapshot now; the B2B rollup and the WB / KLIP
+       overlays are applied when it is refreshed and guarded there
+       (contractGlobalOutstandingSql.test.ts), not in this read query. */
+    expect(text).toContain('FROM contract_qty_move_snapshot')
     expect(text).toContain('outstanding_quantity')
     expect(text).toContain('third_party_frc_kg')
     expect(text).toContain('interco_lco_kg')

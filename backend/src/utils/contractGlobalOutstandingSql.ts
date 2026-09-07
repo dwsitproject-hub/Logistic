@@ -396,8 +396,25 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter, cteName = 'qty_mo
 
 export const CONTRACTS_QTY_MOVE_CTE = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
 
-/** Fast read path: join pre-computed snapshot scoped to list CTE (same columns as qty_move). */
-export function buildQtyMoveFromSnapshotCte(scopeCteName = 'contract_scope'): string {
+/**
+ * Fast read path: read the pre-computed snapshot, scoped the same way the live CTE would be.
+ *
+ * Complete by construction: buildContractQtyMoveSnapshotRefreshSql materialises qty_move for
+ * every contract, so a contract absent from the snapshot is one qty_move yields no row for
+ * either way - verified on the dev DB, where the 8 YTD contracts with no snapshot row produce
+ * 0 live rows. That is why no live branch is needed here at all, which is the point: keeping
+ * one only to serve an empty id set still cost 85s of the contracts-list row set's 85.4s,
+ * because Postgres cannot know at plan time that the branch has no input.
+ */
+export function buildQtyMoveFromSnapshotCte(
+  filter: QtyMoveContractFilter | string = 'contract_scope',
+): string {
+  const resolved: QtyMoveContractFilter =
+    typeof filter === 'string' ? { kind: 'join_scope', scopeCteName: filter } : filter;
+  const scope =
+    resolved.kind === 'join_scope'
+      ? `INNER JOIN ${resolved.scopeCteName} cs ON cs.contract_id = s.contract_number`
+      : `WHERE s.contract_number IN (${resolved.subquery})`;
   return `
       qty_move AS (
         SELECT
@@ -407,14 +424,8 @@ export function buildQtyMoveFromSnapshotCte(scopeCteName = 'contract_scope'): st
           s.quantity_receive,
           s.quantity_delivery
         FROM contract_qty_move_snapshot s
-        INNER JOIN ${scopeCteName} cs ON cs.contract_id = s.contract_number
+        ${scope}
       )`;
-}
-
-function qtyMoveRouteOriginIdsSql(filter: QtyMoveContractFilter): string {
-  return filter.kind === 'join_scope'
-    ? `SELECT cs.contract_id FROM ${filter.scopeCteName} cs`
-    : filter.subquery;
 }
 
 /**
@@ -436,118 +447,7 @@ function qtyMoveRouteOriginIdsSql(filter: QtyMoveContractFilter): string {
  * lower-latency reads for it. This filter is a cheap, non-authoritative heuristic to keep the
  * live path scoped to the small set of contracts most likely to be edited same-day.
  */
-/**
- * Which contracts may read qty_move from the snapshot instead of computing it live.
- *
- * Contract status Close and prior-year contracts were the original rule. The problem: everything
- * else - current-year Open - stays on the live branch, and that is exactly the population the
- * Shipments / Trucking backlog queries are about, so they got no benefit from the snapshot at all.
- * Measured 2026-09-04: the live qty_move CTE costs 42-75s over the full contract set, and those
- * backlog queries ran 40-71s.
- *
- * Completed logistics is the missing third case. A contract whose shipments (or trucking
- * operations) are all COMPLETED has finished moving quantity, so its qty is as settled as a
- * Close contract's - measured to move **976 of the 1,804** live-branch contracts (54%) onto the
- * snapshot.
- *
- * Safe because every way that qty can still change already invalidates the snapshot for that
- * contract: KLIP shipment edits and creates call refreshForShipmentIds, trucking edits and WB
- * imports call refreshForTruckingOperationIds, and a SAP import rebuilds the whole snapshot. So
- * "settled" here does not have to mean "immutable" - it only has to mean "changes are noticed".
- *
- * Contracts with no logistics at all (331 of the 1,804) deliberately stay live: having no
- * shipments and no trucking is not evidence that anything has settled.
- */
-function qtyMoveSnapshotEligibleExpr(contractAlias = 'c'): string {
-  const closedStatus = `UPPER(TRIM(COALESCE(${contractAlias}.status, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
-  // NOT EXISTS(active and not completed) AND EXISTS(active) - i.e. there is logistics, and all of
-  // it is done. Both predicates are indexed lookups on contract_id.
-  const allShipmentsCompleted = `(
-    EXISTS (
-      SELECT 1 FROM shipments s_el
-      WHERE s_el.contract_id = ${contractAlias}.id
-        AND UPPER(TRIM(COALESCE(s_el.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM shipments s_el2
-      WHERE s_el2.contract_id = ${contractAlias}.id
-        AND UPPER(TRIM(COALESCE(s_el2.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'COMPLETED')
-    )
-  )`;
-  const allTruckingCompleted = `(
-    EXISTS (
-      SELECT 1 FROM trucking_operations t_el
-      WHERE t_el.contract_id = ${contractAlias}.id
-        AND t_el.deduped_at IS NULL
-        AND UPPER(TRIM(COALESCE(t_el.status, ''))) <> 'CANCELLED'
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM trucking_operations t_el2
-      WHERE t_el2.contract_id = ${contractAlias}.id
-        AND t_el2.deduped_at IS NULL
-        AND UPPER(TRIM(COALESCE(t_el2.status, ''))) NOT IN ('CANCELLED', 'COMPLETED')
-    )
-  )`;
-  return `(
-    ${closedStatus}
-    OR ${contractAlias}.contract_date < date_trunc('year', now())
-    OR ${allShipmentsCompleted}
-    OR ${allTruckingCompleted}
-  )`;
-}
 
-/**
- * Hybrid read path for qty_move: Close / prior-year-Open contracts read straight from the
- * precomputed snapshot (indexed PK join, near-instant); only current-year Open contracts
- * run the full live computation (buildQtyMoveCte), scoped down to just that subset so its
- * own internal B2B parent/child rollup only has to work over the smaller "live" bucket.
- * Requires contract_qty_move_snapshot to be fresh — callers should gate this behind
- * isContractQtyMoveSnapshotFresh() and fall back to buildQtyMoveCte() entirely when stale.
- */
-export function buildQtyMoveHybridCte(filter: QtyMoveContractFilter): string {
-  const originIds = qtyMoveRouteOriginIdsSql(filter);
-  const eligible = qtyMoveSnapshotEligibleExpr('c');
-  const liveCte = buildQtyMoveCte(
-    { kind: 'in_subquery', subquery: 'SELECT contract_id FROM qty_move_live_ids' },
-    'qty_move_live_calc',
-  );
-  return `
-      qty_move_route AS (
-        SELECT c.contract_id, ${eligible} AS is_snapshot_eligible
-        FROM contracts c
-        WHERE c.contract_id IN (${originIds})
-      ),
-      qty_move_fast_ids AS (
-        SELECT contract_id FROM qty_move_route WHERE is_snapshot_eligible
-      ),
-      qty_move_live_ids AS (
-        SELECT contract_id FROM qty_move_route WHERE NOT is_snapshot_eligible
-      ),
-      ${liveCte},
-      qty_move AS (
-        SELECT
-          s.contract_number,
-          s.quantity_delivery_trucking,
-          s.quantity_delivery_vessel,
-          s.quantity_receive,
-          s.quantity_delivery
-        FROM contract_qty_move_snapshot s
-        INNER JOIN qty_move_fast_ids f ON f.contract_id = s.contract_number
-        UNION ALL
-        SELECT
-          l.contract_number,
-          l.quantity_delivery_trucking,
-          l.quantity_delivery_vessel,
-          l.quantity_receive,
-          l.quantity_delivery
-        FROM qty_move_live_calc l
-        -- buildQtyMoveCte internally expands scope to B2B parents/children (possibly Close,
-        -- already covered by the snapshot branch above) purely to compute correct rollups;
-        -- restrict the final output back to the intended live-only ids to avoid duplicate
-        -- contract_number rows across the UNION ALL.
-        INNER JOIN qty_move_live_ids li ON li.contract_id = l.contract_number
-      )`;
-}
 
 /** SQL to refresh snapshot rows using live qty_move logic (all contracts). */
 export function buildContractQtyMoveSnapshotRefreshSql(): string {

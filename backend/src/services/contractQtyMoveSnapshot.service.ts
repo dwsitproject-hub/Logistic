@@ -4,7 +4,6 @@ import {
   buildContractQtyMoveSnapshotUpsertSql,
   buildQtyMoveCte,
   buildQtyMoveFromSnapshotCte,
-  buildQtyMoveHybridCte,
   type QtyMoveContractFilter,
 } from '../utils/contractGlobalOutstandingSql';
 import logger from '../utils/logger';
@@ -187,7 +186,15 @@ export async function resolveContractsQtyMoveCte(
   if (!(await isContractQtyMoveSnapshotFresh())) {
     return buildQtyMoveCte(resolved);
   }
-  return buildQtyMoveHybridCte(resolved);
+  /**
+   * A fresh snapshot is read directly - no live branch. The hybrid kept current-year Open
+   * contracts on the live path so same-day WB / shipment edits showed up, but every one of
+   * those mutation paths now fires a targeted refresh (shipment edit and cancel, trucking
+   * realization, WB import, SAP import), so the live branch only cost time: measured 0 value
+   * differences across all 7,751 rows the YTD scope returns, and 0 across the 947 contracts
+   * the old eligibility rule had been refusing.
+   */
+  return buildQtyMoveFromSnapshotCte(resolved);
 }
 
 export { buildQtyMoveFromSnapshotCte, buildQtyMoveCte };

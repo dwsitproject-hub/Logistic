@@ -19,16 +19,22 @@ function mockSnapshotIsStale(isStale: boolean): void {
 }
 
 describe('resolveContractsQtyMoveCte', () => {
-  it('returns hybrid (snapshot fast-path + live) qty_move SQL when snapshot is fresh', async () => {
+  /**
+   * A fresh snapshot is read directly, with no live branch: the refresh materialises qty_move
+   * for every contract, so keeping a live branch only to serve an empty id set still cost 85s
+   * of the contracts-list row set's 85.4s - Postgres cannot know at plan time that the branch
+   * has no input. Dropping it measured 105.8s -> 126ms with all 7,751 YTD rows identical.
+   * The B2B rollup and the WB / KLIP overlays are guarded on the refresh path instead, in
+   * contractGlobalOutstandingSql.test.ts - that is where they are applied to the stored values.
+   */
+  it('reads the snapshot directly, with no live calculation, when it is fresh', async () => {
     mockSnapshotIsStale(false);
     const sql = await resolveContractsQtyMoveCte('contract_scope');
     expect(sql).toContain('qty_move AS');
     expect(sql).toContain('FROM contract_qty_move_snapshot');
-    expect(sql).toContain('qty_move_fast_ids');
-    expect(sql).toContain('qty_move_live_ids');
-    expect(sql).toContain('qty_move_live_calc');
-    expect(sql).toContain('trucking_wb_overlay');
-    expect(sql).toContain('b2b_child_qty_rollup');
+    expect(sql).not.toContain('qty_move_live_calc');
+    expect(sql).not.toContain('trucking_wb_overlay');
+    expect(sql).not.toContain('b2b_child_qty_rollup');
   });
 
   it('falls back to fully-live qty_move SQL when snapshot is stale', async () => {
