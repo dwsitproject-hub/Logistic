@@ -104,6 +104,36 @@ export function sqlTruckingPageIsCompletedExpr(
  * Mutually exclusive pipeline stage per trucking operation row (Section 2 + Section 3 filter).
  * Start Receive (SAP AV or trucking_realizations / WB) → IN_PROGRESS without requiring daily planning.
  */
+/** Alias of {@link sqlTruckingIsCompletedLateral} when the caller joins it. */
+export const TRUCKING_LIST_IS_COMPLETED_ALIAS = 'tic_row';
+
+/**
+ * Resolve the completed test once per row. sqlTruckingPagePipelineStageExpr embeds it four
+ * times, and one expansion is 319KB of SQL carrying nine copies of the GR status expression -
+ * which is how buildTruckingListSelectClause reached 1,708KB.
+ */
+export function sqlTruckingIsCompletedLateral(
+  contractAlias = 'c',
+  outstandingQtyExpr?: string,
+  grClosedExpr?: string,
+  alias = TRUCKING_LIST_IS_COMPLETED_ALIAS,
+): string {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)}) AS is_completed
+      ) ${alias} ON TRUE`;
+}
+
+/**
+ * Column reference for the lateral above. Deliberately NOT wrapped in COALESCE: the stage
+ * expression uses `NOT (isCompleted)`, and a NULL there leaves the branch untaken while
+ * COALESCE(..., false) would make `NOT false` true and take it. Passing the raw column keeps
+ * three-valued logic identical to the inlined expression.
+ */
+export function sqlTruckingIsCompletedFromLateral(alias = TRUCKING_LIST_IS_COMPLETED_ALIAS): string {
+  return `${alias}.is_completed`;
+}
+
 export function sqlTruckingPagePipelineStageExpr(
   contractAlias = 'c',
   stoExpr?: string,
@@ -114,10 +144,20 @@ export function sqlTruckingPagePipelineStageExpr(
    * date falls back to the correlated subquery, which this expression evaluates twice.
    */
   sapAlias?: string,
+  /** Precomputed is-completed column (see sqlTruckingIsCompletedLateral). */
+  isCompletedExpr?: string,
 ): string {
   const stoCheck = stoExpr ?? `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
   const realizationStart = sqlRealizationStartDate(contractAlias, sapAlias);
-  const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
+  /**
+   * `isCompleted` is embedded four times below (once directly, three times through
+   * `notCompleted`), and one expansion of it is 319KB of SQL. Callers that resolve it once per
+   * row - see sqlTruckingIsCompletedLateral - pass the column instead, which takes this whole
+   * expression from ~1,382KB to a few KB.
+   */
+  const isCompleted =
+    isCompletedExpr ??
+    sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
   const notCompleted = `NOT (${isCompleted})`;
   const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr)})`;
   return `CASE

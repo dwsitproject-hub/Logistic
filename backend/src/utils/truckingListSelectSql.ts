@@ -6,13 +6,19 @@ import {
   sqlShellRealizationStartDate,
 } from './truckingRealizationSql';
 import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
-import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
+import {
+  sqlTruckingPagePipelineStageExpr,
+  sqlTruckingIsCompletedLateral,
+  sqlTruckingIsCompletedFromLateral,
+} from './truckingPagePipelineSql';
 import { sqlTruckingSapDatesLateral } from './truckingSapDates';
 import {
   sqlTruckingListBaseOutstandingQtyExpr,
   sqlTruckingListResolvedDeliveryQtyExpr,
   sqlTruckingListResolvedReceiveQtyExpr,
   sqlTruckingQuantitySentCoalesce,
+  sqlTruckingGrClosedLateral,
+  sqlTruckingGrClosedFromLateral,
 } from './truckingQuantitySql';
 import {
   sqlB2bEndingBuyerExpr,
@@ -149,6 +155,11 @@ export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
         )`;
 }
 
+/** The GR-close column resolved once per row by sqlTruckingGrClosedLateral in the FROM. */
+const GR_CLOSED_COL = sqlTruckingGrClosedFromLateral();
+/** The completed test resolved once per row by sqlTruckingIsCompletedLateral. */
+const IS_COMPLETED_COL = sqlTruckingIsCompletedFromLateral();
+
 export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
   if (skipSapJoin) {
     return `
@@ -172,8 +183,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
         t.quantity_sent,
-        ${sqlTruckingListResolvedDeliveryQtyExpr()} AS quantity_delivered,
-        ${sqlTruckingListResolvedReceiveQtyExpr()} AS quantity_receive,
+        ${sqlTruckingListResolvedDeliveryQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_delivered,
+        ${sqlTruckingListResolvedReceiveQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
@@ -184,6 +195,10 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), '')), '')`,
+          undefined,
+          GR_CLOSED_COL,
+          undefined,
+          IS_COMPLETED_COL,
         )} AS status,
         t.created_at,
         t.updated_at,
@@ -205,7 +220,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.incoterm,
         c.group_name,
         c.source_type,
-        ${sqlTruckingListBaseOutstandingQtyExpr()} AS outstanding_quantity,
+        ${sqlTruckingListBaseOutstandingQtyExpr('c', GR_CLOSED_COL)} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
         ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
@@ -232,8 +247,8 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
         ${sqlTruckingQuantitySentCoalesce()} AS quantity_sent,
-        ${sqlTruckingListResolvedDeliveryQtyExpr()} AS quantity_delivered,
-        ${sqlTruckingListResolvedReceiveQtyExpr()} AS quantity_receive,
+        ${sqlTruckingListResolvedDeliveryQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_delivered,
+        ${sqlTruckingListResolvedReceiveQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
@@ -245,8 +260,9 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`,
           undefined,
-          undefined,
+          GR_CLOSED_COL,
           TRUCKING_LIST_SAP_DATES_ALIAS,
+          IS_COMPLETED_COL,
         )} AS status,
         t.created_at,
         t.updated_at,
@@ -268,7 +284,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.incoterm,
         c.group_name,
         c.source_type,
-        ${sqlTruckingListBaseOutstandingQtyExpr()} AS outstanding_quantity,
+        ${sqlTruckingListBaseOutstandingQtyExpr('c', GR_CLOSED_COL)} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
         ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
@@ -284,6 +300,8 @@ export function buildTruckingListFromClause(skipSapJoin: boolean): string {
   return `
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
+      ${sqlTruckingGrClosedLateral('c')}
+      ${sqlTruckingIsCompletedLateral('c', undefined, GR_CLOSED_COL)}
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}
       ${b2bJoin}

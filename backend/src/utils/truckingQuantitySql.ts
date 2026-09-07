@@ -478,15 +478,42 @@ export function sqlTruckingPipelineIsCompletedExpr(
 }
 
 /** Trucking list (non-STO-expand) resolved Delivery Qty (Open→WB / Close→SAP). */
+/** Alias of {@link sqlTruckingGrClosedLateral} when the caller joins it. */
+export const TRUCKING_LIST_GR_CLOSED_ALIAS = 'grc_row';
+
+/**
+ * Resolve GR-close once per row for the select clause, the same way
+ * sqlTruckingSapDatesLateral already does for the SAP receive dates. One inlined expansion of
+ * sqlIsContractSapClosedExpr is 26KB of SQL carrying its own correlated latest-import subquery,
+ * and buildTruckingListSelectClause held 49 of them - 1,708KB of the 2.85MB statement that took
+ * 7.7 minutes on 2026-09-07.
+ */
+export function sqlTruckingGrClosedLateral(
+  contractAlias = 'c',
+  alias = TRUCKING_LIST_GR_CLOSED_ALIAS,
+): string {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT (${sqlIsContractSapClosedExpr(contractAlias)}) AS is_closed
+      ) ${alias} ON TRUE`;
+}
+
+/** Column reference for the lateral above, safe when the contract row is missing. */
+export function sqlTruckingGrClosedFromLateral(alias = TRUCKING_LIST_GR_CLOSED_ALIAS): string {
+  return `COALESCE(${alias}.is_closed, false)`;
+}
+
 export function sqlTruckingListResolvedDeliveryQtyExpr(
   operationIdExpr = 't.id',
   contractAlias = 'c',
+  grClosedExpr?: string,
 ): string {
   return sqlTruckingResolvedDeliveryQty(
     'COALESCE(t.quantity_delivered, 0)',
     sqlSapQtyDeliveryOnly(),
     operationIdExpr,
     contractAlias,
+    grClosedExpr ? { grClosedExpr } : undefined,
   );
 }
 
@@ -494,20 +521,25 @@ export function sqlTruckingListResolvedDeliveryQtyExpr(
 export function sqlTruckingListResolvedReceiveQtyExpr(
   operationIdExpr = 't.id',
   contractAlias = 'c',
+  grClosedExpr?: string,
 ): string {
   return sqlTruckingResolvedReceiveQty(
     'COALESCE(t.quantity_delivered, 0)',
     sqlSapQtyReceiveOnly(),
     operationIdExpr,
     contractAlias,
+    grClosedExpr ? { grClosedExpr } : undefined,
   );
 }
 
 /** Trucking list (non-STO-expand) OS Qty using Open→WB / Close→SAP Delivery & Receive. */
-export function sqlTruckingListBaseOutstandingQtyExpr(contractAlias = 'c'): string {
+export function sqlTruckingListBaseOutstandingQtyExpr(
+  contractAlias = 'c',
+  grClosedExpr?: string,
+): string {
   return sqlTruckingOutstandingQtyByIncoterm(
-    sqlTruckingListResolvedDeliveryQtyExpr('t.id', contractAlias),
-    sqlTruckingListResolvedReceiveQtyExpr('t.id', contractAlias),
+    sqlTruckingListResolvedDeliveryQtyExpr('t.id', contractAlias, grClosedExpr),
+    sqlTruckingListResolvedReceiveQtyExpr('t.id', contractAlias, grClosedExpr),
     `COALESCE(${contractAlias}.quantity_ordered, 0)`,
     `${contractAlias}.incoterm`,
   );
