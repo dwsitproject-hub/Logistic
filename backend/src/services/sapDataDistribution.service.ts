@@ -19,7 +19,7 @@ import {
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
 import { resolveSapTruckingQuantityDelivered, hasSapDeleteFlag } from '../utils/sapMasterV2UatFormat';
-import { normalizeSapQtyToKg } from '../utils/sapQtyUom';
+import { KLIP_QTY_STORAGE_UOM, normalizeSapQtyToKg } from '../utils/sapQtyUom';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import {
   denormalizeShipmentPortsFromSap,
@@ -835,6 +835,7 @@ export class SapDataDistributionService {
             WHEN $24::boolean THEN COALESCE($10::numeric, quantity_ordered)
             ELSE GREATEST(quantity_ordered, $10::numeric)
           END,
+          unit = '${KLIP_QTY_STORAGE_UOM}',
           unit_price = COALESCE($11::numeric, unit_price),
           contract_value = CASE
             WHEN $24::boolean THEN COALESCE($12::numeric, contract_value)
@@ -869,7 +870,7 @@ export class SapDataDistributionService {
           status, sto_number, sto_quantity, logistics_classification, po_classification,
           plant_code, currency, created_by
         ) VALUES (
-          $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
+          $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, '${KLIP_QTY_STORAGE_UOM}', $11::numeric, $12::numeric,
           $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, COALESCE($23, 'USD'), $24
         )
         ON CONFLICT (contract_id) DO UPDATE SET
@@ -885,6 +886,7 @@ export class SapDataDistributionService {
             WHEN $25::boolean THEN COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered)
             ELSE GREATEST(contracts.quantity_ordered, EXCLUDED.quantity_ordered)
           END,
+          unit = EXCLUDED.unit,
           unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
           contract_value = CASE
             WHEN $25::boolean THEN COALESCE(EXCLUDED.contract_value, contracts.contract_value)

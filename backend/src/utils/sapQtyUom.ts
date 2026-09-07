@@ -19,6 +19,13 @@ export function isMetricTonUom(uom: unknown): boolean {
 }
 
 /**
+ * The UOM every quantity is stored in. `normalizeSapQtyToKg` converts SAP's value into this,
+ * so any column labelling a stored quantity must say this - not SAP's source UOM. The UI still
+ * presents MT by dividing at display time.
+ */
+export const KLIP_QTY_STORAGE_UOM = 'KG';
+
+/**
  * Convert a SAP quantity to kg for storage.
  * - MT / TO / TON → qty × 1000
  * - KG / blank / unknown → qty as-is (assumed kg)
