@@ -63,6 +63,8 @@ import {
   type PipelineDailySummaryFilterInput,
   type PipelineDailySummaryScope,
   isPipelineDailySummaryFresh,
+  isPipelineDailySummaryUsable,
+  schedulePipelineDailySummaryRefreshIfNeeded,
 } from './pipelineDailySummary.service';
 
 /**
@@ -1645,7 +1647,15 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
   // Resolve row stages from the daily-refresh snapshot when it is fresh so status
   // clicks are served in ~2s from the same source as the circles; when stale, the
   // full-SAP path above still keeps the totals circle-consistent (just slower).
-  const useStageSnapshot = await isPipelineDailySummaryFresh('trucking');
+  /**
+   * Stage paging accepts a usable snapshot, refreshing in the background when stale - see
+   * the note in pipelineDailySummary.service. Requiring freshness put this on the live path
+   * for the 14.7 minutes a post-import trucking rebuild takes.
+   */
+  const useStageSnapshot = await isPipelineDailySummaryUsable('trucking');
+  if (useStageSnapshot && !(await isPipelineDailySummaryFresh('trucking'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
 

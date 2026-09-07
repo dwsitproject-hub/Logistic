@@ -256,7 +256,7 @@ export async function markPipelineDailySummaryStale(
  */
 let refreshInFlight = false;
 
-function schedulePipelineDailySummaryRefreshIfNeeded(): void {
+export function schedulePipelineDailySummaryRefreshIfNeeded(): void {
   // Completion-based guard first - it must hold even when the time debounce has expired.
   if (refreshInFlight) return;
 
@@ -500,7 +500,18 @@ export async function loadTruckingSummaryFromDaily(
   completedGrClosedContractQtyKg: number;
   cancelledGrClosedContractQtyKg: number;
 } | null> {
-  if (!(await isPipelineDailySummaryFresh('trucking'))) return null;
+  /**
+   * Serve from a usable snapshot even when it is marked stale, and kick the refresh off in the
+   * background - the same trade the Section 1 cards already make. A large SAP import marks both
+   * modules stale at once and the trucking rebuild measured 880s (14.7 min); requiring freshness
+   * here sent table paging down the live path for that whole window, at 45-104s per query with
+   * several fired per page load. Stale-but-present shows figures from before the import for a
+   * few minutes; the live fallback showed nothing at all in any usable time.
+   */
+  if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await isPipelineDailySummaryFresh('trucking'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
 
   const { sql, params } = buildDailySummaryWhere(scope);
   const res = await query(
@@ -568,7 +579,18 @@ export async function loadTruckingStagePageFromSnapshot(
   limit: number,
   offset: number,
 ): Promise<{ keys: Array<{ operationId: string; stoLine: string }>; total: number } | null> {
-  if (!(await isPipelineDailySummaryFresh('trucking'))) return null;
+  /**
+   * Serve from a usable snapshot even when it is marked stale, and kick the refresh off in the
+   * background - the same trade the Section 1 cards already make. A large SAP import marks both
+   * modules stale at once and the trucking rebuild measured 880s (14.7 min); requiring freshness
+   * here sent table paging down the live path for that whole window, at 45-104s per query with
+   * several fired per page load. Stale-but-present shows figures from before the import for a
+   * few minutes; the live fallback showed nothing at all in any usable time.
+   */
+  if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await isPipelineDailySummaryFresh('trucking'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
 
   const { sql, params } = buildDailySummaryWhere(scope);
   const isPlannedCard = String(stage ?? '').trim().toUpperCase() === 'PLANNED';
@@ -622,7 +644,18 @@ export async function loadShipmentStagePageFromSnapshot(
   limit: number,
   offset: number,
 ): Promise<{ stoKeys: string[]; total: number } | null> {
-  if (!(await isPipelineDailySummaryFresh('shipment'))) return null;
+  /**
+   * Serve from a usable snapshot even when it is marked stale, and kick the refresh off in the
+   * background - the same trade the Section 1 cards already make. A large SAP import marks both
+   * modules stale at once and the trucking rebuild measured 880s (14.7 min); requiring freshness
+   * here sent table paging down the live path for that whole window, at 45-104s per query with
+   * several fired per page load. Stale-but-present shows figures from before the import for a
+   * few minutes; the live fallback showed nothing at all in any usable time.
+   */
+  if (!(await isPipelineDailySummaryUsable('shipment'))) return null;
+  if (!(await isPipelineDailySummaryFresh('shipment'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
 
   const { sql, params } = buildDailySummaryWhere(scope);
   const stageIdx = params.length + 1;
