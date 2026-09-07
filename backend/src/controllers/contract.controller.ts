@@ -117,6 +117,7 @@ import {
   sqlContractImportStatusExpr,
   sqlContractImportStatusForStoExpr,
   sqlContractImportStatusIsClosedExpr,
+  sqlContractEffectivelyDoneExpr,
   resolveContractEffectiveStatusText,
   sqlContractImportStatusIsOpenExpr,
   sqlContractListImportStatusAggExpr,
@@ -1232,11 +1233,19 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
           'base.import_status',
           'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+          }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
           'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+          }),
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
