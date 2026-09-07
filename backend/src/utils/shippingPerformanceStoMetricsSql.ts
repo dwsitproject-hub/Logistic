@@ -327,7 +327,10 @@ export function buildShipmentListStoMetricsCte(pageCte = 'shipment_page'): strin
 export function buildShippingPerfViewTableQtySelectSql(): {
   deliveredQtySql: string;
   receivedQtySql: string;
+  /** Display value: full PO-level OS, repeated on sibling STO rows. */
   outstandingActualSql: string;
+  /** Aggregate value: PO OS apportioned per PO across its own STOs; safe to SUM. */
+  outstandingAggregateSql: string;
 } {
   const closedExpr = sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR);
   const klipDelivery = sqlCoalesceNonZeroQty(
@@ -367,12 +370,16 @@ export function buildShippingPerfViewTableQtySelectSql(): {
   });
   // Multi-STO PO: repeat PO-level OS (same as Shipments View Table).
   // Use sm.contract_numbers when present so the unnest grain matches sto_metrics.
-  const poLevelOutstanding = `(
-    SELECT COALESCE(SUM(${sqlContractGlobalOutstandingExpr({
+  /**
+   * One template, two divisors, so the display value and the aggregate value can never drift
+   * apart. `divisorSql` is applied per contract row inside the SUM.
+   */
+  const poLevelOutstandingSql = (divisorSql: string) => `(
+    SELECT COALESCE(SUM((${sqlContractGlobalOutstandingExpr({
       contractQtyExpr: 'cx.quantity_ordered',
       incotermExpr: 'cx.incoterm',
       contractNumberExpr: 'cx.contract_id',
-    })}), 0)
+    })})::numeric / ${divisorSql}), 0)
     FROM contracts cx
     WHERE cx.contract_id IS NOT NULL
       AND TRIM(cx.contract_id) <> ''
@@ -386,12 +393,34 @@ export function buildShippingPerfViewTableQtySelectSql(): {
       )
   )`;
 
+  /** View table: full PO-level OS repeated on every sibling STO row (display only). */
+  const poLevelOutstanding = poLevelOutstandingSql('1');
+  /**
+   * Cards / tree / By Vessel: each PO's OS divided by how many STOs THAT PO spans, so summing
+   * the STO rows reproduces the PO-grain total. Dividing the summed OS once by the STO's
+   * MAX(sto_count_on_po) - what the JS aggregate used to do - understated every PO on the STO
+   * that spans fewer STOs than the widest one: 5.76% (203,568,180 kg) over 728 STOs.
+   * contracts is strictly one row per contract_id per po_number, so contract grain == PO grain.
+   */
+  const poLevelOutstandingApportioned = poLevelOutstandingSql(
+    `GREATEST(COALESCE((
+      SELECT MAX(psc_ap.sto_count_on_po)
+      FROM po_sto_counts psc_ap
+      WHERE psc_ap.contract_id = TRIM(cx.contract_id)
+    ), 1), 1)`,
+  );
+
   return {
     deliveredQtySql: `COALESCE((${deliveryResolved}), 0)::numeric`,
     receivedQtySql: `COALESCE((${receiveResolved}), 0)::numeric`,
     outstandingActualSql: `CASE
           WHEN COALESCE((sm.po_sto_count)::int, 1) > 1
             THEN COALESCE((${poLevelOutstanding}), sm.outstanding_qty_actual, 0)::numeric
+          ELSE COALESCE((${listOutstanding}), sm.outstanding_qty_actual, 0)::numeric
+        END`,
+    outstandingAggregateSql: `CASE
+          WHEN COALESCE((sm.po_sto_count)::int, 1) > 1
+            THEN COALESCE((${poLevelOutstandingApportioned}), sm.outstanding_qty_actual, 0)::numeric
           ELSE COALESCE((${listOutstanding}), sm.outstanding_qty_actual, 0)::numeric
         END`,
   };
