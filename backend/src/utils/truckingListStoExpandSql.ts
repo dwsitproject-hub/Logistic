@@ -364,13 +364,18 @@ export function buildTruckingListExpansionSql(
         ${
           useStageSnapshot
             ? `CASE
-          WHEN ${sqlTruckingPageIsCompletedExpr('c', qty.outstandingForStage)} THEN 'COMPLETED'
+          WHEN ${sqlTruckingPageIsCompletedExpr(
+            'c',
+            qty.outstandingForStage,
+            TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+          )} THEN 'COMPLETED'
           ELSE COALESCE(
             NULLIF(sn.stage, 'COMPLETED'),
             ${sqlTruckingPagePipelineStageExpr(
               'c',
               `NULLIF(TRIM((${stoDisplay})::text), '')`,
               qty.outstandingForStage,
+              TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
             )}
           )
         END`
@@ -378,6 +383,7 @@ export function buildTruckingListExpansionSql(
                 'c',
                 `NULLIF(TRIM((${stoDisplay})::text), '')`,
                 qty.outstandingForStage,
+                TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
               )
         } AS status,
         e.created_at,
