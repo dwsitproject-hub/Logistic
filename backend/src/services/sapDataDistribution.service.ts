@@ -734,6 +734,16 @@ export class SapDataDistributionService {
       this.parseNumber(contractData.contract_quantity),
       contractData.contract_qty_uom,
     );
+    /**
+     * SAP also emits STO-level rows whose "Contract No" is blank; in those rows the
+     * "Contract Quantity" column carries the STO quantity, not the contract quantity.
+     * They match the same PO, so letting them write contract-level qty overwrote the
+     * real figure (e.g. PO 1001030860: 1,000,000 kg replaced by 4,820 kg). A row that
+     * names its contract still wins outright - a genuine SAP reduction must be able to
+     * land - while a blank one may only RAISE the value (GREATEST ignores NULLs, so it
+     * also seeds an empty one). The outcome no longer depends on row processing order.
+     */
+    const rowCarriesContractNo = contractNumber != null;
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
     const forceCancelled = hasSapDeleteFlag(parsedData ?? { contract: contractData });
@@ -821,9 +831,15 @@ export class SapDataDistributionService {
           po_number = COALESCE($7, po_number),
           incoterm = COALESCE($8, incoterm),
           transport_mode = COALESCE($9, transport_mode),
-          quantity_ordered = COALESCE($10::numeric, quantity_ordered),
+          quantity_ordered = CASE
+            WHEN $24::boolean THEN COALESCE($10::numeric, quantity_ordered)
+            ELSE GREATEST(quantity_ordered, $10::numeric)
+          END,
           unit_price = COALESCE($11::numeric, unit_price),
-          contract_value = COALESCE($12::numeric, contract_value),
+          contract_value = CASE
+            WHEN $24::boolean THEN COALESCE($12::numeric, contract_value)
+            ELSE GREATEST(contract_value, $12::numeric)
+          END,
           delivery_start_date = COALESCE($13::date, delivery_start_date),
           delivery_end_date = COALESCE($14::date, delivery_end_date),
           source_type = COALESCE($15, source_type),
@@ -839,9 +855,9 @@ export class SapDataDistributionService {
           plant_code = COALESCE($22, plant_code),
           currency = COALESCE($23, currency),
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $24::uuid
+         WHERE id = $25::uuid
          RETURNING id`,
-        [...params.slice(0, 23), existingId],
+        [...params.slice(0, 23), rowCarriesContractNo, existingId],
       );
       contractUuid = updated.rows[0].id as string;
     } else {
@@ -865,9 +881,15 @@ export class SapDataDistributionService {
           product = COALESCE(EXCLUDED.product, contracts.product),
           incoterm = COALESCE(EXCLUDED.incoterm, contracts.incoterm),
           transport_mode = COALESCE(EXCLUDED.transport_mode, contracts.transport_mode),
-          quantity_ordered = COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered),
+          quantity_ordered = CASE
+            WHEN $25::boolean THEN COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered)
+            ELSE GREATEST(contracts.quantity_ordered, EXCLUDED.quantity_ordered)
+          END,
           unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
-          contract_value = COALESCE(EXCLUDED.contract_value, contracts.contract_value),
+          contract_value = CASE
+            WHEN $25::boolean THEN COALESCE(EXCLUDED.contract_value, contracts.contract_value)
+            ELSE GREATEST(contracts.contract_value, EXCLUDED.contract_value)
+          END,
           delivery_start_date = COALESCE(EXCLUDED.delivery_start_date, contracts.delivery_start_date),
           delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
           source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
@@ -884,7 +906,7 @@ export class SapDataDistributionService {
           currency = COALESCE(EXCLUDED.currency, contracts.currency),
           updated_at = CURRENT_TIMESTAMP
         RETURNING id`,
-        params,
+        [...params, rowCarriesContractNo],
       );
       contractUuid = inserted.rows[0].id as string;
     }
