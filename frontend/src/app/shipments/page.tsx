@@ -1983,7 +1983,7 @@ function ShipmentsPageContent() {
         if (listGen !== listFetchGenRef.current) return
         void cachedGet(
           summaryCacheKey,
-          () => api.get(summaryUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS }).then((r) => r.data),
+          (signal) => api.get(summaryUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS, signal }).then((r) => r.data),
           {
             force: summaryForce,
             onRevalidate: (fresh) => {
@@ -2021,7 +2021,7 @@ function ShipmentsPageContent() {
           const osCacheKey = buildCacheKey('GET', osUrl)
           void cachedGet(
             osCacheKey,
-            () => api.get(osUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS }).then((r) => r.data),
+            (signal) => api.get(osUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS, signal }).then((r) => r.data),
             {
               force: forceOsRefresh,
               onRevalidate: (fresh) => {
@@ -2056,7 +2056,7 @@ function ShipmentsPageContent() {
 
       const { data: listEnvelope } = await cachedGet(
         listCacheKey,
-        () => api.get(listUrl, { timeout: LIST_SHELL_TIMEOUT_MS }).then((r) => r.data),
+        (signal) => api.get(listUrl, { timeout: LIST_SHELL_TIMEOUT_MS, signal }).then((r) => r.data),
         {
           force: forceListRefresh,
           onRevalidate: (fresh) => {
@@ -2089,7 +2089,7 @@ function ShipmentsPageContent() {
         const section2Url = `/shipments?${section2Params.toString()}`
         const section2CacheKey = buildCacheKey('GET', section2Url)
         const summaryGen = ++summaryFetchGenRef.current
-        void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
+        void cachedGet(section2CacheKey, (signal) => api.get(section2Url, { signal }).then((r) => r.data), {
           force: true,
           onRevalidate: (fresh) => {
             if (summaryGen !== summaryFetchGenRef.current) return
@@ -2134,7 +2134,7 @@ function ShipmentsPageContent() {
         const hydrateFallbackTimer = window.setTimeout(() => {
           if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
         }, hydrateFallbackMs)
-        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+        void cachedGet(hydrateCacheKey, (signal) => api.get(hydrateUrl, { signal }).then((r) => r.data), {
           force: forceListRefresh,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return

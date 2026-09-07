@@ -1497,7 +1497,7 @@ function ShippingPerformancePageContent() {
       setSummaryFetching(true)
       const { data, revalidating } = await cachedGet(
         cacheKey,
-        () => api.get(shippingPerfListUrl, { timeout: 120000 }).then((r) => r.data),
+        (signal) => api.get(shippingPerfListUrl, { timeout: 120000, signal }).then((r) => r.data),
         {
           onRevalidate: (fresh) => {
             if (gen !== shippingPerfFetchGenRef.current) return

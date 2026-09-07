@@ -216,7 +216,7 @@ function CommercialDocumentsPageContent() {
 
       const url = `/commercial-documents?${params.toString()}`
       const cacheKey = buildCacheKey('GET', url)
-      const { data } = await cachedGet(cacheKey, () => api.get(url).then((r) => r.data))
+      const { data } = await cachedGet(cacheKey, (signal) => api.get(url, { signal }).then((r) => r.data))
       const payload = data?.data
       setRows(payload?.rows || [])
       setTotalRows(payload?.pagination?.total ?? 0)

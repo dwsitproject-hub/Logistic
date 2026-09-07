@@ -1189,8 +1189,9 @@ export default function OilLossPage() {
       try {
         if (!cached) setLoading(true)
         setDataFetching(true)
-        const { data, revalidating } = await cachedGet(cacheKey, () =>
-          api.get('/oil-loss').then((r) => r.data),
+        const { data, revalidating } = await cachedGet(
+          cacheKey,
+          (signal) => api.get('/oil-loss', { signal }).then((r) => r.data),
           {
             onRevalidate: (fresh) => {
               applyOilLossEnvelope(fresh)

@@ -2211,7 +2211,7 @@ function TruckingPageContent() {
 
       const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
         listCacheKey,
-        () => api.get(listUrl).then((r) => r.data),
+        (signal) => api.get(listUrl, { signal }).then((r) => r.data),
         {
           force: options?.force,
           onRevalidate: (fresh) => {
@@ -2230,7 +2230,7 @@ function TruckingPageContent() {
       const scheduleSummaryFetches = () => {
         if (listGen !== listFetchGenRef.current) return
         const summaryGen = ++summaryFetchGenRef.current
-        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+        void cachedGet(summaryCacheKey, (signal) => api.get(summaryUrl, { signal }).then((r) => r.data), {
           force: summaryForce,
           onRevalidate: (fresh) => {
             if (summaryGen !== summaryFetchGenRef.current) return
@@ -2273,7 +2273,7 @@ function TruckingPageContent() {
         hydrateParams.set('hydrateOnly', 'true')
         const hydrateUrl = `/trucking?${hydrateParams.toString()}`
         const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
-        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+        void cachedGet(hydrateCacheKey, (signal) => api.get(hydrateUrl, { signal }).then((r) => r.data), {
           force: options?.force,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
