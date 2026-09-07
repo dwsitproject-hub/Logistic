@@ -186,9 +186,24 @@ export function appendTruckingPipelineStageFilter(
   stage: string | undefined,
   stoExpr: string,
   startIndex: number,
+  /**
+   * Precomputed GR-close and completed columns from the laterals in
+   * buildTruckingListFromClause. This filter is appended to that same query, so the columns are
+   * in scope - verified by executing a WHERE over that FROM, not assumed. Without them the one
+   * stage expression here inlines 40 expansions and 1,382KB of SQL.
+   */
+  grClosedExpr?: string,
+  isCompletedExpr?: string,
 ): { sql: string; params: string[]; nextIndex: number } {
   const openClose = isTruckingPageOpenCloseStatusParam(stage);
-  const stageExpr = sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined);
+  const stageExpr = sqlTruckingPagePipelineStageExpr(
+    'c',
+    stoExpr,
+    undefined,
+    grClosedExpr,
+    undefined,
+    isCompletedExpr,
+  );
   if (openClose === 'OPEN') {
     return {
       sql: ` AND ${stageExpr} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')`,

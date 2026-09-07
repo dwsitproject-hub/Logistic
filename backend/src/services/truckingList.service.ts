@@ -22,7 +22,9 @@ import {
   appendTruckingPipelineStageFilter,
   buildTruckingExpandedStatusFilterWhere,
   normalizeTruckingPagePipelineStageParam,
+  sqlTruckingIsCompletedFromLateral,
 } from '../utils/truckingPagePipelineSql';
+import { sqlTruckingGrClosedFromLateral } from '../utils/truckingQuantitySql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
 import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
@@ -739,10 +741,17 @@ export function buildTruckingListQuery(
     : `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`;
 
   if (status && !options?.omitStatusFilter) {
+    /**
+     * This filter is appended to the query built with buildTruckingListFromClause, so the
+     * GR-close and completed laterals are in scope - proven by executing a WHERE over that FROM.
+     * The trucking.controller caller builds its own FROM without them and keeps the defaults.
+     */
     const stageFilter = appendTruckingPipelineStageFilter(
       String(status),
       truckingStoExprForStatus,
       paramIndex,
+      sqlTruckingGrClosedFromLateral(),
+      sqlTruckingIsCompletedFromLateral(),
     );
     queryText += stageFilter.sql;
     queryParams.push(...stageFilter.params);

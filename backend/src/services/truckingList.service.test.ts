@@ -17,7 +17,11 @@ import {
   type TruckingListRow,
 } from './truckingList.service';
 import { buildTruckingStatusSummaryCombinedQuery } from '../utils/truckingStatusSummaryCombinedSql';
-import { appendTruckingPipelineStageFilter } from '../utils/truckingPagePipelineSql';
+import {
+  appendTruckingPipelineStageFilter,
+  sqlTruckingIsCompletedFromLateral,
+} from '../utils/truckingPagePipelineSql';
+import { sqlTruckingGrClosedFromLateral } from '../utils/truckingQuantitySql';
 
 describe('truckingList.service', () => {
   it('list query defers pipeline status filter until after STO expansion', () => {
@@ -28,10 +32,17 @@ describe('truckingList.service', () => {
     const withInner = buildTruckingListQuery(req);
     const deferred = buildTruckingListQuery(req, { omitStatusFilter: true });
 
+    /**
+     * The service passes the GR-close and completed columns resolved by the laterals in
+     * buildTruckingListFromClause, so the expectation has to be built the same way - one
+     * inlined stage expression is 1,382KB of SQL against a few KB for the column form.
+     */
     const innerStage = appendTruckingPipelineStageFilter(
       'UNPLANNED',
       `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`,
       1,
+      sqlTruckingGrClosedFromLateral(),
+      sqlTruckingIsCompletedFromLateral(),
     ).sql.trim();
 
     expect(withInner.preOuterQuery).toContain(innerStage);
