@@ -1,5 +1,6 @@
 import { sqlB2bChildGrStoStatusLookup } from './b2bOriginEndingSql';
 import { query } from '../database/connection';
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import {
   INCOTERM_GR_PO_STATUS,
   INCOTERM_GR_STO_STATUS,
@@ -437,24 +438,77 @@ export function sqlContractListGrStoStatusAggExpr(contractAlias = 'c'): string {
 
 export const SQL_CONTRACT_IMPORT_STATUS = sqlContractImportStatusExpr('c');
 
+/**
+ * A contract has effectively finished even though GR PO/STO still says Open: OS is within the
+ * ±0 MT tolerance, or ATC at discharge is filled (shipments.ata_discharge_complete, which SAP
+ * import and KLIP edits both write).
+ *
+ * Deliberately NOT folded into sqlContractImportStatusExpr / sqlIsContractSapClosedExpr:
+ * qty_move's trucking_wb_overlay and shipment_klip_overlay gate on `NOT (grClosed)`, so making
+ * that status depend on OS would make OS depend on itself - a contract flipping to Close would
+ * switch its own overlays off, change its own OS, and possibly stop qualifying. Keeping the raw
+ * GR status as the qty machinery's input and applying this on top at classification time breaks
+ * that cycle.
+ */
+export function isContractEffectivelyDone(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row) return false;
+  const os = Number(row.outstanding_quantity);
+  if (Number.isFinite(os) && os <= OUTSTANDING_QTY_ZERO_TOLERANCE_KG) return true;
+  const atc = row.last_ata_vessel_complete_discharge;
+  return atc != null && String(atc).trim() !== '';
+}
+
+/**
+ * Open/Close as shown to the user and as used for cycle maths - the raw GR status, overridden to
+ * Close once the contract has effectively finished. Cancelled is never overridden.
+ */
+export function resolveContractEffectiveStatusText(
+  row: Record<string, unknown> | null | undefined,
+): string {
+  const raw = String((row?.import_status as string) || (row?.status as string) || '')
+    .trim()
+    .toUpperCase();
+  if (raw === 'CANCELLED' || raw === 'CANCELED' || raw === 'CANCEL') return raw;
+  return isContractEffectivelyDone(row) ? 'CLOSE' : raw;
+}
+
+/** SQL form of isContractEffectivelyDone, for row sets that carry OS and ATC columns. */
+export function sqlContractEffectivelyDoneExpr(opts: {
+  outstandingKgExpr: string;
+  atcExpr: string;
+}): string {
+  return `(
+    ((${opts.outstandingKgExpr}) IS NOT NULL
+      AND (${opts.outstandingKgExpr})::numeric <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})
+    OR (${opts.atcExpr}) IS NOT NULL
+  )`;
+}
+
 /** SQL predicate: contract row matches Open import status (UAT GR PO/STO matrix). */
 export function sqlContractImportStatusIsOpenExpr(
   importStatusExpr: string,
   fallbackWhenNoSapExpr?: string,
+  effectivelyDoneExpr?: string,
 ): string {
   const open = `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('OPEN', 'ACTIVE')`;
-  if (!fallbackWhenNoSapExpr) return open;
-  return `(${open} OR (${fallbackWhenNoSapExpr}))`;
+  const raw = fallbackWhenNoSapExpr ? `(${open} OR (${fallbackWhenNoSapExpr}))` : open;
+  /** Effectively finished rows belong to Close, so they must drop out of Open. */
+  return effectivelyDoneExpr ? `(${raw} AND NOT ${effectivelyDoneExpr})` : raw;
 }
 
 /** SQL predicate: contract row matches Close import status (UAT GR PO/STO matrix). */
 export function sqlContractImportStatusIsClosedExpr(
   importStatusExpr: string,
   fallbackWhenNoSapExpr?: string,
+  effectivelyDoneExpr?: string,
 ): string {
   const closed = `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
-  if (!fallbackWhenNoSapExpr) return closed;
-  return `(${closed} OR (${fallbackWhenNoSapExpr}))`;
+  const raw = fallbackWhenNoSapExpr ? `(${closed} OR (${fallbackWhenNoSapExpr}))` : closed;
+  const cancelled = sqlContractImportStatusIsCancelledExpr(importStatusExpr);
+  /** Cancelled stays Cancelled - only Open rows may be pulled into Close. */
+  return effectivelyDoneExpr
+    ? `(${raw} OR (${effectivelyDoneExpr} AND NOT ${cancelled}))`
+    : raw;
 }
 
 /** SQL predicate: import status is Cancelled (Delete PO/STO or Cancel token). */

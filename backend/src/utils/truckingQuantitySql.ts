@@ -3,6 +3,7 @@ import { sqlPoGlobalSapStoQtyKg, sqlPoStoSapQtyKg } from './contractPoGlobalMetr
 import { sqlOverlayParentQtyOrQtyMoveSnapshot } from './b2bOriginEndingSql';
 import { isContractDeliveryClosed, sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import { sqlNormalizeSapQtyToKgWithUom } from './sapQtyUom';
 import {
   sqlWbActualDeliverySumKg,
@@ -218,13 +219,11 @@ export function sqlTruckingPoLevelSapReceiveQty(
 }
 
 /**
- * OS Qty at or below this band (kg) counts as fulfilled for trucking COMPLETED when GR is still Open.
- * Aligned with whole-MT table display (`maxFractionDigits: 0`): residual OS ≤ 499 kg → "0 MT".
- * Also treats over-delivery (negative OS / UI "+N MT") as fulfilled — any OS ≤ 499 kg qualifies.
- * Example: contract 225,000 kg − receive 224,714 kg = 286 kg OS → Completed despite GR Open.
- * Example: OS = −3,000 kg (UI +3 MT overdelivered) → Completed.
+ * OS Qty at or below this band (kg) counts as fulfilled for trucking COMPLETED when GR is still
+ * Open. Re-exported from its own leaf module so contract-level Open/Close can share the exact
+ * same number without an import cycle; every existing importer keeps working.
  */
-export const TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG = 499;
+export { OUTSTANDING_QTY_ZERO_TOLERANCE_KG as TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG };
 
 /**
  * SAP trucking quantity fields are often exported in MT while contracts.quantity_ordered is kg.
@@ -426,7 +425,7 @@ export function sqlTruckingOutstandingQtyByIncoterm(
 
 export function isTruckingOutstandingWithinToleranceKg(
   outstandingKg: number | null | undefined,
-  toleranceKg = TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+  toleranceKg = OUTSTANDING_QTY_ZERO_TOLERANCE_KG,
 ): boolean {
   if (outstandingKg === null || outstandingKg === undefined || !Number.isFinite(outstandingKg)) {
     return false;
@@ -455,7 +454,7 @@ export const isTruckingCompletedByGrAndOs = isTruckingPipelineCompleted;
 /** True when outstanding qty ≤ tolerance (kg), including over-delivery; NULL does not qualify. */
 export function sqlTruckingOutstandingWithinToleranceExpr(
   outstandingExpr: string,
-  toleranceKg = TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+  toleranceKg = OUTSTANDING_QTY_ZERO_TOLERANCE_KG,
 ): string {
   return `(
     ${outstandingExpr} IS NOT NULL

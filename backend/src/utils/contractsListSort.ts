@@ -1,4 +1,5 @@
 import { sqlContractOutstandingSignedExpr } from './sapIncotermMetrics';
+import { resolveContractEffectiveStatusText } from './contractDeliveryStatus';
 
 /**
  * GET /contracts list sort.
@@ -117,16 +118,14 @@ export function resolveContractsListSort(sortKeyRaw: unknown): ContractsListSort
 }
 
 function deliveryStatusUpper(row: Record<string, unknown>): string {
-  return String(row.import_status || row.status || '')
-    .trim()
-    .toUpperCase();
+  return resolveContractEffectiveStatusText(row);
 }
 
 export function computeStatusOverallSortValue(row: Record<string, unknown>): string {
   const delivery = deliveryStatusUpper(row);
   const paid = String(row.payment_status || '').toUpperCase() === 'PAID';
   if (delivery === 'CLOSE' && paid) return 'Close';
-  return String(row.import_status || row.status || '');
+  return delivery;
 }
 
 function asNumber(value: unknown): number | null {

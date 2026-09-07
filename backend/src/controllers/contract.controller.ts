@@ -117,6 +117,8 @@ import {
   sqlContractImportStatusExpr,
   sqlContractImportStatusForStoExpr,
   sqlContractImportStatusIsClosedExpr,
+  sqlContractEffectivelyDoneExpr,
+  resolveContractEffectiveStatusText,
   sqlContractImportStatusIsOpenExpr,
   sqlContractListImportStatusAggExpr,
   sqlContractListGrStoStatusAggExpr,
@@ -407,11 +409,19 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           // with no STO in SAP yet), not tied to whether any SAP row exists at all. Keeps the
           // Contract Performance drilldown card total aligned with this View table's OS sum.
           'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+          }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
           'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+          }),
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
@@ -764,7 +774,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       row.payoff_date_deviation_days = parseDeviation(row.payoff_date_deviation_raw) ?? row.payoff_date_deviation_fb ?? row.payoff_date_deviation_days;
 
       // Compute Over/Under Delivery Status for UI
-      const statusText = String(row.import_status || row.status || '').toUpperCase();
+      const statusText = resolveContractEffectiveStatusText(row);
       const outQty = typeof row.outstanding_quantity === 'number' ? row.outstanding_quantity : Number(row.outstanding_quantity) || 0;
       let overUnder: string = '-';
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
@@ -1231,11 +1241,19 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
           'base.import_status',
           'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+          }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
           'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+          }),
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
@@ -1478,7 +1496,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       if (plantSiteText) debugCounts.nonBlankPlantSite += 1;
       else debugCounts.blankPlantSite += 1;
       // Match GET /contracts SQL late/on-time filter: SAP import status first, then contracts.status.
-      const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+      const statusText = resolveContractEffectiveStatusText(row);
       const transport = String(row.transport_mode || '').trim().toUpperCase();
       const deliveryEnd = due(row.delivery_end_date);
       if (!deliveryEnd) {
