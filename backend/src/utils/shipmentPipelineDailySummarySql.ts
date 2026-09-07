@@ -154,12 +154,23 @@ function buildShipmentDailyBaseCteSql(): string {
       )`;
 }
 
+/**
+ * Published tables the shipment refresh swaps into. The builders below take the target as an
+ * argument so PipelineDailySummaryService can aim them at a staging copy and keep the heavy
+ * INSERTs out of the transaction that publishes the result.
+ */
+export const SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE = 'shipment_pipeline_daily_summary';
+export const SHIPMENT_PIPELINE_VESSEL_STAGE_DAILY_TABLE = 'shipment_pipeline_vessel_stage_daily';
+export const SHIPMENT_LIST_STAGE_SNAPSHOT_TABLE = 'shipment_list_stage_snapshot';
+
 /** INSERT shipment execution aggregates grouped by group_plant + contract_date. */
-export function buildShipmentExecutionDailySummaryInsertSql(): string {
+export function buildShipmentExecutionDailySummaryInsertSql(
+  targetTable: string = SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE,
+): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
   return `
-    INSERT INTO shipment_pipeline_daily_summary (
+    INSERT INTO ${targetTable} (
       group_plant,
       contract_date,
       product,
@@ -301,12 +312,14 @@ function shipmentPipelineStageCaseSql(alias: string): string {
  * INSERT one row per STO key with its derived pipeline stage + toolbar dims, used to
  * page status-filtered list requests without re-deriving status for every row.
  */
-export function buildShipmentStageSnapshotInsertSql(): string {
+export function buildShipmentStageSnapshotInsertSql(
+  targetTable: string = SHIPMENT_LIST_STAGE_SNAPSHOT_TABLE,
+): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
   const stageCase = shipmentPipelineStageCaseSql('e');
   return `
-    INSERT INTO shipment_list_stage_snapshot (
+    INSERT INTO ${targetTable} (
       sto_key, stage, group_plant, contract_date, product, incoterm, last_created_at
     )
     ${base},
@@ -338,7 +351,9 @@ export function buildShipmentStageSnapshotInsertSql(): string {
  * INSERT distinct (dims, stage, vessel) facts for per-stage distinct-vessel counts.
  * Stage keys are the grouped pipeline cards; blank vessel names are excluded.
  */
-export function buildShipmentVesselStageDailyInsertSql(): string {
+export function buildShipmentVesselStageDailyInsertSql(
+  targetTable: string = SHIPMENT_PIPELINE_VESSEL_STAGE_DAILY_TABLE,
+): string {
   const base = buildShipmentDailyBaseCteSql();
   const eff = shipmentEffectiveStatusExpr('f');
   const vessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
@@ -350,7 +365,7 @@ export function buildShipmentVesselStageDailyInsertSql(): string {
     'f.master_vessel_id',
   );
   return `
-    INSERT INTO shipment_pipeline_vessel_stage_daily (
+    INSERT INTO ${targetTable} (
       group_plant, contract_date, product, incoterm, stage, vessel_key
     )
     ${base},
@@ -386,10 +401,12 @@ export function buildShipmentVesselStageDailyInsertSql(): string {
 }
 
 /** UPSERT open contract backlog + preplanned counts grouped by group_plant + contract_date. */
-export function buildShipmentBacklogDailySummaryUpsertSql(): string {
+export function buildShipmentBacklogDailySummaryUpsertSql(
+  targetTable: string = SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE,
+): string {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
-    INSERT INTO shipment_pipeline_daily_summary (
+    INSERT INTO ${targetTable} (
       group_plant, contract_date, product, incoterm,
       unplanned_contract_backlog, preplanned_contract_count
     )

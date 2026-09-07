@@ -19,6 +19,14 @@ import { buildTruckingUnplannedBacklogDailySummarySql } from './truckingUnplanne
 
 const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 
+/**
+ * Published tables the trucking refresh swaps into. The builders below take the target as an
+ * argument so PipelineDailySummaryService can aim them at a staging copy and keep the heavy
+ * INSERTs out of the transaction that publishes the result.
+ */
+export const TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE = 'trucking_pipeline_daily_summary';
+export const TRUCKING_LIST_STAGE_SNAPSHOT_TABLE = 'trucking_list_stage_snapshot';
+
 function buildTruckingExecutionSourceSql(): string {
   const innerSql = `
       SELECT
@@ -36,11 +44,13 @@ function buildTruckingExecutionSourceSql(): string {
 }
 
 /** INSERT execution-row aggregates grouped by group_plant + contract_date. */
-export function buildTruckingExecutionDailySummaryInsertSql(): string {
+export function buildTruckingExecutionDailySummaryInsertSql(
+  targetTable: string = TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE,
+): string {
   const expanded = buildTruckingExecutionSourceSql();
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
-    INSERT INTO trucking_pipeline_daily_summary (
+    INSERT INTO ${targetTable} (
       group_plant,
       contract_date,
       product,
@@ -153,8 +163,10 @@ export function buildTruckingExecutionDailySummaryInsertSql(): string {
       cancelled_gr_closed_contract_qty = EXCLUDED.cancelled_gr_closed_contract_qty`;
 }
 
-export function buildTruckingBacklogDailySummaryUpsertSql(): string {
-  return buildTruckingUnplannedBacklogDailySummarySql();
+export function buildTruckingBacklogDailySummaryUpsertSql(
+  targetTable: string = TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE,
+): string {
+  return buildTruckingUnplannedBacklogDailySummarySql(targetTable);
 }
 
 /**
@@ -163,11 +175,13 @@ export function buildTruckingBacklogDailySummaryUpsertSql(): string {
  * Must never itself read from trucking_list_stage_snapshot (useStageSnapshot stays off
  * in buildTruckingExecutionSourceSql).
  */
-export function buildTruckingStageSnapshotInsertSql(): string {
+export function buildTruckingStageSnapshotInsertSql(
+  targetTable: string = TRUCKING_LIST_STAGE_SNAPSHOT_TABLE,
+): string {
   const expanded = buildTruckingExecutionSourceSql();
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
-    INSERT INTO trucking_list_stage_snapshot (
+    INSERT INTO ${targetTable} (
       operation_id, sto_line, stage, group_plant, contract_date, product, incoterm, supplier, created_at
     )
     SELECT

@@ -173,7 +173,15 @@ export async function ensureSapStoShipmentFromRow(
     await client.query('COMMIT');
     return 'created';
   } catch (err) {
-    await client.query('ROLLBACK');
+    // Guarded: distributeData holds `po:`/`contract:` advisory locks for this transaction, and
+    // the caller loops over candidates on one pooled client. A throwing ROLLBACK would escape
+    // past the loop into `client.release()`, returning the connection to the pool still inside
+    // this transaction - and still holding those locks - for whoever borrows it next.
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      logger.error('ensureSapStoShipmentFromRow rollback failed', { sto: stoNumber, rollbackErr });
+    }
     logger.error('ensureSapStoShipmentFromRow failed', {
       po: row.po_number,
       sto: stoNumber,

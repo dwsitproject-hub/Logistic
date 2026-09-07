@@ -7,11 +7,16 @@ import {
   hasNonToolbarColumnFilters,
 } from '../utils/pipelineDailySummaryToolbarScope';
 import {
+  TRUCKING_LIST_STAGE_SNAPSHOT_TABLE,
+  TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE,
   buildTruckingBacklogDailySummaryUpsertSql,
   buildTruckingExecutionDailySummaryInsertSql,
   buildTruckingStageSnapshotInsertSql,
 } from '../utils/pipelineDailySummarySql';
 import {
+  SHIPMENT_LIST_STAGE_SNAPSHOT_TABLE,
+  SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE,
+  SHIPMENT_PIPELINE_VESSEL_STAGE_DAILY_TABLE,
   buildShipmentBacklogDailySummaryUpsertSql,
   buildShipmentExecutionDailySummaryInsertSql,
   buildShipmentStageSnapshotInsertSql,
@@ -299,72 +304,171 @@ async function upsertRefreshMeta(
   }
 }
 
-/** Serialize TRUNCATE+INSERT so concurrent refresh (UI stale kick + cleanup script) cannot race. */
-async function withPipelineRefreshLock<T>(
+/** A published table and the session-local staging table the next generation is built in. */
+interface PipelineRefreshTable {
+  /** Published table readers query. */
+  real: string;
+  /** TEMP table of identical shape, built outside the advisory lock. */
+  stage: string;
+}
+
+/**
+ * Refresh a pipeline summary as build-then-swap.
+ *
+ * The previous shape took the advisory lock, TRUNCATEd every published table and then ran the
+ * whole rebuild inside that one transaction. The trucking rebuild is minutes long on SIT
+ * (observed 2026-09-07: durationMs 1,070,125 and 1,634,073), and pg_locks during one of those
+ * runs showed what that cost: the single transaction held the refresh advisory lock plus
+ * ACCESS EXCLUSIVE on trucking_pipeline_daily_summary, trucking_list_stage_snapshot and every
+ * one of their indexes and toast relations, continuously, for the whole build. So
+ * `SELECT count(*) FROM trucking_list_stage_snapshot` could not complete at all while a refresh
+ * ran, every trucking list and circle-count read behind it stalled, and the next refresh queued
+ * on the advisory lock for as long as the build took (measured: 3m38s and still waiting).
+ *
+ * So: build into staging tables first, with no advisory lock, no transaction and no lock on
+ * anything readers touch. Only the DELETE + INSERT swap runs inside the locked transaction -
+ * sub-second for ~21k rows - which is the part that actually has to be serialised and atomic.
+ * DELETE, not TRUNCATE, so readers keep seeing the previous generation until the swap commits
+ * instead of blocking on ACCESS EXCLUSIVE (same reasoning as the qty_move snapshot refresh).
+ *
+ * Concurrent refreshes (UI stale kick, scheduler, cleanup scripts) still serialise, but through a
+ * session-scoped advisory lock held across the build rather than an open transaction, so waiting
+ * for a build no longer parks a transaction - or the table locks inside it - for minutes.
+ */
+async function runPipelineRefresh(
+  module: PipelineSummaryModule,
   lockKey: string,
-  fn: (client: PoolClient) => Promise<T>,
-): Promise<T> {
+  tables: PipelineRefreshTable[],
+  buildStatements: (stage: Record<string, string>) => string[],
+): Promise<number> {
+  const start = Date.now();
   const client = await getClient();
+  const stageByReal: Record<string, string> = {};
+  for (const t of tables) stageByReal[t.real] = t.stage;
+
+  let buildLocked = false;
   try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [lockKey]);
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {
-      /* ignore rollback errors */
+    // Build lock: session-scoped, so it serialises builds without parking a transaction.
+    await client.query('SELECT pg_advisory_lock(hashtext($1::text))', [`${lockKey}:build`]);
+    buildLocked = true;
+
+    // INCLUDING ALL, not just DEFAULTS: the build statements rely on the published tables'
+    // unique indexes as ON CONFLICT arbiters, and LIKE also pins column order so the swap below
+    // can use SELECT * without naming every column.
+    for (const t of tables) {
+      await client.query(`DROP TABLE IF EXISTS pg_temp.${t.stage}`);
+      await client.query(`CREATE TEMP TABLE ${t.stage} (LIKE ${t.real} INCLUDING ALL)`);
     }
-    throw error;
+
+    // Heavy part. No transaction open, nothing else waiting on us.
+    let rowCount = 0;
+    for (const sql of buildStatements(stageByReal)) {
+      const res = await client.query(sql);
+      rowCount += res.rowCount ?? 0;
+    }
+    const buildMs = Date.now() - start;
+
+    // Publish. Short, atomic, and the only part that holds the refresh lock transactionally.
+    const swapStart = Date.now();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [lockKey]);
+      for (const t of tables) {
+        await client.query(`DELETE FROM ${t.real}`);
+        await client.query(`INSERT INTO ${t.real} SELECT * FROM ${t.stage}`);
+      }
+      await upsertRefreshMeta(module, rowCount, Date.now() - start, client);
+      await client.query('COMMIT');
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* ignore rollback errors */
+      }
+      throw error;
+    }
+
+    logger.info(`Pipeline daily summary refreshed: ${module}`, {
+      rowCount,
+      durationMs: Date.now() - start,
+      buildMs,
+      swapMs: Date.now() - swapStart,
+    });
+    return rowCount;
   } finally {
+    for (const t of tables) {
+      try {
+        await client.query(`DROP TABLE IF EXISTS pg_temp.${t.stage}`);
+      } catch {
+        /* staging table is session-local; a leftover is dropped by the next refresh */
+      }
+    }
+    if (buildLocked) {
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1::text))', [`${lockKey}:build`]);
+      } catch {
+        // Session-scoped, so it also releases when the connection closes - but a pooled
+        // connection can live for hours, so a failure here has to be visible.
+        logger.error('Failed to release pipeline refresh build lock', { module, lockKey });
+      }
+    }
     client.release();
   }
 }
 
+const TRUCKING_REFRESH_TABLES: PipelineRefreshTable[] = [
+  {
+    real: TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE,
+    stage: 'pipeline_stage_trucking_pipeline_daily_summary',
+  },
+  {
+    real: TRUCKING_LIST_STAGE_SNAPSHOT_TABLE,
+    stage: 'pipeline_stage_trucking_list_stage_snapshot',
+  },
+];
+
+const SHIPMENT_REFRESH_TABLES: PipelineRefreshTable[] = [
+  {
+    real: SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE,
+    stage: 'pipeline_stage_shipment_pipeline_daily_summary',
+  },
+  {
+    real: SHIPMENT_PIPELINE_VESSEL_STAGE_DAILY_TABLE,
+    stage: 'pipeline_stage_shipment_pipeline_vessel_stage_daily',
+  },
+  {
+    real: SHIPMENT_LIST_STAGE_SNAPSHOT_TABLE,
+    stage: 'pipeline_stage_shipment_list_stage_snapshot',
+  },
+];
+
 export class PipelineDailySummaryService {
   static async refreshTruckingPipelineDailySummary(): Promise<number> {
-    const start = Date.now();
-    const rowCount = await withPipelineRefreshLock('pipeline_daily_summary:trucking', async (client) => {
-      await client.query('TRUNCATE trucking_pipeline_daily_summary');
-      await client.query('TRUNCATE trucking_list_stage_snapshot');
-      const execRes = await client.query(buildTruckingExecutionDailySummaryInsertSql());
-      const backlogRes = await client.query(buildTruckingBacklogDailySummaryUpsertSql());
-      const stageSnapshotRes = await client.query(buildTruckingStageSnapshotInsertSql());
-      const n =
-        (execRes.rowCount ?? 0) + (backlogRes.rowCount ?? 0) + (stageSnapshotRes.rowCount ?? 0);
-      const durationMs = Date.now() - start;
-      await upsertRefreshMeta('trucking', n, durationMs, client);
-      return n;
-    });
-    const durationMs = Date.now() - start;
-    logger.info('Pipeline daily summary refreshed: trucking', { rowCount, durationMs });
-    return rowCount;
+    return runPipelineRefresh(
+      'trucking',
+      'pipeline_daily_summary:trucking',
+      TRUCKING_REFRESH_TABLES,
+      (stage) => [
+        // Execution aggregates first: the backlog upsert updates the rows this one lands.
+        buildTruckingExecutionDailySummaryInsertSql(stage[TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE]),
+        buildTruckingBacklogDailySummaryUpsertSql(stage[TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE]),
+        buildTruckingStageSnapshotInsertSql(stage[TRUCKING_LIST_STAGE_SNAPSHOT_TABLE]),
+      ],
+    );
   }
 
   static async refreshShipmentPipelineDailySummary(): Promise<number> {
-    const start = Date.now();
-    const rowCount = await withPipelineRefreshLock('pipeline_daily_summary:shipment', async (client) => {
-      await client.query('TRUNCATE shipment_pipeline_daily_summary');
-      await client.query('TRUNCATE shipment_pipeline_vessel_stage_daily');
-      await client.query('TRUNCATE shipment_list_stage_snapshot');
-      const execRes = await client.query(buildShipmentExecutionDailySummaryInsertSql());
-      const backlogRes = await client.query(buildShipmentBacklogDailySummaryUpsertSql());
-      const vesselRes = await client.query(buildShipmentVesselStageDailyInsertSql());
-      const stageSnapshotRes = await client.query(buildShipmentStageSnapshotInsertSql());
-      const n =
-        (execRes.rowCount ?? 0) +
-        (backlogRes.rowCount ?? 0) +
-        (vesselRes.rowCount ?? 0) +
-        (stageSnapshotRes.rowCount ?? 0);
-      const durationMs = Date.now() - start;
-      await upsertRefreshMeta('shipment', n, durationMs, client);
-      return n;
-    });
-    const durationMs = Date.now() - start;
-    logger.info('Pipeline daily summary refreshed: shipment', { rowCount, durationMs });
-    return rowCount;
+    return runPipelineRefresh(
+      'shipment',
+      'pipeline_daily_summary:shipment',
+      SHIPMENT_REFRESH_TABLES,
+      (stage) => [
+        buildShipmentExecutionDailySummaryInsertSql(stage[SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE]),
+        buildShipmentBacklogDailySummaryUpsertSql(stage[SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE]),
+        buildShipmentVesselStageDailyInsertSql(stage[SHIPMENT_PIPELINE_VESSEL_STAGE_DAILY_TABLE]),
+        buildShipmentStageSnapshotInsertSql(stage[SHIPMENT_LIST_STAGE_SNAPSHOT_TABLE]),
+      ],
+    );
   }
 
   static async refreshAll(): Promise<void> {

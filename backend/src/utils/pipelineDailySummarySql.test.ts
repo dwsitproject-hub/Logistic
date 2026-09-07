@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildTruckingBacklogDailySummaryUpsertSql,
   buildTruckingExecutionDailySummaryInsertSql,
   buildTruckingStageSnapshotInsertSql,
 } from './pipelineDailySummarySql';
@@ -25,5 +26,32 @@ describe('pipelineDailySummarySql', () => {
     expect(sql).toContain('INSERT INTO trucking_list_stage_snapshot');
     expect(sql).toContain('ON CONFLICT (operation_id) DO NOTHING');
     expect(sql).not.toContain('ON CONFLICT (operation_id, sto_line)');
+  });
+
+  /**
+   * The refresh builds into a staging copy so the published tables are only touched inside the
+   * short swap transaction - the builders have to be aimable at that copy, and the ON CONFLICT
+   * clauses must stay target-agnostic (EXCLUDED only, never a hardcoded table qualifier).
+   */
+  it('aims the execution upsert at a caller-supplied target table', () => {
+    const sql = buildTruckingExecutionDailySummaryInsertSql('stage_tbl');
+    expect(sql).toContain('INSERT INTO stage_tbl (');
+    expect(sql).not.toContain('INSERT INTO trucking_pipeline_daily_summary');
+    expect(sql).toContain('ON CONFLICT (group_plant, contract_date, product, incoterm)');
+    expect(sql).not.toContain('trucking_pipeline_daily_summary.');
+  });
+
+  it('aims the backlog upsert at a caller-supplied target table', () => {
+    const sql = buildTruckingBacklogDailySummaryUpsertSql('stage_tbl');
+    expect(sql).toContain('INSERT INTO stage_tbl (');
+    expect(sql).not.toContain('INSERT INTO trucking_pipeline_daily_summary');
+    expect(sql).toContain('unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog');
+  });
+
+  it('aims the stage snapshot insert at a caller-supplied target table', () => {
+    const sql = buildTruckingStageSnapshotInsertSql('stage_tbl');
+    expect(sql).toContain('INSERT INTO stage_tbl (');
+    expect(sql).not.toContain('INSERT INTO trucking_list_stage_snapshot');
+    expect(sql).toContain('ON CONFLICT (operation_id) DO NOTHING');
   });
 });

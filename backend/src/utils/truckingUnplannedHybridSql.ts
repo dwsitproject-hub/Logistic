@@ -407,10 +407,12 @@ export function buildTruckingUnplannedBacklogSummaryCountQuery(
 }
 
 /** Daily refresh — open contract backlog grouped by group_plant + contract_date. */
-export function buildTruckingUnplannedBacklogDailySummarySql(): string {
+export function buildTruckingUnplannedBacklogDailySummarySql(
+  targetTable = 'trucking_pipeline_daily_summary',
+): string {
   const plant = TRUCKING_UNPLANNED_GROUP_PLANT;
   return `
-    INSERT INTO trucking_pipeline_daily_summary (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
+    INSERT INTO ${targetTable} (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
     WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
     backlog AS (
       SELECT
