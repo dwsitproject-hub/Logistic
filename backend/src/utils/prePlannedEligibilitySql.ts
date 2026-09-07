@@ -3,7 +3,8 @@
  */
 
 import { groupPlantExpr } from './groupPlantSql';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 
 /**
@@ -24,10 +25,10 @@ export function contractInAcceptedUnlinkedPrePlannedGroupExistsSql(
   )`;
 }
 
-export function buildPrePlannedEligibleContractsQuery(opts: {
+export async function buildPrePlannedEligibleContractsQuery(opts: {
   excludedPlants: string[];
   minOsMt: number;
-}): { sql: string; params: unknown[] } {
+}): Promise<{ sql: string; params: unknown[] }> {
   const plantExpr = groupPlantExpr('c.plant_code', 'c.company_name');
   const incotermExpr = contractEffectiveIncotermExpr('c');
   const outstandingKgExpr = sqlContractGlobalOutstandingExpr({
@@ -38,9 +39,13 @@ export function buildPrePlannedEligibleContractsQuery(opts: {
   const minOsKg = opts.minOsMt * 1000;
 
   const excludedPlaceholders = opts.excludedPlants.map((_, i) => `$${i + 2}`).join(', ');
+  /** No plants to exclude means no clause at all; `NOT IN ()` is a syntax error. */
+  const excludedPlantsClause = excludedPlaceholders
+    ? `AND ${plantExpr} NOT IN (${excludedPlaceholders})`
+    : '';
 
   const sql = `
-    WITH ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts c2' })}
+    WITH ${await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts c2' })}
     SELECT
       c.id,
       c.contract_id,
@@ -85,7 +90,7 @@ export function buildPrePlannedEligibleContractsQuery(opts: {
           AND pg.status = 'ACCEPTED'
       )
       /* Also covers unlinked ACCEPTED (Preplanned) via the status check above. */
-      AND ${plantExpr} NOT IN (${excludedPlaceholders})
+      ${excludedPlantsClause}
     ORDER BY c.contract_date, c.contract_id
   `;
 

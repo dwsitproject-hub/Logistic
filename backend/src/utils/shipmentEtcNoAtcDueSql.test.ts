@@ -10,15 +10,15 @@ import {
 } from './shipmentEtcNoAtcDueSql';
 
 describe('shipmentEtcNoAtcDueSql', () => {
-  it('uses a 7-day inclusive due-end horizon', () => {
+  it('uses a 7-day inclusive due-end horizon', async () => {
     expect(ETC_NO_ATC_DUE_HORIZON_DAYS).toBe(7);
   });
 
-  it('builds ATC date expression from shipment_base columns', () => {
+  it('builds ATC date expression from shipment_base columns', async () => {
     expect(sqlShipmentListAtcDateExpr('fs')).toBe('fs.ata_vessel_complete_discharge::date');
   });
 
-  it('requires ATC null and due end on or before today+7; no ETC check', () => {
+  it('requires ATC null and due end on or before today+7; no ETC check', async () => {
     const pred = sqlShipmentEtcNoAtcDueWithin7dPred('fs');
     expect(pred).toContain('ata_vessel_complete_discharge::date IS NULL');
     expect(pred).toContain('delivery_end_date IS NOT NULL');
@@ -30,7 +30,7 @@ describe('shipmentEtcNoAtcDueSql', () => {
     expect(pred).toContain('is_contract_sap_closed');
   });
 
-  it('appendShipmentEtcNoAtcDueWithin7dFilter toggles list outer SQL', () => {
+  it('appendShipmentEtcNoAtcDueWithin7dFilter toggles list outer SQL', async () => {
     expect(appendShipmentEtcNoAtcDueWithin7dFilter(false).sql).toBe('');
     expect(appendShipmentEtcNoAtcDueWithin7dFilter(undefined).sql).toBe('');
     const on = appendShipmentEtcNoAtcDueWithin7dFilter('true');
@@ -43,15 +43,15 @@ describe('shipmentEtcNoAtcDueSql', () => {
     expect(on.sql).toContain("NOT IN ('COMPLETED', 'CANCELLED')");
   });
 
-  it('isShipmentEtcNoAtcDueWithin7dListFilter parses query flag', () => {
+  it('isShipmentEtcNoAtcDueWithin7dListFilter parses query flag', async () => {
     expect(isShipmentEtcNoAtcDueWithin7dListFilter(true)).toBe(true);
     expect(isShipmentEtcNoAtcDueWithin7dListFilter('true')).toBe(true);
     expect(isShipmentEtcNoAtcDueWithin7dListFilter(false)).toBe(false);
     expect(isShipmentEtcNoAtcDueWithin7dListFilter(undefined)).toBe(false);
   });
 
-  it('builds aggregate query with matching_page + execution_os', () => {
-    const sql = buildShipmentEtcNoAtcDueWithin7dQuery(
+  it('builds aggregate query with matching_page + execution_os', async () => {
+    const sql = await buildShipmentEtcNoAtcDueWithin7dQuery(
       'WITH shipment_base AS (SELECT 1)',
       " AND sb.product ILIKE '%RBD%'",
     );
@@ -62,7 +62,7 @@ describe('shipmentEtcNoAtcDueSql', () => {
     expect(sql).toContain("sb.product ILIKE '%RBD%'");
   });
 
-  it('parses aggregate row and empty fallback', () => {
+  it('parses aggregate row and empty fallback', async () => {
     expect(parseShipmentEtcNoAtcDueWithin7dRow(null)).toEqual(
       EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D,
     );

@@ -307,7 +307,10 @@ async function loadTruckingUnplannedBacklogCombinedForRequest(
   const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
   const params = [...scope.params, ...g.params, ...c.params];
   const toolbarSql = `${g.sql}${c.sql}`;
-  const res = await query(buildTruckingUnplannedBacklogCombinedQuery(scope.sql, toolbarSql), params);
+  const res = await query(
+    await buildTruckingUnplannedBacklogCombinedQuery(scope.sql, toolbarSql),
+    params,
+  );
   const row = (res.rows[0] || {}) as Record<string, unknown>;
   const count = parseInt(String(row.c ?? '0'), 10) || 0;
   const contractQtyKg = Number(row.contract_qty_kg || 0) || 0;
@@ -1246,9 +1249,9 @@ async function loadTruckingAttentionInsightsForRequest(
 
   const [aggregateRes, topSuppliersRes, carryRes] =
     await runQueriesInBatches([
-      () => query(buildTruckingOverdueInsightsAggregateQuery(scope.sql, toolbarSql), params),
-      () => query(buildTruckingOverdueTopSuppliersQuery(scope.sql, toolbarSql, 3), params),
-      () => query(buildTruckingCarryOverInsightsQuery(scope.sql, toolbarSql), params),
+      async () => query(await buildTruckingOverdueInsightsAggregateQuery(scope.sql, toolbarSql), params),
+      async () => query(await buildTruckingOverdueTopSuppliersQuery(scope.sql, toolbarSql, 3), params),
+      async () => query(await buildTruckingCarryOverInsightsQuery(scope.sql, toolbarSql), params),
     ]);
 
   return parseTruckingAttentionInsights({

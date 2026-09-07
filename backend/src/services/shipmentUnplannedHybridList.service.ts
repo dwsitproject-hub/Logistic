@@ -443,7 +443,7 @@ async function fetchShipmentExecutionPage(
 ): Promise<Record<string, unknown>[]> {
   if (limit <= 0) return [];
 
-  const { text, params } = buildShipmentListEnrichedPageQuery(ctx, limit, offset);
+  const { text, params } = await buildShipmentListEnrichedPageQuery(ctx, limit, offset);
   const result = await query(text, params);
   const rows = normalizeShipmentListRows(result.rows as Record<string, unknown>[]);
   for (const row of rows) {

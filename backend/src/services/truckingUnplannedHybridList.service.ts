@@ -168,7 +168,7 @@ async function fetchContractBacklogPage(
 ): Promise<TruckingListRow[]> {
   if (limit <= 0) return [];
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
-  const text = buildTruckingUnplannedBacklogPageQuery(
+  const text = await buildTruckingUnplannedBacklogPageQuery(
     contractScopeSql,
     toolbarSql,
     limit,

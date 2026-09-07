@@ -25,7 +25,7 @@ import {
   compareContractsListSortRows,
   resolveContractsListSort,
 } from '../utils/contractsListSort';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import { sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
 import { parsePresenceFilter, sqlPresenceListFilter } from '../utils/sapPresenceSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
@@ -2591,7 +2591,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         FROM contracts c
         WHERE c.id = $1
       ),
-      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
+      ${await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
       SELECT
         t.id,
         COALESCE(

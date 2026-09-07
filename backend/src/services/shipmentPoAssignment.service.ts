@@ -38,8 +38,8 @@ const PO_LINE_SELECT_FIELDS = `
     ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity_planning
 `;
 
-function buildPoLineByRowIdSql(): string {
-  const qtyMoveCte = buildSeaContractsQtyMoveCte();
+async function buildPoLineByRowIdSql(): Promise<string> {
+  const qtyMoveCte = await buildSeaContractsQtyMoveCte();
   return `
     WITH ${qtyMoveCte}
     SELECT
@@ -50,8 +50,8 @@ function buildPoLineByRowIdSql(): string {
   `;
 }
 
-function buildGlobalAvailablePoLinesSql(): string {
-  const qtyMoveCte = buildSeaContractsQtyMoveCte();
+async function buildGlobalAvailablePoLinesSql(): Promise<string> {
+  const qtyMoveCte = await buildSeaContractsQtyMoveCte();
   return `
     WITH ${qtyMoveCte},
     candidates AS (
@@ -183,7 +183,7 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   const searchPattern = `%${searchRaw}%`;
 
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
-  const lines = await query(buildGlobalAvailablePoLinesSql(), [searchPattern, limit]);
+  const lines = await query(await buildGlobalAvailablePoLinesSql(), [searchPattern, limit]);
 
   const out: Record<string, unknown>[] = [];
   const seenRowIds = new Set<string>();
@@ -257,7 +257,7 @@ export async function attachPurchaseOrderToShipment(args: {
 
   await ensureUserStoContractAssignmentsTable();
 
-  const poLineRes = await query(buildPoLineByRowIdSql(), [contractRowId]);
+  const poLineRes = await query(await buildPoLineByRowIdSql(), [contractRowId]);
   if (poLineRes.rows.length === 0) {
     return { ok: false, status: 404, message: 'Contract / PO line not found' };
   }

@@ -7,8 +7,8 @@ import {
 } from './truckingAttentionInsightsSql'
 
 describe('truckingAttentionInsightsSql', () => {
-  it('overdue aggregate uses qty_move and aging buckets', () => {
-    const q = buildTruckingOverdueInsightsAggregateQuery('', '')
+  it('overdue aggregate uses qty_move and aging buckets', async () => {
+    const q = await buildTruckingOverdueInsightsAggregateQuery('', '')
     expect(q).toContain('latest_spd_contract')
     expect(q).toContain('qty_move AS')
     expect(q).toContain('bucket_1_7_kg')
@@ -16,8 +16,8 @@ describe('truckingAttentionInsightsSql', () => {
     expect(q).toContain(truckingOpenLandContractBaseWhereSql('c', 'l').trim())
   })
 
-  it('carry-over backlog uses same month cutoff as carry total', () => {
-    const q = buildTruckingCarryOverInsightsQuery('', '')
+  it('carry-over backlog uses same month cutoff as carry total', async () => {
+    const q = await buildTruckingCarryOverInsightsQuery('', '')
     expect(q).toContain('carry_backlog')
     expect(
       q.split("delivery_end_date::date < date_trunc('month', CURRENT_DATE)::date").length - 1,

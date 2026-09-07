@@ -36,7 +36,7 @@ async function refreshOilLossPayload(): Promise<OilLossPayload> {
   refreshInFlight = (async () => {
     try {
       const [result, gainResult] = await Promise.all([
-        query(buildOilLossMainSql()),
+        query(await buildOilLossMainSql()),
         query(buildOilLossGainSql()),
       ]);
       const payload: OilLossPayload = {

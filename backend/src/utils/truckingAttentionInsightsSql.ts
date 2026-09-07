@@ -3,7 +3,8 @@
  */
 
 import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 import {
   buildTruckingUnplannedBacklogLatestSpdCte,
@@ -54,14 +55,14 @@ function sqlAgingBucketCase(daysOverdueExpr: string, osExpr: string): string {
 }
 
 /** Main overdue + aging aggregate (contract grain, Due Date < today & OS > 0). */
-export function buildTruckingOverdueInsightsAggregateQuery(
+export async function buildTruckingOverdueInsightsAggregateQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const openWhere = `${truckingOpenLandContractBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');
   const daysOverdue = sqlDaysOverdue('c.delivery_end_date');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -99,14 +100,14 @@ export function buildTruckingOverdueInsightsAggregateQuery(
 }
 
 /** Top suppliers by overdue OS (kg). */
-export function buildTruckingOverdueTopSuppliersQuery(
+export async function buildTruckingOverdueTopSuppliersQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit = 3,
-): string {
+): Promise<string> {
   const openWhere = `${truckingOpenLandContractBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -142,14 +143,14 @@ export function buildTruckingOverdueTopSuppliersQuery(
  * Carry-over: delivery ended before the current month, OS > 0, 3rd Party.
  * Urgent subset: unplanned backlog (no trucking op) still overdue.
  */
-export function buildTruckingCarryOverInsightsQuery(
+export async function buildTruckingCarryOverInsightsQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const openWhere = `${truckingOpenLandContractBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c

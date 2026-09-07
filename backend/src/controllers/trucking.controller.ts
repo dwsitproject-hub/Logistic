@@ -53,7 +53,6 @@ import {
 } from '../utils/truckingIncotermScope';
 import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { sqlContractGlobalOutstandingExpr } from '../utils/contractGlobalOutstandingSql';
-import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
 import { listTruckingDailyActuals } from '../services/truckingRealization.service';
 import { ensureUnplannedTruckingOpsForRequest } from '../services/truckingEnsureUnplannedOps.service';
 import {
@@ -104,6 +103,7 @@ import {
   sqlContractMatchesStoParam,
   sqlTruckingPoAggregatedStoNumbersExpr,
 } from '../utils/truckingPoStoIdentitySql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 
 let truckingOpIdBackfillChecked = false;
 let truckingStatusReconcileLastRun = 0;
@@ -668,7 +668,7 @@ export const validateContractNumber = async (req: AuthRequest, res: Response) =>
       contract_candidates AS (
         SELECT contract_id AS contract_number FROM matched
       ),
-      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
+      ${await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
       SELECT
         c.id,
         c.contract_id,

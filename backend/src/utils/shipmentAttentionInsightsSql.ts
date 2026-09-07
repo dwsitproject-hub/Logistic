@@ -9,7 +9,8 @@ import {
   sqlIsContractSapInactiveForOsExpr,
   sqlIsContractSapClosedForStoExpr,
 } from './contractDeliveryStatus';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import {
   sqlShipmentIncotermIsCif,
@@ -63,17 +64,17 @@ function sqlShipmentGroupedOverdueAggregateSelect(): string {
     COALESCE(SUM(CASE WHEN days_overdue > 30 THEN outstanding_kg ELSE 0 END), 0)::numeric AS os_gt_30_kg`;
 }
 
-function buildShipmentOverdueExecutionGroupedRowsCte(
+async function buildShipmentOverdueExecutionGroupedRowsCte(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
-): string {
+): Promise<string> {
   /** Former Unplanned STOs are Planned; overdue execution insights use Planned scope. */
   const outerSql = `${toolbarOuterSql} AND ${shipmentEffectiveStatusExpr('sb')} = 'PLANNED'`;
   const outstandingExpr = sqlOutstandingKg('c');
   const daysOverdue = sqlDaysOverdue('c.delivery_end_date');
   const rowKey = sqlShipmentHybridRowKey('sp.sto_number', 'sp.operation_id', 'sp.sto_key');
 
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT DISTINCT TRIM(cn) AS contract_number
       FROM filtered_shipments sp
@@ -146,14 +147,14 @@ function sqlOverdueAggregateSelect(
 }
 
 /** Contract backlog overdue rows (hybrid sto_key = contract:{uuid}, one table row per entry). */
-export function buildShipmentOverdueBacklogAggregateQuery(
+export async function buildShipmentOverdueBacklogAggregateQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');
   const daysOverdue = sqlDaysOverdue('c.delivery_end_date');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -189,25 +190,25 @@ export function buildShipmentOverdueBacklogAggregateQuery(
 }
 
 /** Planned-stage execution overdue rows grouped to STO / operation / sto_key grain. */
-export function buildShipmentOverdueExecutionAggregateQuery(
+export async function buildShipmentOverdueExecutionAggregateQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
-): string {
+): Promise<string> {
   return `
-    ${buildShipmentOverdueExecutionGroupedRowsCte(shipmentBaseCteSql, toolbarOuterSql)}
+    ${await buildShipmentOverdueExecutionGroupedRowsCte(shipmentBaseCteSql, toolbarOuterSql)}
     SELECT
       ${sqlShipmentGroupedOverdueAggregateSelect()}
     FROM overdue_rows`;
 }
 
-export function buildShipmentOverdueBacklogTopSuppliersQuery(
+export async function buildShipmentOverdueBacklogTopSuppliersQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit = 3,
-): string {
+): Promise<string> {
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -240,13 +241,13 @@ export function buildShipmentOverdueBacklogTopSuppliersQuery(
     LIMIT ${Math.max(1, Math.min(limit, 10))}`;
 }
 
-export function buildShipmentOverdueExecutionTopSuppliersQuery(
+export async function buildShipmentOverdueExecutionTopSuppliersQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
   limit = 3,
-): string {
+): Promise<string> {
   return `
-    ${buildShipmentOverdueExecutionGroupedRowsCte(shipmentBaseCteSql, toolbarOuterSql)}
+    ${await buildShipmentOverdueExecutionGroupedRowsCte(shipmentBaseCteSql, toolbarOuterSql)}
     SELECT supplier, COALESCE(SUM(outstanding_kg), 0)::numeric AS os_kg
     FROM overdue_rows
     WHERE supplier IS NOT NULL
@@ -256,13 +257,13 @@ export function buildShipmentOverdueExecutionTopSuppliersQuery(
 }
 
 /** Top vessels by overdue OS (execution rows grouped to shipment grain). */
-export function buildShipmentOverdueTopVesselsQuery(
+export async function buildShipmentOverdueTopVesselsQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
   limit = 3,
-): string {
+): Promise<string> {
   return `
-    ${buildShipmentOverdueExecutionGroupedRowsCte(shipmentBaseCteSql, toolbarOuterSql)}
+    ${await buildShipmentOverdueExecutionGroupedRowsCte(shipmentBaseCteSql, toolbarOuterSql)}
     SELECT vessel_name AS vessel, COALESCE(SUM(outstanding_kg), 0)::numeric AS os_kg
     FROM overdue_rows
     WHERE vessel_name IS NOT NULL
@@ -272,16 +273,16 @@ export function buildShipmentOverdueTopVesselsQuery(
 }
 
 /** Carry-over: delivery ended before current month, OS > 0, 3rd Party. */
-export function buildShipmentCarryOverInsightsQuery(
+export async function buildShipmentCarryOverInsightsQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const openWhere = `${buildShipmentPageSeaIncotermScopeSql('c')}
     AND NOT (${sqlIsContractSapInactiveForOsExpr('c')})
     AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF')${contractScopeSql}${toolbarSql}`;
   const backlogWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlOutstandingKg('c');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c

@@ -10,7 +10,7 @@ import {
 } from './shipmentStatusCardQtySql';
 
 describe('shipmentStatusCardQtySql', () => {
-  it('parseShipmentStatusContractQtyFromExecutionRow maps kg fields', () => {
+  it('parseShipmentStatusContractQtyFromExecutionRow maps kg fields', async () => {
     const parsed = parseShipmentStatusContractQtyFromExecutionRow({
       unplanned_execution_contract_qty: '1000',
       planned_contract_qty: 2000,
@@ -25,7 +25,7 @@ describe('shipmentStatusCardQtySql', () => {
     });
   });
 
-  it('parseShipmentStatusOutstandingQtyFromSqlRow maps kg fields', () => {
+  it('parseShipmentStatusOutstandingQtyFromSqlRow maps kg fields', async () => {
     const parsed = parseShipmentStatusOutstandingQtyFromSqlRow({
       at_loading_port_outstanding_qty: '3000',
       sailed_outstanding_qty: 1000,
@@ -38,7 +38,7 @@ describe('shipmentStatusCardQtySql', () => {
     });
   });
 
-  it('mergeShipmentStatusCardQtyParts combines backlog + preplanned', () => {
+  it('mergeShipmentStatusCardQtyParts combines backlog + preplanned', async () => {
     const merged = mergeShipmentStatusCardQtyParts({
       execution: {
         unplannedExecution: 1000,
@@ -67,7 +67,7 @@ describe('shipmentStatusCardQtySql', () => {
     expect(merged.statusOutstandingQty.atLoadingPort).toBe(100);
   });
 
-  it('mergeShipmentStatusCardQtyParts adds completed PO-backlog contract qty', () => {
+  it('mergeShipmentStatusCardQtyParts adds completed PO-backlog contract qty', async () => {
     const merged = mergeShipmentStatusCardQtyParts({
       execution: {
         unplannedExecution: 0,
@@ -93,8 +93,8 @@ describe('shipmentStatusCardQtySql', () => {
     expect(merged.statusContractQty.cancelled).toBe(1700);
   });
 
-  it('buildShipmentStatusCardQtyExecutionAggregateQuery includes stage filters', () => {
-    const sql = buildShipmentStatusCardQtyExecutionAggregateQuery(
+  it('buildShipmentStatusCardQtyExecutionAggregateQuery includes stage filters', async () => {
+    const sql = await buildShipmentStatusCardQtyExecutionAggregateQuery(
       'WITH shipment_base AS (SELECT 1)',
       ' AND sb.incoterm IS NOT NULL',
     );
@@ -116,7 +116,7 @@ describe('shipmentStatusCardQtySql', () => {
     expect(sql).toContain('b2b_child_qty_rollup');
   });
 
-  it('sumShipmentStatusOutstandingQtyKg sums the six active stages', () => {
+  it('sumShipmentStatusOutstandingQtyKg sums the six active stages', async () => {
     expect(
       sumShipmentStatusOutstandingQtyKg({
         unplanned: 1000,
@@ -129,7 +129,7 @@ describe('shipmentStatusCardQtySql', () => {
     ).toBe(21000);
   });
 
-  it('applyShipmentStatusCardZeroGuards clears OS when stage count is 0', () => {
+  it('applyShipmentStatusCardZeroGuards clears OS when stage count is 0', async () => {
     const guarded = applyShipmentStatusCardZeroGuards({
       counts: {
         unplanned: 1,
@@ -169,7 +169,7 @@ describe('shipmentStatusCardQtySql', () => {
     expect(guarded.statusContractQty?.preplanned).toBe(0);
   });
 
-  it('applyShipmentStatusVesselZeroGuards clears vessel lists when count is 0', () => {
+  it('applyShipmentStatusVesselZeroGuards clears vessel lists when count is 0', async () => {
     const vessels = applyShipmentStatusVesselZeroGuards(
       {
         unplanned: 0,

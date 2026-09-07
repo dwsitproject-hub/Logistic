@@ -206,10 +206,10 @@ export function applyShipmentStatusVesselZeroGuards(
 }
 
 /** Toolbar-scoped execution rows — contract qty from linked POs, OS from qty_move. */
-export function buildShipmentStatusCardQtyExecutionAggregateQuery(
+export async function buildShipmentStatusCardQtyExecutionAggregateQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
-): string {
+): Promise<string> {
   return `
     ${shipmentBaseCteSql},
     filtered_shipments AS (
@@ -222,7 +222,7 @@ export function buildShipmentStatusCardQtyExecutionAggregateQuery(
       SELECT fs.*
       FROM filtered_shipments fs
     ),
-    ${shipmentListQtyMoveCteFromPage()},
+    ${await shipmentListQtyMoveCteFromPage()},
     enriched AS (
       SELECT
         ${sqlShipmentSection1LightExecutionEnrichSelect('sp')},

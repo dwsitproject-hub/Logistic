@@ -97,8 +97,8 @@ describe('truckingOutstandingQtySummarySql', () => {
     expect(sqlTruckingSourceIsInterco('c.source_type')).toContain('INHOUSE')
   })
 
-  it('combined backlog query scans the backlog once for count + contract qty + OS aggregates', () => {
-    const text = buildTruckingUnplannedBacklogCombinedQuery('AND c.contract_date >= $1', '')
+  it('combined backlog query scans the backlog once for count + contract qty + OS aggregates', async () => {
+    const text = await buildTruckingUnplannedBacklogCombinedQuery('AND c.contract_date >= $1', '')
     expect(text).toContain('backlog_rows')
     expect(text).toContain('latest_spd_contract')
     expect(text).toContain('COUNT(*)::bigint AS c')

@@ -4,7 +4,8 @@
  * OS Plan = contract − KLIP assignments − SAP STO qty on STO keys without a KLIP assignment.
  */
 
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { STO_QTY_KG_PER_MT, sqlUserStoQtyAssignedToKgSql } from './userStoAssignmentQty';
 
 const SPD_STO_QTY_KG = `NULLIF(regexp_replace(COALESCE(
@@ -263,8 +264,8 @@ export function sqlPoGlobalOutstandingActualKg(opts: {
 }
 
 /** Build qty_move CTE scoped to SEA contracts (for PO search / eligibility). */
-export function buildSeaContractsQtyMoveCte(): string {
-  return buildQtyMoveCte({
+export async function buildSeaContractsQtyMoveCte(): Promise<string> {
+  return resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `
       SELECT c2.contract_id

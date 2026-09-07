@@ -61,7 +61,7 @@ export async function ensureUnplannedTruckingOpsForRequest(
   req: AuthRequest,
 ): Promise<EnsureUnplannedOpsResult> {
   const { contractScopeSql, toolbarSql, params } = buildEnsureFilterParts(req);
-  const text = buildTruckingUnplannedBacklogIdsWithOsQuery(contractScopeSql, toolbarSql);
+  const text = await buildTruckingUnplannedBacklogIdsWithOsQuery(contractScopeSql, toolbarSql);
   const backlog = await query(text, params);
 
   const dmy = formatDDMMYYYY(new Date());

@@ -17,14 +17,14 @@ import {
 } from './shipmentOutstandingQtySummarySql'
 
 describe('shipmentOutstandingQtySummarySql', () => {
-  it('normalizes osStatus and treats ALL as null', () => {
+  it('normalizes osStatus and treats ALL as null', async () => {
     expect(normalizeShipmentOsStatusParam('PLANNED')).toBe('PLANNED')
     expect(normalizeShipmentOsStatusParam('AT_LOADING_PORT')).toBe('AT_LOADING_PORT')
     expect(normalizeShipmentOsStatusParam('ALL')).toBeNull()
     expect(normalizeShipmentOsStatusParam(undefined)).toBeNull()
   })
 
-  it('marks Completed/Cancelled outside active OS scope', () => {
+  it('marks Completed/Cancelled outside active OS scope', async () => {
     expect(isShipmentOsStatusOutsideActiveScope('COMPLETED')).toBe(true)
     expect(isShipmentOsStatusOutsideActiveScope('CANCELLED')).toBe(true)
     expect(isShipmentOsStatusOutsideActiveScope('PLANNED')).toBe(false)
@@ -33,22 +33,22 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(isShipmentOsStatusOutsideActiveScope(null)).toBe(false)
   })
 
-  it('includes unplanned backlog only for ALL or UNPLANNED (helper; page KPI always uses null)', () => {
+  it('includes unplanned backlog only for ALL or UNPLANNED (helper; page KPI always uses null)', async () => {
     expect(shouldIncludeShipmentUnplannedBacklogForOs(null)).toBe(true)
     expect(shouldIncludeShipmentUnplannedBacklogForOs('UNPLANNED')).toBe(true)
     expect(shouldIncludeShipmentUnplannedBacklogForOs('PLANNED')).toBe(false)
     expect(shouldIncludeShipmentUnplannedBacklogForOs('SAILED')).toBe(false)
   })
 
-  it('includes preplanned backlog only for ALL or PREPLANNED', () => {
+  it('includes preplanned backlog only for ALL or PREPLANNED', async () => {
     expect(shouldIncludeShipmentPreplannedBacklogForOs(null)).toBe(true)
     expect(shouldIncludeShipmentPreplannedBacklogForOs('PREPLANNED')).toBe(true)
     expect(shouldIncludeShipmentPreplannedBacklogForOs('UNPLANNED')).toBe(false)
     expect(shouldIncludeShipmentPreplannedBacklogForOs('PLANNED')).toBe(false)
   })
 
-  it('page KPI path (osStatus null) uses qty_move execution_os without sto_metrics', () => {
-    const q = buildShipmentOutstandingQtyExecutionAggregateQuery(
+  it('page KPI path (osStatus null) uses qty_move execution_os without sto_metrics', async () => {
+    const q = await buildShipmentOutstandingQtyExecutionAggregateQuery(
       'WITH shipment_base AS (SELECT 1)',
       ' AND TRUE',
       [],
@@ -71,8 +71,8 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(q.params).toEqual([])
   })
 
-  it('backlog aggregate uses the same Unplanned/Preplanned rows and card OS, sliced by SAP-aware source × effective incoterm', () => {
-    const sql = buildShipmentOutstandingQtyBacklogAggregateQuery('', '')
+  it('backlog aggregate uses the same Unplanned/Preplanned rows and card OS, sliced by SAP-aware source × effective incoterm', async () => {
+    const sql = await buildShipmentOutstandingQtyBacklogAggregateQuery('', '')
     expect(sql).toContain('UNION ALL')
     expect(sql).toContain("'CFR'")
     expect(sql).toContain('qty_move')
@@ -90,7 +90,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     )
   })
 
-  it('parses and merges bucket rows; totalKg uses card_total_kg when present', () => {
+  it('parses and merges bucket rows; totalKg uses card_total_kg when present', async () => {
     const a = parseShipmentOutstandingQtySummaryRow({
       third_party_fob_kg: 1000,
       third_party_cif_kg: 2000,
@@ -118,7 +118,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(merged.totalKg).toBe(12900)
   })
 
-  it('falls back to bucket sum for totalKg when card_total_kg is absent', () => {
+  it('falls back to bucket sum for totalKg when card_total_kg is absent', async () => {
     const row = parseShipmentOutstandingQtySummaryRow({
       third_party_fob_kg: 100,
       third_party_cif_kg: 0,
@@ -130,7 +130,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(row.totalKg).toBe(100)
   })
 
-  it('alignShipmentOutstandingQtyTotalToCardSum sets Other residual so buckets + Other = total', () => {
+  it('alignShipmentOutstandingQtyTotalToCardSum sets Other residual so buckets + Other = total', async () => {
     const aligned = alignShipmentOutstandingQtyTotalToCardSum(
       {
         totalKg: 999,
@@ -146,7 +146,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(aligned.otherKg).toBe(21000 - 210)
   })
 
-  it('reconcileShipmentOutstandingQtySummary keeps identity 3rd+Interco+Other = total', () => {
+  it('reconcileShipmentOutstandingQtySummary keeps identity 3rd+Interco+Other = total', async () => {
     const row = reconcileShipmentOutstandingQtySummary(
       {
         totalKg: 1000,
@@ -167,7 +167,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     ).toBe(row.totalKg)
   })
 
-  it('builds source_type predicates matching Contract Performance rules', () => {
+  it('builds source_type predicates matching Contract Performance rules', async () => {
     expect(sqlShipmentSourceIsThirdParty('c.source_type')).toContain("'3RD'")
     expect(sqlShipmentSourceIsThirdParty('c.source_type')).toContain("'PARTY'")
     expect(sqlShipmentSourceIsInterco('c.source_type')).toContain('INTERCO')
@@ -175,7 +175,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(sqlShipmentIncotermIsCfr('c.incoterm')).toContain("'CFR'")
   })
 
-  it('active stage predicate includes planned/sailed loading groups', () => {
+  it('active stage predicate includes planned/sailed loading groups', async () => {
     const sql = sqlShipmentOutstandingActiveStagePredicate('f')
     expect(sql).toContain('PLANNED')
     expect(sql).toContain('SAILED')

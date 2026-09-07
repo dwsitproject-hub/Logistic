@@ -9,7 +9,7 @@ import {
 } from './shipmentList.service';
 
 describe('buildShipmentListStatusFilteredCountQuery', () => {
-  it('counts filtered_shipments on full base CTE with toolbar + status outerSql', () => {
+  it('counts filtered_shipments on full base CTE with toolbar + status outerSql', async () => {
     const q = buildShipmentListStatusFilteredCountQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
       countShipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
@@ -31,7 +31,7 @@ describe('buildShipmentListStatusFilteredCountQuery', () => {
 });
 
 describe('seedShipmentListFilteredTotal', () => {
-  it('seeds COUNT_CACHE so status-card paging can skip a second live COUNT', () => {
+  it('seeds COUNT_CACHE so status-card paging can skip a second live COUNT', async () => {
     invalidateShipmentsListCache();
     const filterCacheKey = 'opt3-snapshot-gate-seed-test';
     expect(getCachedFilteredTotal(filterCacheKey)).toBeNull();
@@ -43,8 +43,8 @@ describe('seedShipmentListFilteredTotal', () => {
 });
 
 describe('buildShipmentListPageQuery', () => {
-  it('selects SQL effective_status so table badges match status cards', () => {
-    const q = buildShipmentListPageQuery(
+  it('selects SQL effective_status so table badges match status cards', async () => {
+    const q = await buildShipmentListPageQuery(
       {
         shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
         outerSql: '',
@@ -63,8 +63,8 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('vessel_name_master');
   });
 
-  it('skipSapJoin shell omits qty_move and sto_metrics so first paint cannot drift OS/receive/delivery', () => {
-    const q = buildShipmentListPageQuery(
+  it('skipSapJoin shell omits qty_move and sto_metrics so first paint cannot drift OS/receive/delivery', async () => {
+    const q = await buildShipmentListPageQuery(
       {
         shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
         outerSql: '',
@@ -88,8 +88,8 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('vessel_name_master');
   });
 
-  it('hydrate skipSapJoin=false keeps list qty SQL for OS, receive, and delivery', () => {
-    const q = buildShipmentListPageQuery(
+  it('hydrate skipSapJoin=false keeps list qty SQL for OS, receive, and delivery', async () => {
+    const q = await buildShipmentListPageQuery(
       {
         shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
         outerSql: '',
@@ -113,8 +113,8 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('quantity_delivered_klip');
   });
 
-  it('enriches before ORDER BY for contract_qty even when skipSapJoin is true', () => {
-    const q = buildShipmentListPageQuery(
+  it('enriches before ORDER BY for contract_qty even when skipSapJoin is true', async () => {
+    const q = await buildShipmentListPageQuery(
       {
         shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
         outerSql: '',
@@ -133,8 +133,8 @@ describe('buildShipmentListPageQuery', () => {
     expect(q.text).toContain('le.contract_qty DESC');
   });
 
-  it('enriches before ORDER BY for outstanding_quantity even when skipSapJoin is true', () => {
-    const q = buildShipmentListPageQuery(
+  it('enriches before ORDER BY for outstanding_quantity even when skipSapJoin is true', async () => {
+    const q = await buildShipmentListPageQuery(
       {
         shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
         outerSql: '',
@@ -158,7 +158,7 @@ describe('buildShipmentListPageQuery', () => {
 });
 
 describe('normalizeShipmentListRows', () => {
-  it('does not floor to SAILED when is_contract_sap_closed is TRUE (GR Close)', () => {
+  it('does not floor to SAILED when is_contract_sap_closed is TRUE (GR Close)', async () => {
     const rows = normalizeShipmentListRows([
       {
         row_kind: 'shipment',
@@ -173,7 +173,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('COMPLETED');
   });
 
-  it('does not floor ATA sailed when GR is Open and members disagree', () => {
+  it('does not floor ATA sailed when GR is Open and members disagree', async () => {
     const rows = normalizeShipmentListRows([
       {
         row_kind: 'shipment',
@@ -188,7 +188,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('SAILED');
   });
 
-  it('keeps SQL effective_status when JS ATA would promote to Arrived LP', () => {
+  it('keeps SQL effective_status when JS ATA would promote to Arrived LP', async () => {
     const rows = normalizeShipmentListRows([
       {
         row_kind: 'shipment',
@@ -202,7 +202,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.effective_status).toBeUndefined();
   });
 
-  it('keeps COMPLETED on contract_backlog rows (low remaining OS)', () => {
+  it('keeps COMPLETED on contract_backlog rows (low remaining OS)', async () => {
     const rows = normalizeShipmentListRows([
       {
         row_kind: 'contract_backlog',
@@ -213,7 +213,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('COMPLETED');
   });
 
-  it('keeps CANCELLED on contract_backlog rows', () => {
+  it('keeps CANCELLED on contract_backlog rows', async () => {
     const rows = normalizeShipmentListRows([
       {
         row_kind: 'contract_backlog',
@@ -224,7 +224,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('CANCELLED');
   });
 
-  it('keeps PREPLANNED on contract_backlog rows', () => {
+  it('keeps PREPLANNED on contract_backlog rows', async () => {
     const rows = normalizeShipmentListRows([
       {
         row_kind: 'contract_backlog',
@@ -235,7 +235,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('PREPLANNED');
   });
 
-  it('attaches SEA Trade Cycle on contract_backlog when ETA present; null without ETA', () => {
+  it('attaches SEA Trade Cycle on contract_backlog when ETA present; null without ETA', async () => {
     const yesterday = new Date();
     yesterday.setHours(0, 0, 0, 0);
     yesterday.setDate(yesterday.getDate() - 2);
@@ -274,7 +274,7 @@ describe('normalizeShipmentListRows', () => {
     expect(Number(withPastEta[0]?.trade_cycle_days)).toBeGreaterThan(0);
   });
 
-  it('attaches SEA Trade Cycle on shipment execution rows', () => {
+  it('attaches SEA Trade Cycle on shipment execution rows', async () => {
     const yesterday = new Date();
     yesterday.setHours(0, 0, 0, 0);
     yesterday.setDate(yesterday.getDate() - 2);

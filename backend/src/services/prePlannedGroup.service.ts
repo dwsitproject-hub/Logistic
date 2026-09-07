@@ -77,7 +77,7 @@ function memberSignature(members: PrePlannedEligibleContract[]): string {
 
 async function fetchEligibleContracts(): Promise<PrePlannedEligibleContract[]> {
   const cfg = getPrePlannedConfig();
-  const { sql, params } = buildPrePlannedEligibleContractsQuery({
+  const { sql, params } = await buildPrePlannedEligibleContractsQuery({
     excludedPlants: cfg.excludedPlants,
     minOsMt: cfg.minOsMt,
   });
@@ -392,7 +392,7 @@ export async function createManualPrePlannedGroup(
     throw new Error('Select at least 2 contracts to create a manual Preplanned group');
   }
 
-  const { sql, params } = buildManualPrePlannedEligibleContractsByIdsQuery(dedupedIds);
+  const { sql, params } = await buildManualPrePlannedEligibleContractsByIdsQuery(dedupedIds);
   const res = await query(sql, params);
   const eligible = res.rows.map(mapEligibleRow);
 

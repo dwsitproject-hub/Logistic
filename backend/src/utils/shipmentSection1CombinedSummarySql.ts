@@ -96,7 +96,7 @@ export interface ShipmentSection1CombinedSummaryQueryOpts {
   summaryEnrichedFrom: string;
 }
 
-function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSummaryQueryOpts): string {
+async function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSummaryQueryOpts): Promise<string> {
   const masterJoin = sqlMasterVesselLateralJoin(
     'f.vessel_code',
     'f.vessel_name',
@@ -117,7 +117,7 @@ function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSumm
       , shipment_page AS (
         SELECT * FROM ${opts.summaryEnrichedFrom}
       )
-      , ${shipmentListQtyMoveCteFromPage('shipment_page')}
+      , ${await shipmentListQtyMoveCteFromPage('shipment_page')}
       , enriched AS (
         SELECT
           f.*,
@@ -139,11 +139,11 @@ function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1CombinedSumm
  * Live vessel-name arrays + execution stage counts for pipeline cards.
  * Used to overlay stale daily snapshot counts with the same toolbar-scoped live scan.
  */
-export function buildPipelineCardVesselNamesQuery(
+export async function buildPipelineCardVesselNamesQuery(
   opts: ShipmentSection1CombinedSummaryQueryOpts,
-): string {
+): Promise<string> {
   const displayVessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
-  return `${buildShipmentSection1SummaryCteBlock(opts)}
+  return `${await buildShipmentSection1SummaryCteBlock(opts)}
       SELECT
         ${shipmentPagePipelineSummarySelectSql()},
         ${shipmentPagePipelineVesselNamesSelectSql(displayVessel)},
@@ -238,12 +238,12 @@ export function overlayShipmentDailySummaryLiveStageCounts(
 }
 
 /** Pipeline summary + status-card contract/OS qty (qty_move, no sto_metrics). */
-export function buildShipmentSection1CombinedSummaryQuery(
+export async function buildShipmentSection1CombinedSummaryQuery(
   opts: ShipmentSection1CombinedSummaryQueryOpts,
-): string {
+): Promise<string> {
   const displayVessel = shipmentPipelineEnrichedDisplayVesselKeyExpr('e');
 
-  return `${buildShipmentSection1SummaryCteBlock(opts)}
+  return `${await buildShipmentSection1SummaryCteBlock(opts)}
       SELECT
         COUNT(*)::bigint AS total_count,
         ${shipmentPagePipelineSummarySelectSql()},

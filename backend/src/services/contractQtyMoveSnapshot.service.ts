@@ -12,16 +12,45 @@ import logger from '../utils/logger';
 const STALE_REFRESH_DEBOUNCE_MS = 60_000;
 let lastStaleRefreshAt = 0;
 
+/**
+ * Freshness is probed once per builder, and a page builds several queries - measured at 1.3s per
+ * probe under load, enough to blow a 5s budget on its own. Cache it for a beat so all builders in
+ * one request share a single probe, and invalidate explicitly whenever the flag actually moves
+ * (mark-stale / refresh completion) so the TTL can never straddle an import boundary.
+ */
+const FRESHNESS_TTL_MS = 2_000;
+let freshnessCache: { value: boolean; at: number } | null = null;
+
+export function invalidateContractQtyMoveSnapshotFreshness(): void {
+  freshnessCache = null;
+}
+
 export async function isContractQtyMoveSnapshotFresh(): Promise<boolean> {
-  const res = await query(
-    `SELECT is_stale FROM contract_qty_move_snapshot_meta WHERE id = 'global' LIMIT 1`,
-  );
-  const row = res.rows[0] as { is_stale?: boolean } | undefined;
-  return Boolean(row && !row.is_stale);
+  const now = Date.now();
+  if (freshnessCache && now - freshnessCache.at < FRESHNESS_TTL_MS) {
+    return freshnessCache.value;
+  }
+  try {
+    const res = await query(
+      `SELECT is_stale FROM contract_qty_move_snapshot_meta WHERE id = 'global' LIMIT 1`,
+    );
+    const row = res.rows[0] as { is_stale?: boolean } | undefined;
+    const value = Boolean(row && !row.is_stale);
+    freshnessCache = { value, at: now };
+    return value;
+  } catch (err) {
+    /** A probe failure must not fail the caller's page query - degrade to the live CTE. */
+    logger.warn('contract_qty_move snapshot freshness probe failed; using live qty_move', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    freshnessCache = { value: false, at: now };
+    return false;
+  }
 }
 
 export async function markContractQtyMoveSnapshotStale(): Promise<void> {
   await query(`UPDATE contract_qty_move_snapshot_meta SET is_stale = TRUE WHERE id = 'global'`);
+  invalidateContractQtyMoveSnapshotFreshness();
   scheduleContractQtyMoveSnapshotRefreshIfNeeded();
 }
 
@@ -62,6 +91,7 @@ export class ContractQtyMoveSnapshotService {
     await query(
       `UPDATE contract_qty_move_snapshot_meta SET is_stale = TRUE WHERE id = 'global'`,
     );
+    invalidateContractQtyMoveSnapshotFreshness();
 
     const client = await getClient();
     let rowCount = 0;
@@ -93,6 +123,7 @@ export class ContractQtyMoveSnapshotService {
        WHERE id = 'global'`,
       [rowCount, durationMs],
     );
+    invalidateContractQtyMoveSnapshotFreshness();
     logger.info('Contract qty_move snapshot refreshed', { rowCount, durationMs });
     return rowCount;
   }

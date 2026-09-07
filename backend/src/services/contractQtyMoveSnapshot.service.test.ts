@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const queryMock = vi.fn();
 vi.mock('../database/connection', () => ({
   query: (...args: unknown[]) => queryMock(...args),
 }));
 
-import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
+import {
+  invalidateContractQtyMoveSnapshotFreshness,
+  resolveContractsQtyMoveCte,
+} from './contractQtyMoveSnapshot.service';
+
+beforeEach(() => {
+  invalidateContractQtyMoveSnapshotFreshness();
+});
 
 function mockSnapshotIsStale(isStale: boolean): void {
   queryMock.mockResolvedValueOnce({ rows: [{ is_stale: isStale }] });

@@ -10,7 +10,7 @@ import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { sqlShipmentListB2bOriginContractJoins } from './shipmentB2bOriginSql';
 import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
-function buildStoPagingListSql(): string {
+async function buildStoPagingListSql(): Promise<string> {
   const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
   const seaIncoterm = buildShipmentPageSeaIncotermScopeSql('c');
   const coreWhereSql = `${seaIncoterm} AND c.contract_date >= $1 AND c.contract_date <= $2`;
@@ -34,7 +34,7 @@ function buildStoPagingListSql(): string {
   );
   if (!injected) throw new Error('inject failed');
 
-  return buildShipmentListPageQuery(
+  return (await buildShipmentListPageQuery(
     {
       shipmentBaseCteSql: injected,
       outerSql: '',
@@ -47,18 +47,18 @@ function buildStoPagingListSql(): string {
     },
     20,
     0,
-  ).text;
+  )).text;
 }
 
 describe('shipmentListStoPaging SQL shape', () => {
-  it('does not corrupt numeric-shipment regex when injecting paged filter', () => {
-    const sql = buildStoPagingListSql();
+  it('does not corrupt numeric-shipment regex when injecting paged filter', async () => {
+    const sql = await buildStoPagingListSql();
     expect(sql).toContain("'^[0-9]+$'");
     expect(sql).not.toContain("'^[0-9]+ GROUP BY");
   });
 
-  it('injected SQL uses sto_link_agg enrich and ranked_sto total', () => {
-    const sql = buildStoPagingListSql();
+  it('injected SQL uses sto_link_agg enrich and ranked_sto total', async () => {
+    const sql = await buildStoPagingListSql();
     expect(sql).toContain('sto_link_agg AS');
     expect(sql).toContain('LEFT JOIN sto_link_agg sla');
     expect(sql).toContain('FROM ranked_sto) AS __filter_total');

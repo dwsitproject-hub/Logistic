@@ -7,8 +7,8 @@ import {
 } from './oilLossSapSql';
 
 describe('buildOilLossMainSql', () => {
-  it('resolves qty from Contracts qty_move (same as Contracts View Table)', () => {
-    const sql = buildOilLossMainSql();
+  it('resolves qty from Contracts qty_move (same as Contracts View Table)', async () => {
+    const sql = await buildOilLossMainSql();
     expect(sql).toContain('oil_loss_closed');
     expect(sql).toContain('oil_loss_eligible');
     expect(sql).toContain('oil_loss_contract_scope');
@@ -26,8 +26,8 @@ describe('buildOilLossMainSql', () => {
     expect(sql).toContain('quantity_delivery_vessel');
   });
 
-  it('resolves SFAL/SFBD via SAP then trucking then non-zero shipment', () => {
-    const sql = buildOilLossMainSql();
+  it('resolves SFAL/SFBD via SAP then trucking then non-zero shipment', async () => {
+    const sql = await buildOilLossMainSql();
     expect(sql).toContain('trucking_sfal_kg');
     expect(sql).toContain('trucking_sfbd_kg');
     expect(sql).toContain('NULLIF(shipment_sfal_kg, 0)');
@@ -44,8 +44,8 @@ describe('buildOilLossMainSql', () => {
 });
 
 describe('operation_id derivation (SEA voyage / LAND trucking op id, with fallback)', () => {
-  it('prefers shipment/trucking Operation ID over the legacy Contract Ext No fallback', () => {
-    const sql = buildOilLossMainSql();
+  it('prefers shipment/trucking Operation ID over the legacy Contract Ext No fallback', async () => {
+    const sql = await buildOilLossMainSql();
     expect(sql).toContain('operation_id_sap_fallback');
     expect(sql).toContain('sh_sto.operation_id');
     expect(sql).toContain('sh_sto.sto_key');
@@ -57,8 +57,8 @@ describe('operation_id derivation (SEA voyage / LAND trucking op id, with fallba
     expect(sql).toContain("NULLIF(TRIM(p.operation_id_sap_fallback), '')");
   });
 
-  it('selects operation_id from shipments and trucking lookup CTEs', () => {
-    const sql = buildOilLossMainSql();
+  it('selects operation_id from shipments and trucking lookup CTEs', async () => {
+    const sql = await buildOilLossMainSql();
     expect(sql).toContain('NULLIF(TRIM(operation_id), \'\') AS operation_id');
   });
 });
@@ -91,8 +91,8 @@ describe('oilLossSapSql UAT fields', () => {
     expect(SAP_OIL_LOSS_QTY_VESSEL_NUMERIC).toContain('Quantity Delivery Vessel');
   });
 
-  it('casts SAP qty only when the cleaned cell is a single number', () => {
-    const sql = buildOilLossMainSql();
+  it('casts SAP qty only when the cleaned cell is a single number', async () => {
+    const sql = await buildOilLossMainSql();
     expect(SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC).toContain('^-?[0-9]+');
     expect(SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC).toContain('ELSE NULL');
     expect(sql).toContain('^-?[0-9]+');

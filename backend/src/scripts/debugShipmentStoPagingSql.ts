@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     usesStoKeyPaging: true,
   };
 
-  const page = buildShipmentListPageQuery(ctx, 20, 0);
+  const page = await buildShipmentListPageQuery(ctx, 20, 0);
   console.log('SQL length', page.text.length);
   const res = await query(page.text, page.params);
   console.log('rows', res.rowCount);

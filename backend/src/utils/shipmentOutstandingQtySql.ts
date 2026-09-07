@@ -2,10 +2,8 @@ import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
 } from './shipmentManualQtyResolveSql';
-import {
-  buildQtyMoveCte,
-  sqlContractGlobalOutstandingExpr,
-} from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 
 /**
  * Outstanding quantity (kg) using the same incoterm rules as the Contracts list:
@@ -62,8 +60,10 @@ export function shipmentListOutstandingQtySql(
 }
 
 /** Page-scoped qty_move for shipments list (contracts on current page only). */
-export function shipmentListQtyMoveCteFromPage(pageCte = 'shipment_page'): string {
-  return buildQtyMoveCte({
+export async function shipmentListQtyMoveCteFromPage(
+  pageCte = 'shipment_page',
+): Promise<string> {
+  return resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT DISTINCT TRIM(cn) AS contract_number
       FROM ${pageCte} sp

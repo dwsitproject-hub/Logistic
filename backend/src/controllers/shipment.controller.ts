@@ -1326,7 +1326,7 @@ ${contractMetaSelectCore}
       });
     }
 
-    const summaryCountQuery = buildShipmentSection1CombinedSummaryQuery({
+    const summaryCountQuery = await buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: shipmentBaseCteSqlSummary,
       unplannedBacklogCountCteSql: buildUnplannedContractBacklogTableCountCte(contractScopeSql),
       toolbarOuterSql: section1SummaryFilterSql,
@@ -2124,7 +2124,7 @@ ${contractMetaSelectCore}
           AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       ),
       ${shipmentPageCte},
-      ${shipmentListQtyMoveCteFromPage()},
+      ${await shipmentListQtyMoveCteFromPage()},
       ${spdAggCtes}
       SELECT 
         sp.*,

@@ -1,8 +1,6 @@
 import { query } from '../database/connection';
-import {
-  buildQtyMoveCte,
-  sqlContractGlobalOutstandingExpr,
-} from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import {
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
@@ -88,7 +86,7 @@ export function validatePlanningTotalAgainstOutstandingKg(
 /** KLIP OS Qty actual (kg) for open contract backlog / unplanned rows. */
 export async function fetchContractOutstandingQtyKg(contractUuid: string): Promise<number | null> {
   const subquery = `SELECT c.contract_id FROM contracts c WHERE c.id = $1::uuid`;
-  const qtyMoveCte = buildQtyMoveCte({ kind: 'in_subquery', subquery });
+  const qtyMoveCte = await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery });
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',

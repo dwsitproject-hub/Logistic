@@ -7,7 +7,8 @@
  * residual is otherKg.
  */
 
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { normalizeTruckingPagePipelineStageParam } from './truckingPagePipelineSql';
 import {
   buildTruckingUnplannedBacklogLatestSpdCte,
@@ -286,17 +287,17 @@ export function buildTruckingOutstandingQtyExecutionAggregateQuery(
   return { text, params };
 }
 
-function buildTruckingUnplannedBacklogOsCtes(
+async function buildTruckingUnplannedBacklogOsCtes(
   contractScopeSql: string,
   toolbarSql: string,
-): { backlogWhere: string; outstandingExpr: string; qtyMoveCte: string } {
+): Promise<{ backlogWhere: string; outstandingExpr: string; qtyMoveCte: string }> {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -311,11 +312,11 @@ function buildTruckingUnplannedBacklogOsCtes(
  * Aggregate Unplanned backlog at outstanding qty (no trucking op yet).
  * @deprecated Use `buildTruckingUnplannedBacklogCombinedQuery`.
  */
-export function buildTruckingOutstandingQtyBacklogAggregateQuery(
+export async function buildTruckingOutstandingQtyBacklogAggregateQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
-  const { backlogWhere, outstandingExpr, qtyMoveCte } = buildTruckingUnplannedBacklogOsCtes(
+): Promise<string> {
+  const { backlogWhere, outstandingExpr, qtyMoveCte } = await buildTruckingUnplannedBacklogOsCtes(
     contractScopeSql,
     toolbarSql,
   );
@@ -347,11 +348,11 @@ export function buildTruckingOutstandingQtyBacklogAggregateQuery(
  * Section 1 Summary/OS backlog — single scan of the unplanned contract backlog for
  * COUNT + contract qty (kg) + strip buckets (Unplanned = outstanding qty, clamped at 0).
  */
-export function buildTruckingUnplannedBacklogCombinedQuery(
+export async function buildTruckingUnplannedBacklogCombinedQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
-  const { backlogWhere, outstandingExpr, qtyMoveCte } = buildTruckingUnplannedBacklogOsCtes(
+): Promise<string> {
+  const { backlogWhere, outstandingExpr, qtyMoveCte } = await buildTruckingUnplannedBacklogOsCtes(
     contractScopeSql,
     toolbarSql,
   );

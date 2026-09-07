@@ -26,15 +26,19 @@ import { query } from '../database/connection';
 import { allocateNextSyntheticSequenceDefault } from '../utils/operationId';
 import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
 import { invalidateTruckingListCache } from './truckingList.service';
+import { invalidateContractQtyMoveSnapshotFreshness } from './contractQtyMoveSnapshot.service';
 import { ensureUnplannedTruckingOpsForRequest } from './truckingEnsureUnplannedOps.service';
 
 describe('ensureUnplannedTruckingOpsForRequest', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    invalidateContractQtyMoveSnapshotFreshness();
   });
 
   it('creates UNPLANNED op via getOrCreate for backlog contract without active op', async () => {
     const contractId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    // resolveContractsQtyMoveCte probes snapshot freshness first; keep it on the live path.
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ is_stale: true }], rowCount: 1 } as never);
     vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: contractId }], rowCount: 1 } as never);
     vi.mocked(allocateNextSyntheticSequenceDefault).mockResolvedValueOnce(7);
     vi.mocked(getOrCreateActiveTruckingOp).mockImplementation(async (_db, _id, opts) => ({
@@ -54,6 +58,8 @@ describe('ensureUnplannedTruckingOpsForRequest', () => {
   });
 
   it('second run creates 0 when backlog query returns empty (already has op)', async () => {
+    // resolveContractsQtyMoveCte probes snapshot freshness first; keep it on the live path.
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ is_stale: true }], rowCount: 1 } as never);
     vi.mocked(query).mockResolvedValueOnce({ rows: [], rowCount: 0 } as never);
 
     const req = { query: {} } as AuthRequest;
@@ -67,6 +73,8 @@ describe('ensureUnplannedTruckingOpsForRequest', () => {
 
   it('skips contract that already has an active trucking op', async () => {
     const contractId = '11111111-2222-3333-4444-555555555555';
+    // resolveContractsQtyMoveCte probes snapshot freshness first; keep it on the live path.
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ is_stale: true }], rowCount: 1 } as never);
     vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: contractId }], rowCount: 1 } as never);
     vi.mocked(getOrCreateActiveTruckingOp).mockResolvedValueOnce({
       id: 'op-1',

@@ -26,7 +26,7 @@ import {
   SAP_SFBD_NUMERIC_EXPR,
   sqlOilLossUatQtyDeliveryExpr,
 } from './oilLossSapSql';
-import { buildQtyMoveCte } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 
 /** Pre-aggregated lookups — avoids per-row LATERAL scans over full SAP dataset. */
@@ -251,7 +251,7 @@ export function buildOilLossWithQtyCtes(): string {
     )`;
 }
 
-export function buildOilLossMainSql(): string {
+export async function buildOilLossMainSql(): Promise<string> {
   // Align Qty Delivery with Contracts View Table: qty_move + UAT Incoterm×Mode matrix.
   const contractsListDeliveryExpr = sqlQtyMoveJoinIncotermDelivery(
     `COALESCE(NULLIF(TRIM(oil_loss_eligible.incoterm), ''), '')`,
@@ -307,7 +307,7 @@ export function buildOilLossMainSql(): string {
       FROM oil_loss_eligible
       WHERE NULLIF(TRIM(contract_number), '') IS NOT NULL
     ),
-    ${buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'oil_loss_contract_scope' })}
+    ${await resolveContractsQtyMoveCte({ kind: 'join_scope', scopeCteName: 'oil_loss_contract_scope' })}
     SELECT
       id,
       transport_mode,

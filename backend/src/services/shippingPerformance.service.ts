@@ -11,7 +11,7 @@ import {
   buildShippingPerfViewTableQtySelectSql,
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
-import { buildQtyMoveCte } from '../utils/contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
 import { shippingPerfOutstandingQtyKgForAggregate } from '../utils/shippingPerformanceOutstandingAgg';
 import {
   shippingPerfStoGroupKeyFromRow,
@@ -305,6 +305,10 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
     outstanding_qty_actual: metrics.outstandingQtyActual,
     outstanding_qty_planning: metrics.outstandingQtyPlanning,
     outstanding_qty: metrics.outstandingQtyActual,
+    outstanding_qty_aggregate: rows.reduce((best, row) => {
+      const n = Number(row.outstanding_qty_aggregate ?? 0);
+      return Number.isFinite(n) && n > best ? n : best;
+    }, 0),
     po_sto_count: Math.max(
       ...rows.map((row) => {
         const n = Number(row.po_sto_count ?? 1);
@@ -399,7 +403,8 @@ const SHIPPING_PERF_SEA_ROW_SCOPE = buildShipmentPageSeaRowScopeSql('c', 'l', 's
 
 const SHIPPING_PERF_VIEW_TABLE_QTY = buildShippingPerfViewTableQtySelectSql();
 
-const SHIPPING_PERFORMANCE_SQL = `
+export async function buildShippingPerformanceSql(): Promise<string> {
+  return `
       WITH latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
@@ -528,7 +533,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         WHERE COALESCE(vlp.is_discharge_port, false) = true
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
       ),
-      ${buildQtyMoveCte({
+      ${await resolveContractsQtyMoveCte({
         kind: 'in_subquery',
         subquery: `SELECT DISTINCT TRIM(sk.contract_id)
           FROM ship_keys sk
@@ -663,6 +668,7 @@ const SHIPPING_PERFORMANCE_SQL = `
         COALESCE(sm.planning_qty, 0)::numeric AS planning_qty,
         COALESCE(sm.po_sto_count, 1)::int AS po_sto_count,
         ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingActualSql} AS outstanding_qty_actual,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingAggregateSql} AS outstanding_qty_aggregate,
         COALESCE(sm.outstanding_qty_planning, 0)::numeric AS outstanding_qty_planning,
         ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingActualSql} AS outstanding_qty
       FROM shipments s
@@ -686,6 +692,7 @@ const SHIPPING_PERFORMANCE_SQL = `
       -- among ties is plan-dependent, and the STO-group merge picks fields from the last
       -- tied row it sees. Ties keep a stable order now.
       ORDER BY s.created_at DESC, s.id DESC`;
+}
 
 function parseStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -856,7 +863,7 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
-      const result = await query(SHIPPING_PERFORMANCE_SQL);
+      const result = await query(await buildShippingPerformanceSql());
       const rows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
       ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       return rows;

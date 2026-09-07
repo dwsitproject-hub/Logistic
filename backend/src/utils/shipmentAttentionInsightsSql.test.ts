@@ -10,11 +10,11 @@ import {
 import { unplannedContractBacklogBaseWhereSql } from './shipmentUnplannedHybridSql'
 
 describe('shipmentAttentionInsightsSql', () => {
-  it('uses hybrid row key coalesce for execution overdue', () => {
+  it('uses hybrid row key coalesce for execution overdue', async () => {
     expect(sqlShipmentHybridRowKey('sp.sto_number', 'sp.operation_id', 'sp.sto_key')).toBe(
       "COALESCE(NULLIF(TRIM(sp.sto_number), ''), NULLIF(TRIM(sp.operation_id), ''), sp.sto_key)",
     )
-    const q = buildShipmentOverdueExecutionAggregateQuery(
+    const q = await buildShipmentOverdueExecutionAggregateQuery(
       'WITH shipment_base AS (SELECT 1 AS x)',
       ' AND TRUE',
     )
@@ -24,8 +24,8 @@ describe('shipmentAttentionInsightsSql', () => {
     expect(q).toContain('GROUP BY row_key')
   })
 
-  it('backlog overdue uses unplanned base where and sea FOB/CIF scope', () => {
-    const q = buildShipmentOverdueBacklogAggregateQuery('', '')
+  it('backlog overdue uses unplanned base where and sea FOB/CIF scope', async () => {
+    const q = await buildShipmentOverdueBacklogAggregateQuery('', '')
     expect(q).toContain(unplannedContractBacklogBaseWhereSql('c', 'l').trim())
     expect(q).toContain("('contract:' || c.id::text) AS row_key")
     expect(q).toContain("delivery_end_date::date < CURRENT_DATE")
@@ -33,8 +33,8 @@ describe('shipmentAttentionInsightsSql', () => {
     expect(q).toContain('bucket_1_7_kg')
   })
 
-  it('execution overdue applies unplanned predicate and vessel_name column', () => {
-    const q = buildShipmentOverdueExecutionAggregateQuery(
+  it('execution overdue applies unplanned predicate and vessel_name column', async () => {
+    const q = await buildShipmentOverdueExecutionAggregateQuery(
       'WITH shipment_base AS (SELECT 1)',
       ' AND sb.product = $1',
     )
@@ -45,8 +45,8 @@ describe('shipmentAttentionInsightsSql', () => {
     expect(q).toContain('CIF')
   })
 
-  it('top vessels query groups by vessel on execution rows only', () => {
-    const q = buildShipmentOverdueTopVesselsQuery(
+  it('top vessels query groups by vessel on execution rows only', async () => {
+    const q = await buildShipmentOverdueTopVesselsQuery(
       'WITH shipment_base AS (SELECT 1)',
       ' AND TRUE',
     )
@@ -57,8 +57,8 @@ describe('shipmentAttentionInsightsSql', () => {
     expect(q).toContain('LIMIT 3')
   })
 
-  it('carry-over excludes preplanned via backlog where', () => {
-    const q = buildShipmentCarryOverInsightsQuery('', '')
+  it('carry-over excludes preplanned via backlog where', async () => {
+    const q = await buildShipmentCarryOverInsightsQuery('', '')
     expect(q).toContain('carry_backlog')
     expect(q).toContain(unplannedContractBacklogBaseWhereSql('c', 'l').trim())
     expect(q).toContain('carry_label_month')

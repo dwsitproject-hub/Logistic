@@ -6,7 +6,8 @@
  * incoterm (FOB / CIF / CFR) filters on that OS.
  */
 
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
@@ -390,12 +391,12 @@ export function alignShipmentOutstandingQtyTotalToCardSum(
  * Aggregate OS from active shipment execution rows (toolbar-scoped) at contract grain
  * (qty_move, one PO once — furthest active stage wins).
  */
-export function buildShipmentOutstandingQtyExecutionAggregateQuery(
+export async function buildShipmentOutstandingQtyExecutionAggregateQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
   baseParams: unknown[],
   osStatus: string | null,
-): { text: string; params: unknown[] } {
+): Promise<{ text: string; params: unknown[] }> {
   const stageFilter = appendShipmentPipelineStageFilter(
     osStatus ?? undefined,
     baseParams.length + 1,
@@ -416,7 +417,7 @@ export function buildShipmentOutstandingQtyExecutionAggregateQuery(
       SELECT fs.*
       FROM filtered_shipments fs
     ),
-    ${shipmentListQtyMoveCteFromPage()},
+    ${await shipmentListQtyMoveCteFromPage()},
     enriched AS (
       SELECT
         ${sqlShipmentSection1LightExecutionEnrichSelect('sp')}
@@ -444,10 +445,10 @@ export function buildShipmentOutstandingQtyExecutionAggregateQuery(
  * Same rows + clamp-at-zero OS as the Unplanned / Preplanned status cards; buckets
  * only slice by COALESCE(contract, SAP) source × effective incoterm.
  */
-export function buildShipmentOutstandingQtyBacklogAggregateQuery(
+export async function buildShipmentOutstandingQtyBacklogAggregateQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractOutstandingFromFields({
@@ -459,36 +460,46 @@ export function buildShipmentOutstandingQtyBacklogAggregateQuery(
   });
   const sourceExpr = sqlCoalesceSourceType('c.source_type', 'l.source_type_raw');
   const incotermExpr = contractEffectiveIncotermExpr('c');
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
-      FROM contracts c
-      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE (${unplannedWhere}) OR (${preplannedWhere})`,
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
 
   return `
     WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    backlog_contract_ids AS MATERIALIZED (
+      SELECT c.id, c.contract_id, TRUE AS is_unplanned, FALSE AS is_preplanned
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${unplannedWhere}
+      UNION ALL
+      SELECT c.id, c.contract_id, FALSE AS is_unplanned, TRUE AS is_preplanned
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${preplannedWhere}
+    ),
     ${qtyMoveCte},
     backlog_rows AS (
       SELECT
         ${sourceExpr} AS source_type,
         ${incotermExpr} AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
-      FROM contracts c
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-      WHERE ${unplannedWhere}
+      WHERE b.is_unplanned
         AND ${sqlBacklogOsStillActiveSql()}
       UNION ALL
       SELECT
         ${sourceExpr} AS source_type,
         ${incotermExpr} AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
-      FROM contracts c
+      FROM backlog_contract_ids b
+      INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-      WHERE ${preplannedWhere}
+      WHERE b.is_preplanned
         AND ${sqlBacklogOsStillActiveSql()}
     )
     SELECT

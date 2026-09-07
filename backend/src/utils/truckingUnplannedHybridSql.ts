@@ -3,7 +3,8 @@
  */
 
 import { sqlIsContractSapInactiveForOsExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import { groupPlantExpr } from './groupPlantSql';
 import { appendRegionSiteFilter, sqlRegionSiteDisplayForContract, sqlRegionSiteRawForContract } from './regionSiteSql';
@@ -326,21 +327,21 @@ export function buildTruckingUnplannedBacklogContractQtyQuery(
     FROM unplanned_trucking_backlog`;
 }
 
-export function buildTruckingUnplannedBacklogPageQuery(
+export async function buildTruckingUnplannedBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
   sortKey = 'contract_date',
   sortDir: 'ASC' | 'DESC' = 'DESC',
-): string {
+): Promise<string> {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c
@@ -368,17 +369,17 @@ export function buildTruckingUnplannedBacklogPageQuery(
  * Backlog contract UUIDs eligible for ensure-unplanned-ops (OS qty > 0).
  * Same filters as Unplanned hybrid backlog list.
  */
-export function buildTruckingUnplannedBacklogIdsWithOsQuery(
+export async function buildTruckingUnplannedBacklogIdsWithOsQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = buildQtyMoveCte({
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT c.contract_id
       FROM contracts c

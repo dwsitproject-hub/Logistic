@@ -76,10 +76,10 @@ export function parseShipmentEtcNoAtcDueWithin7dRow(
 /**
  * Toolbar-scoped aggregate: matching shipment group count + OS kg (qty_move / execution_os).
  */
-export function buildShipmentEtcNoAtcDueWithin7dQuery(
+export async function buildShipmentEtcNoAtcDueWithin7dQuery(
   shipmentBaseCteSql: string,
   toolbarOuterSql: string,
-): string {
+): Promise<string> {
   const pred = sqlShipmentEtcNoAtcDueWithin7dPred('fs');
   return `
     ${shipmentBaseCteSql},
@@ -98,7 +98,7 @@ export function buildShipmentEtcNoAtcDueWithin7dQuery(
       SELECT mp.*
       FROM matching_page mp
     ),
-    ${shipmentListQtyMoveCteFromPage()},
+    ${await shipmentListQtyMoveCteFromPage()},
     enriched AS (
       SELECT
         ${sqlShipmentSection1LightExecutionEnrichSelect('sp')}

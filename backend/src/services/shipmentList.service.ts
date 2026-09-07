@@ -274,12 +274,12 @@ function resolvePageOrderBy(ctx: ShipmentListQueryContext): string {
   return buildShipmentListPageOrderBy(sortKey, sortDir, ctx.tableStatusFilter);
 }
 
-function buildShipmentListPageCore(
+async function buildShipmentListPageCore(
   ctx: ShipmentListQueryContext,
   limit: number,
   offset: number,
   options: { inlineCount: boolean },
-): { text: string; params: unknown[] } {
+): Promise<{ text: string; params: unknown[] }> {
   const baseParams = [...ctx.innerParams, ...ctx.outerParams];
   const limitIdx = baseParams.length + 1;
   const offsetIdx = baseParams.length + 2;
@@ -318,7 +318,7 @@ function buildShipmentListPageCore(
       ${enrichScope} AS (
         SELECT * FROM filtered_shipments
       ),
-      ${shipmentListQtyMoveCteFromPage(enrichScope)},
+      ${await shipmentListQtyMoveCteFromPage(enrichScope)},
       ${spdAggCtes},
       ${enrichedCte},
       ${shipmentPageCte}
@@ -374,7 +374,7 @@ function buildShipmentListPageCore(
 
   const spdAggCtes = shipmentListSpdAggCtes(false);
   const text = `${filteredAndPage},
-      ${shipmentListQtyMoveCteFromPage()},
+      ${await shipmentListQtyMoveCteFromPage()},
       ${spdAggCtes}
       ${LIST_PAGE_SELECT}`;
 
@@ -487,7 +487,7 @@ export async function loadShipmentStatusCardQtyForRequest(
 
   const run = (async () => {
     const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
-    const execText = buildShipmentStatusCardQtyExecutionAggregateQuery(
+    const execText = await buildShipmentStatusCardQtyExecutionAggregateQuery(
       opts.shipmentBaseCteSql,
       opts.toolbarOuterSql,
     );
@@ -548,15 +548,16 @@ export async function loadShipmentOutstandingQtyForRequest(
 
   const run = runSerializedShipmentHeavyQuery(`os:${cacheKey}`, async () => {
     const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
-    const execQ = buildShipmentOutstandingQtyExecutionAggregateQuery(
+    const execPromise = buildShipmentOutstandingQtyExecutionAggregateQuery(
       opts.shipmentBaseCteSql,
       opts.toolbarOuterSql,
       baseParams,
       null,
-    );
-    const execPromise = query(execQ.text, execQ.params).then((res) =>
-      parseShipmentOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
-    );
+    )
+      .then((execQ) => query(execQ.text, execQ.params))
+      .then((res) =>
+        parseShipmentOutstandingQtySummaryRow((res.rows[0] || {}) as Record<string, unknown>),
+      );
 
     const { dateFrom, dateTo, contract, plant } = req.query;
     const globalSearch =
@@ -571,7 +572,7 @@ export async function loadShipmentOutstandingQtyForRequest(
     const g = appendUnplannedContractBacklogGlobalSearch(globalSearch, idx);
     idx = g.nextIndex;
     const c = appendUnplannedContractBacklogColumnFilters(colFilters, idx);
-    const backlogText = buildShipmentOutstandingQtyBacklogAggregateQuery(
+    const backlogText = await buildShipmentOutstandingQtyBacklogAggregateQuery(
       scope.sql,
       `${g.sql}${c.sql}`,
     );
@@ -634,7 +635,7 @@ export async function loadShipmentEtcNoAtcDueWithin7dForRequest(opts: {
   if (inFlight) return inFlight;
 
   const run = (async () => {
-    const text = buildShipmentEtcNoAtcDueWithin7dQuery(
+    const text = await buildShipmentEtcNoAtcDueWithin7dQuery(
       opts.shipmentBaseCteSql,
       opts.toolbarOuterSql,
     );
@@ -702,24 +703,30 @@ export async function loadShipmentAttentionInsightsForRequest(
     topVesselsRes,
     carryRes,
   ] = await runQueriesInBatches([
-    () => query(
-      buildShipmentOverdueBacklogAggregateQuery(scope.sql, backlogToolbarSql),
+    async () => query(
+      await buildShipmentOverdueBacklogAggregateQuery(scope.sql, backlogToolbarSql),
       backlogParams,
     ),
-    () => query(buildShipmentOverdueExecutionAggregateQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql), baseParams),
-    () => query(
-      buildShipmentOverdueBacklogTopSuppliersQuery(scope.sql, backlogToolbarSql, 3),
+    async () => query(
+      await buildShipmentOverdueExecutionAggregateQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql),
+      baseParams,
+    ),
+    async () => query(
+      await buildShipmentOverdueBacklogTopSuppliersQuery(scope.sql, backlogToolbarSql, 3),
       backlogParams,
     ),
-    () => query(
-      buildShipmentOverdueExecutionTopSuppliersQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql, 3),
+    async () => query(
+      await buildShipmentOverdueExecutionTopSuppliersQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql, 3),
       baseParams,
     ),
-    () => query(
-      buildShipmentOverdueTopVesselsQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql, 3),
+    async () => query(
+      await buildShipmentOverdueTopVesselsQuery(opts.shipmentBaseCteSql, opts.toolbarOuterSql, 3),
       baseParams,
     ),
-    () => query(buildShipmentCarryOverInsightsQuery(scope.sql, backlogToolbarSql), backlogParams),
+    async () => query(
+      await buildShipmentCarryOverInsightsQuery(scope.sql, backlogToolbarSql),
+      backlogParams,
+    ),
   ]);
 
   const totalOsKg = await totalOsKgPromise;
@@ -1275,20 +1282,20 @@ const LIST_PAGE_SELECT_ENRICHED = `
       ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
 
 /** Single round-trip list query: page rows + __filter_total (C). */
-export function buildShipmentListPageQuery(
+export async function buildShipmentListPageQuery(
   ctx: ShipmentListQueryContext,
   limit: number,
   offset: number,
-): { text: string; params: unknown[] } {
+): Promise<{ text: string; params: unknown[] }> {
   return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: true });
 }
 
 /** Enriched page rows (SAP qty, contract ext no, outstanding) without __filter_total. */
-export function buildShipmentListEnrichedPageQuery(
+export async function buildShipmentListEnrichedPageQuery(
   ctx: ShipmentListQueryContext,
   limit: number,
   offset: number,
-): { text: string; params: unknown[] } {
+): Promise<{ text: string; params: unknown[] }> {
   return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: false });
 }
 
@@ -1358,11 +1365,11 @@ export function getCachedFilteredTotal(filterCacheKey: string): number | null {
 }
 
 /** Page rows only — caller supplies total from COUNT_CACHE or a follow-up count query. */
-export function buildShipmentListPageQueryWithoutInlineCount(
+export async function buildShipmentListPageQueryWithoutInlineCount(
   ctx: ShipmentListQueryContext,
   limit: number,
   offset: number,
-): { text: string; params: unknown[] } {
+): Promise<{ text: string; params: unknown[] }> {
   return buildShipmentListPageCore(ctx, limit, offset, { inlineCount: false });
 }
 
@@ -1423,10 +1430,9 @@ async function runShipmentListPageQuery(
   // re-scan filtered_shipments on every card page load.
   const needsLiveCount =
     Boolean(ctx.useLiveStatusFilteredCount && ctx.tableStatusFilter) && cachedTotal == null;
-  const { text, params } =
-    cachedTotal != null && !needsLiveCount
-      ? buildShipmentListPageQueryWithoutInlineCount(ctx, limit, offset)
-      : buildShipmentListPageQuery(ctx, limit, offset);
+  const { text, params } = await (cachedTotal != null && !needsLiveCount
+    ? buildShipmentListPageQueryWithoutInlineCount(ctx, limit, offset)
+    : buildShipmentListPageQuery(ctx, limit, offset));
   const result = await query(text, params);
 
   let total = needsLiveCount ? 0 : (cachedTotal ?? 0);

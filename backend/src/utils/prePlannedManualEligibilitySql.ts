@@ -8,7 +8,8 @@
  */
 
 import { groupPlantExpr } from './groupPlantSql';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 import {
   buildUnplannedContractBacklogLatestSpdCte,
@@ -16,10 +17,9 @@ import {
 } from './shipmentUnplannedHybridSql';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
 
-export function buildManualPrePlannedEligibleContractsByIdsQuery(contractIds: string[]): {
-  sql: string;
-  params: unknown[];
-} {
+export async function buildManualPrePlannedEligibleContractsByIdsQuery(
+  contractIds: string[],
+): Promise<{ sql: string; params: unknown[] }> {
   const plantExpr = groupPlantExpr('c.plant_code', 'c.company_name');
   const incotermExpr = contractEffectiveIncotermExpr('c');
   const outstandingKgExpr = sqlContractGlobalOutstandingExpr({
@@ -29,7 +29,7 @@ export function buildManualPrePlannedEligibleContractsByIdsQuery(contractIds: st
   });
 
   const sql = `
-    WITH ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts c2' })},
+    WITH ${await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts c2' })},
     ${buildUnplannedContractBacklogLatestSpdCte()}
     SELECT
       c.id,

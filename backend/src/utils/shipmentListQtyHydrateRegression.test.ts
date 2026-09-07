@@ -29,9 +29,9 @@ function listCtx(overrides: Partial<ShipmentListQueryContext>): ShipmentListQuer
 }
 
 describe('shipment list OS / receive / delivery regression', () => {
-  it('hydrate SELECT embeds shipmentListPageQtySelectSql (OS, receive, SAP delivery)', () => {
+  it('hydrate SELECT embeds shipmentListPageQtySelectSql (OS, receive, SAP delivery)', async () => {
     const qtySelect = shipmentListPageQtySelectSql('sp');
-    const hydrate = buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0).text;
+    const hydrate = (await buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0)).text;
     expect(hydrate).toContain(qtySelect);
     expect(qtySelect).toContain('AS outstanding_quantity');
     expect(qtySelect).toContain('AS quantity_receive');
@@ -39,8 +39,8 @@ describe('shipment list OS / receive / delivery regression', () => {
     expect(qtySelect).toContain('sm.po_sto_count');
   });
 
-  it('OS repeats PO-level qty_move outstanding when the PO has more than one STO', () => {
-    const hydrate = buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0).text;
+  it('OS repeats PO-level qty_move outstanding when the PO has more than one STO', async () => {
+    const hydrate = (await buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0)).text;
     expect(hydrate).toContain('sm.po_sto_count');
     expect(hydrate).toContain('WHEN COALESCE((sm.po_sto_count)::int, 1) > 1');
     expect(hydrate).not.toContain(
@@ -48,8 +48,8 @@ describe('shipment list OS / receive / delivery regression', () => {
     );
   });
 
-  it('hydrate keeps Open→KLIP / Close→SAP receive and delivery resolve', () => {
-    const hydrate = buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0).text;
+  it('hydrate keeps Open→KLIP / Close→SAP receive and delivery resolve', async () => {
+    const hydrate = (await buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0)).text;
     const receive = sqlShipmentResolvedReceiveKg(
       'COALESCE(sp.is_contract_sap_closed, FALSE)',
       'sp.actual_vessel_qty_receive',
@@ -70,27 +70,27 @@ describe('shipment list OS / receive / delivery regression', () => {
     expect(delivery).toContain('IS TRUE THEN');
   });
 
-  it('CIF/CFR/FRC OS uses receive; FOB/LCO uses delivery', () => {
-    const hydrate = buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0).text;
+  it('CIF/CFR/FRC OS uses receive; FOB/LCO uses delivery', async () => {
+    const hydrate = (await buildShipmentListPageQuery(listCtx({ skipSapJoin: false }), 20, 0)).text;
     expect(hydrate).toContain("IN ('FRC', 'CIF', 'CFR')");
     expect(hydrate).toContain("IN ('LCO', 'FOB')");
   });
 
-  it('shell SQL does not embed qty select so hydrate is the only OS/receive/delivery source', () => {
+  it('shell SQL does not embed qty select so hydrate is the only OS/receive/delivery source', async () => {
     const qtySelect = shipmentListPageQtySelectSql('sp');
-    const shell = buildShipmentListPageQuery(listCtx({ skipSapJoin: true }), 20, 0).text;
+    const shell = (await buildShipmentListPageQuery(listCtx({ skipSapJoin: true }), 20, 0)).text;
     expect(shell).not.toContain(qtySelect);
     expect(shell).not.toMatch(/\bqty_move\b/);
     expect(shell).not.toMatch(/LEFT JOIN sto_metrics\b/);
   });
 
-  it('qty-sort path still hydrates OS even if skipSapJoin is requested on the context', () => {
+  it('qty-sort path still hydrates OS even if skipSapJoin is requested on the context', async () => {
     const qtySelect = shipmentListPageQtySelectSql('fs');
-    const q = buildShipmentListPageQuery(
+    const q = (await buildShipmentListPageQuery(
       listCtx({ skipSapJoin: true, sortKey: 'outstanding_quantity', sortDir: 'ASC' }),
       20,
       0,
-    ).text;
+    )).text;
     expect(q).toContain('list_enriched AS');
     expect(q).toContain(qtySelect);
     expect(q).toContain('le.outstanding_quantity ASC');

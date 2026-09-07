@@ -9,8 +9,8 @@ import {
 } from './shipmentSection1CombinedSummarySql';
 
 describe('shipmentSection1CombinedSummarySql', () => {
-  it('buildShipmentSection1CombinedSummaryQuery uses qty_move without sto_metrics', () => {
-    const sql = buildShipmentSection1CombinedSummaryQuery({
+  it('buildShipmentSection1CombinedSummaryQuery uses qty_move without sto_metrics', async () => {
+    const sql = await buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
       toolbarOuterSql: '',
@@ -36,8 +36,8 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('contract_source_type');
   });
 
-  it('buildPipelineCardVesselNamesQuery uses master + SAP display vessel key and live stage counts', () => {
-    const sql = buildPipelineCardVesselNamesQuery({
+  it('buildPipelineCardVesselNamesQuery uses master + SAP display vessel key and live stage counts', async () => {
+    const sql = await buildPipelineCardVesselNamesQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
       toolbarOuterSql: '',
@@ -53,7 +53,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).not.toContain('total_count');
   });
 
-  it('buildShipmentPipelineLiveStageCountsQuery includes live vessel names without SPD qty joins', () => {
+  it('buildShipmentPipelineLiveStageCountsQuery includes live vessel names without SPD qty joins', async () => {
     const sql = buildShipmentPipelineLiveStageCountsQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
       toolbarOuterSql: " AND sb.plant_site = 'X'",
@@ -69,7 +69,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).not.toContain('outstanding_quantity');
   });
 
-  it('overlayShipmentDailySummaryLiveStageCounts patches stage counts and live vessel names', () => {
+  it('overlayShipmentDailySummaryLiveStageCounts patches stage counts and live vessel names', async () => {
     const merged = overlayShipmentDailySummaryLiveStageCounts(
       {
         planned_count: 10,
@@ -98,8 +98,8 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(merged.eta_loading_delay).toBe(5);
   });
 
-  it('defines a shipment_page CTE so qty_move can scope contracts without sto_metrics', () => {
-    const sql = buildShipmentSection1CombinedSummaryQuery({
+  it('defines a shipment_page CTE so qty_move can scope contracts without sto_metrics', async () => {
+    const sql = await buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
       toolbarOuterSql: '',
@@ -114,8 +114,8 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).not.toContain('po_sto_count');
   });
 
-  it('aliases shipment_page to the scoped source when Section 1 stage scope is active', () => {
-    const sql = buildShipmentSection1CombinedSummaryQuery({
+  it('aliases shipment_page to the scoped source when Section 1 stage scope is active', async () => {
+    const sql = await buildShipmentSection1CombinedSummaryQuery({
       shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1)',
       unplannedBacklogCountCteSql: ', unplanned_contract_backlog_table AS (SELECT 0 AS backlog_count)',
       toolbarOuterSql: '',
@@ -125,7 +125,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(sql).toContain('shipment_page AS (\n        SELECT * FROM scoped_shipments\n      )');
   });
 
-  it('parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow maps combined row', () => {
+  it('parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow maps combined row', async () => {
     const parsed = parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow({
       unplanned_execution_contract_qty: '1000',
       planned_contract_qty: 2000,
@@ -144,7 +144,7 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(parsed.statusOutstandingQty.atLoadingPort).toBe(300);
   });
 
-  it('buildShipmentSummaryEtaEnrichmentSelect includes effective_status', () => {
+  it('buildShipmentSummaryEtaEnrichmentSelect includes effective_status', async () => {
     expect(buildShipmentSummaryEtaEnrichmentSelect('f')).toContain('effective_status');
     expect(buildShipmentSummaryEtaEnrichmentSelect('f')).toContain('loading_no_eta');
   });
