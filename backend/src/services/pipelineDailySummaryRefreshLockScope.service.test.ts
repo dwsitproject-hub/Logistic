@@ -8,10 +8,16 @@ interface RecordedQuery {
 const recorded: RecordedQuery[] = [];
 const release = vi.fn();
 
+/** pg_try_advisory_lock must report success, or every refresh short-circuits before building. */
+function grant(sql: string): { rowCount: number; rows: unknown[] } {
+  if (/pg_try_advisory_lock\(/.test(sql)) return { rowCount: 1, rows: [{ locked: true }] };
+  return { rowCount: 1, rows: [] };
+}
+
 const fakeClient = {
   query: vi.fn(async (sql: string, params?: unknown[]) => {
     recorded.push({ sql, params });
-    return { rowCount: 1, rows: [] };
+    return grant(sql);
   }),
   release,
 };
@@ -92,11 +98,11 @@ describe('pipeline daily summary refresh lock scope', () => {
     expect(sqls().some((s) => /\bTRUNCATE\b/.test(s))).toBe(false);
   });
 
-  it('serialises builds on a session lock and releases it before returning the client', async () => {
+  it('takes the session build lock without waiting and releases it before returning the client', async () => {
     await PipelineDailySummaryService.refreshTruckingPipelineDailySummary();
 
     const all = sqls();
-    const lockAt = all.findIndex((s) => /pg_advisory_lock\(/.test(s));
+    const lockAt = all.findIndex((s) => /pg_try_advisory_lock\(/.test(s));
     const unlockAt = all.findIndex((s) => /pg_advisory_unlock\(/.test(s));
     expect(lockAt).toBe(0);
     expect(recorded[lockAt].params).toEqual(['pipeline_daily_summary:trucking:build']);
@@ -105,17 +111,42 @@ describe('pipeline daily summary refresh lock scope', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Waiting for a concurrent build parked pooled connections for minutes - seen live with two
+   * page requests queued 365s and 308s behind a trucking stage build, which is what made the
+   * Shipment and Trucking pages look dead. The holder is already producing the generation this
+   * caller wanted, so the second caller must give the connection straight back.
+   */
+  it('skips instead of queueing when another build already holds the lock', async () => {
+    fakeClient.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      recorded.push({ sql, params });
+      if (/pg_try_advisory_lock\(/.test(sql)) return { rowCount: 1, rows: [{ locked: false }] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    const rows = await PipelineDailySummaryService.refreshTruckingPipelineDailySummary();
+
+    expect(rows).toBe(0);
+    const all = sqls();
+    expect(all.filter((x) => /pg_try_advisory_lock\(/.test(x))).toHaveLength(1);
+    /** Nothing built, nothing published, and no blocking lock taken. */
+    expect(all.some((x) => /CREATE TEMP TABLE/.test(x))).toBe(false);
+    expect(all.some((x) => /^BEGIN$/.test(x))).toBe(false);
+    expect(all.some((x) => /pg_advisory_lock\(/.test(x))).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it('drops staging tables and releases the build lock when the build fails', async () => {
     fakeClient.query.mockImplementationOnce(async (sql: string, params?: unknown[]) => {
       recorded.push({ sql, params });
-      return { rowCount: 1, rows: [] };
+      return grant(sql);
     });
     fakeClient.query.mockImplementation(async (sql: string, params?: unknown[]) => {
       recorded.push({ sql, params });
       if (/INSERT INTO pipeline_stage_trucking_list_stage_snapshot /.test(sql)) {
         throw new Error('build blew up');
       }
-      return { rowCount: 1, rows: [] };
+      return grant(sql);
     });
 
     await expect(PipelineDailySummaryService.refreshTruckingPipelineDailySummary()).rejects.toThrow(

@@ -331,9 +331,10 @@ interface PipelineRefreshTable {
  * DELETE, not TRUNCATE, so readers keep seeing the previous generation until the swap commits
  * instead of blocking on ACCESS EXCLUSIVE (same reasoning as the qty_move snapshot refresh).
  *
- * Concurrent refreshes (UI stale kick, scheduler, cleanup scripts) still serialise, but through a
- * session-scoped advisory lock held across the build rather than an open transaction, so waiting
- * for a build no longer parks a transaction - or the table locks inside it - for minutes.
+ * Concurrent refreshes (UI stale kick, scheduler, cleanup scripts) do not serialise by waiting:
+ * the second caller sees the advisory lock is taken and returns instead of queueing, since the
+ * holder is already building the generation it wanted. Waiting parked pooled connections for
+ * minutes at a time.
  */
 async function runPipelineRefresh(
   module: PipelineSummaryModule,
@@ -348,8 +349,22 @@ async function runPipelineRefresh(
 
   let buildLocked = false;
   try {
-    // Build lock: session-scoped, so it serialises builds without parking a transaction.
-    await client.query('SELECT pg_advisory_lock(hashtext($1::text))', [`${lockKey}:build`]);
+    /**
+     * Build lock: session-scoped, and acquired with try_ rather than waiting. Whoever holds it
+     * is already producing the generation this caller wanted, so queueing behind it buys nothing
+     * and costs a pooled connection for the whole build - observed live with two page requests
+     * parked 365s and 308s behind a trucking stage build, which is what made the Shipment and
+     * Trucking pages look dead. Skipping returns the connection immediately; readers serve from
+     * the usable snapshot meanwhile.
+     */
+    const lockRes = await client.query<{ locked: boolean }>(
+      'SELECT pg_try_advisory_lock(hashtext($1::text)) AS locked',
+      [`${lockKey}:build`],
+    );
+    if (!lockRes.rows[0]?.locked) {
+      logger.info(`Pipeline daily summary refresh skipped: ${module} - another build holds the lock`);
+      return 0;
+    }
     buildLocked = true;
 
     // INCLUDING ALL, not just DEFAULTS: the build statements rely on the published tables'
