@@ -463,15 +463,21 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     paramIndex++;
   }
 
-  // Contracts whose PO was cancelled/deleted in SAP are out of scope for late/on-time
-  // performance: keeping them would leave permanently-unfulfillable contracts in the
-  // denominator. Plain column predicate - no extra join.
-  //
-  // Not repeated on the snapshot path: the snapshot is built with this same exclusion applied,
-  // so those contracts are already absent from it (and sap_presence is not one of its columns).
-  if (!performanceSnapshotFresh) {
-    contractScopeWhere += sqlExcludeWithdrawnContracts('c');
-  }
+  /*
+   * Withdrawn contracts are out of scope for late/on-time performance: keeping them would leave
+   * permanently-unfulfillable contracts in the denominator. Plain column predicate - no join.
+   *
+   * Applied on BOTH paths now. The snapshot used to be built with this exclusion baked in, so the
+   * read path could assume they were already absent - but that also made the snapshot unable to
+   * serve Section 3's view table, which lists withdrawn contracts on purpose. The snapshot now
+   * carries every contract plus a `sap_presence` column, so the filter belongs here.
+   *
+   * `<> 'WITHDRAWN'` rather than `= 'PRESENT'`, over COALESCE: a snapshot written by the previous
+   * version has NULL in that column until it is rebuilt, and `= 'PRESENT'` would drop every one
+   * of its rows - an empty page instead of a stale one.
+   */
+  contractScopeWhere += sqlExcludeWithdrawnContracts('c');
+  const snapshotPresenceWhere = ` AND COALESCE(sap_presence, 'PRESENT') <> 'WITHDRAWN'`;
 
   /*
    * Product pushdown. The authoritative product filter still runs on `base.product` further down
@@ -588,7 +594,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         SELECT *
         FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE}
         WHERE 1=1
-        ${snapshotDateWhere}
+        ${snapshotDateWhere}${snapshotPresenceWhere}
       )
       SELECT base.*
       FROM base

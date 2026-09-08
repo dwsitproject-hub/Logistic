@@ -2,7 +2,6 @@ import { buildLatePerformanceRowSetSql } from '../services/latePerformance.servi
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
-import { sqlExcludeWithdrawnContracts } from './sapPresenceSql';
 
 /**
  * Every `latest_spd_data` key the Contract Performance read path can reach, grouped by where it
@@ -117,6 +116,7 @@ export function sqlPrunedLatestSpdData(srcExpr: string): string {
 export const CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS = [
   'contract_id',
   'contract_date',
+  'sap_presence',
   'id',
   'product',
   'group_name',
@@ -152,15 +152,16 @@ export const CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS = [
  * INSERT that rebuilds the Contract Performance snapshot from the same builder the live query
  * uses, so the materialised values cannot drift from the computed ones.
  *
- * Scope is deliberately everything except withdrawn contracts: no date range and no user filters.
+ * Scope is deliberately every contract: no date range, no user filters, and no presence filter.
  * A contract's row is date-independent, so one global snapshot serves every date range and every
  * filter combination, and the read path keeps applying filters and the B2B-child /
  * PO-placeholder exclusions exactly as it does today.
  *
- * `sqlExcludeWithdrawnContracts` stays in scope because it is not a user filter: a contract whose
- * PO was cancelled or deleted in SAP is permanently out of the late/on-time population, and
- * leaving it in would put permanently-unfulfillable contracts in the denominator. It can change
- * on import, which is exactly when the snapshot is refreshed.
+ * Withdrawn contracts used to be excluded here, on the grounds that a permanently-unfulfillable
+ * contract must not sit in the late/on-time denominator. That still holds - but it belongs to the
+ * *read* path, not to the snapshot: Section 3's view table lists withdrawn contracts on purpose,
+ * so excluding them here made the snapshot unable to serve that table at all. They are carried
+ * with `sap_presence` and filtered by the callers that must not count them.
  *
  * The column list is written out explicitly rather than relying on `base.*` ordering: the
  * row-set builder emits contract_date immediately after contract_id (via extraBaseColumns), and
@@ -179,7 +180,17 @@ export async function buildContractPerformanceSnapshotRefreshSql(
   // Targeted mode narrows the scope to $1, which narrows every CTE with it - a KLIP edit touches
   // one or two contracts, so recomputing just those is fast enough to do inline on the save
   // rather than marking the whole snapshot stale and dropping the page back to the live query.
-  const scopeWhere = `${sqlExcludeWithdrawnContracts('c')}${
+  /*
+   * Every contract, withdrawn ones included. Section 3's view table lists withdrawn contracts
+   * (their history stays reachable behind ?presence=), so a snapshot that omitted them could
+   * never serve that table. They are carried with `sap_presence` instead, and the read paths
+   * that must not count them - the Section 1 cards and the Section 2 drilldown - filter on it.
+   *
+   * Safe to widen now that absence no longer withdraws anything: withdrawal takes an explicit
+   * operator action, and cancellation comes from SAP's Delete PO / Delete STO flags, which
+   * sqlContractImportStatusExpr resolves to Cancelled (and Cancelled is excluded from OS).
+   */
+  const scopeWhere = `${
     opts.forContractNumbers ? ' AND c.contract_id = ANY($1::text[])' : ''
   }`;
 
@@ -188,7 +199,10 @@ export async function buildContractPerformanceSnapshotRefreshSql(
     contractsLatestSpdCte,
     contractsQtyMoveCte,
     contractsStoAggCte,
-    extraBaseColumns: '          MAX(c.contract_date) AS contract_date,\n',
+    /** MIN keeps a group withdrawn only when every row of it is - same rule as the contracts list. */
+    extraBaseColumns:
+      '          MAX(c.contract_date) AS contract_date,\n' +
+      '          MIN(c.sap_presence) AS sap_presence,\n',
   });
 
   const cols = CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS.join(', ');
