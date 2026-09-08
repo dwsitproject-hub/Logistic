@@ -127,11 +127,42 @@ export class ContractQtyMoveSnapshotService {
     return rowCount;
   }
 
+  /**
+   * Targeted refresh after a KLIP write. Every other targeted entry point delegates here, so this
+   * is the single place that has to fail safely.
+   *
+   * On failure the whole snapshot is marked stale, which sends reads back to the live query.
+   * Without that, the failure was only written to a log: the snapshot kept the pre-edit qty for
+   * those contracts and every page went on serving it, confidently and wrongly - and the live
+   * fallback that used to cover this was removed earlier (it cost 840x). A stale flag is the
+   * blunt instrument here, and deliberately so: a slow page is recoverable, a silently wrong
+   * outstanding qty is not. Failures are meant to be rare, and marking stale is what the
+   * refreshAll path already does.
+   *
+   * The error is rethrown so callers still see it; marking stale is best-effort so a second
+   * failure cannot mask the first.
+   */
   static async refreshForContracts(contractNumbers: string[]): Promise<number> {
     const ids = contractNumbers.map((c) => String(c).trim()).filter(Boolean);
     if (ids.length === 0) return 0;
-    const insertRes = await query(buildContractQtyMoveSnapshotUpsertSql(), [ids]);
-    return insertRes.rowCount ?? 0;
+    try {
+      const insertRes = await query(buildContractQtyMoveSnapshotUpsertSql(), [ids]);
+      return insertRes.rowCount ?? 0;
+    } catch (err) {
+      try {
+        await markContractQtyMoveSnapshotStale();
+        logger.error(
+          'Targeted qty_move refresh failed - snapshot marked stale, reads fall back to live',
+          { contractNumbers: ids, err },
+        );
+      } catch (markErr) {
+        logger.error(
+          'Targeted qty_move refresh failed AND marking the snapshot stale failed - reads may serve pre-edit quantities',
+          { contractNumbers: ids, err, markErr },
+        );
+      }
+      throw err;
+    }
   }
 
   static async refreshForTruckingOperationIds(truckingOperationIds: string[]): Promise<number> {

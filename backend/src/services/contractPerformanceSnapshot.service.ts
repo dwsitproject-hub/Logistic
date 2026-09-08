@@ -173,12 +173,25 @@ export class ContractPerformanceSnapshotService {
       } catch {
         // connection may already be unusable
       }
-      // Loud, because the visible symptom is a stale figure on the view table rather than an
-      // error the user can see.
-      logger.error('Targeted contract performance snapshot refresh failed', {
-        contractNumbers: ids,
-        err,
-      });
+      /*
+       * Loud, because the visible symptom is a stale figure on the view table rather than an
+       * error the user can see - and logging alone was not enough. The transaction rolled back,
+       * so the snapshot still holds the pre-edit rows for these contracts and every read goes on
+       * serving them. Marking the snapshot stale sends reads back to the live query instead:
+       * slower, but right. Best-effort, so a second failure cannot mask the first.
+       */
+      try {
+        await markContractPerformanceSnapshotStale();
+        logger.error(
+          'Targeted contract performance snapshot refresh failed - snapshot marked stale, reads fall back to live',
+          { contractNumbers: ids, err },
+        );
+      } catch (markErr) {
+        logger.error(
+          'Targeted contract performance snapshot refresh failed AND marking it stale failed - reads may serve pre-edit figures',
+          { contractNumbers: ids, err, markErr },
+        );
+      }
       throw err;
     } finally {
       client.release();
