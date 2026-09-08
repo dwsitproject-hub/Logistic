@@ -8,8 +8,18 @@
 -- snapshot is refreshed, so the table can read them instead of recomputing them per request.
 -- import_status is already a column here; this adds the other one.
 --
--- Nullable, no backfill: populated by the next full snapshot rebuild. Until then the read path
--- keeps computing it live (it is gated on the snapshot being fresh, and a rebuild is what clears
--- the stale flag), so no request can see a NULL where a status belongs.
+-- Nullable, no backfill - and that is exactly why the snapshot has to be marked stale here.
+--
+-- Adding a column does not invalidate the snapshot, so without the UPDATE below the read path
+-- would find a *fresh* snapshot whose gr_sto_status_agg is NULL for every row, and the view
+-- table's GR STO Status column would render blank on every deploy until someone rebuilt it. The
+-- stale flag sends reads back to the live computation - slower, but correct - until the rebuild
+-- lands and clears it.
+--
+-- Rebuild with `npx ts-node src/scripts/rebuildCpSnapshotBatched.ts`, not refreshAll(): on a 1 GiB
+-- container refreshAll reached 985 MiB of 1024 before being cancelled, and an OOM there restarts
+-- the whole cluster. The SAP import path refreshes it too, so an import also clears this.
 ALTER TABLE contract_performance_snapshot
   ADD COLUMN IF NOT EXISTS gr_sto_status_agg TEXT;
+
+UPDATE contract_performance_snapshot_meta SET is_stale = TRUE WHERE id = 'global';
