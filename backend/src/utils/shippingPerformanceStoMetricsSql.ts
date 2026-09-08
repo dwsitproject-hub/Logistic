@@ -15,7 +15,10 @@ import {
   sqlShipmentResolvedDeliveryKg,
   sqlShipmentResolvedReceiveKg,
 } from './shipmentManualQtyResolveSql';
-import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
+import {
+  sqlContractImportStatusForStoExpr,
+  sqlContractImportStatusIsClosedExpr,
+} from './contractDeliveryStatus';
 import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import {
@@ -72,9 +75,64 @@ export const SHIPMENT_LIST_PERF_STO_KEYS_CTE = `
       )`;
 
 /** CTEs: perf_sto_keys → sto_po_lines → sto_metrics. Join on sto_key. */
+/**
+ * The contract's SAP import status per (contract, STO), resolved once.
+ *
+ * `sqlContractImportStatusForStoExpr` is the 26KB status expression in its STO-scoped form, and
+ * this query carried 18 expansions of it: once per output row in the view table's import_status,
+ * again per row through the qty selects' closed test, and once per shipment row inside
+ * sto_metrics. All three use the same key - SHIPPING_PERF_STO_GROUP_KEY_EXPR is literally
+ * `shippingPerfStoMetricsKeyExpr('c', 's')` - so one CTE serves them all, which is the shape
+ * `gr_closed` already uses on Trucking (27 expansions -> 2 there).
+ *
+ * Unlike the contract-grain answer, this one cannot come from contract_performance_snapshot:
+ * that stores one status per contract, and this varies per STO within a contract.
+ *
+ * The scope filter sits in the WHERE, not in a join above it, so the expensive expression is only
+ * evaluated for rows the page actually needs - that matters for the Shipments list, which shares
+ * this builder and scopes perf_sto_keys to one page.
+ */
+function buildPerfStoStatusCte(): string {
+  const key = shippingPerfStoMetricsKeyExpr('c', 's');
+  return `
+      perf_sto_status AS MATERIALIZED (
+        SELECT DISTINCT ON (x.contract_uuid, x.sto_key)
+          x.contract_uuid,
+          x.sto_key,
+          x.import_status
+        FROM (
+          SELECT
+            c.id AS contract_uuid,
+            TRIM((${key})::text) AS sto_key,
+            (${sqlContractImportStatusForStoExpr('c', key)}) AS import_status
+          FROM shipments s
+          INNER JOIN contracts c ON c.id = s.contract_id
+          WHERE NULLIF(TRIM((${key})::text), '') IS NOT NULL
+            AND TRIM((${key})::text) IN (SELECT k.sto_key FROM perf_sto_keys k)
+        ) x
+      )`;
+}
+
+/**
+ * Join for the CTE above. Callers need `c` (contracts) and `s` (shipments) in scope, because the
+ * STO key is a function of both - the same expression the CTE keyed itself by.
+ */
+export function perfStoStatusJoinSql(alias = 'pss'): string {
+  return `
+      LEFT JOIN perf_sto_status ${alias}
+        ON ${alias}.contract_uuid = c.id
+       AND ${alias}.sto_key = TRIM((${shippingPerfStoMetricsKeyExpr('c', 's')})::text)`;
+}
+
+/** The closed test, read off the joined column instead of re-expanding the status expression. */
+export function perfStoIsClosedFromJoin(alias = 'pss'): string {
+  return sqlContractImportStatusIsClosedExpr(`${alias}.import_status`);
+}
+
 export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
   return `
       ${perfStoKeysCteSql},
+      ${buildPerfStoStatusCte()},
       ${LATEST_SPD_B2B_CTE},
       all_sto_contract_links AS (
         SELECT DISTINCT ON (sto_key, contract_id)
@@ -222,11 +280,12 @@ export function buildStoPoMetricsCte(perfStoKeysCteSql: string): string {
               TRIM(c.contract_id) AS contract_id,
               COALESCE(s.quantity_delivered_klip, 0)::numeric AS klip_del,
               COALESCE(s.actual_vessel_qty_receive, 0)::numeric AS klip_recv,
-              (${sqlIsContractSapClosedForStoExpr('c', shippingPerfStoMetricsKeyExpr('c', 's'))}) AS is_closed,
+              (${perfStoIsClosedFromJoin('pss_raw')}) AS is_closed,
               s.updated_at,
               s.created_at
             FROM shipments s
             INNER JOIN contracts c ON c.id = s.contract_id
+            ${perfStoStatusJoinSql('pss_raw')}
             WHERE COALESCE(s.status, '') <> 'CANCELLED'
               AND ${shippingPerfStoMetricsKeyExpr('c', 's')} IS NOT NULL
           ) raw
@@ -396,7 +455,8 @@ export function buildShippingPerfViewTableQtySelectSql(): {
   /** Aggregate value: PO OS apportioned per PO across its own STOs; safe to SUM. */
   outstandingAggregateSql: string;
 } {
-  const closedExpr = sqlIsContractSapClosedForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR);
+  /** Read off perf_sto_status (joined by the caller) rather than re-expanding 26KB per use. */
+  const closedExpr = perfStoIsClosedFromJoin();
   const klipDelivery = sqlCoalesceNonZeroQty(
     'sm.klip_delivery_kg',
     's.quantity_delivered_klip',

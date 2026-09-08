@@ -8,6 +8,7 @@ import {
 import { mergePoMetricsFromRows } from '../utils/shippingPerformancePoMetrics';
 import {
   buildShippingPerfStoMetricsCte,
+  perfStoStatusJoinSql,
   SHIPPING_PERF_CONTRACT_OS_CTE,
   buildShippingPerfViewTableQtySelectSql,
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
@@ -25,7 +26,6 @@ import {
 import { SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
 import {
   aggregateImportStatusForStoGroup,
-  sqlContractImportStatusForStoExpr,
 } from '../utils/contractDeliveryStatus';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
 import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
@@ -602,7 +602,7 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         c.product,
         c.source_type,
         c.supplier,
-        ${sqlContractImportStatusForStoExpr('c', SHIPPING_PERF_STO_GROUP_KEY_EXPR)} AS import_status,
+        pss.import_status AS import_status,
         COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
         ${sqlShipmentDisplayVesselName('mv.vessel_name_master', 'sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
@@ -717,6 +717,7 @@ export async function buildShippingPerformanceSql(): Promise<string> {
       ${SHIPMENT_ATA_OVERRIDES_JOIN}
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+      ${perfStoStatusJoinSql()}
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
       ${SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN}
