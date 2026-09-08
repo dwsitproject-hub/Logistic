@@ -1,4 +1,5 @@
 import { buildLatePerformanceRowSetSql } from '../services/latePerformance.service';
+import { sqlContractListGrStoStatusAggExpr } from './contractDeliveryStatus';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
@@ -130,6 +131,7 @@ export const CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS = [
   'plant_site',
   'company_name',
   'import_status',
+  'gr_sto_status_agg',
   'delivery_end_date',
   'cargo_readiness_date',
   'latest_spd_data',
@@ -200,9 +202,18 @@ export async function buildContractPerformanceSnapshotRefreshSql(
     contractsQtyMoveCte,
     contractsStoAggCte,
     /** MIN keeps a group withdrawn only when every row of it is - same rule as the contracts list. */
+    /**
+     * MIN keeps a group withdrawn only when every row of it is - same rule as the contracts list.
+     *
+     * gr_sto_status_agg is injected here rather than added to the shared row set: only the view
+     * table reads it, so putting it in the row set would make the *live* Contract Performance
+     * path pay for 7.4KB of correlated sap_processed_data subqueries it never looks at.
+     */
     extraBaseColumns:
       '          MAX(c.contract_date) AS contract_date,\n' +
-      '          MIN(c.sap_presence) AS sap_presence,\n',
+      '          MIN(c.sap_presence) AS sap_presence,\n' +
+      `          ${sqlContractListGrStoStatusAggExpr('c')} AS gr_sto_status_agg,
+`,
   });
 
   const cols = CONTRACT_PERFORMANCE_SNAPSHOT_COLUMNS.join(', ');

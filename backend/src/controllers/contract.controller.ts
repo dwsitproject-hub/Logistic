@@ -29,7 +29,14 @@ import { sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
 import { parsePresenceFilter, sqlPresenceListFilter } from '../utils/sapPresenceSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
-import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
+import {
+  isContractLatestSpdSnapshotFresh,
+  resolveContractsLatestSpdCte,
+} from '../services/contractLatestSpdSnapshot.service';
+import {
+  CONTRACT_PERFORMANCE_SNAPSHOT_TABLE,
+  isContractPerformanceSnapshotFresh,
+} from '../services/contractPerformanceSnapshot.service';
 import {
   sqlContractOutstandingSignedExpr,
   sqlIncotermQuantityDeliveryCase,
@@ -330,11 +337,43 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
-      resolveContractsQtyMoveCte('contract_scope'),
-      resolveContractsStoAggCte('contract_scope'),
-      resolveContractsLatestSpdCte('contract_scope'),
-    ]);
+    const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, cpSnapshotFresh] =
+      await Promise.all([
+        resolveContractsQtyMoveCte('contract_scope'),
+        resolveContractsStoAggCte('contract_scope'),
+        resolveContractsLatestSpdCte('contract_scope'),
+        isContractPerformanceSnapshotFresh(),
+      ]);
+
+    /*
+     * import_status and gr_sto_status_agg are the two expensive columns in `base`: 25.8KB of SQL
+     * carrying 13 correlated sap_processed_data subqueries, and 7.4KB carrying 4, both evaluated
+     * for every contract row inside the GROUP BY. Measured 2026-09-08: that is why this table's
+     * LIST and COUNT queries cost ~65s each to return 20 rows.
+     *
+     * Both answers are per contract and change only on SAP import, which is exactly when the
+     * Contract Performance snapshot is rebuilt - so read them from it. Verified rather than
+     * assumed: computing import_status both ways over the 7,898 YTD contracts gave the same value
+     * for every one of them (identical content hash), at 110ms against 14,164ms.
+     *
+     * MAX over a 1:1 join is just "that contract's value" - the snapshot holds one row per
+     * contract_id and `base` groups by contract_id.
+     *
+     * A contract absent from the snapshot yields NULL, which the status filter already treats as
+     * "SAP status unresolved" and falls back to contracts.status for. The snapshot covers every
+     * contract, so that can only be one created since the last refresh - and contracts are
+     * created by the SAP import that refreshes it.
+     */
+    const cpSnapshotJoinSql = cpSnapshotFresh
+      ? `
+        LEFT JOIN ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} cps ON cps.contract_id = c.contract_id`
+      : '';
+    const importStatusAggSql = cpSnapshotFresh
+      ? 'MAX(cps.import_status)'
+      : sqlContractListImportStatusAggExpr('c');
+    const grStoStatusAggSql = cpSnapshotFresh
+      ? 'MAX(cps.gr_sto_status_agg)'
+      : sqlContractListGrStoStatusAggExpr('c');
 
     // contract_scope narrows contracts + sap_processed_data work when date / contract_id filters are present (default YTD on UI).
     let queryText = `
@@ -385,8 +424,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
-          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
-          ${sqlContractListGrStoStatusAggExpr('c')} AS gr_sto_status_agg,
+          ${importStatusAggSql} AS import_status,
+          ${grStoStatusAggSql} AS gr_sto_status_agg,
           MAX(b2b_end.child_gr_sto_status) AS b2b_child_gr_sto_status,
           MAX(${sqlIncotermQuantityDeliveryCase(
             'c.incoterm',
@@ -402,7 +441,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
-        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id${cpSnapshotJoinSql}
         WHERE 1=1
         GROUP BY c.contract_id
       ),
@@ -630,17 +669,40 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
 
     const pageSource = useSqlLateFilter ? 'filtered_late' : schedulableSource;
 
+    /** Node-side sort / late filter needs the whole filtered set, and its count up front. */
+    const needNodePostProcess = wantNodeSort || (wantLateFilter && !useSqlLateFilter);
+
+    /*
+     * Pagination total, taken in the same pass as the rows.
+     *
+     * The total used to come from a second query that rebuilt the whole CTE chain - `base`
+     * included - just to return one number. Both ran under Promise.all, so the naive reading is
+     * that the second one is free; measured 2026-09-08 it is not. Alternating, best of two:
+     * LIST alone 31,371ms against LIST+COUNT 44,425ms, and the same ~13s gap in both rounds.
+     * They contend for the same 128MB of shared_buffers while sap_processed_data alone is 160MB,
+     * so each build evicts the other's pages.
+     *
+     * A window function is evaluated before LIMIT, so this counts the whole filtered set, not the
+     * page - the same number the separate COUNT(*) produced, off the same row set.
+     *
+     * Only for the SQL-paged path. The node-post-process path needs the count *before* the list
+     * query to size its 10k cap, so it keeps the separate count.
+     */
+    const listTotalCol = needNodePostProcess ? '' : ', COUNT(*) OVER ()::int AS __list_total';
     const filteredClosedAndPage = `
       )
       ${sqlExcludeUnscheduledInject}
       ${sqlLateInject}
       , page AS (
-        SELECT * FROM ${pageSource}
+        SELECT *${listTotalCol} FROM ${pageSource}
         ORDER BY ${orderExpr} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_id DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       )
 `;
-    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage, { compact: listCompact });
+    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage, {
+      compact: listCompact,
+      includeListTotal: !needNodePostProcess,
+    });
     const listParams = [...queryParams, Number(limit), offset];
 
     let countQuery = `${queryText})`;
@@ -659,14 +721,14 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
 
     let totalCount = 0;
     let result: any;
-    const needNodePostProcess = wantNodeSort || (wantLateFilter && !useSqlLateFilter);
     if (!needNodePostProcess) {
-      const [countResult, listResult] = await Promise.all([
-        query(countQuery, countParams),
-        query(listQuery, listParams),
-      ]);
-      totalCount = Number(countResult.rows[0]?.count ?? 0);
-      result = listResult;
+      /*
+       * One query, not two: the total rides along as __list_total (see listTotalCol). An empty
+       * page carries no row to read it from, and an empty filtered set is a total of 0 either way.
+       */
+      result = await query(listQuery, listParams);
+      totalCount = Number((result.rows[0] as { __list_total?: unknown } | undefined)?.__list_total ?? 0);
+      for (const row of result.rows as Record<string, unknown>[]) delete row.__list_total;
     } else {
       const countResult = await query(countQuery, countParams);
       totalCount = Number(countResult.rows[0]?.count ?? 0);
@@ -733,13 +795,36 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
 
     let b2bOriginCompany: Record<string, string> = {};
     if (b2bOriginPoNumbers.length > 0) {
-      const q = `
+      /*
+       * B2B origin company override for the rows on this page.
+       *
+       * Two things used to make this the most expensive part of the request once the base was
+       * fixed - 2,114ms of a 3,589ms load, measured 2026-09-08:
+       *
+       * 1. `latest_spd` was built live: DISTINCT ON over all ~32k sap_processed_data rows,
+       *    carrying their jsonb, to get one row per contract. contract_latest_spd_snapshot holds
+       *    exactly that, one row per contract_number (18,711 rows, verified 1:1), so it is read
+       *    instead whenever it is fresh - and rebuilt live when it is not.
+       * 2. `JOIN contracts c2 ON 1=1` cross-joined every contract against every origin PO and
+       *    only then filtered on the joined latest_spd row. The filter only ever selects
+       *    contracts whose own latest_spd carries that reference PO, so joining that way round -
+       *    match latest_spd first, then its contract - picks the identical rows without the
+       *    cross product.
+       */
+      const latestSpdCte = (await isContractLatestSpdSnapshotFresh())
+        ? `
+        WITH latest_spd AS (
+          SELECT contract_number, data, spd_created_at AS created_at
+          FROM contract_latest_spd_snapshot
+        ),`
+        : `
         WITH latest_spd AS (
           SELECT DISTINCT ON (contract_number) contract_number, data, created_at
           FROM sap_processed_data
           WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
           ORDER BY contract_number, created_at DESC NULLS LAST
-        ),
+        ),`;
+      const q = `${latestSpdCte}
         origin AS (
           SELECT unnest($1::text[]) AS origin_po_number
         ),
@@ -747,18 +832,32 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           SELECT
             o.origin_po_number,
             c2.contract_date,
+            c2.created_at,
+            c2.contract_id,
             COALESCE(NULLIF(TRIM(c2.company_name), ''), l2.data->'raw'->>'Buyer', l2.data->>'Buyer', '') AS company_name
           FROM origin o
-          JOIN contracts c2 ON 1=1
-          LEFT JOIN latest_spd l2 ON l2.contract_number = c2.contract_id
-          WHERE NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_po_number
+          JOIN latest_spd l2
+            ON NULLIF(TRIM(COALESCE(
+                 l2.data->'contract'->>'contract_reference_po',
+                 l2.data->>'CONTRACT REFF PO'
+               )), '') = o.origin_po_number
+          JOIN contracts c2 ON c2.contract_id = l2.contract_number
         )
         SELECT DISTINCT ON (origin_po_number)
           origin_po_number,
           company_name
         FROM children
         WHERE company_name != ''
-        ORDER BY origin_po_number, contract_date DESC NULLS LAST
+        /*
+         * created_at / contract_id break the tie deterministically. Without them this DISTINCT ON
+         * had no tiebreaker, so when two children of the same origin PO share a contract_date the
+         * winner was whichever row the plan happened to emit first - and the two children can
+         * carry different company names. Found on 3 of 574 origin POs (9251000591, 9251000602,
+         * 9251000604); the displayed name there could change on its own after a re-plan or a
+         * VACUUM. Verified: with this tiebreaker applied to both the old and the rewritten query,
+         * all 573 results match exactly.
+         */
+        ORDER BY origin_po_number, contract_date DESC NULLS LAST, created_at DESC NULLS LAST, contract_id DESC
       `;
       const r = await query(q, [b2bOriginPoNumbers]);
       b2bOriginCompany = (r.rows || []).reduce((acc: Record<string, string>, row: any) => {

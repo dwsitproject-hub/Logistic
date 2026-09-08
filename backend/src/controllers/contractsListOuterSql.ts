@@ -18,6 +18,13 @@ END`;
 export type ContractsListOuterSqlOptions = {
   /** Skip payments-table fallbacks and logistics/doc COUNT subqueries (Contract Performance list). */
   compact?: boolean;
+  /**
+   * Carry `__list_total` out of the page CTE, where it is produced by `COUNT(*) OVER ()` so the
+   * pagination total comes from the same pass as the rows. Off for the node-post-process path:
+   * that path does not emit the column, and selecting a column that is not there is a 42703 that
+   * empties the whole table.
+   */
+  includeListTotal?: boolean;
 };
 
 const CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION = `
@@ -43,12 +50,13 @@ const CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION = `
         COALESCE(NULLIF(trim(base.latest_spd_data->'payment'->>'payoff_date_deviation_days'), ''), NULLIF(trim(base.latest_spd_data->'raw'->>'Payoff Date Deviation (Days) Payoff Date - Due Date'), '')) AS payoff_date_deviation_raw,`;
 
 function buildContractsListRowProjection(options: ContractsListOuterSqlOptions = {}): string {
+  const listTotal = options.includeListTotal ? '        base.__list_total,\n' : '';
   const paymentBlock = options.compact
     ? CONTRACTS_LIST_PAYMENT_SAP_ONLY_PROJECTION
     : CONTRACTS_LIST_PAYMENT_AND_COUNT_PROJECTION;
 
   return `
-        base.contract_id,
+${listTotal}        base.contract_id,
         base.id,
         base.buyer,
         COALESCE(NULLIF(TRIM(base.company_name), ''), COALESCE(base.latest_spd_data->'raw'->>'Buyer', base.latest_spd_data->>'Buyer')) AS company_name,
