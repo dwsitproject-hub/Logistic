@@ -1,12 +1,28 @@
 /**
- * SAP presence state (Phase 2: act on absence).
+ * SAP presence state.
  *
  * Phase 1 counts how many consecutive trusted imports have missed each (po_number, sto_number).
  * This turns those counters into state that read paths honour:
  *
- *   - a PO whose *every* row is missing was cancelled in SAP -> contract WITHDRAWN
  *   - a row missing while its PO survives is an STO change -> supersede that row only
  *   - anything that reappears is restored
+ *   - a PO whose *every* row is missing is **flagged for review**, never withdrawn automatically
+ *
+ * **Absence is not evidence of cancellation here, because SAP export files are produced per
+ * period.** This code used to assume "the SAP Report is a full snapshot of every PO", so a PO
+ * absent from two trusted imports was taken to be cancelled. Confirmed false on 2026-09-07:
+ * `EXPORT jan - dec 2025.XLSX` was imported, then two 2026-only files (`CPO 31 Aug 2026`,
+ * `CPO 7 Sep 2026`) followed. Those files contain no 2025 PO at all, so every 2025 PO counted
+ * two misses and 370 contracts were withdrawn - 143 of them with no SAP cancellation flag
+ * whatsoever, hiding 83,623 MT that the 2025 file itself still reported as Open.
+ *
+ * Cancellation now comes only from what SAP states explicitly: `Delete PO Status` /
+ * `Delete STO Status`, which `sqlContractImportStatusExpr` already resolves to Cancelled. A
+ * human can still withdraw specific POs deliberately via `extraPos` (see applySapPresence.ts).
+ *
+ * Inferring coverage from the file's own rows was considered and rejected: `CPO 31 Aug 2026`
+ * contains no row before 2026-04-10, so a February 2026 PO would still look absent from it.
+ * Only a file that declares its own period could make absence safe, and Klip does not get that.
  *
  * Withdrawal excludes a contract from totals. It never deletes anything: KLIP-entered planning,
  * ATAs and remarks stay, the row stays visible behind a filter, and restoration is one import
@@ -31,46 +47,6 @@ export interface WithdrawalOutcome {
   flaggedForReview: number;
 }
 
-/**
- * POs eligible for withdrawal: every row for the PO has missed the threshold, and the last
- * row we saw was still Open.
- *
- * A PO last seen Closed is deliberately excluded - closed POs stay in the SAP Report, so one
- * disappearing means something changed about the report itself (archival policy, a truncated
- * upload), not that the business was cancelled. Those surface in the Phase 1 review instead.
- * Rows with no GR status recorded are likewise left for a human.
- */
-const SQL_WITHDRAWABLE_POS = `
-  WITH po_state AS (
-    SELECT TRIM(spd.po_number) AS po
-      FROM sap_processed_data spd
-     WHERE NULLIF(TRIM(spd.po_number), '') IS NOT NULL
-       AND spd.superseded_at IS NULL
-     GROUP BY TRIM(spd.po_number)
-    HAVING COUNT(*) FILTER (WHERE spd.consecutive_misses = 0) = 0
-       AND MIN(spd.consecutive_misses) >= $1
-  ),
-  newest AS (
-    SELECT DISTINCT ON (TRIM(spd.po_number))
-           TRIM(spd.po_number) AS po,
-           CASE
-             WHEN UPPER(TRIM(COALESCE(spd.data->'raw'->>'GR PO Status',  spd.data->'contract'->>'gr_po_status',  ''))) LIKE 'CLOSE%'
-               OR UPPER(TRIM(COALESCE(spd.data->'raw'->>'GR STO Status', spd.data->'contract'->>'gr_sto_status', ''))) LIKE 'CLOSE%'
-               THEN 'CLOSE'
-             WHEN UPPER(TRIM(COALESCE(spd.data->'raw'->>'GR PO Status',  spd.data->'contract'->>'gr_po_status',  ''))) LIKE 'OPEN%'
-               OR UPPER(TRIM(COALESCE(spd.data->'raw'->>'GR STO Status', spd.data->'contract'->>'gr_sto_status', ''))) LIKE 'OPEN%'
-               THEN 'OPEN'
-             ELSE 'UNKNOWN'
-           END AS gr_state
-      FROM sap_processed_data spd
-      JOIN po_state ps ON ps.po = TRIM(spd.po_number)
-     ORDER BY TRIM(spd.po_number), COALESCE(
-              (SELECT i.import_timestamp FROM sap_data_imports i WHERE i.id = spd.import_id),
-              spd.last_seen_at,
-              spd.updated_at
-            ) DESC
-  )
-  SELECT po FROM newest WHERE gr_state = 'OPEN'`;
 
 /**
  * Fold absence counters into contract presence. Set-based; safe to run repeatedly.
@@ -85,28 +61,35 @@ export async function applyPresenceState(
   const importId = options.importId ?? null;
   const extraPos = (options.extraPos ?? []).map((p) => String(p).trim()).filter(Boolean);
 
-  // 1. Withdraw. Audit first so the "from" state is the pre-change value.
-  await client.query(
-    `INSERT INTO sap_presence_audit (contract_id, po_number, from_state, to_state, reason, import_id)
-     SELECT c.id, TRIM(c.po_number), c.sap_presence, 'WITHDRAWN',
-            'Absent from ' || $1::int || '+ consecutive trusted SAP imports (last seen Open)', $2::uuid
-       FROM contracts c
-      WHERE c.sap_presence = 'PRESENT'
-        AND (TRIM(c.po_number) IN (${SQL_WITHDRAWABLE_POS})
-             OR ($3::text[] IS NOT NULL AND TRIM(c.po_number) = ANY($3::text[])))`,
-    [minMisses, importId, extraPos.length > 0 ? extraPos : null],
-  );
+  /*
+   * 1. Withdraw - only POs an operator explicitly named. Absence alone no longer withdraws
+   *    anything (see the module note: a per-period export file makes every PO outside its own
+   *    period look absent, which withdrew 370 contracts on 2026-09-07). Audit first so the
+   *    "from" state is the pre-change value.
+   */
+  let withdrawnCount = 0;
+  if (extraPos.length > 0) {
+    await client.query(
+      `INSERT INTO sap_presence_audit (contract_id, po_number, from_state, to_state, reason, import_id)
+       SELECT c.id, TRIM(c.po_number), c.sap_presence, 'WITHDRAWN',
+              'Operator-approved withdrawal', $1::uuid
+         FROM contracts c
+        WHERE c.sap_presence = 'PRESENT'
+          AND TRIM(c.po_number) = ANY($2::text[])`,
+      [importId, extraPos],
+    );
 
-  const withdrawn = await client.query(
-    `UPDATE contracts c
-        SET sap_presence = 'WITHDRAWN',
-            sap_withdrawn_at = CURRENT_TIMESTAMP,
-            sap_withdrawn_reason = 'Absent from ' || $1::int || '+ consecutive trusted SAP imports'
-      WHERE c.sap_presence = 'PRESENT'
-        AND (TRIM(c.po_number) IN (${SQL_WITHDRAWABLE_POS})
-             OR ($2::text[] IS NOT NULL AND TRIM(c.po_number) = ANY($2::text[])))`,
-    [minMisses, extraPos.length > 0 ? extraPos : null],
-  );
+    const withdrawn = await client.query(
+      `UPDATE contracts c
+          SET sap_presence = 'WITHDRAWN',
+              sap_withdrawn_at = CURRENT_TIMESTAMP,
+              sap_withdrawn_reason = 'Operator-approved withdrawal'
+        WHERE c.sap_presence = 'PRESENT'
+          AND TRIM(c.po_number) = ANY($1::text[])`,
+      [extraPos],
+    );
+    withdrawnCount = withdrawn.rowCount ?? 0;
+  }
 
   // 2. Restore anything that came back. Reappearance always wins over a prior withdrawal.
   await client.query(
@@ -174,7 +157,11 @@ export async function applyPresenceState(
     [minMisses],
   );
 
-  // 4. Count what a human still has to look at (last seen Closed, or no GR evidence).
+  /*
+   * 4. Count what a human has to look at: every PO whose rows have all gone missing. This used
+   *    to exclude the last-seen-Open ones because those were withdrawn automatically; now that
+   *    nothing is withdrawn on absence alone, they are exactly what needs reviewing.
+   */
   const review = await client.query(
     `WITH po_state AS (
        SELECT TRIM(spd.po_number) AS po
@@ -186,13 +173,12 @@ export async function applyPresenceState(
           AND MIN(spd.consecutive_misses) >= $1
      )
      SELECT COUNT(*)::int AS n
-       FROM po_state ps
-      WHERE ps.po NOT IN (${SQL_WITHDRAWABLE_POS})`,
+       FROM po_state ps`,
     [minMisses],
   );
 
   const outcome: WithdrawalOutcome = {
-    withdrawn: withdrawn.rowCount ?? 0,
+    withdrawn: withdrawnCount,
     restored: restored.rowCount ?? 0,
     supersededStoRows: superseded.rowCount ?? 0,
     flaggedForReview: review.rows[0]?.n ?? 0,

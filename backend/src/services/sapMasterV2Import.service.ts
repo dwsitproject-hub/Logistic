@@ -1758,19 +1758,22 @@ export class SapMasterV2ImportService {
         );
 
         // 7b. Snapshot-absence tracking (observe only - changes no total and no list).
-        // The SAP Report is a full snapshot: a PO stays while Open and after Close, and drops
-        // out only when cancelled/deleted. Absence is therefore meaningful - but only from an
-        // import that actually completed. A partly-failed import looks identical to a mass
-        // cancellation (2026-07-27: 1,250 failed rows would have withdrawn 585 live POs).
-        // A user-cancelled import is also an incomplete snapshot — never withdraw from it.
+        // Absence is recorded, and supersedes stale STO rows whose PO is still present, but it
+        // no longer withdraws a contract: SAP export files are produced per period, so a
+        // 2026-only file legitimately contains no 2025 PO (see sapPresence.service.ts for the
+        // 2026-09-07 case where that withdrew 370 contracts). Cancellation comes from SAP's own
+        // Delete PO / Delete STO flags instead. Still gated on a completed, trusted import - a
+        // partly-failed one under-reports presence for the period it does cover
+        // (2026-07-27: 1,250 failed rows), and a user-cancelled import covers nothing at all.
         try {
           if (!importWasCancelled) {
             const totalRecords = processedRecords + skippedRecords + failedRecords;
             const trusted = await evaluateImportTrust(finalClient, importId, totalRecords, failedRecords);
             if (trusted) {
               await applyAbsenceForImport(finalClient, importId);
-              // Phase 2: turn the counters into presence state. Withdraws POs cancelled in SAP,
-              // restores any that came back, supersedes stale STO rows. Nothing is deleted.
+              // Turn the counters into presence state: restores anything that came back,
+              // supersedes stale STO rows, counts what a human should review. Withdraws
+              // nothing unless an operator named the PO. Nothing is deleted.
               await applyPresenceState(finalClient, { importId });
             }
           }
