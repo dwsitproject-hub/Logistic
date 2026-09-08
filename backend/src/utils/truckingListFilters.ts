@@ -12,6 +12,7 @@ import {
   sqlTruckingListResolvedDeliveryQtyExpr,
   sqlTruckingListResolvedReceiveQtyExpr,
 } from './truckingQuantitySql'
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias'
 
 export { parseColumnFiltersQuery }
 
@@ -62,7 +63,7 @@ function truckCol(grClosedExpr?: string, cancelledExpr?: string): Record<string,
       undefined,
       cancelledExpr,
     ),
-  location: 't.location',
+  location: sqlNormalizeDischargeDestination('t.location'),
   loading_location: 't.loading_location',
   unloading_location: sqlB2bEndingUnloadExpr('t.unloading_location'),
   trucking_owner: 't.trucking_owner',

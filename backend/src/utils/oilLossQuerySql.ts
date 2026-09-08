@@ -8,6 +8,7 @@ import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
 import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
 import { sapDischargeDestinationSql } from './sapTruckingLoadingLocationSql';
 import { regionSiteDisplayExpr } from './regionSiteSql';
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { buildUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import {
@@ -206,8 +207,10 @@ export function buildOilLossWithQtyCtes(): string {
         ) AS unloading_location_db,
         COALESCE(tr_sto.sfal_qty, tr_ct.sfal_qty) AS trucking_sfal_kg,
         COALESCE(tr_sto.sfbd_qty, tr_ct.sfbd_qty) AS trucking_sfbd_kg,
-        ${regionSiteDisplayExpr(`COALESCE(
-          NULLIF(TRIM(b2b_end.discharge_destination), ''),
+        ${/* p.plant_site already comes from sapDischargeDestinationSql (normalised); the b2b column
+              is a stored copy, so it gets the Region/Site alias map here too. */
+          regionSiteDisplayExpr(`COALESCE(
+          ${sqlNormalizeDischargeDestination(`NULLIF(TRIM(b2b_end.discharge_destination), '')`)},
           NULLIF(TRIM(p.plant_site), '')
         )`)} AS group_plant_resolved,
         COALESCE(sh_sto.quantity_delivered, sh_ct.quantity_delivered) AS shipment_qty_delivered_kg,

@@ -1,11 +1,18 @@
 /**
- * Operational Region/Site = SAP Discharge Destination (not master_plants.group_plant).
+ * Operational Region/Site = SAP Discharge Destination (not master_plants.group_plant), with the
+ * alias map in dischargeDestinationAlias.ts applied - both to values extracted from SAP JSON and
+ * to the stored b2b_ending_child copies read here, so a snapshot written before the map still
+ * displays and filters correctly.
  *
  * Display coalesces empty dest to 'Blank' for tables/drilldown. Filter dropdowns omit Blank.
  * Matching is trim + case-insensitive so Bontang / BONTANG collapse.
  */
 
 import { sapDischargeDestinationFromJson } from './sapTruckingLoadingLocationSql';
+import {
+  normalizeDischargeDestination,
+  sqlNormalizeDischargeDestination,
+} from './dischargeDestinationAlias';
 import { B2B_ENDING_CHILD_SNAPSHOT_TABLE } from './b2bOriginEndingSql';
 
 export type RegionSiteFilterResult = {
@@ -21,7 +28,7 @@ export function sapDischargeDestinationFromAlias(alias = 'spd'): string {
 /** Raw dest (NULL when missing/blank). Overlay B2B child dest when origin is empty. */
 export function sqlRegionSiteRawFromJsonAndB2b(dataExpr: string, b2bAlias = 'b2b_end'): string {
   return `COALESCE(
-    NULLIF(TRIM(${b2bAlias}.discharge_destination), ''),
+    ${sqlNormalizeDischargeDestination(`NULLIF(TRIM(${b2bAlias}.discharge_destination), '')`)},
     ${sapDischargeDestinationFromJson(dataExpr)}
   )`;
 }
@@ -38,7 +45,7 @@ export function sqlRegionSiteDisplayFromJsonAndB2b(dataExpr: string, b2bAlias = 
 export function sqlRegionSiteRawForContract(contractNumberExpr: string, originPoExpr: string): string {
   return `COALESCE(
     (
-      SELECT NULLIF(TRIM(m.discharge_destination), '')
+      SELECT ${sqlNormalizeDischargeDestination(`NULLIF(TRIM(m.discharge_destination), '')`)}
       FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
       WHERE m.origin_po = NULLIF(TRIM(${originPoExpr}), '')
     ),
@@ -60,7 +67,7 @@ export function sqlRegionSiteRawFromLatestSpdSubquery(
   b2bAlias = 'b2b_end',
 ): string {
   return `COALESCE(
-    NULLIF(TRIM(${b2bAlias}.discharge_destination), ''),
+    ${sqlNormalizeDischargeDestination(`NULLIF(TRIM(${b2bAlias}.discharge_destination), '')`)},
     (
       SELECT ${sapDischargeDestinationFromJson('spd.data')}
       FROM sap_processed_data spd
@@ -93,11 +100,17 @@ export const REGION_SITE_FILTER_OPTIONS_SQL = `
       ORDER BY MIN(dest)
 `;
 
+/**
+ * Also applies the Discharge Destination alias map, which matters in both directions:
+ * the option list must offer one entry per site (KIJING and a future SAP-supplied TANJUNG PURA
+ * collapse into one), and an incoming `plant=KIJING` - a bookmark or a saved view from before
+ * this change - must still resolve to the Tanjung Pura group rather than matching nothing.
+ */
 export function filterRegionSiteOptionValues(values: unknown[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
-    const trimmed = String(value ?? '').trim();
+    const trimmed = normalizeDischargeDestination(value);
     if (!trimmed || trimmed.toLowerCase() === 'blank') continue;
     const key = trimmed.toUpperCase();
     if (seen.has(key)) continue;

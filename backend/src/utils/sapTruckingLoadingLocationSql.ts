@@ -1,3 +1,4 @@
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 /** SQL expression: latest SAP supplier name from sap_processed_data row `spd`. */
 export const sapSupplierFromProcessedDataSql = `
   NULLIF(TRIM(COALESCE(
@@ -44,12 +45,18 @@ export const sapTruckingListDischargeLocationSql = `
  * SAP Discharge Destination — source of truth for Trucking modal Plant/Site
  * and operational Region/Site filters. Prefer shipment JSON, then raw column.
  */
+/**
+ * The single point where Discharge Destination is read out of SAP JSON, so the Region/Site alias
+ * map is applied here rather than at each of the eight call sites (see
+ * dischargeDestinationAlias.ts: KIJING is the port for the Tanjung Pura plants, which
+ * master_plants already groups as 'Tanjung Pura').
+ */
 export function sapDischargeDestinationFromJson(dataExpr: string): string {
-  return `NULLIF(TRIM(COALESCE(
+  return sqlNormalizeDischargeDestination(`NULLIF(TRIM(COALESCE(
     NULLIF(TRIM(${dataExpr}->'shipment'->>'discharge_destination'), ''),
     NULLIF(TRIM(${dataExpr}->'raw'->>'Discharge Destination'), ''),
     NULLIF(TRIM(${dataExpr}->>'discharge_destination'), '')
-  )), '')`;
+  )), '')`);
 }
 
 export const sapDischargeDestinationSql = sapDischargeDestinationFromJson('spd.data');

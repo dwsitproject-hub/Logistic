@@ -18,6 +18,7 @@
 
 import { sqlSapGrStoStatusFromJson } from './sapIncotermMetrics';
 import { sapDischargeDestinationFromJson } from './sapTruckingLoadingLocationSql';
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 
 export const SQL_SPD_CONTRACT_REFF_PO = (dataExpr: string): string => `NULLIF(TRIM(COALESCE(
   ${dataExpr}->'contract'->>'contract_reference_po',
@@ -122,8 +123,14 @@ export function sqlB2bEndingBuyerExpr(originBuyerExpr: string, alias = 'b2b_end'
   return `COALESCE(NULLIF(TRIM(${alias}.buyer), ''), ${originBuyerExpr})`;
 }
 
+/**
+ * `discharge_destination` here is the *stored* snapshot copy, so it gets the Region/Site alias map
+ * too - a snapshot written before the map (70 rows still said KIJING) must not leak the old value
+ * past a rebuild. `originDestExpr` comes from sapDischargeDestinationFromJson, already normalised.
+ */
 export function sqlB2bEndingDischargeDestExpr(originDestExpr: string, alias = 'b2b_end'): string {
-  return `COALESCE(NULLIF(TRIM(${alias}.discharge_destination), ''), ${originDestExpr})`;
+  const stored = sqlNormalizeDischargeDestination(`NULLIF(TRIM(${alias}.discharge_destination), '')`);
+  return `COALESCE(${stored}, ${originDestExpr})`;
 }
 
 /** Scalar lookup against the snapshot PK (not a sap_processed_data scan). */

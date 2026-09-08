@@ -33,6 +33,7 @@ import {
   sapTruckingListDischargeLocationSql,
   sapTruckingListLoadingLocationSql,
 } from './sapTruckingLoadingLocationSql';
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 
 /**
  * Alias of the SAP receive-date LATERAL on the hydrate list query. The select clause and the
@@ -167,6 +168,12 @@ export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
 const IMPORT_STATUS_COL = sqlContractSapImportStatusFromLateral();
 /** The GR-close column resolved once per row by sqlTruckingGrClosedLateral in the FROM. */
 const GR_CLOSED_COL = sqlTruckingGrClosedFromLateral();
+/**
+ * Plant/Site on a trucking row is SAP's Discharge Destination, persisted by the import. Rows
+ * written before the Region/Site alias map still hold SAP's port name (5,761 said KIJING), so
+ * it is normalised on read as well as on write - a plain CASE on a text column, no jsonb.
+ */
+const TRUCKING_LOCATION_COL = sqlNormalizeDischargeDestination('t.location');
 /** The SAP-cancelled column from the same lateral as GR_CLOSED_COL. */
 const GR_CANCELLED_COL = sqlTruckingGrCancelledFromLateral();
 /** The completed test resolved once per row by sqlTruckingIsCompletedLateral. */
@@ -178,7 +185,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.id,
         t.operation_id,
         t.contract_id,
-        t.location,
+        ${TRUCKING_LOCATION_COL} AS location,
         t.loading_location,
         ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         t.trucking_owner,
@@ -243,7 +250,7 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         t.id,
         t.operation_id,
         t.contract_id,
-        t.location,
+        ${TRUCKING_LOCATION_COL} AS location,
         COALESCE(NULLIF(TRIM(t.loading_location), ''), b2b.sap_loading_location) AS loading_location,
         ${sqlB2bEndingUnloadExpr(`COALESCE(NULLIF(TRIM(t.unloading_location), ''), b2b.sap_discharge_location)`)} AS unloading_location,
         t.trucking_owner,

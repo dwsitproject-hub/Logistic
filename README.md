@@ -325,6 +325,48 @@ If a record with the same tri-key exists:
 - Domain tables (`contracts`, `shipments`, etc.) are **upserted** (UPDATE if exists, INSERT if not)
 - Preserves data history in raw data table
 
+### Region/Site and Discharge Destination aliases
+
+**Region/Site is SAP's `Discharge Destination`**, not `master_plants.group_plant` - two different
+dimensions that KLIP shows side by side. `backend/src/utils/dischargeDestinationAlias.ts` maps SAP
+port names onto the site they serve:
+
+| SAP Discharge Destination | Shown in KLIP as |
+| --- | --- |
+| `KIJING` | `TANJUNG PURA` |
+
+Kijing is the port for the Tanjung Pura plants, and `master_plants` already grouped all eight of
+them (EU4C, EU2C, EU53, EU23, EU73, EU4E, EU2E, MG21) under `group_plant = 'Tanjung Pura'`, so the
+two dimensions disagreed about the same place.
+
+This is a **normalisation, not a display rename.** SAP is expected to start emitting
+`TANJUNG PURA` as its own discharge location; when it does, both values must collapse into one
+Region/Site rather than appear as two filter entries with the volume split between them. The map
+sends the target to itself so it stays idempotent, and adding another alias is one line.
+
+**Where it is applied** - two kinds of place, and both are needed:
+
+- at the single point the value is read out of SAP JSON (`sapDischargeDestinationFromJson`), which
+  covers Region/Site on Contracts, Contract Performance, Shipments, Shipping Performance,
+  Trucking, Oil Loss, Commercial Documents, and the filter dropdown;
+- wherever a **stored** copy is read - `b2b_ending_child_snapshot.discharge_destination`,
+  `trucking_operations.location` - so a row written before the map still displays correctly.
+
+`filterRegionSiteOptionValues` normalises in both directions: the dropdown offers one entry per
+site, and an incoming `plant=KIJING` from an old bookmark still resolves to the Tanjung Pura group.
+
+**Stored copies were realigned by migration 158** (6,028 `contract_performance_snapshot.plant_site`,
+70 b2b, 5,761 `trucking_operations.location`). Deliberately untouched:
+`trucking_operations.unloading_location` - that is SAP's truck-unloading field, a different
+dimension that happens to carry the same place names.
+
+> Watch the cost when adding an alias. The map compiles to a `CASE` that references its input
+> twice, and Region/Site is a `MAX()` over every contract, so computing it live went from 3 jsonb
+> reads per row to 6 - the Contract Performance view table went 1,360ms to 3,342ms. The fix was to
+> stop computing it live at all: the contracts list now reads `plant_site` from
+> `contract_performance_snapshot`, which stores what the same expression produces (verified
+> identical across all 18,751 contracts).
+
 ### PO Cancellation vs. Absence
 
 **A PO missing from an import file is not a cancelled PO.** SAP export files are produced **per

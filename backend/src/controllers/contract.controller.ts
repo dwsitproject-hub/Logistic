@@ -374,6 +374,20 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     const grStoStatusAggSql = cpSnapshotFresh
       ? 'MAX(cps.gr_sto_status_agg)'
       : sqlContractListGrStoStatusAggExpr('c');
+    /*
+     * plant_site (Region/Site) comes from the snapshot for the same reason, and it got materially
+     * more expensive to compute live once the Discharge Destination alias map was added: the alias
+     * CASE references the COALESCE-over-jsonb twice, so every row went from 3 jsonb reads to 6,
+     * and this is a MAX() over every contract in scope. Measured 2026-09-08 - the view table went
+     * 1,360ms -> 3,342ms on the live expression, and back under a second reading the column.
+     *
+     * The snapshot stores the value the same expression produces (its build calls the same
+     * helper), and `base.plant_site` is what the Region/Site filter matches on, so the filter
+     * follows automatically.
+     */
+    const plantSiteSql = cpSnapshotFresh
+      ? 'MAX(cps.plant_site)'
+      : `MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')})`;
 
     // contract_scope narrows contracts + sap_processed_data work when date / contract_id filters are present (default YTD on UI).
     let queryText = `
@@ -415,7 +429,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           MAX(c.logistics_classification) AS logistics_classification,
           MAX(c.po_classification) AS po_classification,
           ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
-          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
+          COALESCE(${plantSiteSql}, 'Blank') AS plant_site,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           MAX(c.created_at) AS created_at,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,

@@ -1,5 +1,6 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
+import { normalizeDischargeDestination } from '../utils/dischargeDestinationAlias';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
 import {
   isTruckingPageIncoterm,
@@ -1934,8 +1935,15 @@ export class SapDataDistributionService {
     const shipment = (parsedData as { shipment?: Record<string, unknown>; raw?: Record<string, unknown> } | undefined)
       ?.shipment;
     const raw = (parsedData as { raw?: Record<string, unknown> } | undefined)?.raw;
+    /*
+     * Normalised on the way in, so `trucking_operations.location` stores what KLIP shows. Without
+     * this the column keeps SAP's port name and drifts from the Region/Site dimension every import
+     * (5,761 rows already said KIJING when the alias map was added). See
+     * dischargeDestinationAlias.ts - the read paths normalise too, so this is belt and braces
+     * rather than the only guard.
+     */
     const dischargeDestination = [shipment?.discharge_destination, raw?.['Discharge Destination'], data.discharge_destination]
-      .map((v) => (v == null ? '' : String(v).trim()))
+      .map((v) => (v == null ? '' : normalizeDischargeDestination(v)))
       .find((v) => v && v !== '0.00') || null;
 
     const location = dischargeDestination || unloadingLocation || loadingLocation || null;
