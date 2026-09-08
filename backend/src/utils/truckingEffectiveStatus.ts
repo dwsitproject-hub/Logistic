@@ -198,8 +198,19 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
       ELSE COALESCE(t.status, 'PLANNED')
     END,
     updated_at = CURRENT_TIMESTAMP
-  FROM upserted u
-  INNER JOIN contracts c ON c.id = t.contract_id
+  /*
+   * contracts is joined through WHERE, not with an INNER JOIN in the FROM list.
+   *
+   * Postgres does not allow the UPDATE target (t) to be referenced from the ON clause of a join
+   * inside FROM - INNER JOIN contracts c ON c.id = t.contract_id raises
+   * "invalid reference to FROM-clause entry for table t" (42P01, errorMissingRTE). The whole
+   * statement therefore failed on every run since it was introduced on 2026-08-12, and the only
+   * trace was logger.warn('Trucking status reconcile from SAP failed (list continues)') - so
+   * SAP's Trucking Start/Last Receive Dates were never synced into trucking_realizations by this
+   * path, and trucking status was never reconciled by it either.
+   */
+  FROM upserted u, contracts c
   WHERE t.id = u.trucking_operation_id
+    AND c.id = t.contract_id
     AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
 `;
