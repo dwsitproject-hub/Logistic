@@ -2,6 +2,7 @@ import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { isSapSourcedShipmentId } from '../utils/klipLogisticsActivity';
 import { invalidateShipmentsListCache } from './shipmentList.service';
+import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 
 const SPD_EFFECTIVE_STO = `NULLIF(TRIM(COALESCE(
   spd.sto_number::text,
@@ -218,6 +219,8 @@ export async function cancelKlipShipmentGroup(
         './contractPerformanceSnapshot.service'
       );
       scheduleContractPerformanceRefreshForShipments(cancelledIds);
+      /** A cancelled shipment changes Shipping Performance rows directly. */
+      invalidateShippingPerformanceRowCache();
     } catch {
       // best-effort; snapshot fallback (is_stale) covers correctness if this fails
     }

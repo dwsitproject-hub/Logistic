@@ -30,6 +30,7 @@ import {
   dedupeActiveTruckingOpsForPo,
   scheduleTruckingPipelineRefresh,
 } from './truckingDedupe.service';
+import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -966,6 +967,13 @@ export async function processWbRekapWorkbookUpload(args: {
         './contractPerformanceSnapshot.service'
       );
       scheduleContractPerformanceRefreshForTruckingOps(opIds);
+      /*
+       * Shipping Performance serves its rows from a 5-minute in-process cache, and its
+       * outstanding qty comes from qty_move - which a WB upload just changed. Without this the
+       * page kept showing pre-upload OS for up to that whole window. SAP import already did
+       * this; the WB, realization and cancel paths did not.
+       */
+      invalidateShippingPerformanceRowCache();
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[WB import] contract_qty_move_snapshot refresh failed', err);

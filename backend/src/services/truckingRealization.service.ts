@@ -1,6 +1,7 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
 import { sqlTruckingOpIsActiveForMatchingSql } from '../utils/truckingOperationUniqueness';
+import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -313,6 +314,8 @@ export async function replaceTruckingDailyActuals(
       './contractPerformanceSnapshot.service'
     );
     scheduleContractPerformanceRefreshForTruckingOps([truckingOperationId]);
+    /** Same reason as the WB path: this moves qty_move, which Shipping Performance reads. */
+    invalidateShippingPerformanceRowCache();
   } catch {
     // best-effort; snapshot fallback (is_stale) covers correctness if this fails
   }
@@ -348,6 +351,8 @@ export async function upsertTruckingDailyActualRows(
       './contractPerformanceSnapshot.service'
     );
     scheduleContractPerformanceRefreshForTruckingOps([truckingOperationId]);
+    /** Same reason as the WB path: this moves qty_move, which Shipping Performance reads. */
+    invalidateShippingPerformanceRowCache();
   } catch {
     // best-effort; snapshot fallback (is_stale) covers correctness if this fails
   }
