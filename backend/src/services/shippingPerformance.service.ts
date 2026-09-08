@@ -8,6 +8,7 @@ import {
 import { mergePoMetricsFromRows } from '../utils/shippingPerformancePoMetrics';
 import {
   buildShippingPerfStoMetricsCte,
+  SHIPPING_PERF_CONTRACT_OS_CTE,
   buildShippingPerfViewTableQtySelectSql,
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
@@ -539,7 +540,8 @@ export async function buildShippingPerformanceSql(): Promise<string> {
           FROM ship_keys sk
           WHERE sk.contract_id IS NOT NULL AND TRIM(sk.contract_id) <> ''`,
       })},
-      ${buildShippingPerfStoMetricsCte()}
+      ${buildShippingPerfStoMetricsCte()},
+      ${SHIPPING_PERF_CONTRACT_OS_CTE}
       SELECT
         s.id,
         (SELECT COUNT(*)::int FROM remarks r WHERE r.related_entity_type = 'SHIPMENT' AND r.related_entity_id = s.id) AS remarks_count,

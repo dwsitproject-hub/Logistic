@@ -324,6 +324,51 @@ export function buildShipmentListStoMetricsCte(pageCte = 'shipment_page'): strin
  *
  * Expects aliases: `s` (shipments), `c` (contracts), `sm` (sto_metrics), `sa` (sap_agg).
  */
+/**
+ * Per-contract outstanding qty, resolved once.
+ *
+ * The Shipping Performance view table used to compute this inside a correlated scalar subquery -
+ * `SELECT SUM(outstanding(cx)) FROM contracts cx WHERE cx.contract_id IN (this row's contract
+ * numbers)` - so the whole outstanding expression, including the SAP status subqueries it carries,
+ * was re-derived for every output row. EXPLAIN (ANALYZE) on 2026-09-08 showed the damage: three
+ * correlated Aggregate subplans at 7,411 loops each (18.8s), their sap_processed_data index scans
+ * (a further 7s), and a CTE Scan of po_sto_counts at 7,434 loops (6.4s) - out of 76.7s execution.
+ *
+ * Now each contract's outstanding is computed once here and the subquery only sums ready numbers.
+ *
+ * `po_sto_counts` is keyed (contract_id, po_number), so it is folded to one row per contract_id
+ * first: joining it on contract_id alone would multiply the contracts rows and inflate the SUM.
+ * MAX over the PO numbers of a contract is what the correlated form took, so the divisor is
+ * unchanged.
+ *
+ * Deliberately unscoped (every contract, not just those on this page): a scoped version risks
+ * missing a contract that `sm.contract_numbers` lists but the page's own keys do not, and the
+ * whole point is that this runs once rather than per row.
+ *
+ * Must be spliced after `po_sto_counts` in the WITH chain, and the query must alias it `o` where
+ * the outstanding templates below reference it.
+ */
+export const SHIPPING_PERF_CONTRACT_OS_CTE = `
+      po_sto_counts_by_contract AS MATERIALIZED (
+        SELECT TRIM(contract_id) AS contract_id, MAX(sto_count_on_po) AS sto_count_on_po
+        FROM po_sto_counts
+        GROUP BY TRIM(contract_id)
+      ),
+      contract_os AS MATERIALIZED (
+        SELECT
+          TRIM(cx.contract_id) AS contract_id,
+          (${sqlContractGlobalOutstandingExpr({
+            contractQtyExpr: 'cx.quantity_ordered',
+            incotermExpr: 'cx.incoterm',
+            contractNumberExpr: 'cx.contract_id',
+          })})::numeric AS os_kg,
+          GREATEST(COALESCE(pc.sto_count_on_po, 1), 1) AS apportion_divisor
+        FROM contracts cx
+        LEFT JOIN po_sto_counts_by_contract pc ON pc.contract_id = TRIM(cx.contract_id)
+        WHERE cx.contract_id IS NOT NULL
+          AND TRIM(cx.contract_id) <> ''
+      )`;
+
 export function buildShippingPerfViewTableQtySelectSql(): {
   deliveredQtySql: string;
   receivedQtySql: string;
@@ -375,25 +420,17 @@ export function buildShippingPerfViewTableQtySelectSql(): {
    * apart. `divisorSql` is applied per contract row inside the SUM.
    */
   const poLevelOutstandingSql = (divisorSql: string) => `(
-    SELECT COALESCE(SUM((${sqlContractGlobalOutstandingExpr({
-      contractQtyExpr: 'cx.quantity_ordered',
-      incotermExpr: 'cx.incoterm',
-      contractNumberExpr: 'cx.contract_id',
-    })})::numeric / ${divisorSql}), 0)
-    FROM contracts cx
-    WHERE cx.contract_id IS NOT NULL
-      AND TRIM(cx.contract_id) <> ''
-      AND EXISTS (
-        SELECT 1
-        FROM unnest(regexp_split_to_array(
-          COALESCE(NULLIF(TRIM(sm.contract_numbers), ''), c.contract_id::text),
-          E'\\\\s*,\\\\s*'
-        )) AS cn
-        WHERE TRIM(cn) = TRIM(cx.contract_id)
-      )
+    SELECT COALESCE(SUM(o.os_kg / ${divisorSql}), 0)
+    FROM contract_os o
+    WHERE EXISTS (
+      SELECT 1
+      FROM unnest(regexp_split_to_array(
+        COALESCE(NULLIF(TRIM(sm.contract_numbers), ''), c.contract_id::text),
+        E'\\\\s*,\\\\s*'
+      )) AS cn
+      WHERE TRIM(cn) = o.contract_id
+    )
   )`;
-
-  /** View table: full PO-level OS repeated on every sibling STO row (display only). */
   const poLevelOutstanding = poLevelOutstandingSql('1');
   /**
    * Cards / tree / By Vessel: each PO's OS divided by how many STOs THAT PO spans, so summing
@@ -402,13 +439,7 @@ export function buildShippingPerfViewTableQtySelectSql(): {
    * that spans fewer STOs than the widest one: 5.76% (203,568,180 kg) over 728 STOs.
    * contracts is strictly one row per contract_id per po_number, so contract grain == PO grain.
    */
-  const poLevelOutstandingApportioned = poLevelOutstandingSql(
-    `GREATEST(COALESCE((
-      SELECT MAX(psc_ap.sto_count_on_po)
-      FROM po_sto_counts psc_ap
-      WHERE psc_ap.contract_id = TRIM(cx.contract_id)
-    ), 1), 1)`,
-  );
+  const poLevelOutstandingApportioned = poLevelOutstandingSql('o.apportion_divisor');
 
   return {
     deliveredQtySql: `COALESCE((${deliveryResolved}), 0)::numeric`,
