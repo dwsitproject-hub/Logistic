@@ -246,12 +246,26 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
 const getContractsUncached = async (req: AuthRequest, res: Response) => {
   try {
-    await ensureUserStoContractAssignmentsTable();
+    /*
+     * Validate the request before touching the database at all.
+     *
+     * ensureUserStoContractAssignmentsTable runs CREATE TABLE / ALTER TABLE / DROP CONSTRAINT /
+     * CREATE UNIQUE INDEX. In a running server that is a no-op - server.ts already ensures it at
+     * startup and an `ensured` flag short-circuits every later call - but `app.listen` is skipped
+     * when NODE_ENV=test, so each vitest process pays the whole DDL chain on its first
+     * /api/contracts request. A request carrying a malformed date paid for it and only then got
+     * its 400, which is why security.pentest's "rejects contracts dateTo with wildcard suffix"
+     * timed out at 5s under full-suite load while passing on its own.
+     *
+     * Rejecting first is right either way: a request we are going to refuse should not wait on
+     * schema work, and parseOptionalStrictDateRange needs nothing from the database.
+     */
     const { status, supplier, buyer, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
     const { dateFrom, dateTo } = parseOptionalStrictDateRange({
       dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
       dateTo: (req.query as { dateTo?: unknown }).dateTo,
     });
+    await ensureUserStoContractAssignmentsTable();
     const productFilter = (req.query as any).product as string | undefined;
     const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
     const productFilters =

@@ -325,6 +325,48 @@ If a record with the same tri-key exists:
 - Domain tables (`contracts`, `shipments`, etc.) are **upserted** (UPDATE if exists, INSERT if not)
 - Preserves data history in raw data table
 
+### PO Cancellation vs. Absence
+
+**A PO missing from an import file is not a cancelled PO.** SAP export files are produced **per
+period** (`EXPORT jan - dec 2025.XLSX`, `CPO 7 Sep 2026.XLSX`), so a 2026 file legitimately
+contains no 2025 PO at all. Any logic that reads "absent from the newest import" as "cancelled"
+will withdraw an entire year of contracts the moment a file for a different period is imported.
+
+**Cancellation comes only from what SAP states explicitly:**
+
+| SAP field | Effect |
+| --- | --- |
+| `Delete PO Status` | whole PO → `import_status = Cancelled` |
+| `Delete STO Status` | that STO → Cancelled; PO-wide only when every real SAP STO is deleted |
+
+Resolved by `sqlContractImportStatusExpr` (`backend/src/utils/contractDeliveryStatus.ts`).
+Cancelled contracts are excluded from outstanding quantity, and never counted as Open or Close.
+
+**What absence tracking still does** (`backend/src/services/sapPresence.service.ts`):
+
+- counts consecutive misses per `(po_number, sto_number)` on trusted imports;
+- **supersedes** a stale SAP row whose PO is still present — an STO moved, or a blank-STO row was
+  replaced once SAP assigned the STO;
+- **restores** anything that reappears;
+- **flags for review** every PO whose rows have all gone missing (`flaggedForReview`);
+- **never withdraws a contract on its own.** Only an operator naming specific POs
+  (`applySapPresence.ts --pos=…`) withdraws, audited as `Operator-approved withdrawal`.
+
+Withdrawal excludes a contract from totals but deletes nothing: KLIP-entered planning, ATAs and
+remarks stay, the row stays visible behind the `?presence=` filter, and every transition is
+written to `sap_presence_audit`.
+
+> Inferring a file's covered period from its own rows was considered and rejected: `CPO 31 Aug
+> 2026.XLSX` holds no row before 2026-04-10, so a February 2026 PO would still look absent from
+> it. Only a file that declares its own period could make absence safe, and Klip is not given
+> that.
+
+**History.** Before this rule, absence *did* withdraw: on 2026-09-07 a 2025 file followed by two
+2026-only files withdrew 370 contracts, all 2025-dated. 227 of them did carry a real
+`Delete PO Status`; the other 143 had no cancellation signal at all, hiding 83,623 MT that the
+2025 file itself still reported as Open. `backend/src/scripts/restoreAbsenceWithdrawnContracts.ts`
+reverses inference-made withdrawals (dry-run by default) and leaves operator-approved ones alone.
+
 ### API Endpoints
 
 - `POST /api/sap-master-v2/import-upload` - Upload and import Excel file (ADMIN only)
