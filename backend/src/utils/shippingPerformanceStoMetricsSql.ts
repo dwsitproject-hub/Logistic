@@ -341,14 +341,32 @@ export function buildShipmentListStoMetricsCte(pageCte = 'shipment_page'): strin
  * MAX over the PO numbers of a contract is what the correlated form took, so the divisor is
  * unchanged.
  *
- * Deliberately unscoped (every contract, not just those on this page): a scoped version risks
- * missing a contract that `sm.contract_numbers` lists but the page's own keys do not, and the
- * whole point is that this runs once rather than per row.
+ * Scoped, but to a provable superset rather than to the page's shipments. A row's outstanding
+ * sums over the contract numbers in `sm.contract_numbers`, falling back to `c.contract_id` when
+ * that is empty - so every contract any row can reference appears either in sto_metrics'
+ * aggregated list or in ship_keys. Scoping to just the shipments side would have missed the
+ * first: an STO can link to POs whose contracts carry no shipment row of their own.
+ *
+ * Worth scoping because a CTE has no index, so the correlated sum re-scans this one per output
+ * row - EXPLAIN (ANALYZE) charged 34.8s to `CTE Scan [contract_os]` over 1,520 loops. Narrowing
+ * it from every contract (18,751) to the referenced ones makes each of those scans that much
+ * cheaper without changing which contracts are summed.
  *
  * Must be spliced after `po_sto_counts` in the WITH chain, and the query must alias it `o` where
  * the outstanding templates below reference it.
  */
 export const SHIPPING_PERF_CONTRACT_OS_CTE = `
+      contract_os_scope AS MATERIALIZED (
+        SELECT DISTINCT TRIM(cn) AS contract_id
+        FROM sto_metrics m,
+             unnest(regexp_split_to_array(m.contract_numbers, E'\\\\s*,\\\\s*')) AS cn
+        WHERE NULLIF(TRIM(m.contract_numbers), '') IS NOT NULL
+          AND NULLIF(TRIM(cn), '') IS NOT NULL
+        UNION
+        SELECT DISTINCT TRIM(sk.contract_id)
+        FROM ship_keys sk
+        WHERE NULLIF(TRIM(sk.contract_id), '') IS NOT NULL
+      ),
       po_sto_counts_by_contract AS MATERIALIZED (
         SELECT TRIM(contract_id) AS contract_id, MAX(sto_count_on_po) AS sto_count_on_po
         FROM po_sto_counts
@@ -364,6 +382,7 @@ export const SHIPPING_PERF_CONTRACT_OS_CTE = `
           })})::numeric AS os_kg,
           GREATEST(COALESCE(pc.sto_count_on_po, 1), 1) AS apportion_divisor
         FROM contracts cx
+        INNER JOIN contract_os_scope sc ON sc.contract_id = TRIM(cx.contract_id)
         LEFT JOIN po_sto_counts_by_contract pc ON pc.contract_id = TRIM(cx.contract_id)
         WHERE cx.contract_id IS NOT NULL
           AND TRIM(cx.contract_id) <> ''
