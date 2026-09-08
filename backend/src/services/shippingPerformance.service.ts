@@ -33,6 +33,7 @@ import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
 import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
+import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -405,35 +406,73 @@ const SHIPPING_PERF_SEA_ROW_SCOPE = buildShipmentPageSeaRowScopeSql('c', 'l', 's
 const SHIPPING_PERF_VIEW_TABLE_QTY = buildShippingPerfViewTableQtySelectSql();
 
 export async function buildShippingPerformanceSql(): Promise<string> {
-  return `
-      WITH latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
+  /**
+   * `latest_spd_contract` is the latest SAP row per contract - which is exactly what
+   * contract_latest_spd_snapshot stores, one row per contract_number (18,711 = 18,711 distinct,
+   * verified). Built live it is a DISTINCT ON over every sap_processed_data row carrying its
+   * jsonb: 12.0s of a 111.7s EXPLAIN (ANALYZE) on 2026-09-08.
+   *
+   * One projection, two sources, so the snapshot form and the live form cannot drift apart. The
+   * only column the snapshot lacks is `spd.sto_number`, which the live form reads first when
+   * building effective_sto - and dropping it is provably a no-op here: across all 18,711 latest
+   * rows, 0 have that column set while the jsonb STO paths are empty, and 0 hold a different
+   * value from them, so effective_sto is identical either way.
+   *
+   * Gated on freshness, so a stale snapshot falls back to the live DISTINCT ON rather than
+   * serving pre-import values.
+   */
+  const latestSpdContractProjection = (dataExpr: string, stoColumnExpr?: string) => `
+          contract_number,
           NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
+            ${stoColumnExpr ? `${stoColumnExpr},
+            ` : ''}${dataExpr}->'raw'->>'STO No.',
+            ${dataExpr}->'raw'->>'STO Number',
+            ${dataExpr}->'shipment'->>'sto_no',
+            ${dataExpr}->'contract'->>'sto_no'
           )), '') AS effective_sto,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
+          COALESCE(${dataExpr}->'raw'->>'Contract Ext No', ${dataExpr}->>'Contract Ext No') AS contract_ext_no,
           UPPER(TRIM(COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
+            ${dataExpr}->'contract'->>'contract_type',
+            ${dataExpr}->>'B2B Flag',
             ''
           ))) AS b2b_flag,
           NULLIF(TRIM(COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
+            ${dataExpr}->'contract'->>'contract_reference_po',
+            ${dataExpr}->>'CONTRACT REFF PO',
+            ${dataExpr}->>'Contract Reff PO Ini',
+            ${dataExpr}->'raw'->>'Contract Reff PO Ini',
+            ${dataExpr}->'raw'->>'CONTRACT REFF PO'
           )), '') AS contract_reference_po,
-          ${sapDischargeDestinationFromJson('spd.data')} AS discharge_destination
+          ${sapDischargeDestinationFromJson(dataExpr)} AS discharge_destination`;
+
+  const latestSpdContractCte = (await isContractLatestSpdSnapshotFresh())
+    ? `latest_spd_contract AS NOT MATERIALIZED (
+        SELECT ${latestSpdContractProjection('lspd.data')}
+        FROM contract_latest_spd_snapshot lspd
+        WHERE lspd.contract_number IS NOT NULL AND TRIM(lspd.contract_number) != ''
+      )`
+    : `latest_spd_contract AS (
+        SELECT DISTINCT ON (spd.contract_number) ${latestSpdContractProjection('spd.data', 'spd.sto_number::text')}
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
+        /*
+         * spd.id DESC is the tiebreaker the shared helpers already use
+         * (contractLatestSpdSql.ts, all three builders) - this query was the one that lacked it.
+         * Without it the pick is arbitrary whenever a contract has several rows sharing the newest
+         * created_at, which is 2,382 of 18,711 contracts (12.7%) and in every one of those the
+         * tied rows carry different STO values, so effective_sto could change between runs, after
+         * a re-plan or after a VACUUM. It also made this CTE disagree with
+         * contract_latest_spd_snapshot on 1,523 contracts, which is what blocked reading it from
+         * there. (Blast radius today: 24 of 2,399 shipment rows reach the l.effective_sto
+         * fallback at all, and none of them sit on an ambiguous contract - so nothing visible
+         * moves. It is fixed because "nothing visible today" depends on which contracts happen to
+         * have a blank sto_number.)
+         */
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST, spd.id DESC
+      )`;
+
+  return `
+      WITH ${latestSpdContractCte},
       ship_keys AS (
         SELECT
           s.id AS shipment_pk,
