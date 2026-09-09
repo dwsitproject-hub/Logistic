@@ -56,3 +56,31 @@ describe('shipments write paths invalidate the list caches', () => {
     }
   });
 });
+
+describe('cross-module list caches are registered, not left to TTL', () => {
+  /**
+   * Every page cache whose data can be changed from another page must register with
+   * listCacheRegistry, or an edit elsewhere leaves it serving pre-edit rows until its TTL. This
+   * is a source check because the registry keeps its callbacks private, and because the failure
+   * being guarded against is a *missing* registration in a module nobody thought to touch.
+   */
+  const services = join(__dirname, '..', 'services');
+
+  it.each([
+    ['latePerformance.service.ts', 'invalidateLatePerformanceCache'],
+    ['shipmentUnplannedHybridList.service.ts', 'invalidateHybridShipmentsListCache'],
+    ['shipmentUnplannedHybridList.service.ts', 'invalidateHybridBreakdownCache'],
+    ['truckingUnplannedHybridList.service.ts', 'invalidateTruckingHybridBreakdownCache'],
+  ])('%s registers %s', (file, fn) => {
+    const src = readFileSync(join(services, file), 'utf8');
+    expect(src).toContain(`registerListCacheInvalidator(${fn})`);
+  });
+
+  it('both list invalidators call through the registry', () => {
+    for (const file of ['shipmentList.service.ts', 'truckingList.service.ts']) {
+      expect(readFileSync(join(services, file), 'utf8')).toContain(
+        'invalidateRegisteredListCaches()',
+      );
+    }
+  });
+});

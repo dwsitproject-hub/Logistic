@@ -402,6 +402,20 @@ user. Cold payloads stayed byte-identical across all four calls.
 > live path. Writes through the app are unaffected - see below.
 
 ### What an edit invalidates (new/edit shipment modal)
+**Coverage audit of every invalidator** (why event-driven refresh is enough, and where it was
+not): `invalidateContractsListCache`, `invalidateHybridShipmentsListCache`,
+`invalidateHybridBreakdownCache` and `invalidateTruckingHybridBreakdownCache` all register with
+`listCacheRegistry`, so a shipment write, a trucking write or a SAP import clears them - SAP
+import calls both `invalidateShipmentsListCache()` and `invalidateTruckingListCache()`, and both
+call through the registry, plus it refreshes all five snapshots (qty_move, sto_agg, latest_spd,
+b2b_ending_child, contract_performance).
+
+`invalidateLatePerformanceCache` was the exception: its only caller was `sapPresence.service`.
+Contract Performance reads shipments and trucking, so a new/edit shipment or a trucking edit left
+that page serving pre-edit rows until its 5-minute TTL lapsed. It is now registered too.
+`shipmentListCacheInvalidation.test.ts` asserts each cross-module cache is registered, so a cache
+added later cannot silently rely on TTL.
+
 
 `invalidateShipmentsListCache()` runs **immediately** on the write, before the response, and it is
 not just a cache clear:

@@ -57,6 +57,7 @@ import {
   sqlB2bOriginEndingChildLateralJoin,
 } from '../utils/b2bOriginEndingSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawFromJsonAndB2b } from '../utils/regionSiteSql';
+import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -111,6 +112,18 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export function invalidateLatePerformanceCache(): void {
   ROW_CACHE.clear();
 }
+
+/**
+ * Contract Performance reads shipments and trucking, so an edit on either page changes what this
+ * cache holds. Before this registration the only caller was sapPresence.service, which meant a
+ * new/edit shipment or a trucking edit left Contract Performance serving pre-edit rows until the
+ * TTL (5 min) lapsed - the page had no way to know the data moved.
+ *
+ * Registering here (rather than importing this module from shipmentList/truckingList) is how the
+ * other cross-module caches do it; a direct import would create a cycle. It now clears on every
+ * shipment write, every trucking write, and on SAP import, which both call through the registry.
+ */
+registerListCacheInvalidator(invalidateLatePerformanceCache);
 
 function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
   const norm = {
