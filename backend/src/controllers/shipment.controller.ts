@@ -4294,6 +4294,9 @@ export const updateShipmentDailyDeliverables = async (req: AuthRequest, res: Res
       [id, JSON.stringify(dd.rows)],
     );
 
+    // Writes shipments.daily_deliverables, which the list and Section 1 read - without this the
+    // caches keep serving pre-edit rows until their TTL expires.
+    invalidateShipmentsListCache();
     return res.json({ success: true, data: upd.rows[0], message: 'Shipment daily planning deliverables updated successfully' });
   } catch (error) {
     logger.error('Update shipment daily deliverables error:', error);
@@ -4473,6 +4476,8 @@ export const bulkUploadShipmentDailyDeliverables = async (req: AuthRequest, res:
       succeededRows += inWindow.length;
     }
 
+    // Same reason as updateShipmentDailyDeliverables: this bulk path updates shipments rows.
+    invalidateShipmentsListCache();
     return res.json({
       success: true,
       data: {

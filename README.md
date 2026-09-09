@@ -367,6 +367,69 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Shipments: why a first visitor waited, and what it costs now
+
+Three separate reasons the startup warmers were not protecting the first visitor. All three were
+key mismatches, none of them visible without comparing the warmed key against the key the browser
+actually reads:
+
+1. **`skipSapJoin` was never warmed as `false`.** Every warmer inherits `skipSapJoin: 'true'` from
+   `buildSyntheticRequest`, and `skipSapJoin` is part of the list cache key - so the page's second
+   call (the hydrate, 15.9s cold) was never warm for anyone.
+2. **The summary warmer used `limit: '20'`, the page sends `limit=1`.** The Unplanned breakdown
+   caches under `${shipmentCtx.cacheKey}:breakdown:...` - a *list* key, which includes limit. The
+   summary row (filter-keyed) was warmed, the breakdown was not.
+3. **`SUMMARY_CACHE` was read after the daily-rollup branch, so on the daily path it was written
+   on every request and read on none.** Every call re-ran the two daily queries plus the live
+   stage-count overlay. This one made the other two look unfixable: no amount of warming helped.
+
+Measured by running the warmers and then replaying exactly what a browser sends on a default load:
+
+| call | before | after |
+| --- | --- | --- |
+| shell (`skipSapJoin=true`) | 21,588 ms | **12 ms** |
+| hydrate (`skipSapJoin=false`) | 26,853 ms | **4 ms** |
+| `summaryOnly` | 73,196 ms | **3 ms** |
+| `outstandingQtyOnly` | 13,062 ms | **3 ms** |
+| **first visitor total** | ~59,674 ms | **22 ms** |
+
+The warmers themselves take 65-85s at startup - that cost is paid by the server, once, not by a
+user. Cold payloads stayed byte-identical across all four calls.
+
+> **The one trade-off to know:** on the daily path the live stage-count overlay used to be
+> recomputed on every request, so stage counts were always current even for changes that bypass
+> the app's invalidation. They are now at most `CACHE_TTL_MS` old on that path, exactly as on the
+> live path. Writes through the app are unaffected - see below.
+
+### What an edit invalidates (new/edit shipment modal)
+
+`invalidateShipmentsListCache()` runs **immediately** on the write, before the response, and it is
+not just a cache clear:
+
+- clears `PAGE_CACHE`, `COUNT_CACHE`, `SUMMARY_CACHE`, `OUTSTANDING_QTY_CACHE`,
+  `STATUS_CARD_QTY_CACHE`, `ETC_NO_ATC_DUE_CACHE`;
+- calls `invalidateRegisteredListCaches()`, which clears the hybrid breakdown caches that live in
+  another module (they register a callback to avoid an import cycle);
+- marks the pipeline daily rollup stale (`markPipelineDailySummaryStale(['shipment'])`), which
+  schedules a debounced background rebuild;
+- invalidates the Oil Loss cache, which reads shipment quantities;
+- **re-warms** the recently used pages and summaries in the background
+  (`PAGE_KEEP_WARM.rewarmRecentlyUsed()`), so the next viewer after an edit is served from memory
+  rather than paying the cold cost.
+
+`createShipment` and `updateShipment` additionally run a targeted
+`ContractQtyMoveSnapshotService.refreshForShipmentIds(...)`.
+
+So nothing waits for a TTL after an edit. TTL is only the upper bound on staleness when nothing
+writes.
+
+**Two write paths were missing from this, and are now fixed:**
+`updateShipmentDailyDeliverables` and `bulkUploadShipmentDailyDeliverables` both run
+`UPDATE shipments` but never invalidated, so an edit to daily deliverables left the list and
+Section 1 serving pre-edit rows for up to `CACHE_TTL_MS`. `shipmentListCacheInvalidation.test.ts`
+now audits the controller's source and fails if any handler writes `shipments` without clearing
+the caches - including handlers added in future.
+
 ### `contractsOnStoSubquery`: gather candidates by index, don't scan contracts
 
 This subquery decides which contracts belong to a grouped Shipments row, and it is embedded

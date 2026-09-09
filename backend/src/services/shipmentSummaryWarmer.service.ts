@@ -73,22 +73,34 @@ function createDiscardingResponse(): Response {
   return res as unknown as Response;
 }
 
-function buildSyntheticRequest(extraQuery: Record<string, string | string[]>): AuthRequest {
+/**
+ * The query a default browser load sends, as the warmers replay it. Exported so a test can lock
+ * it against the frontend's defaults - `shipments.compact.sort` defaults to created_at/desc in
+ * `frontend/src/lib/shipmentsCompactSort.ts`, and the page sends compact/limit/page/includeSummary
+ * exactly as below. If either side drifts, the warmers populate a key nobody reads.
+ */
+export function shipmentWarmerBaseQuery(
+  extraQuery: Record<string, string | string[]> = {},
+): Record<string, string | string[]> {
   const { dateFrom, dateTo } = defaultShipmentsDateRange();
   return {
+    compact: 'true',
+    skipSapJoin: 'true',
+    includeSummary: 'false',
+    limit: '20',
+    page: '1',
+    sortKey: 'created_at',
+    sortDir: 'desc',
+    dateFrom,
+    dateTo,
+    ...extraQuery,
+  };
+}
+
+function buildSyntheticRequest(extraQuery: Record<string, string | string[]>): AuthRequest {
+  return {
     // Must match the query the browser sends on a default load, or we warm a key nobody reads.
-    query: {
-      compact: 'true',
-      skipSapJoin: 'true',
-      includeSummary: 'false',
-      limit: '20',
-      page: '1',
-      sortKey: 'created_at',
-      sortDir: 'desc',
-      dateFrom,
-      dateTo,
-      ...extraQuery,
-    },
+    query: shipmentWarmerBaseQuery(extraQuery),
     headers: {},
     get: () => undefined,
   } as unknown as AuthRequest;
@@ -135,20 +147,37 @@ function scopeToExtraQuery(scope: {
   return extra;
 }
 
-/** Compact list shell (skipSapJoin) — default created_at then persisted vessel_name sort. */
+/**
+ * Compact list shell (skipSapJoin) — default created_at then persisted vessel_name sort.
+ *
+ * The hydrate variant is warmed too. `skipSapJoin` is part of the list cache key, and every
+ * warmer here inherits `skipSapJoin: 'true'` from buildSyntheticRequest, so before this the
+ * page's second call (`skipSapJoin=false`, measured at 15.9s cold) was never warmed and the
+ * first visitor always paid for it. Only the default sort is hydrated: it is the expensive
+ * variant, and a persisted non-default sort is picked up by PAGE_KEEP_WARM after its first use.
+ */
 export async function startShipmentListShellCacheWarmer(): Promise<void> {
   await warmOne('list shell', { sortKey: 'created_at', sortDir: 'desc' });
   await warmOne('list shell vessel_name', { sortKey: 'vessel_name', sortDir: 'asc' });
+  await warmOne('list hydrate', { skipSapJoin: 'false', sortKey: 'created_at', sortDir: 'desc' });
 }
 
-/** Section 1 status cards (the 16.8s call) — default YTD only. */
+/**
+ * Section 1 status cards (the 16.8s call) — default YTD only.
+ *
+ * `limit: '1'` is not cosmetic. The page sends limit=1 for this call, and the Unplanned
+ * breakdown caches under `${shipmentCtx.cacheKey}:breakdown:...` - a *list* cache key, which
+ * includes limit. Warming with the default limit=20 populated the summary row (keyed by the
+ * limit-independent filter key) but not the breakdown, so the first visitor still paid 4.7s for
+ * the four breakdown queries.
+ */
 export function startShipmentSummaryCacheWarmer(): Promise<void> {
-  return warmOne('summary', { summaryOnly: 'true' });
+  return warmOne('summary', { summaryOnly: 'true', limit: '1' });
 }
 
-/** Outstanding Qty strip (the 8.3s call) — default YTD only. */
+/** Outstanding Qty strip (the 8.3s call) — default YTD only. Same limit=1 as the page sends. */
 export function startShipmentOutstandingQtyCacheWarmer(): Promise<void> {
-  return warmOne('outstanding qty', { outstandingQtyOnly: 'true' });
+  return warmOne('outstanding qty', { outstandingQtyOnly: 'true', limit: '1' });
 }
 
 /**
@@ -159,7 +188,11 @@ export async function startShipmentScopedToolbarCacheWarmer(): Promise<void> {
   for (const scope of SHIPMENT_WARM_TOOLBAR_SCOPES) {
     if (!scope.plants?.length && !scope.products?.length) continue;
     const extra = scopeToExtraQuery(scope);
-    await warmOne(`summary (${scope.label})`, { ...extra, summaryOnly: 'true' });
-    await warmOne(`outstanding qty (${scope.label})`, { ...extra, outstandingQtyOnly: 'true' });
+    await warmOne(`summary (${scope.label})`, { ...extra, summaryOnly: 'true', limit: '1' });
+    await warmOne(`outstanding qty (${scope.label})`, {
+      ...extra,
+      outstandingQtyOnly: 'true',
+      limit: '1',
+    });
   }
 }

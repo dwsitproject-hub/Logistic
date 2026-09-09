@@ -918,6 +918,42 @@ export async function loadShipmentSummaryBundle(
       : [],
   });
 
+  /**
+   * Cache first, then the daily rollup.
+   *
+   * This read used to sit *after* the daily branch, so whenever the daily rollup was eligible
+   * the branch returned before the cache was ever consulted: SUMMARY_CACHE was written on every
+   * request and read on none. Each call re-ran the two daily queries plus the live stage-count
+   * overlay, which is why the Shipments summary stayed ~3.3s even with the warmer populating the
+   * exact key the page asks for.
+   *
+   * Freshness is unchanged in kind: the same CACHE_TTL_MS bounds the live path, and every write
+   * path clears these caches through registerListCacheInvalidator. What changes is that the live
+   * stage-count overlay is now at most CACHE_TTL_MS old on the daily path too, instead of being
+   * recomputed per request.
+   */
+  const cached = SUMMARY_CACHE.get(opts.cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    SUMMARY_KEEP_WARM.touch(opts.cacheKey);
+    const [unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
+      await Promise.all([
+        opts.loadUnplannedBreakdown(),
+        loadPreplanned(),
+        loadCompleted(),
+        loadCancelled(),
+      ]);
+    return {
+      summaryRow: normalizeSummaryRow(cached.summaryRow),
+      totalCount: cached.totalCount,
+      unplannedBreakdown,
+      preplannedBreakdown,
+      completedBreakdown,
+      cancelledBreakdown,
+      source: 'cache',
+    };
+  }
+  if (cached) SUMMARY_CACHE.delete(opts.cacheKey);
+
   const filters = buildShipmentPipelineDailyFilterInput(req);
   if (isPipelineDailySummaryEligible(filters)) {
     const fromDaily = await loadShipmentSummaryFromDaily(toPipelineDailySummaryScope(filters));
@@ -970,27 +1006,6 @@ export async function loadShipmentSummaryBundle(
     }
   }
 
-  const cached = SUMMARY_CACHE.get(opts.cacheKey);
-  if (cached && Date.now() < cached.expiresAt) {
-    SUMMARY_KEEP_WARM.touch(opts.cacheKey);
-    const [unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
-      await Promise.all([
-        opts.loadUnplannedBreakdown(),
-        loadPreplanned(),
-        loadCompleted(),
-        loadCancelled(),
-      ]);
-    return {
-      summaryRow: normalizeSummaryRow(cached.summaryRow),
-      totalCount: cached.totalCount,
-      unplannedBreakdown,
-      preplannedBreakdown,
-      completedBreakdown,
-      cancelledBreakdown,
-      source: 'cache',
-    };
-  }
-  if (cached) SUMMARY_CACHE.delete(opts.cacheKey);
 
   const [loaded, unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
     await Promise.all([
