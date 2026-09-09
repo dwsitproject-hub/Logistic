@@ -367,6 +367,56 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Stage A: deriving a Shipments page in Node, and what it refuses to do
+
+The list caches per (filters x status x sort x page), so every toolbar change is an uncached
+query. Replaying a real session from the access log, in order, in one process:
+
+| action | cold |
+| --- | --- |
+| click `status=OPEN` | 12,383 ms |
+| add `product=CPO` | 11,417 ms |
+| add `plant=BONTANG` | 4,035 ms |
+| the hydrate behind them | 63,695 ms |
+| repeat an identical combination | **80 ms** |
+
+That last row is the point: the cache works perfectly, but only for a combination you have already
+visited. `shipmentListNodePaging.ts` derives the page from one loaded row set instead - the set is
+668 rows for the default YTD scope.
+
+**What it refuses, and why - each one measured, not assumed:**
+
+| refused | reason |
+| --- | --- |
+| the unfiltered (ALL) list | ordered by the hybrid global merge sort across execution + backlog rows, not the plain ORDER BY. Totals matched at 109 rows but the order diverged from index 5. |
+| `plant` | not a row column: it filters the *contract scope*, so another plant is a different row set. |
+| text sorts | Postgres orders text by database collation; JS string comparison does not reproduce it. |
+| quantity sorts | `SHIPMENT_LIST_ENRICHED_SORT_KEYS` orders them by a resolved enriched expression, not the column a row carries. Ordering them here diverged from the SQL on three combinations even though the totals matched. |
+| `date` column filters | the SQL compares `(expr)::date` in the database timezone while a row carries a UTC timestamp - `2027-12-30T17:00:00.000Z` is the 31st in Jakarta, so truncating would shift boundaries by a day. |
+| `late_indicator` filter | filters a computed expression, not a stored column. |
+| UNPLANNED / PREPLANNED | resolved by their own SQL path (`AND FALSE` in the execution query). |
+
+Two behaviours it had to learn from the SQL rather than from the shape of the data:
+
+- **a status filter also drops contract-backlog rows.** The filtered SQL is execution-only;
+  backlog rows come from a separate resolver, so filtering on status alone over-counted -
+  `status=CLOSE` gave 6 rows here against 5 from SQL.
+- **`NULLS LAST` holds in both directions**, so it is decided before the sort direction, and the
+  tie-break is `created_at DESC, id ASC` - `created_at` is a bulk-import timestamp shared by
+  thousands of rows, so `id` decides far more often than it looks.
+
+`canDeriveShipmentPageInNode` checks the request *and* that a sample row carries every field the
+work needs, so a projection change cannot silently break the fast path - it falls back instead.
+
+**Verified against the SQL path**: 24 (status x sort key x direction x page) combinations, 0
+differences, with `row_kind` normalised away (the hybrid resolver stamps `shipment_execution`, the
+filtered path leaves it unset, and every consumer only tests for `contract_backlog`). 27 unit
+tests cover the filter, sort and gate semantics.
+
+> Not yet wired into `getShipments` - this is the derivation layer with its parity established.
+> The remaining work is the row-set cache and the scope key that excludes status, sort, page and
+> the Node-handled column filters.
+
 ### Vessel name is always mapped from Master Vessel, never SAP free text
 
 **Root cause of the two-way render, found afterwards:** `normalizeShipmentListRows` - which calls
