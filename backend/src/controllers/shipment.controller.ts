@@ -155,7 +155,6 @@ import {
 } from '../utils/operationId';
 import { groupPlantExpr } from '../utils/groupPlantSql';
 import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
-import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
 import {
   sqlB2bEndingDischargeDestExpr,
   sqlB2bOriginEndingChildLateralJoin,
@@ -218,6 +217,7 @@ import {
 } from '../utils/contractDeliveryStatus';
 import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
 import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
+import { latestSpdDerivedExprs } from '../utils/contractLatestSpdDerivedSql';
 import { deriveCompactShipmentPage } from '../services/shipmentListNodePage.service';
 import {
   buildStoLinkedContractCountSql,
@@ -895,9 +895,32 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
      *   projected columns to zero differences.
      */
     const latestSpdSnapshotFresh = await isContractLatestSpdSnapshotFresh();
+
+    /**
+     * Migration 161 stores these five on the snapshot, so a fresh snapshot needs no jsonb at all:
+     * the source exposes the columns and the projection just names them. Measured on the backlog
+     * counts that read the same six columns, this removed 26 `data->` accesses per row and took
+     * the preplanned count from 771,553 buffers to 7,138.
+     *
+     * The stale path computes them from contractLatestSpdDerivedSql, the same definition the
+     * refresh writes with - a stored column and its expression drifting apart would show wrong
+     * data with nothing failing.
+     *
+     * `source_type_raw` is stored too but deliberately not projected here: nothing on this page
+     * reads it, and adding a column to a CTE other queries build on is a change with no caller.
+     */
+    const SHIPMENT_LATEST_SPD_COLUMNS = [
+      'effective_sto',
+      'b2b_flag_raw',
+      'contract_reference_po_raw',
+      'contract_ext_no_raw',
+      'discharge_destination',
+    ] as const;
+
     const latestSpdSourceSql = latestSpdSnapshotFresh
       ? `(
-          SELECT lss.contract_number, lss.data, NULL::text AS sto_number,
+          SELECT lss.contract_number,
+                 ${SHIPMENT_LATEST_SPD_COLUMNS.map((c) => `lss.${c}`).join(', ')},
                  lss.spd_created_at AS created_at
           FROM contract_latest_spd_snapshot lss
         ) spd`
@@ -905,34 +928,15 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     /** The snapshot is already unique per contract, so it has no id to break ties with. */
     const latestSpdOrderTailSql = latestSpdSnapshotFresh ? '' : ', spd.id DESC';
 
+    const latestSpdDerived = latestSpdDerivedExprs('spd.data', 'spd.sto_number');
+    const latestSpdProjection = latestSpdSnapshotFresh
+      ? SHIPMENT_LATEST_SPD_COLUMNS.map((c) => `spd.${c}`).join(',\n          ')
+      : SHIPMENT_LATEST_SPD_COLUMNS.map((c) => `${latestSpdDerived[c]} AS ${c}`).join(',\n          ');
+
     const latestSpdSelectList = `
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
-          NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') AS effective_sto,
-          COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
-            spd.data->'raw'->>'B2B Flag',
-            spd.data->>'Contract Type'
-          ) AS b2b_flag_raw,
-          COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw,
-          COALESCE(
-            spd.data->'raw'->>'Contract Ext No',
-            spd.data->>'Contract Ext No'
-          ) AS contract_ext_no_raw,
-          ${sapDischargeDestinationFromJson('spd.data')} AS discharge_destination,
+          ${latestSpdProjection},
           spd.created_at`;
 
     const prelude = scopeLatestSpdToContracts

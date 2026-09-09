@@ -369,6 +369,22 @@ dimension that happens to carry the same place names.
 
 ### Migration 161: the snapshot stores its derived columns
 
+**The Shipments summary reads them too.** Its own `latest_spd_contract` still extracted five of the
+six from jsonb; it now names the columns when the snapshot is fresh, and computes them from
+`contractLatestSpdDerivedSql` when it is not - one definition on both sides. `source_type_raw` is
+stored but deliberately not projected there: nothing on that page reads it, and adding a column to
+a CTE other queries build on is a change with no caller.
+
+**One user-visible change came out of it, and it is worth knowing about.** Comparing the four page
+payloads before and after the whole chain, exactly one value moved: the completed card's vessel
+list shows `BG.PRIMA SAMUDRA IV` where it used to show `PRIMA SAMUDRA IV` - same 76 vessels, one
+spelled differently. The cause is the now-deterministic SAP row choice, and the data behind it is
+the real story: `vessel_code = MBGPSIV` is **not in `master_vessels` at all**, and its shipment
+rows store two spellings (`BG.PRIMA SAMUDRA IV` on the older rows, `Prima Samudra IV` on the
+newer). With no master entry the "name always comes from Master Vessel" rule has nothing to map
+to, so whichever row wins decides the spelling. That is a data-quality item, not a query one -
+adding MBGPSIV to Master Vessel would settle it.
+
 Reading the snapshot instead of scanning SAP only bought 14-21%, and the reason was the snapshot
 itself: it stores the SAP row as jsonb, and the backlog CTE makes **26 `data->` accesses per row**
 to produce six values. A prototype settled it before the migration was written - a flat table of
