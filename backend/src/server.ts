@@ -17,6 +17,7 @@ import logger from './utils/logger';
 import { runWarmupJobsSequentially } from './utils/startupWarmupQueue';
 import {
   startShipmentListShellCacheWarmer,
+  startShipmentRowSetScopeWarmer,
   startShipmentOutstandingQtyCacheWarmer,
   startShipmentScopedToolbarCacheWarmer,
   startShipmentSummaryCacheWarmer,
@@ -312,6 +313,12 @@ if (process.env.NODE_ENV !== 'test') {
         { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
         { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
         { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
+        /**
+         * Last on purpose. It loads the *unfiltered* Shipments row sets, which cost more than any
+         * single page, and nothing waits on them - they only decide whether a later status-card
+         * click is answered from memory (single-digit ms) or from SQL (about 12s).
+         */
+        { name: 'Shipments scope row sets', run: () => startShipmentRowSetScopeWarmer() },
       ],
       {
         // Let the app finish booting and serve any waiting request before we add DB load.

@@ -28,6 +28,7 @@
 
 import type { Response } from 'express';
 import { getShipments } from '../controllers/shipment.controller';
+import { primeCompactShipmentScope } from './shipmentListNodePage.service';
 import type { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 
@@ -160,6 +161,59 @@ export async function startShipmentListShellCacheWarmer(): Promise<void> {
   await warmOne('list shell', { sortKey: 'created_at', sortDir: 'desc' });
   await warmOne('list shell vessel_name', { sortKey: 'vessel_name', sortDir: 'asc' });
   await warmOne('list hydrate', { skipSapJoin: 'false', sortKey: 'created_at', sortDir: 'desc' });
+}
+
+/**
+ * Load the row sets the status cards are derived from.
+ *
+ * A status-filtered page can be answered from a scope row set in single-digit milliseconds, but
+ * only if that set is already loaded - a request never loads it, because the scope is the
+ * *unfiltered* view and costs more than the filtered query it would replace (measured: the first
+ * status click went 12.4s to 60.8s when the request did the loading). So the warmer does it.
+ *
+ * Two scopes: the shell and the hydrate variant, since skipSapJoin changes the row contents.
+ * Everything else about the default view is already in the base query.
+ */
+export async function startShipmentRowSetScopeWarmer(): Promise<void> {
+  for (const skipSapJoin of ['true', 'false']) {
+    const query = shipmentWarmerBaseQuery({ skipSapJoin });
+    try {
+      const primed = await primeCompactShipmentScope({
+        query,
+        loadScopePage: async (scopeQuery) => {
+          let body: unknown;
+          const capture = {
+            statusCode: 200,
+            status() {
+              return capture;
+            },
+            json(payload: unknown) {
+              body = payload;
+              return capture;
+            },
+            setHeader() {
+              return capture;
+            },
+            send() {
+              return capture;
+            },
+          };
+          await getShipments(
+            { query: scopeQuery, headers: {}, get: () => undefined } as unknown as AuthRequest,
+            capture as unknown as Response,
+          );
+          const data = (body as { data?: { shipments?: unknown[] } } | undefined)?.data;
+          return { rows: (data?.shipments ?? []) as Record<string, unknown>[] };
+        },
+      });
+      logger.info('Shipments scope row set warmed', {
+        skipSapJoin,
+        rows: primed.rows,
+      });
+    } catch (error) {
+      logger.warn('Shipments scope row-set warm-up failed', { skipSapJoin, error });
+    }
+  }
 }
 
 /**

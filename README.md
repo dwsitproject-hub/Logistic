@@ -367,6 +367,40 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Stage A wired up: a status-filtered page comes from memory
+
+| action (replayed from a real session) | before | after |
+| --- | --- | --- |
+| click `status=OPEN` | 12,383 ms | **12 ms** |
+| add `product=CPO` | 11,417 ms | **5 ms** |
+| add `plant=BONTANG` | 4,035 ms | 3,268 ms - a new scope, so SQL by design |
+| whole sequence | 267,874 ms | 164,181 ms |
+
+**A request never loads a scope.** That was the first design and it was a net loss: the scope is
+the *unfiltered* view, which costs more than the filtered query it replaces, so the first status
+click went from 12.4s to 60.8s and the replayed session from 268s to 311s - even though a second
+filter change inside the same scope answered in 15ms. Now a request either finds the row set
+loaded and answers from memory, or runs the SQL path it would have run anyway while the row set
+loads in the background. That makes the change strictly an improvement, never a regression.
+
+`startShipmentRowSetScopeWarmer` loads the two default-window scopes (shell and hydrate - they
+differ, because `skipSapJoin` changes the row contents) and is **last** in the startup queue:
+nothing waits on it, and it took 207s on the dev box, which is more than any single page costs.
+
+**Parity, verified end to end:** `ROW_SET_LOAD_MARKER` in the query forces the SQL path, so the
+same request runs both ways and the payloads are compared. Six shapes - Open and Close, both sort
+directions, page 1/2/3, a product filter, a non-default limit - all byte-identical, with the
+derived path confirmed as the one that served (6 of 6 logged `route=compact-node-derived`), at
+5-12ms against 476-1,152ms.
+
+One field had to be dropped to reach that: the scope load goes through the hybrid ALL path, which
+stamps `row_kind='shipment_execution'`, while the filtered SQL path never sets it. Every derived
+row is an execution row anyway (the status filter drops the backlog ones), so the derived rows are
+returned as copies without it - and the shared cached row set keeps it for the ALL path.
+
+`shipmentListRowSetCache` registers with `listCacheRegistry`, so a shipment write, a trucking
+write or a SAP import clears it immediately, like every other list cache.
+
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 
 The list caches per (filters x status x sort x page), so every toolbar change is an uncached

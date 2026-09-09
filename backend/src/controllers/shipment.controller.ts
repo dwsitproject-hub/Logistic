@@ -218,6 +218,7 @@ import {
 } from '../utils/contractDeliveryStatus';
 import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
 import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
+import { deriveCompactShipmentPage } from '../services/shipmentListNodePage.service';
 import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
@@ -510,6 +511,44 @@ function shipmentListLimitOffset(limit: unknown, page: unknown): { limit: number
   const safeLimit = Math.max(1, Math.min(500, Number(limit) || 20));
   const safePage = Math.max(1, Number(page) || 1);
   return { limit: safeLimit, offset: (safePage - 1) * safeLimit };
+}
+
+/**
+ * Capture a list response in-process, for the row-set scope load.
+ *
+ * The scope load re-enters getShipments with a synthetic query instead of duplicating the list
+ * SQL, so it cannot drift from the real path when that path changes. ROW_SET_LOAD_MARKER in that
+ * query stops the synthetic request taking the derive path itself.
+ */
+function captureShipmentListResponse(): {
+  res: Response;
+  rows: () => Record<string, unknown>[];
+} {
+  let body: unknown;
+  const captured = {
+    statusCode: 200,
+    status(code: number) {
+      captured.statusCode = code;
+      return captured;
+    },
+    json(payload: unknown) {
+      body = payload;
+      return captured;
+    },
+    setHeader() {
+      return captured;
+    },
+    send() {
+      return captured;
+    },
+  };
+  return {
+    res: captured as unknown as Response,
+    rows: () => {
+      const data = (body as { data?: { shipments?: unknown } } | undefined)?.data;
+      return Array.isArray(data?.shipments) ? (data.shipments as Record<string, unknown>[]) : [];
+    },
+  };
 }
 
 function emitShipmentListTimings(
@@ -1529,6 +1568,40 @@ ${vlpLateralJoins}
         sortKey: listSortKey,
         sortDir: listSortDir,
       });
+
+      /**
+       * Fast path: derive an Open/Close-filtered page from one cached row set.
+       *
+       * The caches below are keyed by (filters x status x sort x page), so clicking a status card
+       * or adding a product filter is always an uncached query - 12.4s and 11.4s when measured,
+       * against 80ms for a combination already visited. deriveCompactShipmentPage loads the scope
+       * once (this same request minus status, sort, page and the column filters it can mirror)
+       * and slices it. It refuses anything it cannot reproduce and we fall through unchanged.
+       */
+      const derived = await deriveCompactShipmentPage({
+        query: req.query as Record<string, unknown>,
+        sortKey: listSortKey,
+        sortDir: listSortDir,
+        page: Number(page),
+        limit: Number(limit),
+        loadScopePage: async (scopeQuery) => {
+          const scopeRes = captureShipmentListResponse();
+          await getShipments(
+            { ...req, query: scopeQuery } as unknown as AuthRequest,
+            scopeRes.res,
+          );
+          return { rows: scopeRes.rows() };
+        },
+      });
+      if (derived.ok) {
+        emitShipmentListTimings(res, { ...timingsMs, total: performance.now() - tReq0 }, {
+          route: 'compact-node-derived',
+          rowCount: derived.page.shipments.length,
+          total: derived.page.pagination.total,
+        });
+        return res.json({ success: true, data: derived.page });
+      }
+      logger.debug('Shipments page not derived from a row set', { reason: derived.reason });
 
       // Keep ALL hybrid even for 10-digit PO/STO search — Unplanned backlog has no shipments row.
       if (shouldResolveAllHybridShipmentsList(status, etcNoAtcDueWithin7dParam)) {
