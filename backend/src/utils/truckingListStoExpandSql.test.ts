@@ -100,6 +100,25 @@ describe('truckingListStoExpandSql', () => {
    * whole query with 42P01 and the Trucking page rendered "No Trucking operations found" - the
    * shell is what the first paint requests, so the page was empty for every user.
    */
+  it('scopes both contract_sto_lines branches to trucking_source, not the whole database', () => {
+    // Unscoped, these branches enumerated every contract in the database and relied on the
+    // outer join to discard the rest: a single-contract request still probed
+    // sap_processed_data 15,737 times. Keep the predicate on BOTH branches.
+    const sql = buildTruckingListExpansionSql('SELECT 1 AS id', { skipSapJoin: false });
+    const scopeMatches = sql.match(
+      /IN \(SELECT ts_scope\.contract_id FROM trucking_source ts_scope\)/g,
+    );
+    expect(scopeMatches?.length).toBe(2);
+    expect(sql).toContain(
+      'AND cs.contract_id IN (SELECT ts_scope.contract_id FROM trucking_source ts_scope)',
+    );
+    expect(sql).toContain(
+      'AND c2.id IN (SELECT ts_scope.contract_id FROM trucking_source ts_scope)',
+    );
+    // The scope predicate is only sound while trucking_source is declared before this CTE.
+    expect(sql.indexOf('trucking_source AS')).toBeLessThan(sql.indexOf('contract_sto_lines AS'));
+  });
+
   it('only references the grc alias in a query that also joins gr_closed', () => {
     const inner = 'SELECT 1 AS id';
     for (const skipSapJoin of [true, false]) {

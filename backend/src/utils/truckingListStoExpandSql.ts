@@ -85,6 +85,19 @@ export function sqlTruckingAggregatedStoLinesFromAgg(fallbackStoExpr = 'ts.sto_n
   return `COALESCE(csla.agg_sto_lines, NULLIF(TRIM(${fallbackStoExpr}::text), ''))`;
 }
 
+/**
+ * STO lines per contract, from `contract_stos` plus SAP rows whose effective STO is not yet
+ * registered.
+ *
+ * Both UNION branches are scoped to `trucking_source`. Without that, they enumerated every
+ * contract in the database and only the outer `ON sto.contract_id = c.id` narrowed the result:
+ * a request filtered to one contract still made the planner walk 15,737 contracts and probe
+ * `sap_processed_data` once each - 99.6% of the query's loops on that table. The predicate is
+ * output-preserving by construction, since the outer join already discards any row whose
+ * contract is not in `trucking_source` (verified byte-for-byte across five filter shapes).
+ *
+ * `trucking_source` must stay defined before this CTE in the WITH list.
+ */
 export function buildContractStoLinesCte(skipSapJoin: boolean): string {
   const eligible = sqlTruckingEligibleStoLineWhere('c', 'TRIM(cs.sto_number::text)', skipSapJoin);
   if (skipSapJoin) {
@@ -109,6 +122,8 @@ export function buildContractStoLinesCte(skipSapJoin: boolean): string {
           FROM contract_stos cs
           INNER JOIN contracts c_cs ON c_cs.id = cs.contract_id
           WHERE cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
+            -- Page scope: rows outside trucking_source cannot survive the outer join below.
+            AND cs.contract_id IN (SELECT ts_scope.contract_id FROM trucking_source ts_scope)
             AND ${sqlTruckingEligibleStoLineWhere('c_cs', 'TRIM(cs.sto_number::text)', true)}
           UNION
           SELECT c2.id, TRIM(${SPD_EFFECTIVE_STO}) AS sto_number
@@ -116,6 +131,8 @@ export function buildContractStoLinesCte(skipSapJoin: boolean): string {
           INNER JOIN contracts c2 ON c2.contract_id = spd.contract_number
           WHERE spd.contract_number IS NOT NULL
             AND TRIM(spd.contract_number) != ''
+            -- Page scope: this branch used to join all of SAP to all of contracts.
+            AND c2.id IN (SELECT ts_scope.contract_id FROM trucking_source ts_scope)
             AND ${SPD_EFFECTIVE_STO} IS NOT NULL
             AND ${contractEffectiveIncotermExpr('c2')} IN ('FRC', 'LCO')
             AND ${sqlTruckingEligibleStoLineWhere('c2', `TRIM(${SPD_EFFECTIVE_STO})`, false)}

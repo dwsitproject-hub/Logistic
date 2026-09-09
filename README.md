@@ -367,6 +367,50 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Trucking: scope the STO-line CTE to the page, not the whole database
+
+`contract_sto_lines` (`backend/src/utils/truckingListStoExpandSql.ts`) resolves which STO lines
+belong to each contract from two sources UNIONed together - `contract_stos`, and SAP rows whose
+effective STO is not yet registered. Both branches were **unscoped**: they enumerated every
+contract in the database, and only the outer `INNER JOIN ... ON sto.contract_id = c.id` narrowed
+the result down to the contracts the page had actually asked for.
+
+The cost showed up in the plan as a `Seq Scan on contracts c2` feeding a nested loop into
+`sap_processed_data`: for a request filtered to **one** contract, the planner still walked 15,737
+contracts and probed SAP once per contract - 15,737 of the query's 15,794 loops on
+`sap_processed_data` (99.6%) came from that single node.
+
+The fix adds one predicate to each branch, restricting them to
+`(SELECT contract_id FROM trucking_source)`. It is **output-preserving by construction**: the outer
+join already discards every row whose `contract_id` is not a `trucking_source` contract, so the
+predicate removes only rows that could never have survived. Verified byte-for-byte across five
+filter shapes (two single-contract, unfiltered page 1 and 2, and the Unplanned status card) -
+60,834,712 bytes of result, identical SHA-256 before and after.
+
+| request | before | after |
+| --- | --- | --- |
+| one contract, buffers touched | 4,343,020 | 62,154 |
+| one contract, execution | 3,331 ms | 762 ms |
+| single contract via list query | 4,596 / 6,202 ms | 2,668 / 1,756 ms |
+| unfiltered default page | 136,592 ms | 117,134 ms |
+
+> The gain scales with how narrow the filter is - unfiltered, `trucking_source` already covers most
+> contracts, so scoping removes little. The unfiltered path's remaining cost is not this node: the
+> root plan still touches 18.7M buffers (146 GB) for a 910 MB database, concentrated in the
+> `trucking_source` -> `contract_sto_lines` -> `expanded` CTE-scan chain, which is the next thing
+> to attack.
+
+**Also measured and rejected here:** pruning the 47 `sap_processed_data` `data->'raw'` keys that
+KLIP never reads after import. They are 23 MB of 57 MB of raw text, but TOAST compression already
+collapses the repeated key names - a pruned prototype table came out **76 MB against 77 MB**, with
+query time inside the noise. Repeated key names are not a storage problem. What *is* expensive is
+re-reading the blob: forcing 20 `data->'raw'->>'key'` accesses per row took 16.9-20.6s, while
+hoisting the extraction into one `WITH r AS MATERIALIZED (SELECT data->'raw' ...)` took 1.0-1.7s
+(10-16x). Those 47 keys were confirmed byte-for-byte duplicated in the parsed sections, so
+flattening stays safe to revisit - except the four `Quality at %Stone` columns, which exist only
+in `raw`. Any future pruning must happen **after** `computeRowContentHash`, or the next import
+rewrites every row.
+
 ### PO Cancellation vs. Absence
 
 **A PO missing from an import file is not a cancelled PO.** SAP export files are produced **per
