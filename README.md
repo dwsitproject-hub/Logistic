@@ -367,6 +367,47 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Contract Qty: the last full scan of `contracts`
+
+After `contractsOnStoSubquery` was rewritten, one full-table scan of `contracts` was left in the
+Shipments summary query, and it was the biggest single node:
+
+    Seq Scan on contracts c_2   loops=463   Buffers: shared hit=628667
+    Filter: (... unnest(contract_numbers) ...) OR (... sto_key ...)
+    Rows Removed by Filter: 18749
+
+628,667 of that query's 1,719,396 buffers - **37%** - for the Contract Qty column
+(`shipmentListRowContractQtySql`): `SUM(quantity_ordered)` over contracts matched by an OR that no
+index can serve.
+
+Rewritten the same way that worked before - gather candidate contract ids from each source by
+index, then sum. One predicate had to change form to be indexable:
+`TRIM(COALESCE(c.sto_number::text, '')) = <sto>` became
+`NULLIF(TRIM(cb.sto_number::text), '') = <sto>`, which agrees for every value this receives
+(`<sto>` is `NULLIF(TRIM(...), '')`, so NULL or non-empty, and the branch is guarded on non-NULL).
+
+| | buffers |
+| --- | --- |
+| before this change | 1,719,396 |
+| after | **1,245,515** (−28%) |
+| across the whole day's work | 5,113,203 → 1,245,515 (**−76%**) |
+
+`Seq Scan on contracts c_2` is gone from the plan; the only remaining scan of that table is
+`c_link` at a single loop.
+
+**Parity:** both expressions rendered against the same `(sto_key, contract_numbers)` pairs and
+compared row by row - **673 pairs, 0 differences** (668 real pairs from the YTD list plus five
+edge cases: null, empty, whitespace-only, an STO with no contracts, and a contract list with no
+STO).
+
+**Also measured, and rejected:** sacrificing the five STO-linked columns (Contract Numbers, PO
+Numbers, Contract Count, Suppliers, Contract Ext No) by forcing them to their cheap join-derived
+branch. The four page calls went 76,378ms to 78,772ms - **no saving at all**, because the earlier
+`contractsOnStoSubquery` rewrite had already made those lookups index-driven. Dropping them would
+have cost accuracy (B2B origin remapping, contracts linked through the STO group) for nothing.
+Worth recording: on this page the expense has consistently been query *shape*, not the value of
+any particular column.
+
 ### Stage A wired up: a status-filtered page comes from memory
 
 | action (replayed from a real session) | before | after |

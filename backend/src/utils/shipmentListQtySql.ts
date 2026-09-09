@@ -13,7 +13,29 @@ import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { sqlSapIncotermFromJsonb } from './sapSourceTypeSql';
 import { shipmentListRowGlobalOutstandingSql } from './shipmentOutstandingQtySql';
 
-/** Sum contract qty (kg) for contracts linked on a grouped shipment row. */
+/**
+ * Sum contract qty (kg) for contracts linked on a grouped shipment row.
+ *
+ * Candidates are gathered *from* each source by index and then summed, rather than scanning
+ * `contracts` and testing an OR per row. The old shape could not use any index for that OR, and
+ * EXPLAIN (ANALYZE, BUFFERS) on the Shipments summary query showed it as the single remaining
+ * full scan: `Seq Scan on contracts c_2 ... Rows Removed by Filter: 18749, loops=463,
+ * Buffers: shared hit=628667` - 37% of that query's 1,719,396 buffers.
+ *
+ * Set-equivalent by construction: `A OR B` over `contracts` sums exactly the contracts whose id
+ * lies in (ids satisfying A) union (ids satisfying B). Each branch extracts the ids the matching
+ * EXISTS tested for, and a NULL `contract_id` on either side drops the row in both shapes.
+ *
+ * The one rewritten predicate: `TRIM(COALESCE(c.sto_number::text, '')) = <sto>` becomes
+ * `NULLIF(TRIM(cb.sto_number::text), '') = <sto>` so `idx_contracts_sto_number_trim` can serve
+ * it. They agree for every value this receives: `<sto>` is `NULLIF(TRIM(...), '')`, so it is NULL
+ * or non-empty, and the branch is guarded on it being non-NULL.
+ *
+ * Indexes each branch relies on: idx_contracts_contract_id_trim,
+ * idx_contract_stos_sto_number_trim (migration 160), idx_contracts_sto_number_trim,
+ * idx_shipments_trim_operation_id and idx_shipments_trim_shipment_id (migration 155). The
+ * operation_id / shipment_id OR is split into two UNION branches so each uses its own index.
+ */
 export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
   const groupedSto = `NULLIF(TRIM(${spAlias}.sto_key::text), '')`;
   return `(
@@ -21,36 +43,37 @@ export function shipmentListRowContractQtySql(spAlias = 'sp'): string {
     FROM contracts c
     WHERE c.contract_id IS NOT NULL
       AND TRIM(c.contract_id) <> ''
-      AND (
-        (
-          ${spAlias}.contract_numbers IS NOT NULL
-          AND TRIM(${spAlias}.contract_numbers) <> ''
-          AND EXISTS (
-            SELECT 1
-            FROM unnest(regexp_split_to_array(${spAlias}.contract_numbers, E'\\\\s*,\\\\s*')) AS cn
-            WHERE TRIM(cn) = TRIM(c.contract_id)
-          )
-        )
-        OR (
-          ${groupedSto} IS NOT NULL
-          AND (
-            EXISTS (
-              SELECT 1 FROM contract_stos cs
-              WHERE cs.contract_id = c.id
-                AND TRIM(cs.sto_number::text) = ${groupedSto}
+      AND c.id IN (
+          SELECT ca.id
+          FROM contracts ca
+          WHERE ${spAlias}.contract_numbers IS NOT NULL
+            AND TRIM(${spAlias}.contract_numbers) <> ''
+            AND TRIM(ca.contract_id) IN (
+              SELECT TRIM(cn)
+              FROM unnest(regexp_split_to_array(${spAlias}.contract_numbers, E'\s*,\s*')) AS cn
             )
-            OR TRIM(COALESCE(c.sto_number::text, '')) = ${groupedSto}
-            OR EXISTS (
-              SELECT 1 FROM shipments sh
-              WHERE sh.contract_id = c.id
-                AND COALESCE(sh.status, '') <> 'CANCELLED'
-                AND (
-                  NULLIF(TRIM(sh.operation_id::text), '') = ${groupedSto}
-                  OR NULLIF(TRIM(sh.shipment_id::text), '') = ${groupedSto}
-                )
-            )
-          )
-        )
+        UNION
+          SELECT cs.contract_id
+          FROM contract_stos cs
+          WHERE ${groupedSto} IS NOT NULL
+            AND TRIM(cs.sto_number::text) = ${groupedSto}
+        UNION
+          SELECT cb.id
+          FROM contracts cb
+          WHERE ${groupedSto} IS NOT NULL
+            AND NULLIF(TRIM(cb.sto_number::text), '') = ${groupedSto}
+        UNION
+          SELECT sh_op.contract_id
+          FROM shipments sh_op
+          WHERE ${groupedSto} IS NOT NULL
+            AND COALESCE(sh_op.status, '') <> 'CANCELLED'
+            AND NULLIF(TRIM(sh_op.operation_id::text), '') = ${groupedSto}
+        UNION
+          SELECT sh_id.contract_id
+          FROM shipments sh_id
+          WHERE ${groupedSto} IS NOT NULL
+            AND COALESCE(sh_id.status, '') <> 'CANCELLED'
+            AND NULLIF(TRIM(sh_id.shipment_id::text), '') = ${groupedSto}
       )
   )`;
 }
