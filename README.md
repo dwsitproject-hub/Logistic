@@ -367,6 +367,52 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Shipments `shipment_page`: where the cost really is
+
+`EXPLAIN (ANALYZE, BUFFERS)` on the Shipments summary query, root buffer count, one change at a
+time (buffers, not wall-clock - see the note below):
+
+| state | root buffers |
+| --- | --- |
+| before any of today's work | 5,113,203 |
+| + migration 159 (`contracts (TRIM(po_number), created_at DESC)`) | 4,176,563 |
+| + `vlp_*` CTEs as indexed LATERALs | 4,159,674 |
+| + migration 160 (`contract_stos (TRIM(sto_number))`) | **3,618,351** (−29%) |
+
+**The vlp LATERAL change removed 2.3M pointless row comparisons but almost no buffers.** The two
+`DISTINCT ON` CTEs were joined with `LEFT JOIN ... ON vlp_l.shipment_id = s.id`; a CTE scan cannot
+be indexed and the planner underestimated the outer side (rows=17 against 864), so it compared
+every outer row against every VLP row - `Rows Removed by Join Filter: 1,151,237` and `1,150,232`.
+As LATERALs each lookup is one index descent against `idx_vlp_shipment_first_load` /
+`idx_vlp_shipment_discharge`, and the body of `shipment_page` went 4,366,945 → 3,413,461 buffers
+(−22%). Both forms were proved to select the identical row for all 2,636 shipments, load and
+discharge.
+
+**It exposed a pre-existing non-determinism.** `sqlShipmentListPrimaryOrderBy` ended at
+`s.created_at DESC` with no unique tiebreaker, so rows tying on every key were resolved by
+whatever order the plan delivered and `array_agg(...)[1]` returned an arbitrary one. Changing the
+plan changed two vessel names in the summary's completed list. The three `TK BINTANG PALMA 33`
+rows involved share an identical `created_at` to the microsecond - a real tie, not a wrong value.
+`s.id` is now the last ORDER BY key, so the choice is stable across plans. Nothing is lost: the
+names come from `master_vessels` and a different representative row simply wins.
+
+**What is left, and what will not fix it.** The remaining hot node is
+`Seq Scan on contracts cc_2 ... Rows Removed by Filter: 18749, loops=463, Buffers: 630,471` inside
+`contractsOnStoSubquery` (`stoLinkedContractSql.ts`), which is embedded four times as a
+correlated subquery. Its `WHERE` is a four-way `OR` of `EXISTS` branches, so it has to be
+evaluated per contract row - no index removes it. Removing it means rewriting the subquery to
+gather candidate contract ids from the four sources by index and then look them up, which is
+behaviour-sensitive and deliberately not bundled with the access-path changes above.
+
+> **Not a memory problem - checked.** The plan reports `shared hit=3,618,351 read=1,744`, so
+> 99.95% of those accesses already come from `shared_buffers`, and the largest sort is 25kB
+> against a 4MB `work_mem`. Raising `shared_buffers` (128MB) or `work_mem` would not help; the
+> cost is the *number* of buffer accesses, which only a query-shape change reduces. The dev
+> container has no memory limit set (`HostConfig.Memory = 0`).
+>
+> Local wall-clock on this box is unusable for anything under a few minutes - the untouched shell
+> call alone measured 21.6s and 40.3s in two runs of the same code. Buffer counts are the metric.
+
 ### Shipments: latest_spd from the snapshot, and a deterministic row choice
 
 The Shipments page issues four calls (shell, full, `summaryOnly`, `outstandingQtyOnly`). Measured

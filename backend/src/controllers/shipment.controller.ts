@@ -593,31 +593,52 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     // IMPORTANT: status derivation depends on ATA ladder. Even in compact view, we must
     // fallback to vessel_loading_ports so rows don't incorrectly stay PLANNED.
     // Pre-join first loading / discharge port rows (avoids ~10 correlated subqueries per shipment row).
-    const vlpCtes = `
-      vlp_load_first AS (
-        SELECT DISTINCT ON (shipment_id)
-          shipment_id,
-          ata_vessel_arrival::date AS vlp_load_ata_va,
-          ata_vessel_berthed::date AS vlp_load_ata_vb,
-          ata_loading_start::date AS vlp_load_ata_ls,
-          ata_loading_completed::date AS vlp_load_ata_lc,
-          ata_vessel_sailed::date AS vlp_load_ata_vs
-        FROM vessel_loading_ports
-        WHERE COALESCE(is_discharge_port, false) = false AND port_sequence = 1
-        ORDER BY shipment_id, id
-      ),
-      vlp_disc_first AS (
-        SELECT DISTINCT ON (shipment_id)
-          shipment_id,
-          ata_vessel_arrival::date AS vlp_disc_ata_va,
-          ata_vessel_berthed::date AS vlp_disc_ata_vb,
-          ata_loading_start::date AS vlp_disc_ata_ls,
-          ata_loading_completed::date AS vlp_disc_ata_lc,
-          eta_vessel_complete_discharge::date AS vlp_disc_eta_edc
-        FROM vessel_loading_ports
-        WHERE COALESCE(is_discharge_port, false) = true
-        ORDER BY shipment_id, port_sequence NULLS LAST, id
-      ),`;
+    /**
+     * First loading port / first discharge port per shipment, as LATERALs rather than CTEs.
+     *
+     * These were `DISTINCT ON (shipment_id)` CTEs joined with `LEFT JOIN ... ON
+     * vlp_l.shipment_id = s.id`. A CTE scan cannot be indexed, and the planner underestimated
+     * the outer side (rows=17 against 864 actual), so it chose a nested loop and compared every
+     * outer row against every VLP row: EXPLAIN reported `Rows Removed by Join Filter: 1,151,237`
+     * and `1,150,232` for the two joins in the Shipments summary query.
+     *
+     * As LATERALs each lookup is one index descent, and the cost stays bounded however wrong the
+     * row estimate is. `idx_vlp_shipment_first_load` and `idx_vlp_shipment_discharge` are partial
+     * indexes whose predicates match these WHERE clauses exactly.
+     *
+     * Output-preserving: `DISTINCT ON (shipment_id) ... ORDER BY shipment_id, <rest>` keeps the
+     * first row per shipment under `<rest>`, which is what `ORDER BY <rest> LIMIT 1` returns for
+     * one shipment; `ON TRUE` with no matching row yields the same NULLs the LEFT JOIN did.
+     * Aliases and column names are unchanged - shipmentAtaOverrideSql reads `vlp_l.*` / `vlp_d.*`.
+     */
+    const vlpLateralJoins = `
+        LEFT JOIN LATERAL (
+          SELECT
+            vlp_lf.ata_vessel_arrival::date AS vlp_load_ata_va,
+            vlp_lf.ata_vessel_berthed::date AS vlp_load_ata_vb,
+            vlp_lf.ata_loading_start::date AS vlp_load_ata_ls,
+            vlp_lf.ata_loading_completed::date AS vlp_load_ata_lc,
+            vlp_lf.ata_vessel_sailed::date AS vlp_load_ata_vs
+          FROM vessel_loading_ports vlp_lf
+          WHERE vlp_lf.shipment_id = s.id
+            AND COALESCE(vlp_lf.is_discharge_port, false) = false
+            AND vlp_lf.port_sequence = 1
+          ORDER BY vlp_lf.id
+          LIMIT 1
+        ) vlp_l ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            vlp_df.ata_vessel_arrival::date AS vlp_disc_ata_va,
+            vlp_df.ata_vessel_berthed::date AS vlp_disc_ata_vb,
+            vlp_df.ata_loading_start::date AS vlp_disc_ata_ls,
+            vlp_df.ata_loading_completed::date AS vlp_disc_ata_lc,
+            vlp_df.eta_vessel_complete_discharge::date AS vlp_disc_eta_edc
+          FROM vessel_loading_ports vlp_df
+          WHERE vlp_df.shipment_id = s.id
+            AND COALESCE(vlp_df.is_discharge_port, false) = true
+          ORDER BY vlp_df.port_sequence NULLS LAST, vlp_df.id
+          LIMIT 1
+        ) vlp_d ON TRUE`;
 
     const ataSelect = buildShipmentListAtaSelectSql();
 
@@ -876,7 +897,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           spd.created_at`;
 
     const prelude = scopeLatestSpdToContracts
-      ? `WITH ${vlpCtes}
+      ? `WITH
       ${sqlRelevantContractNumbersWithB2bOrigins(relevantContractWhereSql)},
       latest_spd_contract AS (
         ${latestSpdSelectList}
@@ -888,7 +909,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       shipment_base_core AS (
         SELECT 
 `
-      : `WITH ${vlpCtes}
+      : `WITH
       latest_spd_contract AS (
         ${latestSpdSelectList}
         FROM ${latestSpdSourceSql}
@@ -986,8 +1007,7 @@ ${contractMetaSelectCore}
         ${sqlShipmentListB2bOriginContractJoins()}
         ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         ${sqlShipmentListExecutionCsStoJoin(listStoKeySql)}
-        LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
-        LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
+${vlpLateralJoins}
         LEFT JOIN vessel_loading_ports vlp_load ON vlp_load.shipment_id = s.id
           AND COALESCE(vlp_load.is_discharge_port, false) = false
         LEFT JOIN vessel_loading_ports vlp_disc ON vlp_disc.shipment_id = s.id

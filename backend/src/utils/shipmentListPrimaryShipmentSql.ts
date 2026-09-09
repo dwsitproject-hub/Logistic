@@ -2,6 +2,12 @@ import { shipmentListStoKeyExpr } from './shipmentStoTypeSql';
 
 /**
  * Shared ORDER BY for picking the primary shipment row in a STO group.
+ *
+ * The final `id` is a tiebreaker, not a preference: without it, rows tying on every key
+ * (including `created_at`) were resolved by whatever order the plan happened to deliver, so
+ * `array_agg(...)[1]` returned an arbitrary row. Converting the vlp_* CTEs to LATERALs changed
+ * the plan and with it one vessel in the Shipments summary's completed list - the value was
+ * never wrong before, it was undefined. With `id` last the choice is stable across plans.
  * Keep in sync with sqlShipmentListPrimaryIdAgg / sqlShipmentListPrimaryFieldAgg.
  */
 export function sqlShipmentListPrimaryOrderBy(
@@ -39,7 +45,8 @@ export function sqlShipmentListPrimaryOrderBy(
       THEN 0
       ELSE 1
     END,
-    ${shipmentAlias}.created_at DESC`;
+    ${shipmentAlias}.created_at DESC,
+    ${shipmentAlias}.id`;
 }
 
 /**
