@@ -367,6 +367,43 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Backlog breakdowns read latest-SPD from the snapshot
+
+The four Section-1 backlog counts (unplanned, preplanned, completed, cancelled) each rebuilt
+`latest_spd_contract` by scanning `sap_processed_data`, and each runs on every summary call with a
+per-filter cache. The snapshot for exactly that already existed and was fresh. One builder feeds
+**18 call sites** across six files - including Oil Loss and the pre-planned eligibility SQL - so
+the source is now chosen in a single place.
+
+Buffers, snapshot against live, with identical results:
+
+| breakdown | snapshot | live | saved |
+| --- | --- | --- | --- |
+| unplanned | 326,717 | 378,605 | −51,888 (−14%) |
+| preplanned | 606,470 | 771,553 | −165,083 (−21%) |
+| completed backlog | 326,763 | 378,651 | −51,888 (−14%) |
+| cancelled backlog | 296,935 | 348,823 | −51,888 (−15%) |
+
+**Parity:** each count query was generated once and then run twice - the snapshot CTE text swapped
+for the live CTE text, so only the source differs - and the returned rows compared. All four
+identical. The live form gained the `spd.id DESC` tiebreaker it was missing, without which the two
+disagree on `effective_sto` for 1,484 contracts (the same divergence found when the Shipments
+summary was switched over).
+
+> **The win is smaller than the plan suggested, and the reason matters.** Ranking plan nodes by
+> their own `Buffers` line had put the SAP scan at 763,222 buffers inside the preplanned count -
+> but that figure is cumulative, it includes the node's children. The scan's own cost is about
+> 164,000, and reading the snapshot is not free either: it stores `data` as jsonb and this CTE
+> pulls about eight keys out of it, so it pays the detoast-per-access cost measured earlier in
+> this file (20 accesses: 16.9s against 1.2s when the extraction is hoisted). Flattening
+> `contract_latest_spd_snapshot` into typed columns is what would make this read genuinely cheap -
+> the same conclusion the jsonb analysis reached, now with a second reason to do it.
+
+**Also measured, and not worth pursuing:** the OS Qty Plan column
+(`outstanding_qty_planning`). Its source CTE reads `user_sto_contract_assignments` - 229 rows -
+and costs **583 buffers / 2.9 ms**, producing 25 rows. Removing it would save about 3ms of a
+14-21s query, so it is not a candidate for removal on cost grounds.
+
 ### Contract Qty: the last full scan of `contracts`
 
 After `contractsOnStoSubquery` was rewritten, one full-table scan of `contracts` was left in the

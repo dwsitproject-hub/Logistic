@@ -33,6 +33,7 @@ import {
   buildShipmentContractBacklogOrderBy,
   buildShipmentContractBacklogOuterOrderBy,
 } from './shipmentListSortSql';
+import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
 
 export { buildShipmentPageUnplannedOpenContractsCte };
 
@@ -379,7 +380,46 @@ function sqlUnplannedSuggestedGroupCodeExpr(sortKey: string): string {
     : 'NULL::text';
 }
 
-export function buildUnplannedContractBacklogLatestSpdCte(): string {
+/**
+ * The backlog latest-SPD CTE with its source resolved.
+ *
+ * Freshness is read here rather than threaded through eighteen call sites, matching how
+ * resolveContractsQtyMoveCte is already used by these same builders. Callers that cannot await
+ * pass the flag to buildUnplannedContractBacklogLatestSpdCte directly.
+ */
+export async function resolveUnplannedContractBacklogLatestSpdCte(): Promise<string> {
+  return buildUnplannedContractBacklogLatestSpdCte(await isContractLatestSpdSnapshotFresh());
+}
+
+/**
+ * Latest SAP row per contract, for the contract-backlog queries.
+ *
+ * `snapshotFresh` decides the source. `contract_latest_spd_snapshot` already holds exactly this -
+ * one row per contract - and reading it avoids a full scan of `sap_processed_data`, which EXPLAIN
+ * measured at 164,331 buffers in the completed and cancelled backlog counts (43% and 47% of each)
+ * and 763,222 of the preplanned count's 771,573 (99%). This CTE is used by eleven queries, so the
+ * source is chosen in one place.
+ *
+ * Two things make the swap output-preserving, both verified against all 18,711 contracts when the
+ * same swap was made for the Shipments summary:
+ *
+ * - the snapshot has no `sto_number` column, but that first COALESCE arm adds nothing over the
+ *   JSON arms - column and JSON-only forms agreed on every contract;
+ * - the live form had no tiebreaker, so ties on `created_at` were broken arbitrarily and it
+ *   disagreed with the snapshot on `effective_sto` for 1,484 contracts. `spd.id DESC` is now
+ *   appended to the live form, which brought all projected columns to zero differences.
+ *
+ * The snapshot is unique per contract, so it needs no tiebreaker of its own.
+ */
+export function buildUnplannedContractBacklogLatestSpdCte(snapshotFresh: boolean): string {
+  const source = snapshotFresh
+    ? `(
+          SELECT lss.contract_number, lss.data, NULL::text AS sto_number,
+                 lss.spd_created_at AS created_at
+          FROM contract_latest_spd_snapshot lss
+        ) spd`
+    : 'sap_processed_data spd';
+  const orderTail = snapshotFresh ? '' : ', spd.id DESC';
   return `
       latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
@@ -411,9 +451,9 @@ export function buildUnplannedContractBacklogLatestSpdCte(): string {
           ${sapDischargeDestinationFromJson('spd.data')} AS discharge_destination,
           ${sqlSapSourceTypeFromJsonb('spd.data')} AS source_type_raw,
           spd.created_at
-        FROM sap_processed_data spd
+        FROM ${source}
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${orderTail}
       )`;
 }
 
@@ -450,7 +490,7 @@ export async function buildUnplannedContractBacklogCountQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id
       FROM contracts c
@@ -479,10 +519,10 @@ export async function buildUnplannedContractBacklogCountQuery(
  * ALL status hybrid: unplanned + preplanned contract backlog rows (no shipment yet).
  * Flat contract-level pagination — distinct from PREPLANNED card group paging.
  */
-export function buildAllHybridContractBacklogCountQuery(
+export async function buildAllHybridContractBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   /**
@@ -490,7 +530,7 @@ export function buildAllHybridContractBacklogCountQuery(
    * Card Unplanned OS uses buildUnplannedContractBacklogCountQuery (scoped) instead.
    */
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     unplanned_contract_backlog AS (
       SELECT c.id, c.quantity_ordered
       FROM contracts c
@@ -559,7 +599,7 @@ export async function buildAllHybridContractBacklogPageQuery(
    */
   if (!backlogPageSortNeedsQtyMove(sortKey)) {
     return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     all_contract_candidates AS (
       SELECT
         c.id AS contract_uuid,
@@ -663,7 +703,7 @@ export async function buildAllHybridContractBacklogPageQuery(
              ))`,
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     all_contract_backlog AS (
       SELECT ${unplannedSelect},
@@ -712,7 +752,7 @@ export async function buildUnplannedContractBacklogPageQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id
       FROM contracts c
@@ -750,7 +790,7 @@ export async function buildPreplannedContractsCountQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id
       FROM contracts c
@@ -804,7 +844,7 @@ export async function buildPreplannedContractsPageQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id
       FROM contracts c
@@ -864,7 +904,7 @@ export async function buildCompletedContractBacklogCountQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id
       FROM contracts c
@@ -909,7 +949,7 @@ export async function buildCompletedContractBacklogPageQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id
       FROM contracts c
@@ -929,13 +969,13 @@ export async function buildCompletedContractBacklogPageQuery(
     SELECT * FROM completed_contract_backlog`;
 }
 
-export function buildCancelledContractBacklogCountQuery(
+export async function buildCancelledContractBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   const backlogWhere = `${cancelledContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     cancelled_contract_backlog AS (
       SELECT
         c.id,
@@ -971,7 +1011,7 @@ export async function buildCancelledContractBacklogPageQuery(
       WHERE ${backlogWhere}`,
   });
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     cancelled_contract_backlog AS (
       SELECT ${unplannedContractBacklogRowSelectSql(outstandingExpr, 'CANCELLED')}

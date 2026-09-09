@@ -10,7 +10,7 @@ import { sapDischargeDestinationSql } from './sapTruckingLoadingLocationSql';
 import { regionSiteDisplayExpr } from './regionSiteSql';
 import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
-import { buildUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
+import { resolveUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import {
   OIL_LOSS_SFAL_QTY_EXPR,
   OIL_LOSS_SFBD_QTY_EXPR,
@@ -443,15 +443,15 @@ export function buildOilLossGainSql(): string {
  * Shipments Attention — top loss rows aligned with Oil Loss (SAP receive < delivery, vessel CIF/FOB).
  * Toolbar-scoped via contract filters (date / plant / contract / search / column filters).
  */
-export function buildShipmentAttentionOilLossQuery(
+export async function buildShipmentAttentionOilLossQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit = 10,
-): string {
+): Promise<string> {
   const safeLimit = Math.max(1, Math.min(limit, 10));
   return `
     WITH ${buildOilLossWithQtyCtes()},
-    ${buildUnplannedContractBacklogLatestSpdCte()},
+    ${await resolveUnplannedContractBacklogLatestSpdCte()},
     scoped AS (
       SELECT w.*
       FROM with_qty w

@@ -891,7 +891,7 @@ async function computeCancelledContractBacklogBreakdown(
 ): Promise<CancelledContractBacklogBreakdown> {
   const { contractScopeSql, params, toolbarSql } = buildContractQueryParts(ctx);
   const res = await query(
-    buildCancelledContractBacklogCountQuery(contractScopeSql, toolbarSql),
+    await buildCancelledContractBacklogCountQuery(contractScopeSql, toolbarSql),
     params,
   );
   const contractRows = parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;

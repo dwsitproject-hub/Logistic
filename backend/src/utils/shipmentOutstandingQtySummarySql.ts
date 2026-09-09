@@ -17,7 +17,7 @@ import {
   normalizeShipmentPagePipelineStageParam,
 } from './shipmentPagePipelineSql';
 import {
-  buildUnplannedContractBacklogLatestSpdCte,
+  resolveUnplannedContractBacklogLatestSpdCte,
   preplannedContractBacklogBaseWhereSql,
   sqlBacklogOsStillActiveSql,
   unplannedContractBacklogBaseWhereSql,
@@ -466,7 +466,7 @@ export async function buildShipmentOutstandingQtyBacklogAggregateQuery(
   });
 
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog_contract_ids AS MATERIALIZED (
       SELECT c.id, c.contract_id, TRUE AS is_unplanned, FALSE AS is_preplanned
       FROM contracts c

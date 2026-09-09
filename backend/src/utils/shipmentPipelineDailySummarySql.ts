@@ -19,7 +19,7 @@ import {
   shipmentPipelineEnrichedDisplayVesselKeyExpr,
 } from './shipmentPagePipelineSql';
 import {
-  buildUnplannedContractBacklogLatestSpdCte,
+  resolveUnplannedContractBacklogLatestSpdCte,
   unplannedContractBacklogBaseWhereSql,
   preplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
@@ -401,16 +401,16 @@ export function buildShipmentVesselStageDailyInsertSql(
 }
 
 /** UPSERT open contract backlog + preplanned counts grouped by group_plant + contract_date. */
-export function buildShipmentBacklogDailySummaryUpsertSql(
+export async function buildShipmentBacklogDailySummaryUpsertSql(
   targetTable: string = SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE,
-): string {
+): Promise<string> {
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
     INSERT INTO ${targetTable} (
       group_plant, contract_date, product, incoterm,
       unplanned_contract_backlog, preplanned_contract_count
     )
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     backlog AS (
       SELECT
         ${plant} AS group_plant,

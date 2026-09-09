@@ -340,7 +340,11 @@ async function runPipelineRefresh(
   module: PipelineSummaryModule,
   lockKey: string,
   tables: PipelineRefreshTable[],
-  buildStatements: (stage: Record<string, string>) => string[],
+  /**
+   * May be async: the shipment backlog statement now resolves the latest-SPD source (snapshot vs
+   * live) before it can be built, and that resolution reads the snapshot's freshness flag.
+   */
+  buildStatements: (stage: Record<string, string>) => string[] | Promise<string[]>,
 ): Promise<number> {
   const start = Date.now();
   const client = await getClient();
@@ -377,7 +381,7 @@ async function runPipelineRefresh(
 
     // Heavy part. No transaction open, nothing else waiting on us.
     let rowCount = 0;
-    for (const sql of buildStatements(stageByReal)) {
+    for (const sql of await buildStatements(stageByReal)) {
       const res = await client.query(sql);
       rowCount += res.rowCount ?? 0;
     }
@@ -477,9 +481,9 @@ export class PipelineDailySummaryService {
       'shipment',
       'pipeline_daily_summary:shipment',
       SHIPMENT_REFRESH_TABLES,
-      (stage) => [
+      async (stage) => [
         buildShipmentExecutionDailySummaryInsertSql(stage[SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE]),
-        buildShipmentBacklogDailySummaryUpsertSql(stage[SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE]),
+        await buildShipmentBacklogDailySummaryUpsertSql(stage[SHIPMENT_PIPELINE_DAILY_SUMMARY_TABLE]),
         buildShipmentVesselStageDailyInsertSql(stage[SHIPMENT_PIPELINE_VESSEL_STAGE_DAILY_TABLE]),
         buildShipmentStageSnapshotInsertSql(stage[SHIPMENT_LIST_STAGE_SNAPSHOT_TABLE]),
       ],

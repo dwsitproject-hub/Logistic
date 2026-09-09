@@ -12,7 +12,7 @@ import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 import {
-  buildUnplannedContractBacklogLatestSpdCte,
+  resolveUnplannedContractBacklogLatestSpdCte,
   contractBacklogCoreWhereSql,
 } from './shipmentUnplannedHybridSql';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
@@ -30,7 +30,7 @@ export async function buildManualPrePlannedEligibleContractsByIdsQuery(
 
   const sql = `
     WITH ${await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_id FROM contracts c2' })},
-    ${buildUnplannedContractBacklogLatestSpdCte()}
+    ${await resolveUnplannedContractBacklogLatestSpdCte()}
     SELECT
       c.id,
       c.contract_id,

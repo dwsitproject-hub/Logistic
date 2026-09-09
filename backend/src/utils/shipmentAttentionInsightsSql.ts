@@ -19,7 +19,7 @@ import {
   sqlShipmentSourceIsThirdParty,
 } from './shipmentOutstandingQtySummarySql';
 import {
-  buildUnplannedContractBacklogLatestSpdCte,
+  resolveUnplannedContractBacklogLatestSpdCte,
   unplannedContractBacklogBaseWhereSql,
 } from './shipmentUnplannedHybridSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
@@ -165,7 +165,7 @@ export async function buildShipmentOverdueBacklogAggregateQuery(
   });
 
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     overdue_rows AS (
       SELECT
@@ -219,7 +219,7 @@ export async function buildShipmentOverdueBacklogTopSuppliersQuery(
   });
 
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     overdue_rows AS (
       SELECT
@@ -291,7 +291,7 @@ export async function buildShipmentCarryOverInsightsQuery(
   });
 
   return `
-    WITH ${buildUnplannedContractBacklogLatestSpdCte()},
+    WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
     ${qtyMoveCte},
     carry_contracts AS (
       SELECT ${outstandingExpr} AS outstanding_kg
