@@ -217,6 +217,7 @@ import {
   sqlIsContractSapClosedForStoExpr,
 } from '../utils/contractDeliveryStatus';
 import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
+import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
 import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
@@ -818,6 +819,32 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const contractScopeSql =
       contractScopeParts.length > 0 ? `AND ${contractScopeParts.join(' AND ')}` : '';
 
+    /**
+     * `latest_spd_contract` picks the newest SAP row per contract. Reading it from
+     * `contract_latest_spd_snapshot` (one row per contract) instead of scanning
+     * `sap_processed_data` is what keeps the Shipments summary off a full SAP scan.
+     *
+     * Two things make the swap output-preserving, both verified against the real dev data
+     * (18,711 contracts):
+     *
+     * - the snapshot has no `sto_number` column, but that COALESCE arm adds nothing over the
+     *   JSON arms - column and JSON-only forms agreed on every contract, so NULL is safe here;
+     * - the snapshot is built with a `spd.id DESC` tiebreaker while this query had none. Without
+     *   it the two disagreed on `effective_sto` for 1,484 contracts (ties on `created_at` are
+     *   resolved arbitrarily); adding the same tiebreaker to the live form brought all five
+     *   projected columns to zero differences.
+     */
+    const latestSpdSnapshotFresh = await isContractLatestSpdSnapshotFresh();
+    const latestSpdSourceSql = latestSpdSnapshotFresh
+      ? `(
+          SELECT lss.contract_number, lss.data, NULL::text AS sto_number,
+                 lss.spd_created_at AS created_at
+          FROM contract_latest_spd_snapshot lss
+        ) spd`
+      : 'sap_processed_data spd';
+    /** The snapshot is already unique per contract, so it has no id to break ties with. */
+    const latestSpdOrderTailSql = latestSpdSnapshotFresh ? '' : ', spd.id DESC';
+
     const latestSpdSelectList = `
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
@@ -853,10 +880,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       ${sqlRelevantContractNumbersWithB2bOrigins(relevantContractWhereSql)},
       latest_spd_contract AS (
         ${latestSpdSelectList}
-        FROM sap_processed_data spd
+        FROM ${latestSpdSourceSql}
         INNER JOIN relevant_contract_numbers rc ON rc.contract_id = spd.contract_number
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${latestSpdOrderTailSql}
       ),
       shipment_base_core AS (
         SELECT 
@@ -864,9 +891,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
       : `WITH ${vlpCtes}
       latest_spd_contract AS (
         ${latestSpdSelectList}
-        FROM sap_processed_data spd
+        FROM ${latestSpdSourceSql}
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${latestSpdOrderTailSql}
       ),
       shipment_base_core AS (
         SELECT 

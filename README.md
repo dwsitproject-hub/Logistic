@@ -367,6 +367,48 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Shipments: latest_spd from the snapshot, and a deterministic row choice
+
+The Shipments page issues four calls (shell, full, `summaryOnly`, `outstandingQtyOnly`). Measured
+cold on the dev DB, `summaryOnly` alone was 73.2s of the 134.7s total, and its query built
+`latest_spd_contract` by scanning `sap_processed_data` - 73 references to that table in one
+statement - while `contract_latest_spd_snapshot` sat fresh and unused.
+
+It now reads the snapshot when fresh. Two things had to be settled first, both verified against
+all 18,711 contracts:
+
+- the snapshot has no `sto_number` column, but that first COALESCE arm adds nothing over the JSON
+  arms - column and JSON-only forms agreed on **every** contract, so `NULL::text` is safe there;
+- **the live query had no tiebreaker.** The snapshot is built `DISTINCT ON (contract_number)
+  ORDER BY created_at DESC NULLS LAST, spd.id DESC`; this query ordered only by `created_at DESC`,
+  so ties were broken arbitrarily. The two disagreed on `effective_sto` for **1,484 contracts**
+  (and discharge destination for 1). Adding the same `spd.id DESC` tiebreaker to the live form
+  brought all five projected columns to **zero** differences.
+
+So the swap is not just faster, it makes the row choice deterministic. Payload parity across all
+four calls: byte-identical, same SHA-256.
+
+**Be honest about the size of this win: it is small.** Per-CTE timings put `latest_spd_contract`
+at 739ms of a 95s query - the four calls went 134.7s to 128.2s (~5%). The prediction that this was
+the bottleneck was wrong; the measurement corrected it.
+
+**Where the time actually goes** (`EXPLAIN (ANALYZE, BUFFERS)` on the summary query):
+
+| CTE | actual time |
+| --- | --- |
+| `shipment_page` | 47.0s → 83.6s |
+| `enriched` (scans `shipment_page`) | 47.1s → 94.7s |
+| `latest_spd_contract` | 0.74s |
+| everything else | < 0.2s |
+
+Inside `shipment_page`, two nested-loop joins against the `vlp_load_first` / `vlp_disc_first` CTEs
+report `Rows Removed by Join Filter: 1,151,237` and `1,150,232` - the planner cannot index a CTE
+scan, so 864 rows are compared against every vlp row twice over. That is the next target, not the
+jsonb reads.
+
+> Wall-clock on the 1 GiB dev container swings about 2x run to run, so buffer counts are the
+> metric used for anything below a few seconds. SIT has 4 GB and production 8 GB.
+
 ### Trucking: scope the STO-line CTE to the page, not the whole database
 
 `contract_sto_lines` (`backend/src/utils/truckingListStoExpandSql.ts`) resolves which STO lines
