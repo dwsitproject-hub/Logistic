@@ -23,8 +23,33 @@ describe('stoLinkedContractSql', () => {
   it('contractsOnStoSubquery resolves KLIP operation_id siblings', () => {
     const grouped = buildGroupedStoTrimExpr('sb.sto_key');
     const sql = contractsOnStoSubquery(grouped);
-    expect(sql).toContain('sh.operation_id');
+    expect(sql).toContain('sh_op.operation_id');
+    expect(sql).toContain('sh_id.shipment_id');
     expect(sql).toContain('COALESCE');
+  });
+
+  it('contractsOnStoSubquery gathers candidates by index instead of scanning contracts', () => {
+    // The four EXISTS branches used to sit in one OR over `contracts`, which no index can serve:
+    // EXPLAIN showed `Seq Scan on contracts cc_2, Rows Removed by Filter: 18749, loops=463`.
+    // Candidates are now collected from each source and looked up by id. Keep all five branches,
+    // keep them UNIONed, and keep the sto_number predicate in its index-matching form.
+    const grouped = buildGroupedStoTrimExpr('sb.sto_key');
+    const sql = contractsOnStoSubquery(grouped);
+    expect(sql).toContain('WHERE cc.id IN (');
+    expect(sql).not.toContain('EXISTS (');
+    expect(sql.split('UNION').length - 1).toBe(4);
+    for (const branch of [
+      'FROM contract_stos cs_k',
+      'FROM contracts c_sto',
+      'FROM contracts c_spd',
+      'FROM shipments sh_op',
+      'FROM shipments sh_id',
+    ]) {
+      expect(sql).toContain(branch);
+    }
+    // Index-matching form: idx_contracts_sto_number_trim is on NULLIF(btrim(sto_number::text),'').
+    expect(sql).toContain("NULLIF(TRIM(c_sto.sto_number::text), '') = ");
+    expect(sql).not.toContain("TRIM(COALESCE(cc.sto_number::text, '')) = ");
   });
 
   it('contractsOnStoSubquery maps B2B child contracts to origin (does not list child PO)', () => {

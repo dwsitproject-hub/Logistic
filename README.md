@@ -367,6 +367,41 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### `contractsOnStoSubquery`: gather candidates by index, don't scan contracts
+
+This subquery decides which contracts belong to a grouped Shipments row, and it is embedded
+**five times** in the list query (contract numbers, PO numbers, contract count, suppliers, and
+contract ext no). It scanned `contracts` and tested a four-way `OR` of `EXISTS` per row, which no
+index can serve: `Seq Scan on contracts cc_2 ... Rows Removed by Filter: 18749, loops=463,
+Buffers: shared hit=630471`.
+
+It now collects candidate contract ids *from* the four sources - each by index - and looks them up
+by id. `A OR B OR C OR D` over `contracts` selects exactly the contracts whose id lies in the union
+of the ids satisfying each branch, so the shapes are set-equivalent by construction. The
+`operation_id` / `shipment_id` OR is split into two UNION branches so each uses its own index.
+
+One predicate was rewritten to be indexable: `TRIM(COALESCE(cc.sto_number::text, '')) = KEY`
+became `NULLIF(TRIM(c_sto.sto_number::text), '') = KEY`, matching
+`idx_contracts_sto_number_trim`. Those agree for every KEY this function is given - callers always
+pass `NULLIF(TRIM(...), '')`, so KEY is NULL or non-empty; NULL selects nothing either way, and for
+a non-empty KEY both forms require a non-null, non-blank `sto_number` trimming to KEY.
+
+**Parity: every STO key, not a sample.** The old and new shapes were run side by side over all
+**10,388** distinct STO keys in the database (every key from `contract_stos`, `contracts`,
+`shipments.operation_id`, `shipments.shipment_id` and SAP effective STO) and compared as sorted
+sets - **0 mismatches**. Payloads for all four page calls are identical.
+
+| Shipments page call | before today | after |
+| --- | --- | --- |
+| shell (`skipSapJoin=true`) | 21,588 ms | 10,939 ms |
+| full (`skipSapJoin=false`) | 26,853 ms | 15,900 ms |
+| `summaryOnly` | 73,196 ms | 25,521 ms |
+| `outstandingQtyOnly` | 13,062 ms | 7,314 ms |
+| **total** | **134,699 ms** | **59,674 ms** (2.26x) |
+
+Summary query root buffers across the whole day's work: **5,113,203 -> 1,719,396 (-66%)**, and
+`Seq Scan on contracts` is gone from the plan entirely.
+
 ### Shipments `shipment_page`: where the cost really is
 
 `EXPLAIN (ANALYZE, BUFFERS)` on the Shipments summary query, root buffer count, one change at a
