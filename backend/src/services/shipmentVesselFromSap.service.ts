@@ -67,7 +67,24 @@ export function mergeShipmentVesselFromSapRow(
     row.vessel_capacity_mt_master != null && String(row.vessel_capacity_mt_master).trim() !== ''
       ? row.vessel_capacity_mt_master
       : null;
-  const klipName = trimOrNull(row.vessel_name);
+  /**
+   * Keep the first-seen KLIP name, so a second pass cannot overwrite it.
+   *
+   * normalizeShipmentListRows (which calls this) runs more than once over the same rows on the
+   * hybrid list path - once per source array, then again over the merged array. Reading
+   * `row.vessel_name` unconditionally meant the second pass captured the *display* name this
+   * function had just written (the canonical Master form), so the raw stored value was lost.
+   *
+   * That is what made one shipment render two ways: the status-filtered list normalises once and
+   * kept the stored value, while the unfiltered list normalised twice and ended up with the
+   * Master form in `vessel_name_klip`. It also mattered on its own - the edit modal's KLIP-vs-SAP
+   * badge compares this field, so from the unfiltered list it was comparing Master against SAP
+   * instead of the stored KLIP value.
+   *
+   * Preserving it also makes the overlay below idempotent: canonicalising the same raw value
+   * twice gives the same display name.
+   */
+  const klipName = trimOrNull(row.vessel_name_klip) ?? trimOrNull(row.vessel_name);
   row.vessel_name_klip = klipName;
   if (sapName) row.vessel_name_sap = sapName;
   if (masterName) row.vessel_name_master = masterName;

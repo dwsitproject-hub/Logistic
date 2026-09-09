@@ -4,6 +4,30 @@ import { resolve } from 'node:path';
 import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
 
 describe('mergeShipmentVesselFromSapRow', () => {
+  it('is idempotent: a second pass keeps the first-seen KLIP name', () => {
+    // normalizeShipmentListRows calls this more than once over the same rows on the hybrid list
+    // path (once per source array, then again over the merged array). Reading row.vessel_name
+    // unconditionally made the second pass capture the canonical display name this function had
+    // just written, losing the stored value - which is why one shipment rendered two ways
+    // depending on whether a status filter was applied.
+    const row: Record<string, unknown> = {
+      vessel_name: 'TEBAR/BG.TIGA JAYA 58',
+      vessel_name_master: 'BG.TIGA JAYA 58',
+      vessel_code: 'MTEBAR58',
+      is_contract_sap_closed: false,
+    };
+    mergeShipmentVesselFromSapRow(row);
+    const first = { name: row.vessel_name, klip: row.vessel_name_klip };
+    expect(first).toEqual({ name: 'BG.TIGA JAYA 58', klip: 'TEBAR/BG.TIGA JAYA 58' });
+
+    mergeShipmentVesselFromSapRow(row);
+    expect({ name: row.vessel_name, klip: row.vessel_name_klip }).toEqual(first);
+
+    // A third pass must not drift either.
+    mergeShipmentVesselFromSapRow(row);
+    expect({ name: row.vessel_name, klip: row.vessel_name_klip }).toEqual(first);
+  });
+
   it('keeps KLIP when is_contract_sap_closed is the string false', () => {
     const row: Record<string, unknown> = {
       vessel_name: 'VESSEL B',

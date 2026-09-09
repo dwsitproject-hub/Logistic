@@ -369,6 +369,25 @@ dimension that happens to carry the same place names.
 
 ### Vessel name is always mapped from Master Vessel, never SAP free text
 
+**Root cause of the two-way render, found afterwards:** `normalizeShipmentListRows` - which calls
+`mergeShipmentVesselFromSapRow` - runs more than once over the same rows on the hybrid list path
+(once per source array at `shipmentUnplannedHybridList.service.ts:448`, then again over the merged
+array at 601/625). The merge read `row.vessel_name` unconditionally, so the second pass captured
+the canonical display name it had just written and the stored value was lost. The status-filtered
+list normalises once and kept the stored value; the unfiltered list normalised twice and ended up
+with the Master form in `vessel_name_klip`.
+
+The merge now keeps the first-seen KLIP name
+(`trimOrNull(row.vessel_name_klip) ?? trimOrNull(row.vessel_name)`), which makes it idempotent -
+canonicalising the same raw value twice yields the same display name. This also fixes the edit
+modal's KLIP-vs-SAP badge, which compares that field: opened from the unfiltered list it had been
+comparing Master against SAP instead of the stored KLIP value.
+
+`row_kind` is deliberately left as-is. It is only ever tested for `'contract_backlog'` - in
+`normalizeShipmentListRows`, in `shipments/page.tsx` and in `listSapStoPriority` - so its absence
+on the filtered path already means "execution row". Stamping it would be a behaviour change for a
+field nothing distinguishes; a row-set cache can normalise it at comparison time instead.
+
 **The rule:** a vessel *code* may come from SAP, or from the code an operator picks when editing a
 shipment. A vessel *name* is never free text - it is always mapped from KLIP's Master Vessel by
 whichever code is in effect.
