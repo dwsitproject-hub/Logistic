@@ -53,7 +53,28 @@ export function isContractSapClosedFlag(value: unknown): boolean {
 }
 
 /**
- * Table / SAP-hydrate vessel: GR Open → stored KLIP (user edit); GR Close → API overlay (Master/SAP).
+ * Table / SAP-hydrate vessel name: always the API's resolved name.
+ *
+ * A vessel *name* is never free text - it is mapped from KLIP's Master Vessel by the effective
+ * vessel code (SAP's code, or the code the operator picked when editing). The API already applies
+ * that rule: `vessel_name` comes from `resolveShipmentDisplayVesselName`, which runs every
+ * candidate through `canonicalVesselName` (it strips the SAP tug prefix and normalises), so an
+ * Open row already carries the master form.
+ *
+ * This function used to prefer `vessel_name_klip` while the contract was Open. That field holds
+ * the value **as stored**, uncanonicalised - and `shipments.vessel_name` is written by the SAP
+ * import as well as by KLIP, so what surfaced was often SAP's free text rather than an operator
+ * choice. Measured on the dev database: 551 rows store a name that differs from the master name
+ * for their code, and 545 of those names do not exist in Master Vessel at all - they came from
+ * SAP's `Vessel Name` field, e.g. `TEBAR/BG.TIGA JAYA 58` against master `BG.TIGA JAYA 58`, and
+ * `Prima Samudra IX` against `PRIMA SAMUDRA IX`. The frontend's `trimVesselName` only trims, so
+ * preferring that field bypassed the backend's canonicalisation and displayed the raw SAP string.
+ *
+ * It also made the same row render differently depending on the view: the status-filtered list
+ * carried the raw text in `vessel_name_klip` while the unfiltered list carried the master form.
+ *
+ * `vessel_name_klip` is still the right field for the KLIP-vs-SAP comparison badge in the edit
+ * modal, which is what it exists for - it is just not a display name.
  */
 export function shipmentListHydrateVesselName(
   baseName: unknown,
@@ -62,13 +83,8 @@ export function shipmentListHydrateVesselName(
     vessel_name_klip?: unknown
     is_contract_sap_closed?: unknown
   },
-  baseClosed?: unknown,
+  _baseClosed?: unknown,
 ): string {
-  const closed = isContractSapClosedFlag(hydrated.is_contract_sap_closed ?? baseClosed)
-  if (!closed) {
-    const klip = trimVesselName(hydrated.vessel_name_klip) || trimVesselName(hydrated.vessel_name)
-    if (klip) return klip
-  }
   const overlay = trimVesselName(hydrated.vessel_name)
   return overlay || trimVesselName(baseName)
 }

@@ -367,6 +367,51 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Vessel name is always mapped from Master Vessel, never SAP free text
+
+**The rule:** a vessel *code* may come from SAP, or from the code an operator picks when editing a
+shipment. A vessel *name* is never free text - it is always mapped from KLIP's Master Vessel by
+whichever code is in effect.
+
+The backend already implemented this. `resolveShipmentDisplayVesselName` runs every candidate
+through `canonicalVesselName`, which strips SAP's tug prefix and normalises, so the API's
+`vessel_name` carries the master form even for an Open contract - verified directly:
+
+    resolve('BG.TIGA JAYA 58', null, 'TEBAR/BG.TIGA JAYA 58', { contractSapClosed: false })
+      -> 'BG.TIGA JAYA 58'
+
+The frontend did not. `shipmentListHydrateVesselName` preferred `vessel_name_klip` while the
+contract was Open, and the frontend's `trimVesselName` only trims - so it rendered the value **as
+stored**, bypassing that canonicalisation.
+
+**Why that is wrong: `shipments.vessel_name` has two writers.** The SAP import writes it as well
+as KLIP, so `vessel_name_klip` is not evidence of an operator choice. Measured on the dev DB:
+
+| | rows |
+| --- | --- |
+| stored name differs from the master name for its code | 551 |
+| — of those, names that exist in Master Vessel at all | 6 |
+| — names that do **not** exist in Master Vessel | **545** |
+| not completed/cancelled, so displayed under the Open rule | 80 (64 differing) |
+
+Those 545 came from SAP's `Vessel Name` field - confirmed against `sap_processed_data`:
+`TEBAR/BG.TIGA JAYA 58` for code `MTEBAR58` (master: `BG.TIGA JAYA 58`), `Prima Samudra IX` for
+`MPRIMA91` (master: `PRIMA SAMUDRA IX`). The edit modal cannot produce them: it uses
+`MasterVesselCombobox`, a picker, so the input side already enforced the rule.
+
+It also made one row render two ways: the status-filtered list carried the raw text in
+`vessel_name_klip` while the unfiltered list carried the master form, so the same shipment showed
+a different vessel depending on which view you were in.
+
+**Fix:** `shipmentListHydrateVesselName` now returns the API's resolved `vessel_name`, falling
+back to the base name. `vessel_name_klip` keeps its real job - the KLIP-vs-SAP comparison badge in
+the edit modal - it is simply not a display name. `master_vessel_id` is not a usable substitute
+marker either: it is set on 295 of the diverging rows, because the SAP import sets it too.
+
+> Side effect worth noting: with the display no longer depending on `vessel_name_klip`, the
+> filtered and unfiltered resolvers produce identical rows for this field - which removes one of
+> the two blockers to serving every filter from a single cached row set (the other is `row_kind`).
+
 ### Shipments: why a first visitor waited, and what it costs now
 
 Three separate reasons the startup warmers were not protecting the first visitor. All three were

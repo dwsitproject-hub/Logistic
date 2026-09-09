@@ -40,24 +40,45 @@ describe('shipmentVesselCompare', () => {
     expect(shipmentVesselPrimaryName('VESSEL A', 'vessel a')).toBe('VESSEL A')
   })
 
-  it('keeps the edited KLIP name on hydrate when GR is Open', () => {
-    expect(
-      shipmentListHydrateVesselName('VESSEL A', {
-        vessel_name: 'BG. ANDALAN 02',
-        vessel_name_klip: 'VESSEL B',
-        is_contract_sap_closed: false,
-      }),
-    ).toBe('VESSEL B')
+  it('uses the API-resolved name on hydrate, Open or Closed', () => {
+    // A vessel name is always mapped from Master Vessel by the effective code, so the API's
+    // already-canonicalised `vessel_name` wins in both states. This replaces the old rule that
+    // preferred `vessel_name_klip` while Open.
+    for (const closed of [false, true]) {
+      expect(
+        shipmentListHydrateVesselName('VESSEL A', {
+          vessel_name: 'BG. ANDALAN 02',
+          vessel_name_klip: 'VESSEL B',
+          is_contract_sap_closed: closed,
+        }),
+      ).toBe('BG. ANDALAN 02')
+    }
   })
 
-  it('uses overlay name on hydrate when GR is Closed', () => {
+  it('never renders SAP free text stored in vessel_name_klip', () => {
+    // shipments.vessel_name is written by the SAP import too, so vessel_name_klip regularly holds
+    // SAP's raw string - 545 of the 551 diverging names on the dev database do not exist in
+    // Master Vessel at all. The table must show the master form the API resolved.
     expect(
-      shipmentListHydrateVesselName('VESSEL B', {
-        vessel_name: 'BG. ANDALAN 02',
-        vessel_name_klip: 'VESSEL B',
-        is_contract_sap_closed: true,
+      shipmentListHydrateVesselName('BG.TIGA JAYA 58', {
+        vessel_name: 'BG.TIGA JAYA 58',
+        vessel_name_klip: 'TEBAR/BG.TIGA JAYA 58',
+        is_contract_sap_closed: false,
       }),
-    ).toBe('BG. ANDALAN 02')
+    ).toBe('BG.TIGA JAYA 58')
+    expect(
+      shipmentListHydrateVesselName('PRIMA SAMUDRA IX', {
+        vessel_name: 'PRIMA SAMUDRA IX',
+        vessel_name_klip: 'Prima Samudra IX',
+        is_contract_sap_closed: false,
+      }),
+    ).toBe('PRIMA SAMUDRA IX')
+  })
+
+  it('falls back to the base name when the API sent none', () => {
+    expect(
+      shipmentListHydrateVesselName('VESSEL A', { vessel_name: '', vessel_name_klip: 'VESSEL B' }),
+    ).toBe('VESSEL A')
   })
 
   it('treats string false as Open', () => {
