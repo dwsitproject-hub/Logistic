@@ -86,7 +86,12 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(sql).toContain('GREATEST(0')
     expect(sql).toContain('> 1000')
     expect(sql).toContain("spd.data->'raw'->>'Incoterm'")
-    expect(sql).toContain("spd.data->'raw'->>'Source'")
+    /*
+     * source_type_raw is asserted above by name, not by the jsonb expression behind it.
+     * Migration 161 stores it on contract_latest_spd_snapshot, so when the snapshot is fresh this
+     * query reads a column and `spd.data->'raw'->>'Source'` correctly no longer appears - the
+     * expression still exists, in contractLatestSpdDerivedSql, and has its own tests.
+     */
     // Sea scope stays on effective incoterm (cards), not a second filter on blank contracts.incoterm.
     expect(sql).not.toMatch(
       /UPPER\(TRIM\(COALESCE\(c\.incoterm, ''\)\)\) IN \('CIF', 'FOB', 'CFR'\)/,

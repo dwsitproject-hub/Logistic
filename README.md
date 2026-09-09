@@ -367,6 +367,44 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+### Migration 161: the snapshot stores its derived columns
+
+Reading the snapshot instead of scanning SAP only bought 14-21%, and the reason was the snapshot
+itself: it stores the SAP row as jsonb, and the backlog CTE makes **26 `data->` accesses per row**
+to produce six values. A prototype settled it before the migration was written - a flat table of
+those six columns came out at **2,480 kB against 52 MB**, with identical results.
+
+So migration 161 stores them on `contract_latest_spd_snapshot`: `effective_sto`, `b2b_flag_raw`,
+`contract_reference_po_raw`, `contract_ext_no_raw`, `discharge_destination`, `source_type_raw`.
+`data` is deliberately kept - around a hundred other `latest_spd` references pull arbitrary keys
+from it.
+
+| breakdown | stored columns | live jsonb | saved |
+| --- | --- | --- | --- |
+| unplanned | 1,099 ms / 215,697 buf | 3,041 ms / 378,605 buf | −43% |
+| **preplanned** | **144 ms / 7,138 buf** | 3,425 ms / 771,553 buf | **−99.1% (108x)** |
+| completed backlog | 1,129 ms / 214,810 buf | 1,947 ms / 378,651 buf | −43% |
+| cancelled backlog | 2,000 ms / 184,978 buf | 3,114 ms / 348,823 buf | −47% |
+
+**Parity:** each count query generated once, then run twice with only the source of those six
+values swapped. All four identical. The refresh was checked separately: the derived columns were
+nulled for three contracts, `refreshForContracts` was run, and the values came back identical.
+
+**One definition, enforced.** A stored column and the expression behind it that drifted apart
+would show wrong data with nothing failing, so the six expressions live in
+`contractLatestSpdDerivedSql.ts` and both sides read them - the refresh that writes the columns,
+and the live fallback that computes them when the snapshot is stale.
+`contractLatestSpdDerivedSql.test.ts` asserts every column is written by both refresh paths, read
+by the fresh-snapshot CTE, that the fresh CTE touches no jsonb at all, and that the live CTE keeps
+its `spd.id DESC` tiebreaker.
+
+Snapshot size went 52 MB to 55 MB for the extra columns - paid once per refresh, saved on every
+read.
+
+> The earlier note in this file predicted 99% for preplanned and then measured only 21%, and
+> concluded the projection was the blocker. That was right: with the columns stored it is 99.1%.
+> The intermediate step was not wrong, it was incomplete.
+
 ### Backlog breakdowns read latest-SPD from the snapshot
 
 The four Section-1 backlog counts (unplanned, preplanned, completed, cancelled) each rebuilt
