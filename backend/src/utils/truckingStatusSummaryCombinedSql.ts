@@ -206,6 +206,20 @@ export function buildTruckingSection1Sql(cteBlock: string, includeCounts: boolea
  * `whereSql` is the caller's dimension scope, already parameterised; the same predicate
  * `loadTruckingStagePageFromSnapshot` applies to this table.
  */
+/**
+ * Add the sap_presence predicate to a scope WHERE that may be empty.
+ *
+ * `buildDailySummaryWhere` returns '' when the request carries no date, plant, product or
+ * incoterm filter, and appending ` AND ...` to nothing is a syntax error - which is exactly what
+ * the Trucking list did for any request with no toolbar scope at all (the page always sends a
+ * date range, so this only showed up when measuring the endpoint with bare defaults).
+ */
+function sapPresentWhere(whereSql: string): string {
+  const presence = `COALESCE(s.sap_presence, 'PRESENT') = 'PRESENT'`;
+  return whereSql.trim() ? `${whereSql}
+        AND ${presence}` : `WHERE ${presence}`;
+}
+
 export function buildTruckingSection1FromSnapshotQuery(opts: {
   tableName: string;
   whereSql: string;
@@ -224,8 +238,7 @@ export function buildTruckingSection1FromSnapshotQuery(opts: {
         NULL::date AS trucking_start_date,
         NULL::date AS trucking_completion_date
       FROM ${opts.tableName} s
-      ${opts.whereSql}
-        AND COALESCE(s.sap_presence, 'PRESENT') = 'PRESENT'
+      ${sapPresentWhere(opts.whereSql)}
     )`;
   return buildTruckingSection1Sql(
     `${filtered},${TRUCKING_SECTION1_AGGREGATE_CTES}`,

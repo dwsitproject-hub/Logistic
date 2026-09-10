@@ -93,6 +93,13 @@ export interface TruckingListBuiltQuery {
   /** Toolbar-only fast path: page expansion keys before full STO expansion. */
   usesStoKeyPaging?: boolean;
   expansionPaging?: { limit: number; offset: number; orderBySql: string };
+  /**
+   * Page keys already resolved from the stage snapshot - the expansion joins to exactly these
+   * instead of ranking `trucking_source` itself. Set with `usesStoKeyPaging`, which is what
+   * drops the outer LIMIT/OFFSET: these keys *are* the page, so applying it again would slice
+   * a page out of a page.
+   */
+  resolvedExpansionKeys?: Array<{ operationId: string; stoLine?: string }>;
   /** Resolve row stages from trucking_list_stage_snapshot (circles-consistent). */
   useStageSnapshot?: boolean;
 }
@@ -587,7 +594,24 @@ export function sortTruckingListRows(
     }
     const primary = compareSortValues(a[field], b[field], sortDir);
     if (primary !== 0) return primary;
-    return compareSortValues(b.created_at, a.created_at, 'DESC');
+    /*
+     * These two tiebreaks have to match the SQL key order
+     * (`<field> <dir> NULLS LAST, ts.created_at DESC, ts.id`), because the SQL chooses which rows
+     * are fetched and this comparator decides which of them the page keeps. When they disagree, a
+     * row can land on two pages at once.
+     *
+     * It did. The previous line was `compareSortValues(b.created_at, a.created_at, 'DESC')` -
+     * arguments swapped *and* direction reversed, which is a double negation, so it sorted
+     * created_at **ascending** while the SQL sorted it descending. With no unique key after it,
+     * tied rows then kept whatever order their fetch produced - and page 1 fetches 20 rows while
+     * page 2 fetches 40, so the same tie block was arranged differently in each. Measured on the
+     * dev data, where six rows share supplier 'AGRAJAYA BAKTITAMA PT.' and created_at
+     * 2026-05-20 09:51:57.265719+00 across the 20-row boundary: operation 159a784a appeared on
+     * page 1 *and* page 2, and db3460bd appeared on neither.
+     */
+    const byCreatedAt = compareSortValues(a.created_at, b.created_at, 'DESC');
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return String(a.id ?? '').localeCompare(String(b.id ?? ''));
   });
 }
 
@@ -1095,6 +1119,7 @@ function buildTruckingFilteredExpansionSql(built: TruckingListBuiltQuery): strin
     skipSapJoin: built.skipSapJoin,
     useStageSnapshot: built.useStageSnapshot === true,
     expansionPaging: built.expansionPaging,
+    resolvedExpansionKeys: built.resolvedExpansionKeys,
   });
 }
 

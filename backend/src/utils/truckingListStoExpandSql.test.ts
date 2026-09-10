@@ -63,6 +63,51 @@ describe('truckingListStoExpandSql', () => {
     expect(sql).toMatch(/expansion_keys AS \(\s*SELECT DISTINCT ts\.id AS operation_id/s);
   });
 
+  /**
+   * The restriction has to be inside `trucking_source`, and this is what proves it is.
+   *
+   * Joining `paged_expansion` in `expanded` looks like it pages the query and does almost
+   * nothing: `trucking_source` is read more than once (`contract_sto_lines` alone reads it
+   * twice), so Postgres materialises it in full first. Measured with the page keys supplied for
+   * free from the snapshot, the page still cost 19,353 ms; with the same keys also restricting
+   * `trucking_source` it cost 4,565 ms, returning byte-identical rows.
+   */
+  it('resolved keys restrict trucking_source itself, not just the expanded join', () => {
+    const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', {
+      skipSapJoin: true,
+      resolvedExpansionKeys: [
+        { operationId: '11111111-1111-1111-1111-111111111111' },
+        { operationId: '22222222-2222-2222-2222-222222222222' },
+      ],
+    });
+    expect(sql).toContain(
+      "WHERE ts_all.id IN ('11111111-1111-1111-1111-111111111111'::uuid, '22222222-2222-2222-2222-222222222222'::uuid)",
+    );
+    expect(sql).toContain('INNER JOIN paged_expansion pe ON pe.operation_id = ts.id');
+    // Resolved keys ARE the page, so nothing may re-rank or re-slice the scope.
+    expect(sql).not.toContain('ranked_expansion');
+    expect(sql).not.toContain('__filter_total');
+  });
+
+  it('duplicate resolved keys collapse, so a legacy sto_line row cannot double a page row', () => {
+    const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', {
+      skipSapJoin: true,
+      resolvedExpansionKeys: [
+        { operationId: '11111111-1111-1111-1111-111111111111', stoLine: 'A' },
+        { operationId: '11111111-1111-1111-1111-111111111111', stoLine: 'B' },
+      ],
+    });
+    expect(sql.split("'11111111-1111-1111-1111-111111111111'::uuid").length - 1).toBe(2);
+  });
+
+  it('an empty resolved key set returns no rows without scanning the scope', () => {
+    const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id', {
+      skipSapJoin: true,
+      resolvedExpansionKeys: [],
+    });
+    expect(sql).toContain('WHERE FALSE');
+  });
+
   it('resolves sto_line_resolved via a pre-aggregated JOIN, not a correlated per-row subquery', () => {
     const sql = wrapTruckingListQueryWithStoExpansion('SELECT 1 AS id');
     // Computed once (GROUP BY), not re-run per output row.

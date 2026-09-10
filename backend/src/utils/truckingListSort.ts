@@ -118,7 +118,24 @@ export function buildTruckingExpansionKeyOrderBy(
   const field = resolveTruckingExpansionKeySortField(sortKey);
   return buildListOrderByWithSapStoPriority(
     AGGREGATED_STO_SORT,
-    `${field} ${sortDir} NULLS LAST, ts.created_at DESC`,
+    /*
+     * `ts.id` last, and it is not cosmetic: without a unique tiebreaker this ORDER BY leaves
+     * tied rows in whatever order the plan happens to produce, so paging can show a row twice or
+     * skip it entirely - page 1 and page 2 are separate queries with no guarantee they break the
+     * tie the same way.
+     *
+     * The dev data has such a block: six rows sharing supplier 'AGRAJAYA BAKTITAMA PT.' and
+     * created_at 2026-05-20 09:51:57.265719+00, straddling the 20-row page boundary. That is why
+     * the snapshot-paged version of this page picked a different row for page 1 - it orders by
+     * (supplier, created_at, operation_id) and was the only deterministic one of the two.
+     *
+     * `NULLS LAST` on created_at is what makes this order *identical* to the snapshot loader's
+     * rather than merely equal on today's data: DESC defaults to NULLS FIRST, and the snapshot
+     * spells NULLS LAST. No row is affected either way - trucking_operations.created_at is
+     * nullable but holds no NULLs, and neither do the snapshot's 15,562 rows - so this costs
+     * nothing and removes the one input that could have made the two pages disagree again.
+     */
+    `${field} ${sortDir} NULLS LAST, ts.created_at DESC NULLS LAST, ts.id`,
     stageFilter,
   );
 }

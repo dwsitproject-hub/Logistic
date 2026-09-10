@@ -207,25 +207,23 @@ function buildQuantitySelects(skipSapJoin: boolean): {
 }
 
 /** paged_expansion from explicit keys (stage-snapshot fast path). Quotes are escaped. */
-function buildResolvedExpansionKeysCte(
+/** Deduped uuid literals for the page's operations — snapshot may carry legacy sto_line rows. */
+function resolvedExpansionKeyLiterals(
   keys: Array<{ operationId: string; stoLine?: string }>,
-): string {
-  if (keys.length === 0) {
-    return `
-      paged_expansion AS (
-        SELECT NULL::uuid AS operation_id WHERE FALSE
-      ),`;
-  }
-  // Dedupe by operation — snapshot may still carry legacy sto_line columns.
+): string[] {
   const seen = new Set<string>();
-  const values: string[] = [];
+  const literals: string[] = [];
   for (const k of keys) {
     const op = String(k.operationId).replace(/'/g, "''");
     if (seen.has(op)) continue;
     seen.add(op);
-    values.push(`('${op}'::uuid)`);
+    literals.push(`'${op}'::uuid`);
   }
-  if (values.length === 0) {
+  return literals;
+}
+
+function buildResolvedExpansionKeysCte(literals: string[]): string {
+  if (literals.length === 0) {
     return `
       paged_expansion AS (
         SELECT NULL::uuid AS operation_id WHERE FALSE
@@ -234,8 +232,44 @@ function buildResolvedExpansionKeysCte(
   return `
       paged_expansion AS (
         SELECT v.operation_id
-        FROM (VALUES ${values.join(', ')}) v(operation_id)
+        FROM (VALUES ${literals.map((v) => `(${v})`).join(', ')}) v(operation_id)
       ),`;
+}
+
+/**
+ * `trucking_source`, restricted to the page's operations when they are already known.
+ *
+ * Joining `paged_expansion` inside `expanded` is not enough, and measuring said so: with the
+ * page keys handed over for free from the snapshot (25 ms) the page still cost 19,353 ms.
+ * `trucking_source` is referenced more than once - `contract_sto_lines` reads it twice on its
+ * own - so Postgres materialises it, and materialising it means running the full list select
+ * with its per-row laterals over the whole scope before anything gets to filter it down to 20
+ * rows. The restriction has to be *inside* that CTE to be worth anything.
+ *
+ * It is a filter on the operation ids, so the row set is a subset of what the unrestricted CTE
+ * would produce and every downstream CTE derives from it - nothing computes an aggregate over
+ * the wider set that the page then reads.
+ */
+function buildTruckingSourceCte(innerSql: string, literals: string[] | null): string {
+  if (!literals) {
+    return `trucking_source AS (
+        ${innerSql}
+      )`;
+  }
+  if (literals.length === 0) {
+    return `trucking_source AS (
+        SELECT * FROM (
+          ${innerSql}
+        ) ts_all
+        WHERE FALSE
+      )`;
+  }
+  return `trucking_source AS (
+        SELECT * FROM (
+          ${innerSql}
+        ) ts_all
+        WHERE ts_all.id IN (${literals.join(', ')})
+      )`;
 }
 
 function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): string {
@@ -322,10 +356,11 @@ export function buildTruckingListExpansionSql(
   const selectOutstanding = opts?.selectOutstanding !== false;
   const useStageSnapshot = opts?.useStageSnapshot === true;
   const resolvedKeys = opts?.resolvedExpansionKeys;
+  const keyLiterals = resolvedKeys ? resolvedExpansionKeyLiterals(resolvedKeys) : null;
   const paging = resolvedKeys ? undefined : opts?.expansionPaging;
   const qty = buildQuantitySelects(skipSapJoin);
-  const pagingBlock = resolvedKeys
-    ? buildResolvedExpansionKeysCte(resolvedKeys)
+  const pagingBlock = keyLiterals
+    ? buildResolvedExpansionKeysCte(keyLiterals)
     : paging
       ? buildExpansionPagingCtes(paging)
       : '';
@@ -359,9 +394,7 @@ export function buildTruckingListExpansionSql(
   const grCancelledExpr = TRUCKING_QTY_RESOLUTION_OVERRIDES.grCancelledExpr;
 
   return `
-      WITH trucking_source AS (
-        ${innerSql}
-      ),
+      WITH ${buildTruckingSourceCte(innerSql, keyLiterals)},
       ${buildContractStoLinesCte(skipSapJoin)},
       ${CONTRACT_STO_LINES_AGG_CTE},${pagingBlock}
       ${buildExpandedJoinSql(Boolean(paging) || Boolean(resolvedKeys))}${qtyResolutionCte}

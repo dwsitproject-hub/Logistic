@@ -30,6 +30,29 @@ const BUILT = {
 };
 
 describe('Section 1 shares its aggregates across both sources', () => {
+  /**
+   * An unscoped request is a real request, and it produced invalid SQL.
+   *
+   * `buildDailySummaryWhere` returns '' when nothing is filtered, and the sap_presence predicate
+   * was appended as ` AND ...` regardless - `FROM t  AND COALESCE(...)`, a 42601 that emptied
+   * Section 1. The page always sends a date range, so it took measuring the endpoint with bare
+   * defaults to see it.
+   */
+  it('an empty scope produces a WHERE, not a dangling AND', () => {
+    const sql = buildTruckingSection1FromSnapshotQuery({ tableName: 't', whereSql: '' });
+    expect(sql).toContain("WHERE COALESCE(s.sap_presence, 'PRESENT') = 'PRESENT'");
+    expect(sql).not.toMatch(/FROM t s\s+AND/);
+  });
+
+  it('a scoped request keeps its scope and ANDs the presence filter onto it', () => {
+    const sql = buildTruckingSection1FromSnapshotQuery({
+      tableName: 't',
+      whereSql: 'WHERE contract_date >= $1',
+    });
+    expect(sql).toContain('WHERE contract_date >= $1');
+    expect(sql).toContain("AND COALESCE(s.sap_presence, 'PRESENT') = 'PRESENT'");
+  });
+
   it('the snapshot query embeds the shared aggregate block verbatim', () => {
     const sql = buildTruckingSection1FromSnapshotQuery({
       tableName: 'trucking_list_stage_snapshot',

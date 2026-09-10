@@ -2,7 +2,9 @@ import { query } from '../database/connection';
 import {
   loadTruckingBacklogCountFromSnapshot,
   loadTruckingExecutionCountFromSnapshot,
+  loadTruckingStagePageFromSnapshot,
   toPipelineDailySummaryScope,
+  type PipelineDailySummaryScope,
 } from './pipelineDailySummary.service';
 import { AuthRequest } from '../middleware/auth';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from '../utils/contractListFilters';
@@ -123,6 +125,17 @@ export function buildTruckingHybridExecutionCountQuery(
  * sap_presence filter for the same reason. Only the ALL view is served here; Unplanned keeps its
  * live counts until that is measured too.
  */
+function truckingHybridSnapshotScope(
+  ctx: TruckingUnplannedHybridContext,
+): PipelineDailySummaryScope {
+  return toPipelineDailySummaryScope({
+    dateFrom: ctx.contractScope.dateFrom,
+    dateTo: ctx.contractScope.dateTo,
+    plants: ctx.contractScope.plants,
+    colFilters: ctx.colFilters,
+  } as Parameters<typeof toPipelineDailySummaryScope>[0]);
+}
+
 async function loadTruckingHybridCountsFromSnapshot(
   ctx: TruckingUnplannedHybridContext,
 ): Promise<{ contractRows: number; executionRows: number } | null> {
@@ -131,12 +144,7 @@ async function loadTruckingHybridCountsFromSnapshot(
   if (ctx.colFilters && Object.keys(ctx.colFilters).length > 0) return null;
   if (ctx.contractScope.contract) return null;
 
-  const scope = toPipelineDailySummaryScope({
-    dateFrom: ctx.contractScope.dateFrom,
-    dateTo: ctx.contractScope.dateTo,
-    plants: ctx.contractScope.plants,
-    colFilters: ctx.colFilters,
-  } as Parameters<typeof toPipelineDailySummaryScope>[0]);
+  const scope = truckingHybridSnapshotScope(ctx);
 
   const [executionRows, contractRows] = await Promise.all([
     loadTruckingExecutionCountFromSnapshot(scope),
@@ -266,17 +274,53 @@ async function fetchExecutionPage(
   offset: number,
 ): Promise<TruckingListRow[]> {
   if (limit <= 0) return [];
-  const executionBuilt = canPageAllHybridExecutionKeys(ctx)
+
+  /**
+   * Which rows are on this page comes from the snapshot; only those rows are then expanded.
+   *
+   * Deciding membership is what the live query spends its time on - it materialises
+   * `trucking_source` and `contract_sto_lines` to rank the whole scope before taking 20 rows,
+   * measured at 12,567 ms on the cold ALL page - and the snapshot holds one indexed row per
+   * operation. With the keys handed over, `trucking_source` is referenced once and the planner
+   * pushes the key restriction into it.
+   *
+   * Only the default `supplier` sort: those are the columns the snapshot carries, and the
+   * orders were compared for exactly that sort. Anything else keeps the live ranking below.
+   *
+   * Verified before wiring, on pages 1 and 2 of the default YTD scope: same 20 ids in the same
+   * order as the live path. That only became true after the live ordering was made
+   * deterministic - see buildTruckingExpansionKeyOrderBy for what it was doing instead, and
+   * note that the live path was the broken one, not this.
+   */
+  const snapshotKeys =
+    canPageAllHybridExecutionKeys(ctx) && ctx.sortKey === 'supplier'
+      ? await loadTruckingStagePageFromSnapshot(
+          truckingHybridSnapshotScope(ctx),
+          null,
+          ctx.sortDir,
+          limit,
+          offset,
+        )
+      : null;
+  if (snapshotKeys && snapshotKeys.keys.length === 0) return [];
+
+  const executionBuilt = snapshotKeys
     ? {
         ...ctx.executionBuilt,
         usesStoKeyPaging: true,
-        expansionPaging: {
-          limit,
-          offset,
-          orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir),
-        },
+        resolvedExpansionKeys: snapshotKeys.keys,
       }
-    : ctx.executionBuilt;
+    : canPageAllHybridExecutionKeys(ctx)
+      ? {
+          ...ctx.executionBuilt,
+          usesStoKeyPaging: true,
+          expansionPaging: {
+            limit,
+            offset,
+            orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir),
+          },
+        }
+      : ctx.executionBuilt;
   const { text, params } = buildPaginatedListQuery(
     executionBuilt,
     ctx.sortKey,

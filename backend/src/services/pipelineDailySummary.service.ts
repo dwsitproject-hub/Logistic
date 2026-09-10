@@ -714,9 +714,22 @@ export async function loadTruckingBacklogCountFromSnapshot(
   return parseInt(String(row.c ?? '0'), 10) || 0;
 }
 
+/**
+ * A page of row keys from the stage snapshot, plus the total for that scope.
+ *
+ * `stage` selects the status card; pass **null** for the ALL view, which applies no stage
+ * predicate and so enumerates the whole list row set. That is the same set the live ALL page
+ * builds, and the expensive part of building it live is deciding *which* keys the page holds -
+ * the live query materialises `trucking_source` and `contract_sto_lines` to get there, measured
+ * at 12,567 ms on the cold page, while this reads one indexed row per operation.
+ *
+ * Both callers depend on this ORDER BY matching the live key order exactly, and getting there
+ * meant fixing the live side rather than bending this one: it had no unique tiebreaker, so tied
+ * rows came out in whatever order the plan produced. See buildTruckingExpansionKeyOrderBy.
+ */
 export async function loadTruckingStagePageFromSnapshot(
   scope: PipelineDailySummaryScope,
-  stage: string,
+  stage: string | null,
   sortDir: 'ASC' | 'DESC',
   limit: number,
   offset: number,
@@ -735,21 +748,27 @@ export async function loadTruckingStagePageFromSnapshot(
   }
 
   const { sql, params } = buildDailySummaryWhere(scope);
-  const isPlannedCard = String(stage ?? '').trim().toUpperCase() === 'PLANNED';
-  const stageIdx = params.length + 1;
-  const whereSql = isPlannedCard
+  const normalizedStage = stage == null ? null : String(stage).trim().toUpperCase();
+  // PLANNED never occurs on its own (see klip-trucking-planned-equals-in-progress); the card
+  // shows PLANNED + IN_PROGRESS, so it takes no parameter. ALL takes no predicate at all.
+  const isPlannedCard = normalizedStage === 'PLANNED';
+  const stageParam = normalizedStage !== null && !isPlannedCard ? stage : null;
+  const stagePredicate =
+    normalizedStage === null
+      ? ''
+      : isPlannedCard
+        ? `stage IN ('PLANNED', 'IN_PROGRESS')`
+        : `stage = $${params.length + 1}`;
+  const whereSql = stagePredicate
     ? sql
-      ? `${sql} AND stage IN ('PLANNED', 'IN_PROGRESS')`
-      : `WHERE stage IN ('PLANNED', 'IN_PROGRESS')`
-    : sql
-      ? `${sql} AND stage = $${stageIdx}`
-      : `WHERE stage = $${stageIdx}`;
+      ? `${sql} AND ${stagePredicate}`
+      : `WHERE ${stagePredicate}`
+    : sql;
+  const baseParams = stageParam === null ? [...params] : [...params, stageParam];
   const dir = sortDir === 'DESC' ? 'DESC' : 'ASC';
-  const limitIdx = isPlannedCard ? params.length + 1 : stageIdx + 1;
+  const limitIdx = baseParams.length + 1;
   const offsetIdx = limitIdx + 1;
-  const pageParams = isPlannedCard
-    ? [...params, limit, offset]
-    : [...params, stage, limit, offset];
+  const pageParams = [...baseParams, limit, offset];
   const pageRes = await query(
     `SELECT
       operation_id,
@@ -772,7 +791,7 @@ export async function loadTruckingStagePageFromSnapshot(
     };
   }
 
-  const countParams = isPlannedCard ? [...params] : [...params, stage];
+  const countParams = [...baseParams];
   const countRes = await query(
     `SELECT COUNT(*)::bigint AS c FROM trucking_list_stage_snapshot ${whereSql}`,
     countParams,

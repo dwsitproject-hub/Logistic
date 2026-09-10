@@ -1002,37 +1002,98 @@ Cold endpoint, measured through `resolveTruckingListForRequest`:
 | execution count | 24,609 ms | gone (snapshot) |
 | backlog count | one of the 10-19s queries | 8 ms |
 
-### Page rows: attempted, measured, not shipped
+### Page rows: a paging bug found by trying to make the page fast
 
-The remaining 12,567 ms is the ALL view's execution page. Paging is already pushed into the
-expansion (`expansionPaging`), so the cost is materialising `trucking_source` and
-`contract_sto_lines` to work out *which* keys the page holds - exactly what the snapshot could
-answer from an index, as it already does for status-filtered pages.
-
-It was built and compared before wiring, and **the page membership differed** - one row per page,
-`db3460bd…` on live's page 1 and the snapshot's page 2. So it was removed rather than shipped.
-
-What was ruled out along the way, each by measurement rather than argument:
+The remaining 12,567 ms was the ALL view's execution page. The first attempt was built, compared
+and **not shipped**, because the page membership differed - one row per page, `db3460bd...` on
+live's page 1 and the snapshot's page 2. Four candidate causes were ruled out by measurement
+before the real one was found, and the one that read as most plausible was wrong:
 
 - **The SAP-STO sort priority.** `shouldPrioritizeSapStoRows` returns true only for UNPLANNED and
-  PLANNED, and the ALL view passes no stage - so that prefix is not applied and cannot explain it.
-- **Ties at the page boundary.** The live order has no final tiebreaker, so this looked like the
-  answer; but two separate runs returned byte-identical page-1 ids, so the live path is stable
-  here and the difference is systematic, not a coin flip.
-- **A boundary effect at all.** The differing row sits at position 13 of 20, not at the edge, so
-  the orderings diverge in the middle.
+  PLANNED, and the ALL view passes no stage, so that prefix is never applied.
+- **An untrimmed / pre-expansion `supplier`.** The stated suspect: the key order sorts on
+  `ts.supplier` while the snapshot stores a TRIMmed, post-expansion value. Checked directly - **0
+  contracts needed TRIM, 0 were empty, 0 were null.** Not it.
+- **Non-determinism.** Two live runs returned byte-identical page-1 ids, so live looked stable.
+- **A boundary effect.** The differing row sat at position 13 of 20, not at the edge.
 
-The remaining suspect, concrete and unverified: the expansion-key order sorts on
-`ts.supplier` - the **pre-expansion** row, untrimmed - while the snapshot stores
-`NULLIF(TRIM(COALESCE(src.supplier, c.supplier)), '')` from the **post-expansion** row. Two
-different values whenever the expansion alters supplier or whitespace differs. The check that
-would settle it is to compare those two expressions row by row for the page-1 neighbourhood; if
-that is the cause, the fix is to store the same expression the sort uses rather than to change the
-sort.
+The actual cause is that the live path was **not stable at all** - it only looked stable because
+identical repeats of the same query happen to break ties the same way. Rows 16-21 of page 1 share
+supplier `AGRAJAYA BAKTITAMA PT.` **and** `created_at 2026-05-20 09:51:57.265719+00`, straddling
+the 20-row boundary, and the live key order ended at `created_at DESC` with **no unique
+tiebreaker**. Page 1 and page 2 are separate queries; nothing made them break that tie
+consistently.
+
+**So this was a live paging bug, not a snapshot mismatch.** With the tie block identified,
+operation `159a784a...` was returned on page 1 *and* page 2, while `db3460bd...` appeared on
+neither. A user paging through that stretch saw one row twice and never saw another - independent
+of any of this optimisation work, and now fixed.
+
+Two defects, in the SQL and in the Node comparator that decides the final merged page:
+
+| | was | now |
+| --- | --- | --- |
+| `buildTruckingExpansionKeyOrderBy` | `supplier <dir>, created_at DESC` | `..., created_at DESC NULLS LAST, ts.id` |
+| `sortTruckingListRows` | `compareSortValues(b.created_at, a.created_at, 'DESC')` - a double negation, sorting created_at **ascending** while the SQL sorted it descending | `created_at DESC`, then `id` |
+
+`NULLS LAST` is what makes the two orders identical rather than merely equal on today's data;
+DESC defaults to NULLS FIRST and the snapshot spells NULLS LAST. It changes no row -
+`trucking_operations.created_at` is nullable but holds no NULLs, nor do the snapshot's 15,562
+rows.
+
+With both sides deterministic, pages 1 and 2 matched **in set and in order**, and the snapshot
+path could be wired.
+
+#### Handing over the keys saved nothing on its own
+
+The stated reason for the cost was that the live query materialises `trucking_source` and
+`contract_sto_lines` to work out *which* keys the page holds. That was wrong, and measuring it
+said so: with the keys supplied from the snapshot in **25 ms**, the page still cost **19,353 ms**.
+
+`resolvedExpansionKeys` only added `INNER JOIN paged_expansion` inside `expanded`, and
+`trucking_source` is referenced more than once - `contract_sto_lines` alone reads it twice - so
+Postgres materialises it, which means running the full list select with its per-row laterals over
+all 6,496 rows before anything filters it to 20. The restriction has to be **inside** that CTE:
+
+| | page query |
+| --- | --- |
+| live expansion paging | 23,124 ms / 23,825 ms |
+| snapshot keys, `paged_expansion` join only | 19,353 ms |
+| snapshot keys restricting `trucking_source` | **4,565 ms / 4,298 ms** |
+
+Parity is checked on **every column of every row**, not just the ids - a faster page showing
+different rows is a failure, not a win: **0 of 20 rows differ** on both page 1 and page 2.
+
+Gated to the default `supplier` sort, which is the only one the snapshot carries columns for and
+the only one the orders were compared on; every other sort keeps the live ranking.
+
+Cold endpoint at the scope the page actually sends (YTD), through
+`resolveTruckingListForRequest`:
+
+| | before | after |
+| --- | --- | --- |
+| endpoint (shell) | 13,262 ms | **3,612 ms** |
+| endpoint (hydrate) | - | **3,338 ms** |
+| page rows query | 23,124 ms | 4,565 ms |
+
+**What now dominates is planning, not execution.** On the keyed page query, `EXPLAIN (ANALYZE)`
+reads **Planning Time 2,328-3,202 ms against Execution Time 787-2,559 ms** on a statement of
+**336,730 characters**. [[klip-trucking-endpoint-cost-floor]] records that making the SQL 3x
+smaller did not previously make it faster; that was measured when execution was tens of seconds
+and planning was noise. It is no longer noise - it is roughly three quarters of what is left, and
+statement size is the next target.
+
+#### An unscoped request produced invalid SQL
+
+Found while measuring, not by a test: `buildDailySummaryWhere` returns `''` when a request carries
+no date, plant, product or incoterm filter, and `buildTruckingSection1FromSnapshotQuery` appended
+the `sap_presence` predicate as ` AND ...` regardless - `FROM trucking_list_stage_snapshot s  AND
+COALESCE(...)`, a 42601 that failed the whole request. The page always sends a date range, so no
+user could reach it, but any caller without a toolbar scope could. Fixed and covered both ways.
 
 Also worth recording, because it was offered as a way out and turned out not to be needed: hiding
-the total row count and page count would save essentially nothing now - the counts are 8-57 ms.
-The cost that remains is finding and fetching the 20 rows, which a hidden total does not touch.
+the total row count and page count would save essentially nothing - the counts are 8-57 ms. The
+cost was finding and fetching the 20 rows, which a hidden total does not touch.
 
 ### An empty backlog was still running both backlog queries: 18,581 ms to 13,262 ms
 
@@ -1061,9 +1122,9 @@ running the query rather than answering a different question. The empty result i
 query's own parser (`parseTruckingOutstandingQtySummaryRow(null)`) rather than a hand-written zero
 object, so its shape cannot drift.
 
-Where that leaves the page: **60,862 ms to 13,262 ms cold, 4.6x**, and what remains is almost
-entirely the one thing that could not be shipped - the 12,567 ms execution page query, whose
-snapshot version picked a different row for page 1.
+Where that leaves the page: **60,862 ms to 13,262 ms cold, 4.6x** at this point, with the
+12,567 ms execution page query the one thing still outstanding - see the section above for how
+that was closed and what it exposed.
 
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 
