@@ -715,6 +715,12 @@ export async function loadTruckingBacklogCountFromSnapshot(
 }
 
 /**
+ * The sorts a snapshot-served page can order by - the only two the snapshot stores a column for.
+ * Every other sort keeps the live ranking, which reads columns the snapshot does not carry.
+ */
+export type TruckingSnapshotPageSortField = 'supplier' | 'created_at';
+
+/**
  * A page of row keys from the stage snapshot, plus the total for that scope.
  *
  * `stage` selects the status card; pass **null** for the ALL view, which applies no stage
@@ -726,6 +732,10 @@ export async function loadTruckingBacklogCountFromSnapshot(
  * Both callers depend on this ORDER BY matching the live key order exactly, and getting there
  * meant fixing the live side rather than bending this one: it had no unique tiebreaker, so tied
  * rows came out in whatever order the plan produced. See buildTruckingExpansionKeyOrderBy.
+ *
+ * `sortField` is limited to the two the snapshot stores a column for. `created_at` needs no
+ * second clause: the live order repeats `created_at DESC` after it, which is redundant on the
+ * same column, so `created_at <dir> NULLS LAST, operation_id` is the identical ordering.
  */
 export async function loadTruckingStagePageFromSnapshot(
   scope: PipelineDailySummaryScope,
@@ -733,6 +743,7 @@ export async function loadTruckingStagePageFromSnapshot(
   sortDir: 'ASC' | 'DESC',
   limit: number,
   offset: number,
+  sortField: TruckingSnapshotPageSortField = 'supplier',
 ): Promise<{ keys: Array<{ operationId: string; stoLine: string }>; total: number } | null> {
   /**
    * Serve from a usable snapshot even when it is marked stale, and kick the refresh off in the
@@ -766,6 +777,10 @@ export async function loadTruckingStagePageFromSnapshot(
     : sql;
   const baseParams = stageParam === null ? [...params] : [...params, stageParam];
   const dir = sortDir === 'DESC' ? 'DESC' : 'ASC';
+  const orderBy =
+    sortField === 'created_at'
+      ? `created_at ${dir} NULLS LAST, operation_id`
+      : `supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id`;
   const limitIdx = baseParams.length + 1;
   const offsetIdx = limitIdx + 1;
   const pageParams = [...baseParams, limit, offset];
@@ -776,7 +791,7 @@ export async function loadTruckingStagePageFromSnapshot(
       COUNT(*) OVER ()::bigint AS filtered_total
     FROM trucking_list_stage_snapshot
     ${whereSql}
-    ORDER BY supplier ${dir} NULLS LAST, created_at DESC NULLS LAST, operation_id
+    ORDER BY ${orderBy}
     LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     pageParams,
   );

@@ -450,8 +450,12 @@ export function startTruckingListCacheWarmer(): Promise<void> {
       skipSapJoin: 'true',
       limit: '1',
       page: '1',
-      sortKey: 'supplier',
-      sortDir: 'asc',
+      /*
+       * Same sort the View Table now opens on, because the response cache keys on it. Warming
+       * `supplier` while the page asks for `created_at` warms a key nobody requests.
+       */
+      sortKey: 'created_at',
+      sortDir: 'desc',
       dateFrom,
       dateTo,
       summaryOnly: 'true',
@@ -800,7 +804,7 @@ export function buildTruckingListQuery(
   const skipSapJoin =
     options?.skipSapJoin ??
     String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
   const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
@@ -1772,7 +1776,7 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
   const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
   const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 

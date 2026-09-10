@@ -5,6 +5,7 @@ import {
   loadTruckingStagePageFromSnapshot,
   toPipelineDailySummaryScope,
   type PipelineDailySummaryScope,
+  type TruckingSnapshotPageSortField,
 } from './pipelineDailySummary.service';
 import { AuthRequest } from '../middleware/auth';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from '../utils/contractListFilters';
@@ -256,6 +257,12 @@ async function fetchContractBacklogPage(
   return result.rows as TruckingListRow[];
 }
 
+/** The request's sort, when the snapshot can order by it; null sends the page to live. */
+function snapshotPageSortField(sortKey: string): TruckingSnapshotPageSortField | null {
+  if (sortKey === 'supplier' || sortKey === 'created_at') return sortKey;
+  return null;
+}
+
 function canPageAllHybridExecutionKeys(ctx: TruckingUnplannedHybridContext): boolean {
   if (ctx.mode !== 'all') return false;
   return canUseTruckingStoKeyPaging({
@@ -284,22 +291,25 @@ async function fetchExecutionPage(
    * operation. With the keys handed over, `trucking_source` is referenced once and the planner
    * pushes the key restriction into it.
    *
-   * Only the default `supplier` sort: those are the columns the snapshot carries, and the
-   * orders were compared for exactly that sort. Anything else keeps the live ranking below.
+   * Only `supplier` and `created_at`: those are the columns the snapshot carries, and the two
+   * orders were each compared against live before being wired. Anything else keeps the live
+   * ranking below.
    *
-   * Verified before wiring, on pages 1 and 2 of the default YTD scope: same 20 ids in the same
-   * order as the live path. That only became true after the live ordering was made
-   * deterministic - see buildTruckingExpansionKeyOrderBy for what it was doing instead, and
-   * note that the live path was the broken one, not this.
+   * Verified on pages 1 and 2 of the default YTD scope: same 20 ids in the same order as the
+   * live path. That only became true after the live ordering was made deterministic - see
+   * buildTruckingExpansionKeyOrderBy for what it was doing instead, and note that the live path
+   * was the broken one, not this.
    */
+  const snapshotSort = snapshotPageSortField(ctx.sortKey);
   const snapshotKeys =
-    canPageAllHybridExecutionKeys(ctx) && ctx.sortKey === 'supplier'
+    canPageAllHybridExecutionKeys(ctx) && snapshotSort
       ? await loadTruckingStagePageFromSnapshot(
           truckingHybridSnapshotScope(ctx),
           null,
           ctx.sortDir,
           limit,
           offset,
+          snapshotSort,
         )
       : null;
   if (snapshotKeys && snapshotKeys.keys.length === 0) return [];
@@ -367,7 +377,16 @@ export async function resolveTruckingUnplannedHybridList(
   let executionPage: TruckingListRow[] = [];
   let truckingOperations: TruckingListRow[];
 
-  const useGlobalSort = ctx.mode === 'all' && hybridListUsesGlobalMergeSort(sortKey);
+  /**
+   * Merging two halves is only worth anything when both halves have rows.
+   *
+   * The global merge fetches `offset + limit` rows from the execution side and sorts in Node, so
+   * page 10 fetches 200 rows to show 20. With an empty backlog there is nothing to interleave -
+   * the sliced branch asks the database for exactly the 20 rows it needs and returns the same
+   * page, because `sortTruckingListRows` now breaks ties the way the SQL does.
+   */
+  const useGlobalSort =
+    ctx.mode === 'all' && hasBacklogRows && hybridListUsesGlobalMergeSort(sortKey);
 
   if (useGlobalSort) {
     const need = offset + limitNum;

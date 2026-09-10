@@ -1739,8 +1739,16 @@ function TruckingPageContent() {
   } | null>(null)
 
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
-  const [sortKey, setSortKey] = useState<string>('supplier')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  /**
+   * View Table opens on newest-first, and does not remember a sort between visits.
+   *
+   * The old default was `supplier` asc, which was only ever needed by the Download Template
+   * button below - that builds its rows from this same list request, so it inherited whatever
+   * the table happened to be sorted by. It now pins its own order, leaving the table free to
+   * default to something a viewer actually wants to see first.
+   */
+  const [sortKey, setSortKey] = useState<string>('created_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const buildTruckingListSearchParams = useCallback(
     (opts?: {
@@ -1753,13 +1761,15 @@ function TruckingPageContent() {
       skipSapJoin?: boolean
       /** Combined daily planning template includes Unplanned + Planned regardless of filter. */
       omitStatus?: boolean
+      /** Pin the order instead of following the table (exports that need a fixed layout). */
+      sortOverride?: { key: string; dir: 'asc' | 'desc' }
     }) => {
       const params = new URLSearchParams()
       params.append('skipSapJoin', opts?.skipSapJoin === false ? 'false' : 'true')
       params.append('limit', String(opts?.limit ?? pageSize))
       params.append('page', String(opts?.page ?? page))
-      params.append('sortKey', sortKey)
-      params.append('sortDir', sortDir)
+      params.append('sortKey', opts?.sortOverride?.key ?? sortKey)
+      params.append('sortDir', opts?.sortOverride?.dir ?? sortDir)
       if (!opts?.omitStatus && statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
@@ -1872,6 +1882,10 @@ function TruckingPageContent() {
           includeSummary: false,
           skipSapJoin: false,
           omitStatus: true,
+          // The template is grouped by supplier for whoever fills it in. It used to get that
+          // only because the table defaulted to a supplier sort - so a viewer who sorted by
+          // anything else silently downloaded a differently ordered template.
+          sortOverride: { key: 'supplier', dir: 'asc' },
         })
         const response = await api.get(`/trucking?${params.toString()}`)
         const envelope = response.data as {

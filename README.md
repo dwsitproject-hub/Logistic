@@ -1083,6 +1083,53 @@ smaller did not previously make it faster; that was measured when execution was 
 and planning was noise. It is no longer noise - it is roughly three quarters of what is left, and
 statement size is the next target.
 
+#### View Table now opens on newest-first, and the template pins its own order
+
+The `supplier` asc default was never a View Table requirement - it existed for the **Download
+Template** button, which builds its rows from this same list request and so inherited whatever
+the table happened to be sorted by. That was a latent bug of its own: a viewer who sorted by PO
+number silently downloaded a differently ordered template.
+
+So the two were separated. `buildTruckingListSearchParams` takes a `sortOverride`, the template
+passes `{ key: 'supplier', dir: 'asc' }`, and the table defaults to `created_at` desc. The table
+does not remember a sort between visits (plain `useState`; only the column layout is persisted),
+so every visit starts there.
+
+It is also faster, and for two reasons that are visible in the code rather than guessed:
+
+- `idx_trucking_created_at_desc (created_at DESC NULLS LAST)` already exists and matches the
+  order exactly. There is no index on `supplier`.
+- `hybridListUsesGlobalMergeSort()` returns false for `created_at`, so the ALL view takes the
+  sliced branch instead of merging in Node.
+
+| page query, YTD | live | snapshot keys |
+| --- | --- | --- |
+| `created_at` desc, page 1 | 9,879 ms | **1,463 ms** |
+| `created_at` desc, page 2 | 12,766 ms | **2,085 ms** |
+| `supplier` asc, page 1 | 23,124 ms | 4,565 ms |
+
+Parity to the same standard as the supplier sort - every column of every row, pages 1 and 2:
+**same order, 0 of 20 rows differing.** The snapshot loader takes the sort field rather than
+assuming one, restricted to the two columns it stores; `created_at` needs no second clause
+because the live order repeats `created_at DESC` after it, which is redundant on the same column.
+
+Two follow-ons:
+
+- **The startup warmer was warming a key nobody would request.** It runs `summaryOnly` with an
+  explicit `sortKey`, and the response cache keys on it - so warming `supplier` while the page
+  asks `created_at` warms nothing useful. It now uses the page's default.
+- **A global merge with nothing to merge is pure overhead**, and it was running unconditionally.
+  The merge fetches `offset + limit` rows from the execution side and sorts in Node, so page 10
+  asked for 200 rows to show 20. It is now gated on `breakdown.contractRows > 0`, which is
+  already computed on the line above. Safe only because `sortTruckingListRows` was fixed to break
+  ties the way the SQL does - before that the two branches could return different pages.
+
+**One behaviour change worth stating.** With `created_at` the ALL view no longer merge-sorts the
+two halves, so when the backlog is non-empty its rows are appended after all execution rows
+rather than interleaved - they land on the last page. On the default YTD window the backlog is 0
+so nothing moves; on a 2025 scope it is 3 rows. Whether those belong interleaved is a product
+decision, not a performance one.
+
 #### An unscoped request produced invalid SQL
 
 Found while measuring, not by a test: `buildDailySummaryWhere` returns `''` when a request carries

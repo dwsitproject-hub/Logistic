@@ -27,6 +27,53 @@ import {
  * worth protecting is that the guard is *there*: without it the queries return early anyway, so
  * nothing fails, it is just slow again.
  */
+/**
+ * Which sorts may be served from the snapshot, and which must not be.
+ *
+ * The snapshot stores a column for `supplier` and `created_at` only, and each of those two
+ * orders was compared against the live page - every column of every row, pages 1 and 2 - before
+ * being allowed here. Adding a third sort to this gate without doing that comparison would ship
+ * a page that is fast and wrong, which is why the list is spelled out rather than derived.
+ *
+ * Source-audited because this file has no database, and what needs protecting is the gate
+ * itself: without it the page is merely slow again, so nothing fails to catch the regression.
+ */
+describe('snapshot-served page sorts', () => {
+  const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
+
+  it('admits exactly the two sorts the snapshot has columns for', () => {
+    expect(src).toContain("if (sortKey === 'supplier' || sortKey === 'created_at') return sortKey;");
+    expect(src).toContain('const snapshotSort = snapshotPageSortField(ctx.sortKey);');
+  });
+
+  it('passes the request sort down to the loader rather than assuming one', () => {
+    expect(src).toMatch(/loadTruckingStagePageFromSnapshot\([\s\S]{0,240}snapshotSort,/);
+  });
+
+  it('a sort outside that set falls through to the live ranking', () => {
+    // The live expansion-key branch must still be reachable, not replaced.
+    expect(src).toContain('orderBySql: buildTruckingExpansionKeyOrderBy(ctx.sortKey, ctx.sortDir),');
+  });
+});
+
+/**
+ * A global merge with nothing to merge is pure overhead.
+ *
+ * The merge fetches `offset + limit` execution rows and sorts them in Node, so page 10 asks for
+ * 200 rows to show 20. When the backlog is empty there is nothing to interleave and the sliced
+ * branch returns the same page from a LIMIT/OFFSET - which is only true because
+ * `sortTruckingListRows` was fixed to break ties the way the SQL does.
+ */
+describe('global merge sort is skipped when the backlog is empty', () => {
+  const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
+
+  it('gates the merge on the backlog count it already has', () => {
+    expect(src).toContain(
+      "ctx.mode === 'all' && hasBacklogRows && hybridListUsesGlobalMergeSort(sortKey);",
+    );
+  });
+});
+
 describe('empty backlog skips its queries', () => {
   const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
 
