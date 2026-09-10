@@ -165,7 +165,7 @@ export function buildTruckingExecutionDailySummaryInsertSql(
 
 export function buildTruckingBacklogDailySummaryUpsertSql(
   targetTable: string = TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE,
-): string {
+): Promise<string> {
   return buildTruckingUnplannedBacklogDailySummarySql(targetTable);
 }
 

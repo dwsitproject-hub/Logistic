@@ -781,6 +781,81 @@ So `spd_keyed` still carries `data`, deliberately, and the 92 accesses that read
 column route remains open, but it needs the three PO families resolved one at a time, not in
 bulk.
 
+## Trucking
+
+### Where the cold Trucking page's time goes
+
+Measured 2026-09-10 through `resolveTruckingListForRequest`, default YTD view, fresh process so
+every in-process cache is empty. **60,862 ms wall, 13 queries, 97,324 ms of database time** - more
+DB time than wall time because several of them run concurrently:
+
+| ms | query |
+| --- | --- |
+| 34,038 | status / OS summary (`WITH filtered AS ...`, 391 KB of SQL) |
+| 13,458 | page rows (`trucking_source`, 302 KB) |
+| 13,399 | `latest_spd_contract` (133 KB) |
+| 13,189 | count (`trucking_filtered`, 336 KB) |
+| 12,156 | `latest_spd_contract` (108 KB) |
+| 10,985 | `latest_spd_contract` (51 KB) |
+
+The page query is no longer the dominant cost - it was 82s when
+[[klip-trucking-endpoint-cost-floor]] was written and is now 12,673 ms on its own EXPLAIN
+(root buffers 2,379,603). Part of that is migration 162 arriving here for free: the Trucking query
+makes **116 reads of its stored status columns** (GR PO/STO status, delete flags), because
+`contractDeliveryStatus` is shared with Shipments. That is exactly the "~6ms per contract for the
+SAP status expression" the cost-floor note identified.
+
+### The `latest_spd_contract` CTE was a second copy
+
+Three of those queries - **36,540 ms, 38% of the database time** - were
+`buildTruckingUnplannedBacklogLatestSpdCte()`, a Trucking-local copy of three COALESCE families
+that `contractLatestSpdDerivedSql` already defines and migration 161 already **stores** on
+`contract_latest_spd_snapshot`: `b2b_flag_raw`, `contract_reference_po_raw`,
+`contract_ext_no_raw`. The Shipments twin had been switched to read the snapshot; this one never
+was, so it kept scanning all 27,003 SAP rows and detoasting 138 MB of jsonb to derive values that
+were sitting in a 2,520 kB column store with a primary key on `contract_number`.
+
+The two copies still agreed arm for arm, which is the dangerous state rather than a safe one:
+nothing would have failed if either had been edited. The Trucking builder now delegates to the
+shared resolver, so there is one definition, and a test asserts the delegation and rejects any arm
+being re-spelled there.
+
+One behaviour change, and it is an improvement: the Trucking live form ordered by
+`created_at DESC NULLS LAST` with **no tiebreaker**, so which SAP row won a tie was undefined. The
+snapshot breaks ties on `spd.id DESC`, as the shared live form now does too.
+
+The async ripple reached nine call sites and two test files; `tsc` found every one, including
+`pipelineDailySummary.service`'s statement callback, which is now `async`.
+
+### What the CTE swap is actually worth: 20%, not 38%
+
+The first re-measurement after the change read 192,394 ms, worse than the baseline - but its own
+log shows a shipment pipeline refresh running concurrently (68,238 ms of build) and a trucking
+build holding the refresh lock. That is contention, not the change, and is not usable.
+
+So it was measured the narrow way instead: one real backlog query, built once, with **only the CTE
+swapped** - the two statements otherwise byte-identical, run alternately on an idle database, live
+form first so any cache warming would favour the snapshot form rather than the other way round.
+
+| | execution | root buffers |
+| --- | --- | --- |
+| live jsonb CTE | 24,386 ms / 20,334 ms | 2,350,081 / 2,350,056 |
+| fresh snapshot CTE | 22,189 ms / 15,250 ms | **1,862,811 / 1,862,811** |
+
+**Buffers: -20.7%, and deterministic** - identical across both runs of each form. Execution time
+ranges overlap (15.3-22.2s against 20.3-24.4s), so the time is suggestive and is *not* claimed.
+
+That is the honest size of it, and it is smaller than "38% of the database time" implies. The CTE
+is only part of each of those three queries; what remains is the backlog predicate over
+`contracts`, which [[klip-trucking-endpoint-cost-floor]] measured at ~8 correlated SubPlans per
+row, 92 SubPlans and 97 scans of `sap_processed_data` in one plan. The swap removes about 487,000
+buffers per query - roughly 7s of the 36.5s, not all of it. The remaining 1.86M buffers per query
+are the next thing to look at, and they are not jsonb extraction.
+
+The run also confirms, uncontaminated, that all three queries now begin
+`WITH latest_spd_contract AS (SELECT lss.contract_number, lss.effective_sto, lss.b2b_flag_raw
+...)` - the snapshot columns, no `DISTINCT ON` over `sap_processed_data`.
+
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 
 The list caches per (filters x status x sort x page), so every toolbar change is an uncached

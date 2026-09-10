@@ -7,7 +7,7 @@ import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 import {
-  buildTruckingUnplannedBacklogLatestSpdCte,
+  resolveTruckingUnplannedBacklogLatestSpdCte,
   truckingUnplannedContractBacklogBaseWhereSql,
 } from './truckingUnplannedHybridSql';
 import {
@@ -73,7 +73,7 @@ export async function buildTruckingOverdueInsightsAggregateQuery(
   });
 
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${qtyMoveCte},
     overdue_contracts AS (
       SELECT
@@ -118,7 +118,7 @@ export async function buildTruckingOverdueTopSuppliersQuery(
   });
 
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${qtyMoveCte},
     overdue_contracts AS (
       SELECT
@@ -159,7 +159,7 @@ export async function buildTruckingCarryOverInsightsQuery(
   });
 
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${qtyMoveCte},
     carry_contracts AS (
       SELECT ${outstandingExpr} AS outstanding_kg
@@ -188,16 +188,16 @@ export async function buildTruckingCarryOverInsightsQuery(
 }
 
 /** Land trucking ops with gain/loss at or below threshold. */
-export function buildTruckingLossAboveThresholdQuery(
+export async function buildTruckingLossAboveThresholdQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit = 5,
-): string {
+): Promise<string> {
   const threshold = TRUCKING_LOSS_ABOVE_THRESHOLD_PCT;
   const openWhere = `${truckingOpenLandContractBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
 
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()}
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()}
     SELECT
       NULLIF(TRIM(COALESCE(c.supplier, t.trucking_owner, '')), '') AS supplier,
       t.gain_loss_percentage::numeric AS gain_loss_pct

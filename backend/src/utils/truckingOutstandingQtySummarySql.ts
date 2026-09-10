@@ -11,7 +11,7 @@ import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { normalizeTruckingPagePipelineStageParam } from './truckingPagePipelineSql';
 import {
-  buildTruckingUnplannedBacklogLatestSpdCte,
+  resolveTruckingUnplannedBacklogLatestSpdCte,
   TRUCKING_UNPLANNED_B2B_END_JOIN,
   truckingUnplannedContractBacklogBaseWhereSql,
 } from './truckingUnplannedHybridSql';
@@ -322,7 +322,7 @@ export async function buildTruckingOutstandingQtyBacklogAggregateQuery(
   );
 
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${qtyMoveCte},
     backlog_rows AS (
       SELECT
@@ -358,7 +358,7 @@ export async function buildTruckingUnplannedBacklogCombinedQuery(
   );
 
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${qtyMoveCte},
     backlog_rows AS (
       SELECT

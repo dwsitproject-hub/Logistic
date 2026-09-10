@@ -140,7 +140,7 @@ export async function countTruckingUnplannedHybridBreakdown(
     const executionCount = buildTruckingHybridExecutionCountQuery(ctx);
 
     const [contractRes, executionRes] = await Promise.all([
-      query(buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql), contractParams),
+      query(await buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql), contractParams),
       query(executionCount.text, executionCount.params),
     ]);
 

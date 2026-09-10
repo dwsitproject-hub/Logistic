@@ -467,10 +467,12 @@ export class PipelineDailySummaryService {
       'trucking',
       'pipeline_daily_summary:trucking',
       TRUCKING_REFRESH_TABLES,
-      (stage) => [
+      /* async: the backlog upsert now resolves whether the latest-SPD snapshot is fresh
+         before it can render its CTE. */
+      async (stage) => [
         // Execution aggregates first: the backlog upsert updates the rows this one lands.
         buildTruckingExecutionDailySummaryInsertSql(stage[TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE]),
-        buildTruckingBacklogDailySummaryUpsertSql(stage[TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE]),
+        await buildTruckingBacklogDailySummaryUpsertSql(stage[TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE]),
         buildTruckingStageSnapshotInsertSql(stage[TRUCKING_LIST_STAGE_SNAPSHOT_TABLE]),
       ],
     );

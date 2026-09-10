@@ -2,6 +2,7 @@
  * Trucking page — Unplanned hybrid list (open PO backlog + trucking execution rows).
  */
 
+import { resolveUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import { sqlIsContractSapInactiveForOsExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
@@ -70,33 +71,25 @@ export function buildTruckingUnplannedBacklogOrderBy(
   return `${field} ${dir} NULLS LAST, contract_id ASC`;
 }
 
-export function buildTruckingUnplannedBacklogLatestSpdCte(): string {
-  return `
-      latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
-            spd.data->'raw'->>'B2B Flag',
-            spd.data->>'Contract Type'
-          ) AS b2b_flag_raw,
-          COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw,
-          COALESCE(
-            spd.data->'raw'->>'Contract Ext No',
-            spd.data->>'Contract Ext No'
-          ) AS contract_ext_no_raw,
-          spd.created_at
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      )`;
+/**
+ * The same `latest_spd_contract` CTE the Shipments backlog uses.
+ *
+ * This was a second copy of the same three COALESCE families - b2b flag, contract reference PO,
+ * contract ext no - spelled out arm for arm, and the two copies happened to still agree. They no
+ * longer can: both now come from `contractLatestSpdDerivedSql`, and migration 161 already stores
+ * all three on `contract_latest_spd_snapshot`, so a fresh snapshot is read as columns instead of
+ * scanning sap_processed_data.
+ *
+ * That is where Trucking's cold time was going. Measured 2026-09-10, the cold page issued 13
+ * queries for 97,324ms of database time, and three of them were this CTE in its live form:
+ * 13,399ms + 12,156ms + 10,985ms = 36,540ms, 38% of the total.
+ *
+ * One behaviour change, and it is an improvement: the live form here ordered by
+ * `created_at DESC NULLS LAST` with no tiebreaker, so which SAP row won a tie was undefined. The
+ * snapshot resolves ties on `spd.id DESC`, as the shared live form now does too.
+ */
+export async function resolveTruckingUnplannedBacklogLatestSpdCte(): Promise<string> {
+  return resolveUnplannedContractBacklogLatestSpdCte();
 }
 
 /** Open FRC/LCO LAND/MIX contracts with no active trucking operation. */
@@ -289,12 +282,12 @@ export function buildTruckingUnplannedContractToolbarScope(input: {
   };
 }
 
-export function buildTruckingUnplannedBacklogCountQuery(
+export async function buildTruckingUnplannedBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     unplanned_trucking_backlog AS (
       SELECT c.id
       FROM contracts c
@@ -308,12 +301,12 @@ export function buildTruckingUnplannedBacklogCountQuery(
 }
 
 /** Sum contract quantity_ordered for unplanned backlog (one row per contract). */
-export function buildTruckingUnplannedBacklogContractQtyQuery(
+export async function buildTruckingUnplannedBacklogContractQtyQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     unplanned_trucking_backlog AS (
       SELECT c.quantity_ordered
       FROM contracts c
@@ -363,7 +356,7 @@ export async function buildTruckingUnplannedBacklogPageQuery(
   });
   const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir);
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${backlogIdsCte},
     ${qtyMoveCte},
     unplanned_trucking_backlog AS (
@@ -405,7 +398,7 @@ export async function buildTruckingUnplannedBacklogIdsWithOsQuery(
     subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     ${backlogIdsCte},
     ${qtyMoveCte}
     SELECT c.id
@@ -420,18 +413,18 @@ export async function buildTruckingUnplannedBacklogIdsWithOsQuery(
 export function buildTruckingUnplannedBacklogSummaryCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   return buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql);
 }
 
 /** Daily refresh — open contract backlog grouped by group_plant + contract_date. */
-export function buildTruckingUnplannedBacklogDailySummarySql(
+export async function buildTruckingUnplannedBacklogDailySummarySql(
   targetTable = 'trucking_pipeline_daily_summary',
-): string {
+): Promise<string> {
   const plant = TRUCKING_UNPLANNED_GROUP_PLANT;
   return `
     INSERT INTO ${targetTable} (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     backlog AS (
       SELECT
         ${plant} AS group_plant,
