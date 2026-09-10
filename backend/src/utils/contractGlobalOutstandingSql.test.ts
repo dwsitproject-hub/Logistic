@@ -30,7 +30,9 @@ describe('contractGlobalOutstandingSql', () => {
       incotermExpr: 'pl.incoterm',
       contractNumberExpr: 'pl.contract_number',
     });
-    expect(sql).toContain('Delete PO Status');
+    /* Reads migration 162's stored column now; the column <-> path mapping is asserted against
+       the migration itself in sapDerivedColumnSql.test.ts. */
+    expect(sql).toContain('raw_delete_po_status');
     expect(sql).toContain('THEN 0::numeric');
     expect(sql).toContain('CANCELLED');
   });

@@ -4,12 +4,13 @@ import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import {
   INCOTERM_GR_PO_STATUS,
   INCOTERM_GR_STO_STATUS,
-  sqlIncotermImportStatusFromJson,
-  sqlSapGrStoStatusFromJson,
+  sqlIncotermImportStatusFromRow,
+  sqlSapGrStoStatusFromRow,
 } from './sapIncotermMetrics';
+import { sapRowSource, sqlSapField } from './sapDerivedColumnSql';
 import {
-  sqlSpdHasDeletePoFlagExpr,
-  sqlSpdHasDeleteStoFlagExpr,
+  sqlSpdHasDeletePoFlagFromRow,
+  sqlSpdHasDeleteStoFlagFromRow,
 } from './sapMasterV2UatFormat';
 import { sapStoNumberKeyExpr, sqlIsSapSeaStoRowExpr } from './shipmentStoTypeSql';
 import { shippingPerfStoMetricsKeyExpr } from './shippingPerformanceStoSql';
@@ -134,24 +135,31 @@ export function sqlContractImportStatusExpr(
   spdExtraAndSql = '',
 ): string {
   // NULL when the GR field is blank — never inject contracts.status per SPD row.
+  /*
+   * Reads migration 162's stored columns rather than `data`. Every alias below is a subquery over
+   * `sap_processed_data` (`spd`, `spd_gr`, `spd_del`, `spd_live`), so the columns are available -
+   * and this expression renders the GR PO and GR STO trees, which on the jsonb path is six blob
+   * detoasts each time it appears.
+   */
   const sapStatusNorm = sqlNormalizeContractDeliveryStatusExpr(
-    sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, 'NULL'),
+    sqlIncotermImportStatusFromRow('spd', `${contractAlias}.incoterm`, 'NULL'),
   );
-  const lineGrStatusRaw = sqlIncotermImportStatusFromJson(
-    'spd_gr.data',
+  const lineGrStatusRaw = sqlIncotermImportStatusFromRow(
+    'spd_gr',
     `${contractAlias}.incoterm`,
     'NULL',
   );
   const openNorm = (expr: string) =>
     `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('OPEN', 'ACTIVE')`;
   const inc = `UPPER(TRIM(COALESCE(${contractAlias}.incoterm, '')))`;
+  const spdRow = sapRowSource('spd');
   const stoOpen = `(
-    ${openNorm("spd.data->'raw'->>'GR STO Status'")}
-    OR ${openNorm("spd.data->'contract'->>'gr_sto_status'")}
+    ${openNorm(sqlSapField(spdRow, 'raw_gr_sto_status'))}
+    OR ${openNorm(sqlSapField(spdRow, 'contract_gr_sto_status'))}
   )`;
   const poOpen = `(
-    ${openNorm("spd.data->'raw'->>'GR PO Status'")}
-    OR ${openNorm("spd.data->'contract'->>'gr_po_status'")}
+    ${openNorm(sqlSapField(spdRow, 'raw_gr_po_status'))}
+    OR ${openNorm(sqlSapField(spdRow, 'contract_gr_po_status'))}
   )`;
   // Incoterm-scoped: do not let commercial contract.status Open override Close GR STO on LCO.
   const rowOpenSignal = `(
@@ -216,7 +224,7 @@ export function sqlContractImportStatusExpr(
           FROM sap_processed_data spd_del
           WHERE spd_del.contract_number = ${contractAlias}.contract_id
             ${poMatch('spd_del')}
-            AND ${sqlSpdHasDeletePoFlagExpr('spd_del.data')}
+            AND ${sqlSpdHasDeletePoFlagFromRow('spd_del')}
         )`;
   const thisStoDeleted =
     stoKeyExpr && String(stoKeyExpr).trim()
@@ -227,7 +235,7 @@ export function sqlContractImportStatusExpr(
             ${poMatch('spd_del')}
             ${latestImportOnly('spd_del')}
             AND ${sapStoNumberKeyExpr('spd_del')} = TRIM((${stoKeyExpr})::text)
-            AND ${sqlSpdHasDeleteStoFlagExpr('spd_del.data')}
+            AND ${sqlSpdHasDeleteStoFlagFromRow('spd_del')}
         )`
       : 'FALSE';
   const allRealStosDeleted = `(
@@ -246,7 +254,7 @@ export function sqlContractImportStatusExpr(
               ${poMatch('spd_live')}
               ${latestImportOnly('spd_live')}
               AND ${sqlSpdHasRealSapStoKeyExpr('spd_live')}
-              AND NOT (${sqlSpdHasDeleteStoFlagExpr('spd_live.data')})
+              AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd_live')})
           )
         )`;
   const headerOnlyDeleteSto = `(
@@ -264,7 +272,7 @@ export function sqlContractImportStatusExpr(
             WHERE spd_del.contract_number = ${contractAlias}.contract_id
               ${poMatch('spd_del')}
               ${latestImportOnly('spd_del')}
-              AND ${sqlSpdHasDeleteStoFlagExpr('spd_del.data')}
+              AND ${sqlSpdHasDeleteStoFlagFromRow('spd_del')}
           )
         )`;
   const deleteFlagCancelled =
@@ -301,7 +309,7 @@ export function sqlContractImportStatusExpr(
           WHERE spd.contract_number = ${contractAlias}.contract_id
             ${poMatch('spd')}${stoScope}${preferSapStoLinesOverDirtyHeader}${spdExtraAndSql}
             ${latestImportOnly('spd')}
-            AND NOT (${sqlSpdHasDeleteStoFlagExpr('spd.data')})
+            AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd')})
         ) s
         WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
           OR s.row_open
@@ -335,14 +343,16 @@ export function sqlContractPoGrStoStatusExpr(
   poNumberRef = `${contractAlias}.po_number`,
   stoKeyExpr?: string | null,
 ): string {
-  const grNorm = sqlNormalizeContractDeliveryStatusExpr(sqlSapGrStoStatusFromJson('spd.data'));
+  /* Both use sites below select this inside `FROM sap_processed_data spd`, so the stored columns
+     from migration 162 are in scope. */
+  const grNorm = sqlNormalizeContractDeliveryStatusExpr(sqlSapGrStoStatusFromRow('spd'));
   const openNorm = (expr: string) =>
     `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('OPEN', 'ACTIVE')`;
   const stoOpen = `(
-    ${openNorm("spd.data->'raw'->>'GR STO Status'")}
-    OR ${openNorm("spd.data->'contract'->>'gr_sto_status'")}
+    ${openNorm(sqlSapField(sapRowSource('spd'), 'raw_gr_sto_status'))}
+    OR ${openNorm(sqlSapField(sapRowSource('spd'), 'contract_gr_sto_status'))}
   )`;
-  const lineGrStatusRaw = sqlSapGrStoStatusFromJson('spd_gr.data');
+  const lineGrStatusRaw = sqlSapGrStoStatusFromRow('spd_gr');
 
   const poMatch = (spdAlias: string) => `
             AND (
@@ -423,7 +433,7 @@ export function sqlContractPoGrStoStatusExpr(
           ${poMatch('spd')}
           ${preferSapStoLinesOverDirtyHeader}
           ${latestImportOnly('spd')}
-          AND NOT (${sqlSpdHasDeleteStoFlagExpr('spd.data')})
+          AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd')})
       ) s
       WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
         OR s.row_open

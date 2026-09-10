@@ -27,8 +27,8 @@ describe('shippingPerformanceStoMetricsSql', () => {
     expect(sql).toContain('asp.sto_key');
     expect(sql).toContain('asp.po_number');
     expect(sql).toContain('asp.contract_id');
-    expect(sql).toContain('Quantity Delivery Vessel');
-    expect(sql).toContain('Quantity Receive');
+    expect(sql).toContain('raw_quantity_delivery_vessel');
+    expect(sql).toContain('raw_quantity_receive');
     expect(sql).not.toContain('latest_spd_by_sto_contract');
     expect(sql).not.toContain('lspd_c ON TRUE');
   });

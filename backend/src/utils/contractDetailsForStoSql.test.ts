@@ -31,7 +31,7 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('pl.po_number');
     expect(sql).toContain('pl.incoterm');
     expect(sql).toContain('pl.contract_qty');
-    expect(sql).toContain('Quantity Delivery Vessel');
+    expect(sql).toContain('raw_quantity_delivery_vessel');
     expect(sql).toContain("~ '^(OP-|MNL-|MSEA-)'");
     expect(sql).toContain("'Operation ID'");
     expect(sql).not.toContain('qty_move');
@@ -48,8 +48,8 @@ describe('buildContractDetailsForStoSql', () => {
     const sql = buildContractDetailsForStoSql();
     expect(sql).toContain('pl.po_number');
     expect(sql).toContain('$1::text');
-    expect(sql).toContain('Quantity Delivery Vessel');
-    expect(sql).toContain('Quantity Receive');
+    expect(sql).toContain('raw_quantity_delivery_vessel');
+    expect(sql).toContain('raw_quantity_receive');
     // Edit Shipment path: latest SAP row per PO+STO (not SUM of sibling POs on shared STO).
     expect(sql).toContain('LIMIT 1');
     expect(sql).toContain('pl.contract_number');

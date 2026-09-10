@@ -93,8 +93,8 @@ describe('sqlContractImportStatusExpr', () => {
   it('aggregates PO-scoped SAP status with any-Open wins (no LIMIT 1 fallback to COMPLETED)', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
     expect(sql).toContain('spd.po_number');
-    expect(sql).toContain('GR PO Status');
-    expect(sql).toContain('GR STO Status');
+    expect(sql).toContain('raw_gr_po_status');
+    expect(sql).toContain('raw_gr_sto_status');
     expect(sql).toContain('BOOL_OR');
     expect(sql).toContain("'OPEN'");
     expect(sql).toContain("'ACTIVE'");
@@ -130,8 +130,8 @@ describe('sqlContractImportStatusExpr', () => {
 
   it('prefers Delete PO / all-STO Delete → Cancelled over GR Open (partial Delete STO does not)', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
-    expect(sql).toContain('Delete PO Status');
-    expect(sql).toContain('Delete STO Status');
+    expect(sql).toContain('raw_delete_po_status');
+    expect(sql).toContain('raw_delete_sto_status');
     expect(sql).toContain("THEN 'Cancelled'");
     expect(sql).toMatch(/EXISTS[\s\S]*spd_del[\s\S]*THEN 'Cancelled'/);
     // Partial cancel: live real STOs without Delete STO must block PO Cancelled
@@ -147,7 +147,7 @@ describe('sqlContractImportStatusExpr', () => {
 
   it('scopes Delete STO Cancelled to sto_key when provided', () => {
     const scoped = sqlContractImportStatusExpr('c', 'c.po_number', 'sk.sto_key');
-    expect(scoped).toContain('Delete STO Status');
+    expect(scoped).toContain('raw_delete_sto_status');
     expect(scoped).toContain('sk.sto_key');
     expect(scoped).toContain("THEN 'Cancelled'");
     // PO-wide all-deleted branch is not used when stoKey is set
@@ -179,7 +179,7 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toContain("'CLOSE'");
     expect(sql).toContain('c.po_number');
     expect(sql).toContain('BOOL_OR');
-    expect(sql).toContain('GR PO Status');
+    expect(sql).toContain('raw_gr_po_status');
     expect(sql).not.toContain("->'raw'->>'Status'");
     expect(sql).toContain('b2b_ending_child_snapshot');
     expect(sql).toContain('child_gr_sto_status');
@@ -201,7 +201,7 @@ describe('sqlContractImportStatusIsOpenExpr / ClosedExpr / Cancelled', () => {
 
   it('matches Cancelled without folding into Close', () => {
     expect(sqlContractImportStatusIsCancelledExpr('base.import_status')).toContain('CANCELLED');
-    expect(sqlIsContractSapCancelledExpr('c')).toContain('Delete PO Status');
+    expect(sqlIsContractSapCancelledExpr('c')).toContain('raw_delete_po_status');
     const inactive = sqlIsContractSapInactiveForOsExpr('c');
     expect(inactive).toContain("'CLOSE'");
     expect(inactive).toContain('CANCELLED');
@@ -233,7 +233,7 @@ describe('sqlShipmentBacklogSpdSeaLegFilterSql / sqlIsContractSapClosedForShipme
 describe('sqlContractPoGrStoStatusExpr', () => {
   it('aggregates GR STO with any-Open wins (not latest SPD only)', () => {
     const sql = sqlContractPoGrStoStatusExpr('c', 'c.po_number');
-    expect(sql).toContain('GR STO Status');
+    expect(sql).toContain('raw_gr_sto_status');
     expect(sql).toContain('BOOL_OR');
     expect(sql).toContain("'OPEN'");
     expect(sql).toContain('spd_li.import_id');
@@ -250,6 +250,6 @@ describe('sqlContractPoGrStoStatusExpr', () => {
   it('list agg wraps PO GR STO for GROUP BY contracts', () => {
     const sql = sqlContractListGrStoStatusAggExpr('c');
     expect(sql).toContain('array_agg');
-    expect(sql).toContain('GR STO Status');
+    expect(sql).toContain('raw_gr_sto_status');
   });
 });

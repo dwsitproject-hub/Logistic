@@ -101,8 +101,11 @@ describe('shipmentListSapAggSql', () => {
 
   it('sums sap_agg delivery from Quantity Delivery Vessel/Trucking (same as modal)', () => {
     const full = shipmentListSpdAggCtes(false);
-    expect(full).toContain('Quantity Delivery Vessel');
-    expect(full).toContain('Quantity Delivery Trucking');
+    /* spd_keyed now carries migration 162's quantity columns and sap_agg reads them off `sk`,
+       so the jsonb spellings are gone from here. The column <-> path mapping is asserted against
+       the migration itself in sapDerivedColumnSql.test.ts. */
+    expect(full).toContain('sk.raw_quantity_delivery_vessel');
+    expect(full).toContain('sk.raw_quantity_delivery_trucking');
   });
 
   it('sums sap_agg from the latest SAP row per contract+PO, not every import', () => {

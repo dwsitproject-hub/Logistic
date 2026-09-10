@@ -1,10 +1,13 @@
 /** Shared SQL helpers for contract logistics STO detail (SAP fallback + matching). */
 
+import { SAP_FIELD_ARMS, sapRowSource, sqlSapFields } from './sapDerivedColumnSql';
 import { sqlNormalizeSapStoQtyToKgSql } from './contractPoGlobalMetricsSql';
 import {
   sqlIncotermQuantityDeliveryCase,
   sqlSapGrStoStatusFromJson,
+  sqlSapQtyTruckingFromData,
   sqlSapQtyTruckingFromSpd,
+  sqlSapQtyVesselFromData,
   sqlSapQtyVesselFromSpd,
 } from './sapIncotermMetrics';
 import { sqlNormalizeContractDeliveryStatusExpr } from './contractDeliveryStatus';
@@ -225,12 +228,36 @@ export function sqlSapQtyDeliveredAnyFromSpd(
   spdAlias = 'spd',
   incotermExpr?: string | null,
 ): string {
+  /*
+   * Row source: reads migration 162's stored columns. Only valid where `spdAlias` really is a
+   * `sap_processed_data` alias - a CTE that merely carried `data` must call the FromData form
+   * below, or the SQL names columns that do not exist.
+   */
   const trucking = sqlSapQtyTruckingFromSpd(spdAlias);
   const vessel = sqlSapQtyVesselFromSpd(spdAlias);
   const inc =
     incotermExpr && String(incotermExpr).trim()
       ? String(incotermExpr).trim()
       : sqlSapIncotermFromJsonb(`${spdAlias}.data`);
+  return sqlIncotermQuantityDeliveryCase(inc, trucking, vessel);
+}
+
+/**
+ * Same delivered quantity from something that only carries `data`.
+ *
+ * `shipmentListSapAggSql` needs this: it reads from `spd_keyed`, a CTE that selected `spd.data`
+ * and none of the stored columns.
+ */
+export function sqlSapQtyDeliveredAnyFromData(
+  spdDataExpr: string,
+  incotermExpr?: string | null,
+): string {
+  const trucking = sqlSapQtyTruckingFromData(spdDataExpr);
+  const vessel = sqlSapQtyVesselFromData(spdDataExpr);
+  const inc =
+    incotermExpr && String(incotermExpr).trim()
+      ? String(incotermExpr).trim()
+      : sqlSapIncotermFromJsonb(spdDataExpr);
   return sqlIncotermQuantityDeliveryCase(inc, trucking, vessel);
 }
 
@@ -249,10 +276,7 @@ export function sqlSapQtyDeliveredKgFromSpd(
 export const SPD_PO_NUMBER_SQL = sqlSpdPoNumberExpr('spd');
 
 const SPD_QTY_RECEIVE_RAW_NUM = `NULLIF(regexp_replace(COALESCE(
-  ${sqlCoalesceSapRawQtyFields([
-    `spd.data->'raw'->>'Quantity Receive'`,
-    `spd.data->'raw'->>'Qty Receive'`,
-  ])},
+  ${sqlCoalesceSapRawQtyFields(sqlSapFields(sapRowSource('spd'), SAP_FIELD_ARMS.qtyReceive))},
   ''
 ), '[^0-9\\.-]', '', 'g'), '')::numeric`;
 
@@ -310,10 +334,9 @@ export function sqlStoScopedDeliveredKgSql(opts: StoScopedQtySqlOpts): string {
 
 /** STO + contract + PO scoped SAP receive qty (kg) — latest import row with a receive value. */
 export function sqlStoScopedReceiveKgSql(opts: StoScopedQtySqlOpts): string {
-  const hasReceive = `NULLIF(TRIM(${sqlCoalesceSapRawQtyFields([
-    `spd.data->'raw'->>'Quantity Receive'`,
-    `spd.data->'raw'->>'Qty Receive'`,
-  ])}), '') IS NOT NULL`;
+  const hasReceive = `NULLIF(TRIM(${sqlCoalesceSapRawQtyFields(
+    sqlSapFields(sapRowSource('spd'), SAP_FIELD_ARMS.qtyReceive),
+  )}), '') IS NOT NULL`;
   return sqlLatestStoScopedQtySql(
     opts,
     sqlNormalizeSapStoQtyToKgSql(SPD_QTY_RECEIVE_RAW_NUM, opts.contractQtyExpr),
@@ -466,10 +489,7 @@ export function sqlSapQtyReceiveForStoKeyExpr(opts: {
   const stoKey = opts.stoKeyExpr;
   return `COALESCE((
     SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      ${sqlCoalesceSapRawQtyFields([
-        `spd.data->'raw'->>'Quantity Receive'`,
-        `spd.data->'raw'->>'Qty Receive'`,
-      ])},
+      ${sqlCoalesceSapRawQtyFields(sqlSapFields(sapRowSource('spd'), SAP_FIELD_ARMS.qtyReceive))},
       ''
     ), '[^0-9\\.-]', '', 'g'), '')::numeric)
     FROM sap_processed_data spd

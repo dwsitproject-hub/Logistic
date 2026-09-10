@@ -1,6 +1,10 @@
 /** SAP aggregation CTEs for shipments list (page-scoped spd_keyed join). */
 
 import {
+  sqlSapColumnNullStubs,
+  sqlSapColumnPassthrough,
+} from './sapDerivedColumnSql';
+import {
   SAP_VESSEL_CODE_FROM_SK_SQL,
   SAP_VESSEL_NAME_FROM_SK_SQL,
   SAP_VESSEL_OWNER_FROM_SK_SQL,
@@ -13,6 +17,11 @@ import {
 } from './shipmentListPortsSql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
 import { sqlSapIncotermFromJsonb, sqlSapSourceTypeFromJsonb } from './sapSourceTypeSql';
+/*
+ * FromSpd is valid here now: `spd_keyed` selects the quantity columns from `sap_processed_data`
+ * and passes them down, so `sk` is a row source for exactly those fields. It still carries `data`
+ * for everything with no stored column yet - vessel fields, PO spellings, incoterm, source type.
+ */
 import { sqlSapQtyDeliveredAnyFromSpd } from './contractLogisticsStoDetailSql';
 import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
 
@@ -37,7 +46,8 @@ export const SHIPMENT_LIST_STO_METRICS_STUB = `
 export const SHIPMENT_LIST_SPD_AGG_CTES_STUB = `
       spd_keyed AS (
         SELECT NULL::text AS sto_key, NULL::timestamptz AS created_at, NULL::uuid AS spd_id,
-          NULL::text AS contract_number, NULL::text AS po_number, NULL::jsonb AS data
+          NULL::text AS contract_number, NULL::text AS po_number, NULL::jsonb AS data,
+          ${sqlSapColumnNullStubs()}
         WHERE false
       ),
       contract_ext_agg AS (
@@ -114,7 +124,8 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           spd.id AS spd_id,
           spd.contract_number,
           spd.po_number,
-          spd.data
+          spd.data,
+          ${sqlSapColumnPassthrough('spd')}
         FROM shipment_page sp
         INNER JOIN sap_processed_data spd
           ON ${sapStoNumberKeyExpr('spd')} = TRIM(sp.sto_key::text)
@@ -128,7 +139,8 @@ export const SHIPMENT_LIST_SPD_AGG_CTES_FULL = `
           spd.id AS spd_id,
           spd.contract_number,
           spd.po_number,
-          spd.data
+          spd.data,
+          ${sqlSapColumnPassthrough('spd')}
         FROM shipment_page_contracts spc
         INNER JOIN sap_processed_data spd
           ON TRIM(spd.contract_number::text) = spc.contract_number

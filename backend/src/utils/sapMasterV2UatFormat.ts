@@ -3,6 +3,15 @@
  * Keeps backward compatibility with the 77-column B2B template.
  */
 
+import {
+  SAP_FIELD_ARMS,
+  sapDataSource,
+  sapRowSource,
+  sqlSapCoalesceArms,
+  type SapDerivedColumn,
+  type SapFieldSource,
+} from './sapDerivedColumnSql';
+
 /** Extra normalizeFieldName mappings for UAT (82-column) and SAP Data v3 (93-column) headers. */
 export const SAP_MASTER_V2_UAT_FIELD_MAPPING: Record<string, string> = {
   'contract ext no': 'contract_ext_no',
@@ -71,24 +80,42 @@ export function hasSapDeleteFlag(parsedData: {
   return false;
 }
 
-/** SQL: Delete PO Status non-blank on SPD JSON (`spd.data` or similar). */
-export function sqlSpdHasDeletePoFlagExpr(spdDataExpr = 'spd.data'): string {
+/**
+ * SQL: Delete PO / Delete STO Status non-blank.
+ *
+ * The four arms come from `SAP_FIELD_ARMS`, and the source decides how each one is read: a real
+ * `sap_processed_data` alias reads migration 162's stored columns, anything that only carries
+ * `data` (a CTE, a snapshot, an import-time value) extracts from it as before. Same expression
+ * tree and same order either way - only the access path differs, and the columns were verified
+ * equal to their paths for all 27,003 rows when 162 was applied.
+ *
+ * Reading the columns matters because each jsonb access re-detoasts the whole blob: 23 values per
+ * row measured 1,864,385 buffers as jsonb against 1,110 as columns.
+ */
+function sqlSpdHasFlagExpr(source: SapFieldSource, arms: readonly SapDerivedColumn[]): string {
   return `NULLIF(TRIM(COALESCE(
-    ${spdDataExpr}->'raw'->>'Delete PO Status',
-    ${spdDataExpr}->'contract'->>'delete_po_status',
-    ${spdDataExpr}->'shipment'->>'delete_po_status',
-    ${spdDataExpr}->>'delete_po_status'
+    ${sqlSapCoalesceArms(source, arms)}
   )), '') IS NOT NULL`;
 }
 
-/** SQL: Delete STO Status non-blank on SPD JSON. */
+/** Delete PO Status non-blank, reading from a `data` expression (`spd.data` or similar). */
+export function sqlSpdHasDeletePoFlagExpr(spdDataExpr = 'spd.data'): string {
+  return sqlSpdHasFlagExpr(sapDataSource(spdDataExpr), SAP_FIELD_ARMS.deletePoStatus);
+}
+
+/** Delete PO Status non-blank, reading the stored columns off a sap_processed_data alias. */
+export function sqlSpdHasDeletePoFlagFromRow(alias = 'spd'): string {
+  return sqlSpdHasFlagExpr(sapRowSource(alias), SAP_FIELD_ARMS.deletePoStatus);
+}
+
+/** Delete STO Status non-blank, reading from a `data` expression. */
 export function sqlSpdHasDeleteStoFlagExpr(spdDataExpr = 'spd.data'): string {
-  return `NULLIF(TRIM(COALESCE(
-    ${spdDataExpr}->'raw'->>'Delete STO Status',
-    ${spdDataExpr}->'contract'->>'delete_sto_status',
-    ${spdDataExpr}->'shipment'->>'delete_sto_status',
-    ${spdDataExpr}->>'delete_sto_status'
-  )), '') IS NOT NULL`;
+  return sqlSpdHasFlagExpr(sapDataSource(spdDataExpr), SAP_FIELD_ARMS.deleteStoStatus);
+}
+
+/** Delete STO Status non-blank, reading the stored columns off a sap_processed_data alias. */
+export function sqlSpdHasDeleteStoFlagFromRow(alias = 'spd'): string {
+  return sqlSpdHasFlagExpr(sapRowSource(alias), SAP_FIELD_ARMS.deleteStoStatus);
 }
 
 /** SQL: either Delete PO or Delete STO flag is set. */

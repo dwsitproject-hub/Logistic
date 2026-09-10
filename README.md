@@ -516,8 +516,53 @@ loaded and answers from memory, or runs the SQL path it would have run anyway wh
 loads in the background. That makes the change strictly an improvement, never a regression.
 
 `startShipmentRowSetScopeWarmer` loads the two default-window scopes (shell and hydrate - they
-differ, because `skipSapJoin` changes the row contents) and is **last** in the startup queue:
-nothing waits on it, and it took 207s on the dev box, which is more than any single page costs.
+differ, because `skipSapJoin` changes the row contents). It used to be **last** in the startup
+queue on the grounds that nothing waits on it, and it took 207s on the dev box - more than any
+single page costs. See the section below for why it is now fourth.
+
+### Why the startup queue was not sequencing three of its jobs
+
+`docker logs` after a restart on the dev host, 2026-09-09 - the whole warm-up took **371s**:
+
+| job | duration | finished |
+| --- | --- | --- |
+| Shipments list shell | 41.7s | 11:23:42 |
+| Shipments summary | 19.2s | 11:24:06 |
+| Shipments outstanding qty | 4.8s | 11:24:16 |
+| Shipments scoped toolbar | 33.8s | 11:24:55 |
+| Shipping Performance | *fire-and-forget* | started 11:25:00 |
+| Trucking summary | *fire-and-forget* | started 11:25:05 |
+| Oil Loss | *fire-and-forget* | started 11:25:10 |
+| Shipments scope row sets (shell) | 25s | 11:25:40 |
+| Shipments scope row sets (hydrate) | 206s | 11:29:06 |
+
+Two things are wrong with that, and neither is about what any warmer computes.
+
+**The queue could only sequence a job that hands it a promise.** Shipping Performance, Trucking
+and Oil Loss were declared `: void` - they kicked off `warmX()` and returned - so the queue fell
+back to the 5s inter-job gap and all three were still running throughout the heaviest job in the
+queue. The "one heavy query in flight" property was broken at exactly the point it mattered most.
+All eight jobs now return a promise, asserted in `startupWarmupOrder.test.ts` so a future `void`
+cannot slip back in silently. The cost of this is honest: Shipping Performance, Trucking and Oil
+Loss now warm *later* in wall-clock than they did, because they no longer overlap anything.
+
+**The scope warmer started 135s in.** It is now fourth, right after the summary and
+outstanding-qty warmers, which starts it around 76s in and leaves it alone with the database. It
+stays *behind* those two deliberately: they feed Section 1, the first thing a visitor sees,
+whereas the scope row sets only decide whether a later status-card click is answered from memory
+(single-digit ms) or from SQL (about 12s). What moved back is the scoped toolbar warm
+(CPO / Bontang), a secondary convenience.
+
+Both changes are scheduling only - no query, no cache key and no payload changes.
+
+**Now measured - see the section below.** The hydrate scope costs 206s against 25s for the shell
+on the same 668 rows, and the difference is 1,076 jsonb accesses against none.
+Separately, `SCOPE_PAGE_SIZE` is 500 and the scope is 668 rows, so each scope is read in two full
+queries where the second returns only 168 rows - and `OFFSET 500 LIMIT 500` still has to produce
+all 668 sorted rows, so it costs about as much as the first. Raising the page size would need the
+`Math.min(500, ...)` cap in the controller lifted for the internal loader, and `ROW_SET_LOAD_MARKER`
+travels in the query string, so a browser could send it too - the marker would have to move
+somewhere it cannot be injected first.
 
 **Parity, verified end to end:** `ROW_SET_LOAD_MARKER` in the query forces the SQL path, so the
 same request runs both ways and the payloads are compared. Six shapes - Open and Close, both sort
@@ -532,6 +577,209 @@ returned as copies without it - and the shared cached row set keeps it for the A
 
 `shipmentListRowSetCache` registers with `listCacheRegistry`, so a shipment write, a trucking
 write or a SAP import clears it immediately, like every other list cache.
+
+### The row set now keeps itself warm, instead of waiting for a user
+
+The first version had a 5-minute TTL, no refresh-ahead, and a startup warmer that ran once. The
+build takes 206s. So the steady state was: warm for five minutes after boot, then `expiresAt`
+passed, nothing rebuilt it, and the next status-card click paid 12s of SQL and only *then* started
+a 206s background load - during which every further click paid 12s again. The cache was cold more
+often than warm, and the rebuild was triggered by a user rather than by the system. Compare the
+caches that already had refresh-ahead:
+
+| cache | TTL | renews at | driven by |
+| --- | --- | --- | --- |
+| Shipping Performance | 5 min | 4 min | 60s timer |
+| Oil Loss | 30 min | 25 min | 60s timer |
+| Shipments row set (before) | 5 min | never | a user's click |
+| Shipments row set (now) | 60 min | 50 min | 60s timer |
+
+**Refreshing at the old 5-minute TTL would have been worse than the disease:** 206s of work every
+240s is an 86% duty cycle on the heaviest query in the system. The TTL was the wrong dial.
+Freshness here comes from *invalidation* - shipment write, trucking write, SAP import - not from a
+clock, so the TTL only has to cover changes arriving outside those paths. At 60 minutes renewed at
+50 the duty cycle is about 7%.
+
+**A write clears, then rebuilds.** Clearing is not negotiable: serving the previous rows after an
+edit would hide the user's own change. But clearing *alone* left the next status click on the 12s
+path until somebody happened to trigger a reload, so the invalidator now schedules the rebuild
+itself, debounced 5s so a bulk write does not start one rebuild per row. Requests during the
+rebuild fall back to SQL exactly as before.
+
+**Superseded scopes are cut, not queued.** Every scope in the warm list is reloaded by the cycle,
+and one reload is the most expensive query on the page - so a user cycling through filter
+combinations must not be able to pile them up. The list is capped at 8, dropping the least
+recently read; scopes the startup warmer primed are pinned and never dropped, because a
+status-card click depends on them. Three places enforce it: an unread scope stops being refreshed
+after 3 hours, a load that finishes for a scope no longer in the list is discarded rather than
+cached, and the cycle re-checks each scope before starting it instead of trusting the list it
+opened with.
+
+Honest limit: none of this *cancels* a query Postgres has already started - there is no
+`pg_cancel_backend` plumbing on this path. What it prevents is superseded work accumulating in
+the cache and new unwanted work being started.
+
+Two bugs surfaced while writing the tests for this, both pre-existing in effect:
+
+- **Refresh-ahead did not refresh.** The cycle went through `loadShipmentRowSet`, which returns
+  early on a cache hit - and the entry it wanted to renew was of course still valid, that being
+  the point of renewing early. It only ever reloaded once the entry had fully expired. Fixed with
+  an explicit `force`, and locked by a test that advances the clock 51 minutes.
+- **A load could store rows that predate a write.** A load in flight when an invalidation landed
+  would happily write its pre-write rows into the cache the invalidation had just cleared. Stores
+  are now guarded on an epoch counter. The request-path background load always had this race.
+
+### Why the hydrate list call costs 8x the shell: 1,076 jsonb accesses
+
+`skipSapJoin=false` splices in a different set of CTEs, and the difference is not subtle:
+
+| | shell | hydrate |
+| --- | --- | --- |
+| SQL length | 1,851 chars | **165,336 chars** |
+| CTEs | 8 | **21** |
+| `sap_processed_data` references | 0 | **26** |
+| jsonb accesses | **0** | **1,076** |
+
+`sto_metrics` alone is 885 of those, over 52 distinct paths - a 17x repeat factor. The same
+COALESCE families are re-evaluated dozens of times across the chain: `raw.'Quantity Delivery'` 48
+times, `raw.'GR PO Status'` 36, the five spellings of trucking-delivered quantity 24 each.
+
+**What one access costs.** On `sap_processed_data` (27,003 rows, 22 MB heap, 138 MB TOAST),
+root-node buffers from `EXPLAIN (ANALYZE, BUFFERS)`:
+
+| per row | root buffers | time |
+| --- | --- | --- |
+| `count(*)`, no jsonb | 463 | 36 ms |
+| 1 jsonb value | 85,402 | 1,477 ms |
+| 5 distinct jsonb values | 407,905 | 10,023 ms |
+| 23 jsonb values | 1,864,385 | 14,922 ms |
+| the same 23 as stored columns | **1,110** | **20 ms** |
+
+Linear in the number of accesses - about 2s and 81,000 buffers per value per scan - because every
+access re-detoasts the whole blob. A stored column costs what touching no jsonb costs: **1,680x
+fewer buffers, 750x faster**.
+
+**Migration 162** stores 28 of those paths as `GENERATED ALWAYS AS (...) STORED` columns.
+Generated rather than plain-plus-backfill so the SAP importer needs no change and the columns
+cannot drift from `data` - drift here would surface as a wrong quantity, not as an error. All 28
+were verified equal to their expressions across all 27,003 rows after applying.
+
+One column per *path*, not per value. Collapsing each COALESCE family into one column would change
+results: the GR/delete logic is `openNorm(A) OR openNorm(B)`, not `openNorm(COALESCE(A, B))`, so
+with A='CLOSE' and B='OPEN' the OR is true where the collapsed form is false. Each path keeps its
+own column and the expression trees above them are untouched - an access-path change only.
+
+Two incidental findings from applying it: the ALTER took **3m45s** (one rewrite for all 23 columns,
+ACCESS EXCLUSIVE - it will stall SAP queries on SIT for that long), and the rewrite reclaimed
+bloat, taking the table from **160 MB to 95 MB**. Also, `contract_gr_po_status` and
+`root_gr_po_status` are non-null on **zero** rows - two of the three GR PO arms never carry
+anything in this dataset. They are kept, because the semantics are not ours to narrow.
+
+**First group swapped: GR status and delete flags.** `sapDerivedColumnSql.ts` holds the mapping,
+and every helper now takes a *source* rather than an alias or an expression - `row` for a real
+`sap_processed_data` alias, `data` for anything that only carries the blob. That distinction is
+load-bearing: `shipmentListSapAggSql.ts` passes alias `sk`, which is the `spd_keyed` CTE and
+carries `data` but none of the columns, so a blind alias swap there would have produced SQL
+referencing columns that do not exist.
+
+**Second group swapped: the quantity families** - delivery, trucking-delivered,
+vessel-delivered and received quantity, through `sqlSapQtyTruckingFromSpd`,
+`sqlSapQtyVesselFromSpd`, `sqlSapQtyDeliveredAnyFromSpd` and the two STO-scoped receive
+expressions.
+
+**Third step: `spd_keyed` carries columns, not just the blob.** That CTE selects from
+`sap_processed_data`, so it can pass the stored columns down - and once it does, `sk` is a row
+source for those fields and `sap_agg` reads `sk.raw_quantity_delivery_vessel` instead of
+extracting from `sk.data`. `data` stays on the CTE for everything with no column yet: vessel
+fields, PO spellings, incoterm, source type, B2B flag, contract ext no, STO quantity.
+
+| | before 162 | after status group | after quantity group | after spd_keyed passthrough |
+| --- | --- | --- | --- | --- |
+| hydrate chain | 1,076 accesses | 704 | 338 | **254** |
+| `sto_metrics` | 885 | 513 | **147** | 147 |
+
+**The whole 21-CTE chain was planned against the live schema**, both the hydrate and the
+`skipSapJoin` stub form, with a synthetic `shipment_page` and `qty_move` standing in for the
+upstream CTEs. Both plan clean, so every column reference resolves - including the new `sk.<column>`
+reads and the passthrough itself. Worth doing because none of this SQL had ever been executed, and
+a column name that does not exist is a runtime error rather than a compile one.
+
+**Measured on the real expression, not extrapolated.** The same `SUM(delivered_kg)` over
+`sap_processed_data` joined to `contracts`, rendered both ways and run:
+
+| | root buffers | time |
+| --- | --- | --- |
+| jsonb arms | 388,721 | 4,244 ms |
+| stored columns | **2,376** | **108 ms** |
+
+164x fewer buffers, 39x faster - for *one* instance of one expression, which the chain renders
+many times over.
+
+The swapped SQL was also EXPLAINed against the live schema, because none of it had ever been
+executed and a wrong column name is a runtime error, not a compile one: six probes covering
+`delivered_kg`, both STO-scoped quantities, receive-by-STO-key, import status and the SAP-cancelled
+predicate all plan clean.
+
+Three guards, because the failure mode here is a plausible wrong number rather than an error:
+
+- `sapDerivedColumnSql.test.ts` asserts each column is generated from the path the mapping claims,
+  reading migration 162 itself - and that rewriting every column reference in a row-form
+  expression back to its path reproduces the data form **exactly**, which is what makes the swap
+  provably an access-path change rather than a rewrite.
+- `shipmentListSapAggAccessBudget.test.ts` locks 338 and 147, so a new `data->` in this chain has
+  to be a deliberate decision.
+- The same file asserts `sk` is read only for the columns `spd_keyed` actually carries, and that
+  `spd_keyed` selects every column it promises - in both UNION branches and in the stub, since a
+  stub missing a column is the shape of bug that once emptied the whole Trucking page. TypeScript
+  cannot catch either: the row helpers take a string alias. And it was a real mistake, not a
+  hypothetical - the quantity helpers were being called with `'sk'` while the CTE still carried
+  only `data`.
+
+Left on `data` in `sto_metrics`, and why: the five `STO No.` arms (100 accesses) sit behind
+`sto_number`, a real column that comes first in the COALESCE, so they short-circuit and cost
+nothing at runtime - the static count overstates them. The four `sto_quantity` arms (20) have no
+columns in 162 yet. The rest is a long tail of ones and twos: operation id, contract type,
+contract reference PO, B2B flag.
+
+### Rejected: getting `data` out of the spd_keyed tuplestore by joining back
+
+`spd_keyed` is materialised, and `sap_keyed_qty_latest` re-selects it with `sk.*`, so the jsonb
+blob is written into *two* tuplestores and read back by the CTEs above them. A microbenchmark
+suggested that was expensive - 700 page rows, same rows either way:
+
+| | buffers | temp files | time |
+| --- | --- | --- | --- |
+| CTE carries `data` | 1,175 | read 261 / written 262 | 1,342 ms |
+| CTE leaves it behind | 1,170 | none | 470 ms |
+
+So `data` was dropped from `spd_keyed` and the six CTEs that still need arbitrary keys joined back
+to `sap_processed_data` on `spd_id` - identical by construction, one index lookup, no arm lists to
+get wrong. The alternative was storing the remaining 53 paths as columns, where three *different*
+PO families with three different arm orders is exactly how a silently wrong number gets shipped.
+
+**It was 50% slower and was reverted.** Rendering the chain from the pre-change `dist` build and
+the post-change source, running both over the same 400-row page:
+
+| | root buffers | temp files | time |
+| --- | --- | --- | --- |
+| blob carried in the CTE | 228,770 | read 446 / written 584 | 24,900 ms |
+| joined back by `spd_id` | **1,070,263** | read 354 / written 370 | **37,463 ms** |
+
+The temp spill did shrink, and buffers went up 4.7x anyway: carrying the blob once in a tuplestore
+is cheaper than re-fetching and re-detoasting it through six primary-key joins.
+
+The microbenchmark was the mistake, and specifically this: its "without `data`" arm never needed
+the blob at all, so it was not a fair stand-in for "join back to fetch the blob". It measured the
+saving and none of the cost.
+
+Both forms were also proved output-identical first - 1,668 rows across `sap_agg`, `sap_latest`,
+`contract_ext_agg`, `po_numbers_agg` and both port aggregates, zero differing lines - which is how
+the reverted version could be trusted enough to measure at all. After reverting, the same
+comparison is byte-identical again at 218,932 buffers, 4.3% below the pre-162 build.
+
+So `spd_keyed` still carries `data`, deliberately, and the 92 accesses that read it stay. The
+column route remains open, but it needs the three PO families resolved one at a time, not in
+bulk.
 
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 

@@ -18,15 +18,15 @@ import {
 describe('contractLogisticsStoDetailSql', () => {
   it('includes SAP trucking delivery field aliases', () => {
     const expr = sqlSapQtyDeliveredAnyFromSpd('spd');
-    expect(expr).toContain('Quantity Delivery Trucking');
-    expect(expr).toContain('Quantity Delivered Trucking');
-    expect(expr).toContain('quantity_delivery_trucking');
+    expect(expr).toContain('raw_quantity_delivery_trucking');
+    expect(expr).toContain('raw_quantity_delivered_trucking');
+    expect(expr).toContain('shipment_quantity_delivery_trucking');
   });
 
   it('includes SAP vessel delivery field aliases', () => {
     const expr = sqlSapQtyDeliveredAnyFromSpd('spd');
-    expect(expr).toContain('Quantity Delivery Vessel');
-    expect(expr).toContain('Quantity Delivered');
+    expect(expr).toContain('raw_quantity_delivery_vessel');
+    expect(expr).toContain('raw_quantity_delivered');
   });
 
   it('uses incoterm matrix so CIF prefers vessel over dirty trucking', () => {
@@ -94,11 +94,11 @@ describe('contractLogisticsStoDetailSql', () => {
       contractAlias: 'c',
       stoKeyExpr: 'sk.sto_key',
     });
-    expect(delivered).toContain('Quantity Delivery Trucking');
+    expect(delivered).toContain('raw_quantity_delivery_trucking');
     expect(delivered).toContain('OP-|MNL-|MSEA-');
     expect(delivered).toContain('c.incoterm');
     expect(delivered).toContain("'CIF'");
-    expect(receive).toContain('Quantity Receive');
+    expect(receive).toContain('raw_quantity_receive');
     expect(receive).toContain('po_number');
   });
 
@@ -112,7 +112,7 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(sql).toContain('asp.sto_key');
     expect(sql).toContain('asp.contract_id');
     expect(sql).toContain('asp.po_number');
-    expect(sql).toContain('Quantity Delivery Vessel');
+    expect(sql).toContain('raw_quantity_delivery_vessel');
     expect(sql).toContain('LIMIT 1');
     expect(sql).toContain('created_at DESC');
     expect(sql).toContain("'CIF'");
