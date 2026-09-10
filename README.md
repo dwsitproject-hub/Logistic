@@ -856,6 +856,37 @@ The run also confirms, uncontaminated, that all three queries now begin
 `WITH latest_spd_contract AS (SELECT lss.contract_number, lss.effective_sto, lss.b2b_flag_raw
 ...)` - the snapshot columns, no `DISTINCT ON` over `sap_processed_data`.
 
+### Section 1's summary: four candidates measured, four ruled out
+
+The biggest single query on the cold page is the Trucking Section 1 combined summary - ~23-37s and
+~3.0M root buffers. Every candidate cause was measured rather than argued, and none of them is it:
+
+| candidate | verdict |
+| --- | --- |
+| SAP qty jsonb families (a migration-163 target) | 524K of 3.07M buffers - **17%**, not dominant |
+| nested loops over unindexed CTE Scans | `enable_nestloop=off` made it **3x worse**: 9,186,103 buffers against 3,073,831 |
+| `grOpenOnly` - live expansion for GR-open POs only | 3,011,414 against 3,073,797 buffers - **2%** |
+| planning time | 7,107 ms on the cold run but 1,098-1,755 ms on repeats; not a fixed cost |
+
+Two of those came from misreading EXPLAIN and are worth naming, because the mistakes are easy to
+repeat. Buffers in the text output are **cumulative up the tree**, so the biggest number points at
+whatever sits nearest the root. And `rows x loops` is not cost: four `CTE Scan` nodes showed 154M
+row visits, which reads as catastrophic and is in fact an in-memory tuplestore scan - cheap per
+row, nearly free in buffers. `FORMAT JSON` does not rescue the attribution either, because a CTE's
+definition is not a child of its `CTE Scan`, so subtracting children hands the whole query to the
+scan. The check that settles it is to disable the plan node type and re-measure.
+
+What is left is not a tuning target. `SELECT count(*) FROM filtered` costs the same as the entire
+summary - 28,322 ms and 3,073,828 buffers - so **all** of the cost is producing the expanded row
+set, computing status, qty and OS live for all 6,496 rows. The outer aggregation is free.
+
+So the remaining move is precomputation, and it is a **data-visibility decision rather than a
+technical one**: `trucking_list_stage_snapshot` already holds 21,157 rows and the daily summary
+already supplies the counts and the GR-closed contract qty. Extending it to cover the live parts
+would make Section 1 fast at the cost of lagging a SAP import by however long the build takes -
+measured at 234s. The status circles already make exactly that trade, so it would be consistent;
+it still needs asking.
+
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 
 The list caches per (filters x status x sort x page), so every toolbar change is an uncached
