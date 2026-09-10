@@ -294,6 +294,12 @@ if (process.env.NODE_ENV !== 'test') {
      * is the right trade: nothing waits on the warmers, but the requests they were competing
      * with do have a user waiting.
      *
+     * That only holds for a job that returns its promise. Shipping Performance, Trucking and Oil
+     * Loss used to return void, so the queue could only space them 5s apart and all three ran on
+     * into the jobs after them - on the dev host 2026-09-09 they were still running throughout
+     * the heaviest job in the queue. All eight now return a promise, so every job here is
+     * sequenced exactly and none overlap.
+     *
      * Shipments (the most-opened page) is warmed first so a visitor after restart is
      * not competing with Shipping Performance. Shell (created_at + vessel_name) runs
      * before summary/OS. Shipping Performance follows the Shipments warmers.
@@ -306,6 +312,31 @@ if (process.env.NODE_ENV !== 'test') {
         { name: 'Shipments list shell', run: () => startShipmentListShellCacheWarmer() },
         { name: 'Shipments summary', run: () => startShipmentSummaryCacheWarmer() },
         { name: 'Shipments outstanding qty', run: () => startShipmentOutstandingQtyCacheWarmer() },
+        /**
+         * Fourth, not last.
+         *
+         * It loads the *unfiltered* Shipments row sets and costs more than any single page, so it
+         * used to sit at the end of the queue. Measured on the dev host 2026-09-09 that put it
+         * 135s after the first job, and the three warmers ahead of it were fire-and-forget, so it
+         * ran against all three at once: 25s for the shell scope, 206s for the hydrate scope.
+         *
+         * Moving it here starts it around 76s in and leaves it alone with the database. It stays
+         * *behind* the summary and outstanding-qty warmers deliberately - those feed Section 1,
+         * the first thing a visitor sees, whereas this one only decides whether a later
+         * status-card click is answered from memory (single-digit ms) or from SQL (about 12s).
+         * What moves back is the scoped toolbar warm (CPO / Bontang), which is a secondary
+         * convenience.
+         */
+        {
+          name: 'Shipments scope row sets',
+          run: () => startShipmentRowSetScopeWarmer(),
+          /**
+           * The two scope loads took 206s and 25s on an idle dev host, and about 19 minutes when
+           * the machine was also building. Anything short of that and the queue declares it
+           * wedged and starts the next job on top of the heaviest query in the system.
+           */
+          timeoutMs: 30 * 60_000,
+        },
         {
           name: 'Shipments scoped toolbar (plant×product)',
           run: () => startShipmentScopedToolbarCacheWarmer(),
@@ -313,12 +344,6 @@ if (process.env.NODE_ENV !== 'test') {
         { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
         { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
         { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
-        /**
-         * Last on purpose. It loads the *unfiltered* Shipments row sets, which cost more than any
-         * single page, and nothing waits on them - they only decide whether a later status-card
-         * click is answered from memory (single-digit ms) or from SQL (about 12s).
-         */
-        { name: 'Shipments scope row sets', run: () => startShipmentRowSetScopeWarmer() },
       ],
       {
         // Let the app finish booting and serve any waiting request before we add DB load.

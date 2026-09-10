@@ -28,7 +28,15 @@
 
 import type { Response } from 'express';
 import { getShipments } from '../controllers/shipment.controller';
-import { primeCompactShipmentScope } from './shipmentListNodePage.service';
+import {
+  primeCompactShipmentScope,
+  readShipmentScopeRows,
+  type ScopePageLoader,
+} from './shipmentListNodePage.service';
+import {
+  setShipmentRowSetReloader,
+  startShipmentRowSetKeepWarm,
+} from './shipmentListRowSetCache';
 import type { AuthRequest } from '../middleware/auth';
 import logger from '../utils/logger';
 
@@ -164,6 +172,39 @@ export async function startShipmentListShellCacheWarmer(): Promise<void> {
 }
 
 /**
+ * Run one scope page through the real list handler with no request behind it.
+ *
+ * The row-set cache reloads scopes long after the request that first asked for one has ended, so
+ * the loader it is given must not close over an Express request. This builds a fresh synthetic
+ * one per page, exactly as the other warmers here do.
+ */
+const syntheticScopePageLoader: ScopePageLoader = async (scopeQuery) => {
+  let body: unknown;
+  const capture = {
+    statusCode: 200,
+    status() {
+      return capture;
+    },
+    json(payload: unknown) {
+      body = payload;
+      return capture;
+    },
+    setHeader() {
+      return capture;
+    },
+    send() {
+      return capture;
+    },
+  };
+  await getShipments(
+    { query: scopeQuery, headers: {}, get: () => undefined } as unknown as AuthRequest,
+    capture as unknown as Response,
+  );
+  const data = (body as { data?: { shipments?: unknown[] } } | undefined)?.data;
+  return { rows: (data?.shipments ?? []) as Record<string, unknown>[] };
+};
+
+/**
  * Load the row sets the status cards are derived from.
  *
  * A status-filtered page can be answered from a scope row set in single-digit milliseconds, but
@@ -173,38 +214,23 @@ export async function startShipmentListShellCacheWarmer(): Promise<void> {
  *
  * Two scopes: the shell and the hydrate variant, since skipSapJoin changes the row contents.
  * Everything else about the default view is already in the base query.
+ *
+ * Keeping them loaded is the cache's job, not this function's: the reloader is registered and the
+ * refresh-ahead timer started *before* the first load, so a SAP import arriving mid-warm already
+ * triggers a rebuild rather than leaving the cache empty until someone clicks a status card.
  */
 export async function startShipmentRowSetScopeWarmer(): Promise<void> {
+  setShipmentRowSetReloader((scopeQuery) =>
+    readShipmentScopeRows(scopeQuery, syntheticScopePageLoader),
+  );
+  startShipmentRowSetKeepWarm();
+
   for (const skipSapJoin of ['true', 'false']) {
     const query = shipmentWarmerBaseQuery({ skipSapJoin });
     try {
       const primed = await primeCompactShipmentScope({
         query,
-        loadScopePage: async (scopeQuery) => {
-          let body: unknown;
-          const capture = {
-            statusCode: 200,
-            status() {
-              return capture;
-            },
-            json(payload: unknown) {
-              body = payload;
-              return capture;
-            },
-            setHeader() {
-              return capture;
-            },
-            send() {
-              return capture;
-            },
-          };
-          await getShipments(
-            { query: scopeQuery, headers: {}, get: () => undefined } as unknown as AuthRequest,
-            capture as unknown as Response,
-          );
-          const data = (body as { data?: { shipments?: unknown[] } } | undefined)?.data;
-          return { rows: (data?.shipments ?? []) as Record<string, unknown>[] };
-        },
+        loadScopePage: syntheticScopePageLoader,
       });
       logger.info('Shipments scope row set warmed', {
         skipSapJoin,

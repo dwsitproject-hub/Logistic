@@ -98,6 +98,34 @@ describe('runWarmupJobsSequentially', () => {
     expect(ran).toEqual(['after-wedged']);
   });
 
+  it('lets one job raise its own timeout without loosening the queue', async () => {
+    const ran: string[] = [];
+    const jobs: WarmupJob[] = [
+      /*
+       * Slower than the queue's bound but not wedged - the case that matters, because a job
+       * declared wedged has the next one started on top of it. With its own timeout it is
+       * awaited to completion.
+       */
+      {
+        name: 'slow-but-fine',
+        run: () =>
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              ran.push('slow-but-fine');
+              resolve();
+            }, 60);
+          }),
+        timeoutMs: 500,
+      },
+      { name: 'after', run: async () => void ran.push('after') },
+    ];
+
+    await runWarmupJobsSequentially(jobs, { gapMs: 0, jobTimeoutMs: 20 });
+
+    // Order proves it was awaited: without the override, 'after' would have run first.
+    expect(ran).toEqual(['slow-but-fine', 'after']);
+  });
+
   it('does nothing and does not throw when given no jobs', async () => {
     await expect(runWarmupJobsSequentially([], { gapMs: 0 })).resolves.toBeUndefined();
   });

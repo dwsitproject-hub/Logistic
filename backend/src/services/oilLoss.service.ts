@@ -82,9 +82,10 @@ export async function warmOilLossCache(): Promise<void> {
  * before TTL while the page is in active use; data freshness is unchanged (cache
  * is still at most CACHE_TTL_MS old).
  */
-export function startOilLossCacheWarmer(): void {
-  void warmOilLossCache();
-  if (keepWarmTimer) return;
+export function startOilLossCacheWarmer(): Promise<void> {
+  /** Returned so the startup queue sequences it - see startShippingPerformanceCacheWarmer. */
+  const initialWarm = warmOilLossCache();
+  if (keepWarmTimer) return initialWarm;
   keepWarmTimer = setInterval(() => {
     if (refreshInFlight) return;
     const ageMs = cached ? CACHE_TTL_MS - (cached.expiresAt - Date.now()) : Number.POSITIVE_INFINITY;
@@ -93,4 +94,5 @@ export function startOilLossCacheWarmer(): void {
     }
   }, KEEP_WARM_CHECK_MS);
   keepWarmTimer.unref?.();
+  return initialWarm;
 }

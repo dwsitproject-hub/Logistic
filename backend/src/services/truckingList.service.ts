@@ -383,7 +383,7 @@ async function loadTruckingCombinedSummaryExecution(
  * base's timezone, so the cache key matches the browser's default date scope).
  * Best-effort: a failed warm just means the next request runs cold, as today.
  */
-export function startTruckingListCacheWarmer(): void {
+export function startTruckingListCacheWarmer(): Promise<void> {
   const jakartaNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
   const dateTo = jakartaNow.toISOString().slice(0, 10);
   const dateFrom = `${dateTo.slice(0, 4)}-01-01`;
@@ -399,9 +399,18 @@ export function startTruckingListCacheWarmer(): void {
       summaryOnly: 'true',
     },
   } as unknown as AuthRequest;
-  // Running the live loader also registers the key with SUMMARY_KEEP_WARM, so it stays
-  // fresh via refresh-ahead while the page is in use.
-  void resolveTruckingListForRequest(req).catch(() => {});
+  /*
+   * Running the live loader also registers the key with SUMMARY_KEEP_WARM, so it stays
+   * fresh via refresh-ahead while the page is in use.
+   *
+   * The promise is returned so the startup queue can sequence this warmer instead of releasing
+   * it alongside the next job - see the note on startShippingPerformanceCacheWarmer. Both arms
+   * resolve to void, so a failed warm still leaves the page merely cold, never startup broken.
+   */
+  return resolveTruckingListForRequest(req).then(
+    () => {},
+    () => {},
+  );
 }
 
 export function clearTruckingListMemoryCaches(): void {

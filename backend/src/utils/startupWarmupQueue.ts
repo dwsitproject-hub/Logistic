@@ -29,6 +29,17 @@ export interface WarmupJob {
   name: string;
   /** Return the promise to be sequenced exactly; return void for best-effort spacing. */
   run: () => void | Promise<unknown>;
+  /**
+   * Override the queue's timeout for this job alone.
+   *
+   * The timeout exists to survive a *wedged* warmer, not a slow one - but a job slower than the
+   * timeout is treated as wedged, the queue stops waiting, and the next job starts on top of it.
+   * That is the sequencing guarantee gone, exactly for the heaviest job. Measured on the dev host
+   * 2026-09-10, while it shared the machine with a rebuild: the Shipments list shell took 225s,
+   * outstanding qty 138s, and the scope row sets about 19 minutes - all past the old 5-minute
+   * bound. So a job known to run long says so here instead of the whole queue loosening.
+   */
+  timeoutMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,7 +49,10 @@ export interface RunWarmupOptions {
   initialDelayMs?: number;
   /** Gap between jobs so the database gets breathing room between heavy scans. */
   gapMs?: number;
-  /** Upper bound per job, so one wedged warmer cannot stall the rest forever. */
+  /**
+   * Default upper bound per job, so one wedged warmer cannot stall the rest forever. A job can
+   * raise its own with `WarmupJob.timeoutMs`; this is what the rest get.
+   */
   jobTimeoutMs?: number;
 }
 
@@ -52,12 +66,17 @@ export async function runWarmupJobsSequentially(
 ): Promise<void> {
   const initialDelayMs = options.initialDelayMs ?? 0;
   const gapMs = options.gapMs ?? 5_000;
-  const jobTimeoutMs = options.jobTimeoutMs ?? 5 * 60_000;
+  /**
+   * Ten minutes, not five. Under contention the ordinary Shipments warmers were measured at 225s
+   * and 138s, so a five-minute default declared healthy jobs wedged and let the next one overlap.
+   */
+  const jobTimeoutMs = options.jobTimeoutMs ?? 10 * 60_000;
 
   if (initialDelayMs > 0) await sleep(initialDelayMs);
 
   for (const job of jobs) {
     const startedAt = Date.now();
+    const timeoutForJob = job.timeoutMs ?? jobTimeoutMs;
     try {
       const result = job.run();
       if (result && typeof (result as Promise<unknown>).then === 'function') {
@@ -65,7 +84,7 @@ export async function runWarmupJobsSequentially(
         // itself keeps running; we simply stop waiting on it.
         let timer: NodeJS.Timeout | undefined;
         const timeout = new Promise<'timeout'>((resolve) => {
-          timer = setTimeout(() => resolve('timeout'), jobTimeoutMs);
+          timer = setTimeout(() => resolve('timeout'), timeoutForJob);
           timer.unref?.();
         });
         const outcome = await Promise.race([
@@ -75,7 +94,7 @@ export async function runWarmupJobsSequentially(
         if (timer) clearTimeout(timer);
         if (outcome === 'timeout') {
           logger.warn(
-            `🔥 warm-up '${job.name}' still running after ${Math.round(jobTimeoutMs / 1000)}s - continuing without waiting`,
+            `🔥 warm-up '${job.name}' still running after ${Math.round(timeoutForJob / 1000)}s - continuing without waiting`,
           );
         } else {
           logger.info(`🔥 warm-up '${job.name}' done in ${Date.now() - startedAt}ms`);

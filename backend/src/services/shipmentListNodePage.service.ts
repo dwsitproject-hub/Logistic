@@ -121,7 +121,13 @@ function buildScope(
   return { scopeQuery, key: stableKey(scopeQuery) };
 }
 
-async function readScopeRows(
+/**
+ * Read a whole scope, page by page.
+ *
+ * Exported because the cache's warm cycle reloads a scope without any request behind it - it is
+ * handed a stored scope query and needs the same paging loop a request would have run.
+ */
+export async function readShipmentScopeRows(
   scopeQuery: Record<string, string>,
   loadScopePage: ScopePageLoader,
 ): Promise<RowSetRow[]> {
@@ -151,7 +157,16 @@ export async function primeCompactShipmentScope(input: {
 }): Promise<{ key: string; rows: number }> {
   const { sql: sqlFilters } = splitColumnFilters(parseColumnFilters(input.query.columnFilters));
   const { scopeQuery, key } = buildScope(input.query, sqlFilters);
-  const rows = await loadShipmentRowSet(key, () => readScopeRows(scopeQuery, input.loadScopePage));
+  /**
+   * Pinned: this is the startup warmer's own scope, so the warm cycle keeps refreshing it even
+   * when nobody has read it - which is exactly its purpose.
+   */
+  const rows = await loadShipmentRowSet(
+    key,
+    scopeQuery,
+    () => readShipmentScopeRows(scopeQuery, input.loadScopePage),
+    { pinned: true },
+  );
   return { key, rows: rows.length };
 }
 
@@ -212,7 +227,9 @@ export async function deriveCompactShipmentPage(
    */
   const rows = getCachedShipmentRowSet(key);
   if (!rows) {
-    void loadShipmentRowSet(key, () => readScopeRows(scopeQuery, input.loadScopePage)).catch(() => {
+    void loadShipmentRowSet(key, scopeQuery, () =>
+      readShipmentScopeRows(scopeQuery, input.loadScopePage),
+    ).catch(() => {
       // A failed background load just means the next request runs on SQL again.
     });
     return { ok: false, reason: 'scope row set not loaded yet - loading in background' };

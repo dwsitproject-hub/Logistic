@@ -943,9 +943,22 @@ export async function warmShippingPerformanceRowCache(): Promise<void> {
  * active use, and renews the cache shortly before its TTL so users are always served
  * from memory. Data freshness is unchanged (cache is still at most CACHE_TTL_MS old).
  */
-export function startShippingPerformanceCacheWarmer(): void {
-  void warmShippingPerformanceRowCache();
-  if (keepWarmTimer) return;
+export function startShippingPerformanceCacheWarmer(): Promise<void> {
+  /**
+   * The initial warm is returned, not fire-and-forget.
+   *
+   * `runWarmupJobsSequentially` can only sequence a job that hands it a promise; a job returning
+   * void falls back to the 5s inter-job gap, which means the work carries on in parallel with
+   * whatever runs next. Measured on the dev host 2026-09-09: this warmer, Trucking and Oil Loss
+   * were all released in the 15s before the heaviest job (Shipments scope row sets) and were
+   * still running throughout it - the queue's "one heavy query in flight" property was broken at
+   * exactly the point it mattered most. Returning the promise restores it.
+   *
+   * `warmShippingPerformanceRowCache` swallows its own errors, so this can never reject and the
+   * queue's failure path stays unused.
+   */
+  const initialWarm = warmShippingPerformanceRowCache();
+  if (keepWarmTimer) return initialWarm;
   keepWarmTimer = setInterval(() => {
     if (Date.now() - lastAccessedAt > KEEP_WARM_MAX_IDLE_MS) return;
     if (refreshInFlight) return;
@@ -957,6 +970,7 @@ export function startShippingPerformanceCacheWarmer(): void {
   }, KEEP_WARM_CHECK_MS);
   // Do not keep the event loop alive solely for the warmer.
   keepWarmTimer.unref?.();
+  return initialWarm;
 }
 
 export function stopShippingPerformanceCacheWarmer(): void {
