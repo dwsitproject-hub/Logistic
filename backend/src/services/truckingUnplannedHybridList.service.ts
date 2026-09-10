@@ -308,6 +308,17 @@ export async function resolveTruckingUnplannedHybridList(
   const { executionRows } = breakdown;
   const { sortKey, sortDir } = ctx;
 
+  /**
+   * No backlog rows in scope means no backlog page query.
+   *
+   * `breakdown.contractRows` is counted from the same scope and toolbar predicate the page query
+   * uses, so a count of zero means the page query provably returns nothing - and it was being run
+   * anyway. Measured on the cold Trucking page, default YTD, where the backlog is genuinely
+   * empty: `buildTruckingUnplannedBacklogPageQuery` cost **8,309 ms** to return no rows. The
+   * count that makes this decision now costs 8 ms from the snapshot.
+   */
+  const hasBacklogRows = breakdown.contractRows > 0;
+
   let contractPage: TruckingListRow[] = [];
   let executionPage: TruckingListRow[] = [];
   let truckingOperations: TruckingListRow[];
@@ -317,7 +328,7 @@ export async function resolveTruckingUnplannedHybridList(
   if (useGlobalSort) {
     const need = offset + limitNum;
     [contractPage, executionPage] = await Promise.all([
-      hydrateOnly
+      hydrateOnly || !hasBacklogRows
         ? Promise.resolve([] as TruckingListRow[])
         : fetchContractBacklogPage(ctx, need, 0),
       fetchExecutionPage(ctx, need, 0),
@@ -339,7 +350,7 @@ export async function resolveTruckingUnplannedHybridList(
     });
 
     [contractPage, executionPage] = await Promise.all([
-      hydrateOnly
+      hydrateOnly || !hasBacklogRows
         ? Promise.resolve([] as TruckingListRow[])
         : fetchContractBacklogPage(ctx, slices.contractLimit, slices.contractOffset),
       fetchExecutionPage(ctx, slices.executionLimit, slices.executionOffset),

@@ -1034,6 +1034,37 @@ Also worth recording, because it was offered as a way out and turned out not to 
 the total row count and page count would save essentially nothing now - the counts are 8-57 ms.
 The cost that remains is finding and fetching the 20 rows, which a hidden total does not touch.
 
+### An empty backlog was still running both backlog queries: 18,581 ms to 13,262 ms
+
+Not an optimisation so much as waste that was already there. For the ALL view,
+`fetchContractBacklogPage` was called **unconditionally** - while `breakdown.contractRows`, counted
+from the same scope and toolbar predicate, sat computed on the line above it, unused. On the
+default YTD window, where the backlog is genuinely empty, that ran
+`buildTruckingUnplannedBacklogPageQuery` for **8,309 ms** to return no rows. The combined backlog
+query did the same for **5,789 ms** to return zeros.
+
+Both are now skipped when the backlog count is zero - a decision that costs 8 ms from the snapshot.
+Verified on both sides, because a guard that fires when it should not is worse than the waste:
+
+| | YTD 2026 (backlog empty) | 2025 (backlog = 3) |
+| --- | --- | --- |
+| backlog page query | **not run** | still runs (10,186 ms) |
+| combined backlog query | **not run** | still runs (18,524 ms) |
+| endpoint | **13,262 ms** | 38,433 ms |
+| Unplanned card qty | 297,921,180 | 126,794,090 |
+| OS total | 404,656,114 | 189,844,221 |
+
+The YTD figures are identical to the live values proved in the Section 1 parity run, and the 2025
+path is untouched. The gate is narrow on purpose - a global search, a column filter or a contract
+filter narrows the backlog in ways the snapshot's dimension columns cannot express, so those keep
+running the query rather than answering a different question. The empty result is built from the
+query's own parser (`parseTruckingOutstandingQtySummaryRow(null)`) rather than a hand-written zero
+object, so its shape cannot drift.
+
+Where that leaves the page: **60,862 ms to 13,262 ms cold, 4.6x**, and what remains is almost
+entirely the one thing that could not be shipped - the 12,567 ms execution page query, whose
+snapshot version picked a different row for page 1.
+
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 
 The list caches per (filters x status x sort x page), so every toolbar change is an uncached

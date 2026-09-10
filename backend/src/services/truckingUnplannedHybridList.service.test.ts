@@ -12,6 +12,36 @@ import {
   truckingHybridExecutionStageFilter,
 } from './truckingUnplannedHybridList.service';
 
+/**
+ * An empty backlog must not run the backlog queries.
+ *
+ * `breakdown.contractRows` is counted from the same scope and toolbar predicate the page query
+ * uses, so zero means the page query provably returns nothing - and it was being run anyway.
+ * Measured on the cold Trucking page for the default YTD window, where the backlog is genuinely
+ * empty: the page query cost 8,309 ms to return no rows, and the combined backlog query 5,789 ms
+ * to return zeros. Verified end to end afterwards: for YTD both are skipped and every figure is
+ * unchanged, and for 2025 - the only window with backlog rows in the dev data - both still run and
+ * the numbers are untouched.
+ *
+ * Source-audited rather than behaviour-tested because this file has no database, and the thing
+ * worth protecting is that the guard is *there*: without it the queries return early anyway, so
+ * nothing fails, it is just slow again.
+ */
+describe('empty backlog skips its queries', () => {
+  const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
+
+  it('derives the guard from the count it already has', () => {
+    expect(src).toContain('const hasBacklogRows = breakdown.contractRows > 0;');
+  });
+
+  it('gates both backlog page fetches on it, not just the global-sort one', () => {
+    // Two call sites: the global merge-sort branch and the sliced branch.
+    expect(src.split('hydrateOnly || !hasBacklogRows').length - 1).toBe(2);
+    // And no ungated fetch may remain.
+    expect(src).not.toContain('hydrateOnly\n        ? Promise.resolve([] as TruckingListRow[])');
+  });
+});
+
 describe('truckingUnplannedHybridList.service', () => {
   describe('isTruckingAllHybridListRequest', () => {
     it('returns true for ALL and empty status', () => {

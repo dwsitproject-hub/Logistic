@@ -64,6 +64,7 @@ import {
   loadTruckingStagePageFromSnapshot,
   loadTruckingSummaryFromDaily,
   loadTruckingSection1FromStageSnapshot,
+  loadTruckingBacklogCountFromSnapshot,
   toPipelineDailySummaryScope,
   markPipelineDailySummaryStale,
   type PipelineDailySummaryFilterInput,
@@ -331,6 +332,39 @@ async function loadTruckingUnplannedBacklogCombinedForRequest(
   const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
   const params = [...scope.params, ...g.params, ...c.params];
   const toolbarSql = `${g.sql}${c.sql}`;
+
+  /**
+   * An empty backlog needs no query.
+   *
+   * This one supplies the backlog's count, contract qty and OS buckets together, and all three are
+   * zero when no contract is in the backlog - yet it cost **5,789 ms** on the cold Trucking page
+   * for the default YTD window, where the backlog is genuinely empty. The count that settles it
+   * reads from the snapshot in 8 ms.
+   *
+   * Only when the request is toolbar-only: a global search or column filter narrows the backlog in
+   * ways the snapshot's dimension columns cannot express, so the shortcut would be answering a
+   * different question. Those fall through to the query below.
+   */
+  const canUseSnapshotBacklogCount = !globalSearch && Object.keys(colFilters ?? {}).length === 0 && !contract;
+  if (canUseSnapshotBacklogCount) {
+    const snapshotBacklogCount = await loadTruckingBacklogCountFromSnapshot(
+      toPipelineDailySummaryScope({ dateFrom, dateTo, plants, colFilters } as Parameters<
+        typeof toPipelineDailySummaryScope
+      >[0]),
+    );
+    if (snapshotBacklogCount === 0) {
+      const empty = {
+        count: 0,
+        contractQtyKg: 0,
+        /* Parsed from null so the shape is exactly what the query's own parser would return. */
+        osBacklog: parseTruckingOutstandingQtySummaryRow(null),
+      };
+      UNPLANNED_BACKLOG_CACHE.set(cacheKey, { ...empty, expiresAt: Date.now() + CACHE_TTL_MS });
+      evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
+      return empty;
+    }
+  }
+
   const res = await query(
     await buildTruckingUnplannedBacklogCombinedQuery(scope.sql, toolbarSql),
     params,
