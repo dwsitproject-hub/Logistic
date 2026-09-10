@@ -1,3 +1,4 @@
+import { buildTruckingSection1FromSnapshotQuery } from '../utils/truckingStatusSummaryCombinedSql';
 import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
 import { appendGroupPlantFilter } from '../utils/groupPlantSql';
@@ -593,6 +594,126 @@ export async function loadTruckingSummaryFromDaily(
  * Returns null when the snapshot is stale; ordering is the default list sort
  * (supplier, newest first) with deterministic tiebreakers.
  */
+/**
+ * Section 1's quantities from the precomputed rows, instead of expanding them per request.
+ *
+ * The live query is the most expensive thing on the Trucking page - measured 2026-09-10 at
+ * ~23-37s and ~3.0M root buffers, with `SELECT count(*) FROM filtered` costing the same as the
+ * whole summary, so producing the rows is the cost and aggregating them is free. The pipeline
+ * refresh already runs that expansion to write `stage`, so migration 163 has it store the Section
+ * 1 inputs alongside, at the same grain (verified: 6,496 rows for the default YTD window, the
+ * identical count to the live `filtered` CTE).
+ *
+ * Only the source changes; every rule above it is the shared aggregate block. The dedup MAX
+ * deliberately stays here at read time - `contract_number` is a STRING_AGG of every LAND contract
+ * sharing the STO, and grouping finer than the whole string inflates the totals.
+ *
+ * Serves a usable snapshot even when marked stale, and kicks the refresh off behind it - the same
+ * policy loadTruckingSummaryFromDaily uses, and the reason the caller reports an as-of to the
+ * page rather than pretending the figures are live.
+ */
+export async function loadTruckingSection1FromStageSnapshot(
+  scope: PipelineDailySummaryScope,
+  opts: { includeCounts?: boolean } = {},
+): Promise<{
+  row: Record<string, unknown>;
+  refreshedAt: string | null;
+  isStale: boolean;
+} | null> {
+  if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await isPipelineDailySummaryFresh('trucking'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
+
+  const meta = await getRefreshMeta('trucking');
+  const { sql, params } = buildDailySummaryWhere(scope);
+  /*
+   * A snapshot written before migration 163 has these columns NULL, which would silently read as
+   * zero quantities. Require one non-null before trusting it; until the refresh has run since
+   * 163, the caller falls back to the live path exactly as before.
+   */
+  const ready = await query(
+    `SELECT 1 FROM ${TRUCKING_LIST_STAGE_SNAPSHOT_TABLE} WHERE contract_number IS NOT NULL LIMIT 1`,
+    [],
+  );
+  if (ready.rows.length === 0) return null;
+
+  const text = buildTruckingSection1FromSnapshotQuery({
+    tableName: TRUCKING_LIST_STAGE_SNAPSHOT_TABLE,
+    whereSql: sql,
+    includeCounts: opts.includeCounts === true,
+  });
+  const res = await query(text, params);
+  const row = res.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+
+  return {
+    row,
+    refreshedAt: meta ? new Date(meta.refreshed_at).toISOString() : null,
+    isStale: meta ? meta.is_stale === true : true,
+  };
+}
+
+/**
+ * The ALL view's execution row count, from the stage snapshot.
+ *
+ * The live form is `buildTruckingExpansionKeysCountSql` - `COUNT(DISTINCT ts.id)` over the whole
+ * list select joined to contracts - and it measured **24,609 ms** on the cold Trucking page,
+ * making it one of the two queries that bound the wall time. The stage snapshot answers the same
+ * question from an index: it holds exactly one row per operation, written from the same expansion
+ * and with the same `INNER JOIN contracts`, so `COUNT(*)` over it is the same number by
+ * construction.
+ *
+ * Deliberately counted from the *stage snapshot* and not from
+ * `trucking_pipeline_daily_summary.total_count`: that column filters
+ * `COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'` because it feeds the status circles, which must
+ * exclude SAP-cancelled POs - while the list still shows those rows. Using it would quietly
+ * undercount the table. The stage snapshot applies no such filter, which is what the list needs.
+ *
+ * Same stale-but-usable policy as the paging loader above: a rebuild is scheduled behind the read
+ * rather than sending the page down a 24s path for the duration of it.
+ */
+export async function loadTruckingExecutionCountFromSnapshot(
+  scope: PipelineDailySummaryScope,
+): Promise<number | null> {
+  if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await isPipelineDailySummaryFresh('trucking'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
+
+  const { sql, params } = buildDailySummaryWhere(scope);
+  const res = await query(
+    `SELECT COUNT(*)::bigint AS c FROM ${TRUCKING_LIST_STAGE_SNAPSHOT_TABLE} ${sql}`,
+    params,
+  );
+  const row = res.rows[0] as { c?: string } | undefined;
+  if (!row) return null;
+  return parseInt(String(row.c ?? '0'), 10) || 0;
+}
+
+/**
+ * The contract-backlog row count for the same scope, from the daily summary.
+ *
+ * The live form is one of the three `latest_spd_contract` queries that cost 10-19s each on the
+ * cold page. `unplanned_contract_backlog` is written by the same backlog builder, so this is the
+ * same predicate rather than an approximation of it - and it is verified against the live count
+ * before being trusted, because "same builder" is an argument and the parity check is evidence.
+ */
+export async function loadTruckingBacklogCountFromSnapshot(
+  scope: PipelineDailySummaryScope,
+): Promise<number | null> {
+  if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  const { sql, params } = buildDailySummaryWhere(scope);
+  const res = await query(
+    `SELECT COALESCE(SUM(unplanned_contract_backlog), 0)::bigint AS c
+     FROM trucking_pipeline_daily_summary ${sql}`,
+    params,
+  );
+  const row = res.rows[0] as { c?: string } | undefined;
+  if (!row) return null;
+  return parseInt(String(row.c ?? '0'), 10) || 0;
+}
+
 export async function loadTruckingStagePageFromSnapshot(
   scope: PipelineDailySummaryScope,
   stage: string,

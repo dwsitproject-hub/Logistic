@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
+import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -2983,6 +2984,12 @@ function TruckingPageContent() {
     }
   }, [truckingSection1Summary?.statusContractQty])
 
+  /** Where Section 1's quantities came from; null when they were computed live. */
+  const truckingSummaryFreshnessNote = useMemo(
+    () => describeTruckingSummaryFreshness(truckingSection1Summary?.summaryFreshness),
+    [truckingSection1Summary?.summaryFreshness],
+  )
+
   /** Section 2 Outstanding Qty (kg) — Unplanned + Planned card (Planned = Planned + In Progress). */
   const truckingStatusCardOutstandingQtys = useMemo(() => {
     const q = truckingSection1Summary?.statusOutstandingQty
@@ -3999,6 +4006,26 @@ function TruckingPageContent() {
           loading={outstandingQtyFetching}
           data={truckingSection1Summary?.outstandingQty}
         />
+
+        {/*
+          Section 1's quantities are precomputed by the scheduled refresh, which is what makes this
+          page load in seconds instead of ~23-37s. The cost is that they can trail a SAP import by
+          the build duration, so the as-of is shown rather than left for someone to discover. Only
+          rendered when the figures really did come from the snapshot - a badge that is always
+          there is a badge nobody reads.
+        */}
+        {truckingSummaryFreshnessNote ? (
+          <p
+            className={
+              truckingSummaryFreshnessNote.tone === 'pending'
+                ? 'px-1 text-xs text-amber-700'
+                : 'px-1 text-xs text-muted-foreground'
+            }
+            title={truckingSummaryFreshnessNote.detail}
+          >
+            {truckingSummaryFreshnessNote.label} — {truckingSummaryFreshnessNote.detail}
+          </p>
+        ) : null}
 
         {/* Section 3: Main View Table — calendar or list tab below */}
 

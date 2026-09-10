@@ -182,7 +182,8 @@ export function buildTruckingStageSnapshotInsertSql(
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   return `
     INSERT INTO ${targetTable} (
-      operation_id, sto_line, stage, group_plant, contract_date, product, incoterm, supplier, created_at
+      operation_id, sto_line, stage, group_plant, contract_date, product, incoterm, supplier, created_at,
+      contract_number, contract_qty, outstanding_quantity, source_type, incoterm_eff, sap_presence, status_db
     )
     SELECT
       src.id,
@@ -193,7 +194,23 @@ export function buildTruckingStageSnapshotInsertSql(
       ${sqlPipelineProductKey('c.product')},
       ${sqlPipelineIncotermKey('c.incoterm')},
       NULLIF(TRIM(COALESCE(src.supplier, c.supplier)), ''),
-      src.created_at
+      src.created_at,
+      /*
+       * Section 1's inputs, at the grain the expansion produces them. Every one of these is
+       * already on src - this expansion is built with selectOutstanding and the full SAP join
+       * because the stage column needs it - so storing them costs the write and nothing else.
+       *
+       * They are stored raw, not aggregated: contract_number is a STRING_AGG of every LAND
+       * contract sharing the STO, so the dedup MAX has to be taken over the whole group at read
+       * time. Pre-aggregating per dimension was tried and inflated the totals - see migration 163.
+       */
+      src.contract_number,
+      src.contract_qty,
+      src.outstanding_quantity,
+      src.source_type,
+      src.incoterm,
+      src.sap_presence,
+      src.status_db
     FROM (${expanded}) src
     INNER JOIN contracts c ON c.id = src.contract_id
     WHERE src.id IS NOT NULL AND src.status IS NOT NULL

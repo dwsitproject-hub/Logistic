@@ -29,7 +29,15 @@ export interface TruckingStatusSummaryCombinedOptions {
   grOpenOnly?: boolean;
 }
 
-function buildTruckingExpandedFilteredCte(
+/**
+ * The `filtered` CTE, from the live STO expansion.
+ *
+ * This is the expensive half - measured 2026-09-10 at ~23-37s and ~3.0M root buffers, with
+ * `SELECT count(*) FROM filtered` costing the same as the whole summary, so producing these rows
+ * *is* the cost. It is separated from the aggregates below so a precomputed source can reuse them
+ * verbatim rather than restating the rules and risking a drift nothing would catch.
+ */
+export function buildTruckingSection1FilteredCteFromExpansion(
   built: TruckingStatusSummaryCombinedBuiltQuery,
   opts: TruckingStatusSummaryCombinedOptions = {},
 ): string {
@@ -58,7 +66,20 @@ function buildTruckingExpandedFilteredCte(
       ) trucking_source
       WHERE COALESCE(trucking_source.sap_presence, 'PRESENT') = 'PRESENT'
         ${grOpenFilter}
-    ),
+    )`;
+}
+
+/**
+ * Everything computed over `filtered`, whatever produced it.
+ *
+ * Kept as one shared string on purpose: the dedup key is `contract_number`, which in the trucking
+ * expansion is a STRING_AGG of every LAND contract sharing the STO, so `MAX(contract_qty)` has to
+ * be taken over the whole group. Re-deriving that at a different grain silently inflates the
+ * totals - measured, when it was tried per dimension row: 7 of 13 figures wrong,
+ * completed_contract_qty by +2,018,490 kg. So any second source plugs in here and changes nothing
+ * below this line.
+ */
+export const TRUCKING_SECTION1_AGGREGATE_CTES = `
     per_contract AS (
       SELECT
         status,
@@ -114,16 +135,25 @@ function buildTruckingExpandedFilteredCte(
         COALESCE(SUM(${sqlTruckingStripLineQtyExpr('status', 'contract_qty', 'outstanding_quantity')}), 0)::numeric AS card_total_kg
       FROM os_per_contract
     )`;
-}
 
 /** One STO expansion → counts + contract qty + card OS + strip OS (execution). */
 export function buildTruckingStatusSummaryCombinedQuery(
   built: TruckingStatusSummaryCombinedBuiltQuery,
   opts: TruckingStatusSummaryCombinedOptions = {},
 ): { text: string; params: unknown[] } {
-  const includeCounts = opts.includeCounts !== false;
-  const cteBlock = buildTruckingExpandedFilteredCte(built, opts);
+  const cteBlock = `${buildTruckingSection1FilteredCteFromExpansion(built, opts)},${TRUCKING_SECTION1_AGGREGATE_CTES}`;
+  const text = buildTruckingSection1Sql(cteBlock, opts.includeCounts !== false);
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
 
+/**
+ * The outer SELECT, shared by both sources.
+ *
+ * Extracted rather than copied so the snapshot path cannot come to report a different set of
+ * figures - or the same figures in a different shape - from the live one. The parsers on the
+ * service side read this column list by name, and there is only one of it.
+ */
+export function buildTruckingSection1Sql(cteBlock: string, includeCounts: boolean): string {
   const countSelect = includeCounts
     ? `sc.total_count,
         sc.unplanned_count,
@@ -138,7 +168,7 @@ export function buildTruckingStatusSummaryCombinedQuery(
 
   const countJoin = includeCounts ? 'CROSS JOIN status_counts sc' : '';
 
-  const text = `
+  return `
     WITH ${cteBlock}
     SELECT
       ${countSelect}
@@ -159,6 +189,46 @@ export function buildTruckingStatusSummaryCombinedQuery(
     CROSS JOIN status_outstanding so
     CROSS JOIN os_execution oe
     ${countJoin}`;
+}
 
-  return { text, params: [...built.innerParams, ...built.outerParams] };
+/**
+ * The same Section 1 figures, read from the precomputed rows instead of expanding them.
+ *
+ * `trucking_list_stage_snapshot` is written by the pipeline refresh from the very expansion this
+ * used to run per request, and at the same grain - verified before building this: 6,496 rows for
+ * the default YTD window, the identical count to the live `filtered` CTE. So only the source of
+ * `filtered` changes; every rule above it is TRUCKING_SECTION1_AGGREGATE_CTES, unchanged.
+ *
+ * The dedup MAX stays at read time on purpose. `contract_number` is a STRING_AGG of every LAND
+ * contract sharing the STO, so grouping any finer than the whole string inflates the totals -
+ * measured at +2,018,490 kg on completed contract qty when it was tried per dimension row.
+ *
+ * `whereSql` is the caller's dimension scope, already parameterised; the same predicate
+ * `loadTruckingStagePageFromSnapshot` applies to this table.
+ */
+export function buildTruckingSection1FromSnapshotQuery(opts: {
+  tableName: string;
+  whereSql: string;
+  includeCounts?: boolean;
+}): string {
+  const filtered = `
+    filtered AS (
+      SELECT
+        s.stage AS status,
+        s.status_db,
+        s.contract_number,
+        s.contract_qty,
+        s.outstanding_quantity,
+        s.source_type,
+        s.incoterm_eff AS incoterm,
+        NULL::date AS trucking_start_date,
+        NULL::date AS trucking_completion_date
+      FROM ${opts.tableName} s
+      ${opts.whereSql}
+        AND COALESCE(s.sap_presence, 'PRESENT') = 'PRESENT'
+    )`;
+  return buildTruckingSection1Sql(
+    `${filtered},${TRUCKING_SECTION1_AGGREGATE_CTES}`,
+    opts.includeCounts === true,
+  );
 }

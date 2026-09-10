@@ -63,6 +63,7 @@ import {
   isPipelineDailySummaryEligible,
   loadTruckingStagePageFromSnapshot,
   loadTruckingSummaryFromDaily,
+  loadTruckingSection1FromStageSnapshot,
   toPipelineDailySummaryScope,
   markPipelineDailySummaryStale,
   type PipelineDailySummaryFilterInput,
@@ -134,6 +135,22 @@ export interface TruckingListResponseData {
     };
     outstandingQty?: TruckingOutstandingQtySummary;
     attentionInsights?: TruckingAttentionInsightsRow;
+    /**
+     * Where Section 1's quantities came from, and as of when.
+     *
+     * `snapshot` means they were precomputed by the trucking pipeline refresh rather than scanned
+     * live, so they can trail a SAP import by the build duration (measured 234s). That trade was
+     * approved deliberately - the alternative was ~23-37s per page load - but a viewer looking at
+     * a quantity has no way to know it is a few minutes behind unless the page says so, which is
+     * why this is reported rather than kept internal.
+     */
+    summaryFreshness?: {
+      source: 'snapshot' | 'live';
+      /** ISO timestamp of the refresh these figures came from; null when live. */
+      asOf: string | null;
+      /** The refresh itself is marked stale - a rebuild is due or running. */
+      isStale: boolean;
+    };
   };
   pagination: {
     total: number;
@@ -1349,11 +1366,38 @@ async function runTruckingListSummaryWithBacklog(
     fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
   }
 
+  /**
+   * Section 1 from the snapshot when it has the figures, otherwise live.
+   *
+   * The live combined query is the most expensive thing on this page - measured 2026-09-10 at
+   * ~23-37s and ~3.0M root buffers, and `SELECT count(*) FROM filtered` costs the same as the
+   * whole summary, so all of it is producing the expanded row set rather than aggregating it.
+   * Four candidate tunings were measured and all four ruled out (SAP qty jsonb 17%,
+   * `enable_nestloop=off` 3x worse, grOpenOnly 2%, planning time a cold artefact), which left
+   * precomputation as the only move.
+   *
+   * Migration 163 has the trucking refresh compute these from the *same* expansion, once per
+   * build instead of once per request, and names the columns exactly as the live query aliases
+   * them - so the snapshot row goes through the identical parsers below. The trade was approved:
+   * Section 1 can lag a SAP import by the build duration (measured 234s), which is what the
+   * status circles in the same section already do. `summaryFreshness` reports the as-of so the
+   * page can say so.
+   */
+  const section1Snapshot = dailyEligible
+    ? await loadTruckingSection1FromStageSnapshot(toPipelineDailySummaryScope(filters), {
+        includeCounts: false,
+      })
+    : null;
+  const sectionOneFromSnapshot = section1Snapshot !== null;
   const [combined, backlog] = await Promise.all([
-    loadTruckingCombinedSummaryExecution(built, {
-      includeCounts: !fromDaily,
-      grOpenOnly: Boolean(fromDaily),
-    }),
+    sectionOneFromSnapshot
+      ? Promise.resolve(
+          parseTruckingCombinedSummaryRow(section1Snapshot!.row, { includeCounts: false }),
+        )
+      : loadTruckingCombinedSummaryExecution(built, {
+          includeCounts: !fromDaily,
+          grOpenOnly: Boolean(fromDaily),
+        }),
     loadTruckingUnplannedBacklogCombinedForRequest(req),
   ]);
   timingsMs.dbCombinedSummary = performance.now() - tCombined0;
@@ -1362,9 +1406,16 @@ async function runTruckingListSummaryWithBacklog(
     ...combined.statusContractQty,
     unplanned: combined.statusContractQty.unplanned + backlog.contractQtyKg,
   };
-  const statusContractQty = fromDaily
-    ? mergeTruckingGrClosedSnapshotContractQty(liveContractQty, fromDaily)
-    : liveContractQty;
+  /*
+   * The GR-closed merge exists because the live path runs with grOpenOnly and therefore only
+   * covers GR-open POs, so completed/cancelled qty has to be topped up from the snapshot. When
+   * the snapshot serves Section 1 it already holds the *full* completed/cancelled figures, so
+   * merging again would double-count them.
+   */
+  const statusContractQty =
+    fromDaily && !sectionOneFromSnapshot
+      ? mergeTruckingGrClosedSnapshotContractQty(liveContractQty, fromDaily)
+      : liveContractQty;
   const statusOutstandingQty = mergeTruckingUnplannedBacklogOs(
     combined.statusOutstandingQty,
     backlog.osBacklog.totalKg,
@@ -1388,6 +1439,16 @@ async function runTruckingListSummaryWithBacklog(
       outstandingQty,
       statusContractQty,
       statusOutstandingQty,
+      /*
+       * The counts on this branch always come from the snapshot; the quantities come from it only
+       * when it carries them. Reported separately from the counts because that is the figure a
+       * viewer reads off a card.
+       */
+      summaryFreshness: {
+        source: sectionOneFromSnapshot ? 'snapshot' : 'live',
+        asOf: sectionOneFromSnapshot ? section1Snapshot!.refreshedAt : null,
+        isStale: sectionOneFromSnapshot ? section1Snapshot!.isStale : false,
+      },
       ...(attentionInsights !== undefined ? { attentionInsights } : {}),
     };
     MERGED_SUMMARY_CACHE.set(mergedCacheKey, {

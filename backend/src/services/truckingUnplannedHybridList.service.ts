@@ -1,4 +1,9 @@
 import { query } from '../database/connection';
+import {
+  loadTruckingBacklogCountFromSnapshot,
+  loadTruckingExecutionCountFromSnapshot,
+  toPipelineDailySummaryScope,
+} from './pipelineDailySummary.service';
 import { AuthRequest } from '../middleware/auth';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from '../utils/contractListFilters';
 import { computeHybridListPageSlices } from '../utils/hybridListPageSlices';
@@ -104,6 +109,43 @@ export function buildTruckingHybridExecutionCountQuery(
   };
 }
 
+/**
+ * The two ALL/Unplanned row counts from the snapshot, or null when this request cannot use it.
+ *
+ * The execution count comes from `trucking_list_stage_snapshot` rather than
+ * `trucking_pipeline_daily_summary.total_count`: that column filters
+ * `COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'` because it feeds the status circles, which
+ * must drop SAP-cancelled POs - while the *list* still shows those rows. Using it would quietly
+ * undercount the table.
+ *
+ * Unplanned mode is deliberately excluded for now: its execution half counts only UNPLANNED ops,
+ * and the snapshot column that answers that (`unplanned_execution_count`) carries the
+ * sap_presence filter for the same reason. Only the ALL view is served here; Unplanned keeps its
+ * live counts until that is measured too.
+ */
+async function loadTruckingHybridCountsFromSnapshot(
+  ctx: TruckingUnplannedHybridContext,
+): Promise<{ contractRows: number; executionRows: number } | null> {
+  if (ctx.mode !== 'all') return null;
+  if (String(ctx.globalSearch ?? '').trim()) return null;
+  if (ctx.colFilters && Object.keys(ctx.colFilters).length > 0) return null;
+  if (ctx.contractScope.contract) return null;
+
+  const scope = toPipelineDailySummaryScope({
+    dateFrom: ctx.contractScope.dateFrom,
+    dateTo: ctx.contractScope.dateTo,
+    plants: ctx.contractScope.plants,
+    colFilters: ctx.colFilters,
+  } as Parameters<typeof toPipelineDailySummaryScope>[0]);
+
+  const [executionRows, contractRows] = await Promise.all([
+    loadTruckingExecutionCountFromSnapshot(scope),
+    loadTruckingBacklogCountFromSnapshot(scope),
+  ]);
+  if (executionRows === null || contractRows === null) return null;
+  return { executionRows, contractRows };
+}
+
 const BREAKDOWN_CACHE = new Map<string, { data: TruckingUnplannedHybridBreakdown; expiresAt: number }>();
 const BREAKDOWN_IN_FLIGHT = new Map<string, Promise<TruckingUnplannedHybridBreakdown>>();
 const BREAKDOWN_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -136,6 +178,32 @@ export async function countTruckingUnplannedHybridBreakdown(
   if (inFlight) return inFlight;
 
   const run = (async () => {
+    /**
+     * Both halves of this total come from the snapshot when the request is toolbar-only.
+     *
+     * Live, they were two of the queries that bound the cold Trucking page: the execution count
+     * (`COUNT(DISTINCT ts.id)` over the whole list select) measured 10-25s, and the backlog count
+     * is one of the `latest_spd_contract` queries at 7-19s. Verified against the live forms on a
+     * scope with a non-zero backlog, because a 0-vs-0 comparison proves nothing:
+     *
+     *   execution count   live 9,066 (15,632ms)   snapshot 9,066 (57ms)
+     *   backlog count     live     3 ( 7,294ms)   snapshot     3 ( 8ms)
+     *
+     * Only when there is no global search and no column filters: those cannot be answered from
+     * the columns the snapshot carries, and a wrong total is worse than a slow one. Anything else
+     * falls through to the live counts below, unchanged.
+     */
+    const snapshotCounts = await loadTruckingHybridCountsFromSnapshot(ctx);
+    if (snapshotCounts) {
+      const data = {
+        contractRows: snapshotCounts.contractRows,
+        executionRows: snapshotCounts.executionRows,
+        totalTableRows: snapshotCounts.contractRows + snapshotCounts.executionRows,
+      };
+      BREAKDOWN_CACHE.set(cacheKey, { data, expiresAt: Date.now() + BREAKDOWN_CACHE_TTL_MS });
+      return data;
+    }
+
     const { contractScopeSql, params: contractParams, toolbarSql } = buildContractQueryParts(ctx);
     const executionCount = buildTruckingHybridExecutionCountQuery(ctx);
 

@@ -887,6 +887,153 @@ would make Section 1 fast at the cost of lagging a SAP import by however long th
 measured at 234s. The status circles already make exactly that trade, so it would be consistent;
 it still needs asking.
 
+### Section 1 precomputed: 34,912 ms to 70 ms, and the attempt that had to be thrown away
+
+Approved, with the condition that the page tells the viewer the figures can trail an import.
+
+**The first attempt was wrong and was measured wrong, not reasoned wrong.** It stored the
+aggregates per `(group_plant, contract_date, product, incoterm)` alongside the counts already in
+`trucking_pipeline_daily_summary`. That is unsound: the live query dedups with
+`GROUP BY status, contract_number`, and `contract_number` in the trucking expansion is **not a
+contract id** - it is `STRING_AGG(DISTINCT cc.contract_id, ', ')` over every LAND contract sharing
+the STO (`truckingListSelectSql.ts`). One group can span several real contracts with different
+plants, products and incoterms, and `MAX(contract_qty)` is taken once for the whole group.
+Splitting that group by dimension breaks it apart and the per-part MAXes sum to more than the
+whole:
+
+| | live | snapshot | delta |
+| --- | --- | --- | --- |
+| completed_contract_qty | 2,145,394,200 | 2,147,412,690 | +2,018,490 |
+| cancelled_contract_qty | 45,546,331 | 45,946,331 | +400,000 |
+| interco_lco_kg | 50,074,520 | 49,574,520 | -500,000 |
+
+**7 of 13 figures wrong, and all six status counts exactly right** - because counting rows is
+additive at any grain and quantities are not. Nothing failed. Three hypotheses were tested and
+discarded before the real cause was found: contracts spanning multiple `contracts` rows (zero),
+null `contract_date` splitting a contract across dimension rows (zero), and the shell-versus-full
+inner query (identical deltas). Time skew was ruled out too - the last write to `contracts`,
+`sap_processed_data` and `trucking_operations` all predated the build.
+
+**What works instead: store the expensive part at the grain it is produced at.** Verified before
+building rather than assumed - `trucking_list_stage_snapshot` holds exactly **6,496** rows for the
+default YTD window, the identical count to the live `filtered` CTE. Same grain, so nothing needs
+re-deriving, and dimension filters keep working because filtering still happens *before* the
+grouping, exactly as live. Migration 163 adds seven columns there (`contract_number`,
+`contract_qty`, `outstanding_quantity`, `source_type`, `incoterm_eff`, `sap_presence`,
+`status_db`), and the refresh fills them from the expansion it **already runs** to write `stage`.
+
+| | before | after |
+| --- | --- | --- |
+| Section 1 | 34,912 ms live expansion | **70 ms** snapshot read |
+| trucking build | 227 s | **227 s** (unchanged) |
+| parity | - | **0 of 22 figures differ** |
+
+The rejected aggregate version had taken the build from 234s to **469s** by adding its own CTE
+chain; the row-grain version adds only the writes.
+
+**Parity is structural, not maintained by hand.** `truckingStatusSummaryCombinedSql` is split into
+the live `filtered` source, the snapshot `filtered` source, and
+`TRUCKING_SECTION1_AGGREGATE_CTES` plus the outer SELECT, which both sources embed **verbatim**.
+`truckingSection1SharedAggregates.test.ts` asserts that, that both `filtered` forms expose the
+same columns, that the snapshot form groups on the whole `contract_number` and never on a
+dimension, and that it applies the same `sap_presence` predicate. `sap_presence` is stored rather
+than approximated from the contract precisely because the live predicate reads it off the expanded
+row.
+
+Two guards on top: the loader refuses a snapshot whose `contract_number` is still NULL (written
+before 163, which would otherwise read as zero quantities), and Section 1 falls back to the live
+path whenever the daily summary is not eligible for the request.
+
+**What the viewer sees.** `summaryFreshness: { source, asOf, isStale }` on the response, rendered
+under the Outstanding Qty strip **only when the figures really came from the snapshot** - a badge
+that is always present is a badge nobody reads. Wording and tone live in
+`frontend/src/lib/truckingSummaryFreshness.ts` with its own tests; a pending rebuild reads
+differently from a completed one, and both say that the table's own row quantities are still live.
+
+**Live is no longer needed for freshness** - the three events that change trucking data (WB
+upload, daily planning upload, SAP import) all already call `invalidateTruckingListCache()`, which
+marks the summary stale and schedules the rebuild. It is still needed for **coverage**: requests
+with a global search, column filters or other non-dimension filters cannot be answered from
+columns the snapshot does not carry. Status filters already can, since `stage` is stored.
+
+**And the page is still ~60s, because Section 1 was never the critical path.** Worth stating
+plainly next to the 425x: the cold endpoint went 60,862 ms to 59,854 ms. The queries run
+concurrently, so removing the largest one only helps if it is the longest, and it was not. What
+bounds the page now, from the same breakdown:
+
+| ms | query |
+| --- | --- |
+| 24,609 | page rows (`trucking_source`) |
+| 24,558 | count (`trucking_filtered`) |
+| 19,213 / 15,750 / 10,243 | the three `latest_spd_contract` backlog queries |
+| **80** | Section 1 (was 34,038) |
+
+### The ALL view's counts from the snapshot: 60,862 ms to 18,581 ms
+
+Both halves of the hybrid total now come from the snapshot when the request is toolbar-only.
+Verified against the live forms **before** being wired in, on a scope with a non-zero backlog
+because a 0-vs-0 comparison proves nothing:
+
+| | live | snapshot |
+| --- | --- | --- |
+| execution count | 9,066 (15,632 ms) | 9,066 (**57 ms**) |
+| backlog count | 3 (7,294 ms) | 3 (**8 ms**) |
+
+The execution count reads `trucking_list_stage_snapshot`, **not**
+`trucking_pipeline_daily_summary.total_count`. That column filters
+`COALESCE(c.sap_presence, 'PRESENT') = 'PRESENT'` because it feeds the status circles, which must
+drop SAP-cancelled POs - while the list still shows those rows. Using it would have quietly
+undercounted the table. The stage snapshot applies no such filter and is keyed one row per
+operation with the same `INNER JOIN contracts` as `expansion_keys`, so `COUNT(*)` is the same
+number by construction.
+
+Two deliberate exclusions: Unplanned mode keeps its live counts (its execution half counts only
+UNPLANNED ops, and the column that answers that carries the same sap_presence filter), and any
+request with a global search or column filters falls through to live, because those cannot be
+answered from the columns the snapshot carries.
+
+Cold endpoint, measured through `resolveTruckingListForRequest`:
+
+| | baseline | now |
+| --- | --- | --- |
+| endpoint | 60,862 ms | **18,581 ms** |
+| DB time | 97,324 ms | **26,848 ms** |
+| Section 1 | 34,038 ms | 51 ms |
+| execution count | 24,609 ms | gone (snapshot) |
+| backlog count | one of the 10-19s queries | 8 ms |
+
+### Page rows: attempted, measured, not shipped
+
+The remaining 12,567 ms is the ALL view's execution page. Paging is already pushed into the
+expansion (`expansionPaging`), so the cost is materialising `trucking_source` and
+`contract_sto_lines` to work out *which* keys the page holds - exactly what the snapshot could
+answer from an index, as it already does for status-filtered pages.
+
+It was built and compared before wiring, and **the page membership differed** - one row per page,
+`db3460bd…` on live's page 1 and the snapshot's page 2. So it was removed rather than shipped.
+
+What was ruled out along the way, each by measurement rather than argument:
+
+- **The SAP-STO sort priority.** `shouldPrioritizeSapStoRows` returns true only for UNPLANNED and
+  PLANNED, and the ALL view passes no stage - so that prefix is not applied and cannot explain it.
+- **Ties at the page boundary.** The live order has no final tiebreaker, so this looked like the
+  answer; but two separate runs returned byte-identical page-1 ids, so the live path is stable
+  here and the difference is systematic, not a coin flip.
+- **A boundary effect at all.** The differing row sits at position 13 of 20, not at the edge, so
+  the orderings diverge in the middle.
+
+The remaining suspect, concrete and unverified: the expansion-key order sorts on
+`ts.supplier` - the **pre-expansion** row, untrimmed - while the snapshot stores
+`NULLIF(TRIM(COALESCE(src.supplier, c.supplier)), '')` from the **post-expansion** row. Two
+different values whenever the expansion alters supplier or whitespace differs. The check that
+would settle it is to compare those two expressions row by row for the page-1 neighbourhood; if
+that is the cause, the fix is to store the same expression the sort uses rather than to change the
+sort.
+
+Also worth recording, because it was offered as a way out and turned out not to be needed: hiding
+the total row count and page count would save essentially nothing now - the counts are 8-57 ms.
+The cost that remains is finding and fetching the 20 rows, which a hidden total does not touch.
+
 ### Stage A: deriving a Shipments page in Node, and what it refuses to do
 
 The list caches per (filters x status x sort x page), so every toolbar change is an uncached
