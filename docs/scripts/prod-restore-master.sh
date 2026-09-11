@@ -22,8 +22,27 @@ PG_IMAGE="${PG_IMAGE:-postgres:18-alpine}"
 [ -f "$DUMP" ] || { echo "dump not found: $DUMP" >&2; exit 1; }
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE" >&2; exit 1; }
 
-set -a; . "$ENV_FILE"; set +a
-: "${DB_HOST:?}"; : "${DB_NAME:?}"; : "${DB_USER:?}"; : "${DB_PASSWORD:?}"
+# Read .env by parsing, never by sourcing.
+#
+# A .env is not a shell script. Docker Compose accepts unquoted spaces in values, so a legitimate
+# line like `OIDC_SCOPES=openid email profile` becomes, under `source`, an assignment followed by
+# a command named `email` - which aborted this script on the staging host with
+# "email: command not found". Parsing takes the literal text after the first '=' and interprets
+# nothing.
+envval() {
+  [ -f "$ENV_FILE" ] || return 0
+  grep -m1 "^$1=" "$ENV_FILE" 2>/dev/null | cut -d= -f2-
+}
+
+DB_HOST="$(envval DB_HOST)"
+DB_PORT="$(envval DB_PORT)"
+DB_NAME="$(envval DB_NAME)"
+DB_USER="$(envval DB_USER)"
+DB_PASSWORD="$(envval DB_PASSWORD)"
+: "${DB_HOST:?DB_HOST not found in $ENV_FILE}"
+: "${DB_NAME:?DB_NAME not found}"
+: "${DB_USER:?DB_USER not found}"
+: "${DB_PASSWORD:?DB_PASSWORD not found}"
 DB_PORT="${DB_PORT:-5432}"
 
 DUMP_DIR="$(cd "$(dirname "$DUMP")" && pwd)"
