@@ -1,6 +1,7 @@
-import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr } from './groupPlantSql';
 import { normalizeRoleLevel } from './rolePermissionScope';
 import type { SessionUserPayload } from '../services/sessionAuth.service';
+import { canonicalizeUserRegionSites } from './userRegionSite';
 
 export interface MissingEtaAlertScopeClause {
   sql: string;
@@ -35,16 +36,12 @@ export function buildMissingEtaAlertScopeClause(user: SessionUserPayload): Missi
     paramIndex += 1;
   }
 
-  const groupPlants = (user.group_plants ?? [])
-    .map((p) => String(p).trim())
-    .filter(Boolean);
+  const groupPlants = canonicalizeUserRegionSites(user.group_plants ?? []);
   if (groupPlants.length > 0) {
-    const plantFilter = appendGroupPlantFilter(groupPlants, paramIndex, GROUP_PLANT, 'c.plant_code');
-    if (plantFilter.sql) {
-      parts.push(plantFilter.sql.replace(/^ AND /, ''));
-      params.push(...plantFilter.params);
-      paramIndex = plantFilter.nextIndex;
-    }
+    const placeholders = groupPlants.map((_, i) => `UPPER($${paramIndex + i})`).join(', ');
+    parts.push(`UPPER(NULLIF(TRIM(${GROUP_PLANT}), 'Blank')) IN (${placeholders})`);
+    params.push(...groupPlants);
+    paramIndex += groupPlants.length;
   }
 
   const products = (user.products ?? []).map((p) => String(p).trim()).filter(Boolean);

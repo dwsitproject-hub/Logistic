@@ -33,6 +33,25 @@ export function filterRegionSiteOptions(options: string[]): string[] {
   return out
 }
 
+/** Map stored Region/Plant labels onto the current dropdown option strings (case-insensitive). */
+export function alignSelectedToRegionSiteOptions(selected: string[], options: string[]): string[] {
+  const byKey = new Map<string, string>()
+  for (const option of filterRegionSiteOptions(options)) {
+    byKey.set(option.trim().toUpperCase(), option)
+  }
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const value of selected) {
+    const trimmed = String(value ?? '').trim()
+    if (isBlankFilterOption(trimmed)) continue
+    const key = trimmed.toUpperCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(byKey.get(key) ?? trimmed)
+  }
+  return out
+}
+
 export function valueInRegionSiteList(value: unknown, selected: string[]): boolean {
   const destSelected = selected.filter((item) => !isBlankFilterOption(item))
   if (destSelected.length === 0) return true

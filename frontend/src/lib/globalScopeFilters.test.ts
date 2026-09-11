@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  alignSelectedToRegionSiteOptions,
   filterRegionSiteOptions,
   isBlankFilterOption,
   rowMatchesToolbarMultiFilters,
@@ -12,6 +13,14 @@ describe('filterRegionSiteOptions', () => {
       'BONTANG',
       'Tarakan',
     ])
+  })
+})
+
+describe('alignSelectedToRegionSiteOptions', () => {
+  it('rewrites stored labels onto the option casing and drops Blank', () => {
+    expect(
+      alignSelectedToRegionSiteOptions(['tanjung pura', 'Blank', 'Tarakan'], ['TANJUNG PURA', 'BONTANG']),
+    ).toEqual(['TANJUNG PURA', 'Tarakan'])
   })
 })
 

@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { canonicalizeUserRegionSites } from '../utils/userRegionSite';
 
 export type UserScopeAssociations = {
   plants: string[];
@@ -38,7 +39,9 @@ export async function fetchUserScopeAssociations(
   ]);
 
   let plants = plantsResult.rows.map((row) => String(row.plant_name));
-  let group_plants = groupPlantsResult.rows.map((row) => String(row.group_plant));
+  let group_plants = canonicalizeUserRegionSites(
+    groupPlantsResult.rows.map((row) => row.group_plant),
+  );
   const products = productsResult.rows.map((row) => String(row.product_name));
 
   const legacy = typeof legacyPlant === 'string' ? legacyPlant.trim() : '';
@@ -51,7 +54,9 @@ export async function fetchUserScopeAssociations(
        ORDER BY group_plant`,
       [legacy],
     );
-    group_plants = legacyGroupResult.rows.map((row) => String(row.group_plant));
+    group_plants = canonicalizeUserRegionSites(
+      legacyGroupResult.rows.map((row) => row.group_plant),
+    );
   }
 
   return { plants, group_plants, products };

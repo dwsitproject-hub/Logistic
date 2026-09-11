@@ -1100,7 +1100,7 @@ export const getContractFilterGroupPlants = async (_req: AuthRequest, res: Respo
   }
 };
 
-/** Master Plant List group_plant values — Users assignment and commercial documents. */
+/** Master Plant List group_plant values — kept for callers that still need the master dimension. Users assignment uses Region/Plant (`/filter-options/group-plants`). */
 export const getContractFilterMasterGroupPlants = async (_req: AuthRequest, res: Response) => {
   try {
     const r = await query(

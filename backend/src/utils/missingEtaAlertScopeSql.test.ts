@@ -61,7 +61,15 @@ describe('missingEtaAlertScopeSql', () => {
       baseUser({ group_plants: ['PLANT-A', 'Blank'] }),
     );
     expect(scope.sql).toContain('group_plant');
+    expect(scope.sql).toContain('UPPER(');
     expect(scope.params).toEqual(['PLANT-A']);
+  });
+
+  it('Staff group_plants collapse KIJING onto TANJUNG PURA', () => {
+    const scope = buildMissingEtaAlertScopeClause(
+      baseUser({ group_plants: ['KIJING'] }),
+    );
+    expect(scope.params).toEqual(['TANJUNG PURA']);
   });
 
   it('Staff with products adds product filter', () => {

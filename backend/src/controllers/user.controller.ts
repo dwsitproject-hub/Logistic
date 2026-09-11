@@ -5,6 +5,7 @@ import { query, getClient } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
+import { canonicalizeUserRegionSites, expandRegionSiteMatchNames } from '../utils/userRegionSite';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -46,10 +47,14 @@ async function fetchUserAssociations(userIds: string[]): Promise<UserAssociation
     ),
   ]);
 
+  const groupPlantRowsByUser = new Map<string, unknown[]>();
   for (const row of groupPlantsResult.rows) {
-    const list = groupPlantsByUser.get(row.user_id) ?? [];
+    const list = groupPlantRowsByUser.get(row.user_id) ?? [];
     list.push(row.group_plant);
-    groupPlantsByUser.set(row.user_id, list);
+    groupPlantRowsByUser.set(row.user_id, list);
+  }
+  for (const [userId, names] of groupPlantRowsByUser) {
+    groupPlantsByUser.set(userId, canonicalizeUserRegionSites(names));
   }
 
   for (const row of productsResult.rows) {
@@ -65,11 +70,13 @@ function enrichUserRow(row: Record<string, unknown>, associations: UserAssociati
   const userId = String(row.id);
   const junctionGroupPlants = associations.groupPlantsByUser.get(userId) ?? [];
   const legacyPlant = typeof row.plant === 'string' ? row.plant.trim() : '';
-  const groupPlants = junctionGroupPlants.length > 0
-    ? junctionGroupPlants
-    : legacyPlant
-      ? [legacyPlant]
-      : [];
+  const groupPlants = canonicalizeUserRegionSites(
+    junctionGroupPlants.length > 0
+      ? junctionGroupPlants
+      : legacyPlant
+        ? legacyPlant.split(',').map((part) => part.trim())
+        : [],
+  );
   const products = associations.productsByUser.get(userId) ?? [];
 
   return {
@@ -92,18 +99,19 @@ async function syncUserPlants(
     return [];
   }
 
-  const uniqueNames = [...new Set(groupPlantNames.map((name) => String(name).trim()).filter(Boolean))];
+  const uniqueNames = canonicalizeUserRegionSites(groupPlantNames);
   if (uniqueNames.length === 0) {
     return [];
   }
 
+  const matchNames = expandRegionSiteMatchNames(uniqueNames);
   const resolved = await client.query(
     `SELECT id, ${MASTER_PLANT_GROUP_PLANT_SQL} AS group_plant
      FROM master_plants mp
      WHERE TRIM(LOWER(${MASTER_PLANT_GROUP_PLANT_SQL})) = ANY(
        SELECT TRIM(LOWER(unnest($1::text[])))
      )`,
-    [uniqueNames]
+    [matchNames]
   );
 
   for (const row of resolved.rows) {
@@ -115,7 +123,15 @@ async function syncUserPlants(
     );
   }
 
-  return [...new Set(resolved.rows.map((row) => String(row.group_plant)))].sort();
+  const saved = canonicalizeUserRegionSites(resolved.rows.map((row) => row.group_plant));
+  if (saved.length !== uniqueNames.length) {
+    logger.warn('User region/plant assignment: some values did not match master_plants.group_plant', {
+      userId,
+      requested: uniqueNames,
+      saved,
+    });
+  }
+  return saved;
 }
 
 async function syncUserProducts(

@@ -49,6 +49,7 @@ import {
 import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { alignSelectedToRegionSiteOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 
 interface User {
   id: string
@@ -138,7 +139,7 @@ export default function UsersPage() {
       const [usersRes, rolesRes, groupPlantsRes, dashboardProductsRes, masterProductsRes] = await Promise.all([
         api.get('/users'),
         api.get('/roles'),
-        api.get('/contracts/filter-options/master-group-plants'),
+        api.get('/contracts/filter-options/group-plants'),
         api.get('/dashboard/filter-options/products'),
         api.get('/products', { params: { page: 1, limit: 500 } }),
       ])
@@ -146,9 +147,7 @@ export default function UsersPage() {
       setUsers(usersRes.data.data)
       setRoles(rolesRes.data.data)
       const groupPlants = (groupPlantsRes.data?.data?.groupPlants ?? []) as string[]
-      setPlantOptions(
-        [...new Set(groupPlants.map((name) => String(name).trim()).filter(Boolean))].sort()
-      )
+      setPlantOptions(filterRegionSiteOptions(Array.isArray(groupPlants) ? groupPlants : []))
 
       const productNames = new Set<string>()
       const dashboardProducts = dashboardProductsRes.data?.data
@@ -268,13 +267,16 @@ export default function UsersPage() {
       role: user.role,
       level: user.level || 'Staff',
       transport_type: user.transport_type || '',
-      plants: user.group_plants?.length
-        ? user.group_plants
-        : user.plants?.length
-          ? user.plants
-          : user.plant
-            ? [user.plant]
-            : [],
+      plants: alignSelectedToRegionSiteOptions(
+        user.group_plants?.length
+          ? user.group_plants
+          : user.plants?.length
+            ? user.plants
+            : user.plant
+              ? user.plant.split(',').map((part) => part.trim())
+              : [],
+        plantOptions,
+      ),
       products: user.products ?? [],
       phone: user.phone || '',
       department: user.department || '',
@@ -410,7 +412,7 @@ export default function UsersPage() {
                     <TableHead>Role</TableHead>
                     <TableHead>Level</TableHead>
                     <TableHead>Transport Type</TableHead>
-                    <TableHead>Group Plant</TableHead>
+                    <TableHead>Region/Plant</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead>Department</TableHead>
                     <TableHead>Status</TableHead>
@@ -678,12 +680,13 @@ export default function UsersPage() {
 
                 <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
-                    label="Group Plant"
+                    label="Region/Plant"
                     options={plantOptions}
                     selected={formData.plants}
                     onChange={(plants) => setFormData({ ...formData, plants })}
-                    placeholder="Select group plant(s)"
-                    emptyMessage="No group plants found"
+                    placeholder="Select region/plant(s)"
+                    emptyMessage="No region/plant values"
+                    uppercaseOptionLabels
                   />
                 </div>
 
@@ -846,12 +849,13 @@ export default function UsersPage() {
 
                 <div className={showPlant ? '' : 'opacity-50 pointer-events-none'}>
                   <SearchableMultiSelect
-                    label="Group Plant"
+                    label="Region/Plant"
                     options={plantOptions}
                     selected={formData.plants}
                     onChange={(plants) => setFormData({ ...formData, plants })}
-                    placeholder="Select group plant(s)"
-                    emptyMessage="No group plants found"
+                    placeholder="Select region/plant(s)"
+                    emptyMessage="No region/plant values"
+                    uppercaseOptionLabels
                   />
                 </div>
 

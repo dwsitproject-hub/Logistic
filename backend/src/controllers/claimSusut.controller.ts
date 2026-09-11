@@ -3,6 +3,18 @@ import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import * as XLSX from 'xlsx';
+import {
+  buildClaimSusutFilteredCte,
+  CLAIM_SUSUT_AGING_SUM_SQL,
+  CLAIM_SUSUT_ROW_AGING_SQL,
+  nestClaimSusutTree,
+  parseClaimSusutQueryFilters,
+  parseClaimSusutStoredErrors,
+  parseOptionalUuid,
+  type ClaimSusutFilterScope,
+  type ClaimSusutQueryFilters,
+  type ClaimSusutTreeLeaf,
+} from '../utils/claimSusutQuerySql';
 
 type HeaderRow = (string | number | null | undefined)[];
 
@@ -342,9 +354,164 @@ export const listClaimSusutImports = async (_req: AuthRequest, res: Response) =>
   }
 };
 
+export const getClaimSusutImportById = async (req: AuthRequest, res: Response) => {
+  try {
+    const importId = parseOptionalUuid((req.params as { id?: string })?.id);
+    if (!importId) {
+      return res.status(400).json({ success: false, error: { message: 'Invalid import id' } });
+    }
+    const result = await query(
+      `
+      SELECT
+        i.id,
+        i.file_name,
+        i.sheet_name,
+        i.uploaded_at,
+        i.total_rows,
+        i.inserted_rows,
+        i.errors,
+        u.full_name AS uploaded_by_name,
+        u.username AS uploaded_by_username
+      FROM claim_susut_imports i
+      LEFT JOIN users u ON u.id = i.uploaded_by
+      WHERE i.id = $1::uuid
+      LIMIT 1
+      `,
+      [importId],
+    );
+    const row = result.rows?.[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: { message: 'Claim Susut import not found' } });
+    }
+    const errors = parseClaimSusutStoredErrors(row.errors);
+    const totalRows = Number(row.total_rows) || 0;
+    const insertedRows = Number(row.inserted_rows) || 0;
+    const failedRows = errors.length;
+    return res.json({
+      success: true,
+      data: {
+        ...row,
+        errors,
+        failedRows,
+        successRate:
+          totalRows > 0 ? Number(((insertedRows / totalRows) * 100).toFixed(1)) : insertedRows > 0 ? 100 : 0,
+      },
+    });
+  } catch (error) {
+    logger.error('Get Claim Susut import failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut import' } });
+  }
+};
+
+function claimSusutQueryFromReq(req: AuthRequest): ClaimSusutQueryFilters {
+  return parseClaimSusutQueryFilters((req.query || {}) as Record<string, unknown>);
+}
+
+async function runClaimSusutCte(
+  filters: ClaimSusutQueryFilters,
+  scope: ClaimSusutFilterScope,
+  selectSql: string,
+  extraParams: unknown[] = [],
+) {
+  const base = buildClaimSusutFilteredCte(filters, scope);
+  return query(`${base.sql}\n${selectSql}`, [...base.params, ...extraParams]);
+}
+
+export const getClaimSusutFilterOptions = async (req: AuthRequest, res: Response) => {
+  try {
+    const filters = claimSusutQueryFromReq(req);
+    const result = await runClaimSusutCte(
+      filters,
+      'options',
+      `
+      SELECT
+        ARRAY(SELECT DISTINCT product FROM filtered ORDER BY 1) AS products,
+        ARRAY(SELECT DISTINCT region_plant FROM filtered ORDER BY 1) AS plants,
+        ARRAY(SELECT DISTINCT source FROM filtered ORDER BY 1) AS sources,
+        ARRAY(SELECT DISTINCT incoterm FROM filtered ORDER BY 1) AS incoterms
+      `,
+    );
+    const row = result.rows?.[0] || {};
+    return res.json({
+      success: true,
+      data: {
+        products: row.products || [],
+        plants: row.plants || [],
+        sources: row.sources || [],
+        incoterms: row.incoterms || [],
+      },
+      meta: { importId: filters.importId },
+    });
+  } catch (error) {
+    logger.error('Claim Susut filter options failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut filter options' } });
+  }
+};
+
+export const getClaimSusutSummary = async (req: AuthRequest, res: Response) => {
+  try {
+    const filters = claimSusutQueryFromReq(req);
+    const result = await runClaimSusutCte(
+      filters,
+      'summary',
+      `
+      SELECT
+        COALESCE(SUM(qty_claim), 0)::float8 AS qty_claim,
+        COALESCE(SUM(amount_after_tax_idr), 0)::float8 AS amount_after_tax_idr,
+        COUNT(*)::int AS row_count
+      FROM filtered
+      `,
+    );
+    const row = result.rows?.[0] || {};
+    return res.json({
+      success: true,
+      data: {
+        qtyClaim: Number(row.qty_claim) || 0,
+        amountAfterTax: Number(row.amount_after_tax_idr) || 0,
+        rowCount: Number(row.row_count) || 0,
+      },
+      meta: { importId: filters.importId },
+    });
+  } catch (error) {
+    logger.error('Claim Susut summary failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut summary' } });
+  }
+};
+
+export const getClaimSusutTree = async (req: AuthRequest, res: Response) => {
+  try {
+    const filters = claimSusutQueryFromReq(req);
+    const result = await runClaimSusutCte(
+      filters,
+      'tree',
+      `
+      SELECT
+        product,
+        region_plant,
+        incoterm,
+        company,
+        COALESCE(SUM(qty_claim), 0)::float8 AS qty_claim,
+        COALESCE(SUM(amount_after_tax_idr), 0)::float8 AS amount_after_tax_idr
+      FROM filtered
+      GROUP BY 1, 2, 3, 4
+      `,
+    );
+    const leaves = (result.rows || []) as ClaimSusutTreeLeaf[];
+    const nodes = nestClaimSusutTree(leaves);
+    return res.json({
+      success: true,
+      data: nodes,
+      meta: { importId: filters.importId },
+    });
+  } catch (error) {
+    logger.error('Claim Susut tree failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut drilldown' } });
+  }
+};
+
 export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
   try {
-    const importId = String((req.query as any).importId || '').trim();
+    const filters = claimSusutQueryFromReq(req);
     const sortKeyRaw = String((req.query as any).sortKey || 'os_days').trim();
     const sortDirRaw = String((req.query as any).sortDir || 'desc').trim().toLowerCase();
     const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
@@ -353,31 +520,27 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 200;
     const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
 
-    const activeImportId =
-      importId ||
-      (await query(`SELECT id FROM claim_susut_imports ORDER BY uploaded_at DESC LIMIT 1`)).rows?.[0]?.id ||
-      null;
-
-    if (!activeImportId) {
-      return res.json({ success: true, data: [], meta: { totalCount: 0, importId: null } });
-    }
-
     const SORT_SQL: Record<string, string> = {
       vendor_code: `vendor_code`,
       vendor_name: `vendor_name`,
+      company: `company`,
       vendor_type: `vendor_type`,
+      source: `source`,
       created_by: `created_by`,
       sta: `sta`,
       crno: `crno`,
       cr_date: `cr_date`,
       os_days: `os_days`,
-      group_of_transport: `group_of_transport`,
+      group_of_transport: `group_of_transport_norm`,
       payment_method: `payment_method`,
       dest: `dest`,
+      region_plant: `region_plant`,
+      incoterm: `incoterm`,
       po_number: `po_number`,
       contract_ext_no: `contract_ext_no`,
       comm: `comm`,
       commodity: `commodity`,
+      product: `product`,
       uom: `uom`,
       currency: `currency`,
       company_code: `company_code`,
@@ -396,37 +559,48 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
     const sortExpr = SORT_SQL[sortKey];
     const orderBy = `${sortExpr} ${sortDir} NULLS LAST, id DESC`;
 
-    const countRes = await query(`SELECT COUNT(*)::int AS count FROM claim_susut_rows WHERE import_id=$1`, [activeImportId]);
+    const countRes = await runClaimSusutCte(
+      filters,
+      'rows',
+      `SELECT COUNT(*)::int AS count FROM filtered`,
+    );
     const totalCount = Number(countRes.rows?.[0]?.count) || 0;
 
+    const base = buildClaimSusutFilteredCte(filters, 'rows');
+    const limitIdx = base.params.length + 1;
+    const offsetIdx = base.params.length + 2;
     const rowsRes = await query(
       `
+      ${base.sql}
       SELECT
         id,
-        vendor_code, vendor_name, vendor_type, created_by,
+        vendor_code, vendor_name, company, vendor_type, source, created_by,
         sta, crno, cr_date, os_days,
-        group_of_transport, payment_method,
-        dest, po_number, contract_ext_no,
-        comm, commodity, uom, currency, company_code,
+        group_of_transport_norm AS group_of_transport, payment_method,
+        dest, region_plant, incoterm, po_number, contract_ext_no,
+        comm, commodity, product, uom, currency, company_code,
         remarks, type,
         qty_claim, amount_before_tax_idr, tax, amount_after_tax_idr,
-        CASE WHEN os_days IS NOT NULL AND os_days >= 0 AND os_days <= 30 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END AS a_0_30,
-        CASE WHEN os_days IS NOT NULL AND os_days >= 31 AND os_days <= 60 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END AS a_31_60,
-        CASE WHEN os_days IS NOT NULL AND os_days >= 61 AND os_days <= 90 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END AS a_61_90,
-        CASE WHEN os_days IS NOT NULL AND os_days > 90 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END AS a_gt_90,
+        ${CLAIM_SUSUT_ROW_AGING_SQL},
         created_at
-      FROM claim_susut_rows
-      WHERE import_id=$1
+      FROM filtered
       ORDER BY ${orderBy}
-      LIMIT $2 OFFSET $3
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}
       `,
-      [activeImportId, limit, offset],
+      [...base.params, limit, offset],
     );
 
     return res.json({
       success: true,
       data: rowsRes.rows,
-      meta: { totalCount, importId: activeImportId, limit, offset, sortKey, sortDir: sortDir.toLowerCase() },
+      meta: {
+        totalCount,
+        importId: filters.importId,
+        limit,
+        offset,
+        sortKey,
+        sortDir: sortDir.toLowerCase(),
+      },
     });
   } catch (error) {
     logger.error('List Claim Susut rows failed:', error);
@@ -436,43 +610,22 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
 
 export const listClaimSusutByGroupOfTransport = async (req: AuthRequest, res: Response) => {
   try {
-    const importId = String((req.query as any).importId || '').trim();
-    const activeImportId =
-      importId ||
-      (await query(`SELECT id FROM claim_susut_imports ORDER BY uploaded_at DESC LIMIT 1`)).rows?.[0]?.id ||
-      null;
-
-    if (!activeImportId) {
-      return res.json({ success: true, data: [], meta: { importId: null } });
-    }
-
-    const result = await query(
+    const filters = claimSusutQueryFromReq(req);
+    const result = await runClaimSusutCte(
+      filters,
+      'group',
       `
       SELECT
-        COALESCE(NULLIF(TRIM(group_of_transport), ''), '(Blank)') AS group_of_transport,
-        COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days >= 0 AND os_days <= 30 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_0_30,
-        COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days >= 31 AND os_days <= 60 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_31_60,
-        COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days >= 61 AND os_days <= 90 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_61_90,
-        COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days > 90 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_gt_90,
-        COALESCE(SUM(CASE
-          WHEN os_days IS NOT NULL AND (
-            (os_days >= 0 AND os_days <= 30)
-            OR (os_days >= 31 AND os_days <= 60)
-            OR (os_days >= 61 AND os_days <= 90)
-            OR (os_days > 90)
-          )
-          THEN COALESCE(amount_after_tax_idr, 0)
-          ELSE 0
-        END), 0)::numeric AS grand_total
-      FROM claim_susut_rows
-      WHERE import_id = $1
+        group_of_transport_norm AS group_of_transport,
+        COALESCE(SUM(qty_claim), 0)::float8 AS qty_claim,
+        ${CLAIM_SUSUT_AGING_SUM_SQL}
+      FROM filtered
       GROUP BY 1
       ORDER BY grand_total DESC NULLS LAST, a_gt_90 DESC NULLS LAST, a_61_90 DESC NULLS LAST, a_31_60 DESC NULLS LAST, a_0_30 DESC NULLS LAST, group_of_transport ASC
       `,
-      [activeImportId],
     );
 
-    return res.json({ success: true, data: result.rows, meta: { importId: activeImportId } });
+    return res.json({ success: true, data: result.rows, meta: { importId: filters.importId } });
   } catch (error) {
     logger.error('List Claim Susut by group of transport failed:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut by group of transport' } });
