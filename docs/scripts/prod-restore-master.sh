@@ -6,11 +6,15 @@
 # Run on the production BACKEND host, after the backend has started once (the schema comes from
 # the migrations, not from the dump - the dump is --data-only).
 #
-# Handles the one collision this restore always hits: docker-entrypoint.sh seeds five accounts on
-# every container start, and staging has the same usernames, so restoring `users` would fail on
-# the unique constraint. Those five rows are removed first - identified narrowly, by username AND
-# the seed's own @klip.com email, so a real account that happens to be called "admin" is left
-# alone.
+# Handles two things a plain pg_restore cannot.
+#
+# 1. docker-entrypoint.sh seeds five accounts on every container start, and staging has the same
+#    usernames, so restoring `users` would fail on the unique constraint. Those five rows are
+#    removed first - identified narrowly, by username AND the seed's own @klip.com email, so a
+#    real account that happens to be called "admin" is left alone.
+#
+# 2. A --data-only restore is not FK-safe, and --disable-triggers needs superuser rights that a
+#    managed database does not grant. Tables are restored one at a time, parents first.
 
 set -uo pipefail
 
@@ -89,22 +93,85 @@ if [ "$SEED_COUNT" -gt 0 ]; then
   psql_run -c "DELETE FROM users WHERE username IN ('admin','trading','logistics','finance','management') AND email LIKE '%@klip.com';"
 fi
 
+# Restore order, and why it is explicit rather than left to pg_restore.
+#
+# A --data-only restore is not guaranteed to be FK-safe, and here it demonstrably is not:
+# pg_restore works through the TOC roughly alphabetically, which puts
+# master_vessel_code_aliases before master_vessels and user_plants before users. The usual answer
+# is --disable-triggers, but that needs real superuser rights and the Aliyun RDS `postgres`
+# account does not have them - it fails with
+#   permission denied: "RI_ConstraintTrigger_..." is a system trigger
+#
+# So the tables go in one at a time, parents first. This needs no special privileges at all.
+#
+# The FK graph among these tables (read from the schema, not assumed):
+#   master_vessel_code_aliases -> master_vessels
+#   user_plants                -> users, master_plants
+#   user_products              -> users, products
+#   loading_ports, surveyors   -> shipments   (both empty; see the note below)
+RESTORE_ORDER=(
+  users
+  products
+  suppliers
+  supplier_groups
+  master_plants
+  master_vessels
+  master_loading_ports
+  surveyors
+  loading_ports
+  master_vessel_code_aliases
+  user_plants
+  user_products
+)
+
+# Each table is inserted without ON CONFLICT, so a second run would duplicate rows. Refuse when
+# anything is already populated rather than silently doubling the master data.
 echo
-echo "--- restoring (single transaction: all of it, or none) ---"
-# --single-transaction so a failure halfway leaves the database exactly as it was.
-# --disable-triggers because a --data-only restore does not guarantee FK-safe table order.
-docker run --rm -e PGPASSWORD="$DB_PASSWORD" -v "$DUMP_DIR:/dump:ro" "$PG_IMAGE" \
-  pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-  --data-only --no-owner --disable-triggers --single-transaction \
-  "/dump/$DUMP_FILE"
-RC=$?
+echo "--- checking the target tables are empty ---"
+NOT_EMPTY=""
+for t in "${RESTORE_ORDER[@]}"; do
+  exists="$(psql_val "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='$t' LIMIT 1")"
+  [ "$exists" = "1" ] || continue
+  n="$(psql_val "SELECT count(*) FROM \"$t\"")"
+  [ "${n:-0}" -eq 0 ] || NOT_EMPTY="$NOT_EMPTY $t($n)"
+done
+
+if [ -n "$NOT_EMPTY" ]; then
+  echo
+  echo ">>> STOP: these tables already hold rows:$NOT_EMPTY"
+  echo "    This restore inserts without ON CONFLICT, so running it now would duplicate the"
+  echo "    master data. If a previous attempt loaded some tables, empty those and retry."
+  exit 1
+fi
+echo "    all empty - proceeding"
 
 echo
-if [ $RC -ne 0 ]; then
-  echo ">>> RESTORE FAILED (exit $RC). Because it ran in one transaction, nothing was committed -"
-  echo "    except the DELETE above, which did commit. Re-run the backend container to re-seed the"
-  echo "    five accounts if you need to log in before retrying."
-  exit $RC
+echo "--- restoring, parents first ---"
+FAILED=""
+for t in "${RESTORE_ORDER[@]}"; do
+  exists="$(psql_val "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='$t' LIMIT 1")"
+  [ "$exists" = "1" ] || continue
+  # --single-transaction per table: a table either loads completely or not at all.
+  if docker run --rm -e PGPASSWORD="$DB_PASSWORD" -v "$DUMP_DIR:/dump:ro" "$PG_IMAGE" \
+       pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+       --data-only --no-owner --single-transaction \
+       -t "$t" "/dump/$DUMP_FILE" 2>/tmp/restore_err_$$
+  then
+    printf '  %-30s %s rows\n' "$t" "$(psql_val "SELECT count(*) FROM \"$t\"")"
+  else
+    printf '  %-30s FAILED\n' "$t"
+    sed 's/^/      /' /tmp/restore_err_$$
+    FAILED="$FAILED $t"
+  fi
+  rm -f /tmp/restore_err_$$
+done
+
+if [ -n "$FAILED" ]; then
+  echo
+  echo ">>> Tables that failed:$FAILED"
+  echo "    Tables listed with a row count above DID commit. Empty those and the failed ones,"
+  echo "    then retry, rather than re-running on a half-loaded database."
+  exit 1
 fi
 
 echo "=== row counts after restore ==="
