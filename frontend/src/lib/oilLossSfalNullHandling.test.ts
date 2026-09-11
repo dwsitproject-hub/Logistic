@@ -50,6 +50,8 @@ describe('computeROilLossSummary R1 with null SFAL', () => {
     const summary = computeROilLossSummary(
       [
         {
+          // `id` is required on OilLossSourceRow; the fixture simply omitted it.
+          id: 'row-sfal-null',
           contract_number: 'CN-1',
           quantity_sent: 100_000,
           quantity_received: 90_000,
@@ -66,6 +68,7 @@ describe('computeROilLossSummary R1 with null SFAL', () => {
     const summary = computeROilLossSummary(
       [
         {
+          id: 'row-sfal-zero',
           contract_number: 'CN-1',
           quantity_sent: 100_000,
           quantity_received: 90_000,

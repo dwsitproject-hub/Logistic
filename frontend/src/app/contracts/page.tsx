@@ -3199,7 +3199,7 @@ function ContractsPageContent() {
         exportColumns as ContractPerfExportColumn[],
         collected,
         {
-          formatStatusOverall: (row) => resolveContractStatusDisplay(row as Contract),
+          formatStatusOverall: (row) => resolveContractStatusDisplay(row as unknown as Contract),
         },
       )
 

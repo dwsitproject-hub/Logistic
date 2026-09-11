@@ -42,12 +42,25 @@ export function resolveLoadingPortDisplayLabel(opts: {
   return klip || sap || EMPTY_PORT_DISPLAY
 }
 
+/**
+ * One row shape for all three resolvers, because callers hand the same row to each.
+ *
+ * They used to declare only the field each one reads, which made a realistic row an excess-
+ * property error at every call written as a literal - including the test that proves the two
+ * names stay independent, passing `{ port_name, sap_port_name }` to both. Each function still
+ * reads only its own field; this widens what may be passed, not what is used.
+ */
+export type PortRow =
+  | { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown }
+  | null
+  | undefined
+
 export function resolveKlipPortInputValue(value: unknown): string {
   return isValidHumanPortName(value) ? String(value).trim() : ''
 }
 
 export function resolveKlipPortNameFromRow(
-  portRow: { port_name?: unknown; is_discharge_port?: unknown } | null | undefined,
+  portRow: PortRow,
   shipmentInfo?: Record<string, unknown> | null,
   sequence?: number,
 ): string {
@@ -73,7 +86,7 @@ export function resolveKlipPortNameFromRow(
 
 /** SAP port name only — empty string when SAP is missing/invalid (no KLIP fallback). */
 export function resolveSapPortNameFromRow(
-  portRow: { sap_port_name?: unknown; is_discharge_port?: unknown } | null | undefined,
+  portRow: PortRow,
   shipmentInfo?: Record<string, unknown> | null,
   sequence?: number,
 ): string {
@@ -91,7 +104,7 @@ export function resolveSapPortNameFromRow(
 }
 
 export function resolveLoadingPortDisplayFromRow(
-  portRow: { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown } | null | undefined,
+  portRow: PortRow,
   shipmentInfo?: Record<string, unknown> | null,
   sequence?: number,
   contractSapClosed?: unknown,

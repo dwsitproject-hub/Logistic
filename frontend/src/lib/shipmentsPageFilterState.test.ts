@@ -15,6 +15,9 @@ describe('shipmentsPageFilterState', () => {
     selectedGroupPlants: ['TP'],
     lateIndicatorFilter: 'ALL',
     charterTypeFilter: 'ALL',
+    // Required on ShipmentsGlobalFilterScope; the fixture predated it, so every key this test
+    // built carried `undefined` for it and the assertions never noticed.
+    sourceTypeFilter: 'ALL',
     viewOption: 'all',
     viewFilterValue: '',
     columnFiltersJson: '{}',

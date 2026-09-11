@@ -402,6 +402,32 @@ not. `regionSiteScopeAlignment.test.ts` reproduces the original mismatch, assert
 value both ticks and unticks, and audits every page for the call - forgetting one is invisible
 until a scoped user opens that page, since the count still reads correctly.
 
+#### `tsc --noEmit` on the frontend: 124 errors to 0
+
+Long-standing and entirely in test files, so the suite passed and nothing surfaced them. Split
+two ways:
+
+**104 were the vitest globals.** `vitest.config.ts` sets `globals: true`, so `describe` / `it` /
+`expect` exist at runtime, but nothing told TypeScript - four test files that rely on the globals
+rather than importing from `vitest` reported "Cannot find name". Fixed with
+`src/vitest-globals.d.ts` carrying `/// <reference types="vitest/globals" />`, **not** a `types`
+entry in tsconfig: setting `types` stops TypeScript auto-including every `@types/*` package
+(node, react, d3, ...) and would have traded these errors for a different set.
+
+**20 were real mismatches**, and two of them were tests quietly proving less than they appeared:
+
+| file | what it was | fix |
+| --- | --- | --- |
+| `shipmentsPageFilterState.test.ts` | fixture predated `sourceTypeFilter`, so every key it built carried `undefined` there | added the field |
+| `oilLossSfalNullHandling.test.ts` | fixtures omitted the required `id` | added it |
+| `loadingPortDisplay.test.ts` | the test that proves SAP and KLIP port names stay independent passes a row with *both*, but each resolver declared only the field it reads - an excess-property error | one shared `PortRow` type across the three resolvers; each still reads only its own field |
+| `contractPerformanceExport.test.ts` | callback params were typed `object`, so no caller could read a field off the row without casting | callbacks now receive the `Record<string, unknown>` the module already builds |
+
+The two production edits are type-level only. Entry points still take `object`, because a typed
+contract interface is assignable to that and would *not* be assignable to a `Record` without an
+index signature - it is the callbacks, which callers write and this code invokes, that needed the
+usable type. All 521 frontend tests still pass.
+
 ### Migration 161: the snapshot stores its derived columns
 
 **The Shipments summary reads them too.** Its own `latest_spd_contract` still extracted five of the

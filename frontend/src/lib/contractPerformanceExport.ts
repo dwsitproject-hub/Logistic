@@ -14,14 +14,21 @@ import {
   formatSapQtyMtDisplay,
 } from '@/lib/sapDisplayValue'
 
+/**
+ * Rows arrive here as whatever the page holds, so the entry points still take `object` - a typed
+ * contract interface is assignable to that, and would not be assignable to a Record without an
+ * index signature. The *callbacks* are the other direction: the caller writes them and this
+ * module calls them, so declaring their parameter as `object` meant no caller could read a field
+ * off the row without casting. They now receive the record this module already builds.
+ */
 export interface ContractPerfExportColumn {
   id: string
   label: string
-  getSortValue?: (row: object) => string | number | null | undefined
+  getSortValue?: (row: Record<string, unknown>) => string | number | null | undefined
 }
 
 export interface ContractPerfExportFormatters {
-  formatStatusOverall: (row: object) => string
+  formatStatusOverall: (row: Record<string, unknown>) => string
 }
 
 function asRecord(row: object): Record<string, unknown> {
@@ -99,7 +106,7 @@ export function resolveContractPerfExportCell(
   const rec = asRecord(row)
 
   if (id === 'status_overall') {
-    return formatters.formatStatusOverall(row) || '-'
+    return formatters.formatStatusOverall(rec) || '-'
   }
   if (id === 'over_under_delivery_status') {
     return formatSapDisplayValue(rec.over_under_delivery_status)
@@ -108,11 +115,11 @@ export function resolveContractPerfExportCell(
     return formatSapDisplayValue(rec.lt_spot)
   }
   if (id === 'month_delivery_end') {
-    const formatted = column.getSortValue?.(row)
+    const formatted = column.getSortValue?.(rec)
     return dashIfEmpty(formatted == null ? '' : String(formatted))
   }
   if (CONTRACT_PERF_EXPORT_DATE_COLUMN_IDS.has(id)) {
-    const raw = column.getSortValue?.(row)
+    const raw = column.getSortValue?.(rec)
     return raw ? formatDateDMY(String(raw)) : '-'
   }
   if (CONTRACT_PERF_EXPORT_QTY_MT_COLUMN_IDS.has(id)) {
@@ -134,7 +141,7 @@ export function resolveContractPerfExportCell(
     return formatSignedCycleDaysCompact(parseOptionalNumber(rec[id]))
   }
 
-  return dashIfEmpty(column.getSortValue ? column.getSortValue(row) : '')
+  return dashIfEmpty(column.getSortValue ? column.getSortValue(rec) : '')
 }
 
 /** Header + body using only the caller-supplied visible columns (user picker order). */
