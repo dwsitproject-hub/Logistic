@@ -360,9 +360,16 @@ Didaftarkan di **DWS Hub Admin → Applications** (sudah dilakukan 2026-09-11):
 | Target URL | `https://klip.kpndomain.com/login` |
 | OIDC Redirect URIs | `https://klip.kpndomain.com/auth/oidc/callback`<br>`http://172.28.80.50:3001/auth/oidc/callback` (sementara, untuk uji lewat IP) |
 
-Yang harus diminta balik dari admin Hub: **`OIDC_DISCOVERY_URL` produksi**, berbentuk
-`https://<host-hub-produksi>/api/sso/.well-known/openid-configuration`. Staging memakai
-`test-dwshub.kpndomain.com`; host produksinya jangan ditebak.
+**`OIDC_DISCOVERY_URL` produksi** (terverifikasi dari host backend 2026-09-11):
+
+```
+https://dwshub.kpndomain.com/api/sso/.well-known/openid-configuration
+```
+
+`issuer`-nya `https://dwshub.kpndomain.com` (bukan `test-dwshub`), dan
+`token_endpoint_auth_methods_supported` adalah `["none"]` - public client dengan PKCE, jadi
+memang tidak ada client secret yang perlu diminta. Varian HTTP menjawab `301` ke HTTPS; pakai
+yang HTTPS.
 
 ### Mengisi env di backend produksi
 
