@@ -346,6 +346,64 @@ Jangan tunda ke "nanti setelah UAT". Password-nya ada di repo.
 
 ---
 
+## STEP 8 — SSO / OIDC
+
+### Prasyarat dari sisi Hub
+
+Didaftarkan di **DWS Hub Admin → Applications** (sudah dilakukan 2026-09-11):
+
+| Field | Value |
+|---|---|
+| SSO Mode | `OIDC (strict)` |
+| OAuth Client ID | `logistic` |
+| Client type | public client / PKCE — **tidak ada client secret** |
+| Target URL | `https://klip.kpndomain.com/login` |
+| OIDC Redirect URIs | `https://klip.kpndomain.com/auth/oidc/callback`<br>`http://172.28.80.50:3001/auth/oidc/callback` (sementara, untuk uji lewat IP) |
+
+Yang harus diminta balik dari admin Hub: **`OIDC_DISCOVERY_URL` produksi**, berbentuk
+`https://<host-hub-produksi>/api/sso/.well-known/openid-configuration`. Staging memakai
+`test-dwshub.kpndomain.com`; host produksinya jangan ditebak.
+
+### Mengisi env di backend produksi
+
+```bash
+bash /opt/klip/docs/scripts/prod-set-oidc.sh
+```
+
+Script itu menanyakan discovery URL dan redirect URI, lalu **memverifikasi lebih dulu** sebelum
+menulis apa pun: discovery harus terambil **dari host backend** (bukan dari laptop — token
+exchange dilakukan server-to-server), harus JSON dan bukan HTML UI Hub, harus memuat `issuer` /
+`authorization_endpoint` / `token_endpoint` / `jwks_uri`, dan `jwks_uri` harus mengembalikan
+`keys`. Gagal di salah satu titik itu berarti `.env` tidak disentuh sama sekali.
+
+Penulisannya **merge**, bukan tulis-ulang: key lain di `.env` tetap, dan ada backup bertimestamp.
+`SESSION_COOKIE_SECURE` diturunkan dari skema redirect URI (`https` → `true`), karena cookie
+`Secure` di atas HTTP akan di-set lalu tidak pernah dikirim balik dan login berputar diam-diam.
+
+> `prod-set-db-credentials.sh` menulis ulang `.env` dari daftar key tetap. Menjalankannya
+> **setelah** script ini akan menghapus seluruh blok OIDC. Jalankan yang OIDC paling akhir.
+
+### Verifikasi
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:5001/auth/oidc/login
+```
+
+`302` ke authorization endpoint Hub = konfigurasi terbaca. `503` = salah satu dari
+`OIDC_DISCOVERY_URL` / `OIDC_CLIENT_ID` / `OIDC_REDIRECT_URI` kosong (ini perilaku yang
+disengaja — rute mati dengan aman, bukan error yang membingungkan).
+
+Login sungguhan harus lewat **browser**, pada origin yang sama persis dengan redirect URI.
+Session-nya cookie `HttpOnly` yang terikat host, jadi tidak bisa diuji dengan `curl`.
+
+### Yang menentukan siapa bisa masuk
+
+Pemetaan user bersifat **invite-only berdasarkan email** — akun tidak pernah dibuat otomatis.
+User Hub yang emailnya tidak ada di tabel `users` ditolak ke `/login?error=sso_no_access`.
+41 akun sudah dibawa dari staging; siapa pun di luar itu harus dibuat lebih dulu.
+
+---
+
 ## Rollback
 
 ```bash
