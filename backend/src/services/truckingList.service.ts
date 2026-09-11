@@ -15,6 +15,7 @@ import {
 import {
   appendTruckingUnplannedBacklogColumnFilters,
   appendTruckingUnplannedBacklogGlobalSearch,
+  buildTruckingUnplannedBacklogCountQuery,
   buildTruckingUnplannedContractToolbarScope,
 } from '../utils/truckingUnplannedHybridSql';
 import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
@@ -354,12 +355,28 @@ async function loadTruckingUnplannedBacklogCombinedForRequest(
    */
   const canUseSnapshotBacklogCount = !globalSearch && Object.keys(colFilters ?? {}).length === 0 && !contract;
   if (canUseSnapshotBacklogCount) {
-    const snapshotBacklogCount = await loadTruckingBacklogCountFromSnapshot(
+    let backlogCount = await loadTruckingBacklogCountFromSnapshot(
       toPipelineDailySummaryScope({ dateFrom, dateTo, plants, colFilters } as Parameters<
         typeof toPipelineDailySummaryScope
       >[0]),
     );
-    if (snapshotBacklogCount === 0) {
+    /*
+     * A Region/Plant filter cannot be counted from the daily summary - it keys on the
+     * master_plants dimension, not the toolbar's - so ask the database for the count directly.
+     *
+     * That is a query this path did not previously run, and it earns its place only because it
+     * decides whether to skip a much larger one: measured for BONTANG, the count is 1,375 ms
+     * against 6,501 ms for the combined query it lets us skip. The trade is real and stated: when
+     * the backlog is *not* empty both run, so a scope with backlog rows pays the count on top.
+     */
+    if (backlogCount === null && plants.length > 0) {
+      const countRes = await query(
+        await buildTruckingUnplannedBacklogCountQuery(scope.sql, toolbarSql),
+        params,
+      );
+      backlogCount = parseInt(String((countRes.rows[0] as { c?: unknown })?.c ?? '0'), 10) || 0;
+    }
+    if (backlogCount === 0) {
       const empty = {
         count: 0,
         contractQtyKg: 0,
@@ -1423,7 +1440,18 @@ async function runTruckingListSummaryWithBacklog(
   const tCombined0 = performance.now();
 
   const filters = buildPipelineDailyFilterInput(req);
+  /*
+   * Two gates, because the two snapshots answer different questions.
+   *
+   * `trucking_pipeline_daily_summary` keys on the master_plants `group_plant`, so it cannot serve
+   * a Region/Plant filter - the toolbar's values are Discharge Destination. The stage snapshot
+   * can, since migration 164 gives it `region_site` written from the live filter's own
+   * expression. Sharing one flag between them sent Section 1 down the live path for every
+   * plant-filtered request: measured at **18,826 ms** for BONTANG against **37 ms** from the
+   * snapshot, and it was the single largest query on that page.
+   */
   const dailyEligible = isPipelineDailySummaryEligible(filters);
+  const stageSnapshotEligible = isPipelineDailySummaryEligible(filters, { allowPlantFilter: true });
   let fromDaily: Awaited<ReturnType<typeof loadTruckingSummaryFromDaily>> | null = null;
   if (dailyEligible) {
     fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
@@ -1446,9 +1474,15 @@ async function runTruckingListSummaryWithBacklog(
    * status circles in the same section already do. `summaryFreshness` reports the as-of so the
    * page can say so.
    */
-  const section1Snapshot = dailyEligible
+  const section1Snapshot = stageSnapshotEligible
     ? await loadTruckingSection1FromStageSnapshot(toPipelineDailySummaryScope(filters), {
-        includeCounts: false,
+        /*
+         * Counts normally come from the daily summary; when that refused - a Region/Plant filter,
+         * or a stale summary - they have to come from here, or Section 1 loses its circles. The
+         * snapshot computes them from the same rows, and parity was verified with counts on:
+         * 22 figures, 0 differing, for no filter, BONTANG and TANJUNG PURA.
+         */
+        includeCounts: !fromDaily,
       })
     : null;
   const sectionOneFromSnapshot = section1Snapshot !== null;

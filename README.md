@@ -532,6 +532,74 @@ region_sites. Adding the dimension to that key would split a MAX-deduped quantit
 and sum it twice, which is exactly the migration 163 failure. A separate contract-grain backlog
 table would be the sound way to do it.
 
+#### Tracing the summary half: one shared gate was sending Section 1 live
+
+The endpoint stayed slow for a plant filter after migration 164, and three predictions about why
+had already been wrong - so this was measured per query instead of per endpoint, by wrapping the
+connection module's `query` and timing what the request actually issued.
+
+Two queries, out of twelve, were the whole cost:
+
+| query | bytes | ms |
+| --- | --- | --- |
+| `WITH filtered AS (...)` - Section 1, **live** | 347,743 | **18,826** |
+| `WITH latest_spd_contract AS (...)` - backlog combined | 113,757 | 7,107 |
+| everything else (10 queries) | - | < 110 each |
+
+**Section 1 should never have been live here.** `dailyEligible` gated two different tables from
+one flag: `loadTruckingSummaryFromDaily`, which reads the aggregate table and genuinely cannot
+serve a Region/Plant filter, and `loadTruckingSection1FromStageSnapshot`, which reads the stage
+snapshot and can, now that it carries `region_site`. Splitting them took Section 1 from
+**18,826 ms to 68 ms**, and its statement from 347,743 to 5,902 bytes.
+
+Counts came with a catch worth recording: the snapshot was asked for Section 1 with
+`includeCounts: false`, because the daily summary normally supplies them. With a plant filter it
+does not, so the counts would have gone missing. It now asks for counts exactly when the daily
+summary did not supply them - which also fixes the same latent gap for a merely stale summary.
+
+**The backlog query second.** The empty-backlog shortcut could not fire, because the count that
+decides it came from the daily summary and that refused the plant filter. Asking the database
+for the count directly is a query this path did not run before, and it earns its place only by
+skipping a larger one: **1,375 ms against the 6,501 ms** combined query. Stated plainly, the
+trade is one-way - a scope whose backlog is *not* empty now pays the count on top.
+
+| summaryOnly, BONTANG | ms |
+| --- | --- |
+| before | 18,992 |
+| Section 1 from the snapshot | 6,883 |
+| plus the backlog count shortcut | **3,298** |
+
+#### The other filters: region/plant was not the expensive one
+
+Surveyed after the above, each in its own cold cache key. Timings on this box are noisy and
+successive calls warm each other, so these are orders of magnitude rather than precise costs -
+but the spread is far wider than noise:
+
+| filter | summaryOnly ms | path |
+| --- | --- | --- |
+| incoterm | 14 | snapshot |
+| product | 17 | snapshot |
+| none | 326 | snapshot |
+| loading location | 1,006 | live |
+| column filter (supplier) | 1,362 | live |
+| global search | 1,780 | live |
+| region/plant | 4,633 | snapshot + live backlog count |
+| **status** | **29,963** | live |
+| **late indicator** | **44,121** | live |
+| **source type** | **87,844** | live |
+
+Product and incoterm were checked for the dimension mismatch that broke Region/Plant and do not
+have it: 30 of 30 product values and 2 of 2 incoterm values in the snapshot match the option
+list exactly, because both sides read `contracts` directly.
+
+The three slow ones all fail `isPipelineDailySummaryEligible` and fall to the live expansion, and
+their cost tracks how many rows the filter still matches - which is why a narrow global search is
+1.8 s and `sourceType = 3RD PARTY` is 88 s. **Two of the three are already stored on the stage
+snapshot**: `stage` (since migration 106) and `source_type` (since 163). Serving them the way
+region_site is now served is the same shape of change, and would be worth more than everything
+Region/Plant bought. Late indicator is not stored - it needs the delivery and completion dates -
+so it would need columns first.
+
 #### Add/Edit User: 36 of 40 Region/Plant choices save nothing
 
 Found while checking the same filter elsewhere. The user form offers the same
