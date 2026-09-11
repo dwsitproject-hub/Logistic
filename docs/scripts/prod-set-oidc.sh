@@ -191,8 +191,12 @@ sed 's/^\(DB_PASSWORD\|JWT_SECRET\|SESSION_SECRET\)=.*/\1=<set>/' "$ENV_FILE"
 cat <<'NEXT'
 
 --- next ---
-1. Restart the backend so it picks the new environment up:
-     cd /opt/klip && docker compose up -d backend && docker compose logs --tail=50 backend
+1. Restart the backend so it picks the new environment up. Both compose files, always: without
+   the remote-db overlay Compose also starts the co-located `postgres` service, which must stay
+   down in production.
+     cd /opt/klip
+     docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d backend
+     docker logs --tail=50 klip-backend
 
 2. Confirm the routes are live (they answer 503 while OIDC is unconfigured):
      curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:5001/auth/oidc/login
