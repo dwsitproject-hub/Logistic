@@ -49,6 +49,31 @@ describe('isPipelineDailySummaryEligible', () => {
     }
   });
 
+  /**
+   * Migration 164 gives `trucking_list_stage_snapshot` a `region_site` column written from the
+   * live filter's own expression, so the loaders reading *that* table can serve a Region/Plant
+   * filter. Verified before the flag was wired: across all 39 region_site values plus the
+   * unfiltered case, snapshot and live execution counts agreed on 40 of 40, and Section 1's 22
+   * figures agreed exactly for no filter, BONTANG and TANJUNG PURA.
+   *
+   * The flag is a caller's declaration, not a bypass - each loader re-checks that the column is
+   * actually populated before trusting it.
+   */
+  it('allows a plant filter only for a caller that declares the region_site table', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: ['BONTANG'] };
+    expect(isPipelineDailySummaryEligible(filters, { allowPlantFilter: true })).toBe(true);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+  });
+
+  it('the flag does not loosen any other rule', () => {
+    expect(
+      isPipelineDailySummaryEligible(
+        { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: ['BONTANG'], globalSearch: 'abc' },
+        { allowPlantFilter: true },
+      ),
+    ).toBe(false);
+  });
+
   it('rejects global search', () => {
     expect(
       isPipelineDailySummaryEligible({

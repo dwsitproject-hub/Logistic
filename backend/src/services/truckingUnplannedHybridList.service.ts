@@ -3,7 +3,6 @@ import {
   loadTruckingBacklogCountFromSnapshot,
   loadTruckingExecutionCountFromSnapshot,
   loadTruckingStagePageFromSnapshot,
-  pipelineDailySummaryScopeHasPlantFilter,
   toPipelineDailySummaryScope,
   type PipelineDailySummaryScope,
   type TruckingSnapshotPageSortField,
@@ -147,9 +146,13 @@ async function loadTruckingHybridCountsFromSnapshot(
   if (ctx.contractScope.contract) return null;
 
   const scope = truckingHybridSnapshotScope(ctx);
-  // Region/Plant is a different dimension here than in the toolbar - see the predicate's note.
-  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
-
+  /*
+   * The execution half reads `trucking_list_stage_snapshot`, which carries region_site since
+   * migration 164, so it can answer a Region/Plant filter. The backlog half reads
+   * `trucking_pipeline_daily_summary`, which still keys on the master_plants `group_plant`
+   * dimension and cannot - it returns null, and both counts then come from live together rather
+   * than mixing one snapshot figure with one live one.
+   */
   const [executionRows, contractRows] = await Promise.all([
     loadTruckingExecutionCountFromSnapshot(scope),
     loadTruckingBacklogCountFromSnapshot(scope),
@@ -306,10 +309,7 @@ async function fetchExecutionPage(
   const snapshotSort = snapshotPageSortField(ctx.sortKey);
   const snapshotScope = truckingHybridSnapshotScope(ctx);
   const snapshotKeys =
-    canPageAllHybridExecutionKeys(ctx) &&
-    snapshotSort &&
-    // Region/Plant is a different dimension here than in the toolbar - see the predicate's note.
-    !pipelineDailySummaryScopeHasPlantFilter(snapshotScope)
+    canPageAllHybridExecutionKeys(ctx) && snapshotSort
       ? await loadTruckingStagePageFromSnapshot(
           snapshotScope,
           null,

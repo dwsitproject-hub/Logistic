@@ -3,6 +3,7 @@
  */
 
 import { groupPlantExpr } from './groupPlantSql';
+import { sqlRegionSiteRawForContract } from './regionSiteSql';
 import {
   sqlPipelineIncotermKey,
   sqlPipelineProductKey,
@@ -180,10 +181,23 @@ export function buildTruckingStageSnapshotInsertSql(
 ): string {
   const expanded = buildTruckingExecutionSourceSql();
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+  /*
+   * The toolbar's Region/Plant dimension, stored next to - not instead of - `group_plant`.
+   *
+   * `group_plant` is the master_plants grouping; the filter's options are SAP Discharge
+   * Destination. Only 4 of the dropdown's 40 values exist in both, which is why filtering the
+   * snapshot by Region/Plant returned an empty page (migration 164).
+   *
+   * This is the *same expression the live filter evaluates*, inlined rather than re-derived, so
+   * the stored value cannot drift from what a live request would have matched. Timed over all
+   * 18,751 contracts first: 5.2s against a 227s build.
+   */
+  const regionSite = sqlRegionSiteRawForContract('c.contract_id', 'c.po_number');
   return `
     INSERT INTO ${targetTable} (
       operation_id, sto_line, stage, group_plant, contract_date, product, incoterm, supplier, created_at,
-      contract_number, contract_qty, outstanding_quantity, source_type, incoterm_eff, sap_presence, status_db
+      contract_number, contract_qty, outstanding_quantity, source_type, incoterm_eff, sap_presence, status_db,
+      region_site
     )
     SELECT
       src.id,
@@ -210,7 +224,8 @@ export function buildTruckingStageSnapshotInsertSql(
       src.source_type,
       src.incoterm,
       src.sap_presence,
-      src.status_db
+      src.status_db,
+      ${regionSite}
     FROM (${expanded}) src
     INNER JOIN contracts c ON c.id = src.contract_id
     WHERE src.id IS NOT NULL AND src.status IS NOT NULL

@@ -1924,7 +1924,9 @@ async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<
     !listUsesStoPaging
   ) {
     const dailyFilters = buildPipelineDailyFilterInput(req);
-    if (isPipelineDailySummaryEligible({ ...dailyFilters, status: 'ALL' })) {
+    // Stage-snapshot path: region_site carries the toolbar's dimension (migration 164), and
+    // loadTruckingStagePageFromSnapshot refuses if the column is not populated yet.
+    if (isPipelineDailySummaryEligible({ ...dailyFilters, status: 'ALL' }, { allowPlantFilter: true })) {
       snapshotServed = await loadTruckingStageSnapshotPage(
         listBuilt,
         toPipelineDailySummaryScope(dailyFilters),

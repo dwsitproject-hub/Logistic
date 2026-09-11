@@ -1,7 +1,7 @@
 import { buildTruckingSection1FromSnapshotQuery } from '../utils/truckingStatusSummaryCombinedSql';
 import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
-import { appendGroupPlantFilter } from '../utils/groupPlantSql';
+import { appendRegionSiteFilter } from '../utils/regionSiteSql';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 import {
   extractToolbarScopeFromColumnFilters,
@@ -99,18 +99,21 @@ export function toPipelineDailySummaryScope(
  * and scoping one with values from the other silently returns nothing.
  *
  * Measured on the dev database: the dropdown offers **40** values, the snapshot holds **11**, and
- * only **3** overlap even case-insensitively. `appendGroupPlantFilter` also compares
- * case-sensitively, so of those 3, `BONTANG` matched 0 rows against the stored `Bontang` (2,237)
- * and `TANJUNG PURA` matched 0 against `Tanjung Pura` (4,866). That is the empty Trucking page.
+ * only **4** overlap even case-insensitively (BEKASI, BONTANG, KARAWANG, TANJUNG PURA). The old
+ * comparison was case-sensitive too, so even those 4 failed: `BONTANG` matched 0 rows against the
+ * stored `Bontang` (2,237) and `TANJUNG PURA` 0 against `Tanjung Pura` (4,866).
  *
  * Making the comparison case-insensitive would have been the tempting fix and the wrong one: it
- * would repair 3 of 40 options and leave the other 37 silently empty, which is worse than being
- * uniformly broken because it looks fixed. So a plant filter falls back to the live path, which
- * filters the right dimension through `appendRegionSiteFilter` (`UPPER(...) IN (UPPER($n))`).
+ * would repair 4 of 40 options and leave the other 36 silently empty, which is worse than being
+ * uniformly broken because it looks fixed.
  *
- * The fix that gets the speed back is to store Region/Site on the snapshot the way
- * `contract_performance_snapshot.plant_site` already does - it holds the Discharge Destination
- * values, uppercase, and its page filters correctly today.
+ * **`trucking_list_stage_snapshot` no longer needs this guard** - migration 164 gives it a
+ * `region_site` column written from the live filter's own expression, so the three loaders that
+ * read it scope on the right dimension. The guard still applies to every table that does not
+ * carry that column: both `*_pipeline_daily_summary` tables, whose grain is
+ * (group_plant, contract_date, product, incoterm) and cannot be re-keyed without re-deriving the
+ * aggregates - the exact change that inflated 7 of 13 figures in the migration 163 first attempt
+ * - and `shipment_list_stage_snapshot`, which simply has no region_site yet.
  */
 export function pipelineDailySummaryScopeHasPlantFilter(scope: {
   plants?: string[];
@@ -118,10 +121,45 @@ export function pipelineDailySummaryScopeHasPlantFilter(scope: {
   return Array.isArray(scope.plants) && scope.plants.length > 0;
 }
 
+/**
+ * Is `region_site` populated, or is this a snapshot built before migration 164?
+ *
+ * An unpopulated column is all NULL, and a NULL never matches `UPPER(region_site) IN (...)` - so
+ * the page would come back empty again, which is the failure this column exists to fix. Falling
+ * back to live is slower and right.
+ *
+ * The test is "does any row have a value", **not** "is every row non-NULL". Those differ, and
+ * the stricter form was wrong: after the first rebuild 41 of 15,562 rows were NULL, and they are
+ * legitimate - a contract with no b2b ending row and no SAP discharge destination has no
+ * Region/Site. Requiring zero NULLs would have refused the snapshot forever over 0.3% of rows
+ * that no filter can match anyway. Those rows are excluded from a plant filter on both paths,
+ * because the live form compares the same NULL through `appendRegionSiteFilter`.
+ *
+ * The insert writes every row in one statement, so a half-populated table is not a state that
+ * can occur.
+ */
+async function truckingStageSnapshotRegionSiteReady(): Promise<boolean> {
+  const res = await query(
+    `SELECT 1 FROM ${TRUCKING_LIST_STAGE_SNAPSHOT_TABLE} WHERE region_site IS NOT NULL LIMIT 1`,
+  );
+  return res.rows.length > 0;
+}
+
+/** Can this scope be served from the trucking stage snapshot, plant filter included? */
+async function truckingStageSnapshotCanScope(scope: PipelineDailySummaryScope): Promise<boolean> {
+  if (!pipelineDailySummaryScopeHasPlantFilter(scope)) return true;
+  return truckingStageSnapshotRegionSiteReady();
+}
+
 export function isPipelineDailySummaryEligible(
   filters: PipelineDailySummaryFilterInput,
+  options?: { allowPlantFilter?: boolean },
 ): boolean {
-  if (pipelineDailySummaryScopeHasPlantFilter(filters)) return false;
+  // Only a caller reading `trucking_list_stage_snapshot` may pass allowPlantFilter - it is the
+  // one table carrying region_site. The loaders re-check, so this flag cannot bypass the guard.
+  if (options?.allowPlantFilter !== true && pipelineDailySummaryScopeHasPlantFilter(filters)) {
+    return false;
+  }
   if (String(filters.globalSearch ?? '').trim()) return false;
   if (hasColumnFilters(filters.colFilters)) return false;
   if (filters.lateIndicator && String(filters.lateIndicator).toUpperCase() !== 'ALL') return false;
@@ -166,7 +204,21 @@ function appendDimensionScopeFilter(
   return idx;
 }
 
-function buildDailySummaryWhere(scope: PipelineDailySummaryScope): {
+/**
+ * Scope predicate for the snapshot tables.
+ *
+ * `regionSiteColumn` says the table carries the toolbar's Region/Plant dimension (SAP Discharge
+ * Destination) and a plant filter may be applied to it. Only `trucking_list_stage_snapshot` does,
+ * via migration 164; the aggregate tables still key on the master_plants `group_plant`, which is a
+ * different dimension and must not be scoped with these values - see
+ * `pipelineDailySummaryScopeHasPlantFilter`. Callers without the column refuse the plant filter
+ * before reaching here, so a plant filter arriving without one is a programming error rather than
+ * something to silently drop: it would return an unfiltered page, which is the worst outcome.
+ */
+function buildDailySummaryWhere(
+  scope: PipelineDailySummaryScope,
+  options?: { regionSiteColumn?: string },
+): {
   sql: string;
   params: unknown[];
 } {
@@ -183,11 +235,19 @@ function buildDailySummaryWhere(scope: PipelineDailySummaryScope): {
     params.push(scope.dateTo);
   }
   if (scope.plants.length > 0) {
-    const plantFilter = appendGroupPlantFilter(scope.plants, idx, 'group_plant', 'group_plant');
-    if (plantFilter.sql) {
-      parts.push(plantFilter.sql.replace(/^ AND /, ''));
-      params.push(...plantFilter.params);
-      idx += plantFilter.params.length;
+    if (!options?.regionSiteColumn) {
+      throw new Error(
+        'buildDailySummaryWhere: a Region/Plant filter needs a region_site column - this table ' +
+          'stores the master_plants group_plant dimension, which the toolbar does not use.',
+      );
+    }
+    // Same comparison as the live filter (appendRegionSiteFilter): UPPER on both sides, and the
+    // migration-164 index is on UPPER(region_site) so it stays sargable.
+    const regionFilter = appendRegionSiteFilter(scope.plants, idx, options.regionSiteColumn);
+    if (regionFilter.sql) {
+      parts.push(regionFilter.sql.replace(/^ AND /, ''));
+      params.push(...regionFilter.params);
+      idx += regionFilter.params.length;
     }
   }
   idx = appendDimensionScopeFilter(
@@ -561,6 +621,9 @@ export async function loadTruckingSummaryFromDaily(
    * few minutes; the live fallback showed nothing at all in any usable time.
    */
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  // This table keys on the master_plants `group_plant` dimension, which the toolbar's
+  // Region/Plant options are not drawn from - see pipelineDailySummaryScopeHasPlantFilter.
+  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
@@ -651,12 +714,13 @@ export async function loadTruckingSection1FromStageSnapshot(
   isStale: boolean;
 } | null> {
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await truckingStageSnapshotCanScope(scope))) return null;
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
 
   const meta = await getRefreshMeta('trucking');
-  const { sql, params } = buildDailySummaryWhere(scope);
+  const { sql, params } = buildDailySummaryWhere(scope, { regionSiteColumn: 'region_site' });
   /*
    * A snapshot written before migration 163 has these columns NULL, which would silently read as
    * zero quantities. Require one non-null before trusting it; until the refresh has run since
@@ -707,11 +771,12 @@ export async function loadTruckingExecutionCountFromSnapshot(
   scope: PipelineDailySummaryScope,
 ): Promise<number | null> {
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await truckingStageSnapshotCanScope(scope))) return null;
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
 
-  const { sql, params } = buildDailySummaryWhere(scope);
+  const { sql, params } = buildDailySummaryWhere(scope, { regionSiteColumn: 'region_site' });
   const res = await query(
     `SELECT COUNT(*)::bigint AS c FROM ${TRUCKING_LIST_STAGE_SNAPSHOT_TABLE} ${sql}`,
     params,
@@ -733,6 +798,9 @@ export async function loadTruckingBacklogCountFromSnapshot(
   scope: PipelineDailySummaryScope,
 ): Promise<number | null> {
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  // This table keys on the master_plants `group_plant` dimension, which the toolbar's
+  // Region/Plant options are not drawn from - see pipelineDailySummaryScopeHasPlantFilter.
+  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
   const { sql, params } = buildDailySummaryWhere(scope);
   const res = await query(
     `SELECT COALESCE(SUM(unplanned_contract_backlog), 0)::bigint AS c
@@ -784,11 +852,12 @@ export async function loadTruckingStagePageFromSnapshot(
    * few minutes; the live fallback showed nothing at all in any usable time.
    */
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (!(await truckingStageSnapshotCanScope(scope))) return null;
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
 
-  const { sql, params } = buildDailySummaryWhere(scope);
+  const { sql, params } = buildDailySummaryWhere(scope, { regionSiteColumn: 'region_site' });
   const normalizedStage = stage == null ? null : String(stage).trim().toUpperCase();
   // PLANNED never occurs on its own (see klip-trucking-planned-equals-in-progress); the card
   // shows PLANNED + IN_PROGRESS, so it takes no parameter. ALL takes no predicate at all.
@@ -859,6 +928,9 @@ export async function loadShipmentStagePageFromSnapshot(
    * few minutes; the live fallback showed nothing at all in any usable time.
    */
   if (!(await isPipelineDailySummaryUsable('shipment'))) return null;
+  // This table keys on the master_plants `group_plant` dimension, which the toolbar's
+  // Region/Plant options are not drawn from - see pipelineDailySummaryScopeHasPlantFilter.
+  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
   if (!(await isPipelineDailySummaryFresh('shipment'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
@@ -909,6 +981,9 @@ export async function loadShipmentSummaryFromDaily(
   };
 } | null> {
   if (!(await isPipelineDailySummaryUsable('shipment'))) return null;
+  // This table keys on the master_plants `group_plant` dimension, which the toolbar's
+  // Region/Plant options are not drawn from - see pipelineDailySummaryScopeHasPlantFilter.
+  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
   if (!(await isPipelineDailySummaryFresh('shipment'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }

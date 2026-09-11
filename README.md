@@ -478,6 +478,60 @@ The test that asserted `plants: ['PRC Karawang'] -> eligible` has been inverted 
 recorded. Its fixture value is worth noting: `PRC Karawang` is not a value either dimension ever
 produces, which is a fair sign the case was written from assumption rather than from the data.
 
+#### Migration 164: Region/Site on the stage snapshot, and what it did not fix
+
+The live fallback restored correctness; this restores the speed for the paths that can take it.
+`trucking_list_stage_snapshot` gets a `region_site` column filled by the refresh from
+**`sqlRegionSiteRawForContract` itself** - the same expression the live filter evaluates, inlined
+rather than re-derived, so the stored value cannot drift from what a live request would match.
+Timed over all 18,751 contracts before building it: **5.2 s**. The rebuild came in at **214 s**
+against a 227 s baseline, so the column costs nothing measurable - unlike the migration 163 first
+attempt, whose extra CTE chain took the build to 469 s.
+
+`group_plant` stays where it is rather than being repurposed: it is a real dimension the page
+shows in its own right, and overwriting it would make the two indistinguishable again.
+
+**Parity, checked in two layers** - because counts alone would not have caught the 163 failure,
+where all six status counts were right and seven of thirteen quantities wrong:
+
+| check | result |
+| --- | --- |
+| execution count, snapshot vs live, every value | **0 differing of 40** (39 region_site values + unfiltered) |
+| Section 1's 22 figures, no filter / BONTANG / TANJUNG PURA | **0 differing** |
+| loader latency | 12-80 ms against 1.0-13.5 s live |
+
+41 of 15,562 rows have a NULL `region_site` - contracts with no b2b ending row and no SAP
+discharge destination. They are excluded from a Region/Plant filter on **both** paths, because
+live compares the same NULL through `appendRegionSiteFilter`, so this is not a behaviour change.
+It did break the first readiness guard, which required *zero* NULLs and so would have refused the
+snapshot forever over 0.3% of rows no filter can match; it now asks whether *any* row has a value.
+
+**And the endpoint is still slow for a plant filter, which is the honest headline.** Three
+predictions about where that time goes have now been wrong, so this is recorded as measurement
+rather than diagnosis:
+
+| piece, BONTANG | ms |
+| --- | --- |
+| execution count (snapshot) | 80 |
+| backlog count (falls back to live) | 1,375 |
+| Section 1 (snapshot) | 37 |
+| page keys (snapshot) | 26 |
+| **summaryOnly request, end to end** | **26,775** |
+
+So it is neither the backlog count (predicted, wrong) nor the page keys (predicted earlier for the
+unfiltered page, also wrong). It is the rest of the summary half, which does not read the stage
+snapshot, and the specific query has not been identified yet. Note also that these timings are
+not independent - a later call in the same process is warmed by the earlier ones, which is why a
+"full" request can read faster than either half measured before it.
+
+Deliberately still on live: `loadTruckingBacklogCountFromSnapshot` and both
+`*_pipeline_daily_summary` readers. Their grain is
+(group_plant, contract_date, product, incoterm), and a contract's `contract_number` is a
+STRING_AGG that can span several `contracts` rows with different po_numbers - so different
+region_sites. Adding the dimension to that key would split a MAX-deduped quantity across groups
+and sum it twice, which is exactly the migration 163 failure. A separate contract-grain backlog
+table would be the sound way to do it.
+
 #### Add/Edit User: 36 of 40 Region/Plant choices save nothing
 
 Found while checking the same filter elsewhere. The user form offers the same
