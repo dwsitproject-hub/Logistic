@@ -1452,7 +1452,30 @@ async function runTruckingListSummaryWithBacklog(
    * snapshot, and it was the single largest query on that page.
    */
   const dailyEligible = isPipelineDailySummaryEligible(filters);
-  const stageSnapshotEligible = isPipelineDailySummaryEligible(filters, { allowPlantFilter: true });
+  /*
+   * Section 1 reads the stage snapshot, which can express more than the aggregate table:
+   * Region/Plant via region_site, Source via source_type, and Status not at all - because this
+   * summary is built with `omitStatusFilter: true` and reports every status regardless of the
+   * card selected, exactly as the snapshot form does.
+   *
+   * Source is admitted only for the two literals the predicate understands. The UI sends nothing
+   * else, but `appendContractPerfSourceTypeFilter` silently returns '' for anything it does not
+   * recognise, and an unfiltered answer to a filtered question is the failure mode this whole
+   * area has already produced three times.
+   */
+  const sourceTypeFilter = String(filters.sourceType ?? '').trim();
+  const sourceTypeIsExpressible =
+    !sourceTypeFilter ||
+    sourceTypeFilter.toUpperCase() === 'ALL' ||
+    sourceTypeFilter === 'Interco' ||
+    sourceTypeFilter === '3rd Party';
+  const stageSnapshotEligible =
+    sourceTypeIsExpressible &&
+    isPipelineDailySummaryEligible(filters, {
+      allowPlantFilter: true,
+      allowSourceTypeFilter: true,
+      allowStatusFilter: true,
+    });
   let fromDaily: Awaited<ReturnType<typeof loadTruckingSummaryFromDaily>> | null = null;
   if (dailyEligible) {
     fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
@@ -1484,6 +1507,7 @@ async function runTruckingListSummaryWithBacklog(
          * 22 figures, 0 differing, for no filter, BONTANG and TANJUNG PURA.
          */
         includeCounts: !fromDaily,
+        sourceType: sourceTypeFilter,
       })
     : null;
   const sectionOneFromSnapshot = section1Snapshot !== null;

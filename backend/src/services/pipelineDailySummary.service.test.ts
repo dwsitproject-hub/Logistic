@@ -65,6 +65,41 @@ describe('isPipelineDailySummaryEligible', () => {
     expect(isPipelineDailySummaryEligible(filters)).toBe(false);
   });
 
+  /**
+   * Source and Status, admitted for different reasons and verified the same way.
+   *
+   * Source needs a predicate: the stage snapshot carries `source_type` (migration 163) and the
+   * scope applies `appendContractPerfSourceTypeFilter` - the *same* function the live query
+   * uses, which takes a column expression. Status needs none at all: the summary is built with
+   * `omitStatusFilter: true`, so it already reports every status regardless of the card.
+   *
+   * Parity before wiring, Section 1's 22 figures, live against snapshot: 0 differing for no
+   * filter, Interco, 3rd Party and status COMPLETED. Live 9.3-49.4s, snapshot 20-66ms.
+   */
+  it('admits Source only when the caller says it applies the predicate', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [], sourceType: 'Interco' };
+    expect(isPipelineDailySummaryEligible(filters, { allowSourceTypeFilter: true })).toBe(true);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+  });
+
+  it('admits Status without a predicate, because the summary omits the status filter', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [], status: 'COMPLETED' };
+    expect(isPipelineDailySummaryEligible(filters, { allowStatusFilter: true })).toBe(true);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+  });
+
+  it('each flag admits only its own filter', () => {
+    const both = {
+      dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [],
+      sourceType: 'Interco', status: 'COMPLETED',
+    };
+    expect(isPipelineDailySummaryEligible(both, { allowSourceTypeFilter: true })).toBe(false);
+    expect(isPipelineDailySummaryEligible(both, { allowStatusFilter: true })).toBe(false);
+    expect(
+      isPipelineDailySummaryEligible(both, { allowSourceTypeFilter: true, allowStatusFilter: true }),
+    ).toBe(true);
+  });
+
   it('the flag does not loosen any other rule', () => {
     expect(
       isPipelineDailySummaryEligible(

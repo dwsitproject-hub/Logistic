@@ -649,6 +649,54 @@ to the snapshot's own column for structural parity; and the summary is built wit
 `omitStatusFilter: true`, so it **ignores the status filter entirely** - meaning Status needs no
 predicate on the snapshot at all, only a gate that stops refusing it.
 
+#### Source and Status from the snapshot: 30-50 s to 36-49 ms
+
+Both admitted to the stage snapshot, for different reasons - which is why the eligibility flags
+are separate rather than one "stage snapshot" switch:
+
+- **Source** needs a predicate. `source_type` has been on the snapshot since migration 163, and
+  the scope applies `appendContractPerfSourceTypeFilter` - the *same* function the live query
+  uses, which happens to take a column expression, so the snapshot's own column slots straight
+  in and the two cannot drift.
+- **Status needs no predicate at all.** The summary is built with `omitStatusFilter: true`, so it
+  already reports every status regardless of which card is selected. Refusing the filter only
+  forced an identical answer to be computed the slow way.
+
+One guard worth its line: Source is admitted only for the two literals the predicate understands
+(`Interco`, `3rd Party`). The UI sends nothing else, but
+`appendContractPerfSourceTypeFilter` silently returns `''` for anything it does not recognise,
+and an unfiltered answer to a filtered question is the failure mode this area has already
+produced three times.
+
+Parity to the same standard as Region/Plant - Section 1's **22 figures, live against snapshot**:
+
+| case | live | snapshot | differing |
+| --- | --- | --- | --- |
+| no filter | 40,734 ms | 63 ms | **0** |
+| Source = Interco | 9,314 ms | 20 ms | **0** |
+| Source = 3rd Party | 49,442 ms | 66 ms | **0** |
+| Status = COMPLETED | 33,412 ms | 54 ms | **0** |
+
+The filter survey, re-run with the correct Source literals:
+
+| filter | before | after |
+| --- | --- | --- |
+| incoterm | 14 ms | 6 ms |
+| product | 17 ms | 7 ms |
+| **Source (Interco)** | 15-50 s | **36 ms** |
+| **Source (3rd Party)** | 15-50 s | **49 ms** |
+| **Status** | 29,963 ms | **39 ms** |
+| region/plant | 4,633 ms | 2,393 ms |
+| global search | 1,780 ms | 2,524 ms |
+| column filter | 1,362 ms | 1,748 ms |
+| late indicator | 44,121 ms | 38,931 ms |
+
+Late Indicator is unchanged and expected to be: it needs `delivery_end_date`,
+`trucking_completion_date` and `eta_trucking_completion_date`, none of which the snapshot stores,
+so it would need columns before it could be served. Global search and column filters move by less
+than the run-to-run noise on this box; they remain live by design, since neither is expressible
+from a fixed set of dimension columns.
+
 #### Add/Edit User: 36 of 40 Region/Plant choices save nothing
 
 Found while checking the same filter elsewhere. The user form offers the same

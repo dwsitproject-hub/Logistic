@@ -1,6 +1,7 @@
 import { buildTruckingSection1FromSnapshotQuery } from '../utils/truckingStatusSummaryCombinedSql';
 import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
+import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments';
 import { appendRegionSiteFilter } from '../utils/regionSiteSql';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 import {
@@ -151,12 +152,31 @@ async function truckingStageSnapshotCanScope(scope: PipelineDailySummaryScope): 
   return truckingStageSnapshotRegionSiteReady();
 }
 
+/**
+ * Each flag says "this caller can express that filter", and may only be passed by a caller that
+ * actually does. They are deliberately separate rather than one "stage snapshot" flag, because
+ * the three are true for different reasons:
+ *
+ * - `allowPlantFilter`: the stage snapshot carries `region_site` (migration 164) and the scope
+ *   applies it.
+ * - `allowSourceTypeFilter`: the stage snapshot carries `source_type` (migration 163) and the
+ *   caller passes `sourceType` down so the same predicate is applied.
+ * - `allowStatusFilter`: no predicate is needed at all. The summary's own query is built with
+ *   `omitStatusFilter: true`, so it reports every status regardless of the selected card - the
+ *   snapshot form does the same, and refusing the filter only forced an identical answer to be
+ *   computed the slow way.
+ *
+ * Getting this wrong is not a slow page but a wrong one: a filter the snapshot cannot express
+ * reaching a snapshot read is what made a Source-filtered page show 116 rows of 1,236.
+ */
 export function isPipelineDailySummaryEligible(
   filters: PipelineDailySummaryFilterInput,
-  options?: { allowPlantFilter?: boolean },
+  options?: {
+    allowPlantFilter?: boolean;
+    allowSourceTypeFilter?: boolean;
+    allowStatusFilter?: boolean;
+  },
 ): boolean {
-  // Only a caller reading `trucking_list_stage_snapshot` may pass allowPlantFilter - it is the
-  // one table carrying region_site. The loaders re-check, so this flag cannot bypass the guard.
   if (options?.allowPlantFilter !== true && pipelineDailySummaryScopeHasPlantFilter(filters)) {
     return false;
   }
@@ -164,10 +184,22 @@ export function isPipelineDailySummaryEligible(
   if (hasColumnFilters(filters.colFilters)) return false;
   if (filters.lateIndicator && String(filters.lateIndicator).toUpperCase() !== 'ALL') return false;
   if (filters.charterType && String(filters.charterType).toUpperCase() !== 'ALL') return false;
-  if (filters.sourceType && String(filters.sourceType).toUpperCase() !== 'ALL') return false;
+  if (
+    options?.allowSourceTypeFilter !== true &&
+    filters.sourceType &&
+    String(filters.sourceType).toUpperCase() !== 'ALL'
+  ) {
+    return false;
+  }
   if (filters.viewOption || filters.viewQuery) return false;
   if (filters.scopeStatus && String(filters.scopeStatus).trim().toUpperCase() !== 'ALL') return false;
-  if (filters.status && String(filters.status).trim().toUpperCase() !== 'ALL') return false;
+  if (
+    options?.allowStatusFilter !== true &&
+    filters.status &&
+    String(filters.status).trim().toUpperCase() !== 'ALL'
+  ) {
+    return false;
+  }
   if (filters.etaLoading && String(filters.etaLoading).toUpperCase() !== 'ALL') return false;
   if (filters.etaDischarge && String(filters.etaDischarge).toUpperCase() !== 'ALL') return false;
   if (filters.vessel || filters.port || filters.sto || filters.contract) return false;
@@ -217,7 +249,7 @@ function appendDimensionScopeFilter(
  */
 function buildDailySummaryWhere(
   scope: PipelineDailySummaryScope,
-  options?: { regionSiteColumn?: string },
+  options?: { regionSiteColumn?: string; sourceType?: string; sourceTypeColumn?: string },
 ): {
   sql: string;
   params: unknown[];
@@ -250,6 +282,18 @@ function buildDailySummaryWhere(
       idx += regionFilter.params.length;
     }
   }
+  /*
+   * The Source filter, applied through the *same* function the live query uses so the two cannot
+   * drift - it takes a column expression, so the snapshot's own `source_type` slots straight in.
+   * It matches only the literals the UI sends ('Interco', '3rd Party') and returns '' otherwise,
+   * which is why a caller must gate on the filter being one of those rather than on it merely
+   * being set.
+   */
+  if (options?.sourceType && options.sourceTypeColumn) {
+    const sourceSql = appendContractPerfSourceTypeFilter(options.sourceType, options.sourceTypeColumn);
+    if (sourceSql) parts.push(sourceSql.replace(/^ AND /, ''));
+  }
+
   idx = appendDimensionScopeFilter(
     parts,
     params,
@@ -707,7 +751,7 @@ export async function loadTruckingSummaryFromDaily(
  */
 export async function loadTruckingSection1FromStageSnapshot(
   scope: PipelineDailySummaryScope,
-  opts: { includeCounts?: boolean } = {},
+  opts: { includeCounts?: boolean; sourceType?: string } = {},
 ): Promise<{
   row: Record<string, unknown>;
   refreshedAt: string | null;
@@ -720,7 +764,11 @@ export async function loadTruckingSection1FromStageSnapshot(
   }
 
   const meta = await getRefreshMeta('trucking');
-  const { sql, params } = buildDailySummaryWhere(scope, { regionSiteColumn: 'region_site' });
+  const { sql, params } = buildDailySummaryWhere(scope, {
+    regionSiteColumn: 'region_site',
+    sourceType: opts.sourceType,
+    sourceTypeColumn: 'source_type',
+  });
   /*
    * A snapshot written before migration 163 has these columns NULL, which would silently read as
    * zero quantities. Require one non-null before trusting it; until the refresh has run since
