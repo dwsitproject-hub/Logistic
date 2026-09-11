@@ -1,0 +1,108 @@
+# KLIP production reverse proxy — 172.28.80.50 (ECS-App)
+#
+# Differs from klip-single-origin.conf.example in one important way: in production the backend
+# runs on a DIFFERENT host, so /api and /auth proxy to 172.28.80.51:5001, not 127.0.0.1:5001.
+#
+# This host already runs Nginx serving other applications on 80 and 443 (confirmed 2026-09-11:
+# three nginx workers on both ports, plus a proxy on 3010). So this is an ADDITIONAL server block
+# with its own server_name - do not replace the existing default site.
+#
+# Install:
+#   sudo cp klip-production.conf.example /etc/nginx/sites-available/klip
+#   sudo ln -s /etc/nginx/sites-available/klip /etc/nginx/sites-enabled/klip
+#   sudo nginx -t          # must pass before reloading - a bad config takes the OTHER apps down
+#   sudo systemctl reload nginx
+#
+# Some installs use /etc/nginx/conf.d/*.conf instead of sites-available. Check which this host
+# uses before copying:  grep -rn "include" /etc/nginx/nginx.conf | grep -E "sites-enabled|conf.d"
+#
+# Single origin is not cosmetic: the session cookie is HttpOnly and host-bound, so the browser,
+# /api and /auth must share one hostname or SSO login cannot complete.
+
+# --- HTTP: redirect to HTTPS ---
+server {
+    listen 80;
+    server_name <DOMAIN_PRODUKSI>;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name <DOMAIN_PRODUKSI>;
+
+    ssl_certificate     /etc/ssl/certs/<DOMAIN_PRODUKSI>.crt;
+    ssl_certificate_key /etc/ssl/private/<DOMAIN_PRODUKSI>.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # Enable only after HTTPS is confirmed working end to end - HSTS is remembered by browsers
+    # and a premature header locks users out of a broken site.
+    # add_header Strict-Transport-Security "max-age=15552000; includeSubDomains" always;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    # SAP and claim imports are spreadsheet uploads; the default 1m rejects the larger ones.
+    client_max_body_size 64m;
+
+    # Snapshot rebuilds and cold pages are slow by design (the trucking rebuild is 150-240s and
+    # the first page load after a deploy can take tens of seconds). The default 60s proxy_read
+    # turns those into 504s that look like application errors.
+    proxy_read_timeout    300s;
+    proxy_send_timeout    300s;
+    proxy_connect_timeout 15s;
+
+    # --- API -> backend host ---
+    location /api/ {
+        proxy_pass http://172.28.80.51:5001;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # --- OIDC SSO routes -> backend host (outside the /api prefix) ---
+    location /auth/ {
+        proxy_pass http://172.28.80.51:5001;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # --- UI -> Next.js on this host ---
+    # 80 and 443 are taken by this Nginx, so the container publishes 3001 (FRONTEND_PORT=3001)
+    # and is reached over loopback.
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+    }
+}
+
+# --- Matching environment ---
+#
+# Frontend /opt/klip/.env on 172.28.80.50:
+#   FRONTEND_PORT=3001
+#   NEXT_PUBLIC_API_URL=/api
+#   # BACKEND_INTERNAL_URL is NOT needed: Nginx proxies /api, so Next.js never has to rewrite it.
+#
+# Backend /opt/klip/.env on 172.28.80.51:
+#   FRONTEND_URL=https://<DOMAIN_PRODUKSI>
+#   TRUST_PROXY=1
+#   SESSION_COOKIE_SECURE=true          # the cookie is served over HTTPS
+#   SESSION_COOKIE_SAMESITE=Lax
+#   OIDC_REDIRECT_URI=https://<DOMAIN_PRODUKSI>/auth/oidc/callback
+#
+# NEXT_PUBLIC_API_URL is baked at image build time, so changing it requires `up -d --build`, not
+# just a restart.
+#
+# Requires the inbound rule 172.28.80.50 -> 172.28.80.51:5001. Verify from this host before
+# reloading Nginx, or every /api request will 502:
+#   curl -s http://172.28.80.51:5001/health
