@@ -511,7 +511,8 @@ export function invalidateTruckingListCache(): void {
   SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
 }
 
-function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
+/** Exported so the hybrid counts can be gated by the same predicate as every other snapshot read. */
+export function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
   const {
     status,
     location,

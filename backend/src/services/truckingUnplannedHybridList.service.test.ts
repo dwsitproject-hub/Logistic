@@ -38,6 +38,48 @@ import {
  * Source-audited because this file has no database, and what needs protecting is the gate
  * itself: without it the page is merely slow again, so nothing fails to catch the regression.
  */
+/**
+ * Three bugs, one cause: a filter the snapshot cannot express reaching a snapshot read.
+ *
+ * Found by asking whether a Source filter's total matched its rows. It did not, and the digging
+ * turned up three separate leaks, all introduced when counts and page keys moved to the snapshot:
+ *
+ *   1. the counts checked search / column filters / contract, and nothing about Source, Late
+ *      Indicator, location or status - a Source-filtered page reported the unfiltered total,
+ *      6,496 against an actual 1,236, with 324 phantom pages behind it;
+ *   2. the breakdown cache keyed on scope + search + column filters, so the count cached for the
+ *      unfiltered page was served to a filtered one and back again;
+ *   3. `canPageAllHybridExecutionKeys` delegates to `canUseTruckingStoKeyPaging` without passing
+ *      Source, so the snapshot returned 500 keys chosen with no Source predicate and the
+ *      expansion then dropped all but **116** of them - rows silently missing, which is worse
+ *      than a wrong total.
+ *
+ * After the fix, Interco and 3rd Party report 1,236 and 5,260 and sum exactly to the unfiltered
+ * 6,496. Source-audited because this file has no database.
+ */
+describe('filters the snapshot cannot express never reach it', () => {
+  const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
+
+  it('decides eligibility where req is in scope, by the shared predicate', () => {
+    expect(src).toContain('snapshotCountsEligible: isPipelineDailySummaryEligible(');
+    expect(src).toContain('allowPlantFilter: true');
+  });
+
+  it('gates the counts on it', () => {
+    expect(src).toContain('if (!ctx.snapshotCountsEligible) return null;');
+  });
+
+  it('gates the snapshot page keys on it too, not just the counts', () => {
+    // The live expansion-paging branch keeps the looser gate: it ranks trucking_source with the
+    // filter applied, so it is correct where the snapshot keys are not.
+    expect(src).toMatch(/ctx\.snapshotCountsEligible\s*\?\s*await loadTruckingStagePageFromSnapshot/);
+  });
+
+  it('keys the breakdown cache on every filter, via the built query filter key', () => {
+    expect(src).toContain('${ctx.executionBuilt.filterCacheKey}');
+  });
+});
+
 describe('snapshot-served page sorts', () => {
   const src = readFileSync(join(__dirname, 'truckingUnplannedHybridList.service.ts'), 'utf8');
 

@@ -600,6 +600,55 @@ region_site is now served is the same shape of change, and would be worth more t
 Region/Plant bought. Late indicator is not stored - it needs the delivery and completion dates -
 so it would need columns first.
 
+#### A Source filter was showing 116 rows of 1,236 - three leaks, one cause
+
+Setting out to serve Source and Status from the snapshot, the first thing checked was whether a
+Source filter's total matched its rows. It did not, and behind that were **three separate
+defects, all introduced when the counts and page keys moved to the snapshot** - so they were
+fixed before any performance work.
+
+| # | defect | symptom |
+| --- | --- | --- |
+| 1 | the counts checked search / column filters / contract, and nothing about Source, Late Indicator, location or status | Source-filtered page reported **6,496**, the unfiltered total, against an actual 1,236 - with 324 phantom pages |
+| 2 | the breakdown cache keyed on scope + search + column filters only | the count cached for the unfiltered page was served to a filtered one, and back again |
+| 3 | `canPageAllHybridExecutionKeys` delegates to `canUseTruckingStoKeyPaging` **without passing Source** | the snapshot returned 500 keys chosen with no Source predicate; the expansion then dropped all but **116** - rows silently missing, which is worse than a wrong total |
+
+The third is the one that matters most and was the hardest to see, because the page looked
+plausible: 116 Interco rows, all genuinely Interco. The giveaway was arithmetic - 116 + 384 = 500,
+exactly the unfiltered page size, so the page was being *partitioned* rather than queried.
+
+One cause underneath all three: a filter the snapshot cannot express was reaching a snapshot
+read. Eligibility is now decided once, where `req` is in scope, by the same predicate that gates
+every other snapshot read, and carried on the context as `snapshotCountsEligible` - so a filter
+the context does not even mention can no longer slip through. Plants stay allowed, because
+`region_site` expresses them.
+
+The live expansion-paging branch deliberately keeps the looser gate: it ranks `trucking_source`
+with the filter applied, so it is correct exactly where the snapshot keys are not.
+
+After the fix, the totals partition exactly:
+
+| | rows on a 500 page | total |
+| --- | --- | --- |
+| no Source filter | 500 | 6,496 |
+| Interco | 500 | 1,236 |
+| 3rd Party | 500 | 5,260 |
+| | | **1,236 + 5,260 = 6,496** |
+
+**Correcting an earlier figure in this file:** the filter survey recorded `sourceType` at
+87,844 ms. That measurement passed `3RD PARTY`, and `appendContractPerfSourceTypeFilter` matches
+only the literal `3rd Party` or `Interco` - so it applied no predicate at all and timed an
+unfiltered live request. The real filtered cost is 15-50 s. The conclusion it supported still
+holds, for a different reason: a Source filter is expensive because it forces the live path, not
+because the predicate is costly.
+
+**Still to do:** serving Source and Status from the snapshot, which was the actual task. Both
+columns exist (`source_type` since migration 163, `stage` since 106). Two useful findings for
+that work: `appendContractPerfSourceTypeFilter` takes a column expression, so it can be applied
+to the snapshot's own column for structural parity; and the summary is built with
+`omitStatusFilter: true`, so it **ignores the status filter entirely** - meaning Status needs no
+predicate on the snapshot at all, only a gate that stops refusing it.
+
 #### Add/Edit User: 36 of 40 Region/Plant choices save nothing
 
 Found while checking the same filter elsewhere. The user form offers the same

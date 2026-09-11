@@ -1,5 +1,6 @@
 import { query } from '../database/connection';
 import {
+  isPipelineDailySummaryEligible,
   loadTruckingBacklogCountFromSnapshot,
   loadTruckingExecutionCountFromSnapshot,
   loadTruckingStagePageFromSnapshot,
@@ -26,6 +27,7 @@ import {
 } from '../utils/truckingUnplannedHybridSql';
 import {
   buildPaginatedListQuery,
+  buildPipelineDailyFilterInput,
   buildTruckingListQuery,
   sortTruckingListRows,
   type TruckingListBuiltQuery,
@@ -49,6 +51,19 @@ export interface TruckingUnplannedHybridContext {
   sortDir: 'ASC' | 'DESC';
   /** Unplanned = UNPLANNED ops + backlog. All = every visible op + same open-PO backlog. */
   mode: TruckingHybridListMode;
+  /**
+   * May the row counts come from the snapshot for this request?
+   *
+   * The counts used to check only search / column filters / contract, and the context carries
+   * nothing about Source, Late Indicator or location - so a Source filter produced a page of
+   * **116 rows reporting a total of 6,496**, the unfiltered figure, with 324 phantom pages behind
+   * it. The rows were filtered live; the count never saw the filter.
+   *
+   * Decided where `req` is in scope, by the same predicate that gates every other snapshot read,
+   * so a filter the snapshot cannot express can no longer slip through a context that does not
+   * mention it.
+   */
+  snapshotCountsEligible: boolean;
 }
 
 export interface TruckingUnplannedHybridBreakdown {
@@ -141,6 +156,7 @@ async function loadTruckingHybridCountsFromSnapshot(
   ctx: TruckingUnplannedHybridContext,
 ): Promise<{ contractRows: number; executionRows: number } | null> {
   if (ctx.mode !== 'all') return null;
+  if (!ctx.snapshotCountsEligible) return null;
   if (String(ctx.globalSearch ?? '').trim()) return null;
   if (ctx.colFilters && Object.keys(ctx.colFilters).length > 0) return null;
   if (ctx.contractScope.contract) return null;
@@ -166,8 +182,19 @@ const BREAKDOWN_IN_FLIGHT = new Map<string, Promise<TruckingUnplannedHybridBreak
 const BREAKDOWN_CACHE_TTL_MS = 5 * 60 * 1000;
 const BREAKDOWN_MAX_CACHE_ENTRIES = 80;
 
+/**
+ * The counts are cached per request shape, and the shape has to include every filter that
+ * changes them.
+ *
+ * It used to key on scope + search + column filters only, so Source, Late Indicator, location and
+ * status were invisible to it - a request filtered to Source=Interco was served the count cached
+ * for the unfiltered page, and vice versa. `executionBuilt.filterCacheKey` is built by
+ * `buildTruckingListFilterCacheKey` from all of them, which is exactly the discriminator this
+ * needs, and it cannot drift as filters are added because the page query is keyed by the same
+ * string.
+ */
 function breakdownCacheKey(ctx: TruckingUnplannedHybridContext): string {
-  return `trucking-hybrid-bd:${ctx.mode}:${JSON.stringify({
+  return `trucking-hybrid-bd:${ctx.mode}:${ctx.executionBuilt.filterCacheKey}:${JSON.stringify({
     scope: ctx.contractScope,
     search: ctx.globalSearch,
     colFilters: ctx.colFilters,
@@ -309,7 +336,19 @@ async function fetchExecutionPage(
   const snapshotSort = snapshotPageSortField(ctx.sortKey);
   const snapshotScope = truckingHybridSnapshotScope(ctx);
   const snapshotKeys =
-    canPageAllHybridExecutionKeys(ctx) && snapshotSort
+    canPageAllHybridExecutionKeys(ctx) &&
+    snapshotSort &&
+    /*
+     * The keys must be drawn from the same row set the page is meant to show.
+     *
+     * `canPageAllHybridExecutionKeys` delegates to `canUseTruckingStoKeyPaging` without passing
+     * Source or Late Indicator, so it said yes to a Source-filtered request: the snapshot handed
+     * back 500 keys chosen with no Source predicate, the expansion then applied it, and the page
+     * showed **116 rows of a filtered set of 1,236** - rows silently missing, not merely a wrong
+     * total. That gate is still right for the *live* branch below, which ranks trucking_source
+     * with the filter applied; it is this branch that needs the stricter test.
+     */
+    ctx.snapshotCountsEligible
       ? await loadTruckingStagePageFromSnapshot(
           snapshotScope,
           null,
@@ -502,6 +541,13 @@ function buildTruckingHybridContext(
     sortKey,
     sortDir,
     mode,
+    // Plants are allowed: the stage snapshot carries region_site (migration 164). Everything
+    // else this predicate refuses - Source, Late Indicator, location, status - is a filter the
+    // snapshot cannot express, and answering it with an unfiltered count is how the total came
+    // to disagree with the rows.
+    snapshotCountsEligible: isPipelineDailySummaryEligible(buildPipelineDailyFilterInput(req), {
+      allowPlantFilter: true,
+    }),
   };
 }
 
