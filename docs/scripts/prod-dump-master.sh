@@ -19,8 +19,10 @@ OUT_DIR="${OUT_DIR:-/opt/klip/backups}"
 # source server is a different major version.
 PGDUMP_IMAGE="${PGDUMP_IMAGE:-postgres:18-alpine}"
 
-[ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE" >&2; exit 1; }
-set -a; . "$ENV_FILE"; set +a
+if [ "$ENV_FILE" != "/dev/null" ]; then
+  [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE" >&2; exit 1; }
+  set -a; . "$ENV_FILE"; set +a
+fi
 : "${DB_HOST:?DB_HOST not set in $ENV_FILE}"
 : "${DB_NAME:?DB_NAME not set}"
 : "${DB_USER:?DB_USER not set}"
@@ -62,7 +64,8 @@ psql_q() {
     psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "$1"
 }
 
-echo "=== source: $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME ==="
+echo "=== running on: $(hostname) ($(hostname -I 2>/dev/null | awk '{print $1}')) ==="
+echo "=== source    : $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME ==="
 echo "server version: $(psql_q 'SHOW server_version')"
 
 PRESENT=()
@@ -80,6 +83,36 @@ for t in "${MASTER_TABLES[@]}" "${USER_TABLES[@]}"; do
 done
 
 [ "${#PRESENT[@]}" -gt 0 ] || { echo "no tables found to dump" >&2; exit 1; }
+
+# Refuse to dump a database that has no master data.
+#
+# This script takes its connection from /opt/klip/.env, and on the PRODUCTION host that file
+# points at production - so running it there dumps the empty database you were about to seed.
+# That happened on 2026-09-11 and produced a 6.2K file containing only the five seeded accounts.
+# Nothing legitimate is ever dumped from an empty source, so refusing is always right.
+MASTER_ROWS=0
+for t in "${MASTER_TABLES[@]}"; do
+  case " ${PRESENT[*]} " in
+    *" $t "*) n="$(psql_q "SELECT count(*) FROM \"$t\"" || echo 0)"
+              MASTER_ROWS=$(( MASTER_ROWS + ${n:-0} )) ;;
+  esac
+done
+
+if [ "$MASTER_ROWS" -eq 0 ]; then
+  echo
+  echo ">>> STOP: every master table is empty at $DB_HOST/$DB_NAME."
+  echo "    Nothing would be dumped. This is what happens when the script runs on the PRODUCTION"
+  echo "    host, where /opt/klip/.env points at the production database."
+  echo
+  echo "    Run it on the STAGING host instead, where .env points at the SIT database."
+  echo "    To dump a different source without moving hosts, override the connection:"
+  echo "      DB_HOST=<sit-host> DB_NAME=<db> DB_USER=<user> DB_PASSWORD=<pw> \\"
+  echo "        ENV_FILE=/dev/null bash $0"
+  exit 1
+fi
+echo
+echo "master rows found: $MASTER_ROWS (source looks populated)"
+
 
 ARGS=()
 for t in "${PRESENT[@]}"; do ARGS+=(-t "public.$t"); done
