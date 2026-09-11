@@ -51,3 +51,21 @@ export function sqlShellRealizationStartDate(): string {
 export function sqlShellRealizationEndDate(): string {
   return `COALESCE(tr.realization_end_date, t.trucking_completion_date)`;
 }
+
+/**
+ * ATA for the Late Indicator: actual receipt only, never a planning date.
+ *
+ * `sqlShellRealizationEndDate` above falls back to `t.trucking_completion_date`, which is the
+ * *daily planning* end date (the expansion aliases that same column `planning_end_date`). That
+ * fallback is fine for the displayed Trucking Completion Date, but it conflates plan with actual:
+ * it holds 14,458 values where the raw actual holds 1,310, so a row that has only been planned
+ * looks like it has been received.
+ *
+ * The Late Indicator needs the two kept apart - ATA first, then the planning date as the ETA
+ * fallback - so it reads this instead. The full-SAP path already has it right in
+ * `sqlRealizationEndDate`, whose own note says "never planning columns"; the shell simply has no
+ * SAP to consult, so WB/extension is all there is.
+ */
+export function sqlShellTruckingAtaEndDate(): string {
+  return `tr.realization_end_date`;
+}

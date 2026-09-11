@@ -3,6 +3,7 @@ import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments';
 import { appendRegionSiteFilter } from '../utils/regionSiteSql';
+import { sqlTruckingLateIndicatorSortExpr } from '../utils/truckingListSort';
 import type { ColumnFilterPayload } from '../utils/contractListFilters';
 import {
   extractToolbarScopeFromColumnFilters,
@@ -146,6 +147,22 @@ async function truckingStageSnapshotRegionSiteReady(): Promise<boolean> {
   return res.rows.length > 0;
 }
 
+/**
+ * Is the Late Indicator's due-date column populated, or is this a build from before migration 165?
+ *
+ * Only `late_due_date` is checked, and deliberately: it is the rule's first branch, so a NULL
+ * there means '-' rather than a missing input. The other two are legitimately NULL in bulk -
+ * `late_ata_date` only where nothing has been received yet - so "any row has a value" is the
+ * right test for the column existing, and it is this one that must be there for the rule to mean
+ * anything.
+ */
+async function truckingStageSnapshotLateIndicatorReady(): Promise<boolean> {
+  const res = await query(
+    `SELECT 1 FROM ${TRUCKING_LIST_STAGE_SNAPSHOT_TABLE} WHERE late_due_date IS NOT NULL LIMIT 1`,
+  );
+  return res.rows.length > 0;
+}
+
 /** Can this scope be served from the trucking stage snapshot, plant filter included? */
 async function truckingStageSnapshotCanScope(scope: PipelineDailySummaryScope): Promise<boolean> {
   if (!pipelineDailySummaryScopeHasPlantFilter(scope)) return true;
@@ -161,6 +178,9 @@ async function truckingStageSnapshotCanScope(scope: PipelineDailySummaryScope): 
  *   applies it.
  * - `allowSourceTypeFilter`: the stage snapshot carries `source_type` (migration 163) and the
  *   caller passes `sourceType` down so the same predicate is applied.
+ * - `allowLateIndicatorFilter`: the stage snapshot carries the rule's three input dates
+ *   (migration 165) and the caller passes `lateIndicator` down so the shared rule is applied to
+ *   them. The dates are stored, never the label - its last branch compares against CURRENT_DATE.
  * - `allowStatusFilter`: no predicate is needed at all. The summary's own query is built with
  *   `omitStatusFilter: true`, so it reports every status regardless of the selected card - the
  *   snapshot form does the same, and refusing the filter only forced an identical answer to be
@@ -175,6 +195,7 @@ export function isPipelineDailySummaryEligible(
     allowPlantFilter?: boolean;
     allowSourceTypeFilter?: boolean;
     allowStatusFilter?: boolean;
+    allowLateIndicatorFilter?: boolean;
   },
 ): boolean {
   if (options?.allowPlantFilter !== true && pipelineDailySummaryScopeHasPlantFilter(filters)) {
@@ -182,7 +203,13 @@ export function isPipelineDailySummaryEligible(
   }
   if (String(filters.globalSearch ?? '').trim()) return false;
   if (hasColumnFilters(filters.colFilters)) return false;
-  if (filters.lateIndicator && String(filters.lateIndicator).toUpperCase() !== 'ALL') return false;
+  if (
+    options?.allowLateIndicatorFilter !== true &&
+    filters.lateIndicator &&
+    String(filters.lateIndicator).toUpperCase() !== 'ALL'
+  ) {
+    return false;
+  }
   if (filters.charterType && String(filters.charterType).toUpperCase() !== 'ALL') return false;
   if (
     options?.allowSourceTypeFilter !== true &&
@@ -249,7 +276,14 @@ function appendDimensionScopeFilter(
  */
 function buildDailySummaryWhere(
   scope: PipelineDailySummaryScope,
-  options?: { regionSiteColumn?: string; sourceType?: string; sourceTypeColumn?: string },
+  options?: {
+    regionSiteColumn?: string;
+    sourceType?: string;
+    sourceTypeColumn?: string;
+    /** Late Indicator, computed at read time from the stored dates - never a stored label. */
+    lateIndicator?: string;
+    lateIndicatorColumns?: { deliveryEnd: string; completion: string; etaCompletion: string };
+  },
 ): {
   sql: string;
   params: unknown[];
@@ -289,6 +323,26 @@ function buildDailySummaryWhere(
    * which is why a caller must gate on the filter being one of those rather than on it merely
    * being set.
    */
+  /*
+   * The Late Indicator, evaluated here rather than stored.
+   *
+   * `sqlTruckingLateIndicatorSortExpr` is the single definition of the rule - the live filter's
+   * `lateIndicatorTruckingExpr` now delegates to it too - so applying it to the snapshot's own
+   * columns cannot drift from what a live request would have decided. It has to be computed at
+   * read time because its last branch compares against CURRENT_DATE.
+   */
+  if (options?.lateIndicator && options.lateIndicatorColumns) {
+    const wanted = String(options.lateIndicator).trim().toUpperCase();
+    const label =
+      wanted === 'ON_TIME' ? 'On Time' : wanted === 'LATE' ? 'Late' : wanted === 'NA' ? '-' : null;
+    if (label) {
+      const cols = options.lateIndicatorColumns;
+      const expr = sqlTruckingLateIndicatorSortExpr(cols.deliveryEnd, cols.completion, cols.etaCompletion);
+      parts.push(`${expr} = $${idx++}::text`);
+      params.push(label);
+    }
+  }
+
   if (options?.sourceType && options.sourceTypeColumn) {
     const sourceSql = appendContractPerfSourceTypeFilter(options.sourceType, options.sourceTypeColumn);
     if (sourceSql) parts.push(sourceSql.replace(/^ AND /, ''));
@@ -751,7 +805,7 @@ export async function loadTruckingSummaryFromDaily(
  */
 export async function loadTruckingSection1FromStageSnapshot(
   scope: PipelineDailySummaryScope,
-  opts: { includeCounts?: boolean; sourceType?: string } = {},
+  opts: { includeCounts?: boolean; sourceType?: string; lateIndicator?: string } = {},
 ): Promise<{
   row: Record<string, unknown>;
   refreshedAt: string | null;
@@ -759,6 +813,10 @@ export async function loadTruckingSection1FromStageSnapshot(
 } | null> {
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
   if (!(await truckingStageSnapshotCanScope(scope))) return null;
+  // A Late Indicator filter needs migration 165's columns actually written.
+  if (opts.lateIndicator && String(opts.lateIndicator).trim().toUpperCase() !== 'ALL') {
+    if (!(await truckingStageSnapshotLateIndicatorReady())) return null;
+  }
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
@@ -768,6 +826,12 @@ export async function loadTruckingSection1FromStageSnapshot(
     regionSiteColumn: 'region_site',
     sourceType: opts.sourceType,
     sourceTypeColumn: 'source_type',
+    lateIndicator: opts.lateIndicator,
+    lateIndicatorColumns: {
+      deliveryEnd: 'late_due_date',
+      completion: 'late_ata_date',
+      etaCompletion: 'late_eta_date',
+    },
   });
   /*
    * A snapshot written before migration 163 has these columns NULL, which would silently read as
@@ -820,6 +884,23 @@ export async function loadTruckingExecutionCountFromSnapshot(
 ): Promise<number | null> {
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
   if (!(await truckingStageSnapshotCanScope(scope))) return null;
+  /**
+   * Serve a usable snapshot even when it is marked stale, and refresh behind.
+   *
+   * Requiring freshness here was tried on 2026-09-11 and reverted the same day. The reasoning was
+   * sound - a WB upload marks this stale, the rebuild takes 150-240s, and a row missing from the
+   * table for that window reads as the upload having failed, which is worse than a figure being a
+   * few minutes behind. The measurement was not: every write marks it stale, and on the dev box
+   * **14,591 of 16,552** operations had been touched since the last successful rebuild, so the
+   * rule sent essentially every request down the live path and the page took 25-190s. It made the
+   * page unusable in order to fix a gap it only closes while a rebuild happens to be current.
+   *
+   * The requirement is real and is **not met by this loader**: rows created by an upload do not
+   * appear until the next rebuild. Closing it properly means refreshing the affected operations
+   * on write - the pattern `contractPerformanceSnapshot.service` already uses in
+   * `refreshForTruckingOperationIds` - so the catch-up is seconds rather than minutes. Until that
+   * exists, this serves fast and slightly behind, which is what it did before today.
+   */
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }
@@ -901,6 +982,23 @@ export async function loadTruckingStagePageFromSnapshot(
    */
   if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
   if (!(await truckingStageSnapshotCanScope(scope))) return null;
+  /**
+   * Serve a usable snapshot even when it is marked stale, and refresh behind.
+   *
+   * Requiring freshness here was tried on 2026-09-11 and reverted the same day. The reasoning was
+   * sound - a WB upload marks this stale, the rebuild takes 150-240s, and a row missing from the
+   * table for that window reads as the upload having failed, which is worse than a figure being a
+   * few minutes behind. The measurement was not: every write marks it stale, and on the dev box
+   * **14,591 of 16,552** operations had been touched since the last successful rebuild, so the
+   * rule sent essentially every request down the live path and the page took 25-190s. It made the
+   * page unusable in order to fix a gap it only closes while a rebuild happens to be current.
+   *
+   * The requirement is real and is **not met by this loader**: rows created by an upload do not
+   * appear until the next rebuild. Closing it properly means refreshing the affected operations
+   * on write - the pattern `contractPerformanceSnapshot.service` already uses in
+   * `refreshForTruckingOperationIds` - so the catch-up is seconds rather than minutes. Until that
+   * exists, this serves fast and slightly behind, which is what it did before today.
+   */
   if (!(await isPipelineDailySummaryFresh('trucking'))) {
     schedulePipelineDailySummaryRefreshIfNeeded();
   }

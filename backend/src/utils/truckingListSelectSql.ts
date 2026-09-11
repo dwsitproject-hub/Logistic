@@ -3,6 +3,7 @@ import {
   sqlRealizationEndDate,
   sqlRealizationStartDate,
   sqlShellRealizationEndDate,
+  sqlShellTruckingAtaEndDate,
   sqlShellRealizationStartDate,
 } from './truckingRealizationSql';
 import {
@@ -39,7 +40,8 @@ import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
  * Alias of the SAP receive-date LATERAL on the hydrate list query. The select clause and the
  * FROM clause must agree on it, so both read this constant rather than repeating the string.
  */
-const TRUCKING_LIST_SAP_DATES_ALIAS = 'sapd';
+/** Exported so the Late Indicator filter can name the same SAP dates lateral the select uses. */
+export const TRUCKING_LIST_SAP_DATES_ALIAS = 'sapd';
 
 /** Contract numbers on grouped STO / operation (no SAP). */
 export const TRUCKING_LIST_CONTRACT_NUMBER_CASE = `
@@ -197,6 +199,14 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlShellRealizationEndDate()} AS realization_end_date,
         ${sqlShellRealizationStartDate()} AS trucking_start_date,
         ${sqlShellRealizationEndDate()} AS trucking_completion_date,
+        /*
+         * The Late Indicator's ATA, kept apart from the displayed completion date above.
+         *
+         * That one falls back to the planning date when WB is empty, which is right for display
+         * and wrong for judging lateness - it makes a planned row look received. The rule reads
+         * ATA first, then planning_end_date as its ETA.
+         */
+        ${sqlShellTruckingAtaEndDate()} AS ata_end_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
@@ -262,6 +272,9 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS realization_end_date,
         ${sqlRealizationStartDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS trucking_start_date,
         ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS trucking_completion_date,
+        /* ATA for the Late Indicator - the same value here, named separately so the rule cannot
+           pick up the planning fallback the shell variant applies to the column above. */
+        ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS ata_end_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,

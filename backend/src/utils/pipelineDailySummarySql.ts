@@ -197,7 +197,8 @@ export function buildTruckingStageSnapshotInsertSql(
     INSERT INTO ${targetTable} (
       operation_id, sto_line, stage, group_plant, contract_date, product, incoterm, supplier, created_at,
       contract_number, contract_qty, outstanding_quantity, source_type, incoterm_eff, sap_presence, status_db,
-      region_site
+      region_site,
+      late_due_date, late_ata_date, late_eta_date
     )
     SELECT
       src.id,
@@ -225,9 +226,27 @@ export function buildTruckingStageSnapshotInsertSql(
       src.incoterm,
       src.sap_presence,
       src.status_db,
-      ${regionSite}
+      ${regionSite},
+      /*
+       * The Late Indicator's three inputs, stored rather than the label it produces.
+       *
+       * Due date against ATA (actual receipt: WB, or SAP Trucking Last Receive Date), falling
+       * back to ETA (the last daily-planning deliverable date), then to today. The last branch
+       * compares against CURRENT_DATE, so the label moves on its own as the day advances - a
+       * stored label would be correct when written and wrong by the next morning.
+       *
+       * ATA comes from the expansion, which resolves WB then SAP; ETA is the raw
+       * trucking_operations planning column. Storing the expansion's like-named
+       * trucking_completion_date instead failed parity on 13 of 22 Section 1 figures, because on
+       * shell requests that column falls back to the planning date and made past-due rows look
+       * received. Same-named is not same-valued (migration 165).
+       */
+      c.delivery_end_date::date,
+      src.ata_end_date::date,
+      t.trucking_completion_date::date
     FROM (${expanded}) src
     INNER JOIN contracts c ON c.id = src.contract_id
+    INNER JOIN trucking_operations t ON t.id = src.id
     WHERE src.id IS NOT NULL AND src.status IS NOT NULL
     ON CONFLICT (operation_id) DO NOTHING`;
 }

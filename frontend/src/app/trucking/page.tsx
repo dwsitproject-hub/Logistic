@@ -371,6 +371,8 @@ interface TruckingOperation {
   trucking_start_date: string
   trucking_completion_date: string
   eta_trucking_completion_date?: string | null
+  /** ATA for the Late Indicator - actual receipt (WB or SAP), never a planning date. */
+  ata_end_date?: string | null
   quantity_sent: number
   quantity_delivered: number
   quantity_receive?: number
@@ -2746,11 +2748,20 @@ function TruckingPageContent() {
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   // Helper function to calculate late indicator
+  /**
+   * Due date against ATA, then the daily-planning end date, then today.
+   *
+   * It used to read `trucking_completion_date` - which on a shell response is the planning date,
+   * not the actual - and `eta_trucking_completion_date`, which is 0 of 16,552 rows for trucking
+   * because ETA is a shipment concept. So the badge judged some rows on a plan and the ETA
+   * fallback never fired. `ata_end_date` and `planning_end_date` are the two the backend filter
+   * and sort now use, so all three finally agree.
+   */
   const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } =>
     computeLateIndicatorDisplay(
       operation.delivery_end_date,
-      operation.trucking_completion_date,
-      operation.eta_trucking_completion_date,
+      operation.ata_end_date,
+      operation.planning_end_date,
     )
 
   const hasActiveTruckingFilters = useMemo(() => {

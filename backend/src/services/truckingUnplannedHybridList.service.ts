@@ -156,9 +156,20 @@ async function loadTruckingHybridCountsFromSnapshot(
   ctx: TruckingUnplannedHybridContext,
 ): Promise<{ contractRows: number; executionRows: number } | null> {
   if (ctx.mode !== 'all') return null;
+  /*
+   * `snapshotCountsEligible` is the whole test, and it already covers global search, contract,
+   * status, Source, Late Indicator and any column filter the scope cannot express.
+   *
+   * The raw `Object.keys(ctx.colFilters).length > 0` check that used to sit here was wrong, not
+   * redundant: Product and Incoterm arrive as *column filters* from the toolbar, and
+   * `toPipelineDailySummaryScope` folds them into the scope, which then applies them. Counting
+   * keys refused them anyway, so a scoped user filtered to one product paid the live count -
+   * 9,914 ms of the 25,305 ms it took to draw their page, with cards reading zero until it
+   * returned. `hasNonToolbarColumnFilters`, which `isPipelineDailySummaryEligible` uses, is the
+   * distinction that matters.
+   */
   if (!ctx.snapshotCountsEligible) return null;
   if (String(ctx.globalSearch ?? '').trim()) return null;
-  if (ctx.colFilters && Object.keys(ctx.colFilters).length > 0) return null;
   if (ctx.contractScope.contract) return null;
 
   const scope = truckingHybridSnapshotScope(ctx);
@@ -169,11 +180,31 @@ async function loadTruckingHybridCountsFromSnapshot(
    * dimension and cannot - it returns null, and both counts then come from live together rather
    * than mixing one snapshot figure with one live one.
    */
-  const [executionRows, contractRows] = await Promise.all([
+  const [executionRows, snapshotContractRows] = await Promise.all([
     loadTruckingExecutionCountFromSnapshot(scope),
     loadTruckingBacklogCountFromSnapshot(scope),
   ]);
-  if (executionRows === null || contractRows === null) return null;
+  if (executionRows === null) return null;
+
+  /*
+   * The two halves come from different tables, so they are allowed to come from different places.
+   *
+   * The backlog count reads `trucking_pipeline_daily_summary`, which keys on the master_plants
+   * `group_plant` and so refuses a Region/Plant filter. Requiring both from the snapshot meant one
+   * refusal dragged the other to live as well - and the live execution count is the expensive one:
+   * measured 9,668 ms against 717 rows the snapshot had already counted, while the live backlog
+   * count for the same scope is 1,887 ms. Asking the database only for the half the snapshot
+   * cannot answer is what the combined backlog query already does a few lines away.
+   */
+  let contractRows = snapshotContractRows;
+  if (contractRows === null) {
+    const { contractScopeSql, params: contractParams, toolbarSql } = buildContractQueryParts(ctx);
+    const res = await query(
+      await buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql),
+      contractParams,
+    );
+    contractRows = parseInt(String((res.rows[0] as { c?: unknown })?.c ?? '0'), 10) || 0;
+  }
   return { executionRows, contractRows };
 }
 
@@ -336,7 +367,7 @@ async function fetchExecutionPage(
   const snapshotSort = snapshotPageSortField(ctx.sortKey);
   const snapshotScope = truckingHybridSnapshotScope(ctx);
   const snapshotKeys =
-    canPageAllHybridExecutionKeys(ctx) &&
+    ctx.mode === 'all' &&
     snapshotSort &&
     /*
      * The keys must be drawn from the same row set the page is meant to show.

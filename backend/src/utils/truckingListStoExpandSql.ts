@@ -414,6 +414,15 @@ export function buildTruckingListExpansionSql(
         e.realization_end_date,
         e.trucking_start_date,
         e.trucking_completion_date,
+        /*
+         * ATA for the Late Indicator, projected explicitly.
+         *
+         * This SELECT names every column it passes out, so adding one to the inner list is not
+         * enough - omitting it here is a 42703 that failed every snapshot rebuild silently in the
+         * background, leaving the snapshot stale. Stale now means the page falls to the live path,
+         * so a missing passthrough reads as the page being slow rather than as a broken query.
+         */
+        e.ata_end_date,
         e.eta_trucking_start_date,
         e.eta_trucking_completion_date,
         e.eta_delivery_start_date,

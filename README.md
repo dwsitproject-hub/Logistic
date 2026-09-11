@@ -697,6 +697,80 @@ so it would need columns before it could be served. Global search and column fil
 than the run-to-run noise on this box; they remain live by design, since neither is expressible
 from a fixed set of dimension columns.
 
+#### The Late Indicator rule was wrong in three places
+
+**The rule, confirmed with the business 2026-09-11:** due date delivery end against **ATA** (SAP
+Trucking Last Receive Date, or the last WB date), falling back to **ETA** (the last daily-planning
+deliverable date), then to today.
+
+No implementation matched it. The *logic* was already right everywhere - one shared SQL expression
+and one frontend function, both four-branch - but every caller fed it different inputs:
+
+| place | ATA slot | ETA slot |
+| --- | --- | --- |
+| badge on screen | realization, which falls back to the planning date on shell responses | `eta_trucking_completion_date` - **0 of 16,552 rows**, because ETA is a shipment concept |
+| sort | same | same |
+| backend filter | **the planning date** - wrong slot entirely | same |
+
+So filtering Late could return rows whose badge read On Time, and the ETA fallback never fired
+anywhere. Correcting it moves **2,908 of 7,485 YTD rows** (measured with WB-only ATA; the real
+shift is larger).
+
+Fixed by giving the row an unconflated `ata_end_date` alongside the existing `planning_end_date`,
+and pointing filter, sort and badge at the same two slots. `sqlShellRealizationEndDate` keeps its
+planning fallback for the *displayed* completion date, which is right there and wrong for
+lateness.
+
+Migration 165 stores the three inputs as `late_due_date` / `late_ata_date` / `late_eta_date`,
+named for their role - because the first attempt stored the expansion's like-named
+`trucking_completion_date` and **failed parity on 13 of 22 Section 1 figures**: that column holds
+14,458 values where the actual holds 1,310, so past-due rows looked received. Same-named is not
+same-valued. Parity after: **22 figures, 0 differing** for none / LATE / ON_TIME / NA, live
+27-63 s against snapshot 38-78 ms, and the filter went **38,931 ms to 41 ms**.
+
+#### What went wrong operationally, and what it cost
+
+Three self-inflicted faults, all from stacking changes without verifying end to end between them.
+Recorded because the pattern matters more than the individual bugs.
+
+**1. Empty cards.** Splitting the eligibility gate let a Region/Plant filter reach Section 1's
+snapshot path for the first time, which made `fromDaily` null and pushed the code down a branch
+that had never run with the snapshot. The loader was asked for counts; the *parser* was still
+hardcoded to no counts, so they were fetched and discarded, `summary` came back undefined, and the
+endpoint returned no summary at all. Every card read zero and the Outstanding strip spun.
+**Parity testing missed it because it compared SQL rows, not the endpoint response** - 22 figures
+matched while the response carried no summary.
+
+**2. A freshness rule that made the page unusable.** Requiring a fresh snapshot for row membership
+was reverted the same day. The reasoning was sound - a WB upload marks the snapshot stale, the
+rebuild takes 150-240 s, and a missing row reads as a failed upload. The measurement was not:
+every write marks it stale, and **14,591 of 16,552** operations had been touched since the last
+rebuild, so essentially every request went live and the page took 25-190 s. The requirement is
+real and is **still open**; closing it properly means refreshing the touched operations on write,
+the pattern `contractPerformanceSnapshot.service` already uses in `refreshForTruckingOperationIds`.
+
+**3. All-or-nothing counts.** `loadTruckingHybridCountsFromSnapshot` required both halves from the
+snapshot. The backlog half reads the aggregate table, which refuses a plant filter, so one refusal
+dragged the execution count to live as well - **9,668 ms** for 717 rows the snapshot had already
+counted, against **1,887 ms** for the live backlog count alone. Each half now comes from wherever
+can answer it.
+
+Net for the reported case, Product CPO + Region/Plant BONTANG: **25,305 ms to 7,038 ms**, with
+cards correct (55/28/631/3 = 717, matching the table).
+
+**Two misattributions worth recording**, both from reasoning off a table name instead of tracing
+the query. The remaining cost was blamed on the backlog count, which measured 1,375 ms. And a
+saturated box was blamed on a SAP import - the `WITH parsed AS MATERIALIZED` queries are
+`buildOilLossGainSql`, the **Oil Loss warmer**, triggered by a `docker restart` done to load new
+code. Warm-up plus two snapshot rebuilds, on a box where `sap_processed_data` (160 MB) does not
+fit in `shared_buffers` (128 MB), is enough to make every timing meaningless.
+
+**Deploy ordering matters for this batch.** Migration 165 drops the three columns an earlier
+revision added and marks the snapshot stale. Between the migration running and the backend loading
+the new code, the refresh fails with 42703 and the page falls to live. Apply the migrations, deploy
+the code, then confirm `pipeline_summary_refresh_meta` reports `is_stale = false` for trucking
+before judging performance.
+
 #### Add/Edit User: 36 of 40 Region/Plant choices save nothing
 
 Found while checking the same filter elsewhere. The user form offers the same

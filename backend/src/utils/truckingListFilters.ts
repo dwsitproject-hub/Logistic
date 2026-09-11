@@ -2,10 +2,12 @@
  * Server-side global search + column filters for trucking list (`t` + `c` joins).
  */
 
+import { sqlTruckingLateIndicatorSortExpr } from './truckingListSort';
+import { sqlRealizationEndDate, sqlShellTruckingAtaEndDate } from './truckingRealizationSql';
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
-import { TRUCKING_LIST_CONTRACT_EXT_NO_FULL } from './truckingListSelectSql'
+import { TRUCKING_LIST_CONTRACT_EXT_NO_FULL, TRUCKING_LIST_SAP_DATES_ALIAS } from './truckingListSelectSql'
 import { sqlB2bEndingBuyerExpr, sqlB2bEndingUnloadExpr } from './b2bOriginEndingSql'
 import {
   sqlTruckingListBaseOutstandingQtyExpr,
@@ -16,24 +18,41 @@ import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias'
 
 export { parseColumnFiltersQuery }
 
-function lateIndicatorTruckingExpr(): string {
-  return `(
-  CASE
-    WHEN c.delivery_end_date IS NULL THEN '-'
-    WHEN t.trucking_completion_date IS NOT NULL THEN
-      CASE
-        WHEN c.delivery_end_date::date < t.trucking_completion_date::date THEN 'Late'
-        ELSE 'On Time'
-      END
-    WHEN t.eta_trucking_completion_date IS NOT NULL THEN
-      CASE
-        WHEN c.delivery_end_date::date < t.eta_trucking_completion_date::date THEN 'Late'
-        ELSE 'On Time'
-      END
-    WHEN c.delivery_end_date::date < CURRENT_DATE THEN 'Late'
-    ELSE 'On Time'
-  END
-)`;
+/**
+ * One definition of the Late Indicator, shared with the sort and with the snapshot form.
+ *
+ * This used to be a second, hand-copied CASE identical to
+ * `sqlTruckingLateIndicatorSortExpr`. Two copies that agree are the dangerous state rather than
+ * a safe one - nothing would have failed if either were edited - and the snapshot now applies
+ * this rule to its own stored columns, so "the two agree" had to stop being something checked by
+ * eye.
+ */
+/**
+ * One definition of the Late Indicator, shared with the sort, the badge and the snapshot.
+ *
+ * Due date against **ATA** (SAP Trucking Last Receive Date, or the last WB date), falling back to
+ * **ETA** (the last daily-planning deliverable date), and finally to today.
+ *
+ * All three places used to disagree on the inputs, so filtering Late could return rows whose
+ * badge read On Time. This filter passed the *planning* date into the ATA slot, and every place
+ * passed `eta_trucking_completion_date` as the ETA - a column that is 0 of 16,552 for trucking,
+ * because ETA is a shipment concept, so the fallback never fired anywhere. Correcting it moves
+ * 2,908 of 7,485 YTD rows.
+ *
+ * `skipSapJoin` decides only where ATA comes from: the shell has no sap_processed_data, so WB is
+ * all there is; the hydrate adds the SAP receive date.
+ */
+function lateIndicatorTruckingExpr(skipSapJoin: boolean): string {
+  const ata = skipSapJoin
+    ? sqlShellTruckingAtaEndDate()
+    : sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS);
+  return sqlTruckingLateIndicatorSortExpr(
+    'c.delivery_end_date',
+    ata,
+    // ETA = last daily-planning deliverable date. The expansion aliases this same column
+    // `planning_end_date`; here it is still the raw trucking_operations column.
+    't.trucking_completion_date',
+  );
 }
 
 /*
@@ -47,9 +66,18 @@ function lateIndicatorTruckingExpr(): string {
  *
  * Passing no grClosedExpr reproduces the previous map exactly.
  */
-function truckCol(grClosedExpr?: string, cancelledExpr?: string): Record<string, string> {
+function truckCol(
+  grClosedExpr?: string,
+  cancelledExpr?: string,
+  /**
+   * Shell requests have no `sapd` lateral, so the Late Indicator's ATA must come from WB alone.
+   * Naming an alias the FROM does not emit is a 42P01 that empties the whole page rather than
+   * failing loudly - see klip-trucking-skipsapjoin-alias-scope.
+   */
+  skipSapJoin = false,
+): Record<string, string> {
   return {
-  late_indicator: lateIndicatorTruckingExpr(),
+  late_indicator: lateIndicatorTruckingExpr(skipSapJoin),
   operation_id: 't.operation_id',
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
@@ -121,8 +149,10 @@ export function appendTruckingColumnFilters(
   /** Optional precomputed GR-close and SAP-cancelled columns; see truckCol(). */
   grClosedExpr?: string,
   cancelledExpr?: string,
+  /** Shell requests cannot reference the SAP dates lateral - see truckCol(). */
+  skipSapJoin = false,
 ): { sql: string; params: any[]; nextIndex: number } {
-  const TRUCK_COL = truckCol(grClosedExpr, cancelledExpr)
+  const TRUCK_COL = truckCol(grClosedExpr, cancelledExpr, skipSapJoin)
   const parts: string[] = []
   const params: any[] = []
   let pi = startIndex
@@ -205,13 +235,14 @@ export function appendTruckingColumnFilters(
 
 export function appendTruckingLateIndicatorFilter(
   lateIndicator: string | undefined,
-  startIndex: number
+  startIndex: number,
+  skipSapJoin = false
 ): { sql: string; params: any[]; nextIndex: number } {
   const v = String(lateIndicator ?? 'ALL').toUpperCase()
   if (v === 'ALL' || !v) {
     return { sql: '', params: [], nextIndex: startIndex }
   }
-  const expr = lateIndicatorTruckingExpr()
+  const expr = lateIndicatorTruckingExpr(skipSapJoin)
   if (v === 'ON_TIME') {
     return {
       sql: ` AND ${expr} = $${startIndex}::text`,

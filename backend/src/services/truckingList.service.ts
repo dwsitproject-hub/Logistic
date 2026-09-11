@@ -953,9 +953,11 @@ export function buildTruckingListQuery(
     fp,
     sqlTruckingGrClosedFromLateral(),
     sqlTruckingGrCancelledFromLateral(),
+    skipSapJoin,
   );
   fp = cCol.nextIndex;
-  const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp);
+  // skipSapJoin decides where the Late Indicator's ATA comes from; the shell has no sapd lateral.
+  const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp, skipSapJoin);
   fp = li.nextIndex;
   const src = appendTruckingSourceTypeFilter(sourceTypeParam, fp);
   fp = src.nextIndex;
@@ -1475,6 +1477,7 @@ async function runTruckingListSummaryWithBacklog(
       allowPlantFilter: true,
       allowSourceTypeFilter: true,
       allowStatusFilter: true,
+      allowLateIndicatorFilter: true,
     });
   let fromDaily: Awaited<ReturnType<typeof loadTruckingSummaryFromDaily>> | null = null;
   if (dailyEligible) {
@@ -1508,13 +1511,24 @@ async function runTruckingListSummaryWithBacklog(
          */
         includeCounts: !fromDaily,
         sourceType: sourceTypeFilter,
+        lateIndicator: filters.lateIndicator,
       })
     : null;
   const sectionOneFromSnapshot = section1Snapshot !== null;
   const [combined, backlog] = await Promise.all([
     sectionOneFromSnapshot
       ? Promise.resolve(
-          parseTruckingCombinedSummaryRow(section1Snapshot!.row, { includeCounts: false }),
+          /*
+           * Must match what the loader was asked for.
+           *
+           * This was hardcoded `false` because the daily summary always supplied the counts on
+           * this branch. Once a Region/Plant filter could reach it, the daily summary refused
+           * (different dimension), `fromDaily` became null, and the counts were fetched from the
+           * snapshot and then thrown away here - so `combined.summary` came back undefined, the
+           * function returned no summary at all, and every card read zero while the Outstanding
+           * strip waited for a value that never arrived.
+           */
+          parseTruckingCombinedSummaryRow(section1Snapshot!.row, { includeCounts: !fromDaily }),
         )
       : loadTruckingCombinedSummaryExecution(built, {
           includeCounts: !fromDaily,

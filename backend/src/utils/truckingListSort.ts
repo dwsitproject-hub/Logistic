@@ -79,10 +79,18 @@ const SORT_ALIAS_BY_KEY: Record<string, string> = {
 export function resolveTruckingExpansionKeySortField(sortKey: string): string {
   if (sortKey === 'sto_number') return AGGREGATED_STO_SORT;
   if (sortKey === 'late_indicator') {
+    /*
+     * ATA then the planning date, matching the filter and the badge.
+     *
+     * `ts.trucking_completion_date` was the wrong ATA on shell requests - it falls back to the
+     * planning date there - and `ts.eta_trucking_completion_date` is 0 of 16,552 for trucking,
+     * so the ETA fallback never fired. `ata_end_date` is the unconflated actual and
+     * `planning_end_date` is the last daily-planning deliverable date.
+     */
     return sqlTruckingLateIndicatorSortExpr(
       'ts.delivery_end_date',
-      'ts.trucking_completion_date',
-      'ts.eta_trucking_completion_date',
+      'ts.ata_end_date',
+      'ts.planning_end_date',
     );
   }
   const alias = SORT_ALIAS_BY_KEY[sortKey];
@@ -95,10 +103,11 @@ export function resolveTruckingExpansionKeySortField(sortKey: string): string {
  */
 export function resolveTruckingListSortField(sortKey: string): string {
   if (sortKey === 'late_indicator') {
+    // Same two slots as above, on the unprefixed page aliases.
     return sqlTruckingLateIndicatorSortExpr(
       'delivery_end_date',
-      'trucking_completion_date',
-      'eta_trucking_completion_date',
+      'ata_end_date',
+      'planning_end_date',
     );
   }
   return SORT_ALIAS_BY_KEY[sortKey] || 'created_at';

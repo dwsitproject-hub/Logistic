@@ -1127,12 +1127,13 @@ export const getTruckingDailyDeliverablesCalendar = async (req: AuthRequest, res
     params.push(...gSearch.params);
     idx = gSearch.nextIndex;
 
-    const cCol = appendTruckingColumnFilters(colFilters, idx);
+    const cCol = appendTruckingColumnFilters(colFilters, idx, undefined, undefined, true);
     extraWhere += cCol.sql;
     params.push(...cCol.params);
     idx = cCol.nextIndex;
 
-    const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, idx);
+    // This controller builds its own FROM without the SAP dates lateral, so ATA is WB-only.
+    const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, idx, true);
     extraWhere += li.sql;
     params.push(...li.params);
     idx = li.nextIndex;
