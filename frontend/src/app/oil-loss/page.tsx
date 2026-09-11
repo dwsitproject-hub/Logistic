@@ -1140,8 +1140,17 @@ export default function OilLossPage() {
     handleProductsChange,
     handleGroupPlantsChange,
     resetUserScopeFilters,
+    alignGroupPlantsToOptions,
     userScopeReady,
   } = useUserScopeFilterDefaults('oil-loss')
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
   const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('YTD')
   const [globalTransport, setGlobalTransport] =

@@ -1073,6 +1073,7 @@ function ShipmentsPageContent() {
     resetUserScopeFilters,
     handleProductsChange,
     handleGroupPlantsChange,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('shipments')
   /** Debounce Product / Group Plant so multi-select does not fire a cold fetch per click. */
   const debouncedSelectedProducts = useDebouncedValue(selectedProducts, 400)
@@ -1087,6 +1088,15 @@ function ShipmentsPageContent() {
   )
 
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])

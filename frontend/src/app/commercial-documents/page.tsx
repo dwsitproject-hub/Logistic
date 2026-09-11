@@ -166,7 +166,20 @@ function CommercialDocumentsPageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
     resetUserScopeFilters,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('contracts')
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   *
+   * This page also sets `uppercaseOptionLabels`, which restyles the label but not the value - so
+   * the mismatch was invisible in the list and visible only as the unticked box.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availablePlants)
+  }, [availablePlants, alignGroupPlantsToOptions])
 
   const rowsLengthRef = useRef(0)
   rowsLengthRef.current = rows.length

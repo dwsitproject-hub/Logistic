@@ -1053,6 +1053,7 @@ function ContractsPageContent() {
     resetUserScopeFilters,
     handleProductsChange,
     handleGroupPlantsChange,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('contracts')
   const {
     selectedProducts: contractPerfSelectedProducts,
@@ -1062,6 +1063,7 @@ function ContractsPageContent() {
     handleProductsChange: handleContractPerfProductsChange,
     handleGroupPlantsChange: handleContractPerfGroupPlantsChange,
     resetUserScopeFilters: resetContractPerfUserScopeFilters,
+    alignGroupPlantsToOptions: alignContractPerfGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('contract-performance', {
     mapProducts: mapUserProductsToContractPerfOptions,
   })
@@ -1101,6 +1103,16 @@ function ContractsPageContent() {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+    alignContractPerfGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions, alignContractPerfGroupPlantsToOptions])
+
   const [uploadingId, setUploadingId] = useState<string>('')
   const [csvCargoUploading, setCsvCargoUploading] = useState(false)
   const [csvCargoResult, setCsvCargoResult] = useState<{

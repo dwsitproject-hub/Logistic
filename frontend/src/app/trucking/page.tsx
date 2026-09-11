@@ -1082,12 +1082,22 @@ function TruckingPageContent() {
     resetUserScopeFilters,
     handleProductsChange,
     handleGroupPlantsChange,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('trucking')
   const scopeSummaryRequestKey = useMemo(
     () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
     [selectedProducts, selectedGroupPlants],
   )
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])

@@ -367,6 +367,41 @@ dimension that happens to carry the same place names.
 > `contract_performance_snapshot`, which stores what the same expression produces (verified
 > identical across all 18,751 contracts).
 
+#### The scoped Region/Plant box said "1 selected" with nothing ticked
+
+Reported 2026-09-11 for a user scoped to product CPO and Region/Plant Bontang: on Contract
+Performance the filter showed `1 selected (OR)` and the Bontang row was **unchecked**.
+
+It is a display bug only, and the two halves of that are worth separating:
+
+- The **request was always right.** `appendRegionSiteFilter` emits
+  `UPPER(NULLIF(TRIM(expr), 'Blank')) IN (UPPER($n))`, so `plant=Bontang` matched. The rows on
+  screen were correctly scoped the whole time.
+- The **checkbox was comparing two spellings of the same place.** The user's scope is stored
+  against `master_plants` and reaches the page as `Bontang`; the dropdown options are DISTINCT
+  SAP Discharge Destination and arrive as `BONTANG`. `SearchableMultiSelect` renders
+  `checked={selected.includes(option)}`, and the count comes from `selected.length` - hence one
+  selected, nothing ticked. Both spellings were confirmed against the dev database.
+
+Products were fine and stay fine: the stored value is `CPO` and the option is `CPO`.
+`useUserScopeFilterDefaults` already had a `mapProducts` hook for pages that relabel products;
+Region/Plant had no equivalent, and passed the stored value through untouched.
+
+**Fixed in the state, not in the comparison** - and that distinction is the whole design. Ticking
+the box with a looser comparison would have left it impossible to untick, because the toggle
+removes with `selected.filter((s) => s !== value)` and that is strict. So the hook exposes
+`alignGroupPlantsToOptions(options)`, which re-spells the selection as the options spell it
+(reusing `alignSelectedToRegionSiteOptions`) and returns the **same array reference** when nothing
+changes, so the effect that calls it cannot loop.
+
+Wired on all six pages that show the filter: Contracts, Contract Performance (a second, separate
+scope in the same file), Shipments, Trucking, Oil Loss, Shipping Performance, and Commercial
+Documents - which names its options `availablePlants` rather than `availableGroupPlants` and sets
+`uppercaseOptionLabels`, so its labels already looked uppercase while the value underneath did
+not. `regionSiteScopeAlignment.test.ts` reproduces the original mismatch, asserts the aligned
+value both ticks and unticks, and audits every page for the call - forgetting one is invisible
+until a scoped user opens that page, since the count still reads correctly.
+
 ### Migration 161: the snapshot stores its derived columns
 
 **The Shipments summary reads them too.** Its own `latest_spd_contract` still extracted five of the

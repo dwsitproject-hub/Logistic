@@ -1406,6 +1406,7 @@ function ShippingPerformancePageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
     resetUserScopeFilters,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('shipping-performance', {
     mapProducts: mapUserProductsToContractPerfOptions,
   })
@@ -1562,6 +1563,15 @@ function ShippingPerformancePageContent() {
     () => filterRegionSiteOptions(distinctScopeOptions('plant_site')),
     [distinctScopeOptions],
   )
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const availableProducts = useMemo(() => distinctScopeOptions('product'), [distinctScopeOptions])
   const availableVessels = useMemo(
     () =>
