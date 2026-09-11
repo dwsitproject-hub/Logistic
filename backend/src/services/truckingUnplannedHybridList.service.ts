@@ -3,6 +3,7 @@ import {
   loadTruckingBacklogCountFromSnapshot,
   loadTruckingExecutionCountFromSnapshot,
   loadTruckingStagePageFromSnapshot,
+  pipelineDailySummaryScopeHasPlantFilter,
   toPipelineDailySummaryScope,
   type PipelineDailySummaryScope,
   type TruckingSnapshotPageSortField,
@@ -146,6 +147,8 @@ async function loadTruckingHybridCountsFromSnapshot(
   if (ctx.contractScope.contract) return null;
 
   const scope = truckingHybridSnapshotScope(ctx);
+  // Region/Plant is a different dimension here than in the toolbar - see the predicate's note.
+  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
 
   const [executionRows, contractRows] = await Promise.all([
     loadTruckingExecutionCountFromSnapshot(scope),
@@ -301,10 +304,14 @@ async function fetchExecutionPage(
    * was the broken one, not this.
    */
   const snapshotSort = snapshotPageSortField(ctx.sortKey);
+  const snapshotScope = truckingHybridSnapshotScope(ctx);
   const snapshotKeys =
-    canPageAllHybridExecutionKeys(ctx) && snapshotSort
+    canPageAllHybridExecutionKeys(ctx) &&
+    snapshotSort &&
+    // Region/Plant is a different dimension here than in the toolbar - see the predicate's note.
+    !pipelineDailySummaryScopeHasPlantFilter(snapshotScope)
       ? await loadTruckingStagePageFromSnapshot(
-          truckingHybridSnapshotScope(ctx),
+          snapshotScope,
           null,
           ctx.sortDir,
           limit,

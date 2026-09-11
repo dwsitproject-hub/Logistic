@@ -428,6 +428,66 @@ contract interface is assignable to that and would *not* be assignable to a `Rec
 index signature - it is the callbacks, which callers write and this code invokes, that needed the
 usable type. All 521 frontend tests still pass.
 
+#### Region/Plant emptied the Trucking page - two dimensions, not a case bug
+
+Reported 2026-09-11: filtering Trucking by Region/Plant, **especially Bontang or Tanjung Pura**,
+left the summary cards and the view table empty.
+
+`trucking_pipeline_daily_summary.group_plant` and `trucking_list_stage_snapshot.group_plant` are
+written by `groupPlantExpr('c.plant_code', 'c.company_name')` - the **master_plants grouping**.
+The toolbar's options come from `REGION_SITE_FILTER_OPTIONS_SQL` - DISTINCT SAP **Discharge
+Destination**. The README has warned since the alias work that these are two different dimensions
+shown side by side; the snapshot work scoped one with values from the other.
+
+Measured on the dev database:
+
+| | |
+| --- | --- |
+| dropdown options (Discharge Destination, alias applied) | **40** |
+| snapshot `group_plant` values | **11** |
+| overlap, case-insensitive | **4** — BEKASI, BONTANG, KARAWANG, TANJUNG PURA |
+
+And even those 4 failed, because `appendGroupPlantFilter` compares case-sensitively while the two
+sides disagree on case: `BONTANG` matched **0** rows against the stored `Bontang` (2,237),
+`TANJUNG PURA` **0** against `Tanjung Pura` (4,866).
+
+**Why case-insensitivity was the wrong fix**, though it was one line: it repairs 4 of 40 options
+and leaves 36 silently empty. That is worse than uniformly broken, because it looks fixed. So a
+plant filter now makes the request ineligible for the snapshot and falls back to the live path,
+which filters the right dimension through `appendRegionSiteFilter` (`UPPER(...) IN (UPPER($n))`).
+
+| Trucking, YTD | before | after |
+| --- | --- | --- |
+| no plant filter | 6,496 rows | 6,496 (unchanged, 3.9 s) |
+| BONTANG | **0** | **1,119** |
+| TANJUNG PURA | **0** | **2,339** |
+| PALEMBANG (absent from the snapshot entirely) | 0 | 91 |
+
+The honest cost: a plant-filtered request is back on the live path at 6-23 s. The fix that
+returns the speed is to store Region/Site on the snapshot the way
+`contract_performance_snapshot.plant_site` already does - it holds Discharge Destination values,
+uppercase, and Contract Performance's Region/Plant filter works correctly today because of it.
+
+**Shipments has the same defect** - `shipment_pipeline_daily_summary` and
+`shipment_list_stage_snapshot` store the same master_plants dimension - and the guard sits in
+`isPipelineDailySummaryEligible`, so both pages are covered by the one change. Contracts, Oil
+Loss, Shipping Performance and Commercial Documents never read this snapshot, so their
+Region/Plant filter was always on the live path and always correct.
+
+The test that asserted `plants: ['PRC Karawang'] -> eligible` has been inverted with the reason
+recorded. Its fixture value is worth noting: `PRC Karawang` is not a value either dimension ever
+produces, which is a fair sign the case was written from assumption rather than from the data.
+
+#### Add/Edit User: 36 of 40 Region/Plant choices save nothing
+
+Found while checking the same filter elsewhere. The user form offers the same
+`/contracts/filter-options/group-plants` list (40 Discharge Destination values), but persistence
+goes through `user_plants -> master_plants`, matched on `master_plants.group_plant`
+case-insensitively with alias expansion. Only **4** of the 40 resolve: BEKASI, BONTANG, KARAWANG,
+TANJUNG PURA. The other 36 match nothing - `syncUserPlants` logs a warning, saves the subset, and
+returns success, so the admin sees the save succeed and the scope silently is not what they
+picked. Not fixed here: that area was being actively edited in parallel.
+
 ### Migration 161: the snapshot stores its derived columns
 
 **The Shipments summary reads them too.** Its own `latest_spd_contract` still extracted five of the

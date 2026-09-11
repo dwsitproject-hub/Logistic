@@ -7,14 +7,46 @@ import {
 } from './pipelineDailySummary.service';
 
 describe('isPipelineDailySummaryEligible', () => {
-  it('allows date range + plants only', () => {
+  it('allows a date range on its own', () => {
     expect(
       isPipelineDailySummaryEligible({
         dateFrom: '2026-01-01',
         dateTo: '2026-06-30',
-        plants: ['PRC Karawang'],
+        plants: [],
       }),
     ).toBe(true);
+  });
+
+  /**
+   * This assertion used to read `plants: ['PRC Karawang'] -> true`, and that assumption is what
+   * emptied the Trucking page for a Region/Plant filter.
+   *
+   * The toolbar's options are DISTINCT SAP Discharge Destination; the snapshot's `group_plant` is
+   * `groupPlantExpr('c.plant_code', 'c.company_name')` - the master_plants grouping. Two
+   * dimensions. On the dev database the dropdown offers 40 values, the snapshot holds 11, and
+   * only 4 overlap (BEKASI, BONTANG, KARAWANG, TANJUNG PURA) - and even those failed, because
+   * `appendGroupPlantFilter` compares case-sensitively: `BONTANG` matched 0 rows against the
+   * stored `Bontang` (2,237), `TANJUNG PURA` 0 against `Tanjung Pura` (4,866).
+   *
+   * Note the old fixture value: `PRC Karawang` is not a value either side ever produces, which is
+   * a fair sign the case was written from assumption rather than from the data.
+   */
+  it('rejects a Region/Plant filter - the snapshot stores a different dimension', () => {
+    expect(
+      isPipelineDailySummaryEligible({
+        dateFrom: '2026-01-01',
+        dateTo: '2026-06-30',
+        plants: ['BONTANG'],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects it whatever the spelling, since the fix is not about case', () => {
+    for (const plant of ['Bontang', 'BONTANG', 'TANJUNG PURA', 'PALEMBANG']) {
+      expect(
+        isPipelineDailySummaryEligible({ dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [plant] }),
+      ).toBe(false);
+    }
   });
 
   it('rejects global search', () => {

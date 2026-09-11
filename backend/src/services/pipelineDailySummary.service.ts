@@ -89,9 +89,39 @@ export function toPipelineDailySummaryScope(
 }
 
 /** Daily summary applies when filters are toolbar scope (date, plant, product, incoterm). */
+/**
+ * A Region/Plant filter cannot be answered from this snapshot - it stores a different dimension.
+ *
+ * The toolbar's Region/Plant options are DISTINCT SAP **Discharge Destination**
+ * (`REGION_SITE_FILTER_OPTIONS_SQL`), but `group_plant` here is written by
+ * `groupPlantExpr('c.plant_code', 'c.company_name')` - the `master_plants` grouping. The README
+ * has warned since the alias work that these are two different dimensions shown side by side,
+ * and scoping one with values from the other silently returns nothing.
+ *
+ * Measured on the dev database: the dropdown offers **40** values, the snapshot holds **11**, and
+ * only **3** overlap even case-insensitively. `appendGroupPlantFilter` also compares
+ * case-sensitively, so of those 3, `BONTANG` matched 0 rows against the stored `Bontang` (2,237)
+ * and `TANJUNG PURA` matched 0 against `Tanjung Pura` (4,866). That is the empty Trucking page.
+ *
+ * Making the comparison case-insensitive would have been the tempting fix and the wrong one: it
+ * would repair 3 of 40 options and leave the other 37 silently empty, which is worse than being
+ * uniformly broken because it looks fixed. So a plant filter falls back to the live path, which
+ * filters the right dimension through `appendRegionSiteFilter` (`UPPER(...) IN (UPPER($n))`).
+ *
+ * The fix that gets the speed back is to store Region/Site on the snapshot the way
+ * `contract_performance_snapshot.plant_site` already does - it holds the Discharge Destination
+ * values, uppercase, and its page filters correctly today.
+ */
+export function pipelineDailySummaryScopeHasPlantFilter(scope: {
+  plants?: string[];
+}): boolean {
+  return Array.isArray(scope.plants) && scope.plants.length > 0;
+}
+
 export function isPipelineDailySummaryEligible(
   filters: PipelineDailySummaryFilterInput,
 ): boolean {
+  if (pipelineDailySummaryScopeHasPlantFilter(filters)) return false;
   if (String(filters.globalSearch ?? '').trim()) return false;
   if (hasColumnFilters(filters.colFilters)) return false;
   if (filters.lateIndicator && String(filters.lateIndicator).toUpperCase() !== 'ALL') return false;
