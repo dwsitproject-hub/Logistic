@@ -54,13 +54,13 @@ APPs/
 | Claim Mutu import | `claim-mutu/` |
 | Claim Susut import | `claim-susut/` |
 | Supplier import | `suppliers/` |
-| SAP MASTER v2 auto-import | `SAP Data/Original/` (input, never moved), `SAP Data/Success/`, `SAP Data/Failed/` |
+| SAP MASTER v2 auto-import | `<SAP_AUTO_IMPORT_ROOT>/ORIGINAL/` (input, never moved), `Success/`, `Failed/` — see the note below |
 
-Manual SAP upload in the UI still uses a temp file and is **not** written to Original. The 07:00 Asia/Jakarta scheduler reads Original, runs the same MASTER v2 engine, writes Success/Failed workbooks (non-empty only), and emails ADMIN. Set `SAP_AUTO_IMPORT_ENABLED=true` after these folders exist on the share.
+Manual SAP upload in the UI still uses a temp file and is **not** written to Original. The **06:00** Asia/Jakarta scheduler (`SAP_AUTO_IMPORT_CRON`, default `0 6 * * *`) reads Original, runs the same MASTER v2 engine, writes Success/Failed workbooks (non-empty only), and emails ADMIN. Set `SAP_AUTO_IMPORT_ENABLED=true` after these folders exist on the share.
 
 If IT stores SAP files under a share labelled `Klip > SAP Data` outside `APPs/dev/klip`, either copy/symlink that tree to `dev/klip/SAP Data` or set `SAP_AUTO_IMPORT_ROOT` to a second bind mount. The Synology overlay (`docker-compose.backend.synology.yml`) is enough when the KLIP upload root is already `/app/uploads`.
 
-The Contract ETA reminder also runs at 07:00; it is a separate job and still runs when SAP auto-import is enabled.
+The Contract ETA reminder runs at 07:00; it is a separate job and still runs when SAP auto-import is enabled.
 
 ## One-time setup (backend server 172.28.92.57)
 
@@ -97,8 +97,25 @@ In `/opt/klip/.env` (and align `backend/.env`):
 KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
 UPLOAD_DIR=/app/uploads
 SAP_AUTO_IMPORT_ENABLED=true
-SAP_AUTO_IMPORT_ROOT=/app/uploads/SAP Data
+SAP_AUTO_IMPORT_ROOT=/app/uploads/IMPORT DATA/LOGISTICS REPORT
 ```
+
+**The path moved on 2026-09-13.** IT now publishes to
+`\\172.30.1.94\APPs\dev\KLIP\IMPORT DATA\LOGISTICS REPORT\ORIGINAL`. Two things follow.
+
+The UNC path is not the value to configure - the backend is a Linux container and cannot resolve
+it. `//172.30.1.94/APPs` is mounted at `/mnt/synology-apps`, and `dev/klip` is bind-mounted to
+`/app/uploads`, so the value is the container-side path above. Setting the UNC form logs an error
+rather than failing silently.
+
+`ORIGINAL` is in capitals while the code's canonical name is `Original`. Linux is case-sensitive,
+so the subfolders are now resolved case-insensitively against what is actually on the share; a
+mismatch used to report `filesScanned: 0`, which reads exactly like a morning with no new files.
+Every run now logs the folder it scanned:
+
+```bash
+docker logs klip-backend 2>&1 | grep "auto-import scanning"
+
 
 ### 5. Deploy backend (Synology bind mount)
 

@@ -3,12 +3,16 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  clearSapAutoImportPathCache,
   ensureSapAutoImportFolders,
   isSapAutoImportExcelFile,
   jakartaDateYmd,
   resolveSafeFailedWorkbookPath,
   sapAutoImportResultFileName,
+  sapAutoImportFailedDir,
+  sapAutoImportOriginalDir,
   sapAutoImportShareFailedPath,
+  sapAutoImportSuccessDir,
   shouldSkipCompletedSapAutoImport,
 } from './sapAutoImportPaths';
 
@@ -18,6 +22,41 @@ describe('sapAutoImportPaths', () => {
   afterEach(() => {
     if (originalRoot === undefined) delete process.env.SAP_AUTO_IMPORT_ROOT;
     else process.env.SAP_AUTO_IMPORT_ROOT = originalRoot;
+    clearSapAutoImportPathCache();
+  });
+
+  /**
+   * IT owns this folder and renames it: on 2026-09-13 it moved to `.../LOGISTICS REPORT/ORIGINAL`,
+   * in capitals. On Linux a hardcoded `Original` then matches nothing and the scan reports zero
+   * new files - indistinguishable from "nothing to import", which is how a broken path goes
+   * unnoticed for days.
+   */
+  it('finds the subfolders whatever case they are stored in', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-case-'));
+    fs.mkdirSync(path.join(tmp, 'ORIGINAL'));
+    fs.mkdirSync(path.join(tmp, 'success'));
+    process.env.SAP_AUTO_IMPORT_ROOT = tmp;
+    clearSapAutoImportPathCache();
+
+    expect(sapAutoImportOriginalDir()).toBe(path.join(tmp, 'ORIGINAL'));
+    expect(sapAutoImportSuccessDir()).toBe(path.join(tmp, 'success'));
+    // Absent: keep the canonical spelling, which is what ensureSapAutoImportFolders creates.
+    expect(sapAutoImportFailedDir()).toBe(path.join(tmp, 'Failed'));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('does not create a second folder when one already exists in another case', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-case2-'));
+    fs.mkdirSync(path.join(tmp, 'ORIGINAL'));
+    process.env.SAP_AUTO_IMPORT_ROOT = tmp;
+    clearSapAutoImportPathCache();
+
+    ensureSapAutoImportFolders();
+    const dirs = fs.readdirSync(tmp).sort();
+    expect(dirs).toEqual(['Failed', 'ORIGINAL', 'Success']);
+
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 
   it('ignores Excel lock files and non-Excel names', () => {

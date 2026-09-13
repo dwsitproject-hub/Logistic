@@ -61,16 +61,19 @@ export class SchedulerService {
   }
 
   /**
-   * Daily MASTER v2 import from Synology `Klip/SAP Data/Original` (independent of
-   * logistics_overview Excel jobs). Defaults to 07:00 Asia/Jakarta; disabled unless
-   * SAP_AUTO_IMPORT_ENABLED=true. Safe to overlap the Contract ETA reminder cron.
+   * Daily MASTER v2 import from the Synology SAP folder (independent of logistics_overview Excel
+   * jobs). Defaults to 06:00 Asia/Jakarta; disabled unless SAP_AUTO_IMPORT_ENABLED=true. Safe to
+   * overlap the Contract ETA reminder cron.
+   *
+   * The folder is IT's, not ours, and it moves: it is `SAP_AUTO_IMPORT_ROOT` plus an Original /
+   * Success / Failed subfolder, resolved case-insensitively (see sapAutoImportPaths).
    */
   private static startSapFolderAutoImportCron(): void {
     if (String(process.env.SAP_AUTO_IMPORT_ENABLED || 'false').toLowerCase() !== 'true') {
       logger.info('SAP folder auto-import cron is disabled (SAP_AUTO_IMPORT_ENABLED is not true)');
       return;
     }
-    const schedule = process.env.SAP_AUTO_IMPORT_CRON || '0 7 * * *';
+    const schedule = process.env.SAP_AUTO_IMPORT_CRON || '0 6 * * *';
     cron.schedule(
       schedule,
       async () => {

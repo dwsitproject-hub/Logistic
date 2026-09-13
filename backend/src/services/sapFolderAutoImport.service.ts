@@ -245,6 +245,15 @@ export async function runSapFolderAutoImport(
   try {
     const folders = ensureSapAutoImportFolders();
     const fileNames = listOriginalExcelFiles(folders.original);
+    /*
+     * The folder it actually scanned, every run. Without this a path that has moved reports
+     * `filesScanned: 0` and nothing else - identical to a morning with no new files, which is
+     * how a changed share path stayed unnoticed until someone asked why nothing was importing.
+     */
+    logger.info('SAP folder auto-import scanning', {
+      originalDir: folders.original,
+      excelFilesFound: fileNames.length,
+    });
     const hashed: Array<{ fileName: string; sha256: string; fileSize: number; filePath: string }> = [];
 
     for (const fileName of fileNames) {
