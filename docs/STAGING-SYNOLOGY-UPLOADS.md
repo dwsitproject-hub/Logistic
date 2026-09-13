@@ -113,6 +113,44 @@ so the subfolders are now resolved case-insensitively against what is actually o
 mismatch used to report `filesScanned: 0`, which reads exactly like a morning with no new files.
 Every run now logs the folder it scanned:
 
+```
+
+### Mounting IT's share (2026-09-13)
+
+The folders on the share are `ORIGINAL`, `SUCCEED` and `FAILED` - `SUCCEED` is not a case variant
+of `Success`, so it is handled as an accepted alias, not by case folding.
+
+The share is mounted **read-only** on the host, and SIT and production read the **same** folder.
+Both facts point the same way: KLIP reads the source and writes its result workbooks elsewhere.
+`SAP_AUTO_IMPORT_RESULTS_ROOT` does that, and `ORIGINAL` is never created or written to - IT owns
+those files and KLIP cannot alter them even by accident.
+
+Bring the share into the container with its own mount, separate from `/app/uploads`:
+
+```bash
+docker compose -f docker-compose.backend.yml                -f docker-compose.backend.remote-db.yml                -f docker-compose.backend.sap-share.yml up -d --build backend
+```
+
+With this in `/opt/klip/.env`:
+
+```env
+KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
+SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
+```
+
+**Check the container user before expecting reads to work.** The share's folders are mode `0550`
+owned by uid/gid `1001`, so the container's user must be 1001 or in group 1001 - otherwise every
+read is denied and the scan reports an empty folder rather than a permission error:
+
+```bash
+docker exec klip-backend id
+docker exec klip-backend ls /mnt/sap-import/ORIGINAL
+```
+
+A missing source folder is now logged explicitly ("the source folder does not exist") instead of
+surfacing as `filesScanned: 0`.
+
 ```bash
 docker logs klip-backend 2>&1 | grep "auto-import scanning"
 

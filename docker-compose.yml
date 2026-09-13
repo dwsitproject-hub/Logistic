@@ -85,6 +85,9 @@ services:
       SAP_AUTO_IMPORT_ENABLED: ${SAP_AUTO_IMPORT_ENABLED:-false}
       SAP_AUTO_IMPORT_CRON: ${SAP_AUTO_IMPORT_CRON:-0 6 * * *}
       SAP_AUTO_IMPORT_ROOT: "${SAP_AUTO_IMPORT_ROOT:-/app/uploads/SAP Data}"
+      # Result workbooks. Defaults to SAP_AUTO_IMPORT_ROOT; set it when the source share is
+      # read-only, or when two environments read the same folder and would overwrite each other.
+      SAP_AUTO_IMPORT_RESULTS_ROOT: "${SAP_AUTO_IMPORT_RESULTS_ROOT:-}"
       SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
     ports:
       - "${BACKEND_PORT:-5001}:5001"

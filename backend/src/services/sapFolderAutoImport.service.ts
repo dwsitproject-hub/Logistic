@@ -273,6 +273,17 @@ export async function runSapFolderAutoImport(
   runLock = true;
   try {
     const folders = ensureSapAutoImportFolders();
+    if (!folders.originalExists) {
+      /*
+       * Distinguish "the folder is not there" from "the folder is empty". Both used to surface as
+       * filesScanned: 0, which is why a moved share path looked like an ordinary quiet morning.
+       */
+      logger.error('SAP folder auto-import: the source folder does not exist', {
+        originalDir: folders.original,
+        root: folders.root,
+        hint: 'Check SAP_AUTO_IMPORT_ROOT and that the share is mounted into the container',
+      });
+    }
     const fileNames = listOriginalExcelFiles(folders.original);
     /*
      * The folder it actually scanned, every run. Without this a path that has moved reports
@@ -381,13 +392,35 @@ export async function runSapFolderAutoImport(
 
         const successFileName = sapAutoImportResultFileName(meta.fileName, 'success');
         const failedFileName = sapAutoImportResultFileName(meta.fileName, 'failed');
-        const wroteSuccess = writeSapAutoImportSuccessWorkbook(
-          path.join(sapAutoImportSuccessDir(), successFileName),
-          successRows,
+        /*
+         * A result workbook that cannot be written must not turn a successful import into a
+         * failed one. These writes sit inside the same try as the import, so an EROFS from a
+         * read-only share would have marked the file 'failed' and left the registry claiming the
+         * data never landed - while it had, in full.
+         */
+        const writeResultWorkbook = (what: string, write: () => boolean): boolean => {
+          try {
+            return write();
+          } catch (error) {
+            logger.error('SAP auto-import result workbook could not be written (import itself is unaffected)', {
+              what,
+              fileName: meta.fileName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return false;
+          }
+        };
+        const wroteSuccess = writeResultWorkbook('success', () =>
+          writeSapAutoImportSuccessWorkbook(
+            path.join(sapAutoImportSuccessDir(), successFileName),
+            successRows,
+          ),
         );
-        const wroteFailed = writeSapAutoImportFailedWorkbook(
-          path.join(sapAutoImportFailedDir(), failedFileName),
-          failedRows,
+        const wroteFailed = writeResultWorkbook('failed', () =>
+          writeSapAutoImportFailedWorkbook(
+            path.join(sapAutoImportFailedDir(), failedFileName),
+            failedRows,
+          ),
         );
 
         const fileResult: SapFolderAutoImportFileResult = {

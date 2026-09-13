@@ -22,6 +22,7 @@ describe('sapAutoImportPaths', () => {
   afterEach(() => {
     if (originalRoot === undefined) delete process.env.SAP_AUTO_IMPORT_ROOT;
     else process.env.SAP_AUTO_IMPORT_ROOT = originalRoot;
+    delete process.env.SAP_AUTO_IMPORT_RESULTS_ROOT;
     clearSapAutoImportPathCache();
   });
 
@@ -46,15 +47,71 @@ describe('sapAutoImportPaths', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('does not create a second folder when one already exists in another case', () => {
+  /**
+   * `SUCCEED` is what IT actually called it on the share. It is not a case variant of `Success` -
+   * no amount of case folding matches them - so it has to be an accepted alias, or the code would
+   * try to create `Success` beside it on a read-only mount and fail.
+   */
+  it('accepts the folder names IT actually uses, including SUCCEED', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-alias-'));
+    for (const d of ['ORIGINAL', 'SUCCEED', 'FAILED']) fs.mkdirSync(path.join(tmp, d));
+    process.env.SAP_AUTO_IMPORT_ROOT = tmp;
+    clearSapAutoImportPathCache();
+
+    expect(sapAutoImportOriginalDir()).toBe(path.join(tmp, 'ORIGINAL'));
+    expect(sapAutoImportSuccessDir()).toBe(path.join(tmp, 'SUCCEED'));
+    expect(sapAutoImportFailedDir()).toBe(path.join(tmp, 'FAILED'));
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /**
+   * The source share is read-only and shared between SIT and production, so results must be able
+   * to live somewhere else entirely.
+   */
+  it('writes results to their own root while reading from the source root', () => {
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-src-'));
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-out-'));
+    fs.mkdirSync(path.join(src, 'ORIGINAL'));
+    process.env.SAP_AUTO_IMPORT_ROOT = src;
+    process.env.SAP_AUTO_IMPORT_RESULTS_ROOT = out;
+    clearSapAutoImportPathCache();
+
+    expect(sapAutoImportOriginalDir()).toBe(path.join(src, 'ORIGINAL'));
+    expect(sapAutoImportSuccessDir()).toBe(path.join(out, 'Success'));
+    expect(sapAutoImportFailedDir()).toBe(path.join(out, 'Failed'));
+
+    const folders = ensureSapAutoImportFolders();
+    expect(folders.originalExists).toBe(true);
+    // Nothing was created in the source root - it belongs to IT and is mounted read-only.
+    expect(fs.readdirSync(src).sort()).toEqual(['ORIGINAL']);
+    expect(fs.readdirSync(out).sort()).toEqual(['Failed', 'Success']);
+
+    delete process.env.SAP_AUTO_IMPORT_RESULTS_ROOT;
+    fs.rmSync(src, { recursive: true, force: true });
+    fs.rmSync(out, { recursive: true, force: true });
+  });
+
+  it('reports a missing source folder rather than inventing one', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-missing-'));
+    process.env.SAP_AUTO_IMPORT_ROOT = tmp;
+    clearSapAutoImportPathCache();
+
+    const folders = ensureSapAutoImportFolders();
+    expect(folders.originalExists).toBe(false);
+    expect(fs.existsSync(path.join(tmp, 'Original'))).toBe(false);
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('does not create a second folder when one already exists under an accepted name', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'klip-sap-case2-'));
-    fs.mkdirSync(path.join(tmp, 'ORIGINAL'));
+    for (const d of ['ORIGINAL', 'SUCCEED', 'FAILED']) fs.mkdirSync(path.join(tmp, d));
     process.env.SAP_AUTO_IMPORT_ROOT = tmp;
     clearSapAutoImportPathCache();
 
     ensureSapAutoImportFolders();
-    const dirs = fs.readdirSync(tmp).sort();
-    expect(dirs).toEqual(['Failed', 'ORIGINAL', 'Success']);
+    expect(fs.readdirSync(tmp).sort()).toEqual(['FAILED', 'ORIGINAL', 'SUCCEED']);
 
     fs.rmSync(tmp, { recursive: true, force: true });
   });
