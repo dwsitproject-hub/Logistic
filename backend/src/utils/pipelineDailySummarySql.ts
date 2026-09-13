@@ -28,7 +28,15 @@ const NULL_CONTRACT_DATE = `DATE '1970-01-01'`;
 export const TRUCKING_PIPELINE_DAILY_SUMMARY_TABLE = 'trucking_pipeline_daily_summary';
 export const TRUCKING_LIST_STAGE_SNAPSHOT_TABLE = 'trucking_list_stage_snapshot';
 
-function buildTruckingExecutionSourceSql(): string {
+/**
+ * @param operationIds When given, the expansion is restricted to these operations instead of
+ * every FRC/LCO row in the database. This is the same `resolvedExpansionKeys` restriction the
+ * snapshot-served *page* already uses, and it works because it lands inside `trucking_source`
+ * itself - see the note on `buildTruckingSourceCte`. Nothing downstream aggregates over the
+ * wider set, so a restricted build produces, for the operations named, exactly the rows an
+ * unrestricted build would have produced for them.
+ */
+function buildTruckingExecutionSourceSql(operationIds?: readonly string[]): string {
   const innerSql = `
       SELECT
         ${buildTruckingListSelectClause(false)}
@@ -41,6 +49,9 @@ function buildTruckingExecutionSourceSql(): string {
   return wrapTruckingListQueryWithStoExpansion(innerSql, {
     selectOutstanding: true,
     skipSapJoin: false,
+    ...(operationIds
+      ? { resolvedExpansionKeys: operationIds.map((operationId) => ({ operationId })) }
+      : {}),
   });
 }
 
@@ -178,8 +189,9 @@ export function buildTruckingBacklogDailySummaryUpsertSql(
  */
 export function buildTruckingStageSnapshotInsertSql(
   targetTable: string = TRUCKING_LIST_STAGE_SNAPSHOT_TABLE,
+  opts?: { operationIds?: readonly string[] },
 ): string {
-  const expanded = buildTruckingExecutionSourceSql();
+  const expanded = buildTruckingExecutionSourceSql(opts?.operationIds);
   const plant = groupPlantExpr('c.plant_code', 'c.company_name');
   /*
    * The toolbar's Region/Plant dimension, stored next to - not instead of - `group_plant`.

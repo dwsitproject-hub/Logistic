@@ -58,6 +58,8 @@ export type WbImportOperationFailure = {
 export type WbImportApplyResult = {
   importId: string;
   status: 'completed' | 'partial' | 'failed';
+  /** Operations this upload wrote to — the caller refreshes their snapshot rows. */
+  touchedOperationIds: string[];
   sheetsProcessed: string[];
   sheetsSkipped: Array<{ sheetName: string; reason: string }>;
   rawTicketRows: number;
@@ -983,6 +985,13 @@ export async function processWbRekapWorkbookUpload(args: {
   return {
     importId,
     status,
+    /*
+     * Reported so the caller can refresh the Trucking stage snapshot for exactly these rows.
+     * The refresh is the caller's to make: it is a separate transaction on a separate
+     * connection, and keeping it out of here leaves this function's own BEGIN/COMMIT the single
+     * transaction it is meant to be.
+     */
+    touchedOperationIds: [...touchedOps.keys()],
     sheetsProcessed: parsed.sheetsProcessed,
     sheetsSkipped: parsed.sheetsSkipped,
     rawTicketRows: parsed.rawTicketRows,

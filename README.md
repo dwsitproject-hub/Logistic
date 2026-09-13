@@ -1556,6 +1556,65 @@ Also worth recording, because it was offered as a way out and turned out not to 
 the total row count and page count would save essentially nothing - the counts are 8-57 ms. The
 cost was finding and fetching the 20 rows, which a hidden total does not touch.
 
+### WB upload rows appear immediately: a targeted snapshot refresh
+
+The snapshot made the page fast and made it lie. `trucking_list_stage_snapshot` is the source of
+the page's rows, their Outstanding Qty **and** Section 1's quantities, and only the full rebuild
+ever wrote it - 227s on dev, 1,070s and 1,634s measured on SIT. So after a WB upload the page kept
+showing the pre-upload OS Qty until the next rebuild, which is precisely the figure the upload
+exists to change.
+
+Requiring freshness instead was tried on 2026-09-11 and reverted the same day: 14,591 of 16,552
+operations had been touched since the last rebuild, so the page fell to the live path and took
+25-190s. Staleness is not an error state here; it is the normal state.
+
+**The fix is to rebuild the operations that changed, not the whole table.** `buildTruckingStage
+SnapshotInsertSql` now takes `operationIds` and passes them as `resolvedExpansionKeys` - the same
+restriction the snapshot-served *page* already uses to expand 20 rows out of 16,000, and it works
+for the same reason: it lands inside `trucking_source` itself, where it can prune work, rather
+than filtering afterwards.
+
+Measured on dev, warm:
+
+| Operations | Delta |
+|---|---|
+| 10 | 2,658 ms |
+| 50 | 3,038 ms |
+| 200 | 3,982 ms |
+
+That is ~2.5s fixed (planning a 386 KB statement) plus ~7ms per operation, against 227s for the
+full rebuild. The WB upload controller awaits it before answering, because the user opens the page
+straight after; it swallows its own errors, so it can never fail an upload whose data is already
+committed.
+
+**Parity, not reasoning.** The claim that a subset build is safe rests on nothing downstream
+aggregating over the wider set. That was checked rather than argued: rebuilding 1, 10, 50 and 200
+operations reproduced what the full rebuild had written with **0 differences across all 20
+columns**, every time.
+
+**Two things it deliberately does not do.**
+
+`is_stale` stays true. A full rebuild is still owed for every operation nobody touched; this only
+stops the page misreporting the ones somebody just did.
+
+It does not touch `trucking_pipeline_daily_summary`, whose grain is a dimension aggregate rather
+than a row. That table supplies Section 1's status circles, so while deltas are pending the counts
+would describe the state before the upload while the quantities beside them described the state
+after - which reads as a bug, not as staleness. So `hasPendingTruckingStageDeltas()` routes
+Section 1's counts to the stage snapshot as well while that is true. That path is not new: it is
+the one a Region/Plant filter already takes, measured at 70ms and parity-verified on 22 figures.
+
+**The regression this could have caused, and the log that prevents it.** A rebuild reads its
+source, builds for minutes, then swaps wholesale. A delta applied during that window would be
+replaced by what the build read *before* the upload existed - the row silently reverting to its
+pre-upload quantities, which is worse than never refreshing it. So every targeted refresh records
+its operations in `trucking_stage_snapshot_delta_log` (migration 166), and a rebuild that
+publishes re-applies everything touched since it started reading, then prunes the rest.
+
+Still lagging until the next rebuild: the status circles for operations nobody touched, and the
+Unplanned backlog aggregates. Manual daily-actual edits and manual realization updates write the
+same tables and do **not** yet trigger a delta - the same one-line call would cover them.
+
 ### An empty backlog was still running both backlog queries: 18,581 ms to 13,262 ms
 
 Not an optimisation so much as waste that was already there. For the ALL view,

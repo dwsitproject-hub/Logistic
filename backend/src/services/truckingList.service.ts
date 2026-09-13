@@ -61,6 +61,7 @@ import {
   type TruckingAttentionInsightsRow,
 } from '../utils/truckingAttentionInsightsSql';
 import {
+  hasPendingTruckingStageDeltas,
   isPipelineDailySummaryEligible,
   loadTruckingStagePageFromSnapshot,
   loadTruckingSummaryFromDaily,
@@ -1337,7 +1338,13 @@ export async function loadTruckingListSummary(
 
   if (req) {
     const filters = buildPipelineDailyFilterInput(req);
-    if (isPipelineDailySummaryEligible(filters)) {
+    /*
+     * `trucking_pipeline_daily_summary` is a dimension aggregate, so a targeted refresh cannot
+     * update it - it only tracks full rebuilds. While an upload's deltas are pending, its counts
+     * describe the state before that upload, so Section 1 is routed through the stage snapshot,
+     * which the delta did refresh. See hasPendingTruckingStageDeltas.
+     */
+    if (isPipelineDailySummaryEligible(filters) && !(await hasPendingTruckingStageDeltas())) {
       const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
       if (fromDaily) {
         SUMMARY_CACHE.set(summaryCacheKey, {
@@ -1453,7 +1460,9 @@ async function runTruckingListSummaryWithBacklog(
    * plant-filtered request: measured at **18,826 ms** for BONTANG against **37 ms** from the
    * snapshot, and it was the single largest query on that page.
    */
-  const dailyEligible = isPipelineDailySummaryEligible(filters);
+  // Same routing as above: a pending delta means the daily aggregate's counts pre-date it.
+  const dailyEligible =
+    isPipelineDailySummaryEligible(filters) && !(await hasPendingTruckingStageDeltas());
   /*
    * Section 1 reads the stage snapshot, which can express more than the aggregate table:
    * Region/Plant via region_site, Source via source_type, and Status not at all - because this

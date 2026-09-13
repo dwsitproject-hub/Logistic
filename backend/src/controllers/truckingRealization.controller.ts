@@ -3,6 +3,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { invalidateTruckingListCache } from '../services/truckingList.service';
+import { refreshTruckingStageSnapshotForOperationIds } from '../services/pipelineDailySummary.service';
 import {
   deriveDbStatusFromRealization,
   listTruckingDailyActuals,
@@ -589,6 +590,24 @@ export const bulkUploadWbRekap = async (req: AuthRequest, res: Response) => {
       uploadedBy: req.user?.id ?? null,
       sheets,
     });
+
+    /*
+     * Refresh the uploaded operations' snapshot rows before answering.
+     *
+     * The Trucking page reads its rows, their Outstanding Qty and Section 1's quantities from
+     * trucking_list_stage_snapshot, which only the full rebuild used to write - so until that
+     * ran (227s on dev, up to 27min on SIT) the page still showed the pre-upload OS Qty, which
+     * is precisely the figure the user opens it to check after an upload.
+     *
+     * Awaited rather than scheduled, because the page is opened straight after this response:
+     * measured ~2.5s fixed plus ~7ms per operation. It cannot fail the upload - the refresh
+     * swallows its own errors and leaves the snapshot exactly as stale as it already was.
+     *
+     * Before the cache invalidation below, so nothing that was cached mid-refresh survives it.
+     */
+    if (result.touchedOperationIds.length > 0) {
+      await refreshTruckingStageSnapshotForOperationIds(result.touchedOperationIds);
+    }
 
     invalidateTruckingListCache();
 
