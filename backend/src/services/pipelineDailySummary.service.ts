@@ -419,14 +419,24 @@ export async function isPipelineDailySummaryUsable(module: PipelineSummaryModule
   return isPipelineDailySummaryMetaUsable(meta, module);
 }
 
+/**
+ * @param options.schedule Defaults to true: marking stale normally also kicks the rebuild.
+ *
+ * A SAP import passes `false`. The trucking build joins contract_qty_move_snapshot and reads the
+ * other derived snapshots, all of which that import is about to refresh - so kicking the rebuild
+ * here would race them and publish a generation built from pre-import values, and the page would
+ * carry it until the next rebuild, which is the following morning. The import runs the rebuild
+ * itself once its upstream snapshots are in.
+ */
 export async function markPipelineDailySummaryStale(
   modules: PipelineSummaryModule[] = ['trucking', 'shipment'],
+  options?: { schedule?: boolean },
 ): Promise<void> {
   await query(
     `UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = ANY($1::text[])`,
     [modules],
   );
-  schedulePipelineDailySummaryRefreshIfNeeded();
+  if (options?.schedule !== false) schedulePipelineDailySummaryRefreshIfNeeded();
 }
 
 /**

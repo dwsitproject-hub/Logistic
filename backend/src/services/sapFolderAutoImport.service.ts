@@ -172,6 +172,35 @@ function listOriginalExcelFiles(originalDir: string): string[] {
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
+/**
+ * Take only the newest file when the folder holds several.
+ *
+ * Original is an archive - nobody empties it - so a folder with a month of exports would
+ * otherwise be imported end to end, replaying old SAP states over the current one in whatever
+ * order the names sorted. Only the newest export describes today.
+ *
+ * Newest by modification time, because the file name is IT's format and not ours to parse; the
+ * name breaks a tie only so the choice is deterministic when two files share a timestamp (which
+ * a bulk copy onto a share does produce).
+ *
+ * If the newest file was already imported, this run has nothing to do. That is the point: it
+ * must not fall back to an older file and undo the newer one.
+ */
+export function pickLatestOriginalFile<T extends { fileName: string; mtimeMs: number }>(
+  files: readonly T[],
+): T[] {
+  if (files.length <= 1) return [...files];
+  const newest = [...files].sort(
+    (a, b) => b.mtimeMs - a.mtimeMs || b.fileName.localeCompare(a.fileName, undefined, { numeric: true }),
+  )[0];
+  return [newest];
+}
+
+/** Escape hatch for a deliberate backfill of several files in one run. */
+export function sapAutoImportProcessesAllFiles(): boolean {
+  return String(process.env.SAP_AUTO_IMPORT_ALL_FILES || 'false').toLowerCase() === 'true';
+}
+
 async function sendRunEmail(kind: SapAutoImportEmailKind, files: SapAutoImportEmailFile[], filesSkippedChecksum = 0): Promise<boolean> {
   const recipients = await findSapAutoImportAdminRecipients();
   const appUrl = frontendUrl();
@@ -254,16 +283,31 @@ export async function runSapFolderAutoImport(
       originalDir: folders.original,
       excelFilesFound: fileNames.length,
     });
-    const hashed: Array<{ fileName: string; sha256: string; fileSize: number; filePath: string }> = [];
-
-    for (const fileName of fileNames) {
+    /*
+     * Stat first, hash second. Hashing reads the whole workbook across a network share, and once
+     * only the newest file is a candidate there is no reason to read the rest at all.
+     */
+    const stated = fileNames.map((fileName) => {
       const filePath = path.join(folders.original, fileName);
       const stat = fs.statSync(filePath);
+      return { fileName, filePath, fileSize: stat.size, mtimeMs: stat.mtimeMs };
+    });
+    const candidates = sapAutoImportProcessesAllFiles() ? stated : pickLatestOriginalFile(stated);
+    if (candidates.length < stated.length) {
+      logger.info('SAP folder auto-import taking the latest file only', {
+        chosen: candidates[0]?.fileName,
+        modified: candidates[0] ? new Date(candidates[0].mtimeMs).toISOString() : null,
+        olderFilesIgnored: stated.length - candidates.length,
+      });
+    }
+
+    const hashed: Array<{ fileName: string; sha256: string; fileSize: number; filePath: string }> = [];
+    for (const candidate of candidates) {
       hashed.push({
-        fileName,
-        sha256: await sha256File(filePath),
-        fileSize: stat.size,
-        filePath,
+        fileName: candidate.fileName,
+        sha256: await sha256File(candidate.filePath),
+        fileSize: candidate.fileSize,
+        filePath: candidate.filePath,
       });
     }
 
@@ -275,7 +319,7 @@ export async function runSapFolderAutoImport(
       return {
         ran: false,
         skipReason: 'in_flight',
-        filesScanned: hashed.length,
+        filesScanned: stated.length,
         filesProcessed: 0,
         filesSkippedChecksum: 0,
         files: [],
@@ -299,7 +343,7 @@ export async function runSapFolderAutoImport(
       const emailSent = notify ? await sendRunEmail('no_new_files', [], skipped.length) : false;
       return {
         ran: true,
-        filesScanned: hashed.length,
+        filesScanned: stated.length,
         filesProcessed: 0,
         filesSkippedChecksum: skipped.length,
         files: skippedResults,
@@ -401,7 +445,7 @@ export async function runSapFolderAutoImport(
 
     return {
       ran: true,
-      filesScanned: hashed.length,
+      filesScanned: stated.length,
       filesProcessed: processedResults.filter((f) => f.status === 'completed').length,
       filesSkippedChecksum: skipped.length,
       files: allFiles,

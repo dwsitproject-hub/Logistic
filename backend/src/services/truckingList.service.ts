@@ -502,12 +502,35 @@ export function clearTruckingListMemoryCaches(): void {
   UNPLANNED_BACKLOG_CACHE.clear();
 }
 
-export function invalidateTruckingListCache(): void {
+/**
+ * @param options.scheduleSnapshotRefresh Defaults to true.
+ *
+ * A SAP import passes `false` and runs the rebuild itself afterwards: the trucking build reads
+ * the derived snapshots the import is in the middle of refreshing, so starting it here would
+ * publish a generation built from pre-import values. Caches are still cleared immediately -
+ * only the rebuild is deferred.
+ */
+export function invalidateTruckingListCache(options?: { scheduleSnapshotRefresh?: boolean }): void {
   clearTruckingListMemoryCaches();
   invalidateRegisteredListCaches();
-  markPipelineDailySummaryStale(['trucking']).catch(() => {});
+  markPipelineDailySummaryStale(['trucking'], {
+    schedule: options?.scheduleSnapshotRefresh !== false,
+  }).catch(() => {});
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
+  PAGE_KEEP_WARM.rewarmRecentlyUsed();
+  SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
+}
+
+/**
+ * Re-run the recently used page and summary loads without clearing anything first.
+ *
+ * For after a rebuild has published: the caches were already cleared when the import started, and
+ * what is wanted now is for the warm set to be recomputed against the new snapshot rather than
+ * left for the first viewer to pay for.
+ */
+export function rewarmTruckingListCaches(): void {
+  clearTruckingListMemoryCaches();
   PAGE_KEEP_WARM.rewarmRecentlyUsed();
   SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
 }

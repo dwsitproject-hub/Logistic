@@ -1793,7 +1793,14 @@ export class SapMasterV2ImportService {
       if (processedRecords > 0) {
         invalidateShipmentsListCache();
         invalidateShippingPerformanceRowCache();
-        invalidateTruckingListCache();
+        /*
+         * Caches cleared now, rebuild deferred. The trucking/shipment build reads the four
+         * derived snapshots refreshed below, so letting the invalidation kick it here would race
+         * them and publish a generation computed from pre-import quantities - and the page would
+         * serve that until the next rebuild, i.e. the following morning. It is run explicitly
+         * once the upstream snapshots are in.
+         */
+        invalidateTruckingListCache({ scheduleSnapshotRefresh: false });
 
         // Mark the Contract Performance snapshot stale synchronously, before the rebuild starts.
         // A SAP import is exactly what changes the values it holds - GR PO/STO status, delivery
@@ -1856,11 +1863,53 @@ export class SapMasterV2ImportService {
               } catch (err) {
                 logger.error('Contract performance snapshot refresh failed after SAP import', { err });
               }
+
+              /*
+               * The Trucking and Shipment pages are served from these two snapshots, and they are
+               * built from the four above - so this runs last, and only on the path where those
+               * succeeded. Without it the first viewer after the import pays the live query,
+               * measured at 25-190s on Trucking; with it the page is snapshot-served.
+               *
+               * Awaited so the warm-up below runs against the published generation rather than
+               * the one it replaced.
+               */
+              try {
+                const { PipelineDailySummaryService } = await import('./pipelineDailySummary.service');
+                await PipelineDailySummaryService.refreshAll();
+              } catch (err) {
+                logger.error('Pipeline daily summary refresh failed after SAP import', { err });
+              }
+
+              /*
+               * Re-run the page loads that were warm before the import, so the first person in
+               * the morning is served from memory. Best-effort and bounded by the keep-warm
+               * registry's own idle window - it does not warm scopes nobody has opened.
+               */
+              try {
+                const { rewarmTruckingListCaches } = await import('./truckingList.service');
+                rewarmTruckingListCaches();
+              } catch (err) {
+                logger.error('Trucking cache re-warm after SAP import failed', { err });
+              }
             } else {
               logger.error(
-                'Skipping contract performance snapshot refresh - an upstream snapshot failed, so it would hold pre-import values. Snapshot left stale; reads fall back to the live query.',
+                'Skipping contract performance and pipeline snapshot refreshes - an upstream snapshot failed, so they would hold pre-import values. Left stale; reads fall back to the live query.',
                 { importId },
               );
+              /*
+               * The rebuild was deliberately not kicked by the invalidation above, so without
+               * this a failed upstream would leave the pipeline snapshot with nothing scheduled
+               * at all. Schedule it on the normal debounced path: stale-but-consistent beats a
+               * snapshot that never rebuilds.
+               */
+              try {
+                const { schedulePipelineDailySummaryRefreshIfNeeded } = await import(
+                  './pipelineDailySummary.service'
+                );
+                schedulePipelineDailySummaryRefreshIfNeeded();
+              } catch (err) {
+                logger.error('Fallback pipeline refresh scheduling failed', { err });
+              }
             }
 
             try {

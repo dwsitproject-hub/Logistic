@@ -1556,6 +1556,32 @@ Also worth recording, because it was offered as a way out and turned out not to 
 the total row count and page count would save essentially nothing - the counts are 8-57 ms. The
 cost was finding and fetching the 20 rows, which a hidden total does not touch.
 
+### After a SAP import: what refreshes, in what order, and the race that was there
+
+The scheduled SAP import (06:00 Asia/Jakarta, `SAP_AUTO_IMPORT_CRON`) runs the same MASTER v2
+engine as a manual upload, so both share one post-import chain. It refreshes four derived
+snapshots in parallel - `contract_qty_move_snapshot`, `contract_sto_agg`, `contract_latest_spd`,
+`b2b_ending_child` - then the Contract Performance snapshot, which is computed from them.
+
+**The trucking rebuild was not in that chain.** It was started by the cache invalidation at the
+top of the block, which marks the pipeline snapshot stale and schedules a rebuild immediately. So
+it ran *alongside* the four snapshots it reads: the trucking build joins
+`contract_qty_move_snapshot` for the B2B origin overlay, and could publish a generation computed
+from pre-import quantities. The page would then serve those until the next rebuild - the following
+morning.
+
+So `markPipelineDailySummaryStale` and `invalidateTruckingListCache` take a flag to mark stale
+*without* scheduling. The import passes it, and runs `PipelineDailySummaryService.refreshAll()`
+itself after the upstream snapshots have landed. Caches are still cleared at the top, immediately;
+only the rebuild moved. If an upstream refresh fails, the rebuild falls back to the normal
+debounced schedule rather than not happening at all - stale but consistent beats never rebuilt.
+
+Then the keep-warm registry is re-run, so the first viewer is served from memory rather than
+paying the live query (25-190s on Trucking). That is bounded by what the registry holds: it
+re-warms scopes someone opened recently, and after a container restart, or a scope nobody has
+opened, there is nothing to re-warm and the first load pays the snapshot-served cost (70ms-3s)
+rather than the live one.
+
 ### WB upload rows appear immediately: a targeted snapshot refresh
 
 The snapshot made the page fast and made it lie. `trucking_list_stage_snapshot` is the source of
