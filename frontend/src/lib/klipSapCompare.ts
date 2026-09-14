@@ -109,3 +109,14 @@ export function hasKlipSapMismatch(
   if (sapEmpty) return false
   return !klipSapValuesEqual(klipValue, sapValue, format)
 }
+
+/**
+ * Does this field hold anything at all, in the format's own terms?
+ *
+ * Needed to tell "no value" apart from "a value that happens to match SAP" - the badge means
+ * different things in those two cases, and treating them alike is how a blank field ended up
+ * claiming to be KLIP input.
+ */
+export function hasKlipSapValue(value: unknown, format: KlipSapCompareFormat): boolean {
+  return formatKlipSapDisplayValue(value, format) !== '—'
+}

@@ -6,6 +6,11 @@ import { AuthRequest } from '../middleware/auth';
 import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
 import {
+  SHIPMENT_PROVENANCE_COLUMNS,
+  buildKlipEditedFieldsSetSql,
+  klipEditedFieldsToRecord,
+} from '../utils/klipEditedFields';
+import {
   InvalidDateInputError,
   parseOptionalStrictDateRange,
 } from '../utils/strictDateInput';
@@ -3177,6 +3182,26 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
         success: false,
         error: { message: 'No valid fields to update' },
       });
+    }
+
+    /*
+     * Record which of these columns a user actually wrote (migration 167).
+     *
+     * The column names are read back out of the SET clauses already assembled above rather than
+     * collected in each branch - there are two dozen of them, and a branch that forgot to opt in
+     * would produce a marker that is quietly incomplete, which is worse than none at all.
+     *
+     * Only the columns the SAP import also writes are worth recording; a KLIP-only column proves
+     * itself.
+     */
+    const writtenColumns = updateFields
+      .map((clause) => clause.split('=')[0]?.trim() ?? '')
+      .filter(Boolean);
+    const provenanceColumns = klipEditedFieldsToRecord(writtenColumns, SHIPMENT_PROVENANCE_COLUMNS);
+    if (provenanceColumns.length > 0) {
+      updateFields.push(buildKlipEditedFieldsSetSql(`$${paramIndex}`));
+      updateValues.push(provenanceColumns);
+      paramIndex++;
     }
 
     // Add updated_at timestamp

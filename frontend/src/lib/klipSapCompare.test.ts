@@ -5,6 +5,7 @@ import {
   formatKlipSapDisplayValue,
   formatNumberDelta,
   hasKlipSapMismatch,
+  hasKlipSapValue,
   klipSapValuesEqual,
 } from './klipSapCompare'
 
@@ -41,5 +42,28 @@ describe('klipSapCompare', () => {
     expect(hasKlipSapMismatch('Vessel B', 'Vessel A', 'text')).toBe(true)
     expect(hasKlipSapMismatch('Vessel B', '', 'text')).toBe(false)
     expect(formatKlipSapDelta('Vessel B', 'Vessel A', 'text')).toBeNull()
+  })
+})
+
+/**
+ * The KLIP chip used to be unconditional, so a field the user never opened showed its SAP value
+ * with "KLIP" beside it. Nothing in the data records who wrote a value; only whether it still
+ * equals SAP's is knowable, and that is what the badge may claim.
+ */
+describe('hasKlipSapValue', () => {
+  it('tells an absent value apart from one that merely matches SAP', () => {
+    expect(hasKlipSapValue('', 'text')).toBe(false)
+    expect(hasKlipSapValue(null, 'date')).toBe(false)
+    expect(hasKlipSapValue(undefined, 'number')).toBe(false)
+    expect(hasKlipSapValue('   ', 'text')).toBe(false)
+
+    expect(hasKlipSapValue('BONTANG', 'text')).toBe(true)
+    expect(hasKlipSapValue('2026-09-14', 'date')).toBe(true)
+    expect(hasKlipSapValue(0, 'number')).toBe(true)
+  })
+
+  it('treats a zero as present, because a user can mean zero', () => {
+    expect(hasKlipSapValue(0, 'number')).toBe(true)
+    expect(hasKlipSapValue('0', 'number')).toBe(true)
   })
 })

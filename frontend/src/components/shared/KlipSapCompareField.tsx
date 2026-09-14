@@ -5,6 +5,7 @@ import {
   formatKlipSapDelta,
   formatKlipSapDisplayValue,
   hasKlipSapMismatch,
+  hasKlipSapValue,
   type KlipSapCompareFormat,
 } from '@/lib/klipSapCompare'
 
@@ -28,7 +29,11 @@ type KlipSapCompareFieldProps = {
   editing?: boolean
   editControl?: React.ReactNode
   showOverrideBadge?: boolean
-  /** When false, hide the always-on KLIP chip (use for fields where chip only means override). */
+  /**
+   * Leave unset. The badge is then derived from the comparison, which is the only thing that can
+   * actually be known - see the note in the component body. Pass a boolean only where the caller
+   * has a better source of truth than value equality.
+   */
   showKlipBadge?: boolean
   hidden?: boolean
 }
@@ -42,7 +47,7 @@ export function KlipSapCompareField({
   editing = false,
   editControl,
   showOverrideBadge = false,
-  showKlipBadge = true,
+  showKlipBadge,
   hidden = false,
 }: KlipSapCompareFieldProps) {
   if (hidden) return null
@@ -50,6 +55,23 @@ export function KlipSapCompareField({
   const mismatch = hasKlipSapMismatch(klipValue, sapValue, format)
   const delta = formatKlipSapDelta(klipValue, sapValue, format)
   const sapDisplay = formatKlipSapDisplayValue(sapValue, format)
+
+  /*
+   * The KLIP chip used to be unconditional, which made it an assertion the data cannot support.
+   *
+   * Most KLIP-labelled columns are shared with the SAP import, which fills whatever the user left
+   * empty; nothing records who wrote a value. So a field the user never opened displayed its SAP
+   * value with a blue "KLIP" chip beside it, and there was no way to tell it apart from something
+   * typed by hand.
+   *
+   * What IS knowable is whether the value still equals what SAP reported. Equal means SAP's number
+   * is what you are looking at, whoever put it there; different means someone or something in KLIP
+   * moved it. That is what the chips now say, and nothing more.
+   */
+  const klipHasValue = hasKlipSapValue(klipValue, format)
+  const sapHasValue = hasKlipSapValue(sapValue, format)
+  const showKlip = showKlipBadge ?? (klipHasValue && mismatch)
+  const showSapSourced = !showKlip && klipHasValue && sapHasValue && !mismatch
 
   const labelClass = compact
     ? 'mb-1 block text-[10px] font-medium text-gray-600'
@@ -67,9 +89,17 @@ export function KlipSapCompareField({
       ) : (
         <div className={cn('flex min-h-8 items-center gap-2', KLIP_VALUE_CLASS)}>
           <span>{formatKlipSapDisplayValue(klipValue, format)}</span>
-          {showKlipBadge ? (
+          {showKlip ? (
             <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
               KLIP
+            </span>
+          ) : null}
+          {showSapSourced ? (
+            <span
+              className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600"
+              title="Sama dengan nilai SAP — bukan bukti diisi lewat KLIP"
+            >
+              SAP
             </span>
           ) : null}
           {showOverrideBadge ? (
