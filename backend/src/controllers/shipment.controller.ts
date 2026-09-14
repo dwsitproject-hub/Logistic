@@ -3961,19 +3961,29 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     const eta_vessel_start_discharging_n = toDateOrNull(eta_vessel_start_discharging);
     const eta_vessel_complete_discharge_n = toDateOrNull(eta_vessel_complete_discharge);
 
-    // A port name is never a bare number. Coerce instead of rejecting, so the user's other edits
-    // still save while junk like "0.00" cannot be persisted as a port name.
+    /*
+     * A port name is never a bare number, and a screen label is never a port name.
+     *
+     * This used to fall back to `Loading Port N` / `Discharge Port` - the very text the modal
+     * prints beside the field - because the column was NOT NULL and the save needed something.
+     * That label then sat in the database as if it were the port's name, and travelled: the
+     * wave-2 ETA migration found PO 1581000913 whose stored name was `Loading Port 1`.
+     *
+     * NULL instead (migration 168). The display already treats a blank name as absent and renders
+     * its own badge, so nothing is lost on screen and the data stops asserting a name nobody gave.
+     * Junk like "0.00" is still rejected rather than saved, and the user's other edits still go
+     * through.
+     */
     const safePortName = (() => {
       const raw = port_name == null ? '' : String(port_name).trim();
       if (isValidHumanPortName(raw)) return raw;
       if (raw) {
-        logger.warn('Rejected non-port name on loading port save; using generic label', {
+        logger.warn('Rejected non-port name on loading port save; storing no name', {
           shipmentId: req.params.shipmentId ?? null,
           submitted: raw,
         });
       }
-      // Sequence 999 is this schema's discharge-port convention.
-      return Number(port_sequence) === 999 ? 'Discharge Port' : `Loading Port ${port_sequence ?? 1}`;
+      return null;
     })();
 
     const toNumberOrNull = (v: unknown): number | null => {
