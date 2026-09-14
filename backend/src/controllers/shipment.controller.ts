@@ -7,9 +7,35 @@ import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
 import {
   SHIPMENT_PROVENANCE_COLUMNS,
+  buildKlipEditedFieldsChangedSetSql,
   buildKlipEditedFieldsSetSql,
   klipEditedFieldsToRecord,
 } from '../utils/klipEditedFields';
+
+/*
+ * The per-port editor saves the whole form, so "the request supplied it" is not evidence a user
+ * authored it - the form round-trips values it merely displayed. Only the columns whose value
+ * actually changes are recorded, compared against the stored row inside the same UPDATE.
+ *
+ * Placeholders match the SET list below; keep them in step if that statement is renumbered.
+ */
+const VESSEL_LOADING_PORT_CHANGED_PROVENANCE_SQL = buildKlipEditedFieldsChangedSetSql([
+  { column: 'quantity_at_loading_port', placeholder: '$4' },
+  { column: 'quality_ffa', placeholder: '$5' },
+  { column: 'quality_mi', placeholder: '$6' },
+  { column: 'quality_dobi', placeholder: '$7' },
+  { column: 'quality_red', placeholder: '$8' },
+  { column: 'quality_ds', placeholder: '$9' },
+  { column: 'quality_stone', placeholder: '$10' },
+  { column: 'ata_vessel_arrival', placeholder: '$12' },
+  { column: 'ata_vessel_berthed', placeholder: '$14' },
+  { column: 'ata_loading_start', placeholder: '$16' },
+  { column: 'ata_loading_completed', placeholder: '$18' },
+  { column: 'ata_vessel_sailed', placeholder: '$20' },
+  { column: 'loading_rate', placeholder: '$26' },
+  // No eta_* here: SAP never sends ETA (0 occurrences across 27,003 SAP rows, against 1,800 for
+  // ATA), so it is KLIP input already and needs no marker. See klipEditedFields.ts.
+]);
 import {
   InvalidDateInputError,
   parseOptionalStrictDateRange,
@@ -4006,6 +4032,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
            eta_vessel_start_discharging = $24,
            eta_vessel_complete_discharge = $25,
            loading_rate = $26,
+           ${VESSEL_LOADING_PORT_CHANGED_PROVENANCE_SQL},
            updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND shipment_id = $27
          RETURNING *`,

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   SHIPMENT_PROVENANCE_COLUMNS,
   TRUCKING_PROVENANCE_COLUMNS,
+  VESSEL_LOADING_PORT_PROVENANCE_COLUMNS,
+  buildKlipEditedFieldsChangedSetSql,
   buildKlipEditedFieldsSetSql,
   klipEditedFieldsToRecord,
 } from './klipEditedFields';
@@ -62,5 +64,64 @@ describe('buildKlipEditedFieldsSetSql', () => {
     expect(sql).toContain('DISTINCT');
     expect(sql).toContain('$7::text[]');
     expect(sql).not.toMatch(/klip_edited_fields\s*=\s*\$7/);
+  });
+});
+
+/**
+ * The per-port editor saves the whole form, so the marker there has to come from a comparison
+ * against the stored row - "the request supplied it" would claim a user authored values the form
+ * merely displayed.
+ */
+describe('buildKlipEditedFieldsChangedSetSql', () => {
+  it('marks a column only when the incoming value differs from the stored one', () => {
+    const sql = buildKlipEditedFieldsChangedSetSql([
+      { column: 'ata_vessel_arrival', placeholder: '$12' },
+      { column: 'quality_ffa', placeholder: '$5' },
+    ]);
+    expect(sql).toContain("CASE WHEN $12 IS DISTINCT FROM ata_vessel_arrival THEN ARRAY['ata_vessel_arrival']");
+    expect(sql).toContain("CASE WHEN $5 IS DISTINCT FROM quality_ffa THEN ARRAY['quality_ffa']");
+  });
+
+  it('uses IS DISTINCT FROM, so NULL to a value counts as a change', () => {
+    const sql = buildKlipEditedFieldsChangedSetSql([{ column: 'quality_mi', placeholder: '$6' }]);
+    expect(sql).toContain('IS DISTINCT FROM');
+    expect(sql).not.toMatch(/\$6\s*<>\s*quality_mi/);
+  });
+
+  it('keeps what was already recorded', () => {
+    const sql = buildKlipEditedFieldsChangedSetSql([{ column: 'quality_mi', placeholder: '$6' }]);
+    expect(sql).toContain("COALESCE(klip_edited_fields, '{}')");
+  });
+
+  it('emits nothing for an empty list, so callers can skip the clause', () => {
+    expect(buildKlipEditedFieldsChangedSetSql([])).toBe('');
+  });
+
+  it('does not track ETA, which SAP never supplies', () => {
+    expect(VESSEL_LOADING_PORT_PROVENANCE_COLUMNS.some((c) => c.startsWith('eta_'))).toBe(false);
+    expect(VESSEL_LOADING_PORT_PROVENANCE_COLUMNS).toContain('ata_vessel_arrival');
+    expect(VESSEL_LOADING_PORT_PROVENANCE_COLUMNS).toContain('quality_ffa');
+  });
+});
+
+/**
+ * Measured against the dev database rather than assumed, because the code paths exist for all
+ * three and only the data settles it: across 27,003 sap_processed_data rows, ETA keys appear 0
+ * times and SF keys 0 times, while ATA appears 1,800 times.
+ */
+describe('fields SAP never supplies are not tracked', () => {
+  it('leaves SFAL/SFBD off the shipment list', () => {
+    expect(SHIPMENT_PROVENANCE_COLUMNS).not.toContain('sfal_qty');
+    expect(SHIPMENT_PROVENANCE_COLUMNS).not.toContain('sfbd_qty');
+  });
+
+  it('leaves daily planning off the trucking list', () => {
+    expect(TRUCKING_PROVENANCE_COLUMNS).not.toContain('daily_deliverables');
+  });
+
+  it('still tracks the fields SAP does supply', () => {
+    expect(SHIPMENT_PROVENANCE_COLUMNS).toContain('actual_vessel_qty_receive');
+    expect(SHIPMENT_PROVENANCE_COLUMNS).toContain('quantity_delivered');
+    expect(TRUCKING_PROVENANCE_COLUMNS).toContain('loading_location');
   });
 });

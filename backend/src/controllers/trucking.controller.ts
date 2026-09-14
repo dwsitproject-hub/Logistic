@@ -9,6 +9,11 @@ import { AuthRequest } from '../middleware/auth';
 import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
 import {
+  TRUCKING_PROVENANCE_COLUMNS,
+  buildKlipEditedFieldsSetSql,
+  klipEditedFieldsToRecord,
+} from '../utils/klipEditedFields';
+import {
   InvalidDateInputError,
   parseOptionalStrictDateOnly,
   parseOptionalStrictDateRange,
@@ -993,6 +998,30 @@ export const updateTruckingOperation = async (req: AuthRequest, res: Response) =
         success: false,
         error: { message: 'No valid fields to update' },
       });
+    }
+
+    /*
+     * Record which of these columns a user wrote (migration 167).
+     *
+     * This endpoint applies only the fields present in the request, so "supplied" really does mean
+     * "a user set it" - unlike the per-port editor, which round-trips a whole form and therefore
+     * has to compare against the stored value instead.
+     *
+     * Read back out of the SET clauses rather than collected alongside each branch: the loop above
+     * has several early `continue`s, and a path that forgot to opt in would leave the marker
+     * quietly incomplete.
+     */
+    const truckingWrittenColumns = updateFields
+      .map((clause) => clause.split('=')[0]?.trim() ?? '')
+      .filter(Boolean);
+    const truckingProvenance = klipEditedFieldsToRecord(
+      truckingWrittenColumns,
+      TRUCKING_PROVENANCE_COLUMNS,
+    );
+    if (truckingProvenance.length > 0) {
+      updateFields.push(buildKlipEditedFieldsSetSql(`$${paramIndex}`));
+      updateValues.push(truckingProvenance);
+      paramIndex++;
     }
 
     // Add updated_at timestamp

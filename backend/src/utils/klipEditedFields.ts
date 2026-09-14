@@ -14,8 +14,11 @@ export const SHIPMENT_PROVENANCE_COLUMNS = [
   'port_of_discharge',
   'quantity_delivered',
   'actual_vessel_qty_receive',
-  'sfal_qty',
-  'sfbd_qty',
+  /*
+   * sfal_qty / sfbd_qty are deliberately absent. The SAP upsert does assign them - and worse,
+   * overwrites rather than gap-fills - but SAP never sends the values: 0 occurrences of any SF key
+   * across 27,003 sap_processed_data rows. They are KLIP input and prove themselves.
+   */
   'ata_arrival',
   'ata_berthed',
   'ata_loading_start',
@@ -42,9 +45,21 @@ export const VESSEL_LOADING_PORT_PROVENANCE_COLUMNS = [
   'quality_stone',
   'quantity_at_loading_port',
   'loading_rate',
+  /*
+   * eta_* columns are deliberately absent. The SAP writer does pass them through the same merge,
+   * so the code path exists - but SAP never supplies a value: across 27,003 sap_processed_data
+   * rows the ETA keys appear 0 times, against 1,800 for ATA. ETA is KLIP input and proves itself,
+   * and marking it would imply an ambiguity that does not exist.
+   */
 ] as const;
 
-/** Columns on `trucking_operations` shared with the SAP import. */
+/**
+ * Columns on `trucking_operations` shared with the SAP import.
+ *
+ * `daily_deliverables` is not here on purpose: SAP never writes it, so a row holding planning is
+ * already proof of KLIP authorship. The same reasoning keeps sfal_qty/sfbd_qty off the shipment
+ * list above.
+ */
 export const TRUCKING_PROVENANCE_COLUMNS = [
   'loading_location',
   'unloading_location',
@@ -83,4 +98,38 @@ export function klipEditedFieldsToRecord(
     if (ambiguous.has(column)) out.add(column);
   }
   return [...out].sort();
+}
+
+/**
+ * Mark only the columns whose value this statement actually changes.
+ *
+ * Needed where a save submits a whole form rather than the fields a user touched - the per-port
+ * ATA/quality editor does exactly that, round-tripping values it merely displayed. Marking those
+ * would claim a user authored SAP's number, which is the very thing this marker exists to stop.
+ *
+ * The comparison is safe inside the same UPDATE: every SET expression is evaluated against the
+ * OLD row, so "$12 IS DISTINCT FROM ata_vessel_arrival" asks "is the incoming value different
+ * from what is stored", even though the same statement is assigning that column.
+ *
+ * IS DISTINCT FROM rather than <>: a column going from NULL to a value is a change, and <> would
+ * answer NULL there and quietly record nothing.
+ */
+export function buildKlipEditedFieldsChangedSetSql(
+  pairs: ReadonlyArray<{ column: string; placeholder: string }>,
+): string {
+  if (pairs.length === 0) return '';
+  const branches = pairs
+    .map(
+      ({ column, placeholder }) =>
+        `      || CASE WHEN ${placeholder} IS DISTINCT FROM ${column} THEN ARRAY['${column}'] ELSE ARRAY[]::text[] END`,
+    )
+    .join('\n');
+  return `klip_edited_fields = (
+    SELECT COALESCE(ARRAY(
+      SELECT DISTINCT unnest(
+        COALESCE(klip_edited_fields, '{}')
+${branches}
+      ) ORDER BY 1
+    ), '{}')
+  )`;
 }

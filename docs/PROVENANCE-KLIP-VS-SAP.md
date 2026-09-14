@@ -46,8 +46,7 @@ yang paling berharga dan paling tidak mungkin diketik ulang user: timbangan hari
 | ATA & Quality sebelum migrasi 130 | Backfill migrasi 130 menyalin nilai efektif ke kolom `sap_*`, sehingga keduanya identik selamanya |
 | Quality yang user isi `0` | Penggabungan memperlakukan `0` tersimpan sebagai "kosong", jadi SAP menimpanya |
 | Lokasi & qty trucking | `loading_location`, `unloading_location`, `quantity_delivered` — tiga penulis, satu kolom, tanpa penanda |
-| SFAL/SFBD shipment | SAP **menimpa langsung**, bahkan tidak sekadar mengisi yang kosong |
-| ETA shipment, tanggal planning trucking | Migrasi 026 dan 057 mengisinya dari sumber SAP tanpa penanda |
+| Tanggal planning trucking | Migrasi 057 mengisinya dari sumber SAP tanpa penanda |
 
 `shipments`, `trucking_operations`, dan `vessel_loading_ports` **tidak punya kolom `updated_by`
 maupun `created_by`** — hanya `updated_at`, yang ikut berubah setiap import SAP. Jadi tidak bisa
@@ -106,5 +105,8 @@ tebakan — untuk seterusnya.
 
 **4. Untuk migrasi, pakai daftar di tabel pertama.** Tidak ada yang perlu dihapus di produksi.
 
-**5. Perbaiki SFAL/SFBD shipment.** SAP menimpanya langsung, jadi angka yang diketik user hilang
-pada import berikutnya. Itu bug tersendiri, terlepas dari urusan provenance.
+**5. Catatan koreksi.** Saya sempat menyebut SFAL/SFBD shipment sebagai bug karena kode SAP
+menimpanya langsung. Diperiksa terhadap data: SAP tidak pernah mengirim nilainya - 0 kemunculan
+kunci SF apa pun di 27.003 baris. Jalur kodenya ada tapi tidak pernah aktif, jadi tidak ada yang
+hilang. Hal yang sama berlaku untuk ETA (0 kemunculan, melawan 1.800 untuk ATA) dan untuk daily
+planning trucking. Ketiganya murni KLIP dan tidak perlu penanda.
