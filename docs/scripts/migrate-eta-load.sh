@@ -18,6 +18,13 @@
 #   before SAP had it. That is real user data and worth carrying - but it is also the case where a
 #   mistake invents structure, so it takes an explicit flag and is reported either way.
 #
+#   --map-by-po attaches a KLIP-created shipment's ETA to the shipment production already has for
+#   that contract. An MNL-/MSEA- row exists because a user created it before SAP had sent the STO;
+#   once SAP did, production built its own row for the SAME voyage. Attaching there is more
+#   correct than carrying the KLIP shipment across, and avoids two rows for one voyage. It applies
+#   only where the contract has EXACTLY ONE shipment in production - with several, "which voyage"
+#   has no answer the data can give, and those rows are left alone.
+#
 # Nothing here touches ATA, quality or quantities. Those columns are shared with the SAP import
 # and their provenance cannot be established (docs/PROVENANCE-KLIP-VS-SAP.md); ETA is KLIP-only,
 # which is exactly why it can be carried without argument.
@@ -28,10 +35,12 @@ CSV="${1:-}"
 shift || true
 APPLY=""
 CREATE_PORTS=""
+MAP_BY_PO=""
 for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
     --create-ports) CREATE_PORTS=1 ;;
+    --map-by-po) MAP_BY_PO=1 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -56,6 +65,7 @@ DB_PORT="${DB_PORT:-5432}"
 MODE="DRY RUN"
 [ -n "$APPLY" ] && MODE="APPLY"
 [ -n "$APPLY" ] && [ -n "$CREATE_PORTS" ] && MODE="APPLY + CREATE PORTS"
+[ -n "$MAP_BY_PO" ] && MODE="$MODE + MAP BY PO"
 
 echo "=== host   : $(hostname) ($(hostname -I 2>/dev/null | awk '{print $1}'))"
 echo "=== target : $DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
@@ -122,6 +132,47 @@ LEFT JOIN vessel_loading_ports vlp
  AND vlp.shipment_id = s.id
  AND COALESCE(vlp.port_sequence, -1) = COALESCE(i.port_sequence, -1)
  AND COALESCE(vlp.is_discharge_port, FALSE) = COALESCE(i.is_discharge_port, FALSE);
+
+SQL
+
+if [ -n "$MAP_BY_PO" ]; then
+cat <<'SQL'
+
+-- Attach a KLIP-created shipment's rows to the shipment production already has for that contract.
+-- Restricted to contracts with exactly one, which is what makes the mapping unambiguous: with
+-- several, nothing in the data says which voyage the ETA belongs to.
+UPDATE eta_resolved r
+SET shipment_uuid = one.id
+FROM contracts c
+JOIN LATERAL (
+  SELECT s.id, COUNT(*) OVER () AS cnt
+  FROM shipments s
+  WHERE s.contract_id = c.id
+) one ON one.cnt = 1
+WHERE r.shipment_uuid IS NULL
+  AND r.shipment_key ~ '^(MNL-|MSEA-)'
+  AND TRIM(c.po_number::text) = TRIM(r.po_number);
+
+-- Ports follow their shipment: same sequence, same loading-vs-discharge side.
+UPDATE eta_resolved r
+SET port_uuid = v.id
+FROM vessel_loading_ports v
+WHERE r.scope = 'port'
+  AND r.port_uuid IS NULL
+  AND r.shipment_uuid IS NOT NULL
+  AND v.shipment_id = r.shipment_uuid
+  AND COALESCE(v.port_sequence, -1) = COALESCE(r.port_sequence, -1)
+  AND COALESCE(v.is_discharge_port, FALSE) = COALESCE(r.is_discharge_port, FALSE);
+
+\echo ''
+\echo '-- rows re-homed onto the shipment production already had --'
+SELECT COUNT(*)::int AS rows_mapped_by_po
+FROM eta_resolved
+WHERE shipment_key ~ '^(MNL-|MSEA-)' AND shipment_uuid IS NOT NULL;
+SQL
+fi
+
+cat <<'SQL'
 
 \echo ''
 \echo '======== what this CSV resolves to in production ========'
