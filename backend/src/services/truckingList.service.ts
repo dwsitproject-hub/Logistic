@@ -1659,6 +1659,20 @@ async function runTruckingListSummaryWithBacklog(
     statusContractQty,
     statusOutstandingQty,
     outstandingQty,
+    /*
+     * The same as-of the daily branch reports, and for the same reason.
+     *
+     * This branch runs whenever the daily summary refuses - a Region/Plant filter, a source,
+     * status or Late Indicator filter, or a pending delta - but the figures still come from the
+     * snapshot and are exactly as old. Without this the badge vanished precisely when a filter
+     * was applied, so the page stopped saying "as of" at the moment a user was most likely to be
+     * comparing a filtered figure against something else.
+     */
+    summaryFreshness: {
+      source: sectionOneFromSnapshot ? 'snapshot' : 'live',
+      asOf: sectionOneFromSnapshot ? section1Snapshot!.refreshedAt : null,
+      isStale: sectionOneFromSnapshot ? section1Snapshot!.isStale : false,
+    },
     ...(attentionInsights !== undefined ? { attentionInsights } : {}),
   };
   MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
