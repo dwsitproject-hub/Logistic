@@ -1513,7 +1513,9 @@ async function runTruckingListSummaryWithBacklog(
     });
   let fromDaily: Awaited<ReturnType<typeof loadTruckingSummaryFromDaily>> | null = null;
   if (dailyEligible) {
+    const t = performance.now();
     fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
+    timingsMs.dailySummary = performance.now() - t;
   }
 
   /**
@@ -1533,6 +1535,7 @@ async function runTruckingListSummaryWithBacklog(
    * status circles in the same section already do. `summaryFreshness` reports the as-of so the
    * page can say so.
    */
+  const tSection1 = performance.now();
   const section1Snapshot = stageSnapshotEligible
     ? await loadTruckingSection1FromStageSnapshot(toPipelineDailySummaryScope(filters), {
         /*
@@ -1546,7 +1549,15 @@ async function runTruckingListSummaryWithBacklog(
         lateIndicator: filters.lateIndicator,
       })
     : null;
+  timingsMs.section1Snapshot = performance.now() - tSection1;
   const sectionOneFromSnapshot = section1Snapshot !== null;
+  /*
+   * Timed separately because these two run concurrently and one of them has repeatedly turned out
+   * to be the whole cost - first the live combined summary, later the backlog pair. A single
+   * figure covering both sent an earlier diagnosis to the wrong half.
+   */
+  const tExecution = performance.now();
+  const tBacklog = performance.now();
   const [combined, backlog] = await Promise.all([
     sectionOneFromSnapshot
       ? Promise.resolve(
@@ -1565,9 +1576,16 @@ async function runTruckingListSummaryWithBacklog(
       : loadTruckingCombinedSummaryExecution(built, {
           includeCounts: !fromDaily,
           grOpenOnly: Boolean(fromDaily),
+        }).then((r) => {
+          timingsMs.liveCombinedExecution = performance.now() - tExecution;
+          return r;
         }),
-    loadTruckingUnplannedBacklogCombinedForRequest(req),
+    loadTruckingUnplannedBacklogCombinedForRequest(req).then((r) => {
+      timingsMs.backlog = performance.now() - tBacklog;
+      return r;
+    }),
   ]);
+  timingsMs.execution = performance.now() - tExecution;
   timingsMs.dbCombinedSummary = performance.now() - tCombined0;
 
   const liveContractQty: TruckingStatusContractQtyKg = {
