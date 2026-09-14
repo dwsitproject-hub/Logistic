@@ -192,7 +192,7 @@ export function ShipmentOutstandingQtySummary({
               etcNoAtcDueActive && 'ring-2 ring-red-400 ring-offset-2 shadow-md',
               !onEtcNoAtcDueClick && 'cursor-default',
             )}
-            title="Show shipments with no ATC, overdue or due within 7 days"
+            title="Late ATC — Overdue / Due ≤7d"
           >
             <div className="flex items-start gap-2">
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-100 text-red-800">
@@ -200,12 +200,12 @@ export function ShipmentOutstandingQtySummary({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1 text-[11px] font-semibold leading-tight text-red-950">
-                  <span>Pending ATC (Overdue / Due ≤7d)</span>
+                  <span>Late ATC</span>
                   <FieldHelp text={FIELD_HELP.shipmentEtcNoAtcDueWithin7d} />
                   {etcNoAtcDueLoading ? (
                     <Loader2
                       className="h-3 w-3 shrink-0 animate-spin text-red-700"
-                      aria-label="Loading pending ATC KPI"
+                      aria-label="Loading late ATC KPI"
                     />
                   ) : null}
                 </div>

@@ -3502,7 +3502,7 @@ function ShipmentsPageContent() {
     summaryFetching || (userScopeReady && shipmentsSection1Summary == null)
 
   const shipmentsTableScopeLabel = useMemo(() => {
-    if (etcNoAtcDueWithin7dFilter) return 'Pending ATC (Overdue / Due ≤7d)'
+    if (etcNoAtcDueWithin7dFilter) return 'Late ATC'
     if (statusFilter !== 'ALL') {
       if (statusFilter === 'OPEN') return 'Open'
       if (statusFilter === 'CLOSE') return 'Close'
