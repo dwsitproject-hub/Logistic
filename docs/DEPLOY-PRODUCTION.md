@@ -423,16 +423,27 @@ berbeda dari host SIT, dan tidak bisa diasumsikan:
 
 ```bash
 mount | grep -i -E "synology|cifs|172.30.1.94"
-ls -la "/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT/ORIGINAL"
+ls -la "/mnt/synology/dev/KLIP/IMPORT DATA/LOGISTICS REPORT/ORIGINAL"
 ```
 
-Kalau kosong, mount-nya harus diminta ke tim infra dulu - tidak ada konfigurasi KLIP yang bisa
-menggantikannya. Minta **read-only**; KLIP tidak perlu menulis ke sana.
+**Titik mount produksi berbeda dari SIT** (diperiksa 2026-09-14). Jangan menyalin path SIT:
+
+| | Mount point | Opsi |
+|---|---|---|
+| SIT | `/mnt/synology-apps` | `ro`, uid/gid 1001, dir_mode 0550 |
+| Produksi | `/mnt/synology` | `rw`, uid/gid 0, dir_mode 0755 |
+
+Konsekuensinya di produksi: izin bukan masalah (0755 terbaca semua user, termasuk `nodejs`
+uid 1001), dan mount-nya `rw` - tapi KLIP tetap tidak punya jalur tulis ke folder sumber, jadi
+file IT tetap aman.
+
+Kalau `mount` kosong, share-nya harus diminta ke tim infra dulu - tidak ada konfigurasi KLIP yang
+bisa menggantikan mount yang tidak ada.
 
 ### `.env`
 
 ```env
-KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+KLIP_SAP_IMPORT_MOUNT=/mnt/synology/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
 SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
 SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
 ```
