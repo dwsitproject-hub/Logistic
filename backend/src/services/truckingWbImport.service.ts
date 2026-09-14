@@ -829,9 +829,13 @@ export async function processWbRekapWorkbookUpload(args: {
     }
     const candidateList = [...allCandidates];
 
+    const tOps1 = Date.now();
     const opsByPo = await findTruckingOpsByPoForWbImportBatch(client, candidateList);
+    timingsMs.lookupOpsByPo = Date.now() - tOps1;
     normalizeOpsByPoMap(opsByPo);
+    const tSto = Date.now();
     const poFromSto = await batchResolvePoFromSto(client, candidateList);
+    timingsMs.lookupPoFromSto = Date.now() - tSto;
 
     // Candidates that were actually STO keys resolving to a PO not already covered above.
     const secondaryPos = new Set<string>();
@@ -840,14 +844,20 @@ export async function processWbRekapWorkbookUpload(args: {
       if (resolvedPo && !opsByPo.has(resolvedPo)) secondaryPos.add(resolvedPo);
     }
     if (secondaryPos.size > 0) {
+      const tOps2 = Date.now();
       const secondaryOps = await findTruckingOpsByPoForWbImportBatch(client, [...secondaryPos]);
+      timingsMs.lookupOpsSecondary = Date.now() - tOps2;
       normalizeOpsByPoMap(secondaryOps);
       for (const [po, list] of secondaryOps) opsByPo.set(po, list);
     }
 
     const diagnosticPoSet = new Set<string>([...candidateList, ...secondaryPos]);
+    const tDiag = Date.now();
     const diagnostics = await batchFetchContractDiagnostics(client, [...diagnosticPoSet]);
+    timingsMs.lookupDiagnostics = Date.now() - tDiag;
+    const tAnyStatus = Date.now();
     const anyStatusCounts = await batchFetchAnyStatusOpsCounts(client, [...diagnosticPoSet]);
+    timingsMs.lookupAnyStatusCounts = Date.now() - tAnyStatus;
 
     // Dedupe auto-create across multiple aggregated rows for the same contract in this file.
     timingsMs.batchLookups = Date.now() - tLookups;
