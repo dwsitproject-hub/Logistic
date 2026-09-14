@@ -411,6 +411,85 @@ User Hub yang emailnya tidak ada di tabel `users` ditolak ke `/login?error=sso_n
 
 ---
 
+## STEP 9 — SAP auto-import dari share IT
+
+Terbukti di SIT 2026-09-14: hanya file terbaru yang diimpor, sumber tidak tersentuh, hasil
+ditulis ke volume lokal.
+
+### Prasyarat yang harus diperiksa lebih dulu
+
+Host backend produksi (`172.28.80.51`) belum tentu punya share Synology yang ter-mount. Ini
+berbeda dari host SIT, dan tidak bisa diasumsikan:
+
+```bash
+mount | grep -i -E "synology|cifs|172.30.1.94"
+ls -la "/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT/ORIGINAL"
+```
+
+Kalau kosong, mount-nya harus diminta ke tim infra dulu - tidak ada konfigurasi KLIP yang bisa
+menggantikannya. Minta **read-only**; KLIP tidak perlu menulis ke sana.
+
+### `.env`
+
+```env
+KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
+SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
+```
+
+Nilainya sama persis dengan SIT, termasuk `SAP_AUTO_IMPORT_RESULTS_ROOT`. Itu bukan salah ketik:
+keduanya menunjuk volume Docker masing-masing host, jadi hasilnya tidak pernah bertabrakan.
+Justru menulis hasil ke share yang **dipakai bersama** itulah yang akan saling menimpa.
+
+Catatan folder `dev` pada path: IT menempatkan export di subtree `dev`, dan produksi membaca
+folder yang sama. Itu keputusan yang sudah diambil - SIT untuk pengujian, produksi untuk
+operasional. Registry checksum-nya per-database, jadi keduanya mengimpor secara independen.
+
+### Deploy
+
+```bash
+cd /opt/klip && git pull origin main
+docker compose -f docker-compose.backend.yml                -f docker-compose.backend.remote-db.yml                -f docker-compose.backend.sap-share.yml up -d --build backend
+```
+
+### Verifikasi, berurutan
+
+```bash
+docker exec klip-backend id
+docker exec klip-backend ls -la /mnt/sap-import/ORIGINAL
+```
+
+User container harus `uid=1001`; folder share bermode `0550` milik uid/gid 1001, dan kalau tidak
+cocok setiap pembacaan ditolak - muncul sebagai folder kosong, bukan error izin.
+
+```bash
+docker logs klip-backend 2>&1 | grep -i "auto-import cron"
+```
+
+Harus `scheduled: 0 6 * * * (Asia/Jakarta)`, bukan `disabled`.
+
+### Menjalankan manual (opsional)
+
+Cron akan berjalan sendiri jam 06:00. Untuk menguji lebih dulu, dari browser sebagai ADMIN:
+
+```javascript
+await (await fetch('/api/sap-master-v2/auto-import/run', {method:'POST', credentials:'include'})).json()
+```
+
+Ini import sungguhan: data masuk, email terkirim ke semua ADMIN, dan rebuild snapshot berjalan
+4-27 menit sesudahnya. Pilih jendela waktu yang sepi.
+
+### Yang tidak perlu dikhawatirkan
+
+File di `ORIGINAL` tidak pernah dihapus, dipindah, atau diubah oleh KLIP - mount read-only dan
+kode tidak punya jalur tulis ke sana. `SUCCEED`/`FAILED` milik IT juga tidak disentuh; hasil KLIP
+ada di `/app/uploads/SAP Data/{Success,Failed}` di dalam container.
+
+Konsekuensinya: kalau IT mengharapkan workbook hasil muncul di share, itu belum terjadi dan perlu
+keputusan terpisah (mount `rw` untuk subtree KLIP, hanya untuk produksi).
+
+---
+
 ## Rollback
 
 ```bash
