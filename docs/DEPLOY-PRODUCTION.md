@@ -501,6 +501,112 @@ keputusan terpisah (mount `rw` untuk subtree KLIP, hanya untuk produksi).
 
 ---
 
+## STEP 10 — Domain klip.kpndomain.com
+
+Urutannya tidak bisa dibalik, dan setiap langkah bisa diverifikasi sebelum yang berikutnya.
+
+### Prasyarat: DNS
+
+```bash
+getent hosts klip.kpndomain.com
+```
+
+Harus mengembalikan `172.28.80.50`. Diperiksa 2026-09-14: masih `NXDOMAIN` - domainnya belum
+dikenal resolver server sama sekali.
+
+**Certbot tidak bisa menerbitkan sertifikat sebelum ini berhasil.** Tantangan HTTP-01 diambil lewat
+nama domainnya, jadi DNS harus lebih dulu menunjuk ke host frontend. Tidak ada jalan memintas.
+
+### 1. Daftarkan redirect URI baru di Hub - sebelum menyentuh env
+
+Di DWS Hub Admin, **tambahkan** (jangan ganti) pada OIDC Redirect URIs:
+
+```
+https://klip.kpndomain.com/auth/oidc/callback
+```
+
+Biarkan `http://172.28.80.50:3001/auth/oidc/callback` tetap terdaftar sampai domainnya terbukti
+jalan - itu yang membuat peralihan ini bisa dibatalkan. Ubah juga Target URL menjadi
+`https://klip.kpndomain.com/login`.
+
+### 2. Vhost Nginx di host frontend (172.28.80.50)
+
+```bash
+sudo cp /opt/klip/docs/nginx/klip-kpndomain.conf /etc/nginx/sites-available/klip.kpndomain.com.conf
+sudo ln -s /etc/nginx/sites-available/klip.kpndomain.com.conf /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+`nginx -t` **wajib lulus sebelum reload**. Host ini melayani aplikasi lain di port 80 dan 443
+(sustainability, cloud-monitoring, dwshub), dan konfigurasi yang salah menjatuhkan semuanya.
+
+### 3. TLS lewat certbot
+
+```bash
+sudo certbot --nginx -d klip.kpndomain.com
+```
+
+Certbot membaca blok HTTP di atas, menambahkan server 443 beserta redirect-nya, dan mendaftarkan
+perpanjangan otomatis - sama seperti domain lain di host ini. Sengaja tidak ditulis tangan: path
+sertifikat buatan sendiri akan menyimpang dari yang diharapkan mekanisme perpanjangan.
+
+### 4. Frontend: env dan rebuild
+
+`/opt/klip/.env` di 172.28.80.50:
+
+```ini
+FRONTEND_PORT=127.0.0.1:3001
+NEXT_PUBLIC_API_URL=/api
+# BACKEND_INTERNAL_URL dihapus - Nginx yang mem-proxy /api dan /auth sekarang
+```
+
+```bash
+cd /opt/klip && docker compose -f docker-compose.frontend.yml up -d --build
+```
+
+**Rebuild wajib.** `NEXT_PUBLIC_API_URL` di-bake saat build image; `up -d` saja tidak berefek.
+
+`FRONTEND_PORT` kembali ke loopback menutup port 3001 dari jaringan - sejak Nginx ada, tidak ada
+lagi alasan mengeksposnya.
+
+### 5. Backend: env dan restart
+
+`/opt/klip/.env` di 172.28.80.51:
+
+```ini
+FRONTEND_URL=https://klip.kpndomain.com
+OIDC_REDIRECT_URI=https://klip.kpndomain.com/auth/oidc/callback
+SESSION_COOKIE_SECURE=true
+TRUST_PROXY=1
+```
+
+```bash
+cd /opt/klip && docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml -f docker-compose.backend.sap-share.yml up -d backend
+```
+
+`SESSION_COOKIE_SECURE=true` hanya benar setelah HTTPS terbukti jalan. Dinyalakan terlalu awal,
+cookie sesi dikirim browser lalu tidak pernah dikembalikan, dan login berputar tanpa pesan error.
+
+### 6. Verifikasi
+
+```bash
+curl -sI https://klip.kpndomain.com/ | head -3
+curl -s -o /dev/null -w '%{http_code}
+' https://klip.kpndomain.com/api/health
+```
+
+Lalu login SSO lewat browser di `https://klip.kpndomain.com/login`. Harus lewat browser sungguhan:
+cookie sesinya HttpOnly dan terikat host.
+
+### 7. Pembersihan, setelah domain terbukti
+
+- Cabut `http://172.28.80.50:3001/auth/oidc/callback` dari Hub Admin
+- Nyalakan HSTS di vhost hanya setelah HTTPS stabil beberapa hari - browser mengingatnya, dan
+  header yang dipasang terlalu dini mengunci user dari situs yang rusak
+
+---
+
 ## Rollback
 
 ```bash
