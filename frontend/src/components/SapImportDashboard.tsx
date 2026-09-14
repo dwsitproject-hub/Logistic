@@ -107,6 +107,12 @@ const SapImportDashboard: React.FC = () => {
   const perms = usePermissions();
   const canUploadSap = canCreatePermission(perms, 'page.sap');
   const [imports, setImports] = useState<SapImport[]>([]);
+  /*
+   * A refused request used to be indistinguishable from an empty one: the 403 went to
+   * console.error and the table rendered "No import history available". The user concluded there
+   * were no imports; the admin who had just granted the permission concluded it had worked.
+   */
+  const [importsError, setImportsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
@@ -205,6 +211,7 @@ const SapImportDashboard: React.FC = () => {
   const loadImports = async (fromPoll = false) => {
     try {
       const response = await api.get('/sap-master-v2/imports');
+      setImportsError(null);
       const nextImports: SapImport[] = response.data.data || [];
       const pendingId = pendingImportIdRef.current;
       setImports((prev) => {
@@ -254,6 +261,12 @@ const SapImportDashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Failed to load imports:', error);
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      setImportsError(
+        status === 403
+          ? 'You do not have permission to view SAP import history. Ask an administrator to grant SAP Data view access for your role and level.'
+          : 'Could not load import history. Please retry, and tell IT if it keeps happening.',
+      );
     } finally {
       if (!fromPoll) setLoading(false);
     }
@@ -682,7 +695,11 @@ const SapImportDashboard: React.FC = () => {
               </tbody>
             </table>
 
-            {imports.length === 0 && (
+            {imports.length === 0 && importsError && (
+              <div className="text-center text-red-600 py-12">{importsError}</div>
+            )}
+
+            {imports.length === 0 && !importsError && (
               <div className="text-center text-gray-500 py-12">
                 {canUploadSap
                   ? 'No import history available. Start your first import above.'
