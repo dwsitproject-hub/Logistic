@@ -35,6 +35,12 @@ type KlipSapCompareFieldProps = {
    * has a better source of truth than value equality.
    */
   showKlipBadge?: boolean
+  /**
+   * The data itself records a KLIP user writing this field (migration 167's klip_edited_fields).
+   * When true it settles the question and the comparison is not consulted; false means only
+   * "not recorded", which for older rows is the normal state and not evidence of anything.
+   */
+  klipEdited?: boolean
   hidden?: boolean
 }
 
@@ -48,6 +54,7 @@ export function KlipSapCompareField({
   editControl,
   showOverrideBadge = false,
   showKlipBadge,
+  klipEdited = false,
   hidden = false,
 }: KlipSapCompareFieldProps) {
   if (hidden) return null
@@ -70,7 +77,12 @@ export function KlipSapCompareField({
    */
   const klipHasValue = hasKlipSapValue(klipValue, format)
   const sapHasValue = hasKlipSapValue(sapValue, format)
-  const showKlip = showKlipBadge ?? (klipHasValue && mismatch)
+  /*
+   * Recorded provenance wins over the comparison. It answers the case equality cannot: a user who
+   * typed the same number SAP reported looks SAP-sourced to an equality test, and for older rows
+   * migration 130 copied effective values into the snapshot so they agree by construction.
+   */
+  const showKlip = showKlipBadge ?? (klipHasValue && (klipEdited || mismatch))
   const showSapSourced = !showKlip && klipHasValue && sapHasValue && !mismatch
 
   const labelClass = compact

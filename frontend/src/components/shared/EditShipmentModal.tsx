@@ -121,6 +121,7 @@ import {
   qualitySapReferenceFromPort,
   type ShipmentQualityFields,
 } from '@/lib/shipmentQualityFields'
+import { isKlipEditedField } from '@/lib/klipProvenance'
 import {
   KlipSapCompareField,
   KlipSapCompareLegend,
@@ -135,6 +136,7 @@ import {
 import {
   ataFieldsFromShipmentInfo,
   ataSapReferenceFromShipmentInfo,
+  ataPortColumnForField,
   resolveAtaSapReferenceValue,
   emptyAtaFields,
   type ShipmentAtaApiField,
@@ -3034,6 +3036,10 @@ export function EditShipmentModal({
                                   label={label}
                                   klipValue={klipVal}
                                   sapValue={sapVal}
+                                  klipEdited={isKlipEditedField(
+                                    portRow.klip_edited_fields,
+                                    ataPortColumnForField(key),
+                                  )}
                                   format="date"
                                   compact
                                   showOverrideBadge={Boolean(klipVal && klipVal !== (sapVal || ''))}
@@ -3083,6 +3089,10 @@ export function EditShipmentModal({
                               label={label}
                               klipValue={klipVal}
                               sapValue={sapRef}
+                              klipEdited={isKlipEditedField(
+                                dischargePortRow?.klip_edited_fields,
+                                ataPortColumnForField(key),
+                              )}
                               format="date"
                               compact
                               showOverrideBadge={hasOverride}
@@ -3216,6 +3226,7 @@ export function EditShipmentModal({
                             label={label}
                             klipValue={klipVal}
                             sapValue={sapVal}
+                            klipEdited={isKlipEditedField(portRow.klip_edited_fields, portKey)}
                             format="number"
                             compact
                             hidden={
@@ -3263,6 +3274,10 @@ export function EditShipmentModal({
                           label={label}
                           klipValue={klipVal}
                           sapValue={sapVal}
+                          klipEdited={isKlipEditedField(
+                            dischargePortRow?.klip_edited_fields,
+                            portKey,
+                          )}
                           format="number"
                           compact
                           hidden={

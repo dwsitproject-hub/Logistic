@@ -104,6 +104,8 @@ export type LoadingPortAtaSave = {
 export type LoadingPortRef = {
   id?: string
   shipment_id?: string
+  /** Columns on this port row a KLIP user wrote (migration 167). Empty means unknown, not SAP. */
+  klip_edited_fields?: string[]
   contract_number?: string
   sap_port_name?: string | null
   port_name?: string

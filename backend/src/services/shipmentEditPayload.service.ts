@@ -175,6 +175,13 @@ const PORTS_SELECT = `
   vlp.sap_quality_ds,
   vlp.sap_quality_stone,
   vlp.is_discharge_port,
+  /*
+   * Which of this row's columns a KLIP user actually wrote (migration 167). The modal prefers this
+   * over comparing against the SAP snapshot: equality cannot tell a user who typed SAP's own
+   * number apart from SAP having written it, and migration 130's backfill made older rows agree
+   * with the snapshot by construction.
+   */
+  COALESCE(vlp.klip_edited_fields, '{}') AS klip_edited_fields,
   vlp.created_at,
   vlp.updated_at,
   c.contract_id AS contract_number`;
@@ -303,7 +310,15 @@ async function loadPortsAndInfo(
       vlpd.quality_dobi AS quality_at_discharge_loc_1_dobi,
       vlpd.quality_red AS quality_at_discharge_loc_1_red,
       vlpd.quality_ds AS quality_at_discharge_loc_1_ds,
-      vlpd.quality_stone AS quality_at_discharge_loc_1_stone
+      vlpd.quality_stone AS quality_at_discharge_loc_1_stone,
+      /*
+       * Provenance for the fields this payload flattens onto the shipment (migration 167). Three
+       * sources, because the modal's fields come from three rows: the shipment itself, the first
+       * loading port and the discharge port.
+       */
+      COALESCE(s.klip_edited_fields, '{}')    AS klip_edited_fields,
+      COALESCE(vlp1.klip_edited_fields, '{}') AS klip_edited_fields_loading,
+      COALESCE(vlpd.klip_edited_fields, '{}') AS klip_edited_fields_discharge
     FROM shipments s
     LEFT JOIN contracts c ON s.contract_id = c.id
     LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id

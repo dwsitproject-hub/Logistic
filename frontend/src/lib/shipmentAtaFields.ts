@@ -93,6 +93,30 @@ export function isDischargeAtaField(key: ShipmentAtaApiField): boolean {
 }
 
 /**
+ * The `vessel_loading_ports` column behind each ATA field, for reading provenance
+ * (`klip_edited_fields`, migration 167).
+ *
+ * The API names and the column names differ, and the discharge keys reuse the SAME five columns on
+ * the discharge row - `ata_vessel_arrival` there means arrival at the discharge port. Mapping them
+ * by string manipulation would silently mis-resolve that; this table states it.
+ */
+const ATA_FIELD_TO_PORT_COLUMN: Record<ShipmentAtaApiField, string> = {
+  ata_vessel_arrival_at_loading_port: 'ata_vessel_arrival',
+  ata_vessel_berthed_at_loading_port: 'ata_vessel_berthed',
+  ata_vessel_start_loading: 'ata_loading_start',
+  ata_vessel_completed_loading: 'ata_loading_completed',
+  ata_vessel_sailed_from_loading_port: 'ata_vessel_sailed',
+  ata_vessel_arrive_at_discharge_port: 'ata_vessel_arrival',
+  ata_vessel_berthed_at_discharge_port: 'ata_vessel_berthed',
+  ata_vessel_start_discharging: 'ata_loading_start',
+  ata_vessel_complete_discharge: 'ata_loading_completed',
+};
+
+export function ataPortColumnForField(key: ShipmentAtaApiField): string {
+  return ATA_FIELD_TO_PORT_COLUMN[key];
+}
+
+/**
  * SAP chip value for an ATA field.
  * Discharge keys must use the discharge VLP row only — never the loading port's sap_ata_*.
  */
