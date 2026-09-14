@@ -250,8 +250,22 @@ SET
   eta_vessel_start_discharging         = COALESCE(v.eta_vessel_start_discharging, r.eta_vessel_start_discharging),
   eta_vessel_complete_discharge        = COALESCE(v.eta_vessel_complete_discharge, r.eta_vessel_complete_discharge),
   updated_at = CURRENT_TIMESTAMP
-FROM eta_resolved r
-WHERE r.scope = 'port' AND v.id = r.port_uuid;
+/*
+ * One CSV row per target row, chosen deterministically.
+ *
+ * --map-by-po can land a KLIP row on the same production row an STO-numbered row already targets -
+ * they describe the same voyage. With both matching, `UPDATE ... FROM` picks whichever the planner
+ * happens to reach first, so two runs of the same file could store different dates. DISTINCT ON
+ * settles it, and prefers the STO-numbered row: that is the voyage SAP knows about, so its dates
+ * are the ones production should agree with.
+ */
+FROM (
+  SELECT DISTINCT ON (port_uuid) *
+  FROM eta_resolved
+  WHERE scope = 'port' AND port_uuid IS NOT NULL
+  ORDER BY port_uuid, (shipment_key ~ '^(MNL-|MSEA-)') ASC, shipment_key
+) r
+WHERE v.id = r.port_uuid;
 
 UPDATE shipments s
 SET
@@ -270,8 +284,14 @@ SET
   sfal_qty              = COALESCE(s.sfal_qty, r.sfal_qty),
   sfbd_qty              = COALESCE(s.sfbd_qty, r.sfbd_qty),
   updated_at = CURRENT_TIMESTAMP
-FROM eta_resolved r
-WHERE r.scope = 'shipment' AND s.id = r.shipment_uuid;
+-- Same deterministic choice as the port update above.
+FROM (
+  SELECT DISTINCT ON (shipment_uuid) *
+  FROM eta_resolved
+  WHERE scope = 'shipment' AND shipment_uuid IS NOT NULL
+  ORDER BY shipment_uuid, (shipment_key ~ '^(MNL-|MSEA-)') ASC, shipment_key
+) r
+WHERE s.id = r.shipment_uuid;
 
 -- The shipment snapshot now disagrees with the rows underneath it.
 UPDATE pipeline_summary_refresh_meta SET is_stale = TRUE WHERE module = 'shipment';
