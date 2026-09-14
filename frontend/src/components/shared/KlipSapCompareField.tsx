@@ -13,9 +13,21 @@ const KLIP_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
 
 export function KlipSapCompareLegend({ className }: { className?: string }) {
   return (
-    <div className={cn('flex items-center gap-2 text-[10px]', className)}>
-      <span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-800">KLIP</span>
-      <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">SAP</span>
+    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]', className)}>
+      <span className="flex items-center gap-1">
+        <span className="rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-800">KLIP</span>
+        <span className="text-gray-500">diubah lewat KLIP</span>
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">SAP</span>
+        <span className="text-gray-500">sama dengan data SAP</span>
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="rounded-full border border-dashed border-gray-300 px-2 py-0.5 font-medium text-gray-500">
+          ?
+        </span>
+        <span className="text-gray-500">asal belum tercatat (data lama)</span>
+      </span>
     </div>
   )
 }
@@ -41,6 +53,8 @@ type KlipSapCompareFieldProps = {
    * "not recorded", which for older rows is the normal state and not evidence of anything.
    */
   klipEdited?: boolean
+  /** "Budi, 12 Sep 2026" — shown on the KLIP chip's tooltip when audit_logs has the edit. */
+  klipEditedBy?: string | null
   hidden?: boolean
 }
 
@@ -55,6 +69,7 @@ export function KlipSapCompareField({
   showOverrideBadge = false,
   showKlipBadge,
   klipEdited = false,
+  klipEditedBy = null,
   hidden = false,
 }: KlipSapCompareFieldProps) {
   if (hidden) return null
@@ -82,8 +97,17 @@ export function KlipSapCompareField({
    * typed the same number SAP reported looks SAP-sourced to an equality test, and for older rows
    * migration 130 copied effective values into the snapshot so they agree by construction.
    */
-  const showKlip = showKlipBadge ?? (klipHasValue && (klipEdited || mismatch))
+  const showKlip = showKlipBadge ?? (klipHasValue && klipEdited)
   const showSapSourced = !showKlip && klipHasValue && sapHasValue && !mismatch
+  /*
+   * Differs from SAP, but nothing records who wrote it.
+   *
+   * This is the majority of the data today - every row predates the marker - and it used to render
+   * as "KLIP", which is the same over-claim being fixed, only milder. Saying "unknown" is the
+   * honest reading, and it has a useful side effect: the blue chips grow as real edits accumulate,
+   * so the picture visibly improves rather than staying permanently ambiguous.
+   */
+  const showUnknown = !showKlip && !showSapSourced && klipHasValue && mismatch
 
   const labelClass = compact
     ? 'mb-1 block text-[10px] font-medium text-gray-600'
@@ -102,7 +126,10 @@ export function KlipSapCompareField({
         <div className={cn('flex min-h-8 items-center gap-2', KLIP_VALUE_CLASS)}>
           <span>{formatKlipSapDisplayValue(klipValue, format)}</span>
           {showKlip ? (
-            <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
+            <span
+              className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700"
+              title={klipEditedBy ? `Diubah oleh ${klipEditedBy}` : undefined}
+            >
               KLIP
             </span>
           ) : null}
@@ -112,6 +139,14 @@ export function KlipSapCompareField({
               title="Sama dengan nilai SAP — bukan bukti diisi lewat KLIP"
             >
               SAP
+            </span>
+          ) : null}
+          {showUnknown ? (
+            <span
+              className="rounded-full border border-dashed border-gray-300 px-1.5 py-0.5 text-[9px] font-semibold text-gray-500"
+              title="Berbeda dari nilai SAP, tetapi asalnya tidak tercatat — baris ini dibuat sebelum pencatatan asal data"
+            >
+              ?
             </span>
           ) : null}
           {showOverrideBadge ? (

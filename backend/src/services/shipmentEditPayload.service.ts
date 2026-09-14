@@ -3,6 +3,7 @@
  */
 
 import { query } from '../database/connection';
+import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
 import { ttlMemo } from '../utils/ttlMemo';
@@ -187,6 +188,8 @@ const PORTS_SELECT = `
   c.contract_id AS contract_number`;
 
 export interface ShipmentEditPayload {
+  /** Latest KLIP edit per column, from audit_logs. Absent entries mean "not recorded". */
+  fieldHistory: Record<string, KlipFieldEdit>;
   shipment: Record<string, unknown>;
   editContext: ShipmentEditContext;
   ports: Record<string, unknown>[];
@@ -415,10 +418,16 @@ async function resolveShipmentEditPayloadUncached(
   shipmentUuid: string,
   preferredSto?: string | null,
 ): Promise<ShipmentEditPayload | null> {
-  const [shipmentRes, editContext, portsBundle] = await Promise.all([
+  const [shipmentRes, editContext, portsBundle, fieldHistory] = await Promise.all([
     query(SHIPMENT_BY_ID_SQL, [shipmentUuid]),
     resolveShipmentEditContext(shipmentUuid, preferredSto),
     loadPortsAndInfo(shipmentUuid, preferredSto),
+    /*
+     * Who last wrote each field, for the KLIP badge's tooltip. Decoration on top of
+     * klip_edited_fields, which is what actually decides the badge - so this resolves to {} on
+     * failure rather than taking the modal down.
+     */
+    loadKlipFieldHistory(shipmentUuid),
   ]);
 
   if (shipmentRes.rows.length === 0 || !editContext) {
@@ -437,6 +446,7 @@ async function resolveShipmentEditPayloadUncached(
   });
 
   return {
+    fieldHistory,
     shipment,
     editContext,
     ports: portsBundle.ports,

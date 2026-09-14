@@ -122,6 +122,11 @@ import {
   type ShipmentQualityFields,
 } from '@/lib/shipmentQualityFields'
 import { isKlipEditedField } from '@/lib/klipProvenance'
+import { describeKlipFieldEdit, type KlipFieldEditInfo } from '@/lib/klipFieldHistory'
+import {
+  describePortProvenance,
+  summarizePortProvenance,
+} from '@/lib/klipSapProvenanceSummary'
 import {
   KlipSapCompareField,
   KlipSapCompareLegend,
@@ -859,6 +864,7 @@ export function EditShipmentModal({
     Record<string, LoadingAtaFields>
   >({})
   const [qualityIsEditing, setQualityIsEditing] = useState(false)
+  const [klipFieldHistory, setKlipFieldHistory] = useState<Record<string, KlipFieldEditInfo>>({})
   const [showAtaDifferencesOnly, setShowAtaDifferencesOnly] = useState(false)
   const [showQualityDifferencesOnly, setShowQualityDifferencesOnly] = useState(false)
   const [qualityEditsByPortKey, setQualityEditsByPortKey] = useState<
@@ -991,6 +997,19 @@ export function EditShipmentModal({
         .filter((p) => !p.is_discharge_port)
         .slice()
         .sort((a, b) => (a.port_sequence ?? 0) - (b.port_sequence ?? 0)),
+    [loadingPorts],
+  )
+
+  /*
+   * The header's one-line answer to "does this shipment need checking?". Computed over every port,
+   * loading and discharge, because a disagreement can sit three scrolls down inside a collapsed
+   * block and would otherwise only be found by reading the whole modal.
+   */
+  const provenanceNote = useMemo(
+    () =>
+      describePortProvenance(
+        summarizePortProvenance(loadingPorts as unknown as Record<string, unknown>[]),
+      ),
     [loadingPorts],
   )
 
@@ -1218,6 +1237,9 @@ export function EditShipmentModal({
 
         const row = { ...payload.shipment, id: sid } as Record<string, unknown>
         const editContext = payload.editContext ?? null
+        setKlipFieldHistory(
+          (payload as { fieldHistory?: Record<string, KlipFieldEditInfo> }).fieldHistory ?? {},
+        )
         const ports: LoadingPortRef[] = payload.ports ?? []
         const info: Record<string, unknown> = payload.shipmentInfo ?? {}
 
@@ -2095,6 +2117,29 @@ export function EditShipmentModal({
                       ? `STO ${stoNumber} — edit Estimation schedule and manual ATA (SAP reference preserved)`
                       : 'Update vessel, quantities, Estimation schedule, and manual ATA'}
                 </p>
+                {provenanceNote ? (
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span
+                      className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                      title="Dihitung dari perbandingan nilai KLIP terhadap referensi SAP pada setiap port"
+                    >
+                      {provenanceNote}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[11px] font-medium text-blue-700 underline-offset-2 hover:underline"
+                      onClick={() => {
+                        const next = !(showAtaDifferencesOnly && showQualityDifferencesOnly)
+                        setShowAtaDifferencesOnly(next)
+                        setShowQualityDifferencesOnly(next)
+                      }}
+                    >
+                      {showAtaDifferencesOnly && showQualityDifferencesOnly
+                        ? 'Tampilkan semua field'
+                        : 'Tampilkan hanya yang berbeda'}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
             <Button variant="ghost" size="icon" className="text-gray-400 hover:text-gray-600" onClick={onClose}>
@@ -3040,6 +3085,10 @@ export function EditShipmentModal({
                                     portRow.klip_edited_fields,
                                     ataPortColumnForField(key),
                                   )}
+                                  klipEditedBy={describeKlipFieldEdit(
+                                    klipFieldHistory,
+                                    ataPortColumnForField(key),
+                                  )}
                                   format="date"
                                   compact
                                   showOverrideBadge={Boolean(klipVal && klipVal !== (sapVal || ''))}
@@ -3091,6 +3140,10 @@ export function EditShipmentModal({
                               sapValue={sapRef}
                               klipEdited={isKlipEditedField(
                                 dischargePortRow?.klip_edited_fields,
+                                ataPortColumnForField(key),
+                              )}
+                              klipEditedBy={describeKlipFieldEdit(
+                                klipFieldHistory,
                                 ataPortColumnForField(key),
                               )}
                               format="date"
@@ -3227,6 +3280,7 @@ export function EditShipmentModal({
                             klipValue={klipVal}
                             sapValue={sapVal}
                             klipEdited={isKlipEditedField(portRow.klip_edited_fields, portKey)}
+                            klipEditedBy={describeKlipFieldEdit(klipFieldHistory, portKey)}
                             format="number"
                             compact
                             hidden={
@@ -3278,6 +3332,7 @@ export function EditShipmentModal({
                             dischargePortRow?.klip_edited_fields,
                             portKey,
                           )}
+                          klipEditedBy={describeKlipFieldEdit(klipFieldHistory, portKey)}
                           format="number"
                           compact
                           hidden={
