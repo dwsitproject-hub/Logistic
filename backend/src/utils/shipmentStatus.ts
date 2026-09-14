@@ -182,13 +182,22 @@ export function normalizeShipmentDetailStatus(raw: string | null | undefined): S
 /**
  * Derive SEA shipment status from milestones (latest ATA stage wins).
  * Maps 1:1 with summary breakdown tiers on the Shipments page.
- * Completed is GR Close only. ATA complete discharge with GR still Open is UNLOADING.
+ *
+ * ATC completes the shipment. Discharge finished is the end of the voyage, and that is what this
+ * status describes - users enter the ATC precisely to record it. It used to wait for GR Close, so
+ * a vessel that had finished discharging still read UNLOADING until SAP closed the transaction,
+ * sometimes days later, and the Shipments page disagreed with what the operators could see.
+ *
+ * This is the shipment's status only. Contract Open/Close is decided separately by
+ * isContractEffectivelyDone, which reads ATC and outstanding qty directly and never consults
+ * shipment status - so nothing here can close a contract.
+ *
  * Open STO without ATA ladder is PLANNED (Unplanned card = PO backlog only).
  * Delivery Qty / ETA with no ATA also resolve to PLANNED.
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
-  if (hasDate(m.ata_complete_discharge)) return 'UNLOADING';
+  if (hasDate(m.ata_complete_discharge)) return 'COMPLETED';
   if (hasDate(m.ata_start_discharging)) return 'UNLOADING';
   if (hasDate(m.ata_berthed_at_discharge_port)) return 'BERTHED_DP';
   if (hasDate(m.ata_arrive_at_discharge_port)) return 'ARRIVED_DP';

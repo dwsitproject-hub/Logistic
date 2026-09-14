@@ -6,10 +6,23 @@ import {
 } from './shipmentStatus';
 
 describe('deriveShipmentStatus', () => {
-  it('returns UNLOADING when ATA complete discharge exists but GR is still Open', () => {
+  /*
+   * Changed deliberately 2026-09-14. ATC records that discharge finished, which is the end of the
+   * voyage this status describes; waiting for SAP to close the transaction left the page reading
+   * UNLOADING for days after the operators could see the vessel was done.
+   */
+  it('returns COMPLETED when ATA complete discharge exists, even with GR still Open', () => {
     expect(
       deriveShipmentStatus({
         ata_complete_discharge: '2026-01-15',
+      }),
+    ).toBe('COMPLETED');
+  });
+
+  it('still stops at UNLOADING when discharge started but did not finish', () => {
+    expect(
+      deriveShipmentStatus({
+        ata_start_discharging: '2026-01-15',
       }),
     ).toBe('UNLOADING');
   });
@@ -103,7 +116,7 @@ describe('deriveShipmentStatus', () => {
         ata_complete_discharge: '2026-01-09',
         contract_import_status: 'Open',
       }),
-    ).toBe('UNLOADING');
+    ).toBe('COMPLETED');
     expect(
       deriveShipmentStatus({
         ata_complete_discharge: '2026-01-09',

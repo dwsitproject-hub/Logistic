@@ -508,8 +508,13 @@ export function shipmentHasDeliveryQtyExpr(alias: string): string {
  *
  * One STO is one voyage: milestone dates are MAX-merged across PO/contract members, so
  * AT Sailed / ATC Discharge on any shipment PO in the group drives the pipeline card.
- * Completed is GR Close only (FOB/LCO = GR STO, CIF/CFR = GR PO) — ATA discharge with
- * GR still Open stays UNLOADING. Persisted sibling `shipments.status` must not demote.
+ *
+ * ATC completes the shipment, alongside GR Close. Waiting for GR left a vessel that had finished
+ * discharging reading UNLOADING until SAP closed the transaction — see deriveShipmentStatus, which
+ * this mirrors. Contract Open/Close is unaffected: it comes from isContractEffectivelyDone, which
+ * never reads shipment status.
+ *
+ * Persisted sibling `shipments.status` must not demote.
  */
 export function shipmentEffectiveStatusExpr(alias: string): string {
   const f = alias
@@ -517,7 +522,7 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'UNLOADING'
+      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
       WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
       WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'

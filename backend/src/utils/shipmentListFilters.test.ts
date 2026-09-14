@@ -102,7 +102,9 @@ describe('shipmentEffectiveStatusExpr', () => {
     expect(sql).toContain('ata_vessel_sailed_from_loading_port');
     expect(sql).toContain('ata_vessel_complete_discharge');
     expect(sql).toMatch(/is_contract_sap_closed[\s\S]*THEN 'COMPLETED'/);
-    expect(sql).toMatch(/ata_vessel_complete_discharge IS NOT NULL THEN 'UNLOADING'/);
+    // ATC completes the shipment; only discharge that started but did not finish is UNLOADING.
+    expect(sql).toMatch(/ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'/);
+    expect(sql).toMatch(/ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'/);
     expect(sql).not.toContain('group_status_floor');
   });
 });
