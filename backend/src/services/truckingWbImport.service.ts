@@ -833,9 +833,25 @@ export async function processWbRekapWorkbookUpload(args: {
     const opsByPo = await findTruckingOpsByPoForWbImportBatch(client, candidateList);
     timingsMs.lookupOpsByPo = Date.now() - tOps1;
     normalizeOpsByPoMap(opsByPo);
+    /*
+     * Only candidates that did NOT resolve as a PO need the STO lookup.
+     *
+     * A WB row carries a PO or an STO, and `opsByPo` has already matched every candidate that is
+     * a PO with an active operation. Sending those through the STO resolver as well was the
+     * single most expensive thing in the whole upload - 46,117ms of a 48s run in production -
+     * and the result was discarded a few lines below, where a resolved PO already present in
+     * `opsByPo` is skipped.
+     *
+     * A string that is both a valid PO and some other contract's STO would previously have
+     * contributed that other contract's operations. PO and STO are different numbering spaces
+     * (1001... against 1006...), and pulling in a different PO's operations because the numbers
+     * collided was never intended.
+     */
+    const stoCandidates = candidateList.filter((cand) => !opsByPo.has(cand));
     const tSto = Date.now();
-    const poFromSto = await batchResolvePoFromSto(client, candidateList);
+    const poFromSto = await batchResolvePoFromSto(client, stoCandidates);
     timingsMs.lookupPoFromSto = Date.now() - tSto;
+    timingsMs.stoCandidates = stoCandidates.length;
 
     // Candidates that were actually STO keys resolving to a PO not already covered above.
     const secondaryPos = new Set<string>();
