@@ -1,5 +1,6 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { getClient, query } from '../database/connection';
+import logger from '../utils/logger';
 import {
   isContractDeliveryClosed,
   SQL_CONTRACT_IMPORT_STATUS,
@@ -749,6 +750,17 @@ export async function processWbRekapWorkbookUpload(args: {
   uploadedBy: string | null;
   sheets: WbRekapWorkbookSheet[];
 }): Promise<WbImportApplyResult> {
+  /*
+   * Per-stage timings, logged once at the end.
+   *
+   * A WB upload was measured at 47s for 730 rows across 206 operations in production, and the
+   * shape of that cost is not obvious from reading: parsing, the batched lookups, the per-row
+   * apply loop and the per-operation sync each do very different work. A single total told us
+   * nothing, and guessing which half was slow is how an earlier diagnosis went to the wrong
+   * place - so the stages are measured rather than reasoned about.
+   */
+  const timingsMs: Record<string, number> = {};
+  const tParse = Date.now();
   const parsed = parseWbRekapWorkbook(args.sheets, toIsoDate10FromCell);
   const userFacingRowParseFailures = filterWbRekapUserFacingRowParseFailures(
     parsed.rowParseFailures,
@@ -764,6 +776,8 @@ export async function processWbRekapWorkbookUpload(args: {
         .filter(Boolean),
     ),
   ];
+  timingsMs.parseWorkbook = Date.now() - tParse;
+  const tStoResolve = Date.now();
   const ticketStoPoMap = await batchResolvePoFromSto(query, blankPoStos);
   for (const ticket of parsed.tickets) {
     if (ticket.poNumber) continue;
@@ -772,6 +786,7 @@ export async function processWbRekapWorkbookUpload(args: {
     const resolved = ticketStoPoMap.get(sto);
     if (resolved) ticket.poNumber = resolved;
   }
+  timingsMs.resolveTicketSto = Date.now() - tStoResolve;
   const aggregated = aggregateWbRekapTickets(parsed.tickets);
 
   const importId = await createWbImportBatch(query, {
@@ -802,6 +817,7 @@ export async function processWbRekapWorkbookUpload(args: {
 
   let dedupedAny = false;
   const client = await getClient();
+  const tLookups = Date.now();
   try {
     await client.query('BEGIN');
 
@@ -834,6 +850,8 @@ export async function processWbRekapWorkbookUpload(args: {
     const anyStatusCounts = await batchFetchAnyStatusOpsCounts(client, [...diagnosticPoSet]);
 
     // Dedupe auto-create across multiple aggregated rows for the same contract in this file.
+    timingsMs.batchLookups = Date.now() - tLookups;
+    const tRowLoop = Date.now();
     const autoCreateCache = new Map<string, TruckingOpForWbRow>();
 
     for (const row of aggregated) {
@@ -885,6 +903,8 @@ export async function processWbRekapWorkbookUpload(args: {
       }
     }
 
+    timingsMs.applyRows = Date.now() - tRowLoop;
+    const tSync = Date.now();
     // Deferred: sync quantity_delivered + promote status exactly once per touched
     // operation (previously re-ran in full for every date row of the same operation).
     for (const [operationId, earliestDate] of touchedOps) {
@@ -892,6 +912,8 @@ export async function processWbRekapWorkbookUpload(args: {
       await promoteOperationToInProgress(client, operationId, earliestDate);
     }
 
+    timingsMs.syncAndPromote = Date.now() - tSync;
+    const tDedupe = Date.now();
     for (const po of posNeedingDedupe) {
       const dedupeResult = await dedupeActiveTruckingOpsForPo(client, po, {
         mode: 'soft_dedupe',
@@ -915,7 +937,10 @@ export async function processWbRekapWorkbookUpload(args: {
       }
     }
 
+    timingsMs.dedupe = Date.now() - tDedupe;
+    const tCommit = Date.now();
     await client.query('COMMIT');
+    timingsMs.commit = Date.now() - tCommit;
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
@@ -929,6 +954,13 @@ export async function processWbRekapWorkbookUpload(args: {
   if (dedupedAny) {
     scheduleTruckingPipelineRefresh();
   }
+
+  logger.info('WB rekap upload timings (ms)', {
+    ...timingsMs,
+    rows: aggregated.length,
+    operations: touchedOps.size,
+    total: Object.values(timingsMs).reduce((a, b) => a + b, 0),
+  });
 
   const operationsUpdated = touchedOps.size;
   const status: WbImportApplyResult['status'] =
