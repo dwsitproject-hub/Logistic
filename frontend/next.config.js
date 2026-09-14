@@ -21,6 +21,20 @@ const CONTENT_SECURITY_POLICY = [
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone', // Enable standalone output for Docker
+  experimental: {
+    /**
+     * Next's rewrite proxy gives up on an upstream after 30s by default, and a WB upload takes
+     * longer than that: measured in production at 47s of processing for 730 rows across 206
+     * operations. The backend finished every time and wrote the data; the proxy had already
+     * dropped the connection, so the browser showed "Internal Server Error" for an upload that
+     * had in fact succeeded - and users re-uploaded, paying another 47s for nothing.
+     *
+     * 300s matches the proxy_read_timeout in the production Nginx vhost, so the two agree. Once
+     * Nginx fronts /api the rewrite is out of that path entirely, but it still serves any request
+     * that reaches Next directly.
+     */
+    proxyTimeout: 300_000,
+  },
   images: {
     domains: ['localhost'],
   },
