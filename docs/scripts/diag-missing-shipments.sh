@@ -108,6 +108,46 @@ LEFT JOIN shipments s
  AND COALESCE(NULLIF(TRIM(s.shipment_id), ''), '') = COALESCE(NULLIF(TRIM(i.shipment_key), ''), '')
 WHERE s.id IS NULL AND i.shipment_key ~ '^[0-9]+$';
 
+\echo ''
+\echo '======== could the blocked KLIP rows map by PO instead? ========'
+\echo '-- An MNL-/MSEA- shipment was created because SAP had not sent the STO yet. Once it did,'
+\echo '-- production made its own STO-numbered row for the SAME voyage - so attaching the ETA to'
+\echo '-- that row is more correct than carrying the KLIP one, and avoids two rows for one voyage.'
+\echo '-- This only works where the contract has exactly one shipment in production.'
+SELECT
+  CASE
+    WHEN n.cnt = 0 THEN '0 shipments - nothing to attach to'
+    WHEN n.cnt = 1 THEN '1 shipment - unambiguous, can map by PO'
+    ELSE n.cnt || ' shipments - ambiguous, needs a rule'
+  END AS situation,
+  COUNT(DISTINCT i.shipment_key)::int AS klip_shipments,
+  COUNT(*)::int                       AS eta_rows
+FROM eta_in i
+LEFT JOIN contracts c ON TRIM(c.po_number::text) = TRIM(i.po_number)
+LEFT JOIN shipments s
+  ON s.contract_id = c.id
+ AND COALESCE(NULLIF(TRIM(s.shipment_id), ''), '') = COALESCE(NULLIF(TRIM(i.shipment_key), ''), '')
+JOIN LATERAL (
+  SELECT COUNT(*)::int AS cnt FROM shipments s2 WHERE s2.contract_id = c.id
+) n ON TRUE
+WHERE s.id IS NULL
+  AND i.shipment_key ~ '^(MNL-|MSEA-)'
+GROUP BY 1 ORDER BY 3 DESC;
+
+\echo ''
+\echo '-- the ambiguous ones, if any (first 20) --'
+SELECT i.po_number, i.shipment_key, n.cnt AS shipments_in_production
+FROM eta_in i
+LEFT JOIN contracts c ON TRIM(c.po_number::text) = TRIM(i.po_number)
+LEFT JOIN shipments s
+  ON s.contract_id = c.id
+ AND COALESCE(NULLIF(TRIM(s.shipment_id), ''), '') = COALESCE(NULLIF(TRIM(i.shipment_key), ''), '')
+JOIN LATERAL (
+  SELECT COUNT(*)::int AS cnt FROM shipments s2 WHERE s2.contract_id = c.id
+) n ON TRUE
+WHERE s.id IS NULL AND i.shipment_key ~ '^(MNL-|MSEA-)' AND n.cnt > 1
+GROUP BY 1, 2, 3 ORDER BY 3 DESC, 1 LIMIT 20;
+
 ROLLBACK;
 \echo ''
 \echo 'read-only - nothing was written.'
