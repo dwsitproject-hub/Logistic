@@ -4,6 +4,7 @@
 
 import {
   sqlIsContractSapCancelledExpr,
+  sqlIsContractSapClosedForShipmentBacklogExpr,
   sqlIsContractSapInactiveForShipmentBacklogExpr,
   sqlContractImportStatusExpr,
 } from './contractDeliveryStatus';
@@ -235,9 +236,60 @@ export function preplannedContractBacklogBaseWhereSql(contractAlias = 'c', spdAl
     AND ${contractInAcceptedUnlinkedPrePlannedGroupExistsSql(contractAlias)}`;
 }
 
-/** Open SEA PO without shipment — Unplanned + Preplanned members (Completed OS gate applied by caller). */
+/**
+ * SEA PO without a shipment row that belongs on the Completed card.
+ *
+ * Deliberately NOT the open-backlog core. The core excludes SAP-inactive contracts, which folds
+ * GR-Close in with Cancelled - and that hid a whole class of PO from the Shipment page entirely:
+ * a CIF contract whose GR closed and for which nobody ever created a shipment in KLIP passed the
+ * sea scope, held no shipment row, and was then refused by the only path left to it. It stayed
+ * visible on the Contract page, which has no such gate, so it read as a bug rather than as a rule
+ * (PO 1001031325, reported 2026-09-14; 276 contracts / 527,192 MT on the dev copy).
+ *
+ * Cancelled stays excluded here because it has its own arm below.
+ */
 export function completedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
-  return contractBacklogCoreWhereSql(contractAlias, spdAlias);
+  return `
+    ${buildShipmentPageSeaIncotermScopeSql(contractAlias)}
+    AND NOT (${sqlIsContractSapCancelledExpr(contractAlias)})
+    AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
+    AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}
+    AND NOT EXISTS (
+      SELECT 1 FROM shipments s_ns WHERE s_ns.contract_id = ${contractAlias}.id
+    )
+    AND NOT (${sqlContractSharesNumericStoWithActiveSeaShipmentExpr(`${contractAlias}.id`)})`;
+}
+
+/**
+ * GR-closed only — the rows the ALL view was missing.
+ *
+ * The open arms (Unplanned, Preplanned) already exclude these, so this is disjoint from them and
+ * can be UNIONed without double counting. Keeping it separate from
+ * `completedContractBacklogBaseWhereSql`, which also carries open-but-delivered contracts, is what
+ * makes that guarantee readable rather than something to re-derive.
+ */
+export function grClosedContractBacklogBaseWhereSql(contractAlias = 'c', spdAlias = 'l'): string {
+  return `
+    ${completedContractBacklogBaseWhereSql(contractAlias, spdAlias)}
+    AND ${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias)}`;
+}
+
+/**
+ * The Completed card's gate: little enough left to deliver, OR closed in SAP.
+ *
+ * The OS test alone is not enough. A GR-closed PO can still show outstanding quantity - SAP closes
+ * on receipt, not on the last kilogram - and refusing it for that would put it back in the hole
+ * this whole change exists to fill.
+ */
+export function sqlBacklogCompletedGateSql(contractAlias = 'c'): string {
+  return `((${sqlBacklogOsCompletedSql()}) OR ${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias)})`;
+}
+
+export function sqlBacklogCompletedGateCorrelatedSql(
+  outstandingExpr: string,
+  contractAlias = 'c',
+): string {
+  return `((${sqlBacklogOsCompletedCorrelated(outstandingExpr)}) OR ${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias)})`;
 }
 
 /**
@@ -514,6 +566,7 @@ export async function buildAllHybridContractBacklogCountQuery(
 ): Promise<string> {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const grClosedWhere = `${grClosedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   /**
    * Hot path for ALL hybrid list — keep this free of qty_move.
    * Card Unplanned OS uses buildUnplannedContractBacklogCountQuery (scoped) instead.
@@ -538,10 +591,24 @@ export async function buildAllHybridContractBacklogCountQuery(
        AND pg.shipment_id IS NULL
       WHERE ${preplannedWhere}
     ),
+    /*
+     * GR-closed POs with no shipment row. Disjoint from both arms above, which exclude
+     * SAP-inactive contracts - so this UNION cannot double count. Without it these rows exist only
+     * under the COMPLETED status card, and the default ALL view - the one users actually open -
+     * never shows them.
+     */
+    gr_closed_contract_backlog AS (
+      SELECT c.id, c.quantity_ordered
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${grClosedWhere}
+    ),
     all_contract_backlog AS (
       SELECT id, quantity_ordered FROM unplanned_contract_backlog
       UNION ALL
       SELECT id, quantity_ordered FROM preplanned_contract_backlog
+      UNION ALL
+      SELECT id, quantity_ordered FROM gr_closed_contract_backlog
     )
     SELECT
       COUNT(*)::bigint AS c,
@@ -569,6 +636,7 @@ export async function buildAllHybridContractBacklogPageQuery(
 ): Promise<string> {
   const unplannedWhere = `${unplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const preplannedWhere = `${preplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const grClosedWhere = `${grClosedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
@@ -580,6 +648,8 @@ export async function buildAllHybridContractBacklogPageQuery(
   const preplannedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'PREPLANNED', {
     promoteLowOsToCompleted: true,
   });
+  // Already COMPLETED by GR status - there is nothing to promote.
+  const grClosedSelect = unplannedContractBacklogRowSelectSql(outstandingExpr, 'COMPLETED');
   const outerOrder = buildShipmentContractBacklogOuterOrderBy(sortKey, sortDir);
 
   /**
@@ -642,6 +712,30 @@ export async function buildAllHybridContractBacklogPageQuery(
        AND pg.status = 'ACCEPTED'
        AND pg.shipment_id IS NULL
       WHERE ${preplannedWhere}
+      UNION ALL
+      /* GR-closed, no shipment row — see the note on gr_closed_contract_backlog in the count. */
+      SELECT
+        c.id AS contract_uuid,
+        c.contract_id AS contract_number,
+        c.contract_date,
+        c.created_at,
+        c.po_number AS po_numbers,
+        c.plant_code AS plant_site,
+        c.supplier,
+        c.product,
+        c.incoterm,
+        c.delivery_start_date,
+        c.delivery_end_date,
+        c.quantity_ordered AS contract_qty,
+        c.contract_id,
+        COALESCE(NULLIF(TRIM(COALESCE(l.contract_ext_no_raw, '')), ''), '') AS contract_ext_no,
+        'COMPLETED'::text AS status,
+        'COMPLETED'::text AS backlog_status,
+        NULL::text AS pre_planned_group_id,
+        NULL::text AS pre_planned_group_code
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${grClosedWhere}
     ),
     paged_contracts AS (
       SELECT *
@@ -669,6 +763,14 @@ export async function buildAllHybridContractBacklogPageQuery(
       INNER JOIN contracts c ON c.id = pc.contract_uuid
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       WHERE pc.backlog_status = 'PREPLANNED'
+      UNION ALL
+      SELECT ${grClosedSelect},
+        pc.pre_planned_group_id,
+        pc.pre_planned_group_code
+      FROM paged_contracts pc
+      INNER JOIN contracts c ON c.id = pc.contract_uuid
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE pc.backlog_status = 'COMPLETED'
     )
     SELECT * FROM all_contract_backlog
     ORDER BY ${outerOrder}`;
@@ -689,7 +791,8 @@ export async function buildAllHybridContractBacklogPageQuery(
                  AND pgm.released_at IS NULL
                  AND pg.status = 'ACCEPTED'
                  AND pg.shipment_id IS NULL
-             ))`,
+             ))
+         OR (${grClosedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql})`,
   });
   return `
     WITH ${await resolveUnplannedContractBacklogLatestSpdCte()},
@@ -715,6 +818,13 @@ export async function buildAllHybridContractBacklogPageQuery(
        AND pg.status = 'ACCEPTED'
        AND pg.shipment_id IS NULL
       WHERE ${preplannedWhere}
+      UNION ALL
+      SELECT ${grClosedSelect},
+        NULL::text AS pre_planned_group_id,
+        NULL::text AS pre_planned_group_code
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      WHERE ${grClosedWhere}
     )
     SELECT * FROM all_contract_backlog
     ORDER BY ${outerOrder}
@@ -909,7 +1019,7 @@ export async function buildCompletedContractBacklogCountQuery(
       FROM backlog_contract_ids b
       INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-      WHERE ${sqlBacklogOsCompletedSql()}
+      WHERE ${sqlBacklogCompletedGateSql('c')}
     )
     SELECT
       COUNT(*)::bigint AS c,
@@ -951,7 +1061,7 @@ export async function buildCompletedContractBacklogPageQuery(
       FROM backlog_contract_ids b
       INNER JOIN contracts c ON c.id = b.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${sqlBacklogOsCompletedCorrelated(outstandingExpr)}
+      WHERE ${sqlBacklogCompletedGateCorrelatedSql(outstandingExpr, 'c')}
       ORDER BY ${pageOrder}
       LIMIT ${limit} OFFSET ${offset}
     )

@@ -8,6 +8,10 @@ import {
   appendUnplannedContractBacklogGlobalSearch,
   unplannedContractBacklogBaseWhereSql,
   unplannedShipmentExecutionOuterSql,
+  completedContractBacklogBaseWhereSql,
+  grClosedContractBacklogBaseWhereSql,
+  sqlBacklogCompletedGateSql,
+  BACKLOG_OS_COMPLETED_MAX_KG,
 } from './shipmentUnplannedHybridSql';
 
 describe('shipmentUnplannedHybridSql', () => {
@@ -252,5 +256,43 @@ describe('cancelled contract backlog', () => {
     const pageSql = await buildCancelledContractBacklogPageQuery('', '', 20, 0);
     expect(pageSql).toContain("'CANCELLED'::text");
     expect(pageSql).toContain('cancelled_contract_backlog');
+  });
+});
+
+/**
+ * A GR-closed sea PO with no shipment row used to reach neither half of the page: the execution
+ * half needs a shipments row, and the backlog half folded GR-Close in with Cancelled. It stayed
+ * visible on the Contract page, which has no such gate, so it read as a bug rather than a rule.
+ */
+describe('GR-closed contract backlog', () => {
+  it('keeps GR-closed contracts out of the open arms and inside the completed one', () => {
+    const unplanned = unplannedContractBacklogBaseWhereSql('c', 'l');
+    const completed = completedContractBacklogBaseWhereSql('c', 'l');
+    const grClosed = grClosedContractBacklogBaseWhereSql('c', 'l');
+
+    // The open arm still refuses anything SAP-inactive - that is what keeps the arms disjoint.
+    expect(unplanned).toContain('Close');
+    // The completed arm no longer refuses a closed contract, only a cancelled one.
+    expect(completed).not.toBe(unplanned);
+    // The GR-closed arm is the completed one narrowed to closed contracts. Compared on collapsed
+    // whitespace, because both are assembled from indented template literals.
+    const flat = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+    expect(flat(grClosed)).toContain(flat(completed));
+    expect(flat(grClosed).length).toBeGreaterThan(flat(completed).length);
+  });
+
+  it('still requires the sea scope and the absence of a shipment row', () => {
+    const grClosed = grClosedContractBacklogBaseWhereSql('c', 'l');
+    expect(grClosed).toContain("IN ('CIF', 'FOB', 'CFR')");
+    expect(grClosed).toContain('NOT EXISTS');
+    expect(grClosed).toContain('FROM shipments s_ns');
+  });
+
+  it('admits a closed contract even when outstanding qty is above the completed threshold', () => {
+    // SAP closes on receipt, not on the last kilogram, so an OS-only gate would put these rows
+    // straight back into the hole this change exists to fill.
+    const gate = sqlBacklogCompletedGateSql('c');
+    expect(gate).toContain(' OR ');
+    expect(gate).toContain(String(BACKLOG_OS_COMPLETED_MAX_KG));
   });
 });
