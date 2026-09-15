@@ -1,6 +1,8 @@
 /**
  * Server-side global search + column filters on grouped shipment list (`shipment_base` alias `sb`).
  */
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance'
+import { sqlContractOutstandingFromFields, sqlIncotermQuantityDeliveryCase } from './sapIncotermMetrics'
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
 import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
@@ -523,6 +525,21 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
+      /*
+       * Nothing left outstanding finishes a shipment, even with GR still Open and no ATC.
+       * Trucking has had this since isTruckingPipelineCompleted, and the OS cards already apply
+       * it (shipmentOutstandingQtySummarySql); the list's status column was the last place that
+       * did not, so a row could read PLANNED while its own OS card counted it as finished.
+       *
+       * Sits AFTER the Cancelled and GR-Close arms so it can only ever add COMPLETED, never
+       * override a decision already made.
+       *
+       * The flag is computed once per STO group in the base CTE as BOOL_AND over the group's
+       * contracts - the same shape as is_contract_sap_closed above. BOOL_AND, not a summed OS:
+       * a contract can belong to several STO groups, so summing would need the per-STO division
+       * the aggregates apply to avoid overstating. Testing each contract sidesteps that entirely.
+       */
+      WHEN COALESCE(${f}.is_contract_os_within_band, FALSE) IS TRUE THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
       WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
       WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'
@@ -710,4 +727,34 @@ export function appendShipmentEtaBucketFilters(
   }
 
   return { sql: parts.join(''), params: [], nextIndex: 0 }
+}
+
+/**
+ * Per-contract "nothing left outstanding", for the Shipments list base CTE.
+ *
+ * Reads `contract_qty_move_snapshot` through a joined alias (`qms`) rather than the `qty_move`
+ * CTE the OS cards use: the list query does not have that CTE in scope, and splicing one into a
+ * statement this size has changed plans badly here before. A primary-key join costs 33ms across
+ * every sea contract on dev. The numbers are identical either way - same table, same formula.
+ */
+export function shipmentListContractOsWithinBandExpr(
+  contractAlias = 'c',
+  snapshotAlias = 'qms',
+): string {
+  const incoterm = `COALESCE(${contractAlias}.incoterm, '')`
+  const delivery = sqlIncotermQuantityDeliveryCase(
+    incoterm,
+    `${snapshotAlias}.quantity_delivery_trucking`,
+    `${snapshotAlias}.quantity_delivery_vessel`,
+    `UPPER(TRIM(COALESCE(${contractAlias}.transport_mode, '')))`,
+  )
+  const outstanding = sqlContractOutstandingFromFields({
+    contractQtyExpr: `${contractAlias}.quantity_ordered`,
+    incotermExpr: incoterm,
+    receiveExpr: `${snapshotAlias}.quantity_receive`,
+    deliveryExpr: `(${delivery})`,
+    clampAtZero: true,
+  })
+  // A contract with no snapshot row has no evidence of completion - never assume it finished.
+  return `(${snapshotAlias}.contract_number IS NOT NULL AND (${outstanding}) <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})`
 }

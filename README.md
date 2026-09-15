@@ -1197,6 +1197,46 @@ bulk.
 
 ## Shipments
 
+### ...and the list's status column now says so too
+
+The OS cards stopped counting finished shipments as soon as the rule went into `execution_os`, but
+the list's status column kept reading PLANNED for the same rows - a screen disagreeing with its own
+KPI strip. That column is driven by `shipmentEffectiveStatusExpr`, which had no OS to consult.
+
+Cost was the reason to defer it, so it was measured rather than guessed. `qty_move` turned out to
+be a pure read of `contract_qty_move_snapshot` (primary key on `contract_number`, 18,711 rows), and
+the list already pays for the 26KB GR-status expression once per group, so the missing piece was
+one indexed join, not a derivation. Joining it across every sea contract: **33ms**.
+
+Through the real page, all four calls it makes:
+
+```
+baseline          55,763 ms
+with the change   53,978 ms   then   51,736 ms
+```
+
+Both runs after the change came in faster than the baseline; the spread between runs (~4s) dwarfs
+any effect. No regression.
+
+Deliberately a joined alias rather than splicing the `qty_move` CTE into this statement: adding a
+CTE here has changed plans badly before. Same table, same formula, so the column and the card
+cannot disagree - the expression reports 1,591 sea contracts inside the band, matching the
+independently derived `contract_performance_snapshot` count exactly.
+
+`BOOL_AND` over the group's contracts, not a summed OS, and that is not an optimisation: a contract
+can belong to several STO groups, so summing would need the per-STO division the aggregates apply.
+Testing each contract sidesteps it. The arm sits after Cancelled and GR-Close, so it can only add
+COMPLETED, never override a decision already made (11 cancelled contracts fall inside the band and
+are untouched).
+
+Incremental effect: of 3,008 sea contracts, 1,591 are inside the band, 231 of those are not already
+Close or Cancelled, and **220** additionally have no ATC - so 220 rows newly read COMPLETED. The
+rest were already finished by the existing rules.
+
+One trap worth recording: the first version of this comment used the literal `po_sto_count`, and
+four tests that assert the rendered SQL does not contain that string failed. Prose inside a SQL
+comment is still part of the statement.
+
 ### Nothing outstanding now finishes a shipment, and one tolerance governs all of it
 
 Trucking has always had it (`isTruckingPipelineCompleted`), and so has the contract-level test
