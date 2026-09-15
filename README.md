@@ -1252,11 +1252,35 @@ two shipments 169 repaired.
 Verified before shipping: the migration updates exactly what the detector names, field by field
 (52 / 3 / 52 / 52 / 51), and a second pass updates 0.
 
-The dead-key pattern is worse here than on the discharge side. For loading port 1 the service
-reads `ata_loading_*_at_loading_port_1` before falling back to a global key, and **three of those
-five per-port keys exist on zero of 27,003 rows**. Worse, loading ports 2 and 3 read
-`ata_loading_completed_at_loading_port_2/3` with no fallback at all, so they can never receive a
-completed-loading date. Recorded here; not yet addressed.
+### SAP does not export per-loading-port dates, and that is not a gap to fill
+
+Investigating the ATA bleed turned up keys the service reads that do not exist, and my first
+reading of that was wrong: I took it as SAP sending data the code looked for in the wrong place.
+It is the opposite. Checked across all 27,003 rows, the raw export carries exactly five ATA
+loading columns and **none of them names a port**:
+
+```
+ATA Vessel Arrival at Loading Port / Berthed at Loading Port / Start Loading /
+Completed Loading / Sailed from Loading Port
+```
+
+SAP reports one set of loading dates per shipment, not one per port. So:
+
+- The `..._at_loading_port_1` keys read first for start, completed and sailed exist on **zero**
+  rows. Harmless - the global fallback carries the real value - but they read like evidence that
+  per-port data exists, which is what misled me.
+- Loading ports 2 and 3 read only `..._at_loading_port_2/3` with no fallback, and none of those
+  keys exists either: not the dates, not the port name, not the quantity. Those ports receive
+  nothing from SAP, and that is correct.
+
+**Do not "fix" this by giving ports 2 and 3 the global keys as a fallback.** That would stamp port
+1's dates onto every other port - the same wrong-data spreading migrations 169 and 170 had to
+clean up.
+
+No migration for the ~21 port-2 rows that do carry ATAs from some earlier path: about half match
+port 1's date and half do not, which is no clean signal of corruption, and nothing has been
+reported against them. The reads are kept rather than deleted so a future export carrying per-port
+columns is picked up without another change.
 
 ### A phantom ATC came from the discharge-port row, not from SAP
 

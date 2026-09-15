@@ -318,6 +318,32 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
     const port1Name =
       trimText(shipmentData.vessel_loading_port_1) ??
       trimText((parsedData.raw as Record<string, unknown> | undefined)?.['Vessel Loading Port']);
+    /*
+     * What SAP actually exports for loading ports, verified across all 27,003 rows (2026-09-15).
+     *
+     * There are exactly five raw ATA columns and none of them names a port:
+     *   ATA Vessel Arrival at Loading Port / Berthed at Loading Port / Start Loading /
+     *   Completed Loading / Sailed from Loading Port
+     *
+     * So SAP reports ONE set of loading dates per shipment, not one per port. That has two
+     * consequences worth knowing before touching this block:
+     *
+     *  - The `..._at_loading_port_1` keys read first below for start, completed and sailed do not
+     *    exist on a single row. They are harmless - the global fallback carries the real value -
+     *    but their presence reads like evidence that per-port data exists. It does not.
+     *    (`ata_vessel_arrival_at_loading_port_1` and `..._berthed_at_loading_port_1` DO exist in
+     *    the normalised object; the normaliser adds the `_1` that the raw column lacks.)
+     *
+     *  - Loading ports 2 and 3 below read only `..._at_loading_port_2/3`, with no fallback, and
+     *    none of those keys exists either - not the dates, not the port name, not the quantity.
+     *    Those ports therefore receive nothing from SAP, and that is correct rather than a gap to
+     *    fill. Do NOT give them the global keys as a fallback: that would stamp port 1's dates
+     *    onto every other port, which is the same class of wrong-data spreading that migrations
+     *    169 and 170 had to clean up.
+     *
+     * The reads are kept rather than deleted so a future SAP export that does carry per-port
+     * columns is picked up without another change.
+     */
     pushLoadingPort(1, port1Name, 'quantity_at_loading_port_1_based_on_bast', 'Loading Port 1', {
       arrival:
         shipmentData.eta_vessel_arrival_loading_port_1 ??
