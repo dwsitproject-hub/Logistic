@@ -48,6 +48,49 @@ const SPD_EFFECTIVE_STO = `NULLIF(TRIM(COALESCE(
       spd.data->'contract'->>'sto_no'
     )), '')`;
 
+/**
+ * The STO this shipment actually belongs to.
+ *
+ * `c.sto_number` must NOT lead. Two shipments can hang off ONE contract row: PO 1001029907 has
+ * STOs 1006019385 and 1006019867 under a contract whose sto_number is 1006019385, so preferring
+ * the contract's value made opening 1006019867 look up the SIBLING's SAP row - and that sibling's
+ * ATA/ATC chips showed on a STO SAP leaves NULL. Reproduced on dev: with no ?sto= hint the lookup
+ * returned STO 1006019385 with ATC 8/13/26; with the hint, 1006019867 with ATC NULL.
+ *
+ * shipmentListStoKeyExpr already resolves this correctly for the list. This mirrors it: the
+ * shipment's own numeric STO wins, and the contract's value is only a fallback.
+ */
+export function sqlShipmentOwnStoKey(hintParam?: string): string {
+  const hint = hintParam ? `NULLIF(${hintParam}::text, ''),
+      ` : '';
+  return `TRIM(COALESCE(
+      ${hint}CASE
+        WHEN NULLIF(TRIM(s.shipment_id::text), '') ~ '^[0-9]+$'
+        THEN NULLIF(TRIM(s.shipment_id::text), '')
+        ELSE NULL
+      END,
+      c.sto_number::text,
+      s.operation_id,
+      s.shipment_id::text
+    ))`;
+}
+
+/**
+ * Which SAP rows may answer for this shipment.
+ *
+ * The old form ORed in `spd.contract_number = c.contract_id` unguarded, so when nothing matched
+ * the STO the ORDER BY simply handed back the newest row of the whole PO - a sibling STO's row,
+ * carrying that sibling's dates. A row belonging to a DIFFERENT STO must never be eligible.
+ *
+ * Header rows stay eligible: SAP often carries a PO-level row with no STO at all, and where SAP
+ * never itemised a STO that row is the only source. Those have a NULL effective STO, so they can
+ * never be mistaken for a sibling's.
+ */
+export function sqlSapRowScopeForShipment(stoKeyExpr: string): string {
+  return `${SPD_EFFECTIVE_STO} = ${stoKeyExpr}
+       OR (spd.contract_number = c.contract_id AND ${SPD_EFFECTIVE_STO} IS NULL)`;
+}
+
 const SHIPMENT_BY_ID_SQL = `
   SELECT
     s.*,
@@ -112,14 +155,9 @@ const SHIPMENT_BY_ID_SQL = `
         spd.data->'raw'->>'vessel owner'
       )), '') AS vessel_owner_sap
     FROM sap_processed_data spd
-    WHERE spd.contract_number = c.contract_id
-       OR ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
-            c.sto_number::text, s.operation_id, s.shipment_id::text
-          ))
+    WHERE ${sqlSapRowScopeForShipment(sqlShipmentOwnStoKey())}
     ORDER BY
-      CASE WHEN ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
-        c.sto_number::text, s.operation_id, s.shipment_id::text
-      )) THEN 0 ELSE 1 END,
+      CASE WHEN ${SPD_EFFECTIVE_STO} = ${sqlShipmentOwnStoKey()} THEN 0 ELSE 1 END,
       spd.created_at DESC NULLS LAST
     LIMIT 1
   ) sap_sto ON TRUE
@@ -349,20 +387,9 @@ async function loadPortsAndInfo(
      FROM sap_processed_data spd
      INNER JOIN shipments s ON s.id = $1::uuid
      LEFT JOIN contracts c ON c.id = s.contract_id
-     WHERE spd.contract_number = c.contract_id
-        OR ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
-             NULLIF($2::text, ''),
-             c.sto_number::text,
-             s.operation_id,
-             s.shipment_id::text
-           ))
+     WHERE ${sqlSapRowScopeForShipment(sqlShipmentOwnStoKey('$2'))}
      ORDER BY
-       CASE WHEN ${SPD_EFFECTIVE_STO} = TRIM(COALESCE(
-         NULLIF($2::text, ''),
-         c.sto_number::text,
-         s.operation_id,
-         s.shipment_id::text
-       )) THEN 0 ELSE 1 END,
+       CASE WHEN ${SPD_EFFECTIVE_STO} = ${sqlShipmentOwnStoKey('$2')} THEN 0 ELSE 1 END,
        spd.created_at DESC NULLS LAST
      LIMIT 1`,
     [shipmentUuid, stoHint],

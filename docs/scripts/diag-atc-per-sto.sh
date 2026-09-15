@@ -6,7 +6,7 @@
 # Reads them from /opt/klip/.env - nothing is typed, printed, or left in shell history.
 # Every statement is a SELECT.
 #
-#   bash /opt/klip/docs/scripts/diag-atc-per-sto.sh 1001029907
+#   bash /opt/klip/docs/scripts/diag-atc-per-sto.sh 1001029907 1006019867
 #
 set -u
 PO="${1:?usage: diag-atc-per-sto.sh <PO number>}"
@@ -62,3 +62,40 @@ WHERE TRIM(c.po_number::text) = '${PO}';"
 
 echo
 echo "DONE - read-only, nothing modified"
+
+echo
+echo "=== 5. PO sets per source for one STO (view table vs edit modal mismatch) ==="
+# The edit modal builds its PO list from contract_stos / shipments.shipment_id /
+# shipments.operation_id / user assignments; the view table aggregates its own STO group. On dev
+# all four sources agreed (5 POs, identical), so a 6-vs-4 split in production means these sources
+# disagree THERE. This prints each one separately so the extra/missing POs are named, not counted.
+STO="${2:-}"
+if [ -n "$STO" ]; then
+  "${PSQL[@]}" -c "
+  SELECT 'contract_stos' AS source, COUNT(DISTINCT c.po_number) AS n,
+         STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) AS pos
+  FROM contract_stos cs JOIN contracts c ON c.id = cs.contract_id
+  WHERE TRIM(cs.sto_number::text) = '${STO}'
+  UNION ALL
+  SELECT 'shipments.shipment_id', COUNT(DISTINCT c.po_number),
+         STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number)
+  FROM shipments s JOIN contracts c ON c.id = s.contract_id
+  WHERE TRIM(COALESCE(s.shipment_id::text,'')) = '${STO}' AND COALESCE(s.status,'') <> 'CANCELLED'
+  UNION ALL
+  SELECT 'shipments.operation_id', COUNT(DISTINCT c.po_number),
+         STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number)
+  FROM shipments s JOIN contracts c ON c.id = s.contract_id
+  WHERE TRIM(COALESCE(s.operation_id::text,'')) = '${STO}' AND COALESCE(s.status,'') <> 'CANCELLED'
+  UNION ALL
+  SELECT 'user_sto_assignments', COUNT(DISTINCT COALESCE(NULLIF(TRIM(u.po_number),''), c.po_number)),
+         STRING_AGG(DISTINCT COALESCE(NULLIF(TRIM(u.po_number),''), c.po_number), ', ')
+  FROM user_sto_contract_assignments u JOIN contracts c ON TRIM(c.contract_id)=TRIM(u.contract_number)
+  WHERE TRIM(u.sto_number::text) = '${STO}'
+  UNION ALL
+  SELECT 'SAP spd (po per sto)', COUNT(DISTINCT TRIM(spd.po_number::text)),
+         STRING_AGG(DISTINCT TRIM(spd.po_number::text), ', ' ORDER BY TRIM(spd.po_number::text))
+  FROM sap_processed_data spd
+  WHERE TRIM(COALESCE(spd.sto_number::text,'')) = '${STO}';"
+else
+  echo "(pass a STO as the 2nd argument to run this section)"
+fi

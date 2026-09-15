@@ -1197,6 +1197,39 @@ bulk.
 
 ## Shipments
 
+### The edit form looked up the sibling STO's SAP row
+
+Two shipments can hang off ONE contract row. PO 1001029907 carries STOs 1006019385 and 1006019867,
+and the contract's `sto_number` is 1006019385 for both. The edit payload resolved which SAP row to
+read with `TRIM(COALESCE($2, c.sto_number, s.operation_id, s.shipment_id))` - the contract's value
+ahead of the shipment's own - so opening 1006019867 without a `?sto=` hint fetched STO 1006019385's
+SAP row and showed its ATA/ATC chips on a STO SAP leaves NULL.
+
+A second, independent defect made it worse: the row filter ORed in
+`spd.contract_number = c.contract_id` unguarded, so even when nothing matched the STO the
+`ORDER BY spd.created_at DESC LIMIT 1` handed back the newest row of the whole PO - again a
+sibling's.
+
+Reproduced on dev before changing anything, by driving the same query per shipment:
+
+```
+1006019867  hint=(none)       -> SAP row of STO 1006019385  ATC=8/13/26   <- bug
+1006019867  hint=1006019867   -> SAP row of STO 1006019867  ATC=NULL
+```
+
+`sqlShipmentOwnStoKey` now leads with the shipment's own numeric STO, mirroring what
+`shipmentListStoKeyExpr` already did for the list, and `sqlSapRowScopeForShipment` makes a row
+belonging to a *different* STO ineligible outright. Header rows - SAP's PO-level rows with no STO,
+which are the only source where SAP never itemised a STO - stay eligible, because their effective
+STO is NULL and so can never be mistaken for a sibling's. Verified through the real service
+afterwards: 1006019867 returns NULL while 1006019385 keeps its 2026-08-13.
+
+Not to be confused with the PO-count mismatch reported alongside it (view table 6, edit modal 4).
+That one does **not** reproduce on dev: both STO keys resolve to 1006019867 there, and all four PO
+sources - `contract_stos`, `shipments.shipment_id`, user assignments and SAP's own PO/STO pairs -
+return the same five POs. Whatever splits them in production is data, not a key divergence;
+`docs/scripts/diag-atc-per-sto.sh` prints each source separately so the extra POs get named.
+
 ### Backlog rows carry a contract id, so they must never open a shipment-by-id screen
 
 The Shipments list is a union of two different things. Execution rows are real `shipments`
