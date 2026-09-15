@@ -753,6 +753,26 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
  *  share a single query execution instead of each running the full SQL. */
 const LOAD_IN_FLIGHT = new Map<string, Promise<any[]>>();
 
+/**
+ * Contract Performance excludes contracts with no Region/Site.
+ *
+ * `plant_site` is `COALESCE(MAX(sqlRegionSiteRawFromJsonAndB2b(...)), 'Blank')`, so a contract SAP
+ * gives no discharge destination for arrives here as the literal string "Blank" and rendered as an
+ * unlabelled drilldown card. On dev that bucket holds 59 contracts / 41,060 MT, and only 5 of the
+ * 59 actually have a Discharge Destination in SAP - the rest genuinely have no destination
+ * recorded, so this is filtered display rather than hidden data loss.
+ *
+ * Applied to the ROWS, not to the tree, and that is the point: aggregateLatePerformanceRows builds
+ * the Section 1 summary and the Section 2 drilldown from this one list. Dropping the card alone
+ * would have left Section 1 counting 41,060 MT the tree no longer showed, and the page displays
+ * that discrepancy to the user. Excluded on both sides, the reconciliation stays intact - which is
+ * what the user asked for when told the trade-off.
+ */
+function hasResolvedRegionSite(row: { plant_site?: unknown }): boolean {
+  const site = String(row?.plant_site ?? '').trim();
+  return site !== '' && site.toUpperCase() !== 'BLANK';
+}
+
 export async function loadLatePerformanceRows(filters: LatePerformanceFilters): Promise<any[]> {
   const cached = ROW_CACHE.get(filters.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
@@ -769,7 +789,7 @@ export async function loadLatePerformanceRows(filters: LatePerformanceFilters): 
     try {
       const { queryText, queryParams } = await buildLatePerformanceQuery(filters);
       const result = await query(queryText, queryParams);
-      const rows = result.rows as any[];
+      const rows = (result.rows as any[]).filter(hasResolvedRegionSite);
       ROW_CACHE.set(filters.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       return rows;
     } finally {

@@ -1197,6 +1197,38 @@ bulk.
 
 ## Contract Performance
 
+### Filter lists offered values the page could never return
+
+The incoterm options endpoint is shared by Contracts, Contract Performance, Trucking and
+Shipments, and answered with a `DISTINCT` over the whole `contracts` table. So Trucking offered
+FOB/CIF/CFR and Shipments offered FRC/LCO - values a user could pick and get nothing back - plus a
+literal `Blank` the frontend then stripped again.
+
+`?scope=trucking` and `?scope=shipment` now narrow it to the page's domain set, intersected with
+what the table actually holds, so an incoterm nobody uses still does not appear. No scope means no
+restriction, and an unrecognised scope falls back the same way rather than emptying a filter.
+
+The sets are a business decision, not a reading of the data, and the difference is recorded because
+it matters: `trucking_operations` currently holds **64 FOB, 11 CIF and 2 CFR** rows and `shipments`
+holds **3 LCO**, so those rows are not reachable through the incoterm filter. That was raised before
+implementing and confirmed as intended; if they turn out to be anomalies, `FILTER_OPTION_SCOPES` is
+where the decision lives.
+
+### Contracts with no Region/Site are excluded, from both sections
+
+`plant_site` is `COALESCE(MAX(...), 'Blank')`, so a contract SAP gives no discharge destination for
+arrived as the literal string "Blank" and rendered as an unlabelled drilldown card. On dev that
+bucket holds **59 contracts / 41,060 MT**, and only 5 of the 59 actually have a Discharge
+Destination in SAP - the rest genuinely have none, so this is filtered display, not hidden data
+loss.
+
+Filtered on the ROWS rather than on the tree, and that is the point: `aggregateLatePerformanceRows`
+builds the Section 1 summary and the Section 2 drilldown from one list. Dropping the card alone
+would have left Section 1 counting 41,060 MT the tree no longer showed - and the page displays that
+discrepancy to the user. Excluding on both sides was the user's call once the trade-off was put to
+them. Verified afterwards: 7,306 rows, 29 distinct Region/Site values, no Blank bucket.
+
+
 ### SEA Trade Cycle fell back to the start of the voyage instead of its end
 
 Reported: PO 1001031296 and 1001031455 show "-" for Trade Cycle although they have a Due Date

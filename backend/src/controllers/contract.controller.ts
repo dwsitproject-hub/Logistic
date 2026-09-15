@@ -146,6 +146,7 @@ import {
 import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
 import { SQL_B2B_PARTIES_FOR_ORIGIN_PO } from '../utils/b2bPartiesForContractSql';
 import { resolveStoListMilestoneDates } from '../utils/contractStoListMilestoneDates';
+import { incotermsForScope, parseFilterOptionScope } from '../utils/filterOptionScopes';
 
 export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
@@ -1080,14 +1081,35 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const getContractFilterIncoterms = async (_req: AuthRequest, res: Response) => {
+/**
+ * Incoterm filter options, optionally narrowed to one page's domain via `?scope=`.
+ *
+ * Without a scope this is the whole `contracts` table, which is what every page used to get - so
+ * Trucking offered sea incoterms and Shipments offered land ones, selectable values that return
+ * nothing. With a scope the list is the page's domain set intersected with what the table actually
+ * holds, so an incoterm nobody has does not appear either.
+ *
+ * Blank is dropped rather than offered as a value: it was already stripped on the frontend by
+ * filterIncotermOptions, so sending it only to have it removed was noise.
+ */
+export const getContractFilterIncoterms = async (req: AuthRequest, res: Response) => {
   try {
+    const scope = parseFilterOptionScope(req.query?.scope);
+    const allowed = incotermsForScope(scope);
+    const params: unknown[] = [];
+    let scopeSql = '';
+    if (allowed) {
+      params.push(allowed as unknown as string[]);
+      scopeSql = ` AND UPPER(TRIM(incoterm)) = ANY($${params.length}::text[])`;
+    }
     const r = await query(
       `
-      SELECT DISTINCT COALESCE(NULLIF(TRIM(incoterm), ''), 'Blank') AS incoterm
+      SELECT DISTINCT UPPER(TRIM(incoterm)) AS incoterm
       FROM contracts
+      WHERE NULLIF(TRIM(incoterm), '') IS NOT NULL${scopeSql}
       ORDER BY incoterm
       `,
+      params as never[],
     );
     return res.json({ success: true, data: { incoterms: r.rows.map((x: any) => String(x.incoterm)) } });
   } catch (error) {

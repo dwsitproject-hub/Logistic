@@ -1590,7 +1590,7 @@ function ShipmentsPageContent() {
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
-      api.get('/contracts/filter-options/incoterms'),
+      api.get('/contracts/filter-options/incoterms?scope=shipment'),
       api.get('/dashboard/filter-options/products'),
       api.get('/dashboard/filter-options/suppliers'),
     ])
