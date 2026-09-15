@@ -652,6 +652,21 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
               THEN (open_standard_eta_trucking::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
               THEN (last_ata_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
+            /*
+             * ETC before ETA at LP - it estimates the same event ATC records (discharge
+             * complete), while ETA at LP is the vessel arriving to START loading. Must stay in
+             * step with resolveSeaTradeCycleCompletionDate: this expression drives the Late /
+             * On Time filter and sort, so a difference here shows as rows filtered by one rule
+             * and displayed with another.
+             */
+            WHEN ${_transportExpr} LIKE 'SEA%' AND last_eta_vessel_complete_discharge IS NOT NULL
+              THEN (
+                CASE
+                  WHEN last_eta_vessel_complete_discharge::date < CURRENT_DATE
+                    THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
+                  ELSE (last_eta_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
+                END
+              )
             WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
               THEN (
                 CASE

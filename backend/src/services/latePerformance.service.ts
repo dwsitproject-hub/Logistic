@@ -1168,16 +1168,28 @@ export function isContractPerfOnTimeTradeCycle(row: any, tradeCycle: number): bo
 }
 
 /**
- * SEA Trade Cycle completion date:
- * ATA vessel complete discharge when present; otherwise ETA at LP.
- * When ATA is null: if ETA &lt; today → today; if ETA null → null (UI shows "-").
+ * SEA Trade Cycle completion date: ATC → ETC → ETA at LP.
+ * When no actual exists: if the estimate is before today → today; no estimate → null (UI "-").
  * Uses local calendar for "today" so callers' local midnight Date matches ISO date strings.
+ *
+ * ETC sits between them because it estimates the SAME event ATC records - the vessel finishing
+ * discharge. ETA at Loading Port is the vessel ARRIVING to start loading, i.e. the beginning of
+ * the voyage, so using it as the stand-in for a completion date both left contracts blank that
+ * had an ETC (81 on dev) and gave the 23 that had an ETA at LP a date weeks too early.
+ *
+ * Reported against PO 1001031296 and 1001031455: ETC present, ATC still null, Trade Cycle "-".
+ *
+ * Neither estimate comes from SAP - checked across every row, the export carries no ETA column of
+ * any kind, so both are entered in KLIP. The reason to prefer ETC is therefore not availability
+ * but meaning; that it is also filled ~4x more often is a bonus, not the argument.
  */
 export function resolveSeaTradeCycleCompletionDate(row: any, todayMid: Date): Date | null {
   if (hasCalendarDate(row.last_ata_vessel_complete_discharge)) {
     return due(row.last_ata_vessel_complete_discharge);
   }
-  const etaKey = toCalendarDateKey(row.open_standard_eta_vessel_loading);
+  const etaKey =
+    toCalendarDateKey(row.last_eta_vessel_complete_discharge) ??
+    toCalendarDateKey(row.open_standard_eta_vessel_loading);
   if (!etaKey) return null;
   const todayKey = `${todayMid.getFullYear()}-${String(todayMid.getMonth() + 1).padStart(2, '0')}-${String(todayMid.getDate()).padStart(2, '0')}`;
   if (etaKey < todayKey) {

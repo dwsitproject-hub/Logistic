@@ -1195,6 +1195,48 @@ So `spd_keyed` still carries `data`, deliberately, and the 92 accesses that read
 column route remains open, but it needs the three PO families resolved one at a time, not in
 bulk.
 
+## Contract Performance
+
+### SEA Trade Cycle fell back to the start of the voyage instead of its end
+
+Reported: PO 1001031296 and 1001031455 show "-" for Trade Cycle although they have a Due Date
+Delivery End and an ETC. ATC is still null on both.
+
+The SEA completion chain was ATC → **ETA at Loading Port** → null. ETC was never consulted -
+`last_eta_vessel_complete_discharge` is computed, carried through the performance snapshot and sent
+to the frontend, but no cycle calculation read it.
+
+That fallback is the wrong date, not merely a missing one. The four milestones pair up as
+estimate/actual over start/end: ETA and ATA are the vessel *arriving to start loading*; ETC and ATC
+are it *finishing discharge* (see `contractStoListMilestoneDates`). A cycle measures when the
+contract completes, so with no ATC the natural stand-in is ETC - the estimate of that same event.
+ETA at LP is the beginning of the voyage, often weeks earlier.
+
+Now ATC → ETC → ETA at LP, with the existing "estimate already past → today" clamp applying to
+whichever estimate is used. ETA at LP is kept last so nothing that shows a value today loses one.
+
+On dev: **81** SEA contracts that show "-" gain a value, and **23** change - those had an ETA at LP
+and an ETC, and every one of the 23 had a different ETC, so their Trade Cycle was reading weeks too
+optimistic. That second group was not reported and is the larger correctness gain.
+
+Neither estimate comes from SAP. Checked across every row, the export carries **no ETA column of
+any kind** - in `data->'raw'` or `data->'shipment'` - so ETA at LP and ETC are both entered in KLIP.
+That killed the one defence of the old order (that ETA at LP might be the more reliably populated
+SAP field); the reason to prefer ETC is meaning, and that it is filled ~4x more often is a bonus,
+not the argument.
+
+Changed in two places that must stay in step: `resolveSeaTradeCycleCompletionDate` (used by both
+the Open and Closed paths) and the SQL mirror in `contract.controller.ts`, which drives the
+Late/On Time filter and sort - a difference there would filter rows by one rule and display them by
+another. The help text said `if ATA is empty use ETA at LP … no ETA → "-"`, describing the wrong
+behaviour correctly, which is how this survived; it is updated too.
+
+**Not addressed here, on the user's instruction:** Closed Cash Cycle and Closed DP Cycle carry the
+opposite sign to their Open counterparts and to Trade Cycle. `computeClosedCashCycleDays` does
+`diffCalendarDays(end, payoff)` where Open does `diffCalendarDays(payoff, end)`, so the same
+contract reads +10 while Open and -10 once Closed. Demonstrated on identical dates; 16,925 closed
+contracts on dev would change sign, so it waits for a decision rather than being folded in here.
+
 ## Shipments
 
 ### ...and the list's status column now says so too
