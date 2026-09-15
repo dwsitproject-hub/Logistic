@@ -34,7 +34,10 @@ STO="${1:-}"
 cd /opt/klip || exit 1
 env_val() { sed -n "s/^$1=//p" .env | head -1 | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//'; }
 export PGPASSWORD="$(env_val DB_PASSWORD)"
-PSQL=(psql -h "$(env_val DB_HOST)" -p "$(env_val DB_PORT)" -U "$(env_val DB_USER)" -d "$(env_val DB_NAME)")
+# -P pager=off matters: without it psql pipes into `less`, which shows (END) and - when the
+# script is backgrounded or piped - suspends it with "Stopped". That is what truncated the
+# earlier runs after section 1, not a failing query.
+PSQL=(psql -P pager=off -h "$(env_val DB_HOST)" -p "$(env_val DB_PORT)" -U "$(env_val DB_USER)" -d "$(env_val DB_NAME)")
 
 CTE="WITH v AS (
   SELECT vp.id AS vlp_id, s.id AS ship_uuid, c.contract_id, c.po_number,

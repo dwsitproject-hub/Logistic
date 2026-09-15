@@ -32,7 +32,9 @@ if [ -z "$DB_HOST_V" ] || [ -z "$DB_USER_V" ] || [ -z "$DB_NAME_V" ]; then
   exit 1
 fi
 
-PSQL=(psql -h "$DB_HOST_V" -p "${DB_PORT_V:-5432}" -U "$DB_USER_V" -d "$DB_NAME_V" -v ON_ERROR_STOP=1)
+# -P pager=off: psql otherwise pipes into `less`, which stops the script when it is
+# backgrounded or piped - the cause of the runs that appeared to die after section 1.
+PSQL=(psql -P pager=off -h "$DB_HOST_V" -p "${DB_PORT_V:-5432}" -U "$DB_USER_V" -d "$DB_NAME_V" -v ON_ERROR_STOP=1)
 
 echo "=== 1. KLIP side: one row per shipment under this PO ==="
 # If ATC is already wrong HERE, the write path is at fault. If it is correct here,
