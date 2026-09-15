@@ -5,6 +5,10 @@
 import { resolveUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import { sqlIsContractSapInactiveForOsExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import {
+  sqlTruckingSourceIsInterco,
+  sqlTruckingSourceIsThirdParty,
+} from './truckingOutstandingQtySummarySql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import { groupPlantExpr } from './groupPlantSql';
@@ -417,33 +421,78 @@ export function buildTruckingUnplannedBacklogSummaryCountQuery(
   return buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql);
 }
 
-/** Daily refresh — open contract backlog grouped by group_plant + contract_date. */
+/**
+ * Daily refresh — open contract backlog grouped by group_plant + contract_date.
+ *
+ * Carries the backlog's outstanding qty as well as its row count. The live aggregate of that
+ * quantity was 35,078ms of a 39,226ms cold Trucking load on dev - 89% of the page, in one 150KB
+ * statement returning a single row - because per contract it expands the 26KB GR-status
+ * expression through the backlog predicate and the cancelled check inside the outstanding
+ * expression. The count beside it was already instant precisely because it was stored here.
+ *
+ * Only Interco vs 3rd Party needs columns: `incoterm` is already a dimension of this table, so
+ * the FRC/LCO halves of the card come from the existing grouping.
+ *
+ * The outstanding expression needs `qty_move` in scope, so the CTE is built over the same backlog
+ * predicate the rows are selected by - the quantity summed here is the same number the live
+ * aggregate produced, not an approximation of it.
+ */
 export async function buildTruckingUnplannedBacklogDailySummarySql(
   targetTable = 'trucking_pipeline_daily_summary',
 ): Promise<string> {
   const plant = TRUCKING_UNPLANNED_GROUP_PLANT;
+  const backlogWhere = truckingUnplannedContractBacklogBaseWhereSql('c', 'l');
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      WHERE ${backlogWhere}`,
+  });
+  const osSum = (pred: string) =>
+    `COALESCE(SUM(CASE WHEN ${pred} THEN (${outstandingExpr})::numeric ELSE 0 END), 0)::numeric`;
   return `
-    INSERT INTO ${targetTable} (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
+    INSERT INTO ${targetTable} (
+      group_plant, contract_date, product, incoterm,
+      unplanned_contract_backlog, backlog_os_third_party_kg, backlog_os_interco_kg,
+      backlog_contract_qty_kg
+    )
     WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
+    ${qtyMoveCte},
     backlog AS (
       SELECT
         ${plant} AS group_plant,
         COALESCE(c.contract_date, DATE '1970-01-01')::date AS contract_date,
         ${sqlPipelineProductKey('c.product')} AS product,
         ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
-        COUNT(*)::bigint AS unplanned_contract_backlog
+        COUNT(*)::bigint AS unplanned_contract_backlog,
+        ${osSum(sqlTruckingSourceIsThirdParty('c.source_type'))} AS backlog_os_third_party_kg,
+        ${osSum(sqlTruckingSourceIsInterco('c.source_type'))} AS backlog_os_interco_kg,
+        COALESCE(SUM(COALESCE(c.quantity_ordered, 0)), 0)::numeric AS backlog_contract_qty_kg
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
-      WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
+      WHERE ${backlogWhere}
       GROUP BY 1, 2, 3, 4
     )
     SELECT group_plant, contract_date, product, incoterm,
-           SUM(unplanned_contract_backlog)::bigint AS unplanned_contract_backlog
+           SUM(unplanned_contract_backlog)::bigint AS unplanned_contract_backlog,
+           SUM(backlog_os_third_party_kg)::numeric AS backlog_os_third_party_kg,
+           SUM(backlog_os_interco_kg)::numeric AS backlog_os_interco_kg,
+           SUM(backlog_contract_qty_kg)::numeric AS backlog_contract_qty_kg
     FROM backlog
     GROUP BY group_plant, contract_date, product, incoterm
     ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
-      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
+      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog,
+      backlog_os_third_party_kg = EXCLUDED.backlog_os_third_party_kg,
+      backlog_os_interco_kg = EXCLUDED.backlog_os_interco_kg,
+      backlog_contract_qty_kg = EXCLUDED.backlog_contract_qty_kg`;
 }
 
 export { parseColumnFiltersQuery };

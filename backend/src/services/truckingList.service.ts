@@ -67,6 +67,7 @@ import {
   loadTruckingSummaryFromDaily,
   loadTruckingSection1FromStageSnapshot,
   loadTruckingBacklogCountFromSnapshot,
+  loadTruckingBacklogSummaryFromSnapshot,
   toPipelineDailySummaryScope,
   markPipelineDailySummaryStale,
   type PipelineDailySummaryFilterInput,
@@ -387,6 +388,37 @@ async function loadTruckingUnplannedBacklogCombinedForRequest(
       UNPLANNED_BACKLOG_CACHE.set(cacheKey, { ...empty, expiresAt: Date.now() + CACHE_TTL_MS });
       evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
       return empty;
+    }
+  }
+
+  /*
+   * Serve the whole card from the daily summary when the request is toolbar-only.
+   *
+   * The query below is the single most expensive thing the cold Trucking page does: 34,493ms of a
+   * 39,226ms load on dev, 89% of it, in one 150KB statement returning a single row. The summary
+   * now stores what it computes, written by the same builder over the same predicate, and reading
+   * it back takes 7ms. Parity was verified before this was wired in - 503,920 kg either way.
+   *
+   * The same guard as the count above: a global search, column filter or contract filter narrows
+   * the backlog in ways the summary's dimensions cannot express, so those fall through. A
+   * Region/Plant scope returns null here for the same reason it does there, and also falls
+   * through.
+   */
+  if (canUseSnapshotBacklogCount) {
+    const fromSnapshot = await loadTruckingBacklogSummaryFromSnapshot(
+      toPipelineDailySummaryScope({ dateFrom, dateTo, plants, colFilters } as Parameters<
+        typeof toPipelineDailySummaryScope
+      >[0]),
+    );
+    if (fromSnapshot) {
+      const served = {
+        count: fromSnapshot.count,
+        contractQtyKg: fromSnapshot.contractQtyKg,
+        osBacklog: parseTruckingOutstandingQtySummaryRow(fromSnapshot.osRow),
+      };
+      UNPLANNED_BACKLOG_CACHE.set(cacheKey, { ...served, expiresAt: Date.now() + CACHE_TTL_MS });
+      evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
+      return served;
     }
   }
 

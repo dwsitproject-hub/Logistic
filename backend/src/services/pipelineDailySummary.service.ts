@@ -1145,6 +1145,58 @@ export async function loadTruckingBacklogCountFromSnapshot(
 }
 
 /**
+ * The Unplanned backlog card - count, Contract Qty and the OS buckets - from the daily summary.
+ *
+ * The live form of this was 34,493ms on dev, 89% of a 39,226ms cold Trucking load, in one 150KB
+ * statement returning a single row: per contract it expands the 26KB GR-status expression through
+ * the backlog predicate and the cancelled check inside the outstanding expression. Read from here
+ * the same answer takes 7ms.
+ *
+ * Written by the same builder as `unplanned_contract_backlog`, over the same predicate, so this is
+ * that query's answer rather than an approximation - and verified against it before being wired
+ * in (503,920 kg either way), because "same builder" is an argument and a parity run is evidence.
+ *
+ * The FRC/LCO split comes from the table's own `incoterm` dimension; only Interco vs 3rd Party
+ * needed columns of its own.
+ *
+ * Returns null when the scope carries a Region/Plant filter, exactly as the count loader does:
+ * this table keys on the master_plants `group_plant` dimension, which the toolbar's options are
+ * not drawn from.
+ */
+export async function loadTruckingBacklogSummaryFromSnapshot(
+  scope: PipelineDailySummaryScope,
+): Promise<{
+  count: number;
+  contractQtyKg: number;
+  osRow: Record<string, number>;
+} | null> {
+  if (!(await isPipelineDailySummaryUsable('trucking'))) return null;
+  if (pipelineDailySummaryScopeHasPlantFilter(scope)) return null;
+  const { sql, params } = buildDailySummaryWhere(scope);
+  const bucket = (src: 'third_party' | 'interco', inc: 'FRC' | 'LCO') =>
+    `COALESCE(SUM(CASE WHEN UPPER(TRIM(COALESCE(incoterm, ''))) = '${inc}'
+       THEN backlog_os_${src}_kg ELSE 0 END), 0)::numeric AS ${src}_${inc.toLowerCase()}_kg`;
+  const res = await query(
+    `SELECT COALESCE(SUM(unplanned_contract_backlog), 0)::bigint AS c,
+            COALESCE(SUM(backlog_contract_qty_kg), 0)::numeric AS contract_qty_kg,
+            COALESCE(SUM(backlog_os_third_party_kg + backlog_os_interco_kg), 0)::numeric AS card_total_kg,
+            ${bucket('third_party', 'FRC')},
+            ${bucket('third_party', 'LCO')},
+            ${bucket('interco', 'FRC')},
+            ${bucket('interco', 'LCO')}
+       FROM trucking_pipeline_daily_summary ${sql}`,
+    params,
+  );
+  const row = res.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    count: parseInt(String(row.c ?? '0'), 10) || 0,
+    contractQtyKg: Number(row.contract_qty_kg || 0) || 0,
+    osRow: row as unknown as Record<string, number>,
+  };
+}
+
+/**
  * The sorts a snapshot-served page can order by - the only two the snapshot stores a column for.
  * Every other sort keeps the live ranking, which reads columns the snapshot does not carry.
  */

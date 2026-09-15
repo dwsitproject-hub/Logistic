@@ -1514,6 +1514,41 @@ Cost is nil. The new subquery runs only for contracts the earlier arms left NULL
 reversed-order re-run gave 26.1 s before and 20.8 s after, so the spread is machine noise, not the
 arm. FOB is deliberately excluded - it sits on the sea leg and has its own logic.
 
+### The backlog's outstanding qty is now stored, not recomputed: 39s -> 3.8s
+
+One query was 35,078ms of a 39,226ms cold load - **89% of the page** - in a single 150KB statement
+returning one row. It aggregates outstanding qty over the Unplanned contract backlog, and it is
+expensive because per contract it expands the 26KB GR-status expression through the backlog
+predicate *and* the cancelled check inside the outstanding expression.
+
+The row **count** for that same backlog was already instant, for the one reason that matters: it is
+stored in `trucking_pipeline_daily_summary` and read back by `loadTruckingBacklogCountFromSnapshot`.
+Migration 171 gives the quantity the same treatment - `backlog_os_third_party_kg`,
+`backlog_os_interco_kg`, `backlog_contract_qty_kg`. Only the source split needed columns: `incoterm`
+is already a dimension of that table, so the card's FRC/LCO halves come from the existing grouping.
+
+Written by the same builder over the same predicate, so this is that query's answer and not an
+approximation - and verified as such before being wired in, because "same builder" is an argument
+and a parity run is evidence:
+
+```
+live aggregate    34,493 ms   3rd=503,920  interco=0
+snapshot read          7 ms   3rd=503,920  interco=0
+```
+
+Page cold load: **39,226ms -> 3,849ms**. The cost moves rather than vanishes - the daily refresh
+does the work once - and it falls back to the live query whenever a global search, column filter,
+contract filter or Region/Plant scope narrows the backlog in ways the summary's dimensions cannot
+express.
+
+**A regression this caused, and the lesson in it.** Adding `is_contract_os_within_band` to
+`shipmentEffectiveStatusExpr` broke the *shipment* summary refresh outright - `column
+f.is_contract_os_within_band does not exist` (42703) - because that refresh runs the same
+expression over its own base CTE. The fix is to compute the flag there too, not to default it away:
+the circle counts this table feeds are derived from that expression, so a defaulted-away column
+would have let the cards disagree with the rows they count. Same shape as the `grc` alias-scope bug
+that once emptied the whole Trucking page.
+
 ### Where the cold Trucking page's time goes
 
 Measured 2026-09-10 through `resolveTruckingListForRequest`, default YTD view, fresh process so
