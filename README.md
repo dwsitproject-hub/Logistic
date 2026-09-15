@@ -1252,6 +1252,30 @@ two shipments 169 repaired.
 Verified before shipping: the migration updates exactly what the detector names, field by field
 (52 / 3 / 52 / 52 / 51), and a second pass updates 0.
 
+### Edit Shipment is a STO-level view, so its PO list comes from the STO
+
+Reported as the view table showing 6 POs where the edit modal showed 4. No data source explains
+either number: `contract_stos`, `shipments.shipment_id`, user assignments, SAP's own PO/STO pairs
+and `/shipments/contracts/details?sto=` all return the same **5** in production, and the SAP header
+rows that could have padded the table's list do not exist for these contracts at all.
+
+The difference was in where the modal built its rows. `hydrateShipmentEditForm` seeded them from
+`row.contract_numbers ?? shipment.contract_number ?? contractIdFallback`. Opened from a list row
+that is the whole STO group; opened by id it is the detail endpoint's `contract_number` - a
+**single** contract, because `getShipmentById` returns one. The form then listed one contract's POs
+while the table listed the STO's.
+
+`/shipments/contracts/details?sto=` already answers the STO question and was already being called
+here - but only to fill quantities. Its contract numbers are now merged into the list the form
+renders, so the same STO yields the same POs however the modal was opened. The seed is kept ahead
+of them so an explicitly passed group keeps its order, and the merge is a Set so nothing doubles.
+
+Worth recording what this was *not*, since two plausible theories died on measurement. The two
+screens do read different sources - the table takes `COALESCE(sla.po_numbers, ...)` from SAP's raw
+`PO No` grouped by sto_key, the modal reads KLIP linkage - but in this case both sources agree.
+And `spd_keyed`'s fallback branch looked like it could pull rows from a *different* STO; its second
+guard (`key ~ '^OP-' OR sto IS NULL`) excludes them, so it cannot.
+
 ### SAP does not export per-loading-port dates, and that is not a gap to fill
 
 Investigating the ATA bleed turned up keys the service reads that do not exist, and my first

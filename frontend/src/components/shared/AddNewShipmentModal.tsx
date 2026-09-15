@@ -1434,27 +1434,36 @@ export function AddNewShipmentModal({
       const detailRes = await api.get(`/shipments/${shipmentId}`)
       const shipment = (detailRes.data?.data ?? row) as Record<string, unknown>
 
+      /*
+       * Edit Shipment is a STO-level view, not a contract-level one.
+       *
+       * The seed below is whatever the caller happened to have: opened from a list row it is that
+       * row's `contract_numbers` (the whole STO group), but opened by id it is the detail
+       * endpoint's `contract_number` - a SINGLE contract, because getShipmentById returns one.
+       * The form then listed the POs of that one contract while the view table listed the STO's,
+       * which is the mismatch users reported.
+       *
+       * So the STO decides. /shipments/contracts/details?sto= already answers exactly that
+       * question and was already being called here - but only to fill quantities. Its contract
+       * numbers are now merged into the list the form renders, so the same STO yields the same
+       * POs however the modal was opened. The seed is kept ahead of them so an explicitly passed
+       * group keeps its order.
+       */
       const contractNumbersRaw = String(
         row.contract_numbers ?? shipment.contract_number ?? contractIdFallback,
       )
-        const contractNumbers = contractNumbersRaw
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-      const uniqueContractIds = contractNumbers.length > 0 ? contractNumbers : [contractIdFallback]
-
-      for (const cid of uniqueContractIds) {
-        await validateContractNumber(cid)
-      }
-
-      const qtyAssigned: Record<string, string> = {}
-      for (const cid of uniqueContractIds) {
-        qtyAssigned[cid] = ''
-      }
+      const seededContractIds = contractNumbersRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
 
       const assignmentKey =
         String(shipment.sto_number ?? row.sto_number ?? '').trim() ||
         String(shipment.operation_id ?? row.operation_id ?? '').trim()
+
+      const qtyAssigned: Record<string, string> = {}
+      const stoContractIds: string[] = []
+
       if (assignmentKey) {
         try {
           const detailsRes = await api.get('/shipments/contracts/details', {
@@ -1474,6 +1483,7 @@ export function AddNewShipmentModal({
               const cn = String(detail.contract_number ?? '').trim()
               const po = String(detail.po_number ?? '').trim()
               const rowKey = po ? `${cn}::${po}` : cn
+              if (cn) stoContractIds.push(cn)
               const planKg = parseFloat(String(detail.shipment_plan_qty ?? detail.sto_qty_assigned ?? ''))
               const assignedKg = Number.isFinite(planKg) && planKg > 0 ? planKg : 0
               const sapKg = parseFloat(String(detail.sap_sto_qty ?? ''))
@@ -1486,8 +1496,17 @@ export function AddNewShipmentModal({
             }
           }
         } catch {
-          // Read-only display fallback: keep empty if assignment lookup fails
+          // Read-only display fallback: keep the seeded contracts if the STO lookup fails.
         }
+      }
+
+      const mergedContractIds = Array.from(new Set([...seededContractIds, ...stoContractIds]))
+      const uniqueContractIds =
+        mergedContractIds.length > 0 ? mergedContractIds : [contractIdFallback]
+
+      for (const cid of uniqueContractIds) {
+        await validateContractNumber(cid)
+        if (qtyAssigned[cid] === undefined) qtyAssigned[cid] = ''
       }
 
       let loadingPorts: VesselLoadingPortRow[] = []
