@@ -161,6 +161,8 @@ export function sqlContractImportStatusExpr(
     ${openNorm(sqlSapField(spdRow, 'raw_gr_po_status'))}
     OR ${openNorm(sqlSapField(spdRow, 'contract_gr_po_status'))}
   )`;
+  const closeNorm = (expr: string) =>
+    `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
   // Incoterm-scoped: do not let commercial contract.status Open override Close GR STO on LCO.
   const rowOpenSignal = `(
     CASE
@@ -291,6 +293,52 @@ export function sqlContractImportStatusExpr(
         ELSE NULL
       END`;
 
+  /*
+   * LCO only: accept GR PO Close when SAP never wrote a GR STO status at all.
+   *
+   * LCO still reads GR STO - every arm above is unchanged. But SAP routinely closes the PO
+   * without ever emitting a GR STO line, and for those the arms above all yield NULL: not Open,
+   * not Close. Trucking COMPLETED is isContractDeliveryClosed(status), so those rows hang open
+   * forever. Measured on dev: 282 LCO contracts (343 operations) sit in exactly that state.
+   *
+   * Placed last on purpose. COALESCE short-circuits, so this can only ever fill a NULL - a
+   * contract the SPD aggregate or the B2B child lookup already answered keeps that answer
+   * (54 Close, 3 Open, 1 Cancelled on dev were resolved earlier and stay put).
+   *
+   * One-directional by design: GR PO Open does NOT yield 'Open' here. Doing so would pull a
+   * further ~218 LCO contracts out of NULL and silently change Open/Close list filters that
+   * nobody asked to change. No signal in, NULL out - exactly as today.
+   *
+   * Cost: one index lookup on idx_sap_processed_data_contract, and only for the contracts the
+   * arms above left NULL (~420 of 18,612 on dev). It reads the same latest-import, PO-matched,
+   * non-deleted rows the main aggregate does, so it adds no new access path.
+   */
+  const fbRow = sapRowSource('spd_pofb');
+  const fbPoOpen = `(
+    ${openNorm(sqlSapField(fbRow, 'raw_gr_po_status'))}
+    OR ${openNorm(sqlSapField(fbRow, 'contract_gr_po_status'))}
+  )`;
+  const fbPoClose = `(
+    ${closeNorm(sqlSapField(fbRow, 'raw_gr_po_status'))}
+    OR ${closeNorm(sqlSapField(fbRow, 'contract_gr_po_status'))}
+  )`;
+  const grPoCloseFallbackArm = `
+      CASE
+        WHEN ${inc} = 'LCO' THEN (
+          SELECT CASE
+            WHEN COALESCE(BOOL_OR(${fbPoOpen}), FALSE) THEN NULL
+            WHEN COALESCE(BOOL_OR(${fbPoClose}), FALSE) THEN 'Close'
+            ELSE NULL
+          END
+          FROM sap_processed_data spd_pofb
+          WHERE spd_pofb.contract_number = ${contractAlias}.contract_id
+            ${poMatch('spd_pofb')}
+            ${latestImportOnly('spd_pofb')}
+            AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd_pofb')})
+        )
+        ELSE NULL
+      END`;
+
   return `
     COALESCE(
       ${deleteFlagCancelled},
@@ -319,6 +367,7 @@ export function sqlContractImportStatusExpr(
         THEN ${sqlB2bChildGrStoStatusLookup(poNumberRef)}
         ELSE NULL
       END,
+      ${grPoCloseFallbackArm},
       CASE
         WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)}) THEN NULL
         ELSE ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}

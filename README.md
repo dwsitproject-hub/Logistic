@@ -1197,6 +1197,51 @@ bulk.
 
 ## Trucking
 
+### LCO: a closed PO with no GR STO line no longer hangs forever
+
+LCO reads GR **STO** status, FRC/CIF/CFR read GR **PO** - that split lives in
+`INCOTERM_GR_STO_STATUS` / `INCOTERM_GR_PO_STATUS` (`backend/src/utils/sapIncotermMetrics.ts`) and
+is unchanged. What it did not cover is the case operations kept reporting: SAP closes the PO and
+never writes a GR STO line at all.
+
+For those contracts `sqlContractImportStatusExpr` produced **NULL** - not Open, not Close. The
+per-row status is NULL (LCO reads GR STO, which is blank), the row-open signal is false, so the
+aggregate's `WHERE st IS NOT NULL OR row_open` discards every row and the subquery returns nothing;
+the commercial-`contracts.status` fallback is deliberately skipped for LCO/FOB. Trucking COMPLETED
+is `isContractDeliveryClosed(status)`, and NULL is not closed, so those operations hung open
+permanently. On dev: **282 LCO contracts, 343 trucking operations**.
+
+The fix adds one arm to the `COALESCE`, after the B2B child lookup: for LCO only, when every arm
+above yielded NULL, an unambiguous GR PO Close is accepted as the close signal.
+
+Three properties make it safe rather than a behaviour change:
+
+- **Purely additive.** `COALESCE` short-circuits, so the arm can only ever fill a NULL. Verified
+  over all 18,751 contracts by rendering both expressions side by side: 282 values changed, all
+  LCO, and `changed_from_nonnull = 0`. FRC (11,798), FOB (2,586), CIF and CFR: zero changes. The
+  54 anomaly contracts the B2B child lookup already answered Close, the 3 it answered Open and the
+  1 Cancelled delete-flag all keep their existing answer.
+- **One-directional.** GR PO *Open* does not yield `'Open'`. That would pull a further ~218 LCO
+  contracts out of NULL and change Open/Close list filters nobody asked to change. No signal in,
+  NULL out, exactly as before.
+- **OS Qty is untouched.** This was the real risk: `grClosed` flips the Delivery/Receive resolver
+  (`sqlTruckingResolvedDeliveryQty`) from the WB branch to the SAP branch, so OS Qty *could* move.
+  Measured across all 343 affected operations: **none has WB data**, so the branch switch never
+  fires - 0 delivery-qty changes, and the count of operations outside the 499 kg OS band is 289
+  before and 289 after. 289 operations reach COMPLETED through the new status; the other 54 were
+  already COMPLETED via the OS tolerance band.
+
+Blast radius is narrower than the expression's reach suggests: all 340 contracts already have a
+trucking operation, so the unplanned-contract backlog (which counts contracts *without* one) is
+unaffected, and none has a shipment, so the Shipments page is untouched. The visible change is the
+Trucking list status and the status column on Contracts / Contract Performance.
+
+Cost is nil. The new subquery runs only for contracts the earlier arms left NULL (~420 of 18,751,
+2.2%) and reads the same latest-import, PO-matched, non-deleted rows through
+`idx_sap_processed_data_contract`. Timed over all contracts: 15.48 s before, 15.47 s after; a
+reversed-order re-run gave 26.1 s before and 20.8 s after, so the spread is machine noise, not the
+arm. FOB is deliberately excluded - it sits on the sea leg and has its own logic.
+
 ### Where the cold Trucking page's time goes
 
 Measured 2026-09-10 through `resolveTruckingListForRequest`, default YTD view, fresh process so

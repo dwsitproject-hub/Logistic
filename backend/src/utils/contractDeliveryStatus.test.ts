@@ -128,6 +128,19 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toMatch(/WHEN[\s\S]*IN \('LCO', 'FOB'\) THEN NULL[\s\S]*ELSE[\s\S]*c\.status/s);
   });
 
+  it('falls back to GR PO Close for LCO only when nothing above answered, and never to Open', () => {
+    const sql = sqlContractImportStatusExpr('c', 'c.po_number');
+    // Gated to LCO alone - FOB reads GR STO too but is a sea incoterm with different logic.
+    expect(sql).toMatch(/WHEN UPPER\(TRIM\(COALESCE\(c\.incoterm, ''\)\)\) = 'LCO' THEN \(/);
+    expect(sql).toContain('spd_pofb');
+    // One-directional: an Open PO yields NULL, not 'Open'. Only Close is accepted.
+    expect(sql).toMatch(/WHEN COALESCE\(BOOL_OR\([\s\S]*?\), FALSE\) THEN NULL\s+WHEN COALESCE\(BOOL_OR\([\s\S]*?\), FALSE\) THEN 'Close'/);
+    // Must sit AFTER the B2B child lookup so a child's GR STO answer still wins.
+    expect(sql.indexOf('spd_pofb')).toBeGreaterThan(sql.indexOf('b2b'));
+    // Reads the same latest-import, non-deleted rows as the main aggregate - no new access path.
+    expect(sql).toMatch(/FROM sap_processed_data spd_pofb[\s\S]*?spd_pofb\.import_id IS NOT DISTINCT FROM/);
+  });
+
   it('prefers Delete PO / all-STO Delete → Cancelled over GR Open (partial Delete STO does not)', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
     expect(sql).toContain('raw_delete_po_status');
