@@ -1197,6 +1197,37 @@ bulk.
 
 ## Shipments
 
+### Nothing outstanding now finishes a shipment, and one tolerance governs all of it
+
+Trucking has always had it (`isTruckingPipelineCompleted`), and so has the contract-level test
+(`isContractEffectivelyDone`): once outstanding quantity is within the zero band, the thing is
+finished even if GR still says Open and no ATC was ever recorded. Shipment **execution** rows were
+the only grain without that rule - their ladder knew just two routes to COMPLETED, GR Close and a
+filled ATC - so residual quantity sat in the OS cards forever.
+
+Applied inside `execution_os` (`shipmentOutstandingQtySummarySql.ts`), where `outstanding_quantity`
+is already computed, so the rule costs nothing. The OS buckets `FILTER` on `effective_status` and
+there is no `completed` bucket, so a row that lands there leaves the OS total outright rather than
+contributing ~0. CANCELLED is never overridden - a cancelled shipment is not a completed one.
+
+Deliberately NOT applied in `shipmentEffectiveStatusExpr`, which drives the list's status column:
+that expression runs on an alias with no OS column at all, so the rule there would mean pulling OS
+derivation - the expensive part - into the base CTE of a page that is already slow. Measured
+separately before any such change.
+
+The cycle that forbids this at contract level does not exist here, and that was checked rather than
+assumed: the only read of `shipments.status` anywhere in the OS/qty machinery is
+`COALESCE(s.status, '') <> 'CANCELLED'` in `contractGlobalOutstandingSql.ts`, and a COMPLETED
+derived from OS can never change that predicate.
+
+`BACKLOG_OS_COMPLETED_MAX_KG` was 1000 while everything else used 499
+(`OUTSTANDING_QTY_ZERO_TOLERANCE_KG`), so the same residual counted as finished on the Shipments
+backlog and as still open everywhere else. Now unified on the shared constant. Cost measured first:
+of 1,052 sea backlog contracts on dev only **7** sit in the 500-1000 kg band and move back to open.
+(An earlier count of 1,475 used the wrong denominator - every contract, including trucking
+incoterms that were already on 499.) Tests now assert against the constant rather than the literal,
+so the next change to it cannot silently diverge.
+
 ### The edit form looked up the sibling STO's SAP row
 
 Two shipments can hang off ONE contract row. PO 1001029907 carries STOs 1006019385 and 1006019867,

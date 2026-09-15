@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import {
   buildUnplannedContractBacklogCountQuery,
   buildUnplannedContractBacklogPageQuery,
@@ -46,7 +47,7 @@ describe('shipmentUnplannedHybridSql', () => {
     expect(text).toContain('AS contract_qty_kg');
     expect(text).toContain('AS outstanding_qty_kg');
     expect(text).toContain('LEFT JOIN qty_move qm');
-    expect(text).toContain('> 1000');
+    expect(text).toContain(`> ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
   });
 
   it('builds contract backlog page query with contract ext no and outstanding qty', async () => {
@@ -150,7 +151,7 @@ describe('buildAllHybridContractBacklogQuery', () => {
     expect(text).toContain('UNPLANNED');
     expect(text).toContain('PREPLANNED');
     expect(text).toContain('COMPLETED');
-    expect(text).toContain('<= 1000');
+    expect(text).toContain(`<= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
     expect(text).toContain('pre_planned_group_id');
     expect(text).toContain('paged_contracts');
     expect(text).toContain('ORDER BY contract_date DESC NULLS LAST, contract_number ASC');
@@ -219,23 +220,23 @@ describe('buildPreplannedContractsPageQuery', () => {
 });
 
 describe('completed contract backlog OS gate', () => {
-  it('keeps Unplanned page rows with remaining OS above 1 MT', async () => {
+  it('keeps Unplanned page rows with remaining OS above the shared tolerance', async () => {
     const { buildUnplannedContractBacklogPageQuery } = await import('./shipmentUnplannedHybridSql');
     const text = await buildUnplannedContractBacklogPageQuery('', '', 20, 0);
-    expect(text).toContain('> 1000');
+    expect(text).toContain(`> ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
   });
 
-  it('selects Completed backlog as COMPLETED when remaining OS is 1 MT or less', async () => {
+  it('selects Completed backlog as COMPLETED when remaining OS is within the shared tolerance', async () => {
     const {
       buildCompletedContractBacklogCountQuery,
       buildCompletedContractBacklogPageQuery,
     } = await import('./shipmentUnplannedHybridSql');
     const countSql = await buildCompletedContractBacklogCountQuery('', '');
     expect(countSql).toContain('completed_contract_backlog');
-    expect(countSql).toContain('<= 1000');
+    expect(countSql).toContain(`<= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
     const pageSql = await buildCompletedContractBacklogPageQuery('', '', 20, 0);
     expect(pageSql).toContain("'COMPLETED'::text");
-    expect(pageSql).toContain('<= 1000');
+    expect(pageSql).toContain(`<= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
   });
 });
 

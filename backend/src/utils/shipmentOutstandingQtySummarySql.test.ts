@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import {
   alignShipmentOutstandingQtyTotalToCardSum,
   buildShipmentOutstandingQtyBacklogAggregateQuery,
@@ -15,6 +16,25 @@ import {
   sqlShipmentSourceIsInterco,
   sqlShipmentSourceIsThirdParty,
 } from './shipmentOutstandingQtySummarySql'
+
+describe('OS-completed rule on shipment execution rows', () => {
+  it('promotes a row with nothing outstanding to COMPLETED, without touching CANCELLED', async () => {
+    const sql = (
+      await buildShipmentOutstandingQtyExecutionAggregateQuery(
+        'WITH shipment_base AS (SELECT 1)',
+        ' AND TRUE',
+        [],
+        null,
+      )
+    ).text;
+    // Shipment execution rows were the only grain without this test; trucking and the
+    // contract-level check have had it all along, so residual quantity inflated the OS cards.
+    expect(sql).toContain(`outstanding_quantity <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
+    expect(sql).toMatch(/= 'CANCELLED' THEN effective_status/);
+    // Applied where OS already exists, so it costs nothing extra.
+    expect(sql).toContain('execution_os_raw');
+  });
+});
 
 describe('shipmentOutstandingQtySummarySql', () => {
   it('normalizes osStatus and treats ALL as null', async () => {
@@ -84,7 +104,7 @@ describe('shipmentOutstandingQtySummarySql', () => {
     expect(sql).toContain('pre_planned_group')
     expect(sql).toContain('source_type_raw')
     expect(sql).toContain('GREATEST(0')
-    expect(sql).toContain('> 1000')
+    expect(sql).toContain(`> ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`)
     expect(sql).toContain("spd.data->'raw'->>'Incoterm'")
     /*
      * source_type_raw is asserted above by name, not by the jsonb expression behind it.

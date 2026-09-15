@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import {
   sqlContractInActiveLogisticsOpenOsExpr,
   sqlIncotermIsLandLogistics,
@@ -24,7 +25,7 @@ describe('contractLogisticsOpenOsSql', () => {
     expect(sql).not.toContain('ata_discharge_complete');
     expect(sql).toContain('trucking_operations t');
     expect(sql).toContain('qty_move');
-    expect(sql).toContain('> 1000');
+    expect(sql).toContain(`> ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}`);
     expect(sql).toContain('tc.contract_id');
     expect(sql).toContain('UNPLANNED');
     expect(sql).toContain('PLANNED');

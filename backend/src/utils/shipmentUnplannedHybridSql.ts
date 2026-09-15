@@ -2,6 +2,7 @@
  * Shipments page — Unplanned hybrid list (contract backlog + shipment execution rows).
  */
 
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 import {
   sqlIsContractSapCancelledExpr,
   sqlIsContractSapClosedForShipmentBacklogExpr,
@@ -190,8 +191,16 @@ export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l')
     AND NOT (${sqlContractSharesNumericStoWithActiveSeaShipmentExpr(`${contractAlias}.id`)})`;
 }
 
-/** Remaining OS ≤ 1.0 MT (1000 kg) → Completed card (no shipment row). */
-export const BACKLOG_OS_COMPLETED_MAX_KG = 1000;
+/**
+ * One tolerance for the whole system.
+ *
+ * This was 1000 while trucking, contract Open/Close and the shipment ladder all used 499
+ * (OUTSTANDING_QTY_ZERO_TOLERANCE_KG), so the same residual quantity counted as finished on the
+ * Shipments backlog and as still open everywhere else. Unified on the user's decision
+ * (2026-09-15) after measuring the cost: of 1,052 sea backlog contracts on dev only 7 sit in the
+ * 500-1000 kg band and move back to open.
+ */
+export const BACKLOG_OS_COMPLETED_MAX_KG = OUTSTANDING_QTY_ZERO_TOLERANCE_KG;
 
 /** Clamp-at-zero remaining OS from joined `qty_move qm` (same formula as Unplanned OS). */
 export function sqlBacklogRemainingOsJoinExpr(): string {

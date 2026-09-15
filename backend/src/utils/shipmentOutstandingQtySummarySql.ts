@@ -1,3 +1,4 @@
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
 /**
  * Shipments page — Outstanding Qty KPI strip (FOB/CIF/CFR × Interco / 3rd Party).
  *
@@ -267,7 +268,7 @@ export function sqlShipmentExecutionOsPerContractCtes(enrichedAlias = 'enriched'
       FROM execution_os_contracts
       ORDER BY contract_number, stage_rank DESC
     ),
-    execution_os AS (
+    execution_os_raw AS (
       SELECT
         r.contract_number,
         r.effective_status,
@@ -275,6 +276,37 @@ export function sqlShipmentExecutionOsPerContractCtes(enrichedAlias = 'enriched'
         r.os_incoterm AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
       FROM execution_os_ranked r
+    ),
+    /*
+     * A shipment with nothing left outstanding is finished, even when no ATC has been recorded
+     * and GR still says Open. Trucking has had this (isTruckingPipelineCompleted) and so has the
+     * contract-level test (isContractEffectivelyDone); shipment execution rows were the only ones
+     * without it, so their residual quantity kept inflating the OS cards forever.
+     *
+     * Done HERE rather than in shipmentEffectiveStatusExpr on purpose: outstanding_quantity is
+     * already computed in this CTE, so the rule costs nothing. The list-row expression has no OS
+     * column at all, and bringing one in means pulling OS derivation - the expensive part - into
+     * the base CTE of a page that is already slow. That is measured separately before any change.
+     *
+     * The OS buckets below FILTER on effective_status and there is no 'completed' bucket, so a row
+     * that lands here drops out of the OS total entirely rather than merely contributing ~0.
+     *
+     * CANCELLED is never overridden - a cancelled shipment is not a completed one.
+     */
+    execution_os AS (
+      SELECT
+        contract_number,
+        source_type,
+        incoterm,
+        outstanding_quantity,
+        CASE
+          WHEN UPPER(TRIM(COALESCE(effective_status, ''))) = 'CANCELLED' THEN effective_status
+          WHEN outstanding_quantity IS NOT NULL
+           AND outstanding_quantity <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG}
+          THEN 'COMPLETED'
+          ELSE effective_status
+        END AS effective_status
+      FROM execution_os_raw
     )`;
 }
 
