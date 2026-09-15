@@ -1228,6 +1228,43 @@ of 1,052 sea backlog contracts on dev only **7** sit in the 500-1000 kg band and
 incoterms that were already on 499.) Tests now assert against the constant rather than the literal,
 so the next change to it cannot silently diverge.
 
+### A phantom ATC came from the discharge-port row, not from SAP
+
+Reported: STO 1006019867 showed an ATC of 2026-08-13 that SAP leaves NULL. It belonged to its
+sibling STO 1006019385 under the same PO.
+
+The ATC a user sees is `COALESCE(shipments.ata_discharge_complete, vlpd.ata_loading_completed)`.
+Production's four sources, read one by one, settled it: the stored column was NULL, the manual
+override was NULL, SAP itself carried nothing for that STO - and the discharge-port row held
+2026-08-13. Both siblings' port rows were byte-identical, PORT MERAUKE and PORT BONTANG alike.
+
+The join was never the problem (`vlpd.shipment_id = s.id` is correctly scoped). The **data** was.
+The SAP port lookup used to fall back to a PO-wide row and could write another STO's dates; that
+was fixed later with `sto_match_rank`, but `mergeSapPortValue` is fill-gaps-only -
+`if (hasCurrent) return current` - so nothing written before the fix is ever corrected by a later
+import. Dev is clean, production kept the legacy rows.
+
+Migration 169 removes them, under three conditions that each carry weight: discharge rows only;
+`ata_loading_completed` must equal the `sap_ata_loading_completed` mirror, so values a person typed
+are untouched; and the shipment's **own** STO must have no such value in SAP.
+
+"Own STO" means `shipments.shipment_id`, never `contracts.sto_number` - one contract row can carry
+two STOs, and using the contract's value is the very conflation that causes the bug. Including it
+in the identity test reported **zero** candidates and nearly closed the investigation on a false
+negative; removing it surfaced 5 on dev and 2 in production, one of them the reported row.
+
+Verified before shipping: the migration updates exactly the 5 rows the detector names on dev
+(518 -> 513), a second pass updates 0, and all 27 user-typed rows survive.
+
+Two measurement mistakes are worth recording, because both produced confident wrong numbers. The
+SAP field is `data->'shipment'->>'ata_vessel_completed_discharge'`, not a raw Excel column name -
+testing the raw names returned a meaningless "491 of 491". And the service reads
+`ata_discharging_completed_at_discharge_port` first, which exists on **none** of the 27,003 rows,
+so that arm is dead code.
+
+Loading-port rows (sequences 1-3) read different SAP keys and may carry the same legacy problem.
+Deliberately left alone so this change can be verified on its own.
+
 ### The edit form looked up the sibling STO's SAP row
 
 Two shipments can hang off ONE contract row. PO 1001029907 carries STOs 1006019385 and 1006019867,
