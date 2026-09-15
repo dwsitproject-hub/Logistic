@@ -1195,6 +1195,31 @@ So `spd_keyed` still carries `data`, deliberately, and the 92 accesses that read
 column route remains open, but it needs the three PO families resolved one at a time, not in
 bulk.
 
+## Shipments
+
+### Backlog rows carry a contract id, so they must never open a shipment-by-id screen
+
+The Shipments list is a union of two different things. Execution rows are real `shipments`
+records. Backlog rows are open POs that have no shipment yet, and `shipmentUnplannedHybridSql`
+emits them as `c.id::text AS id` alongside `'contract_backlog'::text AS row_kind` - the `id` is
+the CONTRACT's uuid, because there is nothing else it could be.
+
+Both View and Edit passed that `id` straight to `GET /api/shipments/:id`, which looks it up in
+`shipments.id` and answers **404**. Only one narrow case was guarded (read-only AND Cancelled, which
+opened Contract Details), so every other backlog row failed. Users saw `Failed to load shipment
+for edit`.
+
+`resolveShipmentRowOpenTarget` now decides this in one place, and a backlog row never reaches a
+shipment-by-id screen: View opens Contract Details, Edit opens Add New Shipment with the contract
+prefilled - which is what clicking a row that has no shipment should do. Permission is then
+checked by the add handler, the correct gate, since the action really is a create.
+
+Status is deliberately ignored for backlog rows. The backlog SQL promotes low-OS rows to
+`COMPLETED`, and `handleOpenAddShipmentForContractRow` routes anything with registered planning
+back to the edit modal - so without a second guard a COMPLETED backlog row would have bounced
+between the two handlers forever once Edit began delegating to Add. That guard is the reason the
+delegation is safe, not an optimisation.
+
 ## Trucking
 
 ### LCO: a closed PO with no GR STO line no longer hangs forever

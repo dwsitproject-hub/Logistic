@@ -13,6 +13,31 @@ export function resolveShipmentTablePrimaryAction(
   return 'edit'
 }
 
+export type ShipmentRowOpenTarget = 'contract_detail' | 'add_shipment' | 'edit_shipment'
+
+/**
+ * Where opening a Shipments row should actually go.
+ *
+ * Contract backlog rows carry the CONTRACT's uuid in `id` - the backlog SQL emits
+ * `c.id::text AS id` because no shipment exists yet. Sending that to GET /shipments/:id looks it
+ * up in `shipments.id` and answers 404, which is what users hit on both View and Edit.
+ *
+ * So a backlog row never goes to a shipment-by-id screen: View has nothing to show and opens
+ * Contract Details, Edit has nothing to edit and opens Add New Shipment with the contract
+ * prefilled. Status is irrelevant for backlog rows - the backlog SQL can label one COMPLETED via
+ * its low-OS promotion, and it still has no shipment behind it.
+ */
+export function resolveShipmentRowOpenTarget(
+  row: { row_kind?: string | null },
+  options?: { readOnly?: boolean },
+): ShipmentRowOpenTarget {
+  if (String(row.row_kind ?? '').trim() === 'contract_backlog') {
+    return options?.readOnly === true ? 'contract_detail' : 'add_shipment'
+  }
+  // A real shipment row: both View and Edit open the same modal, read-only or not.
+  return 'edit_shipment'
+}
+
 /** True when list row already has ETA/planning registered (not Unplanned/Preplanned). */
 export function shipmentRowHasRegisteredPlanning(status: string | null | undefined): boolean {
   const key = normalizeShipmentStatusKey(status)

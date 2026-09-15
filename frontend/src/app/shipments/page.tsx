@@ -74,7 +74,7 @@ import {
   VESSEL_MODAL_SUBSECTION_LABEL_CLASS,
 } from '@/lib/vesselModalUi'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
-import { shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
+import { resolveShipmentRowOpenTarget, shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
 import {
   mergeShipmentQtyOverridesOnContractRows,
   preferHydratedQty,
@@ -2307,12 +2307,25 @@ function ShipmentsPageContent() {
 
   const handleOpenEditShipmentModal = (shipment: Shipment, options?: { readOnly?: boolean }) => {
     const readOnly = options?.readOnly === true
-    if (
-      readOnly &&
-      isContractBacklogRow(shipment) &&
-      String(shipment.status ?? '').trim().toUpperCase() === 'CANCELLED'
-    ) {
+    /*
+     * Contract backlog rows carry the CONTRACT's uuid in `id` (shipmentUnplannedHybridSql emits
+     * `c.id::text AS id`), because there is no shipment yet - that is what the row means. Passing
+     * it on made the modal call GET /shipments/<contract uuid>, which looks in `shipments.id` and
+     * answers 404. Only one narrow case was guarded before (read-only AND Cancelled), so every
+     * other backlog row failed.
+     *
+     * View has nothing to show, so it opens Contract Details. Edit has nothing to edit, so it
+     * opens Add New Shipment with the contract prefilled - which is what the user wanted when
+     * they clicked a row that has no shipment. Permission is then checked by the add handler,
+     * which is the right gate: the action really is a create.
+     */
+    const openTarget = resolveShipmentRowOpenTarget(shipment, { readOnly })
+    if (openTarget === 'contract_detail') {
       void openContractDetailForShipmentRow(shipment)
+      return
+    }
+    if (openTarget === 'add_shipment') {
+      handleOpenAddShipmentForContractRow(shipment)
       return
     }
     if (!readOnly && perms.loaded && !canEditShipment) {
@@ -2615,7 +2628,13 @@ function ShipmentsPageContent() {
       return
     }
 
-    if (shipmentRowHasRegisteredPlanning(shipment.status)) {
+    /*
+     * Only a real shipment row can be sent to the edit modal. A backlog row can reach this with
+     * status COMPLETED (the backlog SQL promotes low-OS rows), and bouncing that back to edit
+     * would both 404 on the contract uuid and, now that edit delegates here, loop between the
+     * two handlers.
+     */
+    if (!isContractBacklogRow(shipment) && shipmentRowHasRegisteredPlanning(shipment.status)) {
       handleOpenEditShipmentModal(shipment)
       return
     }
