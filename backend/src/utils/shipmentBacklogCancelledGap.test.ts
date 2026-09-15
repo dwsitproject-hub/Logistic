@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { contractBacklogCoreWhereSql } from './shipmentUnplannedHybridSql';
 import { truckingUnplannedContractBacklogBaseWhereSql } from './truckingUnplannedHybridSql';
+import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
 
 describe('a contract whose shipments are all cancelled still reaches the backlog', () => {
   it('excludes a contract only when it has a NON-cancelled shipment', () => {
@@ -21,6 +22,21 @@ describe('a contract whose shipments are all cancelled still reaches the backlog
     // Both pages now qualify the NOT EXISTS rather than excluding on mere presence of a row.
     expect(contractBacklogCoreWhereSql('c', 'l')).not.toMatch(
       /SELECT 1 FROM shipments s_ns WHERE s_ns\.contract_id = c\.id\s*\)/,
+    );
+  });
+});
+
+describe("a cancelled shipment's ETA is not a registered plan", () => {
+  it('ignores cancelled shipments when deciding whether a contract is already planned', () => {
+    /*
+     * The second half of the same gap. Treating a cancelled shipment's ETA as a registered plan
+     * dropped the contract out of the Unplanned backlog, while having no live shipment kept it out
+     * of the execution arm - so it sat in neither and its OS vanished. Found by diffing the two
+     * pages contract by contract: 1004030361 (CIF, 508 MT) was the only one left over, and 508 MT
+     * was exactly the CIF discrepancy.
+     */
+    expect(sqlContractHasNoRegisteredEtaExpr('c')).toMatch(
+      /s_eta\.status[\s\S]*?<> 'CANCELLED'/,
     );
   });
 });

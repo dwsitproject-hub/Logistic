@@ -199,6 +199,20 @@ export function sqlContractHasNoRegisteredEtaExpr(contractAlias = 'c'): string {
     FROM shipments s_eta
     LEFT JOIN vessel_loading_ports vlp_eta ON vlp_eta.shipment_id = s_eta.id
     WHERE s_eta.contract_id = ${contractAlias}.id
+      /*
+       * A cancelled shipment's ETA is not a registered plan.
+       *
+       * Without this, a contract whose shipments were all cancelled counts as "already planned"
+       * and drops out of the Unplanned backlog - while having no live shipment keeps it out of
+       * the execution arm too. It then sits in neither, exactly like the cancelled-shipment gap
+       * closed in contractBacklogCoreWhereSql, and its outstanding quantity disappears from the
+       * Shipments OS while Contract Performance still counts it.
+       *
+       * Found by diffing the two pages contract by contract: 1004030361 (CIF, 508 MT) was the
+       * single contract left in neither arm, and 508 MT was exactly the CIF discrepancy.
+       * Across the database this moves 9 contracts - 7 FOB, 2 CIF.
+       */
+      AND UPPER(TRIM(COALESCE(s_eta.status, ''))) <> 'CANCELLED'
       AND (
         s_eta.eta_arrival IS NOT NULL
         OR s_eta.eta_berthed IS NOT NULL

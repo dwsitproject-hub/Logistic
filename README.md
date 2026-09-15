@@ -1311,12 +1311,33 @@ what makes the union safe: a contract with any live shipment is counted in execu
 from backlog; one with only cancelled shipments is counted in backlog and not execution; one with
 none is counted in backlog. Exactly once, either way.
 
-Measured through the real endpoint: CFR 0 -> 5,000 MT, CIF 104,021 -> 104,349, total
-352,805 -> 358,133 MT. The remaining gap to Contract Performance is 45,440 MT and comes from two
-other causes, recorded here so they are not re-derived: incoterm attribution (Contract Performance
-uses `contracts.incoterm`, Shipments the grouped STO row's, which is why FOB and CIF were out in
-*opposite* directions), and 157 contracts / 259,963 MT that have no shipment at all and reach the
-page only through the backlog arm's own predicate.
+The same gap had a second half. `sqlContractHasNoRegisteredEtaExpr` counted a **cancelled**
+shipment's ETA as a registered plan, so such a contract dropped out of the Unplanned backlog as
+"already planned" while having no live shipment kept it out of the execution arm. Same principle,
+same fix: a cancelled shipment is not a shipment.
+
+**Correction to how this was first analysed, because two conclusions were wrong.** The gap was
+originally reported as 50,768 MT with FOB and CIF diverging in *opposite* directions, and that was
+an artefact of comparing the wrong number: Contract Performance's **drilldown tree** sums
+`isClosed ? contract_qty : outstanding_qty`, so it is not an OS measure at all. Against the Open OS
+the real gap was 7,811 MT. Two "causes" evaporated with it - incoterm attribution (only 2 STO
+groups span more than one incoterm) and signed-vs-clamped OS (no open sea contract is
+over-delivered, so `GREATEST(0, ...)` never bites). Neither was worth the change it would have
+justified.
+
+What the contract-by-contract diff then showed, which the totals never could:
+
+```
+CIF  508 MT   1 contract in neither arm      -> exactly the CIF discrepancy
+CFR  5,000 MT the only Open CFR contract     -> exactly the CFR discrepancy
+```
+
+Both now match to the MT. The remaining **8,319 MT is FOB only**, and it is deliberate rather than
+defective: `sqlShipmentBacklogSpdSeaLegFilterSql` makes the Shipments backlog ignore Type T (truck
+leg) SPD rows when deciding whether a FOB contract is closed - "truck legs must not block sea
+backlog" - while Contract Performance uses the PO-wide status. A FOB contract closed by its truck
+leg is therefore finished to one page and still open to the other. Closing that last gap means
+choosing one definition, which is a business decision, not a defect.
 
 
 ### ...and the list's status column now says so too
