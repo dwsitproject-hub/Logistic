@@ -1228,6 +1228,36 @@ of 1,052 sea backlog contracts on dev only **7** sit in the 500-1000 kg band and
 incoterms that were already on 499.) Tests now assert against the constant rather than the literal,
 so the next change to it cannot silently diverge.
 
+### Loading-port ATAs needed a stricter rule than the discharge ones
+
+Migration 169 cleared discharge-port ATAs copied from a sibling STO. The loading ports carry the
+same legacy damage - PO 1001029907's STO 1006019867 had its sibling's arrival, berthed, start,
+completed and sailed dates, not just the ATC - but 169's rule cannot be reused for them.
+
+Several STOs under one PO can legitimately share ONE vessel voyage. Where SAP recorded the loading
+dates on only one of those STO rows, the others genuinely have no value of their own and the date
+they show is CORRECT. 169's test ("own STO has no such value in SAP") would delete those: on dev
+it flags 79 rows for `ata_loading_completed` alone, and 16 are siblings on the same vessel.
+
+Migration 170 adds a fourth condition: a sibling under the same contract holds the identical date
+on a **different vessel**. Two ships cannot finish loading at the same moment, so with the other
+conditions the copy explanation is the only sensible one - and it is the shape of the reported
+case, whose two shipments are MT. GIAT ARMADA 02 and MT.ANGGRAINI SPIRIT.
+
+Tiers on dev: 52 different-vessel (repaired), 16 same-vessel and 11 with no sibling holding the
+date (both left alone, and reported by the detector rather than swept in). Production turned out
+to have no ambiguity at all - 2 rows per field, every one in the different-vessel tier, the same
+two shipments 169 repaired.
+
+Verified before shipping: the migration updates exactly what the detector names, field by field
+(52 / 3 / 52 / 52 / 51), and a second pass updates 0.
+
+The dead-key pattern is worse here than on the discharge side. For loading port 1 the service
+reads `ata_loading_*_at_loading_port_1` before falling back to a global key, and **three of those
+five per-port keys exist on zero of 27,003 rows**. Worse, loading ports 2 and 3 read
+`ata_loading_completed_at_loading_port_2/3` with no fallback at all, so they can never receive a
+completed-loading date. Recorded here; not yet addressed.
+
 ### A phantom ATC came from the discharge-port row, not from SAP
 
 Reported: STO 1006019867 showed an ATC of 2026-08-13 that SAP leaves NULL. It belonged to its
