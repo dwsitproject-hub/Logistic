@@ -202,7 +202,7 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
             vessel_code = COALESCE(NULLIF(TRIM(s.vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(s.vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(s.vessel_owner), ''), $4),
-            master_vessel_id = COALESCE($5, s.master_vessel_id),
+            master_vessel_id = COALESCE($5::uuid, s.master_vessel_id),
             updated_at = CURRENT_TIMESTAMP
           FROM contracts c
           LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
@@ -211,7 +211,7 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
             AND (
               s.vessel_code IS NULL OR TRIM(s.vessel_code) = ''
               OR s.vessel_name IS NULL OR TRIM(s.vessel_name) = ''
-              OR ($5 IS NOT NULL AND s.master_vessel_id IS NULL)
+              OR ($5::uuid IS NOT NULL AND s.master_vessel_id IS NULL)
             )`,
           [stoKey, vesselCode, vesselName, trimOrNull(row.vessel_owner), masterVesselId],
         );
@@ -221,13 +221,13 @@ export function queueShipmentVesselSapBackfill(row: ShipmentVesselRow): void {
             vessel_code = COALESCE(NULLIF(TRIM(vessel_code), ''), $2),
             vessel_name = COALESCE(NULLIF(TRIM(vessel_name), ''), $3),
             vessel_owner = COALESCE(NULLIF(TRIM(vessel_owner), ''), $4),
-            master_vessel_id = COALESCE($5, master_vessel_id),
+            master_vessel_id = COALESCE($5::uuid, master_vessel_id),
             updated_at = CURRENT_TIMESTAMP
           WHERE id = $1::uuid
             AND (
               vessel_code IS NULL OR TRIM(vessel_code) = ''
               OR vessel_name IS NULL OR TRIM(vessel_name) = ''
-              OR ($5 IS NOT NULL AND master_vessel_id IS NULL)
+              OR ($5::uuid IS NOT NULL AND master_vessel_id IS NULL)
             )`,
           [shipmentId, vesselCode, vesselName, trimOrNull(row.vessel_owner), masterVesselId],
         );
