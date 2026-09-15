@@ -12,9 +12,27 @@ set -u
 PO="${1:?usage: diag-atc-per-sto.sh <PO number>}"
 
 cd /opt/klip || exit 1
-set -a; . ./.env; set +a
-export PGPASSWORD="${DB_PASSWORD:-}"
-PSQL=(psql -h "${DB_HOST}" -p "${DB_PORT:-5432}" -U "${DB_USER}" -d "${DB_NAME}" -v ON_ERROR_STOP=1)
+
+# Read ONLY the DB_* keys, without sourcing the file.
+# `. ./.env` executes it, so any value containing spaces or backslashes - the SAP share path
+# (\172.30.1.94\APPs\...\IMPORT DATA\...) and the notification e-mail list both do - is parsed
+# as commands and produces "command not found" noise, and can leave variables half-set.
+env_val() {
+  sed -n "s/^$1=//p" .env | head -1 | sed -e 's/^[\"'"'"']//' -e 's/[\"'"'"']$//'
+}
+DB_HOST_V="$(env_val DB_HOST)"
+DB_PORT_V="$(env_val DB_PORT)"
+DB_USER_V="$(env_val DB_USER)"
+DB_NAME_V="$(env_val DB_NAME)"
+export PGPASSWORD="$(env_val DB_PASSWORD)"
+
+if [ -z "$DB_HOST_V" ] || [ -z "$DB_USER_V" ] || [ -z "$DB_NAME_V" ]; then
+  echo "Could not read DB_HOST / DB_USER / DB_NAME from /opt/klip/.env - check the key names:"
+  grep -oE '^DB_[A-Z_]+' .env
+  exit 1
+fi
+
+PSQL=(psql -h "$DB_HOST_V" -p "${DB_PORT_V:-5432}" -U "$DB_USER_V" -d "$DB_NAME_V" -v ON_ERROR_STOP=1)
 
 echo "=== 1. KLIP side: one row per shipment under this PO ==="
 # If ATC is already wrong HERE, the write path is at fault. If it is correct here,
