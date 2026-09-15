@@ -326,6 +326,58 @@ export function buildContractDetailsForStoSql(): string {
 
   return `
       WITH ${LATEST_SPD_B2B_CTE.trim().replace(/^WITH\s+/i, '')},
+      /*
+       * One STO legitimately spans several POs, but only the ones SAP still reports for it.
+       *
+       * SAP files are uploaded out of order: a per-year slice ("EXPORT jan - dec 2025.XLSX",
+       * loaded 2026-09-03) can arrive AFTER the current export ("CPO 7 Sep 2026.XLSX",
+       * 2026-09-07 but carrying older row timestamps). Every KLIP-side link - contract_stos,
+       * contracts.sto_number, shipments - was populated from whichever file mentioned the pair,
+       * so an STO accumulated POs from retired slices and never dropped them. STO 1006017267
+       * listed 8 POs where operations expect 6.
+       *
+       * Ordering must use the IMPORT's created_at, not the row's: here the correct rows carry
+       * 2026-05-15 and the stale ones 2026-09-03, so row timestamps give exactly the wrong answer.
+       *
+       * A contract is dropped only when SAP knows this (contract, STO) pair AND none of those
+       * rows belong to the STO's newest import. KLIP-only links survive untouched, and a manual
+       * user_sto_contract_assignments entry always wins - a person said so on purpose.
+       *
+       * Deliberately NOT "absent from the latest file means cancelled" - that reading once
+       * withdrew 370 contracts wrongly (see README). This decides which POs a STO currently
+       * groups, and changes no contract's status.
+       *
+       * Measured on dev: of 10,172 STOs, 10,098 unchanged, 74 shrink, and none is left with no
+       * POs at all.
+       */
+      sto_latest_import AS (
+        SELECT spd.import_id
+        FROM sap_processed_data spd
+        INNER JOIN sap_data_imports i ON i.id = spd.import_id
+        WHERE ${stoMatchDiscover('spd')}
+        ORDER BY i.created_at DESC NULLS LAST
+        LIMIT 1
+      ),
+      stale_sto_contracts AS (
+        SELECT DISTINCT TRIM(spd.contract_number) AS contract_number
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL
+          AND TRIM(spd.contract_number) != ''
+          AND ${stoMatchDiscover('spd')}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sap_processed_data cur
+            INNER JOIN sto_latest_import li ON cur.import_id = li.import_id
+            WHERE TRIM(cur.contract_number) = TRIM(spd.contract_number)
+              AND ${stoMatchDiscover('cur')}
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM user_sto_contract_assignments u
+            WHERE TRIM(u.sto_number::text) = TRIM($1::text)
+              AND TRIM(u.contract_number) = TRIM(spd.contract_number)
+          )
+      ),
       contract_candidates AS (
         SELECT DISTINCT contract_number
         FROM (
@@ -371,6 +423,7 @@ export function buildContractDetailsForStoSql(): string {
             AND ${stoMatchDiscover('spd')}
         ) u
         WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+          AND TRIM(contract_number) NOT IN (SELECT contract_number FROM stale_sto_contracts)
       ),
       po_lines AS (
         SELECT

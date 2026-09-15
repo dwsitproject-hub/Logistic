@@ -1252,6 +1252,34 @@ two shipments 169 repaired.
 Verified before shipping: the migration updates exactly what the detector names, field by field
 (52 / 3 / 52 / 52 / 51), and a second pass updates 0.
 
+### One STO spans several POs - but only the ones SAP still reports for it
+
+STO 1006017267 listed **8** POs where operations expect **6**
+(1001027063/64/116, 1001027600, 1001027719/720). The two extras were not corrupt; they were
+retired.
+
+SAP files arrive out of order. A per-year slice, `EXPORT jan - dec 2025.XLSX`, was loaded on
+2026-09-03; the current export, `CPO 7 Sep 2026.XLSX`, on 2026-09-07. Every KLIP-side link -
+`contract_stos`, `contracts.sto_number`, `shipments` - was populated from whichever file mentioned
+the pair, so a STO accumulated POs from retired slices and never dropped them. All four sources
+agreed on 8, which is why no single-source check found anything wrong.
+
+**Order by the import's `created_at`, not the row's.** The six correct rows carry 2026-05-15 and
+the two stale ones 2026-09-03, so row timestamps give exactly the wrong answer - the trap that
+makes this look like a data problem rather than a scoping one.
+
+A contract is dropped only when SAP knows the (contract, STO) pair **and** none of those rows
+belong to the STO's newest import. KLIP-only links survive, and a manual
+`user_sto_contract_assignments` entry always wins, because a person set it deliberately.
+
+This is emphatically **not** "absent from the latest file means cancelled" - that reading once
+withdrew 370 contracts wrongly. It decides which POs a STO currently groups and changes no
+contract's status.
+
+Blast radius measured before shipping: of 10,172 STOs on dev, 10,098 unchanged, 74 shrink, and
+**none** is left with no POs. Verified through the real endpoint afterwards, not a stand-in query:
+1006017267 returns exactly the expected six, and 1006019867 still returns its five.
+
 ### Edit Shipment is a STO-level view, so its PO list comes from the STO
 
 Reported as the view table showing 6 POs where the edit modal showed 4. No data source explains
