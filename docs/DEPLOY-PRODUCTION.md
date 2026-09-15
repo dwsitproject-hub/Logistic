@@ -501,83 +501,110 @@ keputusan terpisah (mount `rw` untuk subtree KLIP, hanya untuk produksi).
 
 ---
 
-## STEP 10 — Domain klip.kpndomain.com
+## STEP 10 — Domain klip.kpndomain.com (HTTP dulu)
 
-Urutannya tidak bisa dibalik, dan setiap langkah bisa diverifikasi sebelum yang berikutnya.
+HTTPS sengaja ditunda. Bagian ini seluruhnya di sisi kita: tidak ada tiket infra, dan tidak ada
+perubahan pada aplikasi lain yang sudah jalan di host frontend.
 
-### Prasyarat: DNS
+### Prasyarat: DNS — sudah beres
 
 ```bash
 getent hosts klip.kpndomain.com
 ```
 
-Harus mengembalikan `172.28.80.50`. Diperiksa 2026-09-14: masih `NXDOMAIN` - domainnya belum
-dikenal resolver server sama sekali.
+Harus `172.28.80.50`. Diperiksa 2026-09-15: sudah resolve di resolver internal (172.30.1.5).
+Ini yang sebelumnya `NXDOMAIN` dan memblokir langkah ini.
 
-**Certbot tidak bisa menerbitkan sertifikat sebelum ini berhasil.** Tantangan HTTP-01 diambil lewat
-nama domainnya, jadi DNS harus lebih dulu menunjuk ke host frontend. Tidak ada jalan memintas.
+### 0. Inspeksi dulu — read-only, tidak mengubah apa pun
 
-### 1. Daftarkan redirect URI baru di Hub - sebelum menyentuh env
-
-Di DWS Hub Admin, **tambahkan** (jangan ganti) pada OIDC Redirect URIs:
-
-```
-https://klip.kpndomain.com/auth/oidc/callback
+```bash
+sudo bash /opt/klip/docs/scripts/prod-inspect-nginx.sh 2>&1 | tee /tmp/klip-nginx-inspect.txt
 ```
 
-Biarkan `http://172.28.80.50:3001/auth/oidc/callback` tetap terdaftar sampai domainnya terbukti
-jalan - itu yang membuat peralihan ini bisa dibatalkan. Ubah juga Target URL menjadi
-`https://klip.kpndomain.com/login`.
+Script ini tidak menulis, tidak reload, tidak menjalankan apa pun. Yang dicari ada di **bagian 4**:
+siapa pemilik `default_server`.
 
-### 2. Vhost Nginx di host frontend (172.28.80.50)
+- **Ada blok yang deklarasi `default_server`** → aman. Nama file kita bebas; nginx mencocokkan
+  `server_name` lebih dulu, jadi trafik dwshub dkk tidak tersentuh.
+- **Tidak ada sama sekali** → nginx menjadikan blok **pertama yang di-parse** sebagai default, dan
+  `sites-enabled/*` dibaca berurutan alfabet. Beri nama file kita supaya urut **setelah** file
+  pertama yang ada sekarang, mis. `zz-klip.kpndomain.com.conf`. Kalau tidak, semua request dengan
+  Host tak dikenal jatuh ke KLIP — itu satu-satunya cara vhost ini bisa mengganggu tetangganya.
+
+Bagian 8 memastikan host frontend memang bisa menjangkau backend 172.28.80.51:5001. Kalau tidak,
+`/api` akan 502 begitu vhost aktif — perbaiki dulu sebelum lanjut.
+
+### 1. Pasang vhost
 
 ```bash
 sudo cp /opt/klip/docs/nginx/klip-kpndomain.conf /etc/nginx/sites-available/klip.kpndomain.com.conf
 sudo ln -s /etc/nginx/sites-available/klip.kpndomain.com.conf /etc/nginx/sites-enabled/
 sudo nginx -t
+```
+
+**`nginx -t` wajib lulus sebelum reload.** Perintah itu mem-parse seluruh konfigurasi gabungan;
+kalau gagal, jangan reload — konfigurasi yang sedang berjalan tetap hidup dan tidak ada yang rusak.
+
+```bash
 sudo systemctl reload nginx
 ```
 
-`nginx -t` **wajib lulus sebelum reload**. Host ini melayani aplikasi lain di port 80 dan 443
-(sustainability, cloud-monitoring, dwshub), dan konfigurasi yang salah menjatuhkan semuanya.
+`reload` bukan `restart`: nginx memuat konfigurasi baru untuk koneksi berikutnya dan membiarkan
+koneksi yang sedang berjalan selesai. Aplikasi lain tidak terputus.
 
-### 3. TLS lewat certbot
+### 2. Buktikan tetangganya masih hidup — sebelum menyentuh KLIP
 
-```bash
-sudo certbot --nginx -d klip.kpndomain.com
-```
-
-Certbot membaca blok HTTP di atas, menambahkan server 443 beserta redirect-nya, dan mendaftarkan
-perpanjangan otomatis - sama seperti domain lain di host ini. Sengaja tidak ditulis tangan: path
-sertifikat buatan sendiri akan menyimpang dari yang diharapkan mekanisme perpanjangan.
-
-### 4. Frontend: env dan rebuild
-
-`/opt/klip/.env` di 172.28.80.50:
-
-```ini
-FRONTEND_PORT=127.0.0.1:3001
-NEXT_PUBLIC_API_URL=/api
-# BACKEND_INTERNAL_URL dihapus - Nginx yang mem-proxy /api dan /auth sekarang
-```
+Ini langkah yang paling sering dilewati, dan justru ini yang menjawab kekhawatiran "jangan sampai
+merusak aplikasi yang sudah ada":
 
 ```bash
-cd /opt/klip && docker compose -f docker-compose.frontend.yml up -d --build
+curl -sS -o /dev/null -w 'dwshub -> %{http_code}\n' https://dwshub.kpndomain.com/
 ```
 
-**Rebuild wajib.** `NEXT_PUBLIC_API_URL` di-bake saat build image; `up -d` saja tidak berefek.
+Ulangi untuk setiap `server_name` yang muncul di bagian 5 hasil inspeksi. Semua harus sama seperti
+sebelum reload. Kalau ada yang berubah, langsung rollback:
 
-`FRONTEND_PORT` kembali ke loopback menutup port 3001 dari jaringan - sejak Nginx ada, tidak ada
-lagi alasan mengeksposnya.
+```bash
+sudo rm /etc/nginx/sites-enabled/klip.kpndomain.com.conf && sudo nginx -t && sudo systemctl reload nginx
+```
 
-### 5. Backend: env dan restart
+### 3. Verifikasi KLIP lewat domain
 
-`/opt/klip/.env` di 172.28.80.51:
+```bash
+curl -sI http://klip.kpndomain.com/ | head -3
+curl -s -o /dev/null -w '%{http_code}\n' http://klip.kpndomain.com/api/health
+```
+
+### 4. Frontend: kemungkinan besar tidak perlu diapa-apakan
+
+Periksa dulu `/opt/klip/.env` di 172.28.80.50:
+
+```bash
+grep -E 'NEXT_PUBLIC_API_URL|BACKEND_INTERNAL_URL|FRONTEND_PORT' /opt/klip/.env
+```
+
+Kalau `NEXT_PUBLIC_API_URL=/api` (relatif), **tidak ada rebuild yang diperlukan**. Browser
+memanggil `/api` pada origin mana pun yang sedang dipakai, dan Nginx sudah mencegat `/api` serta
+`/auth` sebelum sampai ke Next — rewrite Next tidak pernah terpakai untuk trafik domain.
+
+`BACKEND_INTERNAL_URL` sengaja **dibiarkan**. Selama itu ada, `http://172.28.80.50:3001` tetap
+berfungsi persis seperti hari ini, jadi domain baru bisa diuji tanpa membuang jalan kembali.
+Menutup port 3001 (`FRONTEND_PORT=127.0.0.1:3001`) baru dilakukan setelah domain terbukti — dan
+itu memang butuh rebuild.
+
+### 5. Backend: hanya kalau SSO mau dipindah ke domain
+
+Satu-satunya hal yang tidak bisa jalan di dua origin sekaligus adalah SSO: backend mengirim satu
+`OIDC_REDIRECT_URI`. Daftarkan dulu di DWS Hub Admin (**tambah**, jangan ganti):
+
+```
+http://klip.kpndomain.com/auth/oidc/callback
+```
+
+Lalu di `/opt/klip/.env` host backend (172.28.80.51):
 
 ```ini
-FRONTEND_URL=https://klip.kpndomain.com
-OIDC_REDIRECT_URI=https://klip.kpndomain.com/auth/oidc/callback
-SESSION_COOKIE_SECURE=true
+OIDC_REDIRECT_URI=http://klip.kpndomain.com/auth/oidc/callback
 TRUST_PROXY=1
 ```
 
@@ -585,25 +612,41 @@ TRUST_PROXY=1
 cd /opt/klip && docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml -f docker-compose.backend.sap-share.yml up -d backend
 ```
 
-`SESSION_COOKIE_SECURE=true` hanya benar setelah HTTPS terbukti jalan. Dinyalakan terlalu awal,
-cookie sesi dikirim browser lalu tidak pernah dikembalikan, dan login berputar tanpa pesan error.
+`TRUST_PROXY=1` diperlukan karena backend kini berada di belakang Nginx — tanpa itu Express
+membaca IP dan protokol dari koneksi Nginx, bukan dari browser.
 
-### 6. Verifikasi
+**`SESSION_COOKIE_SECURE` jangan disentuh.** Defaultnya `false` (`src/middleware/session.ts`
+menyalakannya hanya kalau nilainya persis `'true'`), dan selama masih HTTP itulah yang benar.
+Dinyalakan sekarang, cookie sesi dikirim browser lalu tidak pernah dikembalikan, dan login berputar
+tanpa pesan error.
 
-```bash
-curl -sI https://klip.kpndomain.com/ | head -3
-curl -s -o /dev/null -w '%{http_code}
-' https://klip.kpndomain.com/api/health
-```
+Login SSO harus diuji lewat browser sungguhan di `http://klip.kpndomain.com/login` — cookie sesinya
+HttpOnly dan terikat host, jadi `curl` tidak membuktikan apa-apa.
 
-Lalu login SSO lewat browser di `https://klip.kpndomain.com/login`. Harus lewat browser sungguhan:
-cookie sesinya HttpOnly dan terikat host.
+Rollback SSO: kembalikan `OIDC_REDIRECT_URI` ke `http://172.28.80.50:3001/auth/oidc/callback`,
+restart backend.
 
-### 7. Pembersihan, setelah domain terbukti
+### 6. HTTPS — kenapa ditunda, dan apa yang menanti
 
-- Cabut `http://172.28.80.50:3001/auth/oidc/callback` dari Hub Admin
-- Nyalakan HSTS di vhost hanya setelah HTTPS stabil beberapa hari - browser mengingatnya, dan
-  header yang dipasang terlalu dini mengunci user dari situs yang rusak
+Bukan sekadar `certbot --nginx`, meskipun situs lain di host ini punya sertifikat Let's Encrypt
+sungguhan. `certbot --nginx` memakai tantangan HTTP-01, yang mengharuskan server Let's Encrypt
+menghubungi host ini dari internet publik — sementara `klip.kpndomain.com` menunjuk ke
+`172.28.80.50`, alamat privat RFC1918 yang tidak bisa dijangkau dari luar.
+
+`dwshub.kpndomain.com` memegang sertifikat Let's Encrypt asli (issuer `C=US, O=Let's Encrypt,
+CN=YE1`, berlaku 19 Agu – 17 Nov 2026) sambil resolve ke alamat privat yang sama. Artinya
+sertifikat itu terbit lewat **DNS-01**, bukan HTTP-01. Zona `kpndomain.com` dilayani Cloudflare
+(`decker.ns.cloudflare.com`, `meera.ns.cloudflare.com`), jadi alatnya adalah plugin DNS Cloudflare
+milik certbot dengan API token. Bagian 6 hasil inspeksi melaporkan `authenticator=` dari renewal
+config yang sudah ada — kalau di situ tertulis plugin Cloudflare, mekanismenya sudah terpasang di
+box ini dan tinggal dipakai ulang.
+
+Catatan tambahan: per 2026-09-15 `klip.kpndomain.com` baru resolve di resolver internal;
+`dwshub` resolve publik juga. DNS-01 tidak butuh A record publik — hanya TXT `_acme-challenge`
+yang dibuat sendiri oleh plugin — jadi ini bukan penghalang, tapi berguna diketahui sebelum
+men-debug penerbitan yang gagal.
+
+
 
 ---
 
