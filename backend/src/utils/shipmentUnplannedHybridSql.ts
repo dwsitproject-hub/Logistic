@@ -185,8 +185,29 @@ export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l')
     AND NOT (${sqlIsContractSapInactiveForShipmentBacklogExpr(contractAlias)})
     AND ${shipmentPageExcludeB2bChildCond(spdAlias)}
     AND ${sqlContractHasNoRegisteredEtaExpr(contractAlias)}
+    /*
+     * A cancelled shipment is not a shipment for this purpose.
+     *
+     * Excluding every contract that has ANY shipment row left a gap nothing else covered: a
+     * contract whose shipments were all cancelled is not in the execution OS either, because those
+     * buckets span only the active stages (PLANNED..UNLOADING). It vanished from the Shipments OS
+     * entirely while Contract Performance still counted it as Open with outstanding quantity.
+     *
+     * Found through CFR, where the only Open contract is exactly that case and the card read 0
+     * against Contract Performance's figure. Measured across sea incoterms: 7 contracts, ~5,836 MT.
+     *
+     * Trucking has always had the right shape - its backlog excludes a contract only when it has an
+     * ACTIVE operation - which is why Trucking's OS already agreed with Contract Performance and
+     * this one did not.
+     *
+     * Still disjoint from the execution arm, which is what keeps the union safe: a contract with
+     * any live shipment is counted there and excluded here; one with only cancelled shipments is
+     * counted here and not there; one with none is counted here. Exactly once, either way.
+     */
     AND NOT EXISTS (
-      SELECT 1 FROM shipments s_ns WHERE s_ns.contract_id = ${contractAlias}.id
+      SELECT 1 FROM shipments s_ns
+      WHERE s_ns.contract_id = ${contractAlias}.id
+        AND UPPER(TRIM(COALESCE(s_ns.status, ''))) <> 'CANCELLED'
     )
     AND NOT (${sqlContractSharesNumericStoWithActiveSeaShipmentExpr(`${contractAlias}.id`)})`;
 }

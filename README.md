@@ -1284,6 +1284,41 @@ contracts on dev would change sign, so it waits for a decision rather than being
 
 ## Shipments
 
+### A contract whose shipments were all cancelled vanished from the OS
+
+Contract Performance and the Shipments OS summary disagreed by 50,768 MT on sea incoterms, and the
+most legible symptom was CFR: Contract Performance showed it, the Shipments card showed **0**, and
+there are 7 non-cancelled CFR shipments in the data.
+
+CFR turned out to be the clean case that exposed a general gap. The Shipments OS is built from two
+arms, and neither covered a contract whose shipments are all cancelled:
+
+- the **execution** arm buckets only the active stages (`PLANNED`..`UNLOADING`), so a cancelled
+  shipment contributes nothing - correctly;
+- the **backlog** arm excluded any contract with `EXISTS (SELECT 1 FROM shipments ...)`, *whatever
+  the status*.
+
+So such a contract was in neither, while Contract Performance still counted it as Open with
+outstanding quantity. The only Open CFR contract is exactly that shape, which is why that bucket
+read zero rather than merely low.
+
+**Trucking never had this problem, and comparing the two is what named it**: its backlog excludes a
+contract only when it has an ACTIVE operation. That is the whole reason Trucking's OS already
+agreed with Contract Performance and Shipments' did not.
+
+The Shipments backlog now qualifies its `NOT EXISTS` the same way. The arms stay disjoint, which is
+what makes the union safe: a contract with any live shipment is counted in execution and excluded
+from backlog; one with only cancelled shipments is counted in backlog and not execution; one with
+none is counted in backlog. Exactly once, either way.
+
+Measured through the real endpoint: CFR 0 -> 5,000 MT, CIF 104,021 -> 104,349, total
+352,805 -> 358,133 MT. The remaining gap to Contract Performance is 45,440 MT and comes from two
+other causes, recorded here so they are not re-derived: incoterm attribution (Contract Performance
+uses `contracts.incoterm`, Shipments the grouped STO row's, which is why FOB and CIF were out in
+*opposite* directions), and 157 contracts / 259,963 MT that have no shipment at all and reach the
+page only through the backlog arm's own predicate.
+
+
 ### ...and the list's status column now says so too
 
 The OS cards stopped counting finished shipments as soon as the rule went into `execution_os`, but
