@@ -1228,6 +1228,19 @@ would have left Section 1 counting 41,060 MT the tree no longer showed - and the
 discrepancy to the user. Excluding on both sides was the user's call once the trade-off was put to
 them. Verified afterwards: 7,306 rows, 29 distinct Region/Site values, no Blank bucket.
 
+The View table follows, on the same page-level rule rather than on tree membership: with the
+Late/On-Time filter on ALL the table sends `excludeUnscheduled=false`, so the tree's inclusion
+predicate is not applied and the table would otherwise have kept listing rows the cards above it no
+longer count. It is filtered in SQL as its own CTE stage, not on the returned rows, because the
+page total and the LIMIT come from that chain - and `countSource` had to be moved onto the same
+stage too, or the page would have shown 18,122 rows while claiming 18,181.
+
+Requested with an explicit `requireRegionSite=true` rather than inferred from `scope` or `_ts`,
+neither of which is unique to this page - the plain Contracts page must keep showing those
+contracts. Both sides use the identical `COALESCE(MAX(sqlRegionSiteRawFromJsonAndB2b(...)),
+'Blank')`, so they cannot disagree about which contracts go. Measured end to end: total
+18,181 -> 18,122, exactly the 59, and no blank-region row left in the page.
+
 
 ### SEA Trade Cycle fell back to the start of the voyage instead of its end
 

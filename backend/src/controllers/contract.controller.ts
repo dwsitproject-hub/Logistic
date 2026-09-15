@@ -688,9 +688,37 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       ? 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql > 0'
       : 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql <= 0';
 
-    const schedulableSource = wantExcludeUnscheduled ? 'filtered_perf' : 'filtered';
+    /*
+     * Contract Performance hides contracts with no Region/Site, and the View table has to hide the
+     * same ones or the page contradicts itself: Section 1 and the Section 2 drilldown already drop
+     * them (loadLatePerformanceRows), so a table still listing them would show rows the cards do
+     * not count.
+     *
+     * Filtered in SQL rather than on the returned rows, because the page total and the LIMIT come
+     * from this chain - dropping rows afterwards would leave a total that disagrees with what the
+     * page shows.
+     *
+     * Its own CTE rather than a clause folded into `filtered`, so it composes with the
+     * excludeUnscheduled and late-filter stages that may or may not follow, and so a request that
+     * does not ask for it produces exactly the SQL it produced before.
+     *
+     * Uses the same expression the tree does - base.plant_site is
+     * COALESCE(MAX(sqlRegionSiteRawFromJsonAndB2b('l.data')), 'Blank') in both - so the two cannot
+     * disagree about which contracts are excluded.
+     */
+    const wantRequireRegionSite = String((req.query as any).requireRegionSite || 'false') === 'true';
+    const sqlRequireRegionSiteInject = wantRequireRegionSite
+      ? `, filtered_region AS (
+           SELECT * FROM filtered
+           WHERE NULLIF(TRIM(COALESCE(plant_site, '')), '') IS NOT NULL
+             AND UPPER(TRIM(plant_site)) <> 'BLANK'
+         )`
+      : '';
+    const regionScopedSource = wantRequireRegionSite ? 'filtered_region' : 'filtered';
+
+    const schedulableSource = wantExcludeUnscheduled ? 'filtered_perf' : regionScopedSource;
     const sqlExcludeUnscheduledInject = wantExcludeUnscheduled
-      ? `, filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition})`
+      ? `, filtered_perf AS (SELECT * FROM ${regionScopedSource} WHERE ${schedulableCondition})`
       : '';
     const sqlLateInject = useSqlLateFilter
       ? `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM ${schedulableSource})
@@ -721,6 +749,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     const listTotalCol = needNodePostProcess ? '' : ', COUNT(*) OVER ()::int AS __list_total';
     const filteredClosedAndPage = `
       )
+      ${sqlRequireRegionSiteInject}
       ${sqlExcludeUnscheduledInject}
       ${sqlLateInject}
       , page AS (
@@ -736,10 +765,11 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     const listParams = [...queryParams, Number(limit), offset];
 
     let countQuery = `${queryText})`;
+    countQuery += sqlRequireRegionSiteInject;
     if (wantExcludeUnscheduled) {
-      countQuery += `, filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition})`;
+      countQuery += `, filtered_perf AS (SELECT * FROM ${regionScopedSource} WHERE ${schedulableCondition})`;
     }
-    const countSource = wantExcludeUnscheduled ? 'filtered_perf' : 'filtered';
+    const countSource = wantExcludeUnscheduled ? 'filtered_perf' : regionScopedSource;
     if (useSqlLateFilter) {
       countQuery += `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM ${countSource})`;
       countQuery += `, filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql})`;

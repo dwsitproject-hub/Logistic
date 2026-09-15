@@ -774,6 +774,15 @@ export function buildContractPerfTableListParams(input: {
     input.perfDashMode,
   )
   params.append('excludeUnscheduled', effectiveLate === 'ALL' ? 'false' : 'true')
+  /*
+   * Contract Performance hides contracts with no Region/Site. Section 1 and the Section 2
+   * drilldown already drop them server-side, so the View table has to as well - otherwise the
+   * table lists rows the cards above it do not count.
+   *
+   * Sent explicitly rather than inferred from `scope` or `_ts`: neither is unique to this page,
+   * and the plain Contracts page must keep showing those contracts.
+   */
+  params.append('requireRegionSite', 'true')
   params.append('compact', 'true')
   return params
 }
