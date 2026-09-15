@@ -294,19 +294,27 @@ export function sqlContractImportStatusExpr(
       END`;
 
   /*
-   * LCO only: accept GR PO Close when SAP never wrote a GR STO status at all.
+   * GR-STO incoterms (LCO and FOB): accept GR PO Close when SAP never wrote a GR STO status.
    *
-   * LCO still reads GR STO - every arm above is unchanged. But SAP routinely closes the PO
+   * They still read GR STO - every arm above is unchanged. But SAP routinely closes the PO
    * without ever emitting a GR STO line, and for those the arms above all yield NULL: not Open,
-   * not Close. Trucking COMPLETED is isContractDeliveryClosed(status), so those rows hang open
-   * forever. Measured on dev: 282 LCO contracts (343 operations) sit in exactly that state.
+   * not Close. Anything gated on isContractDeliveryClosed(status) then hangs open forever.
+   * Measured on dev: 282 LCO contracts (343 trucking operations) and 423 FOB contracts.
+   *
+   * FOB was deliberately excluded when this arm was added, on the grounds that a sea incoterm has
+   * a different reach, and included once that reach was measured rather than assumed. It is
+   * narrow: of the 423 FOB contracts exactly ONE has a shipment at all, and that same one is the
+   * only one carrying a KLIP qty overlay - the single place a Close can move a quantity, since
+   * qty_move's shipment overlay gates on NOT grClosed. Six have trucking operations, and FOB is
+   * not in INCOTERM_QTY_TRUCKING, so their OS Qty is NULL either way and they simply reach
+   * COMPLETED through the closed PO.
    *
    * Placed last on purpose. COALESCE short-circuits, so this can only ever fill a NULL - a
    * contract the SPD aggregate or the B2B child lookup already answered keeps that answer
    * (54 Close, 3 Open, 1 Cancelled on dev were resolved earlier and stay put).
    *
    * One-directional by design: GR PO Open does NOT yield 'Open' here. Doing so would pull a
-   * further ~218 LCO contracts out of NULL and silently change Open/Close list filters that
+   * further ~218 LCO and ~221 FOB contracts out of NULL and silently change Open/Close filters that
    * nobody asked to change. No signal in, NULL out - exactly as today.
    *
    * Cost: one index lookup on idx_sap_processed_data_contract, and only for the contracts the
@@ -324,7 +332,7 @@ export function sqlContractImportStatusExpr(
   )`;
   const grPoCloseFallbackArm = `
       CASE
-        WHEN ${inc} = 'LCO' THEN (
+        WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)}) THEN (
           SELECT CASE
             WHEN COALESCE(BOOL_OR(${fbPoOpen}), FALSE) THEN NULL
             WHEN COALESCE(BOOL_OR(${fbPoClose}), FALSE) THEN 'Close'

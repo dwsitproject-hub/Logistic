@@ -1511,7 +1511,7 @@ delegation is safe, not an optimisation.
 
 ## Trucking
 
-### LCO: a closed PO with no GR STO line no longer hangs forever
+### LCO and FOB: a closed PO with no GR STO line no longer hangs forever
 
 LCO reads GR **STO** status, FRC/CIF/CFR read GR **PO** - that split lives in
 `INCOTERM_GR_STO_STATUS` / `INCOTERM_GR_PO_STATUS` (`backend/src/utils/sapIncotermMetrics.ts`) and
@@ -1525,8 +1525,17 @@ the commercial-`contracts.status` fallback is deliberately skipped for LCO/FOB. 
 is `isContractDeliveryClosed(status)`, and NULL is not closed, so those operations hung open
 permanently. On dev: **282 LCO contracts, 343 trucking operations**.
 
-The fix adds one arm to the `COALESCE`, after the B2B child lookup: for LCO only, when every arm
-above yielded NULL, an unambiguous GR PO Close is accepted as the close signal.
+The fix adds one arm to the `COALESCE`, after the B2B child lookup: for the GR-STO incoterms, when
+every arm above yielded NULL, an unambiguous GR PO Close is accepted as the close signal.
+
+**FOB was added afterwards**, on request, having been deliberately excluded at first because a sea
+incoterm reaches the Shipments page and its OS rather than Trucking. That reach was then measured
+rather than argued: 423 FOB contracts move NULL → Close, and of those exactly **one** has a
+shipment at all - the same one that carries a KLIP qty overlay, which is the only place a Close can
+move a quantity (qty_move's shipment overlay gates on `NOT grClosed`). Six have trucking
+operations, and FOB is not in `INCOTERM_QTY_TRUCKING`, so their OS Qty is NULL either way and they
+simply reach COMPLETED through the closed PO. Verified over all 18,751 contracts: 423 changed, all
+FOB, `changed_from_nonnull = 0`; LCO, FRC, CIF and CFR unmoved.
 
 Three properties make it safe rather than a behaviour change:
 

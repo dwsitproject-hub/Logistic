@@ -128,10 +128,14 @@ describe('sqlContractImportStatusExpr', () => {
     expect(sql).toMatch(/WHEN[\s\S]*IN \('LCO', 'FOB'\) THEN NULL[\s\S]*ELSE[\s\S]*c\.status/s);
   });
 
-  it('falls back to GR PO Close for LCO only when nothing above answered, and never to Open', () => {
+  it('falls back to GR PO Close for GR-STO incoterms when nothing above answered, never to Open', () => {
     const sql = sqlContractImportStatusExpr('c', 'c.po_number');
-    // Gated to LCO alone - FOB reads GR STO too but is a sea incoterm with different logic.
-    expect(sql).toMatch(/WHEN UPPER\(TRIM\(COALESCE\(c\.incoterm, ''\)\)\) = 'LCO' THEN \(/);
+    /*
+     * Gated to the GR-STO incoterms - LCO and FOB - because only those read GR STO and can
+     * therefore be left with no answer when SAP writes none. FOB joined after its reach was
+     * measured: 423 contracts, of which one has a shipment.
+     */
+    expect(sql).toMatch(/WHEN UPPER\(TRIM\(COALESCE\(c\.incoterm, ''\)\)\) IN \('LCO', 'FOB'\) THEN \(/);
     expect(sql).toContain('spd_pofb');
     // One-directional: an Open PO yields NULL, not 'Open'. Only Close is accepted.
     expect(sql).toMatch(/WHEN COALESCE\(BOOL_OR\([\s\S]*?\), FALSE\) THEN NULL\s+WHEN COALESCE\(BOOL_OR\([\s\S]*?\), FALSE\) THEN 'Close'/);
