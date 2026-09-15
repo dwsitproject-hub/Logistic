@@ -513,6 +513,13 @@ export async function buildShipmentOutstandingQtyBacklogAggregateQuery(
     ${qtyMoveCte},
     backlog_rows AS (
       SELECT
+        /*
+         * Carried so this CTE can be listed per contract when the Shipments OS has to be
+         * reconciled against Contract Performance. Comparing totals sent that investigation down
+         * two wrong explanations; comparing contract by contract ended it in one pass. Projection
+         * only - the aggregate below is unchanged.
+         */
+        c.contract_id AS contract_number,
         ${sourceExpr} AS source_type,
         ${incotermExpr} AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
@@ -524,6 +531,7 @@ export async function buildShipmentOutstandingQtyBacklogAggregateQuery(
         AND ${sqlBacklogOsStillActiveSql()}
       UNION ALL
       SELECT
+        c.contract_id AS contract_number,
         ${sourceExpr} AS source_type,
         ${incotermExpr} AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
