@@ -604,9 +604,18 @@ http://klip.kpndomain.com/auth/oidc/callback
 Lalu di `/opt/klip/.env` host backend (172.28.80.51):
 
 ```ini
+FRONTEND_URL=http://klip.kpndomain.com
 OIDC_REDIRECT_URI=http://klip.kpndomain.com/auth/oidc/callback
 TRUST_PROXY=1
 ```
+
+`FRONTEND_URL` gampang terlewat karena namanya terdengar seperti urusan frontend, padahal ini
+env **backend** dan efeknya justru paling terasa di SSO. `oidc.controller.ts` memakainya untuk
+melempar browser kembali setelah callback (`${frontendUrl()}/sso/callback?t=...`) dan untuk
+redirect saat error. Kalau masih berisi `http://172.28.80.50:3001`, user yang login di domain
+akan dilempar ke origin lain - sementara cookie sesinya terikat host `klip.kpndomain.com`, jadi
+ia mendarat di tempat yang salah. Nilai ini juga menjadi CORS origin (`server.ts`) dan dasar
+tautan di email pengingat ETA maupun notifikasi SAP auto-import.
 
 ```bash
 cd /opt/klip && docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml -f docker-compose.backend.sap-share.yml up -d backend
