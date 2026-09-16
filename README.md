@@ -1437,13 +1437,41 @@ The 2,700 MT returns to the execution arm, and 942 MT more with it: contracts 10
 
 The remaining +2,462 MT is now only two things, and neither is a Shipments defect:
 
-- **1,117 MT** (1004028041, 1004032347) are blank Region/Site, the exclusion already agreed for
-  Contract Performance and still to be applied to Shipments and Trucking;
+- **1,117 MT** (1004028041, 1004032347) were blank Region/Site - now excluded, see below;
 - **1,345 MT** (1004029281, 1004029907, 1004030633) are contracts whose SAP GR still says **Open**
   with most of the quantity undelivered (62/400, 146/750, 97/500 MT), but whose KLIP
   `contracts.status` says COMPLETED - so Contract Performance calls them Close and Shipments does
   not. Here Shipments is the one telling the truth; the question of whether a stored KLIP status may
   close a GR-Open contract is a Contract Performance decision, left open.
+
+
+### Blank Region/Site leaves the OS total, not the page
+
+Contract Performance counts only contracts that resolve to a real Region/Site
+(`hasResolvedRegionSite`: `plant_site` neither empty nor the literal `Blank`). As the agreed shared
+reference that exclusion has to hold on Shipments too, so both OS arms now carry
+`sqlContractHasResolvedRegionSiteExpr`. It sits in the OS aggregates rather than in
+`backlog_contract_ids`, because the decision was to drop these contracts from the **total** while
+leaving the rows on the page and in the Unplanned / Preplanned counts.
+
+**Region/Site is the SAP discharge destination, not the plant code.** The first attempt used
+`groupPlantExpr`, which also falls back to the literal `'Blank'` and so reads as interchangeable.
+Measured, it removed **14,700 MT of real work** and still left both target contracts counted. The
+predicate now reuses `sqlRegionSiteDisplayForContract` - the same expression the page renders in its
+Region/Site column - so the card and the column cannot disagree about which contracts are blank.
+
+| | before | after |
+| --- | --- | --- |
+| FOB gap vs Contract Performance | +2,462 MT | **+1,346 MT** |
+| CIF / CFR gap | 0 MT | 0 MT |
+| backlog OS query | ~1.6 s | ~1.7 s |
+
+What remains is only the 1,345 MT of GR-Open / KLIP-COMPLETED contracts above.
+
+**Trucking has the same exposure and has not been changed yet**: 33 FRC/LCO contracts with a blank
+Region/Site carry 13,927 MT. Its OS builders are shaped differently - the combined backlog query
+produces the Unplanned card's COUNT and contract qty from the same scan as the OS buckets - so
+applying the exclusion there without also removing the rows from that card needs its own pass.
 
 
 ### ...and the list's status column now says so too

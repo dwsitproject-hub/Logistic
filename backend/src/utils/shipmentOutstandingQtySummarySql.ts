@@ -11,6 +11,7 @@ import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 import { sqlCoalesceSourceType } from './sapSourceTypeSql';
+import { sqlContractHasResolvedRegionSiteExpr } from './regionSiteSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import { shipmentListQtyMoveCteFromPage } from './shipmentOutstandingQtySql';
 import {
@@ -237,7 +238,22 @@ export function sqlShipmentActiveStageRankExpr(effectiveStatusExpr: string): str
  * Collapse execution OS to one row per contract (qty_move, floor 0).
  * Enriched rows must expose contract_numbers, effective_status, os_source_type, os_incoterm.
  */
-export function sqlShipmentExecutionOsPerContractCtes(enrichedAlias = 'enriched'): string {
+export function sqlShipmentExecutionOsPerContractCtes(
+  enrichedAlias = 'enriched',
+  opts: { requireResolvedRegionSite?: boolean } = {},
+): string {
+  /*
+   * `requireResolvedRegionSite` keeps the OS total on the same population Contract Performance
+   * counts. Only the OS cards ask for it; the ETC-without-ATC view uses these CTEs to find rows
+   * needing attention, and a blank site is no reason to hide one of those.
+   */
+  const regionSiteFilter = opts.requireResolvedRegionSite
+    ? `AND EXISTS (
+          SELECT 1 FROM contracts c_rs
+          WHERE c_rs.contract_id = TRIM(cn)
+            AND ${sqlContractHasResolvedRegionSiteExpr('c_rs.contract_id', 'c_rs.po_number')}
+        )`
+    : '';
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: `(SELECT c.quantity_ordered FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1)`,
     incotermExpr: `COALESCE(NULLIF(TRIM(r.os_incoterm), ''), (SELECT c.incoterm FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1), '')`,
@@ -262,6 +278,7 @@ export function sqlShipmentExecutionOsPerContractCtes(enrichedAlias = 'enriched'
           'SAILED',
           'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING'
         )
+        ${regionSiteFilter}
     ),
     execution_os_ranked AS (
       SELECT DISTINCT ON (contract_number)
@@ -459,7 +476,7 @@ export async function buildShipmentOutstandingQtyExecutionAggregateQuery(
         ${sqlShipmentSection1LightExecutionEnrichSelect('sp')}
       FROM shipment_page sp
     ),
-    ${sqlShipmentExecutionOsPerContractCtes('enriched')}
+    ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}
     SELECT
       ${sqlShipmentOutstandingQtyAggregateSelect(
         'execution_os.outstanding_quantity',
@@ -533,6 +550,7 @@ export async function buildShipmentOutstandingQtyBacklogAggregateQuery(
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
       WHERE b.is_unplanned
         AND ${sqlBacklogOsStillActiveSql()}
+        AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
       UNION ALL
       SELECT
         c.contract_id AS contract_number,
@@ -545,6 +563,15 @@ export async function buildShipmentOutstandingQtyBacklogAggregateQuery(
       LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
       WHERE b.is_preplanned
         AND ${sqlBacklogOsStillActiveSql()}
+        /*
+         * Blank Region/Site is excluded from the OS total, not from the backlog itself.
+         *
+         * Contract Performance counts only contracts that resolve to a real site, and it is the
+         * agreed shared reference; the rows stay on the page and in the Unplanned / Preplanned
+         * counts, which is why this lives in the OS aggregate rather than in
+         * backlog_contract_ids.
+         */
+        AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
     )
     SELECT
       ${sqlShipmentOutstandingQtyAggregateSelect(

@@ -140,3 +140,26 @@ export function appendRegionSiteFilter(
     nextIndex: paramIndex + selected.length,
   };
 }
+
+/**
+ * Does this contract resolve to a real Region/Site?
+ *
+ * Contract Performance drops rows whose `plant_site` is empty or the literal `Blank`
+ * (`hasResolvedRegionSite`), so its OS totals count only contracts that resolve to a real site -
+ * agreed as the shared reference, with the rows themselves left visible. Shipments and Trucking
+ * have to apply the same exclusion or their OS cards cannot agree with it, and the difference is
+ * not hypothetical: 1004028041 (117 MT) and 1004032347 (1,000 MT) were counted by the Shipments OS
+ * and by nothing on Contract Performance.
+ *
+ * Region/Site is the SAP discharge destination, NOT the plant code: an earlier attempt at this used
+ * `groupPlantExpr` - which also falls back to the literal 'Blank' and so looks interchangeable -
+ * and it removed 14,700 MT of real work while leaving both target contracts counted. This reuses
+ * the display expression the Shipments page already renders in its Region/Site column, so the card
+ * and the column can never disagree about which contracts are blank.
+ */
+export function sqlContractHasResolvedRegionSiteExpr(
+  contractNumberExpr: string,
+  originPoExpr: string,
+): string {
+  return `UPPER(TRIM(COALESCE((${sqlRegionSiteDisplayForContract(contractNumberExpr, originPoExpr)})::text, ''))) NOT IN ('', 'BLANK')`;
+}
