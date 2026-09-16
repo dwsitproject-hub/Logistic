@@ -1389,10 +1389,61 @@ incoterms that already matched are untouched:
 | CIF gap | 0 MT | 0 MT |
 | CFR gap | 0 MT | 0 MT |
 
-The residual -1,181 MT is the other three rows of the table above (+1,000 +519 -2,700) and is left
-open deliberately: each needs a decision about which page is right, not a fix.
 `docs/scripts/diag-b2b-origin-double-count.sh` re-measures the affected population on any
 environment.
+
+
+### ...and a sibling STO's discharge finished the wrong group
+
+The -2,700 MT row of that table was three contracts that reached **neither** arm. The first
+explanation tried - their shipment had finished, so relax the backlog guards the way the cancelled
+case did - was measured and turned out to be false: their own shipments carry no ATA at all. The
+change was reverted unimplemented.
+
+What the per-shipment listing showed instead is that the group they belong to is not made of their
+shipments alone. For FOB with a vessel, `shipmentListSeaStoKeyExpr` keys a row by a contract-level
+STO pick rather than by the shipment's own STO, so a contract holding two shipments on two STOs puts
+both in one group:
+
+```
+1004029281  own STO 1006019385  COMPLETED  ATA present  -> group 1006019867   regrouped
+1004029907  own STO 1006019385  COMPLETED  ATA present  -> group 1006019867   regrouped
+1004029445  own STO 1006019867  PLANNED    no ATA       -> group 1006019867
+1004030295  own STO 1006019867  PLANNED    no ATA       -> group 1006019867
+1004030473  own STO 1006019867  PLANNED    no ATA       -> group 1006019867
+```
+
+`MAX()` over that group takes the finished voyage's ATA, so a group of still-planned shipments reads
+as discharged. The execution arm drops it as finished; the backlog rejects those contracts for
+holding live shipments; the quantity is counted nowhere. Same family as the ATA bleed that
+migrations 169/170 cleared, except here it is the grouping key that bleeds, not the data. On the dev
+copy 286 FOB shipments are regrouped this way, 40 of them already discharged - CIF has 16 regrouped
+and none discharged, which is why CIF never showed it.
+
+`buildShipmentListAtaSelectSql` now also emits `ata_vessel_complete_discharge_own_sto`, the same MAX
+with `FILTER (WHERE the row has no STO of its own OR its STO is the group's)`, and only the OS path
+(`sqlShipmentOutstandingActiveStagePredicate`, the Section 1 execution enrich) reads it. The list
+keeps displaying the group-wide ATA it always has. The column is emitted even without a group key,
+because a shipment_base variant missing a column the summary selects fails the refresh with 42703 -
+which has already happened once here, with `is_contract_os_within_band`.
+
+| | before | after |
+| --- | --- | --- |
+| FOB gap vs Contract Performance | -1,181 MT | **+2,462 MT** |
+| CIF / CFR gap | 0 MT | 0 MT |
+
+The 2,700 MT returns to the execution arm, and 942 MT more with it: contracts 1004029281 and
+1004029907, whose own planned shipment on the regrouped STO was hidden by the same bled ATA.
+
+The remaining +2,462 MT is now only two things, and neither is a Shipments defect:
+
+- **1,117 MT** (1004028041, 1004032347) are blank Region/Site, the exclusion already agreed for
+  Contract Performance and still to be applied to Shipments and Trucking;
+- **1,345 MT** (1004029281, 1004029907, 1004030633) are contracts whose SAP GR still says **Open**
+  with most of the quantity undelivered (62/400, 146/750, 97/500 MT), but whose KLIP
+  `contracts.status` says COMPLETED - so Contract Performance calls them Close and Shipments does
+  not. Here Shipments is the one telling the truth; the question of whether a stored KLIP status may
+  close a GR-Open contract is a Contract Performance decision, left open.
 
 
 ### ...and the list's status column now says so too

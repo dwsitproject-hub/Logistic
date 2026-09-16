@@ -518,13 +518,26 @@ export function shipmentHasDeliveryQtyExpr(alias: string): string {
  *
  * Persisted sibling `shipments.status` must not demote.
  */
-export function shipmentEffectiveStatusExpr(alias: string): string {
+export function shipmentEffectiveStatusExpr(
+  alias: string,
+  opts: { dischargeColumn?: string } = {},
+): string {
   const f = alias
+  /*
+   * `dischargeColumn` lets the OS path read `ata_vessel_complete_discharge_own_sto` instead.
+   *
+   * The plain column is a MAX over the whole STO group, and for FOB a group can contain a shipment
+   * whose own STO is a different one (see buildShipmentListAtaSelectSql) - so a finished voyage can
+   * mark a group of still-planned shipments as COMPLETED. The list column keeps the group-wide
+   * value, which is what the page has always displayed; only the OS buckets use the narrowed one,
+   * because only they decide whether a contract's quantity is still counted anywhere.
+   */
+  const atc = `${f}.${opts.dischargeColumn ?? 'ata_vessel_complete_discharge'}`;
   return `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
+      WHEN ${atc} IS NOT NULL THEN 'COMPLETED'
       /*
        * Nothing left outstanding finishes a shipment, even with GR still Open and no ATC.
        * Trucking has had this since isTruckingPipelineCompleted, and the OS cards already apply

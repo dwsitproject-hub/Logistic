@@ -128,8 +128,32 @@ export function sqlEffectiveAtaCompleteDischarge(sAlias = 's', vlpAlias = 'vlpd'
   return `COALESCE(sao.ata_discharge_complete, ${sqlKlipStoredAtaCompleteDischarge(sAlias, vlpAlias)})`;
 }
 
-/** List query ATA select (uses vlp_l / vlp_d CTE aliases). */
-export function buildShipmentListAtaSelectSql(): string {
+/**
+ * List query ATA select (uses vlp_l / vlp_d CTE aliases).
+ *
+ * `groupKeyExpr` adds `ata_vessel_complete_discharge_own_sto`: the same discharge ATA, but counting
+ * only the rows whose own STO is the one this group is keyed by.
+ *
+ * For FOB with a vessel, `shipmentListSeaStoKeyExpr` keys a row by a contract-level STO pick rather
+ * than by the shipment's own STO, so a contract holding two shipments on two STOs puts both in one
+ * group. `MAX()` then lets a finished voyage's ATA mark a group whose own shipments have no ATA at
+ * all as discharged - the execution arm drops the group as finished while the backlog rejects those
+ * contracts for holding live shipments, and their quantity lands in neither. Measured on the dev
+ * copy 2026-09-16: 286 FOB shipments are regrouped this way, 40 of them already discharged; STO
+ * 1006019867 cost 3 contracts / 2,700 MT.
+ *
+ * The plain column is untouched, so the list still shows the group's ATA as it always has; only the
+ * OS path reads the filtered one. Rows carrying no STO of their own stay counted either way - they
+ * have no other group to belong to. The column is emitted even without `groupKeyExpr` (where it is
+ * simply the same value), because every shipment_base variant has to expose the same columns or the
+ * summary refresh fails on the one that does not.
+ */
+export function buildShipmentListAtaSelectSql(groupKeyExpr?: string): string {
+  const atc = `COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)`;
+  const ownStoFilter = groupKeyExpr
+    ? `FILTER (WHERE NULLIF(TRIM(s.shipment_id::text), '') IS NULL
+            OR TRIM(s.shipment_id::text) = TRIM((${groupKeyExpr})::text))`
+    : '';
   return `
           MAX(COALESCE(sao.ata_arrival, s.ata_arrival, vlp_l.vlp_load_ata_va)) as ata_vessel_arrival_at_loading_port,
           MAX(COALESCE(sao.ata_berthed, s.ata_berthed, vlp_l.vlp_load_ata_vb)) as ata_vessel_berthed_at_loading_port,
@@ -139,5 +163,6 @@ export function buildShipmentListAtaSelectSql(): string {
           MAX(COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival, vlp_d.vlp_disc_ata_va)) as ata_vessel_arrive_at_discharge_port,
           MAX(COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed, vlp_d.vlp_disc_ata_vb)) as ata_vessel_berthed_at_discharge_port,
           MAX(COALESCE(sao.ata_discharge_start, s.ata_discharge_start, vlp_d.vlp_disc_ata_ls)) as ata_vessel_start_discharging,
-          MAX(COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete, vlp_d.vlp_disc_ata_lc)) as ata_vessel_complete_discharge,`;
+          MAX(${atc}) as ata_vessel_complete_discharge,
+          MAX(${atc}) ${ownStoFilter} as ata_vessel_complete_discharge_own_sto,`;
 }

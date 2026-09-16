@@ -711,12 +711,12 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           LIMIT 1
         ) vlp_d ON TRUE`;
 
-    const ataSelect = buildShipmentListAtaSelectSql();
-
     const etaExtraSelect = `
           -- ETA discharge complete (ETC): shipment-level or discharge VLP
           MAX(COALESCE(s.eta_discharge_complete, vlp_d.vlp_disc_eta_edc)) as eta_vessel_complete_discharge,`;
     const listStoKeySql = shipmentListSeaStoKeyExpr('c', 'l', 's');
+    // After listStoKeySql: the ATA select needs the group key to compute the own-STO discharge column.
+    const ataSelect = buildShipmentListAtaSelectSql(listStoKeySql);
     const listStoDisplaySql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's');
 
     /** Grouped STO key on shipment_base rows (safe for scalar subqueries in the outer enrich CTE). */

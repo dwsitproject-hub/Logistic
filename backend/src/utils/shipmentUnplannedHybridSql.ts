@@ -437,6 +437,9 @@ export function unplannedContractBacklogRowSelectSql(
     NULL::date AS ata_vessel_berthed_at_discharge_port,
     NULL::date AS ata_vessel_start_discharging,
     NULL::date AS ata_vessel_complete_discharge,
+    -- Same shape as shipment_base: every variant must expose this or the summary fails on the one
+    -- that does not. A backlog row has no shipment, so both discharge columns are NULL alike.
+    NULL::date AS ata_vessel_complete_discharge_own_sto,
     c.quantity_ordered AS contract_qty,
     NULL::numeric AS sto_quantity,
     ${sapReceive} AS quantity_receive,
