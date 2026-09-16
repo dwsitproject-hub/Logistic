@@ -10,7 +10,9 @@
 #
 set -u
 [ "$#" -gt 0 ] || { echo "usage: $0 <contract_id> [contract_id ...]"; exit 1; }
-LIST="'$(printf "%s','" "$@" | sed "s/,'$//")'"
+# Build 'a','b','c' - a printf/sed one-liner here doubled the closing quote and broke the query.
+LIST=""
+for id in "$@"; do LIST="${LIST:+$LIST,}'$id'"; done
 
 cd /opt/klip || exit 1
 env_val() { sed -n "s/^$1=//p" .env | head -1 | sed -e 's/^["'"'"']//' -e 's/["'"'"']$//'; }
