@@ -7,6 +7,7 @@
  * residual is otherKg.
  */
 
+import { sqlContractHasResolvedRegionSiteExpr } from './regionSiteSql';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { normalizeTruckingPagePipelineStageParam } from './truckingPagePipelineSql';
@@ -282,6 +283,16 @@ export function buildTruckingOutstandingQtyExecutionAggregateQuery(
       COALESCE(SUM(${lineQty}), 0)::numeric AS card_total_kg
     FROM per_contract pc
     WHERE 1=1
+      /*
+       * Same exclusion as the backlog arm: Contract Performance counts only contracts that resolve
+       * to a real Region/Site, so the execution arm of the OS has to agree with it. The rows stay
+       * on the page and in the status cards - only this OS aggregate narrows.
+       */
+      AND EXISTS (
+        SELECT 1 FROM contracts c_rs
+        WHERE c_rs.contract_id = TRIM(pc.contract_number::text)
+          AND ${sqlContractHasResolvedRegionSiteExpr('c_rs.contract_id', 'c_rs.po_number')}
+      )
       ${stageClause}`;
 
   return { text, params };
@@ -333,6 +344,8 @@ export async function buildTruckingOutstandingQtyBacklogAggregateQuery(
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}
+        /* Blank Region/Site is out of the OS total - see the combined builder below. */
+        AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
     )
     SELECT
       ${sqlTruckingOutstandingQtyAggregateSelect(
@@ -365,7 +378,17 @@ export async function buildTruckingUnplannedBacklogCombinedQuery(
         c.quantity_ordered,
         c.source_type,
         c.incoterm,
-        (${outstandingExpr})::numeric AS outstanding_quantity
+        (${outstandingExpr})::numeric AS outstanding_quantity,
+        /*
+         * Blank Region/Site leaves the OS total, not the card.
+         *
+         * Contract Performance counts only contracts that resolve to a real Region/Site and is the
+         * agreed shared reference, so the OS has to match it. The Unplanned card's COUNT and
+         * contract qty come off the same scan and must keep every row, which is why this is a
+         * zeroed column rather than a WHERE.
+         */
+        (CASE WHEN ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
+              THEN (${outstandingExpr})::numeric ELSE 0 END) AS os_outstanding_quantity
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
@@ -374,9 +397,9 @@ export async function buildTruckingUnplannedBacklogCombinedQuery(
     SELECT
       COUNT(*)::bigint AS c,
       COALESCE(SUM(COALESCE(br.quantity_ordered, 0)), 0)::numeric AS contract_qty_kg,
-      COALESCE(SUM(COALESCE(br.outstanding_quantity, 0)), 0)::numeric AS card_total_kg,
+      COALESCE(SUM(COALESCE(br.os_outstanding_quantity, 0)), 0)::numeric AS card_total_kg,
       ${sqlTruckingOutstandingQtyAggregateSelect(
-        'br.outstanding_quantity',
+        'br.os_outstanding_quantity',
         'br.source_type',
         'br.incoterm',
       )}

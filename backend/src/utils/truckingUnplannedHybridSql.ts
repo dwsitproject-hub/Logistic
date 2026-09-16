@@ -12,7 +12,12 @@ import {
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
 import { groupPlantExpr } from './groupPlantSql';
-import { appendRegionSiteFilter, sqlRegionSiteDisplayForContract, sqlRegionSiteRawForContract } from './regionSiteSql';
+import {
+  appendRegionSiteFilter,
+  sqlContractHasResolvedRegionSiteExpr,
+  sqlRegionSiteDisplayForContract,
+  sqlRegionSiteRawForContract,
+} from './regionSiteSql';
 import {
   sqlB2bEndingBuyerExpr,
   sqlB2bEndingUnloadExpr,
@@ -455,8 +460,19 @@ export async function buildTruckingUnplannedBacklogDailySummarySql(
       ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${backlogWhere}`,
   });
+  /*
+   * The OS sums exclude blank Region/Site; the COUNT and contract qty beside them do not.
+   *
+   * Contract Performance counts only contracts that resolve to a real Region/Site and is the agreed
+   * shared reference, so the OS has to match it - but the Unplanned card's count and contract qty
+   * come off the same scan and must keep every row. This snapshot is what the page actually serves
+   * (loadTruckingBacklogSummaryFromSnapshot), so leaving it out would make the live query and the
+   * served numbers disagree: changing only the live builders moved nothing at all.
+   */
   const osSum = (pred: string) =>
-    `COALESCE(SUM(CASE WHEN ${pred} THEN (${outstandingExpr})::numeric ELSE 0 END), 0)::numeric`;
+    `COALESCE(SUM(CASE WHEN (${pred})
+        AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
+      THEN (${outstandingExpr})::numeric ELSE 0 END), 0)::numeric`;
   return `
     INSERT INTO ${targetTable} (
       group_plant, contract_date, product, incoterm,
