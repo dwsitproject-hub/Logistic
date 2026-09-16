@@ -48,3 +48,43 @@ echo "== 4. is the deployed backend actually carrying the fix? =="
 echo "   (the built file must mention sto_count; if it does not, the build did not include it)"
 grep -c "sto_count" /opt/klip/backend/dist/utils/contractDeliveryStatus.js 2>/dev/null \
   || echo "   dist/utils/contractDeliveryStatus.js not found - check the build output path"
+
+echo
+echo "== 5. Contract Performance open OS per sea incoterm, computed here =="
+echo "   Mirrors what the page applies: blank Region/Site excluded from the total; a contract is"
+echo "   Close when nothing is outstanding, or when an ATC exists AND the PO has a single STO."
+echo "   NOTE: reads contract_performance_snapshot - refresh it first if step 3 said stale."
+"${PSQL[@]}" -c "
+WITH rows AS (
+  SELECT cps.contract_id,
+         UPPER(TRIM(COALESCE(cps.incoterm, ''))) AS incoterm,
+         COALESCE(cps.outstanding_quantity, 0)   AS os_kg,
+         UPPER(TRIM(COALESCE(cps.import_status, cps.status, ''))) AS raw_status,
+         cps.last_ata_vessel_complete_discharge  AS atc,
+         COALESCE(sa.sto_count, 1)               AS sto_count,
+         COALESCE(NULLIF(TRIM(cps.plant_site), ''), 'Blank') AS plant_site
+  FROM contract_performance_snapshot cps
+  LEFT JOIN contract_sto_agg_snapshot sa ON sa.contract_number = cps.contract_id
+  WHERE COALESCE(cps.sap_presence, 'PRESENT') <> 'WITHDRAWN'
+), classified AS (
+  SELECT *,
+         (raw_status IN ('CANCELLED', 'CANCELED', 'CANCEL'))                       AS is_cancelled,
+         (os_kg <= 499 OR (atc IS NOT NULL AND sto_count <= 1))                    AS effectively_done
+  FROM rows
+)
+SELECT incoterm,
+       COUNT(*)                        AS open_contracts,
+       ROUND(SUM(os_kg) / 1000)        AS open_os_mt
+FROM classified
+WHERE incoterm IN ('FOB', 'CIF', 'CFR')
+  AND NOT is_cancelled
+  AND NOT effectively_done
+  AND raw_status IN ('OPEN', 'ACTIVE')
+  AND UPPER(plant_site) <> 'BLANK'
+GROUP BY incoterm
+ORDER BY incoterm;"
+
+echo
+echo "   Compare those three numbers with the Shipments OS Qty card (FOB / CIF / CFR)."
+echo "   Equal      -> the pages agree and any on-screen difference is a stale browser cache."
+echo "   Different  -> send both sets of numbers; the gap is then diagnosed per contract."
