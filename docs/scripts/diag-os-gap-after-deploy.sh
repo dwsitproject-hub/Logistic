@@ -45,9 +45,15 @@ UNION ALL SELECT 'contract_sto_agg',    is_stale::text FROM contract_sto_agg_sna
 
 echo
 echo "== 4. is the deployed backend actually carrying the fix? =="
-echo "   (the built file must mention sto_count; if it does not, the build did not include it)"
-grep -c "sto_count" /opt/klip/backend/dist/utils/contractDeliveryStatus.js 2>/dev/null \
-  || echo "   dist/utils/contractDeliveryStatus.js not found - check the build output path"
+echo "   The backend runs in Docker and the image ships only dist/, so the built files live inside"
+echo "   the container, not on the host - a host path always reports 'not found'."
+docker compose exec -T backend sh -c '
+  echo -n "   contractDeliveryStatus.js  sto_count: "
+  grep -c "sto_count" dist/utils/contractDeliveryStatus.js 2>/dev/null || echo 0
+  echo -n "   shipmentAtaOverrideSql.js  own_sto  : "
+  grep -c "ata_vessel_complete_discharge_own_sto" dist/utils/shipmentAtaOverrideSql.js 2>/dev/null || echo 0
+' 2>/dev/null || echo "   could not reach the backend container - run from the compose project dir"
+echo "   Both above 0 means the build carries the fix; a 0 means the container predates it."
 
 echo
 echo "== 5. Contract Performance open OS per sea incoterm, computed here =="
