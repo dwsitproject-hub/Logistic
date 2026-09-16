@@ -30,6 +30,47 @@ export function sqlShipmentListB2bOriginContractJoins(): string {
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id`;
 }
 
+/**
+ * This contract is the B2B origin the execution arm has already counted.
+ *
+ * The join above remaps a shipment from the B2B child to its origin
+ * (`c.id = COALESCE(c_origin.id, c_link.id)`), so shipment_base.contract_numbers - and therefore
+ * the execution OS arm, which splits that text per contract - carries the ORIGIN, not the child.
+ *
+ * The backlog arm cannot see that link with its own guards: no shipment row points at the origin
+ * (the child owns it) and the origin carries no STO, so both the shipments.contract_id test and
+ * sqlContractSharesNumericStoWithActiveSeaShipmentExpr pass it through. The same outstanding
+ * quantity was then added by both arms, breaking the disjointness contractBacklogCoreWhereSql
+ * documents ("Exactly once, either way").
+ *
+ * Measured on the dev copy 2026-09-16: 4 FOB origins, 9,500 MT counted twice, out of the 8,319 MT
+ * by which the Shipments FOB OS card exceeded Contract Performance.
+ *
+ * The origin lookup is an equality on po_number rather than a copy of the remap's
+ * `ORDER BY created_at DESC LIMIT 1`: po_number is unique across contracts (verified - zero
+ * duplicate groups), so the LIMIT can only ever return that one row and the cheap form is exact.
+ * Should po_number ever stop being unique, this has to become the LATERAL the remap uses.
+ */
+export function sqlContractIsB2bOriginOfShippedChildExpr(contractAlias = 'c'): string {
+  return `EXISTS (
+          SELECT 1
+          FROM latest_spd_contract l_b2b_child
+          INNER JOIN contracts c_b2b_child
+            ON c_b2b_child.contract_id = l_b2b_child.contract_number
+          INNER JOIN shipments s_b2b_child
+            ON s_b2b_child.contract_id = c_b2b_child.id
+           AND UPPER(TRIM(COALESCE(s_b2b_child.status, ''))) <> 'CANCELLED'
+          WHERE NULLIF(TRIM(${contractAlias}.po_number::text), '') IS NOT NULL
+            AND UPPER(NULLIF(TRIM(COALESCE(
+                  l_b2b_child.b2b_flag_raw,
+                  c_b2b_child.contract_type::text,
+                  ''
+                )), '')) = 'B2B'
+            AND NULLIF(TRIM(COALESCE(l_b2b_child.contract_reference_po_raw, '')), '') IS NOT NULL
+            AND TRIM(l_b2b_child.contract_reference_po_raw) = TRIM(${contractAlias}.po_number::text)
+        )`;
+}
+
 /** STO Type V/T line on the execution contract (child), not the remapped origin. */
 export function sqlShipmentListExecutionCsStoJoin(stoKeyExpr: string): string {
   return `LEFT JOIN contract_stos cs_sto ON cs_sto.contract_id = c_link.id

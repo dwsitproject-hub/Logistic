@@ -1332,12 +1332,67 @@ CIF  508 MT   1 contract in neither arm      -> exactly the CIF discrepancy
 CFR  5,000 MT the only Open CFR contract     -> exactly the CFR discrepancy
 ```
 
-Both now match to the MT. The remaining **8,319 MT is FOB only**, and it is deliberate rather than
-defective: `sqlShipmentBacklogSpdSeaLegFilterSql` makes the Shipments backlog ignore Type T (truck
-leg) SPD rows when deciding whether a FOB contract is closed - "truck legs must not block sea
-backlog" - while Contract Performance uses the PO-wide status. A FOB contract closed by its truck
-leg is therefore finished to one page and still open to the other. Closing that last gap means
-choosing one definition, which is a business decision, not a defect.
+Both now match to the MT. The remaining **8,319 MT was FOB only**.
+
+
+### The FOB remainder: a B2B origin counted by both arms
+
+That 8,319 MT was first written up here as deliberate - the sea-leg filter
+(`sqlShipmentBacklogSpdSeaLegFilterSql`) lets the Shipments backlog ignore Type T rows when closing
+a FOB contract, while Contract Performance uses the PO-wide status, so the two pages would disagree
+by design. **That was wrong, and measuring it before implementing is what caught it**: adopting the
+sea-leg definition would have moved 292 FOB contracts Open -> Close and made the gap *wider*, not
+zero. The explanation was abandoned unimplemented.
+
+Listing both arms per contract - rather than reasoning from totals, which had by then produced four
+wrong answers - accounted for the whole 8,319 MT exactly:
+
+| MT | contracts | cause |
+| --- | --- | --- |
+| +9,500 | 4 | counted by **both** arms |
+| +1,000 | 1 | backlog row that is not FOB-Open on Contract Performance |
+| +519 | 4 | execution rows that are not FOB-Open on Contract Performance |
+| -2,700 | 3 | FOB-Open on Contract Performance, in **neither** arm |
+| **8,319** | | |
+
+Two things the totals had implied are not true: the per-contract OS **values** agree to the kg in
+both arms (the earlier "628 MT across 390 contracts" does not apply to FOB), so the whole gap is
+membership, not arithmetic; and `COMPLETED` rows inside `execution_os` are expected, not a leak -
+the OS-completed rule rewrites the status once nothing is outstanding, and those rows carry 0 MT.
+
+The 9,500 MT is a defect, and it comes from the **B2B origin remap**. `shipment_base.contract_numbers`
+is built over `c.id = COALESCE(c_origin.id, c_link.id)`, so a shipment attached to a B2B *child* is
+re-attributed to the *origin* contract, and the execution arm counts the origin. The backlog arm's
+guards only ask whether a shipment points AT a contract - and nothing points at the origin: the
+child owns the shipment, and the origin carries no STO at all. Both arms counted it.
+
+```
+origin 9194100034 <- child 1004030568 [B2B], 1 active shipment
+origin 9194100035 <- child 1004031407 [B2B], 1 active shipment
+origin 9334100045 <- child 1004030594 [B2B], 1 active shipment
+origin 9334100046 <- child 1004031409 [B2B], 1 active shipment
+```
+
+`contractBacklogCoreWhereSql` now carries `sqlContractIsB2bOriginOfShippedChildExpr` alongside its
+two existing guards, restoring the "exactly once, either way" property the section above claims.
+The guard keys the origin by `po_number` equality rather than copying the remap's
+`ORDER BY created_at DESC LIMIT 1`, because `po_number` is unique across contracts (verified: zero
+duplicate groups) so the two are equivalent and the cheap form is exact.
+
+Measured on the dev copy after the change - the removal is exactly the intended one, and the two
+incoterms that already matched are untouched:
+
+| | before | after |
+| --- | --- | --- |
+| FOB backlog rows | 118 / 171,150 MT | 114 / 161,650 MT |
+| FOB gap vs Contract Performance | +8,319 MT | **-1,181 MT** |
+| CIF gap | 0 MT | 0 MT |
+| CFR gap | 0 MT | 0 MT |
+
+The residual -1,181 MT is the other three rows of the table above (+1,000 +519 -2,700) and is left
+open deliberately: each needs a decision about which page is right, not a fix.
+`docs/scripts/diag-b2b-origin-double-count.sh` re-measures the affected population on any
+environment.
 
 
 ### ...and the list's status column now says so too

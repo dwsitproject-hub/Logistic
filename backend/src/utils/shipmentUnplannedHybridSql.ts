@@ -28,6 +28,7 @@ import {
 } from './shipmentIncotermScope';
 import { contractInAcceptedUnlinkedPrePlannedGroupExistsSql } from './prePlannedEligibilitySql';
 import { sqlContractSharesNumericStoWithActiveSeaShipmentExpr } from './seaStoSiblingSql';
+import { sqlContractIsB2bOriginOfShippedChildExpr } from './shipmentB2bOriginSql';
 
 import {
   buildShipmentContractBacklogOrderBy,
@@ -209,7 +210,15 @@ export function contractBacklogCoreWhereSql(contractAlias = 'c', spdAlias = 'l')
       WHERE s_ns.contract_id = ${contractAlias}.id
         AND UPPER(TRIM(COALESCE(s_ns.status, ''))) <> 'CANCELLED'
     )
-    AND NOT (${sqlContractSharesNumericStoWithActiveSeaShipmentExpr(`${contractAlias}.id`)})`;
+    AND NOT (${sqlContractSharesNumericStoWithActiveSeaShipmentExpr(`${contractAlias}.id`)})
+    /*
+     * ...and neither is a shipment the execution arm has remapped onto this contract.
+     *
+     * The two tests above look for a shipment that points AT this contract. A B2B child's
+     * shipment points at the child, but the execution arm re-attributes it to the origin, so the
+     * origin OS is already counted there while both tests above still wave it through to here.
+     */
+    AND NOT (${sqlContractIsB2bOriginOfShippedChildExpr(contractAlias)})`;
 }
 
 /**
