@@ -41,10 +41,17 @@ export function buildPrePlannedGroupLookupMap(groups: PrePlannedGroup[]): Map<st
   return map;
 }
 
+export function formatPrePlannedGroupBadge(group: PrePlannedGroup): string {
+  const label = String(group.excelGroupLabel ?? '').trim();
+  if (label) return `${label} · ${group.groupCode}`;
+  return group.groupCode;
+}
+
 export function formatPrePlannedGroupTooltip(group: PrePlannedGroup): string {
   const memberList = group.members.map((m) => m.contractNumber).join(', ');
+  const excel = String(group.excelGroupLabel ?? '').trim();
   return [
-    group.groupCode,
+    excel ? `${excel} · ${group.groupCode}` : group.groupCode,
     `${group.groupPlant} · ${group.supplier} · ${group.product} · ${group.incoterm}`,
     `Contract date ${group.windowStart} – ${group.windowEnd} · ${group.totalOsMt.toLocaleString()} MT${
       group.isPartial ? ' · partial' : ''

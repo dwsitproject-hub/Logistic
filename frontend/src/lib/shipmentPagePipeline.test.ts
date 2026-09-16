@@ -4,6 +4,7 @@ import {
   pipelineCardQtyForStage,
   pipelineCountForStage,
   pipelineVesselNamesForStage,
+  patchSection1SummaryAfterUnplannedToPreplanned,
   splitVesselNamesForCard,
   SHIPMENT_PAGE_PIPELINE_CARDS,
 } from './shipmentPagePipeline'
@@ -116,5 +117,21 @@ describe('shipmentPagePipeline', () => {
     const completed = SHIPMENT_PAGE_PIPELINE_CARDS.find((c) => c.status === 'COMPLETED')
     expect(completed?.tooltip).toMatch(/1 MT/i)
     expect(completed?.tooltip).toMatch(/no shipment/i)
+  })
+
+  it('patches Unplanned → Preplanned card count and outstanding qty after grouping', () => {
+    const next = patchSection1SummaryAfterUnplannedToPreplanned(
+      {
+        status: { unplanned: 10, preplanned: 2, planned: 5 },
+        statusOutstandingQty: { unplanned: 9000, preplanned: 2000, planned: 1000 },
+        unplannedTable: { contractRows: 10, shipmentRows: 0, totalTableRows: 10 },
+      },
+      { groupCount: 1, contractRows: 3, outstandingQtyKg: 1500 },
+    )
+    expect(next?.status?.preplanned).toBe(3)
+    expect(next?.status?.unplanned).toBe(7)
+    expect(next?.statusOutstandingQty?.preplanned).toBe(3500)
+    expect(next?.statusOutstandingQty?.unplanned).toBe(7500)
+    expect(next?.unplannedTable?.totalTableRows).toBe(7)
   })
 })

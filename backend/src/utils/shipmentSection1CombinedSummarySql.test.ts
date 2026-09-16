@@ -4,6 +4,7 @@ import {
   buildPipelineCardVesselNamesQuery,
   buildShipmentPipelineLiveStageCountsQuery,
   buildShipmentSummaryEtaEnrichmentSelect,
+  overlayHybridBacklogCountsOnSummaryRow,
   overlayShipmentDailySummaryLiveStageCounts,
   parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow,
 } from './shipmentSection1CombinedSummarySql';
@@ -99,6 +100,23 @@ describe('shipmentSection1CombinedSummarySql', () => {
     expect(merged.at_loading_port_vessel_names).toEqual(['LIVE A', 'LIVE B']);
     expect(merged.planned_vessel_names).toEqual([]);
     expect(merged.eta_loading_delay).toBe(5);
+  });
+
+  it('overlayHybridBacklogCountsOnSummaryRow writes live Unplanned/Preplanned card counts', async () => {
+    const merged = overlayHybridBacklogCountsOnSummaryRow(
+      {
+        planned_count: 9,
+        unplanned_contract_backlog_count: 40,
+        preplanned_count: 12,
+        preplanned_contract_count: 12,
+      },
+      { contractRows: 36 },
+      { contractRows: 8, groupCount: 3 },
+    );
+    expect(merged.unplanned_contract_backlog_count).toBe(36);
+    expect(merged.preplanned_count).toBe(3);
+    expect(merged.preplanned_contract_count).toBe(8);
+    expect(merged.planned_count).toBe(9);
   });
 
   it('defines a shipment_page CTE so qty_move can scope contracts without sto_metrics', async () => {

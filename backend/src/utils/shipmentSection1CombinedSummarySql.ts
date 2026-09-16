@@ -237,6 +237,23 @@ export function overlayShipmentDailySummaryLiveStageCounts(
   return out;
 }
 
+/**
+ * Daily rollup stores Unplanned/Preplanned as last-refresh contract counts.
+ * Live hybrid breakdowns are the Section 1 card source of truth after grouping moves.
+ */
+export function overlayHybridBacklogCountsOnSummaryRow(
+  summaryRow: Record<string, unknown>,
+  unplanned: { contractRows: number },
+  preplanned: { contractRows: number; groupCount: number },
+): Record<string, unknown> {
+  return {
+    ...summaryRow,
+    unplanned_contract_backlog_count: unplanned.contractRows,
+    preplanned_count: preplanned.groupCount,
+    preplanned_contract_count: preplanned.contractRows,
+  };
+}
+
 /** Pipeline summary + status-card contract/OS qty (qty_move, no sto_metrics). */
 export async function buildShipmentSection1CombinedSummaryQuery(
   opts: ShipmentSection1CombinedSummaryQueryOpts,

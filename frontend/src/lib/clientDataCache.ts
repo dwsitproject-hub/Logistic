@@ -73,14 +73,17 @@ async function fetchAndStore<T>(
   const controller = new AbortController()
   inFlightControllers.set(cacheKey, controller)
 
-  const promise = fetcher(controller.signal)
+  let promise: Promise<T>
+  promise = fetcher(controller.signal)
     .then((data) => {
-      store.set(cacheKey, { data, fetchedAt: Date.now() })
-      evictExpiredAndOverflow()
+      if (inFlightControllers.get(cacheKey) === controller) {
+        store.set(cacheKey, { data, fetchedAt: Date.now() })
+        evictExpiredAndOverflow()
+      }
       return data
     })
     .finally(() => {
-      inFlight.delete(cacheKey)
+      if (inFlight.get(cacheKey) === promise) inFlight.delete(cacheKey)
       if (inFlightControllers.get(cacheKey) === controller) inFlightControllers.delete(cacheKey)
     })
 
@@ -196,6 +199,12 @@ export function invalidateClientCacheByPathPrefix(pathPrefix: string): void {
   const needle = `GET:${normalized}`
   for (const key of store.keys()) {
     if (key.startsWith(needle)) store.delete(key)
+  }
+  for (const key of [...inFlight.keys()]) {
+    if (!key.startsWith(needle)) continue
+    inFlightControllers.get(key)?.abort()
+    inFlightControllers.delete(key)
+    inFlight.delete(key)
   }
 }
 

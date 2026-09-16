@@ -1,12 +1,15 @@
 import express from 'express';
+import multer from 'multer';
 import { authenticateToken, authorize } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
 import {
   getPrePlannedGroup,
   getPrePlannedGroups,
+  getPrePlannedGroupingTemplate,
   getPrePlannedMetricsHandler,
   postPrePlannedAccept,
   postPrePlannedDismiss,
+  postPrePlannedGroupingBulkUpload,
   postPrePlannedManualCreate,
   postPrePlannedRebuild,
   postPrePlannedRevert,
@@ -15,6 +18,34 @@ import {
 const router = express.Router();
 
 router.use(authenticateToken);
+
+const groupingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /\.(xlsx|xls)$/i.test(file.originalname) ||
+      [
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/octet-stream',
+      ].includes(file.mimetype);
+    cb(null, ok);
+  },
+});
+
+router.get(
+  '/grouping-template',
+  authorize('ADMIN', 'MANAGEMENT', 'LOGISTICS'),
+  getPrePlannedGroupingTemplate,
+);
+router.post(
+  '/grouping-bulk-upload',
+  authorize('ADMIN', 'MANAGEMENT', 'LOGISTICS'),
+  groupingUpload.single('file'),
+  auditLog('MANUAL_CREATE', 'PRE_PLANNED_GROUP'),
+  postPrePlannedGroupingBulkUpload,
+);
 
 router.get('/groups', getPrePlannedGroups);
 router.get('/groups/:id', getPrePlannedGroup);

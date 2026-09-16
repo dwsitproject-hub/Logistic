@@ -31,6 +31,7 @@ export interface PrePlannedGroup {
   mergeHintGroupIds: string[];
   status: string;
   shipmentId: string | null;
+  excelGroupLabel?: string | null;
   members: PrePlannedGroupMember[];
 }
 
@@ -78,6 +79,53 @@ export async function createManualPrePlannedGroup(contractIds: string[]): Promis
   return res.data.data.group as PrePlannedGroup;
 }
 
+export type ShipmentGroupingBulkUploadResult = {
+  processedGroups: number;
+  succeeded: number;
+  failed: number;
+  skippedWithoutY: number;
+  groups: Array<{ group: string; groupCode: string; contractCount: number; totalOsMt?: number }>;
+  failures: Array<{ excelRowNumbers: number[]; group?: string; reason: string }>;
+  warnings: Array<{ group: string; groupCode: string; reason: string }>;
+};
+
+export async function downloadShipmentGroupingTemplate(params: URLSearchParams): Promise<{
+  blob: Blob;
+  truncated: boolean;
+  rowCount: number;
+  limit: number;
+}> {
+  const res = await api.get(`/pre-planned/grouping-template?${params.toString()}`, {
+    responseType: 'blob',
+  });
+  const blob = res.data as Blob;
+  const contentType = String(res.headers?.['content-type'] ?? '');
+  if (contentType.includes('application/json')) {
+    const text = await blob.text();
+    let message = 'Failed to download grouping template';
+    try {
+      const parsed = JSON.parse(text) as { error?: { message?: string } };
+      if (parsed.error?.message) message = parsed.error.message;
+    } catch {
+      /* keep default */
+    }
+    throw new Error(message);
+  }
+  const truncated = String(res.headers?.['x-klip-template-truncated'] ?? '') === '1';
+  const rowCount = Number(res.headers?.['x-klip-template-row-count'] ?? 0);
+  const limit = Number(res.headers?.['x-klip-template-limit'] ?? 0);
+  return { blob, truncated, rowCount, limit };
+}
+
+export async function uploadShipmentGroupingTemplate(
+  file: File,
+): Promise<ShipmentGroupingBulkUploadResult> {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await api.post('/pre-planned/grouping-bulk-upload', fd);
+  return res.data.data as ShipmentGroupingBulkUploadResult;
+}
+
 /** Toolbar scope used to narrow pre-planned suggestions on the Shipments page. */
 export interface PrePlannedGlobalScopeFilters {
   dateFrom: string;
@@ -102,6 +150,7 @@ function groupMatchesSearchTerm(group: PrePlannedGroup, searchTerm: string): boo
   const needle = searchTerm.toLowerCase();
   const fields = [
     group.groupCode,
+    group.excelGroupLabel,
     group.groupPlant,
     group.supplier,
     group.product,

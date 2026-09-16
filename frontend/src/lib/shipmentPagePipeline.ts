@@ -220,6 +220,60 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
   },
 ] as const
 
+/** Immediate Section 1 card patch after Unplanned POs become ACCEPTED Preplanned groups. */
+export interface UnplannedToPreplannedCardMove {
+  groupCount: number
+  contractRows: number
+  outstandingQtyKg: number
+}
+
+export interface ShipmentSection1CardSummaryPatch {
+  status?: Partial<ShipmentPagePipelineStatusCounts>
+  statusOutstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg>
+  unplannedTable?: {
+    contractRows?: number
+    shipmentRows?: number
+    totalTableRows?: number
+  }
+}
+
+export function patchSection1SummaryAfterUnplannedToPreplanned<T extends ShipmentSection1CardSummaryPatch>(
+  prev: T | null | undefined,
+  move: UnplannedToPreplannedCardMove,
+): T | null | undefined {
+  if (!prev) return prev
+  const groups = Math.max(0, Number(move.groupCount) || 0)
+  const contractRows = Math.max(0, Number(move.contractRows) || 0)
+  const osKg = Math.max(0, Number(move.outstandingQtyKg) || 0)
+  if (groups === 0 && contractRows === 0 && osKg === 0) return prev
+
+  const next: T = { ...prev }
+  if (prev.status) {
+    next.status = {
+      ...prev.status,
+      preplanned: Number(prev.status.preplanned ?? 0) + groups,
+      unplanned: Math.max(0, Number(prev.status.unplanned ?? 0) - contractRows),
+    }
+  }
+  if (prev.statusOutstandingQty) {
+    next.statusOutstandingQty = {
+      ...prev.statusOutstandingQty,
+      preplanned: Number(prev.statusOutstandingQty.preplanned ?? 0) + osKg,
+      unplanned: Math.max(0, Number(prev.statusOutstandingQty.unplanned ?? 0) - osKg),
+    }
+  }
+  if (prev.unplannedTable) {
+    const nextContractRows = Math.max(0, Number(prev.unplannedTable.contractRows ?? 0) - contractRows)
+    const nextTableRows = Math.max(0, Number(prev.unplannedTable.totalTableRows ?? 0) - contractRows)
+    next.unplannedTable = {
+      ...prev.unplannedTable,
+      contractRows: nextContractRows,
+      totalTableRows: nextTableRows,
+    }
+  }
+  return next
+}
+
 export function pipelineCountForStage(
   stage: ShipmentPagePipelineStage,
   counts: ShipmentPagePipelineStatusCounts,

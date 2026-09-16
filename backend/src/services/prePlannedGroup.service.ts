@@ -47,6 +47,7 @@ export interface PrePlannedGroupDto {
   mergeHintGroupIds: string[];
   status: string;
   shipmentId: string | null;
+  excelGroupLabel: string | null;
   members: PrePlannedGroupMemberDto[];
 }
 
@@ -371,6 +372,12 @@ function aggregateOrMixed(values: string[]): string {
   return 'Mixed';
 }
 
+function sanitizeExcelGroupLabel(raw: string | null | undefined): string | null {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, 80);
+}
+
 /**
  * Manually create a Preplanned group from a user-selected set of Unplanned
  * contracts (Shipments View Table "Select" column). Unlike auto-clustering,
@@ -386,6 +393,7 @@ function aggregateOrMixed(values: string[]): string {
 export async function createManualPrePlannedGroup(
   contractIds: string[],
   userId: string | undefined,
+  options?: { excelGroupLabel?: string | null },
 ): Promise<PrePlannedGroupDto> {
   const dedupedIds = [...new Set(contractIds.map((id) => id.trim()).filter(Boolean))];
   if (dedupedIds.length < 2) {
@@ -456,13 +464,15 @@ export async function createManualPrePlannedGroup(
     `);
 
     const groupCode = await nextManualGroupCode(groupPlant);
+    const excelGroupLabel = sanitizeExcelGroupLabel(options?.excelGroupLabel);
     const ins = await client.query(
       `
       INSERT INTO pre_planned_groups (
         group_code, partition_key, group_plant, buyer, incoterm, product,
         supplier, supplier_group, window_start, window_end,
-        bin_capacity_mt, total_os_mt, is_partial, status, source, created_by_user_id
-      ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,false,'ACCEPTED','MANUAL',$11)
+        bin_capacity_mt, total_os_mt, is_partial, status, source, created_by_user_id,
+        excel_group_label
+      ) VALUES ($1,'MANUAL',$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,false,'ACCEPTED','MANUAL',$11,$12)
       RETURNING id
       `,
       [
@@ -477,6 +487,7 @@ export async function createManualPrePlannedGroup(
         windowEnd,
         totalOsMt,
         userId ?? null,
+        excelGroupLabel,
       ],
     );
     groupId = ins.rows[0]!.id;
@@ -552,6 +563,7 @@ export async function listPrePlannedGroups(filters: {
       pg.merge_hint_ids,
       pg.status,
       pg.shipment_id,
+      pg.excel_group_label,
       pgm.contract_id,
       pgm.contract_number,
       pgm.os_mt_at_grouping,
@@ -596,6 +608,7 @@ export async function listPrePlannedGroups(filters: {
           : [],
         status: String(row.status),
         shipmentId: row.shipment_id ? String(row.shipment_id) : null,
+        excelGroupLabel: row.excel_group_label ? String(row.excel_group_label) : null,
         members: [],
       };
       groupMap.set(id, g);
@@ -798,6 +811,7 @@ export async function getPrePlannedGroupById(groupId: string): Promise<PrePlanne
       pg.merge_hint_ids,
       pg.status,
       pg.shipment_id,
+      pg.excel_group_label,
       pgm.contract_id,
       pgm.contract_number,
       pgm.os_mt_at_grouping,
@@ -838,6 +852,7 @@ export async function getPrePlannedGroupById(groupId: string): Promise<PrePlanne
           : [],
         status: String(row.status),
         shipmentId: row.shipment_id ? String(row.shipment_id) : null,
+        excelGroupLabel: row.excel_group_label ? String(row.excel_group_label) : null,
         members: [],
       };
     }

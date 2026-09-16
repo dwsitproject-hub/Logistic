@@ -30,7 +30,7 @@ export const FIELD_HELP = {
 
   outstandingQtyMt: `Contract Qty minus fulfilled quantity by incoterm: CIF/CFR/FRC uses Quantity Receive; FOB/LCO uses Quantity Delivery (same UAT trucking/vessel matrix as the Quantity Delivery column). Over-delivery shows +MT (green); remaining outstanding shows MT (black). B2B origin uses the same qty_move overlay as Delivery/Receive (SUM children capped at origin Contract Qty when parent is NULL or 0).`,
   shipmentOutstandingQtyMt: `Remaining qty on this STO, same as Contracts OS Qty. CIF/CFR/FRC uses Receive; FOB/LCO uses Delivery (Open→KLIP / Close→SAP). When one PO has several STOs, each row repeats the PO remainder (Contract Qty minus all related STOs) for display only. Status cards and Section OS Qty still count that PO once. Missing Delivery/Receive counts as 0 MT. Green = Over Delivered (+MT); black = Still Outstanding.`,
-  shipmentEtcNoAtcDueWithin7d: `Shipments without ATC, with Due Date Delivery End on or before today + 7 days (including overdue). Excludes Completed and Cancelled.`,
+  shipmentEtcNoAtcDueWithin7d: `Overdue / Due ≤7d.\n\nShipments without ATC, with Due Date Delivery End on or before today + 7 days (including overdue). Excludes Completed and Cancelled.`,
   shipmentSfalQtyMt: `Ship Figure After Loading (SFAL) from shipment data, displayed in MT (stored as kg in the database).`,
   shipmentSfbdQtyMt: `Ship Figure Before Discharge (SFBD) from shipment data, displayed in MT (stored as kg in the database).`,
 

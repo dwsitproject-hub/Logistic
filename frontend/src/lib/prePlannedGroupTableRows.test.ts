@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PrePlannedGroup } from '@/lib/prePlannedGroups';
+import { formatPrePlannedGroupBadge } from '@/lib/prePlannedGroupTableSpans';
 import {
   collectDistinctFormattedValues,
   formatPrePlannedGroupQtyMt,
@@ -88,5 +89,12 @@ describe('prePlannedGroupTableRows', () => {
       { id: '2', outstanding_quantity: 500_000 },
     ];
     expect(sumGroupQtyKgForColumn(members, 'outstanding_quantity')).toBe(1_500_000);
+  });
+
+  it('shows the Excel Group label next to the KLIP group code', () => {
+    expect(formatPrePlannedGroupBadge(sampleGroup)).toBe('PPG-001');
+    expect(
+      formatPrePlannedGroupBadge({ ...sampleGroup, excelGroupLabel: 'A' }),
+    ).toBe('A · PPG-001');
   });
 });

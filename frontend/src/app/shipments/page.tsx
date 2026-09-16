@@ -31,6 +31,12 @@ import {
 import { resolvePerformancePeriodDateRange } from '@/lib/performancePeriodFilters'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
+import {
+  isShipmentGroupingTemplateFile,
+  isShipmentGroupingTemplateMode,
+  SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP,
+  SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP,
+} from '@/lib/shipmentGroupingTemplate'
 import { buildShipmentViewTableExportMatrix } from '@/lib/shipmentViewTableExport'
 import { shipmentListHydrateVesselName } from '@/lib/shipmentVesselCompare'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
@@ -43,12 +49,15 @@ import {
 import {
   acceptPrePlannedGroup,
   createManualPrePlannedGroup,
+  downloadShipmentGroupingTemplate,
   dismissPrePlannedGroup,
   fetchPrePlannedGroups,
   filterPrePlannedGroupsByGlobalScope,
   hasPrePlannedGlobalScopeFilters,
   revertPrePlannedGroup,
+  uploadShipmentGroupingTemplate,
   type PrePlannedGroup,
+  type ShipmentGroupingBulkUploadResult,
 } from '@/lib/prePlannedGroups'
 import {
   enrichShipmentPoOptions,
@@ -154,6 +163,7 @@ import {
   type EtaBucketFilterKey,
 } from '@/lib/shipmentsPageDerivedData'
 import {
+  patchSection1SummaryAfterUnplannedToPreplanned,
   pipelineCountForStage,
   SHIPMENT_PAGE_PIPELINE_CARDS,
   SHIPMENT_PAGE_PIPELINE_LABELS,
@@ -171,6 +181,7 @@ import { mapShipmentAttentionInsights } from '@/lib/shipmentAttentionInsights'
 import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
 import {
   buildPrePlannedGroupLookupMap,
+  formatPrePlannedGroupBadge,
   formatPrePlannedGroupTooltip,
   resolvePrePlannedGroupForRow,
   resolveShipmentContractNumber,
@@ -1300,6 +1311,10 @@ function ShipmentsPageContent() {
   /** Manual grouping "Select" column — contract_row_id set of user-checked Unplanned rows. */
   const [selectedManualGroupContractIds, setSelectedManualGroupContractIds] = useState<Set<string>>(new Set())
   const [creatingManualPrePlannedGroup, setCreatingManualPrePlannedGroup] = useState(false)
+  const [groupingTemplateDownloading, setGroupingTemplateDownloading] = useState(false)
+  const [groupingTemplateUploading, setGroupingTemplateUploading] = useState(false)
+  const [groupingUploadResult, setGroupingUploadResult] = useState<BulkUploadStatusResult | null>(null)
+  const groupingUploadInputRef = useRef<HTMLInputElement | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -2063,6 +2078,10 @@ function ShipmentsPageContent() {
       }
 
       const LIST_SHELL_TIMEOUT_MS = 90_000
+      const kickSection1WithList = !options?.force
+      if (!kickSection1WithList) {
+        startSection1Fetches()
+      }
 
       const { data: listEnvelope } = await cachedGet(
         listCacheKey,
@@ -2083,7 +2102,9 @@ function ShipmentsPageContent() {
       if (searchTrim.length >= 2 || useAccurateQtySort) {
         setQtyFieldsReady(true)
       }
-      startSection1Fetches()
+      if (kickSection1WithList) {
+        startSection1Fetches()
+      }
 
       // Section 2 ETA scoped summary (only when a pipeline stage is selected).
       if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
@@ -2397,10 +2418,17 @@ function ShipmentsPageContent() {
     setAcceptingPrePlannedGroupId(group.id)
     try {
       await acceptPrePlannedGroup(group.id)
+      setShipmentsSection1Summary((prev) =>
+        patchSection1SummaryAfterUnplannedToPreplanned(prev, {
+          groupCount: 1,
+          contractRows: group.members.length,
+          outstandingQtyKg: Number(group.totalOsMt || 0) * 1000,
+        }) ?? prev,
+      )
       await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
       invalidateLogisticsListCaches()
       section1SummaryForceNextFetchRef.current = true
-      void fetchShipments(page, undefined, { force: true })
+      void fetchShipmentsRef.current(page, undefined, { force: true })
     } catch {
       // Silently ignore — UI will refresh on next fetch.
     } finally {
@@ -2469,7 +2497,7 @@ function ShipmentsPageContent() {
       await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
       invalidateLogisticsListCaches()
       section1SummaryForceNextFetchRef.current = true
-      void fetchShipments(page, undefined, { force: true })
+      void fetchShipmentsRef.current(page, undefined, { force: true })
     } catch {
       // Silently ignore — the badge will simply retry to reflect current state on next refetch.
     }
@@ -2483,7 +2511,7 @@ function ShipmentsPageContent() {
       await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
       invalidateLogisticsListCaches()
       section1SummaryForceNextFetchRef.current = true
-      void fetchShipments(page, undefined, { force: true })
+      void fetchShipmentsRef.current(page, undefined, { force: true })
     } catch {
       // Silently ignore — UI will refresh on next fetch.
     } finally {
@@ -2523,12 +2551,19 @@ function ShipmentsPageContent() {
     if (contractIds.length < 2 || creatingManualPrePlannedGroup) return
     setCreatingManualPrePlannedGroup(true)
     try {
-      await createManualPrePlannedGroup(contractIds)
+      const created = await createManualPrePlannedGroup(contractIds)
       setSelectedManualGroupContractIds(new Set())
+      setShipmentsSection1Summary((prev) =>
+        patchSection1SummaryAfterUnplannedToPreplanned(prev, {
+          groupCount: 1,
+          contractRows: contractIds.length,
+          outstandingQtyKg: Number(created.totalOsMt || 0) * 1000,
+        }) ?? prev,
+      )
       await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
       invalidateLogisticsListCaches()
       section1SummaryForceNextFetchRef.current = true
-      void fetchShipments(page, undefined, { force: true })
+      void fetchShipmentsRef.current(page, undefined, { force: true })
     } catch (error: any) {
       const message =
         error?.response?.data?.error?.message ||
@@ -2544,6 +2579,149 @@ function ShipmentsPageContent() {
     refetchPrePlannedAcceptedGroups,
     refetchPrePlannedGroups,
   ])
+
+  const groupingTemplateEnabled = isShipmentGroupingTemplateMode(statusFilter)
+
+  const buildGroupingTemplateSearchParams = useCallback(() => {
+    const params = new URLSearchParams()
+    if (dateFrom) params.append('dateFrom', dateFrom)
+    if (dateTo) params.append('dateTo', dateTo)
+    const searchTrim = searchTerm.trim()
+    if (searchTrim.length >= 2) params.append('search', searchTrim)
+    const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+      selectedIncoterms,
+      selectedProducts: debouncedSelectedProducts,
+      selectedSuppliers,
+    })
+    const cfKeys = Object.keys(mergedColumnFilters)
+    if (cfKeys.length > 0) {
+      params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+    }
+    const contractParam = searchParams.get('contract')
+    if (contractParam) params.append('contract', contractParam)
+    if (debouncedSelectedGroupPlants.length > 0) {
+      debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
+    }
+    return params
+  }, [
+    dateFrom,
+    dateTo,
+    searchTerm,
+    columnFilters,
+    selectedIncoterms,
+    debouncedSelectedProducts,
+    selectedSuppliers,
+    searchParams,
+    debouncedSelectedGroupPlants,
+  ])
+
+  const downloadGroupingTemplate = useCallback(async () => {
+    if (!groupingTemplateEnabled || groupingTemplateDownloading) return
+    setGroupingTemplateDownloading(true)
+    try {
+      const { blob, truncated, rowCount, limit } = await downloadShipmentGroupingTemplate(
+        buildGroupingTemplateSearchParams(),
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'shipment-unplanned-grouping-template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      if (truncated) {
+        alert(
+          `Template capped at ${limit.toLocaleString('en-US')} Unplanned POs (${rowCount.toLocaleString('en-US')} exported). Tighten toolbar filters and download again.`,
+        )
+      }
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+      let message = err?.response?.data?.error?.message || err?.message || 'Failed to download grouping template'
+      const data = err?.response?.data as unknown
+      if (data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await data.text()) as { error?: { message?: string } }
+          if (parsed.error?.message) message = parsed.error.message
+        } catch {
+          /* keep message */
+        }
+      }
+      alert(message)
+    } finally {
+      setGroupingTemplateDownloading(false)
+    }
+  }, [groupingTemplateEnabled, groupingTemplateDownloading, buildGroupingTemplateSearchParams])
+
+  const mapGroupingUploadToModal = (data: ShipmentGroupingBulkUploadResult): BulkUploadStatusResult => {
+    const errors: string[] = []
+    for (const f of data.failures) {
+      const rows = f.excelRowNumbers?.length ? `rows ${f.excelRowNumbers.join(', ')}` : 'group'
+      const group = f.group ? `Group ${f.group}` : ''
+      errors.push([rows, group, f.reason].filter(Boolean).join(' — '))
+    }
+    for (const w of data.warnings) {
+      errors.push(`Group ${w.group} (${w.groupCode}): ${w.reason}`)
+    }
+    return {
+      created: data.succeeded,
+      updated: data.warnings.length,
+      failed: data.failed,
+      errors,
+    }
+  }
+
+  const handleGroupingTemplateFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || groupingTemplateUploading) return
+      if (!groupingTemplateEnabled) {
+        alert(SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP)
+        return
+      }
+      setGroupingTemplateUploading(true)
+      try {
+        const valid = await isShipmentGroupingTemplateFile(file)
+        if (!valid) {
+          alert('Invalid file. Upload the Unplanned grouping template (Select, Group, PO Number).')
+          return
+        }
+        const data = await uploadShipmentGroupingTemplate(file)
+        setGroupingUploadResult(mapGroupingUploadToModal(data))
+        if (data.succeeded > 0) {
+          const contractRows = data.groups.reduce((sum, g) => sum + Number(g.contractCount || 0), 0)
+          const outstandingQtyKg = data.groups.reduce(
+            (sum, g) => sum + Number(g.totalOsMt || 0) * 1000,
+            0,
+          )
+          setShipmentsSection1Summary((prev) =>
+            patchSection1SummaryAfterUnplannedToPreplanned(prev, {
+              groupCount: data.succeeded,
+              contractRows,
+              outstandingQtyKg,
+            }) ?? prev,
+          )
+        }
+        await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+        invalidateLogisticsListCaches()
+        section1SummaryForceNextFetchRef.current = true
+        void fetchShipmentsRef.current(page, undefined, { force: true })
+      } catch (error: unknown) {
+        const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+        alert(err?.response?.data?.error?.message || err?.message || 'Failed to upload grouping template')
+      } finally {
+        setGroupingTemplateUploading(false)
+      }
+    },
+    [
+      groupingTemplateEnabled,
+      groupingTemplateUploading,
+      page,
+      refetchPrePlannedAcceptedGroups,
+      refetchPrePlannedGroups,
+    ],
+  )
 
   const contractBacklogRowToPoOption = (shipment: Shipment): ShipmentPoOption => {
     const contractId = String(shipment.contract_number || shipment.contract_numbers || '').trim()
@@ -4077,7 +4255,7 @@ function ShipmentsPageContent() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Badge className="cursor-default whitespace-nowrap bg-amber-100 text-amber-800 hover:bg-amber-100">
-                    {group.groupCode}
+                    {formatPrePlannedGroupBadge(group)}
                   </Badge>
                 </TooltipTrigger>
                 <TooltipContent className="whitespace-pre-wrap text-xs" side="top">
@@ -4119,7 +4297,7 @@ function ShipmentsPageContent() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge variant="secondary" className="cursor-default whitespace-nowrap">
-                  {group.groupCode}
+                  {formatPrePlannedGroupBadge(group)}
                 </Badge>
               </TooltipTrigger>
               <TooltipContent className="whitespace-pre-wrap text-xs" side="top">
@@ -6755,6 +6933,17 @@ function ShipmentsPageContent() {
           result={bulkUploadResult}
         />
 
+        <BulkUploadStatusModal
+          open={!!groupingUploadResult}
+          onOpenChange={(open) => { if (!open) setGroupingUploadResult(null) }}
+          title="Unplanned grouping upload"
+          result={groupingUploadResult}
+          createdLabel="Groups created"
+          updatedLabel="Warnings"
+          failedLabel="Failed"
+          errorsTitle="Group / row issues"
+        />
+
         <ShipmentOutstandingQtySummary
           loading={outstandingQtyFetching}
           data={shipmentsSection1Summary?.outstandingQty}
@@ -6892,6 +7081,60 @@ function ShipmentsPageContent() {
                   )}
                   Download Data
                 </Button>
+                <input
+                  ref={groupingUploadInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => void handleGroupingTemplateFileChange(e)}
+                  disabled={!groupingTemplateEnabled || groupingTemplateUploading}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        onClick={() => void downloadGroupingTemplate()}
+                        disabled={!groupingTemplateEnabled || groupingTemplateDownloading}
+                      >
+                        {groupingTemplateDownloading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4 mr-2" />
+                        )}
+                        Download Template
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!groupingTemplateEnabled ? (
+                    <TooltipContent side="top">{SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                  ) : null}
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        onClick={() => groupingUploadInputRef.current?.click()}
+                        disabled={!groupingTemplateEnabled || groupingTemplateUploading}
+                      >
+                        {groupingTemplateUploading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Upload className="h-4 w-4 mr-2" />
+                        )}
+                        Upload
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!groupingTemplateEnabled ? (
+                    <TooltipContent side="top">{SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                  ) : null}
+                </Tooltip>
                 <div className="relative">
                   <Button
                     variant="outline"
@@ -7659,7 +7902,7 @@ function ShipmentsPageContent() {
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="min-w-0">
                                 <div className="font-semibold truncate">
-                                  {group.group?.groupCode ?? 'Preplanned group'}
+                                  {group.group ? formatPrePlannedGroupBadge(group.group) : 'Preplanned group'}
                                 </div>
                                 <div className="text-xs text-gray-600 truncate">
                                   {group.members.length}{' '}

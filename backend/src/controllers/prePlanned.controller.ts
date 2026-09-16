@@ -13,6 +13,12 @@ import {
   revertPrePlannedGroupToSuggested,
 } from '../services/prePlannedGroup.service';
 import { invalidateShipmentsListCache } from '../services/shipmentList.service';
+import {
+  fetchShipmentGroupingTemplateRows,
+  parseGroupingTemplateQueryFromRequest,
+} from '../utils/shipmentPreplannedGroupingTemplateSql';
+import { buildShipmentGroupingTemplateXlsxBuffer } from '../utils/shipmentPreplannedGroupingUpload';
+import { applyShipmentGroupingBulkUpload } from '../services/shipmentGroupingBulkUpload.service';
 
 function disabled(res: Response): void {
   res.status(503).json({
@@ -147,6 +153,73 @@ export const postPrePlannedRevert = async (req: AuthRequest, res: Response): Pro
     res.status(400).json({
       success: false,
       error: { message: error instanceof Error ? error.message : 'Failed to revert pre-planned group' },
+    });
+  }
+};
+
+export const getPrePlannedGroupingTemplate = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!isPrePlannedGroupingEnabled()) {
+      disabled(res);
+      return;
+    }
+    const filters = parseGroupingTemplateQueryFromRequest(req.query as Record<string, unknown>);
+    const { rows, truncated, limit } = await fetchShipmentGroupingTemplateRows(filters);
+    const buf = buildShipmentGroupingTemplateXlsxBuffer(rows);
+    const filename = 'shipment-unplanned-grouping-template.xlsx';
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Klip-Template-Row-Count', String(rows.length));
+    res.setHeader('X-Klip-Template-Limit', String(limit));
+    res.setHeader('X-Klip-Template-Truncated', truncated ? '1' : '0');
+    res.setHeader(
+      'Access-Control-Expose-Headers',
+      'Content-Disposition, X-Klip-Template-Truncated, X-Klip-Template-Row-Count, X-Klip-Template-Limit',
+    );
+    res.send(buf);
+  } catch (error) {
+    logger.error('getPrePlannedGroupingTemplate failed', error);
+    res.status(500).json({
+      success: false,
+      error: { message: 'Failed to download Unplanned grouping template' },
+    });
+  }
+};
+
+export const postPrePlannedGroupingBulkUpload = async (
+  req: AuthRequest,
+  res: Response,
+): Promise<void> => {
+  try {
+    if (!isPrePlannedGroupingEnabled()) {
+      disabled(res);
+      return;
+    }
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file;
+    if (!file?.buffer) {
+      res.status(400).json({ success: false, error: { message: 'File is required (Excel .xlsx)' } });
+      return;
+    }
+    if (!/\.(xlsx|xls)$/i.test(file.originalname || '')) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Upload requires an Excel file (.xlsx)' },
+      });
+      return;
+    }
+    const data = await applyShipmentGroupingBulkUpload(file.buffer, req.user?.id);
+    invalidateShipmentsListCache();
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('postPrePlannedGroupingBulkUpload failed', error);
+    res.status(400).json({
+      success: false,
+      error: {
+        message: error instanceof Error ? error.message : 'Failed to upload grouping template',
+      },
     });
   }
 };

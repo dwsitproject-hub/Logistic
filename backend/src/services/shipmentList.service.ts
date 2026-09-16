@@ -57,6 +57,7 @@ import {
   type ShipmentStatusOutstandingQtyKg,
 } from '../utils/shipmentStatusCardQtySql';
 import {
+  overlayHybridBacklogCountsOnSummaryRow,
   overlayShipmentDailySummaryLiveStageCounts,
   parseShipmentStatusCardQtyExecutionFromCombinedSummaryRow,
 } from '../utils/shipmentSection1CombinedSummarySql';
@@ -413,6 +414,7 @@ const STATUS_CARD_QTY_CACHE = new Map<
 >();
 const STATUS_CARD_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentStatusCardQtyBundle>>();
 const OUTSTANDING_QTY_IN_FLIGHT = new Map<string, Promise<ShipmentOutstandingQtySummary>>();
+let shipmentListCachesEpoch = 0;
 
 /** Backlog qty parts already computed by the Unplanned/Preplanned/Completed/Cancelled breakdown queries. */
 export interface ShipmentStatusCardQtyBacklogParts {
@@ -485,6 +487,7 @@ export async function loadShipmentStatusCardQtyForRequest(
   const inFlight = STATUS_CARD_QTY_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = shipmentListCachesEpoch;
   const run = (async () => {
     const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
     const execText = await buildShipmentStatusCardQtyExecutionAggregateQuery(
@@ -508,11 +511,13 @@ export async function loadShipmentStatusCardQtyForRequest(
       preplannedOutstandingQtyKg: backlogParts.preplannedOutstandingQtyKg,
       outstanding,
     });
-    STATUS_CARD_QTY_CACHE.set(cacheKey, {
-      bundle,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-    evictMapIfNeeded(STATUS_CARD_QTY_CACHE, MAX_CACHE_ENTRIES);
+    if (epoch === shipmentListCachesEpoch) {
+      STATUS_CARD_QTY_CACHE.set(cacheKey, {
+        bundle,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+      evictMapIfNeeded(STATUS_CARD_QTY_CACHE, MAX_CACHE_ENTRIES);
+    }
     return bundle;
   })().finally(() => STATUS_CARD_QTY_IN_FLIGHT.delete(cacheKey));
 
@@ -546,6 +551,7 @@ export async function loadShipmentOutstandingQtyForRequest(
   const inFlight = OUTSTANDING_QTY_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = shipmentListCachesEpoch;
   const run = runSerializedShipmentHeavyQuery(`os:${cacheKey}`, async () => {
     const baseParams = [...opts.innerParams, ...opts.toolbarOuterParams];
     const execPromise = buildShipmentOutstandingQtyExecutionAggregateQuery(
@@ -589,11 +595,13 @@ export async function loadShipmentOutstandingQtyForRequest(
       { ...merged, bucketsComplete: true },
       merged.totalKg,
     );
-    OUTSTANDING_QTY_CACHE.set(cacheKey, {
-      summary,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-    evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
+    if (epoch === shipmentListCachesEpoch) {
+      OUTSTANDING_QTY_CACHE.set(cacheKey, {
+        summary,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+      evictMapIfNeeded(OUTSTANDING_QTY_CACHE, MAX_CACHE_ENTRIES);
+    }
     return summary;
   }).finally(() => OUTSTANDING_QTY_IN_FLIGHT.delete(cacheKey));
 
@@ -634,6 +642,7 @@ export async function loadShipmentEtcNoAtcDueWithin7dForRequest(opts: {
   const inFlight = ETC_NO_ATC_DUE_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = shipmentListCachesEpoch;
   const run = (async () => {
     const text = await buildShipmentEtcNoAtcDueWithin7dQuery(
       opts.shipmentBaseCteSql,
@@ -644,11 +653,13 @@ export async function loadShipmentEtcNoAtcDueWithin7dForRequest(opts: {
     const value = parseShipmentEtcNoAtcDueWithin7dRow(
       (res.rows[0] || {}) as Record<string, unknown>,
     );
-    ETC_NO_ATC_DUE_CACHE.set(cacheKey, {
-      value,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
-    evictMapIfNeeded(ETC_NO_ATC_DUE_CACHE, MAX_CACHE_ENTRIES);
+    if (epoch === shipmentListCachesEpoch) {
+      ETC_NO_ATC_DUE_CACHE.set(cacheKey, {
+        value,
+        expiresAt: Date.now() + CACHE_TTL_MS,
+      });
+      evictMapIfNeeded(ETC_NO_ATC_DUE_CACHE, MAX_CACHE_ENTRIES);
+    }
     return value;
   })().finally(() => ETC_NO_ATC_DUE_IN_FLIGHT.delete(cacheKey));
 
@@ -831,17 +842,20 @@ export async function loadShipmentListSummary(
   }
   if (cached) SUMMARY_CACHE.delete(cacheKey);
 
+  const epoch = shipmentListCachesEpoch;
   const result = await runSerializedShipmentHeavyQuery(`summary:${cacheKey}`, () =>
     query(summaryCountQuery, params),
   );
   const summaryRow = (result.rows[0] || {}) as Record<string, unknown>;
   const totalCount = parseInt(String(summaryRow.total_count ?? '0'), 10) || 0;
-  SUMMARY_CACHE.set(cacheKey, {
-    summaryRow,
-    totalCount,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
-  evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  if (epoch === shipmentListCachesEpoch) {
+    SUMMARY_CACHE.set(cacheKey, {
+      summaryRow,
+      totalCount,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  }
   return { summaryRow, totalCount };
 }
 
@@ -876,6 +890,7 @@ export async function loadShipmentSummaryBundle(
   source: ShipmentSummaryLoadSource;
 }> {
   const liveLoadStartedAt = Date.now();
+  const epoch = shipmentListCachesEpoch;
   const registerSummaryKeepWarm = () => {
     SUMMARY_KEEP_WARM.register(
       opts.cacheKey,
@@ -943,7 +958,11 @@ export async function loadShipmentSummaryBundle(
         loadCancelled(),
       ]);
     return {
-      summaryRow: normalizeSummaryRow(cached.summaryRow),
+      summaryRow: overlayHybridBacklogCountsOnSummaryRow(
+        normalizeSummaryRow(cached.summaryRow),
+        unplannedBreakdown,
+        preplannedBreakdown,
+      ),
       totalCount: cached.totalCount,
       unplannedBreakdown,
       preplannedBreakdown,
@@ -978,12 +997,6 @@ export async function loadShipmentSummaryBundle(
           );
         }
       }
-      SUMMARY_CACHE.set(opts.cacheKey, {
-        summaryRow,
-        totalCount,
-        expiresAt: Date.now() + CACHE_TTL_MS,
-      });
-      evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
       // Live hybrid counts for Unplanned + Preplanned cards — daily SUM can be stale or
       // diverge from the hybrid table (e.g. preplanned moves, execution rows).
       const [unplannedBreakdown, preplannedBreakdown, completedBreakdown, cancelledBreakdown] =
@@ -993,6 +1006,19 @@ export async function loadShipmentSummaryBundle(
           loadCompleted(),
           loadCancelled(),
         ]);
+      summaryRow = overlayHybridBacklogCountsOnSummaryRow(
+        summaryRow,
+        unplannedBreakdown,
+        preplannedBreakdown,
+      );
+      if (epoch === shipmentListCachesEpoch) {
+        SUMMARY_CACHE.set(opts.cacheKey, {
+          summaryRow,
+          totalCount,
+          expiresAt: Date.now() + CACHE_TTL_MS,
+        });
+        evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+      }
       registerSummaryKeepWarm();
       return {
         summaryRow,
@@ -1016,13 +1042,19 @@ export async function loadShipmentSummaryBundle(
       loadCancelled(),
     ]);
   // Combined summary SQL already includes stage counts + vessel name arrays.
-  const summaryRow = normalizeSummaryRow(loaded.summaryRow);
-  SUMMARY_CACHE.set(opts.cacheKey, {
-    summaryRow,
-    totalCount: loaded.totalCount,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
-  evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  const summaryRow = overlayHybridBacklogCountsOnSummaryRow(
+    normalizeSummaryRow(loaded.summaryRow),
+    unplannedBreakdown,
+    preplannedBreakdown,
+  );
+  if (epoch === shipmentListCachesEpoch) {
+    SUMMARY_CACHE.set(opts.cacheKey, {
+      summaryRow,
+      totalCount: loaded.totalCount,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+  }
   registerSummaryKeepWarm();
   return {
     summaryRow,
@@ -1049,6 +1081,7 @@ function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number):
 }
 
 export function invalidateShipmentsListCache(): void {
+  shipmentListCachesEpoch += 1;
   PAGE_CACHE.clear();
   // Hybrid list keeps its own cache (see listCacheRegistry) - clear it too, or an edit
   // leaves the default ALL view serving pre-edit rows.
@@ -1058,6 +1091,9 @@ export function invalidateShipmentsListCache(): void {
   OUTSTANDING_QTY_CACHE.clear();
   STATUS_CARD_QTY_CACHE.clear();
   ETC_NO_ATC_DUE_CACHE.clear();
+  STATUS_CARD_QTY_IN_FLIGHT.clear();
+  OUTSTANDING_QTY_IN_FLIGHT.clear();
+  ETC_NO_ATC_DUE_IN_FLIGHT.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
   // Oil Loss reads shipment quantities (sfal/sfbd/delivered/receive) — refresh its
   // cache after any shipment mutation so the page reflects the edit immediately.

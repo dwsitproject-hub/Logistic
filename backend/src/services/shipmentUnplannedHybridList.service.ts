@@ -267,6 +267,8 @@ const HYBRID_CACHE = new Map<string, { data: HybridListResult; expiresAt: number
 const HYBRID_IN_FLIGHT = new Map<string, Promise<HybridListResult>>();
 const HYBRID_CACHE_TTL_MS = 5 * 60 * 1000;
 const HYBRID_MAX_CACHE_ENTRIES = 80;
+/** Drop in-flight results that started before invalidate — otherwise they refill stale counts. */
+let hybridCachesEpoch = 0;
 
 const BREAKDOWN_CACHE = new Map<string, { data: UnplannedHybridBreakdown; expiresAt: number }>();
 const BREAKDOWN_IN_FLIGHT = new Map<string, Promise<UnplannedHybridBreakdown>>();
@@ -289,10 +291,15 @@ const CANCELLED_BREAKDOWN_CACHE = new Map<
 const CANCELLED_BREAKDOWN_IN_FLIGHT = new Map<string, Promise<CancelledContractBacklogBreakdown>>();
 
 export function invalidateHybridBreakdownCache(): void {
+  hybridCachesEpoch += 1;
   BREAKDOWN_CACHE.clear();
   PREPLANNED_BREAKDOWN_CACHE.clear();
   COMPLETED_BREAKDOWN_CACHE.clear();
   CANCELLED_BREAKDOWN_CACHE.clear();
+  BREAKDOWN_IN_FLIGHT.clear();
+  PREPLANNED_BREAKDOWN_IN_FLIGHT.clear();
+  COMPLETED_BREAKDOWN_IN_FLIGHT.clear();
+  CANCELLED_BREAKDOWN_IN_FLIGHT.clear();
 }
 
 registerListCacheInvalidator(invalidateHybridBreakdownCache);
@@ -309,8 +316,10 @@ export async function countHybridBreakdown(
   const inFlight = BREAKDOWN_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = hybridCachesEpoch;
   const run = computeHybridBreakdown(ctx)
     .then((data) => {
+      if (epoch !== hybridCachesEpoch) return data;
       BREAKDOWN_CACHE.set(cacheKey, { data, expiresAt: Date.now() + HYBRID_CACHE_TTL_MS });
       if (BREAKDOWN_CACHE.size > HYBRID_MAX_CACHE_ENTRIES) {
         const oldest = [...BREAKDOWN_CACHE.entries()].sort(
@@ -488,7 +497,9 @@ function applyContractBacklogRowKind(row: Record<string, unknown>): void {
  */
 
 export function invalidateHybridShipmentsListCache(): void {
+  hybridCachesEpoch += 1;
   HYBRID_CACHE.clear();
+  HYBRID_IN_FLIGHT.clear();
 }
 
 registerListCacheInvalidator(invalidateHybridShipmentsListCache);
@@ -531,8 +542,10 @@ export async function resolveHybridShipmentsList(
     ? runSerializedShipmentHeavyQuery(`hybrid:${cacheKey}`, compute)
     : compute();
 
+  const epoch = hybridCachesEpoch;
   const run = queued
     .then((data) => {
+      if (epoch !== hybridCachesEpoch) return data;
       HYBRID_CACHE.set(cacheKey, { data, expiresAt: Date.now() + HYBRID_CACHE_TTL_MS });
       evictHybridCacheIfNeeded();
       return data;
@@ -756,8 +769,10 @@ export async function countPreplannedContracts(
   const inFlight = PREPLANNED_BREAKDOWN_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = hybridCachesEpoch;
   const run = computePreplannedContractsBreakdown(ctx)
     .then((data) => {
+      if (epoch !== hybridCachesEpoch) return data;
       PREPLANNED_BREAKDOWN_CACHE.set(cacheKey, {
         data,
         expiresAt: Date.now() + HYBRID_CACHE_TTL_MS,
@@ -771,7 +786,9 @@ export async function countPreplannedContracts(
       return data;
     })
     .finally(() => {
-      PREPLANNED_BREAKDOWN_IN_FLIGHT.delete(cacheKey);
+      if (PREPLANNED_BREAKDOWN_IN_FLIGHT.get(cacheKey) === run) {
+        PREPLANNED_BREAKDOWN_IN_FLIGHT.delete(cacheKey);
+      }
     });
 
   PREPLANNED_BREAKDOWN_IN_FLIGHT.set(cacheKey, run);
@@ -855,8 +872,10 @@ export async function countCompletedContractBacklog(
   const inFlight = COMPLETED_BREAKDOWN_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = hybridCachesEpoch;
   const run = computeCompletedContractBacklogBreakdown(ctx)
     .then((data) => {
+      if (epoch !== hybridCachesEpoch) return data;
       COMPLETED_BREAKDOWN_CACHE.set(cacheKey, {
         data,
         expiresAt: Date.now() + HYBRID_CACHE_TTL_MS,
@@ -911,8 +930,10 @@ export async function countCancelledContractBacklog(
   const inFlight = CANCELLED_BREAKDOWN_IN_FLIGHT.get(cacheKey);
   if (inFlight) return inFlight;
 
+  const epoch = hybridCachesEpoch;
   const run = computeCancelledContractBacklogBreakdown(ctx)
     .then((data) => {
+      if (epoch !== hybridCachesEpoch) return data;
       CANCELLED_BREAKDOWN_CACHE.set(cacheKey, {
         data,
         expiresAt: Date.now() + HYBRID_CACHE_TTL_MS,

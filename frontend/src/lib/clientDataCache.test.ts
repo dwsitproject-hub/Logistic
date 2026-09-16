@@ -101,6 +101,7 @@ describe('cachedGet', () => {
 
     resolveFirst?.({ v: 1 })
     await pending
+    expect(peekCache(key)).toEqual({ v: 2 })
   })
 })
 
@@ -138,6 +139,21 @@ describe('invalidateClientCacheByPathPrefix', () => {
     invalidateClientCacheByPathPrefix('/contracts')
     expect(peekCache(contractsKey)).toBeNull()
     expect(peekCache(shipmentsKey)).not.toBeNull()
+  })
+
+  it('aborts in-flight GETs for the prefix so a later force fetch is not joined to a stale request', async () => {
+    let resolveSlow: ((value: { v: number }) => void) | undefined
+    const slow = new Promise<{ v: number }>((resolve) => {
+      resolveSlow = resolve
+    })
+    const key = buildCacheKey('GET', '/shipments?summaryOnly=true')
+    const pending = cachedGet(key, async () => slow)
+    invalidateClientCacheByPathPrefix('/shipments')
+    const fresh = await cachedGet(key, async () => ({ v: 2 }))
+    expect(fresh.data).toEqual({ v: 2 })
+    resolveSlow?.({ v: 1 })
+    await pending.catch(() => {})
+    expect(peekCache(key)).toEqual({ v: 2 })
   })
 })
 
