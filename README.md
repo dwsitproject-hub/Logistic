@@ -1466,12 +1466,62 @@ Region/Site column - so the card and the column cannot disagree about which cont
 | CIF / CFR gap | 0 MT | 0 MT |
 | backlog OS query | ~1.6 s | ~1.7 s |
 
-What remains is only the 1,345 MT of GR-Open / KLIP-COMPLETED contracts above.
+What remains is only the 1,345 MT of GR-Open contracts above - closed in the section below.
 
 **Trucking has the same exposure and has not been changed yet**: 33 FRC/LCO contracts with a blank
 Region/Site carry 13,927 MT. Its OS builders are shaped differently - the combined backlog query
 produces the Unplanned card's COUNT and contract qty from the same scan as the OS buckets - so
 applying the exclusion there without also removing the rows from that card needs its own pass.
+
+
+### One PO, several STOs - and the ATC that closed all of them
+
+The last 1,345 MT was three POs, and the mechanism was not the stored KLIP status this write-up
+first blamed. `isContractEffectivelyDone` closes a contract when
+`last_ata_vessel_complete_discharge` is set - and that column is a **MAX across the PO**. On a PO
+carrying several STOs, one discharged STO therefore closed the whole contract while another was
+still Open with quantity left:
+
+```
+PO 1004030633   Contract Quantity = 500,000 kg
+  STO 1006019438   STO Quantity =  97,340   Receive = 97,340   GR STO = Close   -> discharged
+  STO 1006019958   STO Quantity = 402,660   Receive =      0   GR STO = Open    -> 402,660 kg left
+```
+
+Contract Performance called the PO Close and dropped its 403 MT; the Shipments OS went on counting
+it. Same shape as the sibling-STO discharge above, one page over.
+
+The ATC arm now applies only when the PO has a single STO (`sto_count`), which leaves the case the
+arm exists for - a single-STO PO whose vessel discharged while GR lags - exactly as it was. The
+count comes from `contract_sto_agg_snapshot` joined onto the Contract Performance snapshot, which
+does not store it; one small row per contract, and no snapshot rebuild. The SQL mirror
+(`sqlContractEffectivelyDoneExpr`) takes the count as an optional expression so callers that do not
+carry one keep their previous behaviour.
+
+Measured on the dev copy: **3 contracts move Close -> Open, 1,346 MT, all FOB** - exactly the three
+in question, nothing else. And with that, the two pages agree:
+
+| | Shipments | Contract Performance | gap |
+| --- | --- | --- | --- |
+| FOB | 234,539 MT | 234,539 MT | **0** |
+| CIF | 104,609 MT | 104,609 MT | **0** |
+| CFR | 5,000 MT | 5,000 MT | **0** |
+
+**Why the OS is not computed per STO.** SAP does carry per-STO quantities, and for the PO above they
+sum exactly to the contract quantity - so `contract qty - qty STO1 - qty STO2` looks like the
+natural model. It does not survive contact with the data: of 2,706 multi-STO POs, **1,325 have
+`SUM(STO Quantity) <> Contract Quantity`**, several by exactly 2x, because the reverse relation (one
+STO shared by several POs) is the common one and `STO Quantity` is then the whole STO's, not this
+PO's share - the same grain problem `po_sto_count` already divides for. Restricted to POs whose STOs
+are all exclusive, 324 of 1,593 still disagree. The OS therefore stays at PO grain, where it is
+right, and per-STO quantities are used only to decide **which** STO carries it.
+
+Attribution is already correct as a side effect of the own-STO discharge column: a group whose own
+STO has discharged leaves the execution arm, so the quantity lands on the STO that is still open.
+What is left is 5 POs holding more than one *simultaneously active* STO group, where
+`DISTINCT ON (contract_number)` shows the whole PO's OS on one of them. Splitting it would need the
+per-STO quantities the paragraph above shows cannot be trusted, so it is deliberately not done: the
+totals are exact, and a split would trade that for a nicer-looking row.
 
 
 ### ...and the list's status column now says so too

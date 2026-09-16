@@ -318,6 +318,7 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
+          (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
           MAX(${sqlIncotermQuantityDeliveryCase(
             contractEffectiveIncotermExpr('c'),
             'qm.quantity_delivery_trucking',
@@ -604,8 +605,16 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
    */
   const snapshotBaseSql = `
       WITH base AS (
-        SELECT *
-        FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE}
+        /*
+         * sto_count comes from the STO aggregate rather than the snapshot, which does not store it.
+         * It decides whether an ATC may finish the PO: on a multi-STO PO the ATC is a MAX across
+         * STOs, so one discharged STO must not close a PO whose other STO is still Open.
+         * contract_sto_agg_snapshot is one small row per contract, so this is a cheap join and
+         * needs no snapshot rebuild.
+         */
+        SELECT cps.*, sa.sto_count
+        FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} cps
+        LEFT JOIN contract_sto_agg_snapshot sa ON sa.contract_number = cps.contract_id
         WHERE 1=1
         ${snapshotDateWhere}${snapshotPresenceWhere}
       )
@@ -634,6 +643,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         sqlContractEffectivelyDoneExpr({
           outstandingKgExpr: 'base.outstanding_quantity',
           atcExpr: 'base.last_ata_vessel_complete_discharge',
+          stoCountExpr: 'base.sto_count',
         }),
       )}`;
     } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
@@ -643,6 +653,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         sqlContractEffectivelyDoneExpr({
           outstandingKgExpr: 'base.outstanding_quantity',
           atcExpr: 'base.last_ata_vessel_complete_discharge',
+          stoCountExpr: 'base.sto_count',
         }),
       )}`;
     } else {

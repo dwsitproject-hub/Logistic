@@ -522,7 +522,23 @@ export function isContractEffectivelyDone(row: Record<string, unknown> | null | 
   const os = Number(row.outstanding_quantity);
   if (Number.isFinite(os) && os <= OUTSTANDING_QTY_ZERO_TOLERANCE_KG) return true;
   const atc = row.last_ata_vessel_complete_discharge;
-  return atc != null && String(atc).trim() !== '';
+  if (atc == null || String(atc).trim() === '') return false;
+  /*
+   * An ATC only finishes the PO when the PO has one STO.
+   *
+   * `last_ata_vessel_complete_discharge` is a MAX across the PO, so on a PO carrying several STOs
+   * one discharged STO closed the whole contract while another was still Open with quantity left.
+   * PO 1004030633 is the worked case: STO 1006019438 discharged (97,340 kg, GR Close) while STO
+   * 1006019958 still held 402,660 kg with GR Open - Contract Performance called the PO Close and
+   * dropped its 403 MT, which Shipments went on counting. Multi-STO POs are not an edge case here:
+   * 2,706 POs have more than one STO against 2,592 with exactly one.
+   *
+   * The lagging-GR case the arm exists for is untouched: a single-STO PO whose vessel discharged
+   * while GR still says Open still closes.
+   */
+  const stoCount = Number(row.sto_count);
+  if (Number.isFinite(stoCount) && stoCount > 1) return false;
+  return true;
 }
 
 /**
@@ -543,11 +559,17 @@ export function resolveContractEffectiveStatusText(
 export function sqlContractEffectivelyDoneExpr(opts: {
   outstandingKgExpr: string;
   atcExpr: string;
+  /** PO-level STO count; when it is above 1 an ATC no longer finishes the PO (see the JS form). */
+  stoCountExpr?: string;
 }): string {
+  const atcArm = opts.stoCountExpr
+    ? `((${opts.atcExpr}) IS NOT NULL
+      AND COALESCE((${opts.stoCountExpr})::numeric, 1) <= 1)`
+    : `(${opts.atcExpr}) IS NOT NULL`;
   return `(
     ((${opts.outstandingKgExpr}) IS NOT NULL
       AND (${opts.outstandingKgExpr})::numeric <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})
-    OR (${opts.atcExpr}) IS NOT NULL
+    OR ${atcArm}
   )`;
 }
 

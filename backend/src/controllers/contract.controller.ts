@@ -1430,6 +1430,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           sqlContractEffectivelyDoneExpr({
             outstandingKgExpr: 'base.outstanding_quantity',
             atcExpr: 'base.last_ata_vessel_complete_discharge',
+            stoCountExpr: 'base.sto_count',
           }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
@@ -1439,6 +1440,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           sqlContractEffectivelyDoneExpr({
             outstandingKgExpr: 'base.outstanding_quantity',
             atcExpr: 'base.last_ata_vessel_complete_discharge',
+            stoCountExpr: 'base.sto_count',
           }),
         )}`;
       } else {
