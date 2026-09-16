@@ -1507,6 +1507,47 @@ in question, nothing else. And with that, the two pages agree:
 | CIF | 104,609 MT | 104,609 MT | **0** |
 | CFR | 5,000 MT | 5,000 MT | **0** |
 
+### The same shape, twice more: incoterm and GR read from the group
+
+Production kept a gap after all of the above, and listing every sea contract on both pages reduced
+it to **11 contracts, net 1,548 MT** - small enough to name, and two more instances of the shape
+this whole investigation kept finding: a group-level value deciding a contract-level fact.
+
+| MT | contracts | cause |
+| --- | --- | --- |
+| +1,050 | 4 | bucketed and valued by the STO group's incoterm |
+| +608 | 3 | own GR says Close, but the group's BOOL_AND does not |
+| -110 | 3 | Contract Performance counts them, Shipments has them in neither arm |
+
+**Incoterm.** `execution_os` preferred the grouped row's `os_incoterm` over the contract's own, and
+an STO group can hold contracts of different incoterms. Three FRC contracts in Karawang and one LCO
+in Bontang were therefore counted in the **sea** OS card as FOB. That is not only a wrong bucket:
+the incoterm selects which delivery column the outstanding quantity reads, so the same four were
+valued off the vessel column instead of the trucking one - Contract Performance had them at 0-3 MT
+against 100-750 MT here. Both the bucket and the quantity now take the contract's own incoterm, with
+the group's kept as the fallback for a contract carrying none.
+
+**GR Close.** `is_contract_sap_closed` on the grouped row is `BOOL_AND` over the group's contracts,
+so a group finishes only once every contract in it has. A closed contract sharing an STO with open
+ones stayed in the execution arm and kept contributing. The test is now made per contract inside
+`execution_os_contracts`, where the rows are already split out; the grouped flag is left alone
+because it also drives the list's status column, and there "every contract closed" is the right
+question to ask of a row that stands for the whole group.
+
+Measured on the dev copy after both: FOB, CIF and CFR stay at a 0 MT gap - neither change moves a
+number there, which is what a fix for a production-only data shape should do.
+
+**Diagnostics, because the reasoning went wrong repeatedly.** Three hypotheses were tested on the
+dev copy and generalised to production without checking there, and all three were wrong; a fourth
+compared against a figure the page never displayed (55,653 against 47,153 on screen, because the
+query omitted the year-to-date range, the B2B child exclusion and the PO-placeholder exclusion).
+`docs/scripts/diag-os-gap-slice.sh` now makes reproducing the page's own number an explicit gate
+before any diff, `diag-shipments-os-contracts.sh` lists the Shipments OS per contract from the real
+query inside the container, `diag-why-not-on-cp.sh` names the gate a contract fails, and
+`diag-os-gap-classes.sh` sizes every class across the whole dataset so the order of work follows the
+numbers.
+
+
 **Why the OS is not computed per STO.** SAP does carry per-STO quantities, and for the PO above they
 sum exactly to the contract quantity - so `contract qty - qty STO1 - qty STO2` looks like the
 natural model. It does not survive contact with the data: of 2,706 multi-STO POs, **1,325 have

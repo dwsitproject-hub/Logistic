@@ -7,6 +7,7 @@ import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
  * incoterm (FOB / CIF / CFR) filters on that OS.
  */
 
+import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
@@ -254,9 +255,40 @@ export function sqlShipmentExecutionOsPerContractCtes(
             AND ${sqlContractHasResolvedRegionSiteExpr('c_rs.contract_id', 'c_rs.po_number')}
         )`
     : '';
+  /*
+   * The contract's OWN incoterm decides its bucket and its quantity, not the STO group's.
+   *
+   * `os_incoterm` is the group's, and an STO group can hold contracts of different incoterms. With
+   * the group's value preferred, four trucking contracts landed in the sea OS card as FOB -
+   * 1004030388, 1004030695, 1004030753 (FRC, Karawang) and 9184100081 (LCO, Bontang) - and that is
+   * not only a wrong bucket: the incoterm selects which delivery column the outstanding quantity
+   * reads, so those four were also valued off the vessel column instead of the trucking one.
+   * Contract Performance had them at 0-3 MT against 100-750 MT here, 1,050 MT in all
+   * (production, 2026-09-16).
+   *
+   * The group's value stays as the fallback for a contract that carries none of its own.
+   */
+  const contractOwnIncoterm = `(SELECT c.incoterm FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1)`;
+  /*
+   * A contract whose own GR says Close carries no outstanding quantity, whatever its STO group does.
+   *
+   * `is_contract_sap_closed` on the grouped row is a BOOL_AND across the group's contracts, so a
+   * group finishes only when every contract in it has finished. A closed contract sharing an STO
+   * with open ones therefore stayed inside the execution arm and kept contributing: 1004029445
+   * (FOB, 600 MT), 1004030942 and 1004030943 (CIF, 4 MT each) - 608 MT in production, 2026-09-16.
+   *
+   * Tested per contract here, where the rows are already split out, rather than by changing the
+   * grouped flag - that flag also drives the list's status column, where "every contract closed"
+   * is the right question to ask of a row that represents the whole group.
+   */
+  const contractOwnSapClosed = `EXISTS (
+          SELECT 1 FROM contracts c_closed
+          WHERE c_closed.contract_id = TRIM(cn)
+            AND ${sqlIsContractSapClosedExpr('c_closed')}
+        )`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: `(SELECT c.quantity_ordered FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1)`,
-    incotermExpr: `COALESCE(NULLIF(TRIM(r.os_incoterm), ''), (SELECT c.incoterm FROM contracts c WHERE c.contract_id = r.contract_number LIMIT 1), '')`,
+    incotermExpr: `COALESCE(NULLIF(TRIM(${contractOwnIncoterm}), ''), NULLIF(TRIM(r.os_incoterm), ''), '')`,
     contractNumberExpr: 'r.contract_number',
   });
   return `
@@ -279,6 +311,7 @@ export function sqlShipmentExecutionOsPerContractCtes(
           'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING'
         )
         ${regionSiteFilter}
+        AND NOT (${contractOwnSapClosed})
     ),
     execution_os_ranked AS (
       SELECT DISTINCT ON (contract_number)
@@ -294,7 +327,9 @@ export function sqlShipmentExecutionOsPerContractCtes(
         r.contract_number,
         r.effective_status,
         r.os_source_type AS source_type,
-        r.os_incoterm AS incoterm,
+        -- Same rule as the quantity above: the contract's own incoterm decides its bucket, so a
+        -- trucking contract sharing an STO group with sea ones is not counted as a sea one.
+        COALESCE(NULLIF(TRIM(${contractOwnIncoterm}), ''), NULLIF(TRIM(r.os_incoterm), ''), '') AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
       FROM execution_os_ranked r
     ),
