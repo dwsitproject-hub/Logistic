@@ -45,12 +45,25 @@
 --     them moves a number - left alone rather than deleted on the same circumstantial evidence.
 --   - only rows whose mirror is already NULL. Rows with the mirror intact are 169/170's business.
 --
--- Conditions, all four required:
+-- Conditions, all five required:
 --   1. the value is set and the mirror is NULL
 --   2. the shipment's OWN STO has no such value in SAP
 --   3. a shipment on a DIFFERENT STO holds the identical date on a DIFFERENT vessel
 --   4. the two STOs are linked - some contract has a shipment row on both - so an unrelated STO
 --      that happens to share a date is not touched
+--   5. the shipment has not sailed: its status is neither SAILED nor COMPLETED
+--
+-- Condition 5 is what makes this safe rather than merely plausible, and it was added after the
+-- production dry run. Conditions 1-4 are symmetric - they see a pair of identical dates on two
+-- vessels but not which half is the copy - and the dry run duly selected BOTH sides:
+--
+--     STO 1006019958  Luminor 6             PLANNED     10 rows   <- contradicts itself
+--     STO 1006019867  MT.ANGGRAINI SPIRIT   COMPLETED    6 rows   <- voyage may be real
+--
+-- A shipment still at PLANNED cannot have finished discharging, so an ATC on it is impossible
+-- rather than improbable. A COMPLETED one may hold a genuine date, and 1006019867 is precisely the
+-- STO migration 170 repaired once already. Those six rows are left alone: if they are copies too,
+-- that needs evidence this rule does not have.
 --
 -- Idempotent: once cleared the column IS NULL and the row no longer matches. The backup insert
 -- skips rows already recorded.
@@ -76,6 +89,7 @@ WITH candidates AS (
   JOIN shipments s ON s.id = v.shipment_id
   WHERE v.ata_loading_completed IS NOT NULL
     AND v.sap_ata_loading_completed IS NULL
+    AND UPPER(TRIM(COALESCE(s.status, ''))) NOT IN ('SAILED', 'COMPLETED', 'CANCELLED')
     AND NULLIF(TRIM(s.shipment_id::text), '') IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM sap_processed_data spd
