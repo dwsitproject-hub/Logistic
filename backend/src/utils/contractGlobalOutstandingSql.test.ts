@@ -146,4 +146,16 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('trucking_wb_overlay');
     expect(sql).toContain('t.deduped_at IS NULL');
   });
+
+  it('the snapshot path takes the larger of WB and SAP, like the trucking resolvers do', () => {
+    // Two copies of one rule. Changing only sqlTruckingResolvedDeliveryQty moved the Trucking page
+    // and left Contract Performance - which reads contract_qty_move_snapshot - showing contract
+    // 1364002000 at 100 MT outstanding on 89.74 MT received. They have to move together.
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('GREATEST(w.wb_delivery_qty_kg, COALESCE(s.quantity_delivery_trucking, 0))');
+    expect(sql).toContain('GREATEST(w.wb_receive_qty_kg, COALESCE(s.quantity_receive, 0))');
+    // The bare weighbridge preference must be gone from every branch.
+    expect(sql).not.toContain('THEN w.wb_delivery_qty_kg');
+    expect(sql).not.toContain('THEN w.wb_receive_qty_kg');
+  });
 });

@@ -1875,6 +1875,25 @@ exceed WB. The conclusion was arithmetic on a column that was structurally blank
 script composes the same expressions the pages compose; when a diagnostic and a screenshot
 disagree, the screenshot is the evidence.
 
+**The rule exists in two places, and both had to move.** The trucking resolvers are what the
+Trucking page and Contract Details read. Contract Performance reads `qm.*` - the
+`contract_qty_move_snapshot` table - whose builder (`contractGlobalOutstandingSql.ts`,
+`qty_move_resolved`) carries its own copy of the same decision in three branches:
+
+```
+WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
+ELSE s.quantity_delivery_trucking
+```
+
+Changing only the resolvers moved the Trucking page and left Contract Performance showing contract
+1364002000 at 100 MT outstanding on 89.74 MT received - which looks exactly like a failed deploy
+and is not. Both copies now take GREATEST, and a test asserts the bare weighbridge preference is
+gone from every branch of the snapshot builder.
+
+Because it is a snapshot, the change is invisible on Contract Performance until it is rebuilt:
+`docs/scripts/refresh-qty-move-snapshot.js`. The rebuild marks the snapshot stale first, so readers
+fall back to the live path while it runs, then swaps in one transaction.
+
 **The 499 kg tolerance was not the problem, and that is worth knowing.** Before this change the
 obvious suspicion was that operations were finishing but not reaching COMPLETED -
 `isTruckingPipelineCompleted` is "GR closed OR outstanding <= 499 kg", so a stuck status would hold

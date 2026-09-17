@@ -309,8 +309,15 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter, cteName = 'qty_mo
         qty_move_resolved AS (
           SELECT
             COALESCE(s.contract_number, w.contract_number, sk.contract_number) AS contract_number,
+            -- GREATEST, not the weighbridge alone. trucking_wb_overlay is already scoped to
+            -- GR-open FRC/LCO, so this is the same rule as sqlTruckingResolvedDeliveryQty and has
+            -- to move with it: one weighbridge ticket used to discard SAP outright, which left
+            -- contract 1364002000 reading 100 MT outstanding on 89.74 MT received. This copy is
+            -- what Contract Performance reads (through contract_qty_move_snapshot), so changing
+            -- only the trucking resolvers fixed the Trucking page and left this one untouched.
             CASE
-              WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
+              WHEN w.wb_delivery_qty_kg > 0
+                THEN GREATEST(w.wb_delivery_qty_kg, COALESCE(s.quantity_delivery_trucking, 0))
               ELSE s.quantity_delivery_trucking
             END AS quantity_delivery_trucking,
             CASE
@@ -319,7 +326,8 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter, cteName = 'qty_mo
             END AS quantity_delivery_vessel,
             CASE
               WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
-              WHEN w.wb_receive_qty_kg > 0 THEN w.wb_receive_qty_kg
+              WHEN w.wb_receive_qty_kg > 0
+                THEN GREATEST(w.wb_receive_qty_kg, COALESCE(s.quantity_receive, 0))
               ELSE s.quantity_receive
             END AS quantity_receive,
             COALESCE(
@@ -332,7 +340,8 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter, cteName = 'qty_mo
               ),
               NULLIF(
                 CASE
-                  WHEN w.wb_delivery_qty_kg > 0 THEN w.wb_delivery_qty_kg
+                  WHEN w.wb_delivery_qty_kg > 0
+                    THEN GREATEST(w.wb_delivery_qty_kg, COALESCE(s.quantity_delivery_trucking, 0))
                   ELSE s.quantity_delivery_trucking
                 END,
                 0
