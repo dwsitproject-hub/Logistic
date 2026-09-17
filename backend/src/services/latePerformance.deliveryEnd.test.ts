@@ -429,7 +429,7 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
     expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(-7)
   })
 
-  it('Open LAND row with no milestones uses today fallback (Condition B)', () => {
+  it('Open LAND row with no milestones has no Trade Cycle at all', () => {
     const todayMid = new Date(2026, 5, 10)
     const row = {
       import_status: 'OPEN',
@@ -441,11 +441,16 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
       last_trucking_daily_deliverable_date: null,
       open_standard_eta_trucking: null,
     }
-    // due (5) - today (10) = -5: already past due with nothing delivered, so Late.
-    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(-5)
+    /*
+     * No WB and no daily planning means no completion date, and the rule is ATC, else ETC, else
+     * "-". The old `due end - today` fallback reported a contract where nothing had been planned
+     * as "28 days ahead" - on track precisely when it was not - and was removed 2026-09-17.
+     */
+    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBeNull()
 
     const lateRow = { ...row, delivery_end_date: '2020-01-01' }
-    expect(isContractIncludedInPerfDrilldownTree(lateRow, { lateOnTimeFilter: 'LATE' })).toBe(true)
+    // With no cycle it is unscheduled, so it is in neither the Late nor the On Time tree.
+    expect(isContractIncludedInPerfDrilldownTree(lateRow, { lateOnTimeFilter: 'LATE' })).toBe(false)
   })
 
   it('Close row without completion stays unscheduled (no today fallback)', () => {
