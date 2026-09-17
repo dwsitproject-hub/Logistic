@@ -112,7 +112,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
     ).toBe(15)
   })
 
-  it('LAND OS still open: skips Last Receive/WB, uses planning, and has no ETA fallback', () => {
+  it('LAND uses Last Receive/WB whatever the outstanding quantity, and has no ETA fallback', () => {
     expect(
       resolveCycleCompletionDate(
         {
@@ -125,21 +125,27 @@ describe('resolveCycleCompletionDate (no Today)', () => {
         'LAND',
         todayMid,
       )?.getDate(),
-    ).toBe(15)
+      /*
+       * The actual wins even with 5,000 kg still outstanding. Gating it on a fulfilled quantity
+       * left 1,549 LAND contracts showing "-" in all four cycles while the STO table beside them
+       * displayed that very date as their ATC, and SEA never gated its ATC that way.
+       */
+    ).toBe(1)
 
+    // With no actual at all, the estimate is the last daily planning - and ETA trucking is not an
+    // estimate of completion, so without planning the answer is "-".
     expect(
       resolveCycleCompletionDate(
         {
           outstanding_quantity: 5000,
-          last_trucking_completion_date: '2026-06-01',
-          last_trucking_wb_actuals_date: '2026-06-08',
+          last_trucking_completion_date: null,
+          last_trucking_wb_actuals_date: null,
           last_trucking_daily_deliverable_date: null,
           open_standard_eta_trucking: '2026-06-20',
         },
         'LAND',
         todayMid,
       ),
-      // ETA trucking is not an estimate of completion - dropped 2026-09-17 with ETA at loading port.
     ).toBeNull()
   })
 

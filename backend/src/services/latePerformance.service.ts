@@ -39,7 +39,6 @@ import {
   sqlSapTruckingLastReceiveDateByContractNumber,
 } from '../utils/truckingSapDates';
 import {
-  isTruckingOutstandingWithinToleranceKg,
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
 } from '../utils/truckingQuantitySql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
@@ -1083,16 +1082,23 @@ export function resolveCycleCompletionDate(
   };
 
   if (t.startsWith('LAND')) {
-    const osFulfilled = isTruckingOutstandingWithinToleranceKg(
-      resolveLandOutstandingKgForCycleCompletion(row),
-    );
-    if (osFulfilled) {
-      if (hasCalendarDate(row.last_trucking_completion_date)) {
-        return due(row.last_trucking_completion_date);
-      }
-      if (hasCalendarDate(row.last_trucking_wb_actuals_date)) {
-        return due(row.last_trucking_wb_actuals_date);
-      }
+    /*
+     * The actual, with no outstanding-quantity gate.
+     *
+     * Until 2026-09-17 the WB and completion dates only counted once outstanding was within the
+     * zero band, so a contract that had received part of its quantity read "-" in all four cycles
+     * while the STO table beside it displayed that very date as its ATC - 1,549 of 6,386 LAND
+     * contracts on the dev copy. SEA has never gated its ATC on outstanding quantity, and the same
+     * question should not be answered differently by transport mode.
+     *
+     * Order matches what the STO list shows: SAP Trucking Last Receive once the operation is
+     * Completed, otherwise the last Weighbridge date.
+     */
+    if (hasCalendarDate(row.last_trucking_completion_date)) {
+      return due(row.last_trucking_completion_date);
+    }
+    if (hasCalendarDate(row.last_trucking_wb_actuals_date)) {
+      return due(row.last_trucking_wb_actuals_date);
     }
     /*
      * LAND's estimate is the last daily-planning date, and it is clamped to today the same way
