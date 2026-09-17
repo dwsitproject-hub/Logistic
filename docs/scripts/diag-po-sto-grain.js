@@ -14,6 +14,7 @@
  * inputs actually are before deciding which expression is misreading them.
  */
 const connection = require('/app/dist/database/connection');
+const { buildShipmentListStoMetricsCte } = require('/app/dist/utils/shippingPerformanceStoMetricsSql');
 
 const ARG = (process.argv[2] || '').trim();
 const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -145,6 +146,31 @@ const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFra
   if (!children.length) console.log('   (none)');
   for (const r of children) {
     console.log(`   ${r.contract_id}  PO ${r.po_number || '-'}  reff_po ${r.contract_reference_po}  ${r.incoterm || '-'}  ordered ${r.ordered_mt} MT`);
+  }
+
+  // G. What sto_metrics itself produces for those STO keys. This is the one place where composing
+  //    the application's own expression is right rather than the trap it was in diag-wb-vs-sap:
+  //    the question here is literally "what does this CTE return", not "what would a change do".
+  if (stos.length) {
+    console.log('\nG. sto_metrics, the CTE the Shipments row reads (sm.*):');
+    for (const sto of stos) {
+      try {
+        const m = (await connection.query(`
+          WITH shipment_page AS (SELECT $1::text AS sto_key),
+          ${buildShipmentListStoMetricsCte('shipment_page')}
+          SELECT * FROM sto_metrics`, [sto])).rows[0];
+        if (!m) { console.log(`   STO ${sto}: (no row)`); continue; }
+        console.log(`   STO ${sto}:`);
+        for (const [k, v] of Object.entries(m)) {
+          if (k === 'sto_key') continue;
+          const n = Number(v);
+          const shown = Number.isFinite(n) && Math.abs(n) >= 1000 ? `${v}  (${mt(v)} MT)` : String(v);
+          console.log(`      ${k.padEnd(22)} ${shown}`);
+        }
+      } catch (err) {
+        console.log(`   STO ${sto}: could not build sto_metrics - ${err.message}`);
+      }
+    }
   }
 
   console.log('\nRead C first. If one STO carries several contracts, anything summed by STO key');
