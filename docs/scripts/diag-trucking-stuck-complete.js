@@ -17,6 +17,7 @@ const connection = require('/app/dist/database/connection');
 const { sqlTruckingListBaseOutstandingQtyExpr } = require('/app/dist/utils/truckingQuantitySql');
 const { sqlTruckingEffectiveStatus } = require('/app/dist/utils/truckingEffectiveStatus');
 const { sqlContractImportStatusExpr } = require('/app/dist/utils/contractDeliveryStatus');
+const { TRUCKING_REALIZATIONS_JOIN } = require('/app/dist/utils/truckingRealizationSql');
 
 const mt = (kg) => Math.round(Number(kg || 0) / 1000).toLocaleString('en-US');
 
@@ -25,9 +26,14 @@ const mt = (kg) => Math.round(Number(kg || 0) / 1000).toLocaleString('en-US');
   const eff = sqlTruckingEffectiveStatus('c', undefined, os);
   const gr = sqlContractImportStatusExpr('c');
 
+  // sqlTruckingEffectiveStatus reaches for tr.realization_start_date through
+  // sqlRealizationStartDate, so the realizations join is part of the contract for using it - not an
+  // optimisation. Leaving it out fails at run time with "missing FROM-clause entry for table tr",
+  // several hundred KB of rendered SQL after the fact.
   const base = `
     FROM trucking_operations t
     JOIN contracts c ON c.id = t.contract_id
+    ${TRUCKING_REALIZATIONS_JOIN}
     WHERE UPPER(TRIM(COALESCE(t.status, ''))) NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')
       AND t.deduped_at IS NULL`;
 
