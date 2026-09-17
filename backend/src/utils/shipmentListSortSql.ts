@@ -148,7 +148,8 @@ export const SHIPMENT_CONTRACT_BACKLOG_SORT_COLUMNS: Record<string, string> = {
   quantity_receive: 'quantity_receive',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
-  trade_cycle_days: '(CURRENT_DATE - c.delivery_end_date)',
+  // anchor - completion, matching the displayed value: sorting the other way inverted the column.
+  trade_cycle_days: '(c.delivery_end_date - CURRENT_DATE)',
   loading_port: 'c.contract_date',
   discharge_port: 'c.contract_date',
   sto_quantity: 'c.contract_date',
@@ -515,7 +516,7 @@ export const SHIPMENT_CONTRACT_BACKLOG_OUTER_SORT_COLUMNS: Record<string, string
   quantity_receive: 'quantity_receive',
   outstanding_quantity: 'outstanding_quantity',
   outstanding_qty_planning: 'outstanding_quantity',
-  trade_cycle_days: '(CURRENT_DATE - delivery_end_date)',
+  trade_cycle_days: '(delivery_end_date - CURRENT_DATE)',
   contract_ext_no: 'contract_ext_no',
   pre_planned_group: 'pre_planned_group_code',
 };

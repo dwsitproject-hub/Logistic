@@ -497,7 +497,7 @@ function contractPerfTradeCycleDaysForAgg(tradeCycle: number | null | undefined)
   return Math.abs(tradeCycle)
 }
 
-/** On Time / Late share for Contract Performance Open & Close summary cards (Trade Cycle ≤ 0 vs > 0). */
+/** On Time / Late share for Contract Performance Open & Close summary cards (Trade Cycle >= 0 vs < 0). */
 function contractPerfOnTimeLatePercents(
   onTimeCount: number,
   lateCount: number,

@@ -635,7 +635,7 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         OR ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}
       )`;
 
-    // Open Condition A/B (LAND only Condition B) share on-time threshold (trade_cycle <= 0).
+    // Open Condition A/B (LAND only Condition B) share on-time threshold (trade_cycle >= 0).
     // SEA: ATA → else ETA, or today when ETA < today; ETA null → null (no Condition B).
     const effectiveDeliveryEndDateSql = sqlEffectiveDeliveryEndDateExpr();
     const landOsFulfilled = `(${filteredOutstandingSql} IS NOT NULL AND ${filteredOutstandingSql}::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
@@ -1214,7 +1214,7 @@ export const getContractFilterB2bFlags = async (_req: AuthRequest, res: Response
 
 /**
  * Contract Performance: Late Performance dashboard aggregation.
- * Includes only contracts where computed trade_cycle_days > 0 (Late).
+ * Includes only contracts where computed trade_cycle_days < 0 (Late).
  * Drilldown levels: Incoterm -> Plant/Site -> Product -> Group Name.
  *
  * IMPORTANT: This endpoint aggregates across the full filtered dataset (no pagination),
@@ -1761,13 +1761,19 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         dist.noData.qty += _outstandingQty;
         continue;
       }
-      if (tradeCycle <= 0) {
+      /*
+       * Since 789c816 every cycle is `anchor - completion`: On Time is >= 0, Late is negative.
+       * This handler is the legacy /late-performance route - the page calls /summary, /tree and
+       * /data, which run through the service - but it is still routed, and left unflipped it would
+       * answer with on-time and late swapped and every late contract in the 1-7 day bucket.
+       */
+      if (tradeCycle >= 0) {
         debugCounts.tradeCycleNonPositive += 1;
         pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
         dist.onTime.count += 1;
         dist.onTime.qty += _outstandingQty;
 
-        const daysAhead = -tradeCycle; // 0 = exactly on time, positive = days ahead of deadline
+        const daysAhead = tradeCycle; // 0 = exactly on time, positive = days ahead of deadline
         onTrackCount += 1;
         onTrackTotalDaysAhead += daysAhead;
         onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
@@ -1796,15 +1802,18 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         continue;
       }
 
-      if (tradeCycle <= 7)       { dist.d1_7.count    += 1; dist.d1_7.qty    += _outstandingQty; }
-      else if (tradeCycle <= 14) { dist.d8_14.count   += 1; dist.d8_14.qty   += _outstandingQty; }
-      else if (tradeCycle <= 30) { dist.d15_30.count  += 1; dist.d15_30.qty  += _outstandingQty; }
-      else if (tradeCycle <= 60) { dist.d31_60.count  += 1; dist.d31_60.qty  += _outstandingQty; }
-      else                       { dist.d61plus.count += 1; dist.d61plus.qty += _outstandingQty; }
+      /** How late, as a positive number of days. */
+      const lateDays = -tradeCycle;
+
+      if (lateDays <= 7)       { dist.d1_7.count    += 1; dist.d1_7.qty    += _outstandingQty; }
+      else if (lateDays <= 14) { dist.d8_14.count   += 1; dist.d8_14.qty   += _outstandingQty; }
+      else if (lateDays <= 30) { dist.d15_30.count  += 1; dist.d15_30.qty  += _outstandingQty; }
+      else if (lateDays <= 60) { dist.d31_60.count  += 1; dist.d31_60.qty  += _outstandingQty; }
+      else                     { dist.d61plus.count += 1; dist.d61plus.qty += _outstandingQty; }
 
       lateCount += 1;
-      lateTotalDays += tradeCycle;
-      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
+      lateTotalDays += lateDays;
+      lateMaxDays = Math.max(lateMaxDays, lateDays);
       lateTotalQtyDelivery += _outstandingQty;
       if (logCycle != null) { lateTotalLogCycle += logCycle; lateLogCycleCount++; }
       if (cashCycle != null) { lateTotalCashCycle += cashCycle; lateCashCycleCount++; }
@@ -1826,8 +1835,8 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       const n5 = add(n4.children, sup);
       for (const n of [n1, n2, n3, n4, n5]) {
         n.count += 1;
-        n.totalDays += tradeCycle;
-        n.maxDays = Math.max(n.maxDays, tradeCycle);
+        n.totalDays += lateDays;
+        n.maxDays = Math.max(n.maxDays, lateDays);
         n.totalQtyDelivery += _outstandingQty;
       }
     }

@@ -1,4 +1,4 @@
-/** Calendar-date helpers — Trade Cycle > 0 = Late, ≤ 0 = On Time. */
+/** Calendar-date helpers — Trade Cycle < 0 = Late, >= 0 = On Time (anchor − completion). */
 
 export function toCalendarDateKey(value: unknown): string | null {
   if (value == null) return null;
