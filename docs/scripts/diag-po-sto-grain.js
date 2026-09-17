@@ -26,15 +26,21 @@ const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFra
 
   // 1. Which contracts carry this number, either as their PO or through a shipment's STO.
   const contracts = (await connection.query(`
-    SELECT DISTINCT c.id, c.contract_id, c.po_number, c.sto_number, c.incoterm, c.b2b_flag_raw AS b2b_flag,
+    SELECT DISTINCT c.id, c.contract_id, c.po_number, c.sto_number, c.incoterm,
            c.transport_mode,
            ROUND(COALESCE(c.quantity_ordered, 0) / 1000, 2) AS ordered_mt,
-           c.contract_reference_po_raw AS contract_reference_po
+           snap.b2b_flag_raw AS b2b_flag,
+           snap.contract_reference_po_raw AS contract_reference_po
     FROM contracts c
     LEFT JOIN shipments s ON s.contract_id = c.id
+    -- b2b_flag and contract_reference_po are NOT columns on contracts. Migration 161 put them on
+    -- contract_latest_spd_snapshot, keyed by contract_number - which is what the first run of this
+    -- script found out the expensive way, with 42703 after copying the column names out of the
+    -- migration without reading which table it altered.
+    LEFT JOIN contract_latest_spd_snapshot snap ON snap.contract_number = c.contract_id
     WHERE TRIM(COALESCE(c.po_number::text, '')) = $1
        OR TRIM(COALESCE(c.sto_number::text, '')) = $1
-       OR TRIM(COALESCE(c.contract_reference_po_raw::text, '')) = $1
+       OR TRIM(COALESCE(snap.contract_reference_po_raw::text, '')) = $1
        OR TRIM(COALESCE(s.shipment_id::text, '')) = $1
     ORDER BY c.contract_id`, [ARG])).rows;
 
@@ -95,8 +101,10 @@ const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFra
   // 3. SAP rows for these contracts: the delivery / receive figures the sums are built from.
   const sap = (await connection.query(`
     SELECT c.contract_id, spd.po_number, spd.sto_number,
-           ROUND(NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), '')::numeric, 2) AS sap_delivery,
-           ROUND(NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), '')::numeric, 2)  AS sap_receive,
+           -- SAP raw values are text and may carry thousands separators. A bare ::numeric turns a
+           -- read-only diagnostic into an error on the first row that has one, so strip and guard.
+           NULLIF(REGEXP_REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivery', ''), '[^0-9.-]', '', 'g'), '') AS sap_delivery,
+           NULLIF(REGEXP_REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', ''), '[^0-9.-]', '', 'g'), '')  AS sap_receive,
            NULLIF(TRIM(spd.data->'raw'->>'GR PO Status'), '')  AS gr_po,
            NULLIF(TRIM(spd.data->'raw'->>'GR STO Status'), '') AS gr_sto
     FROM sap_processed_data spd
@@ -127,10 +135,11 @@ const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFra
 
   // 5. B2B: the children that point at this contract's PO, whose quantities roll up to it.
   const children = (await connection.query(`
-    SELECT c.contract_id, c.po_number, c.contract_reference_po_raw AS contract_reference_po, c.incoterm,
+    SELECT c.contract_id, c.po_number, snap.contract_reference_po_raw AS contract_reference_po, c.incoterm,
            ROUND(COALESCE(c.quantity_ordered, 0) / 1000, 2) AS ordered_mt
     FROM contracts c
-    WHERE TRIM(COALESCE(c.contract_reference_po_raw::text, '')) = ANY($1::text[])
+    JOIN contract_latest_spd_snapshot snap ON snap.contract_number = c.contract_id
+    WHERE TRIM(COALESCE(snap.contract_reference_po_raw::text, '')) = ANY($1::text[])
     ORDER BY c.contract_id`, [contracts.map((c) => String(c.po_number || '').trim()).filter(Boolean)])).rows;
   console.log(`\nF. B2B children pointing at these POs (${children.length}):`);
   if (!children.length) console.log('   (none)');
