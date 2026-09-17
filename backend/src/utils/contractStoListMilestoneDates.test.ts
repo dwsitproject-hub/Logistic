@@ -81,4 +81,46 @@ describe('resolveStoListMilestoneDates', () => {
       atc: '2026-05-02',
     });
   });
+
+  it('falls back to SAP receive dates when an open operation has no weighbridge upload', () => {
+    // Contract 1004030966 / OP-LAND-110920264450: no WB rows at all, SAP holding both dates, and
+    // the table printing "-" under ATA and ATC while Edit Trucking showed them one click away.
+    expect(
+      resolveStoListMilestoneDates({
+        type: 'trucking',
+        status: 'IN_PROGRESS',
+        sap_trucking_start_receive_date: '2026-02-28',
+        sap_trucking_last_receive_date: '2026-03-07',
+      }),
+    ).toEqual({
+      eta: null,
+      etc: null,
+      ata: '2026-02-28',
+      atc: '2026-03-07',
+    });
+  });
+
+  it('keeps preferring WB over SAP while the operation is open', () => {
+    const dates = resolveStoListMilestoneDates({
+      type: 'trucking',
+      status: 'IN_PROGRESS',
+      wb_start_date: '2026-04-18',
+      wb_end_date: '2026-04-20',
+      sap_trucking_start_receive_date: '2026-02-28',
+      sap_trucking_last_receive_date: '2026-03-07',
+    });
+    expect(dates.ata).toBe('2026-04-18');
+    expect(dates.atc).toBe('2026-04-20');
+  });
+
+  it('falls back to WB when a Completed operation has no SAP receive dates', () => {
+    const dates = resolveStoListMilestoneDates({
+      type: 'trucking',
+      status: 'COMPLETED',
+      wb_start_date: '2026-04-18',
+      wb_end_date: '2026-04-20',
+    });
+    expect(dates.ata).toBe('2026-04-18');
+    expect(dates.atc).toBe('2026-04-20');
+  });
 });

@@ -113,6 +113,29 @@ describe('truckingQuantitySql', () => {
     expect(sql).toContain(') > 0 THEN');
   });
 
+  it('sqlTruckingResolvedReceiveQty takes SAP when SAP is ahead of the weighbridge', () => {
+    // Contract 1004031065: WB holds 0.09 MT across two tickets, SAP reports 89.74 MT received on a
+    // 100 MT LCO. Reading WB alone left outstanding at the full 100 MT.
+    const sql = sqlTruckingResolvedReceiveQty('COALESCE(t.quantity_delivered, 0)', 'sap_recv', 't.id', 'c', {
+      grClosedExpr: 'grc.is_closed',
+      hasWbExpr: 'wb.has_actuals',
+      wbQtyExpr: 'wb.receive_kg',
+    });
+    expect(sql).toContain('WHEN (wb.has_actuals) AND NOT (grc.is_closed) AND (wb.receive_kg) > 0 THEN GREATEST(wb.receive_kg, COALESCE(sap_recv, 0))');
+    // The GR-closed branch already reads SAP and must not change.
+    expect(sql).toContain('WHEN (grc.is_closed) THEN COALESCE(sap_recv, 0)');
+  });
+
+  it('sqlTruckingResolvedDeliveryQty takes SAP when SAP is ahead of the weighbridge', () => {
+    const sql = sqlTruckingResolvedDeliveryQty('e.quantity_delivered', 'sap_del', 'e.id', 'c', {
+      grClosedExpr: 'grc.is_closed',
+      hasWbExpr: 'wb.has_actuals',
+      wbQtyExpr: 'wb.delivery_kg',
+    });
+    expect(sql).toContain('THEN GREATEST(wb.delivery_kg, COALESCE(sap_del, 0))');
+    expect(sql).toContain('WHEN (grc.is_closed) THEN COALESCE(sap_del, 0)');
+  });
+
   it('sqlTruckingResolvedReceiveQty keeps SAP when WB receive is empty (null/0)', () => {
     const sql = sqlTruckingResolvedReceiveQty(
       'COALESCE(t.quantity_delivered, 0)',

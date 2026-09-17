@@ -359,8 +359,11 @@ export function sqlTruckingResolvedDeliveryQty(
   const grClosed = overrides?.grClosedExpr ?? sqlIsContractSapClosedExpr(contractAlias);
   const hasWb = overrides?.hasWbExpr ?? sqlTruckingHasDailyActualsExpr(operationIdExpr);
   const wbDelivery = overrides?.wbQtyExpr ?? sqlWbActualDeliverySumKg(operationIdExpr);
+  // While GR is open the weighbridge leads, but it does not get to hide SAP when SAP is further
+  // along. See the note above sqlTruckingResolvedReceiveQty for why.
+  const wbOrLarger = `GREATEST(${wbDelivery}, COALESCE(${sapQtyExpr}, 0))`;
   return `CASE
-    WHEN (${hasWb}) AND NOT (${grClosed}) AND (${wbDelivery}) > 0 THEN ${wbDelivery}
+    WHEN (${hasWb}) AND NOT (${grClosed}) AND (${wbDelivery}) > 0 THEN ${wbOrLarger}
     WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
     ELSE COALESCE(${sapQtyExpr}, ${innerQtyExpr}, 0)
   END`;
@@ -383,8 +386,24 @@ export function sqlTruckingResolvedReceiveQty(
   const grClosed = overrides?.grClosedExpr ?? sqlIsContractSapClosedExpr(contractAlias);
   const hasWb = overrides?.hasWbExpr ?? sqlTruckingHasDailyActualsExpr(operationIdExpr);
   const wbReceive = overrides?.wbQtyExpr ?? sqlWbActualReceiveSumKg(operationIdExpr);
+  //
+  // WHY THE WB BRANCH TAKES THE LARGER OF THE TWO.
+  //
+  // One weighbridge ticket used to be enough to discard SAP entirely for as long as GR stayed
+  // open. Contract 1004031065 is what that costs: an LCO for 100 MT whose weighbridge holds two
+  // tickets totalling 0.09 MT while SAP reports 89.74 MT received. Outstanding read 100 MT - the
+  // whole contract, as though nothing had moved - when the operation was very nearly finished.
+  //
+  // The two systems record the same trucks. Neither is a correction of the other, so the one that
+  // is further along is the one that describes where the cargo actually is. GREATEST says only
+  // that, and it cannot lower a figure: a weighbridge ahead of SAP still wins, which is the normal
+  // case and the reason WB leads in the first place.
+  //
+  // The GR-closed branch is untouched. It already reads SAP, which is what closing GR means.
+  //
+  const wbOrLarger = `GREATEST(${wbReceive}, COALESCE(${sapQtyExpr}, 0))`;
   return `CASE
-    WHEN (${hasWb}) AND NOT (${grClosed}) AND (${wbReceive}) > 0 THEN ${wbReceive}
+    WHEN (${hasWb}) AND NOT (${grClosed}) AND (${wbReceive}) > 0 THEN ${wbOrLarger}
     WHEN (${grClosed}) THEN COALESCE(${sapQtyExpr}, 0)
     ELSE COALESCE(${sapQtyExpr}, ${innerQtyExpr}, 0)
   END`;

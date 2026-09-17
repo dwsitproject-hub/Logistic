@@ -1,6 +1,15 @@
 /**
  * Contract Detail → Table List STO: ETA / ETC / ATA / ATC display dates.
- * Trucking ATA/ATC follow KLIP operation status (Completed = SAP, otherwise WB).
+ *
+ * Trucking ATA/ATC follow the contract's own rule: while the operation is still running KLIP's own
+ * record (the weighbridge) is preferred, and once it is Completed SAP is. Either way the other side
+ * is a fallback rather than nothing - the two systems record the same journey, so a date held by
+ * only one of them is still the date.
+ *
+ * It used to read one side only, and a column that had an answer showed a dash. Contract
+ * 1004030966's land leg (OP-LAND-110920264450) is the shape: no weighbridge upload at all, SAP
+ * holding 28/02/2026 and 07/03/2026, and the table printing "-" under both ATA and ATC while Edit
+ * Trucking showed the dates one click away.
  */
 
 export interface StoListMilestoneInput {
@@ -46,14 +55,14 @@ export function resolveStoListMilestoneDates(input: StoListMilestoneInput): StoL
   }
 
   const completed = isStoListTruckingCompleted(input.status);
+  const wbStart = nullDate(input.wb_start_date);
+  const wbEnd = nullDate(input.wb_end_date);
+  const sapStart = nullDate(input.sap_trucking_start_receive_date);
+  const sapEnd = nullDate(input.sap_trucking_last_receive_date);
   return {
     eta: nullDate(input.daily_plan_start_date),
     etc: nullDate(input.daily_plan_end_date),
-    ata: completed
-      ? nullDate(input.sap_trucking_start_receive_date)
-      : nullDate(input.wb_start_date),
-    atc: completed
-      ? nullDate(input.sap_trucking_last_receive_date)
-      : nullDate(input.wb_end_date),
+    ata: completed ? (sapStart ?? wbStart) : (wbStart ?? sapStart),
+    atc: completed ? (sapEnd ?? wbEnd) : (wbEnd ?? sapEnd),
   };
 }

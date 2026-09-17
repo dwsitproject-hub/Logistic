@@ -1837,6 +1837,53 @@ delegation is safe, not an optimisation.
 
 ## Trucking
 
+### While GR is open, the weighbridge leads but does not get to hide SAP
+
+Delivery and receive quantities resolve through `sqlTruckingResolvedDeliveryQty` /
+`sqlTruckingResolvedReceiveQty` (`backend/src/utils/truckingQuantitySql.ts`). The rule was:
+
+```
+WHEN (has WB rows) AND NOT (GR closed) AND (wb sum) > 0  THEN wb sum
+WHEN (GR closed)                                         THEN sap
+ELSE COALESCE(sap, inner, 0)
+```
+
+so a single weighbridge ticket discarded SAP entirely for as long as GR stayed open. Contract
+**1004031065** is what that costs: an LCO for 100 MT whose weighbridge holds two tickets totalling
+**0.09 MT** while SAP reports **89.74 MT** received. Outstanding read **100 MT** - the whole
+contract, as though nothing had moved - on an operation that was very nearly finished.
+
+The first branch now takes `GREATEST(wb, COALESCE(sap, 0))`. The two systems record the same
+trucks; neither is a correction of the other, so the one that is further along is the one that
+describes where the cargo actually is. GREATEST can only raise a figure, so a weighbridge ahead of
+SAP still wins - the normal case, and the reason WB leads at all. The GR-closed branch is
+untouched: it already reads SAP, which is what closing GR means.
+
+The same asymmetry ran through the dates. Contract Details' Table List STO read **WB only** for an
+open operation's ATA/ATC and **SAP only** for a Completed one, so contract 1004030966's land leg
+(`OP-LAND-110920264450`), which has no weighbridge upload at all, printed "-" under both columns
+while Edit Trucking showed 28/02/2026 and 07/03/2026 one click away. `resolveStoListMilestoneDates`
+now falls back to the other side in both directions - preference unchanged, blanks filled.
+
+**A measurement that said the opposite, and why it was wrong.** The first version of
+`docs/scripts/diag-wb-vs-sap.js` reported that this change would affect 0 of 286 contracts. It read
+`contract_qty_move_snapshot` directly, but the application reads SAP through
+`sqlSapQtyDeliveryOnly` / `sqlSapQtyReceiveOnly` - an *overlay*, live `sap_processed_data` first and
+the snapshot only as a fallback. That snapshot is built for Close contracts and is empty for the
+Open ones that are this question's entire scope, so SAP measured as 0 everywhere and could never
+exceed WB. The conclusion was arithmetic on a column that was structurally blank. The rewritten
+script composes the same expressions the pages compose; when a diagnostic and a screenshot
+disagree, the screenshot is the evidence.
+
+### A truck no longer reports that it arrived at a loading port
+
+Contract Details lists shipments and trucking operations in one table and ran every row through the
+**shipment** status map. The two vocabularies overlap on exactly one value and disagree about it:
+`IN_PROGRESS` is "Arrived LP" to a vessel and "Planned" to a truck, so an LCO contract with a single
+land leg read "Arrived LP" on a row labelled Trucking. The map now lives in
+`frontend/src/lib/truckingStatusDisplay.ts` and the Trucking page reads it from there, so the two
+cannot drift apart again.
+
 ### LCO and FOB: a closed PO with no GR STO line no longer hangs forever
 
 LCO reads GR **STO** status, FRC/CIF/CFR read GR **PO** - that split lives in
