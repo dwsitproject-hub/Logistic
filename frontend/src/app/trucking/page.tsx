@@ -1,5 +1,6 @@
 'use client'
 
+import { TRUCKING_STATUS_LABELS, formatTruckingStatusLabel } from '@/lib/truckingStatusDisplay'
 import { useEffect, useState, useMemo, useRef, useCallback, Suspense, memo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
@@ -120,16 +121,6 @@ const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
 /** Hide List | Daily Planning Deliverables toggle — set true to restore the calendar tab. */
 const TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED = false
 
-const TRUCKING_STATUS_LABELS: Record<string, string> = {
-  OPEN: 'Open',
-  CLOSE: 'Close',
-  UNPLANNED: 'Unplanned',
-  PLANNED: 'Planned',
-  IN_PROGRESS: 'Planned',
-  COMPLETED: 'Completed',
-  CANCELLED: 'Cancelled',
-}
-
 const TRUCKING_GLOBAL_STATUS_OPTIONS = [
   { value: 'ALL', label: 'All Status' },
   { value: 'OPEN', label: 'Open' },
@@ -228,8 +219,7 @@ function truckingDbStatus(operation: Pick<TruckingOperation, 'status' | 'status_
 }
 
 function truckingStatusLabel(status: string | undefined | null): string {
-  const key = String(status ?? '').trim().toUpperCase()
-  return TRUCKING_STATUS_LABELS[key] ?? key
+  return formatTruckingStatusLabel(status)
 }
 
 function isTruckingPlanningEditLocked(status: string | undefined | null): boolean {

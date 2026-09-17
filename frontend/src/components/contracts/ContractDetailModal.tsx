@@ -28,6 +28,7 @@ import {
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatContractDeliveryStatusLabel } from '@/lib/contractDeliveryStatus'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
+import { formatTruckingStatusLabel, truckingStatusBadgeClass } from '@/lib/truckingStatusDisplay'
 import {
   canCreatePermission,
   canEditPermission,
@@ -1363,8 +1364,19 @@ export function ContractDetailModal({
                               </Badge>
                             </td>
                             <td className="p-2">
-                              <Badge className={shipmentStatusBadgeClass(row.status)}>
-                                {formatShipmentStatusLabel(row.status)}
+                              {/* Shipment and trucking rows share this table but not their status
+                                  vocabularies: IN_PROGRESS means "Arrived LP" to a vessel and
+                                  "Planned" to a truck. Label each row with its own. */}
+                              <Badge
+                                className={
+                                  row.type === 'shipment'
+                                    ? shipmentStatusBadgeClass(row.status)
+                                    : truckingStatusBadgeClass(row.status)
+                                }
+                              >
+                                {row.type === 'shipment'
+                                  ? formatShipmentStatusLabel(row.status)
+                                  : formatTruckingStatusLabel(row.status)}
                               </Badge>
                             </td>
                             <td className="p-2">{formatQtyMtFromKg(row.sto_quantity)}</td>
