@@ -120,3 +120,36 @@ export function hasKlipSapMismatch(
 export function hasKlipSapValue(value: unknown, format: KlipSapCompareFormat): boolean {
   return formatKlipSapDisplayValue(value, format) !== '—'
 }
+
+export type KlipSapProvenance = 'none' | 'sap' | 'klip'
+
+/**
+ * SAP-only: value matches SAP (or is the only source with a SAP counterpart).
+ * KLIP: recorded edit or value differs from SAP; also a filled value with no SAP reference.
+ * none: field is empty.
+ */
+export function resolveKlipSapProvenance({
+  klipValue,
+  sapValue,
+  format,
+  klipEdited = false,
+}: {
+  klipValue: unknown
+  sapValue: unknown
+  format: KlipSapCompareFormat
+  klipEdited?: boolean
+}): KlipSapProvenance {
+  if (!hasKlipSapValue(klipValue, format)) return 'none'
+  const mismatch = hasKlipSapMismatch(klipValue, sapValue, format)
+  if (klipEdited || mismatch) return 'klip'
+  if (hasKlipSapValue(sapValue, format)) return 'sap'
+  return 'klip'
+}
+
+export function shouldShowKlipSapFooter(
+  provenance: KlipSapProvenance,
+  sapValue: unknown,
+  format: KlipSapCompareFormat,
+): boolean {
+  return provenance === 'klip' && hasKlipSapValue(sapValue, format)
+}

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import { MODAL_READONLY_CONTROL_CLASS } from '@/components/shared/ModalReadonlyControl'
 import { FAST_ENTRY_ROOT_ATTR } from '@/lib/fastEntryFocus'
 import { formatDateTimeDMY } from '@/lib/dateFormat'
 import {
@@ -38,7 +39,7 @@ const fmtIsoDate = (iso: string) => {
   return `${dd}/${m}/${y}`
 }
 
-const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
+const READONLY_FIELD_CLASS = MODAL_READONLY_CONTROL_CLASS
 
 function sliceIsoDate(value: string | null | undefined): string {
   if (!value) return ''
@@ -909,7 +910,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           valueIso={block.start_receive_date}
           onChangeIso={() => {}}
           disabled
-          className="bg-gray-100 cursor-not-allowed"
+          className={MODAL_READONLY_CONTROL_CLASS}
         />
       </div>
       <div>
@@ -920,7 +921,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           valueIso={block.last_receive_date}
           onChangeIso={() => {}}
           disabled
-          className="bg-gray-100 cursor-not-allowed"
+          className={MODAL_READONLY_CONTROL_CLASS}
         />
       </div>
       <div>
@@ -1304,7 +1305,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       valueIso={dueStartDisplay}
                       onChangeIso={() => {}}
                       disabled
-                      className="bg-gray-100 cursor-not-allowed"
+                      className={MODAL_READONLY_CONTROL_CLASS}
                     />
                   </div>
                   <div>
@@ -1316,7 +1317,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       valueIso={dueEndDisplay}
                       onChangeIso={() => {}}
                       disabled
-                      className="bg-gray-100 cursor-not-allowed"
+                      className={MODAL_READONLY_CONTROL_CLASS}
                     />
                   </div>
                   <div>
@@ -1328,7 +1329,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       valueIso={cargoReadinessDisplay}
                       onChangeIso={() => {}}
                       disabled
-                      className="bg-gray-100 cursor-not-allowed"
+                      className={MODAL_READONLY_CONTROL_CLASS}
                     />
                   </div>
                 </div>

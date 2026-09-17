@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildShipmentAllHybridListContext,
   buildShipmentUnplannedHybridListContext,
+  HYBRID_CACHE_TTL_MS,
   isAllHybridListRequest,
   isUnplannedHybridListRequest,
   shouldResolveAllHybridShipmentsList,
@@ -14,6 +15,10 @@ import {
 import { buildShipmentListEnrichedPageQuery } from './shipmentList.service';
 
 describe('shipmentUnplannedHybridList.service', () => {
+  it('shares the 60-minute list TTL so card counts stay in step with the hybrid table', () => {
+    expect(HYBRID_CACHE_TTL_MS).toBe(60 * 60 * 1000);
+  });
+
   const baseInput = {
     shipmentBaseCteSql: 'WITH shipment_base_core AS (SELECT 1)',
     toolbarOuterSql: " AND sb.vessel_name ILIKE '%test%'",

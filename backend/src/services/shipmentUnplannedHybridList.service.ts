@@ -258,14 +258,15 @@ function buildShipmentHybridListContext(input: {
  * summaryOnly request no matter what was cached. That was the entire remaining floor on the
  * Shipments page: ~2-3.3s per load with everything else served from memory in single-digit ms.
  *
- * Caching them on the same 5-minute TTL as the list is also more consistent than leaving them
+ * Caching them on the same 60-minute TTL as the list is also more consistent than leaving them
  * live. The comment at the call site asks for live counts so the cards cannot diverge from the
- * hybrid table - but the table itself is now cached for 5 minutes, so live counts against a
- * cached table is precisely how they WOULD diverge. Sharing one TTL keeps card and table in step.
+ * hybrid table - but the table itself is cached for HYBRID_CACHE_TTL_MS, so live counts against a
+ * cached table is precisely how they WOULD diverge. Sharing one TTL keeps card and table in
+ * step. Freshness is write invalidation, not the clock.
  */
 const HYBRID_CACHE = new Map<string, { data: HybridListResult; expiresAt: number }>();
 const HYBRID_IN_FLIGHT = new Map<string, Promise<HybridListResult>>();
-const HYBRID_CACHE_TTL_MS = 5 * 60 * 1000;
+export const HYBRID_CACHE_TTL_MS = 60 * 60 * 1000;
 const HYBRID_MAX_CACHE_ENTRIES = 80;
 /** Drop in-flight results that started before invalidate — otherwise they refill stale counts. */
 let hybridCachesEpoch = 0;

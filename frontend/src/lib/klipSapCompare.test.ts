@@ -7,6 +7,8 @@ import {
   hasKlipSapMismatch,
   hasKlipSapValue,
   klipSapValuesEqual,
+  resolveKlipSapProvenance,
+  shouldShowKlipSapFooter,
 } from './klipSapCompare'
 
 describe('klipSapCompare', () => {
@@ -65,5 +67,56 @@ describe('hasKlipSapValue', () => {
   it('treats a zero as present, because a user can mean zero', () => {
     expect(hasKlipSapValue(0, 'number')).toBe(true)
     expect(hasKlipSapValue('0', 'number')).toBe(true)
+  })
+})
+
+describe('resolveKlipSapProvenance', () => {
+  it('hides provenance when the field is empty', () => {
+    expect(resolveKlipSapProvenance({ klipValue: '', sapValue: '', format: 'date' })).toBe('none')
+    expect(resolveKlipSapProvenance({ klipValue: null, sapValue: '2026-09-19', format: 'date' })).toBe(
+      'none',
+    )
+  })
+
+  it('treats matching SAP as sap-sourced', () => {
+    expect(
+      resolveKlipSapProvenance({
+        klipValue: '2026-09-19',
+        sapValue: '2026-09-19',
+        format: 'date',
+      }),
+    ).toBe('sap')
+    expect(shouldShowKlipSapFooter('sap', '2026-09-19', 'date')).toBe(false)
+  })
+
+  it('treats mismatch or recorded edit as klip override with SAP footer', () => {
+    expect(
+      resolveKlipSapProvenance({
+        klipValue: '2026-09-21',
+        sapValue: '2026-09-19',
+        format: 'date',
+      }),
+    ).toBe('klip')
+    expect(
+      resolveKlipSapProvenance({
+        klipValue: '2026-09-19',
+        sapValue: '2026-09-19',
+        format: 'date',
+        klipEdited: true,
+      }),
+    ).toBe('klip')
+    expect(shouldShowKlipSapFooter('klip', '2026-09-19', 'date')).toBe(true)
+    expect(shouldShowKlipSapFooter('klip', '', 'date')).toBe(false)
+  })
+
+  it('treats a filled value with no SAP reference as klip without a footer', () => {
+    expect(
+      resolveKlipSapProvenance({
+        klipValue: 'BG. TIGA JAYA',
+        sapValue: '',
+        format: 'text',
+      }),
+    ).toBe('klip')
+    expect(shouldShowKlipSapFooter('klip', '', 'text')).toBe(false)
   })
 })

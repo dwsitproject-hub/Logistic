@@ -274,6 +274,43 @@ export function patchSection1SummaryAfterUnplannedToPreplanned<T extends Shipmen
   return next
 }
 
+export function patchSection1SummaryAfterUnplannedToPlanned<T extends ShipmentSection1CardSummaryPatch>(
+  prev: T | null | undefined,
+  move: UnplannedToPreplannedCardMove,
+): T | null | undefined {
+  if (!prev) return prev
+  const groups = Math.max(0, Number(move.groupCount) || 0)
+  const contractRows = Math.max(0, Number(move.contractRows) || 0)
+  const osKg = Math.max(0, Number(move.outstandingQtyKg) || 0)
+  if (groups === 0 && contractRows === 0 && osKg === 0) return prev
+
+  const next: T = { ...prev }
+  if (prev.status) {
+    next.status = {
+      ...prev.status,
+      planned: Number(prev.status.planned ?? 0) + groups,
+      unplanned: Math.max(0, Number(prev.status.unplanned ?? 0) - contractRows),
+    }
+  }
+  if (prev.statusOutstandingQty) {
+    next.statusOutstandingQty = {
+      ...prev.statusOutstandingQty,
+      planned: Number(prev.statusOutstandingQty.planned ?? 0) + osKg,
+      unplanned: Math.max(0, Number(prev.statusOutstandingQty.unplanned ?? 0) - osKg),
+    }
+  }
+  if (prev.unplannedTable) {
+    const nextContractRows = Math.max(0, Number(prev.unplannedTable.contractRows ?? 0) - contractRows)
+    const nextTableRows = Math.max(0, Number(prev.unplannedTable.totalTableRows ?? 0) - contractRows)
+    next.unplannedTable = {
+      ...prev.unplannedTable,
+      contractRows: nextContractRows,
+      totalTableRows: nextTableRows,
+    }
+  }
+  return next
+}
+
 export function pipelineCountForStage(
   stage: ShipmentPagePipelineStage,
   counts: ShipmentPagePipelineStatusCounts,

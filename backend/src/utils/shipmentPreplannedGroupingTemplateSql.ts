@@ -278,7 +278,16 @@ export async function buildManualGroupingEligibleIdentityQuery(): Promise<{
     ${qtyMoveCte}
     SELECT
       c.id::text AS id,
-      NULLIF(TRIM(c.po_number::text), '') AS po_number
+      c.contract_id AS contract_number,
+      NULLIF(TRIM(c.po_number::text), '') AS po_number,
+      COALESCE(c.incoterm, '') AS incoterm,
+      (${sqlContractOutstandingFromFields({
+        contractQtyExpr: 'c.quantity_ordered',
+        incotermExpr: 'c.incoterm',
+        receiveExpr: 'qm.quantity_receive',
+        deliveryExpr: sqlQtyMoveJoinIncotermDelivery('c.incoterm', 'qm', 'c.transport_mode'),
+        clampAtZero: true,
+      })})::numeric AS outstanding_qty_kg
     FROM backlog_contract_ids b
     INNER JOIN contracts c ON c.id = b.id
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
@@ -289,13 +298,22 @@ export async function buildManualGroupingEligibleIdentityQuery(): Promise<{
 }
 
 export async function prefetchManualGroupingEligibleIdentities(): Promise<
-  Array<{ id: string; poNumber: string }>
+  Array<{
+    id: string;
+    poNumber: string;
+    contractNumber: string;
+    incoterm: string;
+    outstandingQtyKg: number;
+  }>
 > {
   const { sql, params } = await buildManualGroupingEligibleIdentityQuery();
   const res = await query(sql, params);
   return res.rows.map((row) => ({
     id: String(row.id),
     poNumber: String(row.po_number ?? ''),
+    contractNumber: String(row.contract_number ?? ''),
+    incoterm: String(row.incoterm ?? ''),
+    outstandingQtyKg: Number(row.outstanding_qty_kg ?? 0) || 0,
   }));
 }
 

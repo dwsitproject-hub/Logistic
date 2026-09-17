@@ -18,6 +18,7 @@ import {
   parseGroupingTemplateQueryFromRequest,
 } from '../utils/shipmentPreplannedGroupingTemplateSql';
 import { buildShipmentGroupingTemplateXlsxBuffer } from '../utils/shipmentPreplannedGroupingUpload';
+import { fetchMasterVesselNamesForGroupingTemplate } from '../utils/shipmentGroupingPlannedResolve';
 import { applyShipmentGroupingBulkUpload } from '../services/shipmentGroupingBulkUpload.service';
 
 function disabled(res: Response): void {
@@ -165,7 +166,8 @@ export const getPrePlannedGroupingTemplate = async (req: AuthRequest, res: Respo
     }
     const filters = parseGroupingTemplateQueryFromRequest(req.query as Record<string, unknown>);
     const { rows, truncated, limit } = await fetchShipmentGroupingTemplateRows(filters);
-    const buf = buildShipmentGroupingTemplateXlsxBuffer(rows);
+    const vesselNames = await fetchMasterVesselNamesForGroupingTemplate();
+    const buf = buildShipmentGroupingTemplateXlsxBuffer(rows, { vesselNames });
     const filename = 'shipment-unplanned-grouping-template.xlsx';
     res.setHeader(
       'Content-Type',

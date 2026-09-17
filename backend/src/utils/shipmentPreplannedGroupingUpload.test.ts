@@ -1,16 +1,38 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import * as XLSX from 'xlsx';
 import {
+  buildShipmentGroupingTemplateXlsxBuffer,
   clusterShipmentGroupingRowsByGroup,
   isSelectY,
   matchGroupingRowsToContracts,
   parseShipmentGroupingMatrix,
   SHIPMENT_GROUPING_INSTRUCTION,
+  SHIPMENT_GROUPING_LISTS_SHEET_NAME,
+  SHIPMENT_GROUPING_SHEET_NAME,
   SHIPMENT_GROUPING_TEMPLATE_HEADERS,
+  SHIPMENT_GROUPING_VESSEL_LIST_NAME,
+  type ParsedShipmentGroupingRow,
 } from './shipmentPreplannedGroupingUpload';
+import { emptyGroupingEtas } from './shipmentGroupingEtaColumns';
 import {
   sqlGroupingTemplatePlantSiteRawExpr,
   SHIPMENT_GROUPING_TEMPLATE_ROW_LIMIT,
 } from './shipmentPreplannedGroupingTemplateSql';
+
+function selected(
+  over: Partial<ParsedShipmentGroupingRow> & Pick<ParsedShipmentGroupingRow, 'excelRowNumber' | 'group'>,
+): ParsedShipmentGroupingRow {
+  return {
+    selectY: true,
+    poNumber: '',
+    supplier: '',
+    incoterm: '',
+    outstandingQtyMt: null,
+    vessel: '',
+    etas: emptyGroupingEtas(),
+    ...over,
+  };
+}
 
 describe('shipmentPreplannedGroupingUpload parse', () => {
   it('does not use WILMAR examples or contract number columns', () => {
@@ -18,6 +40,12 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract Ext No');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract No');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('PO Number');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Vessel');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Arr. @ LP');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Charter Type');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Loading Port');
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Preplanned/);
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Planned/);
   });
 
   it('skips rows without Y even if Group is leftover', () => {
@@ -42,27 +70,9 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
 
   it('clusters by Group and flags single-PO groups in matching', () => {
     const clusters = clusterShipmentGroupingRowsByGroup([
-      {
-        excelRowNumber: 3,
-        selectY: true,
-        group: 'A',
-        poNumber: '1',
-        supplier: 'S',
-      },
-      {
-        excelRowNumber: 4,
-        selectY: true,
-        group: 'A',
-        poNumber: '2',
-        supplier: 'S',
-      },
-      {
-        excelRowNumber: 5,
-        selectY: true,
-        group: 'B',
-        poNumber: '3',
-        supplier: 'S',
-      },
+      selected({ excelRowNumber: 3, group: 'A', poNumber: '1', supplier: 'S' }),
+      selected({ excelRowNumber: 4, group: 'A', poNumber: '2', supplier: 'S' }),
+      selected({ excelRowNumber: 5, group: 'B', poNumber: '3', supplier: 'S' }),
     ]);
     expect(clusters.find((c) => c.group === 'A')?.rows).toHaveLength(2);
     expect(clusters.find((c) => c.group === 'B')?.rows).toHaveLength(1);
@@ -71,20 +81,8 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
   it('matches by PO Number only and rejects ineligible POs', () => {
     const matches = matchGroupingRowsToContracts(
       [
-        {
-          excelRowNumber: 3,
-          selectY: true,
-          group: '1',
-          poNumber: '1001',
-          supplier: '',
-        },
-        {
-          excelRowNumber: 4,
-          selectY: true,
-          group: '1',
-          poNumber: '9999',
-          supplier: '',
-        },
+        selected({ excelRowNumber: 3, group: '1', poNumber: '1001' }),
+        selected({ excelRowNumber: 4, group: '1', poNumber: '9999' }),
       ],
       [{ id: 'u1', poNumber: '1001' }],
     );
@@ -92,6 +90,60 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     expect(matches[1]?.ok).toBe(false);
     expect(isSelectY('Y')).toBe(true);
     expect(isSelectY('YES')).toBe(false);
+  });
+
+  it('parses Vessel and ETA dates from Select=Y rows', () => {
+    const headers = [...SHIPMENT_GROUPING_TEMPLATE_HEADERS];
+    const row = headers.map(() => '');
+    row[0] = 'Y';
+    row[1] = 'A';
+    row[7] = '1001';
+    row[12] = 'GIAT ARMADA 02';
+    row[13] = '2026-07-01';
+    const parsed = parseShipmentGroupingMatrix([headers, row]);
+    expect(parsed.selectedRows[0]?.vessel).toBe('GIAT ARMADA 02');
+    expect(parsed.selectedRows[0]?.etas.eta_arrival).toBe('2026-07-01');
+  });
+
+  it('embeds Master Vessel sheet and named-range list validation on the Vessel column', () => {
+    const buf = buildShipmentGroupingTemplateXlsxBuffer([], { vesselNames: ['ALPHA STAR', 'BETA'] });
+    const wb = XLSX.read(buf, { type: 'buffer' });
+    expect(wb.SheetNames).toContain(SHIPMENT_GROUPING_LISTS_SHEET_NAME);
+    expect(wb.SheetNames).toContain(SHIPMENT_GROUPING_SHEET_NAME);
+    const master = XLSX.utils.sheet_to_json(wb.Sheets[SHIPMENT_GROUPING_LISTS_SHEET_NAME]!, {
+      header: 1,
+      defval: '',
+    }) as unknown[][];
+    expect(master.flat()).toContain('ALPHA STAR');
+    expect(master.flat()).toContain('BETA');
+
+    const names = (wb.Workbook as { Names?: Array<{ Name?: string; Ref?: string }> } | undefined)?.Names ?? [];
+    const vesselList = names.find((n) => n.Name === SHIPMENT_GROUPING_VESSEL_LIST_NAME);
+    expect(vesselList?.Ref).toMatch(/Master Vessel/);
+    expect(vesselList?.Ref).toMatch(/\$A\$2:\$A\$3/);
+
+    const CFB = require('cfb') as typeof import('cfb');
+    const cfb = CFB.read(buf, { type: 'buffer' });
+    const path =
+      cfb.FullPaths.find((p) => p.replace(/\\/g, '/').includes('xl/worksheets/sheet1.xml')) ?? '';
+    const entry = CFB.find(cfb, path);
+    const xml = Buffer.from(entry?.content as Uint8Array).toString('utf8');
+    expect(xml).toContain('type="list"');
+    expect(xml).toContain(`<formula1>${SHIPMENT_GROUPING_VESSEL_LIST_NAME}</formula1>`);
+    expect(xml).toMatch(/sqref="M3:M\d+"/);
+    expect(xml.indexOf('<dataValidations')).toBeLessThan(xml.indexOf('<ignoredErrors'));
+    const wbXmlPath =
+      cfb.FullPaths.find((p) => p.replace(/\\/g, '/').includes('xl/workbook.xml')) ?? '';
+    const wbEntry = CFB.find(cfb, wbXmlPath);
+    const wbXml = Buffer.from(wbEntry?.content as Uint8Array).toString('utf8');
+    expect(wbXml).toContain(`name="${SHIPMENT_GROUPING_VESSEL_LIST_NAME}"`);
+    expect(wbXml).toContain('Master Vessel');
+    expect(wbXml).toMatch(/name="Master Vessel"[^>]*state="hidden"/);
+    const help = XLSX.utils.sheet_to_json(wb.Sheets['Cara isi']!, {
+      header: 1,
+      defval: '',
+    }) as unknown[][];
+    expect(help.flat().join(' ')).toMatch(/sheet Master Vessel/);
   });
 });
 

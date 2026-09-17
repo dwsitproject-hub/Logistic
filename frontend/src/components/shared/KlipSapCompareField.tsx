@@ -1,15 +1,17 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import {
   formatKlipSapDelta,
   formatKlipSapDisplayValue,
   hasKlipSapMismatch,
-  hasKlipSapValue,
+  resolveKlipSapProvenance,
+  shouldShowKlipSapFooter,
   type KlipSapCompareFormat,
+  type KlipSapProvenance,
 } from '@/lib/klipSapCompare'
-
-const KLIP_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
+import { ModalReadonlyDateInput, ModalReadonlyTextInput } from '@/components/shared/ModalReadonlyControl'
 
 export function KlipSapCompareLegend({ className }: { className?: string }) {
   return (
@@ -22,12 +24,75 @@ export function KlipSapCompareLegend({ className }: { className?: string }) {
         <span className="rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-600">SAP</span>
         <span className="text-gray-500">sama dengan data SAP</span>
       </span>
-      <span className="flex items-center gap-1">
-        <span className="rounded-full border border-dashed border-gray-300 px-2 py-0.5 font-medium text-gray-500">
-          ?
-        </span>
-        <span className="text-gray-500">asal belum tercatat (data lama)</span>
+    </div>
+  )
+}
+
+export function KlipSapSourceBadge({
+  provenance,
+  klipEditedBy = null,
+}: {
+  provenance: KlipSapProvenance
+  klipEditedBy?: string | null
+}) {
+  if (provenance === 'klip') {
+    return (
+      <span
+        className="shrink-0 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700"
+        title={klipEditedBy ? `Diubah oleh ${klipEditedBy}` : undefined}
+      >
+        KLIP
       </span>
+    )
+  }
+  if (provenance === 'sap') {
+    return (
+      <span
+        className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600"
+        title="Sama dengan nilai SAP"
+      >
+        SAP
+      </span>
+    )
+  }
+  return null
+}
+
+export function KlipSapReferenceFooter({
+  sapValue,
+  format,
+  delta,
+}: {
+  sapValue: unknown
+  format: KlipSapCompareFormat
+  delta?: string | null
+}) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
+      <KlipSapSourceBadge provenance="sap" />
+      <span>{formatKlipSapDisplayValue(sapValue, format)}</span>
+      {delta ? (
+        <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
+          Δ {delta}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+export function KlipSapValueWithBadge({
+  children,
+  provenance,
+  klipEditedBy = null,
+}: {
+  children: ReactNode
+  provenance: KlipSapProvenance
+  klipEditedBy?: string | null
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <div className="min-w-0 flex-1">{children}</div>
+      <KlipSapSourceBadge provenance={provenance} klipEditedBy={klipEditedBy} />
     </div>
   )
 }
@@ -39,18 +104,15 @@ type KlipSapCompareFieldProps = {
   format: KlipSapCompareFormat
   compact?: boolean
   editing?: boolean
-  editControl?: React.ReactNode
+  editControl?: ReactNode
   showOverrideBadge?: boolean
   /**
-   * Leave unset. The badge is then derived from the comparison, which is the only thing that can
-   * actually be known - see the note in the component body. Pass a boolean only where the caller
-   * has a better source of truth than value equality.
+   * Force a KLIP chip when the caller has a stronger source of truth than value equality.
+   * Leave unset to derive provenance from mismatch / recorded edit / SAP match.
    */
   showKlipBadge?: boolean
   /**
    * The data itself records a KLIP user writing this field (migration 167's klip_edited_fields).
-   * When true it settles the question and the comparison is not consulted; false means only
-   * "not recorded", which for older rows is the normal state and not evidence of anything.
    */
   klipEdited?: boolean
   /** "Budi, 12 Sep 2026" — shown on the KLIP chip's tooltip when audit_logs has the edit. */
@@ -76,42 +138,41 @@ export function KlipSapCompareField({
 
   const mismatch = hasKlipSapMismatch(klipValue, sapValue, format)
   const delta = formatKlipSapDelta(klipValue, sapValue, format)
-  const sapDisplay = formatKlipSapDisplayValue(sapValue, format)
-
-  /*
-   * The KLIP chip used to be unconditional, which made it an assertion the data cannot support.
-   *
-   * Most KLIP-labelled columns are shared with the SAP import, which fills whatever the user left
-   * empty; nothing records who wrote a value. So a field the user never opened displayed its SAP
-   * value with a blue "KLIP" chip beside it, and there was no way to tell it apart from something
-   * typed by hand.
-   *
-   * What IS knowable is whether the value still equals what SAP reported. Equal means SAP's number
-   * is what you are looking at, whoever put it there; different means someone or something in KLIP
-   * moved it. That is what the chips now say, and nothing more.
-   */
-  const klipHasValue = hasKlipSapValue(klipValue, format)
-  const sapHasValue = hasKlipSapValue(sapValue, format)
-  /*
-   * Recorded provenance wins over the comparison. It answers the case equality cannot: a user who
-   * typed the same number SAP reported looks SAP-sourced to an equality test, and for older rows
-   * migration 130 copied effective values into the snapshot so they agree by construction.
-   */
-  const showKlip = showKlipBadge ?? (klipHasValue && klipEdited)
-  const showSapSourced = !showKlip && klipHasValue && sapHasValue && !mismatch
-  /*
-   * Differs from SAP, but nothing records who wrote it.
-   *
-   * This is the majority of the data today - every row predates the marker - and it used to render
-   * as "KLIP", which is the same over-claim being fixed, only milder. Saying "unknown" is the
-   * honest reading, and it has a useful side effect: the blue chips grow as real edits accumulate,
-   * so the picture visibly improves rather than staying permanently ambiguous.
-   */
-  const showUnknown = !showKlip && !showSapSourced && klipHasValue && mismatch
+  const provenance =
+    showKlipBadge === true
+      ? resolveKlipSapProvenance({
+          klipValue,
+          sapValue,
+          format,
+          klipEdited: true,
+        })
+      : resolveKlipSapProvenance({
+          klipValue,
+          sapValue,
+          format,
+          klipEdited: klipEdited || showOverrideBadge,
+        })
+  const showFooter = shouldShowKlipSapFooter(provenance, sapValue, format)
 
   const labelClass = compact
     ? 'mb-1 block text-[10px] font-medium text-gray-600'
     : 'mb-1 block text-xs font-medium text-gray-600'
+
+  const control =
+    editing && editControl ? (
+      editControl
+    ) : format === 'date' ? (
+      <ModalReadonlyDateInput
+        valueIso={String(klipValue ?? '').trim().slice(0, 10)}
+        compact={compact}
+      />
+    ) : (
+      <ModalReadonlyTextInput
+        value={formatKlipSapDisplayValue(klipValue, format)}
+        compact={compact}
+        className={format === 'number' ? 'text-right tabular-nums' : undefined}
+      />
+    )
 
   return (
     <div
@@ -120,48 +181,12 @@ export function KlipSapCompareField({
       )}
     >
       <label className={labelClass}>{label}</label>
-      {editing && editControl ? (
-        editControl
-      ) : (
-        <div className={cn('flex min-h-8 items-center gap-2', KLIP_VALUE_CLASS)}>
-          <span>{formatKlipSapDisplayValue(klipValue, format)}</span>
-          {showKlip ? (
-            <span
-              className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700"
-              title={klipEditedBy ? `Diubah oleh ${klipEditedBy}` : undefined}
-            >
-              KLIP
-            </span>
-          ) : null}
-          {showSapSourced ? (
-            <span
-              className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600"
-              title="Sama dengan nilai SAP — bukan bukti diisi lewat KLIP"
-            >
-              SAP
-            </span>
-          ) : null}
-          {showUnknown ? (
-            <span
-              className="rounded-full border border-dashed border-gray-300 px-1.5 py-0.5 text-[9px] font-semibold text-gray-500"
-              title="Berbeda dari nilai SAP, tetapi asalnya tidak tercatat — baris ini dibuat sebelum pencatatan asal data"
-            >
-              ?
-            </span>
-          ) : null}
-          {showOverrideBadge ? (
-            <span className="text-[10px] font-medium text-emerald-600">(KLIP override)</span>
-          ) : null}
-        </div>
-      )}
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
-        <span>SAP {sapDisplay}</span>
-        {delta ? (
-          <span className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800">
-            Δ {delta}
-          </span>
-        ) : null}
-      </div>
+      <KlipSapValueWithBadge provenance={provenance} klipEditedBy={klipEditedBy}>
+        {control}
+      </KlipSapValueWithBadge>
+      {showFooter ? (
+        <KlipSapReferenceFooter sapValue={sapValue} format={format} delta={delta} />
+      ) : null}
     </div>
   )
 }

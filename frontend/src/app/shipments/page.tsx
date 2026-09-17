@@ -163,6 +163,7 @@ import {
   type EtaBucketFilterKey,
 } from '@/lib/shipmentsPageDerivedData'
 import {
+  patchSection1SummaryAfterUnplannedToPlanned,
   patchSection1SummaryAfterUnplannedToPreplanned,
   pipelineCountForStage,
   SHIPMENT_PAGE_PIPELINE_CARDS,
@@ -2655,6 +2656,10 @@ function ShipmentsPageContent() {
 
   const mapGroupingUploadToModal = (data: ShipmentGroupingBulkUploadResult): BulkUploadStatusResult => {
     const errors: string[] = []
+    for (const g of data.groups ?? []) {
+      const outcome = g.outcome === 'planned' ? 'Planned' : 'Preplanned'
+      errors.push(`Group ${g.group}${g.groupCode ? ` (${g.groupCode})` : ''}: ${outcome} (${g.contractCount} PO)`)
+    }
     for (const f of data.failures) {
       const rows = f.excelRowNumbers?.length ? `rows ${f.excelRowNumbers.join(', ')}` : 'group'
       const group = f.group ? `Group ${f.group}` : ''
@@ -2690,18 +2695,34 @@ function ShipmentsPageContent() {
         const data = await uploadShipmentGroupingTemplate(file)
         setGroupingUploadResult(mapGroupingUploadToModal(data))
         if (data.succeeded > 0) {
-          const contractRows = data.groups.reduce((sum, g) => sum + Number(g.contractCount || 0), 0)
-          const outstandingQtyKg = data.groups.reduce(
-            (sum, g) => sum + Number(g.totalOsMt || 0) * 1000,
-            0,
-          )
-          setShipmentsSection1Summary((prev) =>
-            patchSection1SummaryAfterUnplannedToPreplanned(prev, {
-              groupCount: data.succeeded,
-              contractRows,
-              outstandingQtyKg,
-            }) ?? prev,
-          )
+          const preplannedGroups = (data.groups ?? []).filter((g) => g.outcome !== 'planned')
+          const plannedGroups = (data.groups ?? []).filter((g) => g.outcome === 'planned')
+          setShipmentsSection1Summary((prev) => {
+            let next = prev
+            if (preplannedGroups.length > 0) {
+              next =
+                patchSection1SummaryAfterUnplannedToPreplanned(next, {
+                  groupCount: preplannedGroups.length,
+                  contractRows: preplannedGroups.reduce((sum, g) => sum + Number(g.contractCount || 0), 0),
+                  outstandingQtyKg: preplannedGroups.reduce(
+                    (sum, g) => sum + Number(g.totalOsMt || 0) * 1000,
+                    0,
+                  ),
+                }) ?? next
+            }
+            if (plannedGroups.length > 0) {
+              next =
+                patchSection1SummaryAfterUnplannedToPlanned(next, {
+                  groupCount: plannedGroups.length,
+                  contractRows: plannedGroups.reduce((sum, g) => sum + Number(g.contractCount || 0), 0),
+                  outstandingQtyKg: plannedGroups.reduce(
+                    (sum, g) => sum + Number(g.totalOsMt || 0) * 1000,
+                    0,
+                  ),
+                }) ?? next
+            }
+            return next
+          })
         }
         await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
         invalidateLogisticsListCaches()
@@ -6936,7 +6957,7 @@ function ShipmentsPageContent() {
         <BulkUploadStatusModal
           open={!!groupingUploadResult}
           onOpenChange={(open) => { if (!open) setGroupingUploadResult(null) }}
-          title="Unplanned grouping upload"
+          title="Upload Planning result"
           result={groupingUploadResult}
           createdLabel="Groups created"
           updatedLabel="Warnings"
@@ -7104,7 +7125,7 @@ function ShipmentsPageContent() {
                         ) : (
                           <Download className="h-4 w-4 mr-2" />
                         )}
-                        Download Template
+                        Download Unplanned
                       </Button>
                     </span>
                   </TooltipTrigger>
@@ -7127,7 +7148,7 @@ function ShipmentsPageContent() {
                         ) : (
                           <Upload className="h-4 w-4 mr-2" />
                         )}
-                        Upload
+                        Upload Planning
                       </Button>
                     </span>
                   </TooltipTrigger>

@@ -4,6 +4,7 @@ import {
   pipelineCardQtyForStage,
   pipelineCountForStage,
   pipelineVesselNamesForStage,
+  patchSection1SummaryAfterUnplannedToPlanned,
   patchSection1SummaryAfterUnplannedToPreplanned,
   splitVesselNamesForCard,
   SHIPMENT_PAGE_PIPELINE_CARDS,
@@ -133,5 +134,20 @@ describe('shipmentPagePipeline', () => {
     expect(next?.statusOutstandingQty?.preplanned).toBe(3500)
     expect(next?.statusOutstandingQty?.unplanned).toBe(7500)
     expect(next?.unplannedTable?.totalTableRows).toBe(7)
+  })
+
+  it('patches Unplanned → Planned card count after Excel Planning upload', () => {
+    const next = patchSection1SummaryAfterUnplannedToPlanned(
+      {
+        status: { unplanned: 10, preplanned: 2, planned: 5 },
+        statusOutstandingQty: { unplanned: 9000, preplanned: 2000, planned: 1000 },
+        unplannedTable: { contractRows: 10, shipmentRows: 0, totalTableRows: 10 },
+      },
+      { groupCount: 1, contractRows: 2, outstandingQtyKg: 800 },
+    )
+    expect(next?.status?.planned).toBe(6)
+    expect(next?.status?.unplanned).toBe(8)
+    expect(next?.statusOutstandingQty?.planned).toBe(1800)
+    expect(next?.statusOutstandingQty?.unplanned).toBe(8200)
   })
 })

@@ -1,14 +1,26 @@
 import * as XLSX from 'xlsx'
 
 /**
- * Shipments Unplanned → Preplanned grouping Excel (Wave 1).
+ * Shipments Unplanned → Preplanned or Planned grouping Excel.
  *
- * Writable columns: Select (Y) + Group (planner bundle code). Vessel/ETA are Wave 2.
- * Native Excel checkboxes are not used — they do not survive SheetJS download/upload.
+ * Writable: Select (Y) + Group + Vessel (master dropdown) + 8 ETA dates.
+ * Charter / loading / discharge are resolved on upload from master vessel + SAP.
  */
 
+export const SHIPMENT_GROUPING_ETA_HEADERS = [
+  'Arr. @ LP',
+  'Berthed LP',
+  'Start Load',
+  'Done Load',
+  'Sail LP',
+  'Arr. @ DP',
+  'Berthed DP',
+  'Start Disch',
+  'Done Disch',
+] as const
+
 export const SHIPMENT_GROUPING_INSTRUCTION =
-  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Bukan nama vessel — vessel dan ETA diisi nanti saat Planned. Baris tanpa Y tidak di-upload.'
+  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Hanya Select+Group = Preplanned. Isi Vessel (dropdown master) dan semua ETA = Planned. Charter, loading, dan discharge diisi otomatis dari master/SAP. Baris tanpa Y tidak di-upload.'
 
 export const SHIPMENT_GROUPING_SHEET_NAME = 'Grouping'
 export const SHIPMENT_GROUPING_HELP_SHEET_NAME = 'Cara isi'
@@ -26,6 +38,8 @@ export const SHIPMENT_GROUPING_TEMPLATE_HEADERS = [
   'Contract Qty (MT)',
   'OS Qty (MT)',
   'Status',
+  'Vessel',
+  ...SHIPMENT_GROUPING_ETA_HEADERS,
 ] as const
 
 export type ShipmentGroupingTemplateHeader = (typeof SHIPMENT_GROUPING_TEMPLATE_HEADERS)[number]
@@ -37,10 +51,10 @@ export const SHIPMENT_GROUPING_PO_COL = SHIPMENT_GROUPING_TEMPLATE_HEADERS.index
 export const SHIPMENT_GROUPING_TEMPLATE_ROW_LIMIT = 10_000
 
 export const SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP =
-  'Open the Unplanned card to download the grouping template'
+  'Open the Unplanned card to download Unplanned'
 
 export const SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP =
-  'Open the Unplanned card to upload the grouping template'
+  'Open the Unplanned card to upload Planning'
 
 export type ShipmentGroupingTemplateSourceRow = {
   supplier?: string | null
@@ -60,6 +74,7 @@ export type ParsedShipmentGroupingRow = {
   group: string
   poNumber: string
   supplier: string
+  vessel: string
 }
 
 export type ShipmentGroupingParseIssue = {
@@ -182,12 +197,16 @@ export function buildShipmentGroupingTemplateMatrix(
       formatGroupingQtyMtFromKg(row.contractQtyKg),
       formatGroupingQtyMtFromKg(row.outstandingQtyKg),
       'Unplanned',
+      '',
+      ...SHIPMENT_GROUPING_ETA_HEADERS.map(() => ''),
     ])
   }
   return matrix
 }
 
-const GROUPING_COL_WIDTHS = [10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12]
+const GROUPING_COL_WIDTHS = [
+  10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12, 28, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+]
 
 function applyGroupingSheetLayout(ws: XLSX.WorkSheet, dataRowCount: number): void {
   const headerRow = 1
@@ -218,19 +237,23 @@ function applyGroupingSheetLayout(ws: XLSX.WorkSheet, dataRowCount: number): voi
 
 function buildCaraIsiSheet(): XLSX.WorkSheet {
   const aoa = [
-    ['Cara isi template grouping Unplanned → Preplanned'],
+    ['Cara isi template grouping Unplanned → Preplanned atau Planned'],
     [''],
     ['1. Isi kolom Select dengan Y untuk PO yang ikut batch ini.'],
     [
       '2. Isi kolom Group dengan kode bundel yang sama untuk PO yang akan satu kapal (contoh: 1, A, B).',
     ],
-    ['3. Group bukan nama vessel. Vessel dan ETA diisi nanti saat membuat Planned shipment.'],
-    ['4. Baris tanpa Y diabaikan saat upload, meskipun kolom Group terisi.'],
-    ['5. Setiap Group harus berisi minimal 2 PO yang masih Unplanned.'],
-    ['6. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
+    ['3. Hanya Select + Group (tanpa Vessel/ETA) = status Preplanned. Minimal 2 PO per Group.'],
+    [
+      '4. Isi Vessel (dropdown dari sheet Master Vessel) dan semua 8 kolom ETA = status Planned. Charter, Loading Port, dan Discharge Port diisi otomatis (master vessel + SAP). Satu Group = satu kapal.',
+    ],
+    ['5. Vessel tanpa semua ETA (kecuali semua PO CIF) ditolak — tidak menjadi Preplanned.'],
+    ['6. Baris tanpa Y diabaikan saat upload, meskipun kolom Group terisi.'],
+    ['7. Planned boleh 1 PO jika Vessel + ETA lengkap. Preplanned tetap minimal 2 PO.'],
+    ['8. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
   ]
   const ws = XLSX.utils.aoa_to_sheet(aoa)
-  ws['!cols'] = [{ wch: 110 }]
+  ws['!cols'] = [{ wch: 120 }]
   return ws
 }
 
@@ -275,6 +298,7 @@ export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupi
   const groupIdx = colIndex(header, ['group'])
   const poIdx = colIndex(header, ['po number', 'po', 'po no', 'po_number'])
   const supplierIdx = colIndex(header, ['supplier'])
+  const vesselIdx = colIndex(header, ['vessel', 'vessel name'])
 
   const selectedRows: ParsedShipmentGroupingRow[] = []
   const issues: ShipmentGroupingParseIssue[] = []
@@ -287,6 +311,7 @@ export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupi
     const group = cellText(row[groupIdx])
     const poNumber = cellText(row[poIdx])
     const supplier = supplierIdx >= 0 ? cellText(row[supplierIdx]) : ''
+    const vessel = vesselIdx >= 0 ? cellText(row[vesselIdx]) : ''
     if (!isSelectY(selectRaw)) {
       skippedWithoutY += 1
       continue
@@ -305,6 +330,7 @@ export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupi
       group,
       poNumber,
       supplier,
+      vessel,
     })
   }
 

@@ -84,7 +84,15 @@ export type ShipmentGroupingBulkUploadResult = {
   succeeded: number;
   failed: number;
   skippedWithoutY: number;
-  groups: Array<{ group: string; groupCode: string; contractCount: number; totalOsMt?: number }>;
+  preplannedSucceeded?: number;
+  plannedSucceeded?: number;
+  groups: Array<{
+    group: string;
+    groupCode: string;
+    contractCount: number;
+    totalOsMt?: number;
+    outcome?: 'preplanned' | 'planned';
+  }>;
   failures: Array<{ excelRowNumbers: number[]; group?: string; reason: string }>;
   warnings: Array<{ group: string; groupCode: string; reason: string }>;
 };

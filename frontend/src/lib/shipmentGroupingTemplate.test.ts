@@ -24,6 +24,7 @@ function selected(
     selectY: true,
     poNumber: '',
     supplier: '',
+    vessel: '',
     ...over,
   }
 }
@@ -50,12 +51,19 @@ describe('shipmentGroupingTemplate', () => {
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Contract Qty (MT)')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS[0]).toBe('Select')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS[1]).toBe('Group')
-    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Vessel')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Vessel')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Arr. @ LP')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Done Disch')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Charter Type')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Loading Port')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Discharge Port')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Plan Qty (MT)')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract Ext No')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract No')
     expect(SHIPMENT_GROUPING_INSTRUCTION).not.toMatch(/WILMAR/i)
     expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/contoh 1 atau A/)
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Preplanned/)
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Planned/)
   })
 
   it('sorts by supplier then region/plant, product, incoterm, contract date, PO', () => {
@@ -218,5 +226,8 @@ describe('shipmentGroupingTemplate', () => {
     const text = help.flat().join(' ')
     expect(text).not.toMatch(/WILMAR/i)
     expect(text).toMatch(/contoh: 1, A, B/)
+    expect(text).toMatch(/Preplanned/)
+    expect(text).toMatch(/Planned/)
+    expect(text).toMatch(/otomatis/)
   })
 })

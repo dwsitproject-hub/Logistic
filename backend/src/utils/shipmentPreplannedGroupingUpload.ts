@@ -1,16 +1,27 @@
 /**
- * Shipments Unplanned → Preplanned grouping Excel parse + workbook builder (Wave 1).
+ * Shipments Unplanned → Preplanned or Planned grouping Excel.
  * Mirrors frontend/src/lib/shipmentGroupingTemplate.ts — keep columns/rules in sync.
  */
 
 import * as XLSX from 'xlsx';
 import type { GroupingTemplateDbRow } from './shipmentPreplannedGroupingTemplateSql';
+import {
+  emptyGroupingEtas,
+  SHIPMENT_GROUPING_ETA_COLUMNS,
+  SHIPMENT_GROUPING_ETA_HEADERS,
+  type GroupingEtaKey,
+} from './shipmentGroupingEtaColumns';
+import { toIsoDate10FromCell } from './planningSheetDate';
+import { injectXlsxSheetDataValidations } from './injectXlsxSheetDataValidations';
 
 export const SHIPMENT_GROUPING_INSTRUCTION =
-  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Bukan nama vessel — vessel dan ETA diisi nanti saat Planned. Baris tanpa Y tidak di-upload.';
+  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Hanya Select+Group = Preplanned. Isi Vessel (dropdown master) dan semua ETA = Planned. Charter, loading, dan discharge diisi otomatis dari master/SAP. Baris tanpa Y tidak di-upload.';
 
 export const SHIPMENT_GROUPING_SHEET_NAME = 'Grouping';
 export const SHIPMENT_GROUPING_HELP_SHEET_NAME = 'Cara isi';
+/** Hidden list of master_vessels names. Excel dropdowns use named range VesselList. */
+export const SHIPMENT_GROUPING_LISTS_SHEET_NAME = 'Master Vessel';
+export const SHIPMENT_GROUPING_VESSEL_LIST_NAME = 'VesselList';
 
 export const SHIPMENT_GROUPING_TEMPLATE_HEADERS = [
   'Select',
@@ -25,6 +36,8 @@ export const SHIPMENT_GROUPING_TEMPLATE_HEADERS = [
   'Contract Qty (MT)',
   'OS Qty (MT)',
   'Status',
+  'Vessel',
+  ...SHIPMENT_GROUPING_ETA_HEADERS,
 ] as const;
 
 export type ParsedShipmentGroupingRow = {
@@ -33,6 +46,10 @@ export type ParsedShipmentGroupingRow = {
   group: string;
   poNumber: string;
   supplier: string;
+  incoterm: string;
+  outstandingQtyMt: number | null;
+  vessel: string;
+  etas: Record<GroupingEtaKey, string>;
 };
 
 export type ShipmentGroupingParseIssue = {
@@ -110,6 +127,16 @@ function colIndex(headerRow: unknown[], aliases: string[]): number {
   return headerRow.findIndex((cell) => wanted.includes(headerKey(cell)));
 }
 
+function parseEtaCell(value: unknown): string {
+  return toIsoDate10FromCell(value) ?? (cellText(value) ? sliceIsoDate(value) : '');
+}
+
+function parseOutstandingQtyMt(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+
 export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupingParseResult {
   const headerRowIndex = matrix.findIndex((row) => isShipmentGroupingTemplateHeaderRow(row ?? []));
   if (headerRowIndex < 0) {
@@ -125,6 +152,12 @@ export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupi
   const groupIdx = colIndex(header, ['group']);
   const poIdx = colIndex(header, ['po number', 'po', 'po no', 'po_number']);
   const supplierIdx = colIndex(header, ['supplier']);
+  const incotermIdx = colIndex(header, ['incoterm']);
+  const osQtyIdx = colIndex(header, ['os qty (mt)', 'os qty']);
+  const vesselIdx = colIndex(header, ['vessel', 'vessel name']);
+  const etaIdxByKey = Object.fromEntries(
+    SHIPMENT_GROUPING_ETA_COLUMNS.map((col) => [col.key, colIndex(header, [col.header, ...col.aliases])]),
+  ) as Record<GroupingEtaKey, number>;
 
   const selectedRows: ParsedShipmentGroupingRow[] = [];
   const issues: ShipmentGroupingParseIssue[] = [];
@@ -148,12 +181,21 @@ export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupi
       issues.push({ excelRowNumber, reason: 'PO Number is required' });
       continue;
     }
+    const etas = emptyGroupingEtas();
+    for (const col of SHIPMENT_GROUPING_ETA_COLUMNS) {
+      const idx = etaIdxByKey[col.key];
+      if (idx >= 0) etas[col.key] = parseEtaCell(row[idx]);
+    }
     selectedRows.push({
       excelRowNumber,
       selectY: true,
       group,
       poNumber,
       supplier,
+      incoterm: incotermIdx >= 0 ? cellText(row[incotermIdx]) : '',
+      outstandingQtyMt: osQtyIdx >= 0 ? parseOutstandingQtyMt(row[osQtyIdx]) : null,
+      vessel: vesselIdx >= 0 ? cellText(row[vesselIdx]) : '',
+      etas,
     });
   }
 
@@ -184,6 +226,9 @@ export function clusterShipmentGroupingRowsByGroup(
 export type EligibleGroupingIdentity = {
   id: string;
   poNumber: string;
+  contractNumber?: string;
+  incoterm?: string;
+  outstandingQtyKg?: number;
 };
 
 export type GroupingRowMatch =
@@ -270,12 +315,32 @@ export function buildShipmentGroupingTemplateMatrixFromDb(
       formatGroupingQtyMtFromKg(row.contractQtyKg),
       formatGroupingQtyMtFromKg(row.outstandingQtyKg),
       'Unplanned',
+      '',
+      ...SHIPMENT_GROUPING_ETA_HEADERS.map(() => ''),
     ]);
   }
   return matrix;
 }
 
-const GROUPING_COL_WIDTHS = [10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12];
+const GROUPING_COL_WIDTHS = [
+  10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12, 28, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+];
+
+function excelColLetter(index: number): string {
+  let n = index + 1;
+  let s = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function excelSheetRangeRef(sheetName: string, range: string): string {
+  const escaped = sheetName.replace(/'/g, "''");
+  return `'${escaped}'!${range}`;
+}
 
 function applyGroupingSheetLayout(ws: XLSX.WorkSheet, dataRowCount: number): void {
   const headerRow = 1;
@@ -296,43 +361,88 @@ function applyGroupingSheetLayout(ws: XLSX.WorkSheet, dataRowCount: number): voi
   };
   ws['!views'] = [{ state: 'frozen', ySplit: 2, topLeftCell: 'A3', activePane: 'bottomLeft' }];
   ws['!cols'] = GROUPING_COL_WIDTHS.map((wch) => ({ wch }));
-  const dvEnd = Math.max(3, 2 + Math.max(dataRowCount, 1));
-  (ws as XLSX.WorkSheet & { '!dataValidation'?: unknown[] })['!dataValidation'] = [
-    {
-      sqref: `A3:A${dvEnd}`,
-      type: 'list',
-      formulas: ['Y'],
-      allowBlank: true,
-      showErrorMessage: true,
-      error: 'Isi Y atau biarkan kosong',
-    },
-  ];
 }
 
 function buildCaraIsiSheet(): XLSX.WorkSheet {
   const aoa = [
-    ['Cara isi template grouping Unplanned → Preplanned'],
+    ['Cara isi template grouping Unplanned → Preplanned atau Planned'],
     [''],
     ['1. Isi kolom Select dengan Y untuk PO yang ikut batch ini.'],
     [
       '2. Isi kolom Group dengan kode bundel yang sama untuk PO yang akan satu kapal (contoh: 1, A, B).',
     ],
-    ['3. Group bukan nama vessel. Vessel dan ETA diisi nanti saat membuat Planned shipment.'],
-    ['4. Baris tanpa Y diabaikan saat upload, meskipun kolom Group terisi.'],
-    ['5. Setiap Group harus berisi minimal 2 PO yang masih Unplanned.'],
-    ['6. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
+    ['3. Hanya Select + Group (tanpa Vessel/ETA) = status Preplanned. Minimal 2 PO per Group.'],
+    [
+      '4. Isi Vessel (dropdown dari sheet Master Vessel) dan semua 8 kolom ETA = status Planned. Charter, Loading Port, dan Discharge Port diisi otomatis (master vessel + SAP). Satu Group = satu kapal.',
+    ],
+    ['5. Vessel tanpa semua ETA (kecuali semua PO CIF) ditolak — tidak menjadi Preplanned.'],
+    ['6. Baris tanpa Y diabaikan saat upload, meskipun kolom Group terisi.'],
+    ['7. Planned boleh 1 PO jika Vessel + ETA lengkap. Preplanned tetap minimal 2 PO.'],
+    ['8. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 110 }];
+  ws['!cols'] = [{ wch: 120 }];
   return ws;
 }
 
-export function buildShipmentGroupingTemplateXlsxBuffer(rows: GroupingTemplateDbRow[]): Buffer {
+function buildMasterVesselSheet(vesselNames: string[]): XLSX.WorkSheet {
+  const aoa: string[][] = [['Vessel']];
+  for (const name of vesselNames) {
+    if (name) aoa.push([name]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 36 }];
+  ws['!autofilter'] = {
+    ref: XLSX.utils.encode_range({
+      s: { c: 0, r: 0 },
+      e: { c: 0, r: Math.max(0, vesselNames.length) },
+    }),
+  };
+  return ws;
+}
+
+export function buildShipmentGroupingTemplateXlsxBuffer(
+  rows: GroupingTemplateDbRow[],
+  options?: { vesselNames?: string[] },
+): Buffer {
+  const vesselNames = (options?.vesselNames ?? []).map((n) => String(n ?? '').trim()).filter(Boolean);
   const matrix = buildShipmentGroupingTemplateMatrixFromDb(rows);
   const ws = XLSX.utils.aoa_to_sheet(matrix);
   applyGroupingSheetLayout(ws, rows.length);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, SHIPMENT_GROUPING_SHEET_NAME);
   XLSX.utils.book_append_sheet(wb, buildCaraIsiSheet(), SHIPMENT_GROUPING_HELP_SHEET_NAME);
-  return XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' }) as Buffer;
+  XLSX.utils.book_append_sheet(wb, buildMasterVesselSheet(vesselNames), SHIPMENT_GROUPING_LISTS_SHEET_NAME);
+  if (!wb.Workbook) wb.Workbook = {};
+  wb.Workbook.Sheets = [{ Hidden: 0 }, { Hidden: 0 }, { Hidden: 1 }];
+  if (vesselNames.length > 0) {
+    wb.Workbook.Names = [
+      {
+        Name: SHIPMENT_GROUPING_VESSEL_LIST_NAME,
+        Ref: excelSheetRangeRef(
+          SHIPMENT_GROUPING_LISTS_SHEET_NAME,
+          `$A$2:$A$${vesselNames.length + 1}`,
+        ),
+      },
+    ];
+  }
+  const raw = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' }) as Buffer;
+  const dvEnd = Math.max(2 + Math.max(rows.length, 1), 200);
+  const validations = [
+    {
+      sqref: `A3:A${dvEnd}`,
+      formula: '"Y"',
+      error: 'Isi Y atau biarkan kosong',
+    },
+  ];
+  const vesselCol = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel');
+  if (vesselCol >= 0 && vesselNames.length > 0) {
+    const col = excelColLetter(vesselCol);
+    validations.push({
+      sqref: `${col}3:${col}${dvEnd}`,
+      formula: SHIPMENT_GROUPING_VESSEL_LIST_NAME,
+      error: 'Pilih Vessel dari sheet Master Vessel',
+    });
+  }
+  return injectXlsxSheetDataValidations(raw, 'xl/worksheets/sheet1.xml', validations);
 }

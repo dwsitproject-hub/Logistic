@@ -65,6 +65,5 @@ export function describePortProvenance(summary: KlipSapProvenanceSummary): strin
   if (summary.differing === 0) return null
   const parts = [`${summary.differing} field berbeda dari SAP`]
   if (summary.klipRecorded > 0) parts.push(`${summary.klipRecorded} diubah lewat KLIP`)
-  if (summary.unrecorded > 0) parts.push(`${summary.unrecorded} asal belum tercatat`)
   return parts.join(' · ')
 }

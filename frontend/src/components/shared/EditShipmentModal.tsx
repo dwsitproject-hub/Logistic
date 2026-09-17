@@ -15,6 +15,10 @@ import {
 } from '@/components/ui/table'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
+  ModalReadonlyDateInput,
+  ModalReadonlyTextInput,
+} from '@/components/shared/ModalReadonlyControl'
+import {
   AlertCircle,
   Anchor,
   Check,
@@ -49,7 +53,7 @@ import {
   resolveShipmentApiLookupKey,
   resolveShipmentDisplayStoNumber,
 } from '@/lib/shipmentStoDisplay'
-import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import api from '@/lib/api'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
@@ -130,8 +134,15 @@ import {
 import {
   KlipSapCompareField,
   KlipSapCompareLegend,
+  KlipSapReferenceFooter,
+  KlipSapSourceBadge,
+  KlipSapValueWithBadge,
 } from '@/components/shared/KlipSapCompareField'
-import { hasKlipSapMismatch } from '@/lib/klipSapCompare'
+import {
+  hasKlipSapMismatch,
+  resolveKlipSapProvenance,
+  shouldShowKlipSapFooter,
+} from '@/lib/klipSapCompare'
 import {
   SectionActionGroup,
   SectionAddButton,
@@ -166,8 +177,6 @@ interface ShipmentDocumentItem {
   file_name: string
   created_at?: string
 }
-const ETA_INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
-const INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900'
 const VESSEL_MODAL_TABLE_QTY_VALUE_CLASS = 'text-xs font-normal tabular-nums text-gray-900'
 
 const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
@@ -406,15 +415,10 @@ function ReadOnlyInfoField({
           {helpText ? <FieldHelp text={helpText} /> : null}
         </span>
       </label>
-      <div
-        className={
-          compact
-            ? `flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`
-            : INFO_VALUE_CLASS
-        }
-      >
-        {formatInfoDisplayValue(value)}
-      </div>
+      <ModalReadonlyTextInput
+        value={formatInfoDisplayValue(value)}
+        compact={compact}
+      />
     </div>
   )
 }
@@ -433,17 +437,19 @@ function ModalPortKlipSapLabel({
 }) {
   const klip = resolveKlipPortNameFromRow(portRow, shipmentInfo, sequence)
   const sap = resolveSapPortNameFromRow(portRow, shipmentInfo, sequence)
+  const provenance = resolveKlipSapProvenance({
+    klipValue: klip,
+    sapValue: sap,
+    format: 'text',
+  })
+  const showFooter = shouldShowKlipSapFooter(provenance, sap, 'text')
   return (
     <div className="min-w-0">
       <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
         <span>{klip || '—'}</span>
-        {klip ? (
-          <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
-            KLIP
-          </span>
-        ) : null}
+        <KlipSapSourceBadge provenance={provenance} />
       </div>
-      <div className="mt-0.5 text-[10px] text-gray-500">SAP {sap || '—'}</div>
+      {showFooter ? <KlipSapReferenceFooter sapValue={sap} format="text" /> : null}
     </div>
   )
 }
@@ -915,6 +921,12 @@ export function EditShipmentModal({
 
   const vesselOverride = hasKlipVesselNameOverride(vesselName, sapVesselName)
   const vesselMismatch = hasKlipSapMismatch(vesselName, sapVesselName, 'text')
+  const vesselProvenance = resolveKlipSapProvenance({
+    klipValue: vesselName,
+    sapValue: sapVesselName,
+    format: 'text',
+  })
+  const showVesselSapFooter = shouldShowKlipSapFooter(vesselProvenance, sapVesselName, 'text')
 
   const planQtyReadOnly = false
 
@@ -2221,28 +2233,20 @@ export function EditShipmentModal({
                     <label className="block text-xs font-medium text-gray-600">Vessel Name</label>
                     <KlipSapCompareLegend className="ml-auto" />
                   </div>
-                  {canModifyCoreSections ? (
-                    <MasterVesselCombobox
-                      value={vesselName}
-                      onSelect={applyMasterVessel}
-                      placeholder="Search and select from Master Vessel"
-                    />
-                  ) : (
-                    <div className="flex min-h-8 items-center gap-2 text-sm font-medium text-gray-900">
-                      <span>{formatInfoDisplayValue(vesselName)}</span>
-                      <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
-                        KLIP
-                      </span>
-                    </div>
-                  )}
-                  {canModifyCoreSections && vesselOverride ? (
-                    <span className="mt-1 inline-flex rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700">
-                      KLIP
-                    </span>
+                  <KlipSapValueWithBadge provenance={vesselProvenance}>
+                    {canModifyCoreSections ? (
+                      <MasterVesselCombobox
+                        value={vesselName}
+                        onSelect={applyMasterVessel}
+                        placeholder="Search and select from Master Vessel"
+                      />
+                    ) : (
+                      <ModalReadonlyTextInput value={formatInfoDisplayValue(vesselName)} />
+                    )}
+                  </KlipSapValueWithBadge>
+                  {showVesselSapFooter ? (
+                    <KlipSapReferenceFooter sapValue={sapVesselName} format="text" />
                   ) : null}
-                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-gray-500">
-                    <span>SAP {sapVesselName.trim() || '—'}</span>
-                  </div>
                 </div>
                 <KlipSapCompareField
                   label="Vessel Code"
@@ -2869,9 +2873,7 @@ export function EditShipmentModal({
                                   className="h-8 text-xs"
                                 />
                               ) : (
-                                <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                                  {formatDateDMY(block.fields[key]) || '—'}
-                                </div>
+                                <ModalReadonlyDateInput valueIso={block.fields[key]} compact />
                               )}
                             </div>
                           ))}
@@ -2901,9 +2903,7 @@ export function EditShipmentModal({
                                 className="h-8 text-xs"
                               />
                             ) : (
-                              <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                                {formatDateDMY(dischargeEtaFields[key]) || '—'}
-                              </div>
+                              <ModalReadonlyDateInput valueIso={dischargeEtaFields[key]} compact />
                             )}
                           </div>
                         ))}
@@ -2926,9 +2926,21 @@ export function EditShipmentModal({
                       </Badge>
                     </div>
                     <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Loading Port</label>
-                        {activeEtaBlock.isEditing && canModifyCoreSections ? (
+                      <KlipSapCompareField
+                        label="Loading Port"
+                        klipValue={resolveKlipPortNameFromRow(
+                          loadingPortRows[0],
+                          shipmentInfo,
+                          loadingPortRows[0]?.port_sequence ?? 1,
+                        )}
+                        sapValue={resolveSapPortNameFromRow(
+                          loadingPortRows[0],
+                          shipmentInfo,
+                          loadingPortRows[0]?.port_sequence ?? 1,
+                        )}
+                        format="text"
+                        editing={activeEtaBlock.isEditing && canModifyCoreSections}
+                        editControl={
                           <Input
                             value={activeEtaBlock.loadingPort}
                             onChange={(e) =>
@@ -2940,21 +2952,13 @@ export function EditShipmentModal({
                             }
                             className="h-9 text-sm"
                           />
-                        ) : (
-                          <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                            <ModalPortKlipSapLabel
-                              portRow={loadingPortRows[0]}
-                              shipmentInfo={shipmentInfo}
-                              sequence={loadingPortRows[0]?.port_sequence ?? 1}
-                            />
-                          </div>
-                        )}
-                      </div>
+                        }
+                      />
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">Apply to PO</label>
-                        <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                          {formatInfoDisplayValue(activeEtaBlock.contractLabels.join(', '))}
-                        </div>
+                        <ModalReadonlyTextInput
+                          value={formatInfoDisplayValue(activeEtaBlock.contractLabels.join(', '))}
+                        />
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -2968,9 +2972,7 @@ export function EditShipmentModal({
                               className="h-8 text-xs"
                             />
                           ) : (
-                            <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                              {formatDateDMY(activeEtaBlock.fields[key]) || '—'}
-                            </div>
+                            <ModalReadonlyDateInput valueIso={activeEtaBlock.fields[key]} compact />
                           )}
                         </div>
                       ))}
@@ -2998,8 +3000,8 @@ export function EditShipmentModal({
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
-                          <div className="text-[10px] text-gray-500">{label}</div>
-                          <div className="text-xs font-medium">{formatDateDMY(block.fields[key]) || '—'}</div>
+                          <div className="mb-1 text-[10px] text-gray-500">{label}</div>
+                          <ModalReadonlyDateInput valueIso={block.fields[key]} compact />
                         </div>
                       ))}
                     </div>
@@ -3308,10 +3310,6 @@ export function EditShipmentModal({
                 <div className="rounded-lg border border-violet-100 bg-white p-3">
                   <div className="mb-3 flex flex-wrap items-center gap-2">
                     <p className="text-[10px] font-medium text-gray-600">Quality at Discharge</p>
-                    <ModalPortKlipSapLabel
-                      portRow={dischargePortRow ?? { is_discharge_port: true }}
-                      shipmentInfo={shipmentInfo}
-                    />
                   </div>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                     {QUALITY_METRICS.map(({ portKey, label }) => {

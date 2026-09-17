@@ -64,11 +64,11 @@ describe('describePortProvenance', () => {
     expect(describePortProvenance({ differing: 0, klipRecorded: 0, unrecorded: 0 })).toBeNull()
   })
 
-  it('names both halves when both are present', () => {
+  it('names recorded KLIP edits without calling remaining diffs unknown', () => {
     const text = describePortProvenance({ differing: 12, klipRecorded: 3, unrecorded: 9 })
     expect(text).toContain('12 field berbeda dari SAP')
     expect(text).toContain('3 diubah lewat KLIP')
-    expect(text).toContain('9 asal belum tercatat')
+    expect(text).not.toContain('asal belum tercatat')
   })
 
   it('omits a half that is zero rather than printing "0"', () => {
