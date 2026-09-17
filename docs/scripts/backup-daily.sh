@@ -2,12 +2,15 @@
 #
 # Daily KLIP database backup to the Synology share, keeping 30 days.
 #
+# Destination: \172.30.1.94\APPs\dev\KLIP\BACKUP, reached through the CIFS mount that
+# mount-synology-backup.sh sets up at /mnt/synology-apps. Run that first.
+#
 # Why this exists: as of 2026-09-17 /opt/klip-db/backups held two dumps, both from 6 August, both
 # taken by hand before a merge. Losing the database would have meant losing six weeks. A dump is
 # ~43 MB and the data grows ~0.3 MB/day, so a month of daily backups is about 1.3 GB.
 #
 #   bash /opt/klip/docs/scripts/backup-daily.sh
-#   BACKUP_DIR=/volume1/klip/db-backups bash /opt/klip/docs/scripts/backup-daily.sh
+#   BACKUP_DIR=/mnt/synology-apps/dev/KLIP/BACKUP bash /opt/klip/docs/scripts/backup-daily.sh
 #
 # Cron (03:15 every day), writing its own log:
 #   15 3 * * * /bin/bash /opt/klip/docs/scripts/backup-daily.sh >> /var/log/klip-backup.log 2>&1
@@ -29,7 +32,7 @@
 set -uo pipefail
 
 APP_DIR="${APP_DIR:-/opt/klip}"
-BACKUP_DIR="${BACKUP_DIR:-/volume1/klip/db-backups}"   # <- the Synology folder
+BACKUP_DIR="${BACKUP_DIR:-/mnt/synology-apps/dev/KLIP/BACKUP}"   # \172.30.1.94\APPs\dev\KLIP\BACKUP
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 MIN_KEEP="${MIN_KEEP:-7}"
 REQUIRE_MOUNT="${REQUIRE_MOUNT:-1}"
