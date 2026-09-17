@@ -931,7 +931,12 @@ function addContractRowToPerfTree(
   const n3 = add(n2.children, prod);
   const n4 = add(n3.children, gn);
   const n5 = add(n4.children, sup);
-  const daysForAgg = tradeCycleDays <= 0 ? Math.max(0, -tradeCycleDays) : tradeCycleDays;
+  /*
+   * Magnitude: the tree shows "how far from the anchor", not which side of it. Written as an
+   * explicit abs because the previous branch-on-sign form read like it depended on the convention
+   * when it did not - and that convention has since flipped.
+   */
+  const daysForAgg = Math.abs(tradeCycleDays);
   for (const n of [n1, n2, n3, n4, n5]) {
     n.count += 1;
     n.totalDays += daysForAgg;
@@ -1716,7 +1721,8 @@ export function aggregateLatePerformanceRows(
       : isLegacyTradeCycleOnTime(tradeCycle);
 
     if (includeSummary) {
-      const tradeMagnitude = tradeCycle <= 0 ? -tradeCycle : tradeCycle;
+      // Magnitude, written plainly - the branch-on-sign form read as convention-dependent.
+      const tradeMagnitude = Math.abs(tradeCycle);
       if (isOpen) {
         openStatusTradeCount += 1;
         if (contractPerfOnTime) openStatusOnTimeCount += 1;
@@ -1763,7 +1769,12 @@ export function aggregateLatePerformanceRows(
         dist.onTime.count += 1;
         dist.onTime.qty += _qtyForPerf;
 
-        const daysAhead = openUsesConditionB ? Math.max(0, -tradeCycle) : -tradeCycle;
+        /*
+         * Magnitude, not the signed cycle. Since 789c816 every cycle is `anchor - completion`, so
+         * an On Time contract is POSITIVE and a Late one negative; reading `-tradeCycle` here made
+         * "Avg Ahead" negative and "Max" zero.
+         */
+        const daysAhead = openUsesConditionB ? Math.max(0, tradeCycle) : tradeCycle;
         onTrackCount += 1;
         onTrackTotalDaysAhead += daysAhead;
         onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
@@ -1786,17 +1797,25 @@ export function aggregateLatePerformanceRows(
       continue;
     }
 
+    /*
+     * How late, as a positive number of days. A Late contract's cycle is negative under the
+     * `anchor - completion` convention, so every bucket test and every total below has to read the
+     * magnitude: comparing the signed value put ALL late contracts in the 1-7 day bucket and left
+     * Avg Late negative with Max stuck at 0.
+     */
+    const lateDays = -tradeCycle;
+
     if (includeSummary) {
-      if (tradeCycle <= 7) {
+      if (lateDays <= 7) {
         dist.d1_7.count += 1;
         dist.d1_7.qty += _qtyForPerf;
-      } else if (tradeCycle <= 14) {
+      } else if (lateDays <= 14) {
         dist.d8_14.count += 1;
         dist.d8_14.qty += _qtyForPerf;
-      } else if (tradeCycle <= 30) {
+      } else if (lateDays <= 30) {
         dist.d15_30.count += 1;
         dist.d15_30.qty += _qtyForPerf;
-      } else if (tradeCycle <= 60) {
+      } else if (lateDays <= 60) {
         dist.d31_60.count += 1;
         dist.d31_60.qty += _qtyForPerf;
       } else {
@@ -1805,8 +1824,8 @@ export function aggregateLatePerformanceRows(
       }
 
       lateCount += 1;
-      lateTotalDays += tradeCycle;
-      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
+      lateTotalDays += lateDays;
+      lateMaxDays = Math.max(lateMaxDays, lateDays);
       lateTotalQtyDelivery += _qtyForPerf;
       if (logCycle != null) {
         lateTotalLogCycle += logCycle;
@@ -1905,7 +1924,12 @@ export function aggregateLatePerformanceRows(
         openStatusDpCycleCount > 0 ? Math.round(openStatusDpCycleTotal / openStatusDpCycleCount) : null,
       openAvgCashCycle:
         openStatusCashCycleCount > 0 ? Math.round(openStatusCashCycleTotal / openStatusCashCycleCount) : null,
-      openIsLateContext: openStatusTradeCount > 0 ? openStatusTradeSignedSum / openStatusTradeCount > 0 : false,
+      /*
+       * Negative average = Late, since 789c816 made every cycle `anchor - completion`. This drives
+       * the card's colour and whether its label reads "Avg Late" or "Avg Ahead"; left at `> 0` it
+       * called every late scope on-time and vice versa.
+       */
+      openIsLateContext: openStatusTradeCount > 0 ? openStatusTradeSignedSum / openStatusTradeCount < 0 : false,
       closeAvgDays: closeStatusTradeCount > 0 ? closeStatusTradeMagnitudeSum / closeStatusTradeCount : 0,
       closeAvgLogCycle:
         closeStatusLogCycleCount > 0 ? Math.round(closeStatusLogCycleTotal / closeStatusLogCycleCount) : null,
@@ -1913,7 +1937,7 @@ export function aggregateLatePerformanceRows(
         closeStatusDpCycleCount > 0 ? Math.round(closeStatusDpCycleTotal / closeStatusDpCycleCount) : null,
       closeAvgCashCycle:
         closeStatusCashCycleCount > 0 ? Math.round(closeStatusCashCycleTotal / closeStatusCashCycleCount) : null,
-      closeIsLateContext: closeStatusTradeCount > 0 ? closeStatusTradeSignedSum / closeStatusTradeCount > 0 : false,
+      closeIsLateContext: closeStatusTradeCount > 0 ? closeStatusTradeSignedSum / closeStatusTradeCount < 0 : false,
     };
     out.distribution = dist;
     if (filters.debug) {
