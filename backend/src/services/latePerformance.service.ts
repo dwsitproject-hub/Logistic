@@ -1131,6 +1131,23 @@ export function resolveOpenCycleCompletionEnd(
   return resolveCycleCompletionDate(row, transport);
 }
 
+/**
+ * The completion date a cycle measures against, with LAND's no-milestone fallback.
+ *
+ * Trade Cycle has always had it: a LAND contract with no WB and no daily planning still has a
+ * meaningful answer - due end against today, which says how far past due it is with nothing
+ * delivered. Log, DP and Cash did not inherit it, so on exactly those contracts they read "-"
+ * while Trade Cycle beside them showed a number. Reported 2026-09-17 on a LAND/LCO contract with
+ * a DP Date and a Payoff Date present and both cycles blank.
+ *
+ * SEA keeps returning null: no ATC and no ETC means "-", as specified, for all four cycles alike.
+ */
+function resolveCycleCompletionOrToday(row: any, transport: string, todayMid: Date): Date | null {
+  const end = resolveCycleCompletionDate(row, transport, todayMid);
+  if (end) return end;
+  return String(transport || '').trim().toUpperCase().startsWith('SEA') ? null : due(todayMid);
+}
+
 /** Open Log Cycle: Cargo Readiness − Completion (Last Receive → WB → ETA / ATC → ETA at LP). */
 export function computeOpenLogCycleDays(
   row: any,
@@ -1140,7 +1157,7 @@ export function computeOpenLogCycleDays(
 ): number | null {
   const ready = due(cargoReady);
   if (!ready) return null;
-  const end = resolveCycleCompletionDate(row, transport, _todayMid);
+  const end = resolveCycleCompletionOrToday(row, transport, _todayMid);
   if (!end) return null;
   return diffCalendarDays(end, ready);
 }
@@ -1154,7 +1171,7 @@ export function computeOpenCashCycleDays(
 ): number | null {
   const payoff = hasCalendarDate(payoffDate) ? due(payoffDate) : resolveSapPayoffCalendarDate(row);
   if (!payoff) return null;
-  const end = resolveCycleCompletionDate(row, transport, _todayMid);
+  const end = resolveCycleCompletionOrToday(row, transport, _todayMid);
   if (!end) return null;
   return diffCalendarDays(end, payoff);
 }
@@ -1168,7 +1185,7 @@ export function computeOpenDpCycleDays(
 ): number | null {
   const dp = hasCalendarDate(dpDate) ? due(dpDate) : resolveSapDpCalendarDate(row);
   if (!dp) return null;
-  const end = resolveCycleCompletionDate(row, transport, _todayMid);
+  const end = resolveCycleCompletionOrToday(row, transport, _todayMid);
   if (!end) return null;
   return diffCalendarDays(end, dp);
 }
@@ -1181,7 +1198,7 @@ export function computeClosedLogCycleDays(
 ): number | null {
   const ready = due(cargoReady);
   if (!ready) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionOrToday(row, transport, new Date());
   if (!end) return null;
   return diffCalendarDays(end, ready);
 }
@@ -1192,7 +1209,7 @@ export function computeClosedCashCycleDays(
   payoffDate: unknown,
 ): number | null {
   if (!hasCalendarDate(payoffDate)) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionOrToday(row, transport, new Date());
   if (!end) return null;
   return diffCalendarDays(end, payoffDate);
 }
@@ -1203,7 +1220,7 @@ export function computeClosedDpCycleDays(
   dpDate: unknown,
 ): number | null {
   if (!hasCalendarDate(dpDate)) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionOrToday(row, transport, new Date());
   if (!end) return null;
   return diffCalendarDays(end, dpDate);
 }
