@@ -43,6 +43,7 @@ import {
   sqlQtyMoveJoinIncotermDelivery,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
+import { sqlLastAtaVesselCompleteDischargeForContract } from '../utils/contractsListCycleSql';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
 import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
 import {
@@ -1359,12 +1360,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           ${sqlMaxTruckingWbActualsDateForContract(
             '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
           )} AS last_trucking_wb_actuals_date,
-          (
-            SELECT MAX(s2.ata_discharge_complete::date)
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND s2.ata_discharge_complete IS NOT NULL
-          ) AS last_ata_vessel_complete_discharge,
+          ${sqlLastAtaVesselCompleteDischargeForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+          )} AS last_ata_vessel_complete_discharge,
           (
             SELECT MAX(
               (

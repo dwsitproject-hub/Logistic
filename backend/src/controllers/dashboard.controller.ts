@@ -10,6 +10,7 @@ import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
 import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
 import { sqlB2bOriginEndingUnloadSubquery } from '../utils/b2bOriginEndingSql';
+import { sqlLastAtaVesselCompleteDischargeForContract } from '../utils/contractsListCycleSql';
 import {
   sqlIncotermQuantityDeliveryCase,
   sqlTransportModeFromContractAndJson,
@@ -3939,7 +3940,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
              ORDER BY p3.created_at DESC NULLS LAST
              LIMIT 1) AS payoff_date_deviation_days,
             (SELECT MAX(t.trucking_completion_date) FROM trucking_operations t WHERE t.contract_id = c.id) AS last_trucking_completion_date,
-            (SELECT MAX(s.ata_discharge_complete::date) FROM shipments s WHERE s.contract_id = c.id AND s.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge
+            ${sqlLastAtaVesselCompleteDischargeForContract('c.id')} AS last_ata_vessel_complete_discharge
           FROM payments p
           WHERE p.contract_id = c.id
         ) pinfo ON true

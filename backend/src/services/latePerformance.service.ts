@@ -381,12 +381,23 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
         -- expressed as their own LATERAL joins (same cardinality, no per-row subplan re-execution).
         LEFT JOIN LATERAL (
           SELECT
-            MAX(s2.ata_discharge_complete::date) FILTER (WHERE s2.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge,
+            /*
+             * The same ATC the Shipments page shows: KLIP override, then the shipment's own
+             * column, then the discharge leg. Contract Performance read only the middle one, so a
+             * contract whose ATC lived on the leg or in an override read "-" here while Shipments
+             * showed it finished - 8 contracts on the dev copy, one with a different date.
+             * Purely additive: nothing that had an ATC loses it.
+             */
+            MAX(COALESCE(
+              sao_atc.ata_discharge_complete::date,
+              s2.ata_discharge_complete::date,
+              vlp_discharge.ata_loading_completed::date
+            )) AS last_ata_vessel_complete_discharge,
             MAX(COALESCE(s2.eta_discharge_complete::date, vlp_discharge.eta_vessel_complete_discharge::date)) AS last_eta_vessel_complete_discharge,
             MAX(vlp_load.eta_vessel_arrival::date) AS open_standard_eta_vessel_loading
           FROM shipments s2
           LEFT JOIN LATERAL (
-            SELECT vlpd.eta_vessel_complete_discharge
+            SELECT vlpd.eta_vessel_complete_discharge, vlpd.ata_loading_completed
             FROM vessel_loading_ports vlpd
             WHERE vlpd.shipment_id = s2.id
               AND vlpd.is_discharge_port = true
@@ -401,6 +412,7 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
             ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
             LIMIT 1
           ) vlp_load ON TRUE
+          LEFT JOIN shipment_ata_overrides sao_atc ON sao_atc.shipment_id = s2.id
           WHERE s2.contract_id = cc.id
         ) shipment_agg ON TRUE
         WHERE 1=1

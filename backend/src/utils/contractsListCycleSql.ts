@@ -6,6 +6,38 @@ import {
 import { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG } from './truckingQuantitySql';
 
 /**
+ * The contract's ATC, read the way the Shipments page reads it.
+ *
+ * Three sources, in the order the Shipments query uses: the KLIP override, the shipment's own
+ * column, then the discharge leg. Contract Performance used to read only the middle one, so a
+ * contract whose ATC lived on the leg or in an override showed "-" on one page and finished on the
+ * other - 8 contracts on the dev copy, one of them with a different date.
+ *
+ * Purely additive: every row that had an ATC keeps it, and the widening can only fill gaps.
+ */
+export function sqlLastAtaVesselCompleteDischargeForContract(contractIdExpr: string): string {
+  return `(
+    SELECT MAX(COALESCE(
+      sao_atc.ata_discharge_complete::date,
+      s_atc.ata_discharge_complete::date,
+      vlp_atc.ata_loading_completed::date
+    ))
+    FROM shipments s_atc
+    LEFT JOIN shipment_ata_overrides sao_atc ON sao_atc.shipment_id = s_atc.id
+    LEFT JOIN LATERAL (
+      SELECT v_atc.ata_loading_completed
+      FROM vessel_loading_ports v_atc
+      WHERE v_atc.shipment_id = s_atc.id
+        AND COALESCE(v_atc.is_discharge_port, FALSE) = TRUE
+        AND v_atc.ata_loading_completed IS NOT NULL
+      ORDER BY v_atc.ata_loading_completed DESC
+      LIMIT 1
+    ) vlp_atc ON TRUE
+    WHERE s_atc.contract_id = ${contractIdExpr}
+  )`;
+}
+
+/**
  * Cycle / milestone fields for contracts list.
  * Use inside base CTE (array_agg contract id) or outer page slice (base.id / base.contract_id).
  */
@@ -37,12 +69,7 @@ export function buildContractsListCycleFieldSelectSql(
             WHERE t.contract_id = ${contractIdExpr}
           ) AS open_standard_eta_trucking,
           (SELECT MIN(s2.ata_loading_complete::date) FROM shipments s2 WHERE s2.contract_id = ${contractIdExpr} AND s2.ata_loading_complete IS NOT NULL) AS first_ata_vessel_completed_loading,
-          (
-            SELECT MAX(s2.ata_discharge_complete::date)
-            FROM shipments s2
-            WHERE s2.contract_id = ${contractIdExpr}
-              AND s2.ata_discharge_complete IS NOT NULL
-          ) AS last_ata_vessel_complete_discharge,
+          ${sqlLastAtaVesselCompleteDischargeForContract(contractIdExpr)} AS last_ata_vessel_complete_discharge,
           (
             SELECT s2.vessel_name
             FROM shipments s2
