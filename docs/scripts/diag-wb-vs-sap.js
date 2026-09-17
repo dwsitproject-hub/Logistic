@@ -129,15 +129,30 @@ const LOOKUP = (process.argv[2] || '').trim();
       String(r.os_old_mt).padStart(9) + ' -> ' + r.os_new_mt + ' MT');
   }
 
-  // Contracts where SAP is ahead but outstanding did NOT move. Not a failure - LCO measures
-  // outstanding against DELIVERY and FRC against RECEIVE, so a gap on the other side changes
-  // nothing - but it is the first thing to look at when a case does not behave as expected.
+  // Operations where SAP is ahead but outstanding did NOT move, split by the reason. The first
+  // production run printed 2,083 of these under a one-line explanation - "a gap on the side the
+  // incoterm does not measure" - which was wrong, or at least far too small to carry the number.
+  // The real reason for nearly all of them is the first line below: the WB branch never fired, so
+  // SAP was already the source and there was nothing for GREATEST to change. Only the third line
+  // is the incoterm-side case, and only the fourth would be surprising.
   const inert = (await connection.query(`
-    SELECT COUNT(*) AS n FROM wbsap
-    WHERE NOT gr_closed AND (wb_del < sap_del OR wb_rec < sap_rec) AND os_new >= os_old`)).rows[0];
-  console.log(`\n   SAP ahead but outstanding unchanged: ${inert.n}`);
-  console.log('   (expected for a gap on the side the incoterm does not measure:');
-  console.log('    LCO counts delivery, FRC counts receive)');
+    SELECT COUNT(*) FILTER (WHERE NOT has_wb)                            AS no_wb_branch,
+           COUNT(*) FILTER (WHERE has_wb AND wb_ahead)                   AS wb_already_ahead,
+           COUNT(*) FILTER (WHERE has_wb AND NOT wb_ahead AND other_side) AS other_side_only,
+           COUNT(*) FILTER (WHERE has_wb AND NOT wb_ahead AND NOT other_side) AS unexplained
+    FROM (
+      SELECT (wb_del > 0 OR wb_rec > 0) AS has_wb,
+             (wb_del >= sap_del AND wb_rec >= sap_rec) AS wb_ahead,
+             CASE WHEN UPPER(TRIM(COALESCE(incoterm, ''))) = 'LCO'
+                  THEN wb_del >= sap_del ELSE wb_rec >= sap_rec END AS other_side
+      FROM wbsap
+      WHERE NOT gr_closed AND (wb_del < sap_del OR wb_rec < sap_rec) AND os_new >= os_old
+    ) x`)).rows[0];
+  console.log('\n   SAP ahead, outstanding unchanged - why:');
+  console.log(`      no weighbridge figure at all, SAP was already the source : ${inert.no_wb_branch}`);
+  console.log(`      weighbridge already ahead on the measured side           : ${inert.wb_already_ahead}`);
+  console.log(`      gap only on the side the incoterm does not measure       : ${inert.other_side_only}`);
+  console.log(`      unexplained - look at these                              : ${inert.unexplained}`);
 
   if (LOOKUP) {
     console.log(`\nD. lookup "${LOOKUP}" (matched on contract number or STO number):`);
