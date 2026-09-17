@@ -33,8 +33,15 @@ fi
 
 if [ ! -f "${CRED_FILE}" ]; then
   log "credentials for \\\\${SERVER}\\${SHARE} - typed here, stored ${CRED_FILE} (0600), never echoed"
+  echo "  (this prompt wants the NAS account name, not a shell command - Ctrl-C to abort)"
   read -rp  "  NAS username: " NAS_USER
+  # A pasted command lands here as a "username", the file is written with nonsense, and the next
+  # run reuses it in silence. Cheap to catch, slow to debug.
+  case "${NAS_USER}" in
+    ''|*' '*|*'/'*|*'&'*) fail "that is not a username (got: ${NAS_USER}). Nothing written - re-run and type only the NAS account name." ;;
+  esac
   read -rsp "  NAS password: " NAS_PASS; echo
+  [ -n "${NAS_PASS}" ] || fail "empty password - nothing written"
   read -rp  "  NAS domain (blank if none): " NAS_DOMAIN
   umask 077
   {
