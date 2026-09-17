@@ -1875,6 +1875,16 @@ exceed WB. The conclusion was arithmetic on a column that was structurally blank
 script composes the same expressions the pages compose; when a diagnostic and a screenshot
 disagree, the screenshot is the evidence.
 
+**The 499 kg tolerance was not the problem, and that is worth knowing.** Before this change the
+obvious suspicion was that operations were finishing but not reaching COMPLETED -
+`isTruckingPipelineCompleted` is "GR closed OR outstanding <= 499 kg", so a stuck status would hold
+outstanding open. Measured in production over all 15,537 live operations
+(`docs/scripts/diag-trucking-stuck-complete.js`): 9,841 sit inside the 499 kg band and **none** of
+them fails to show Completed, with zero unknown outstanding quantities. The rule fires everywhere it
+should. What was holding outstanding was the quantity itself, which is what GREATEST addresses: 58
+operations fell, 8,922 MT released, 3 reached Complete. The other 55 are genuinely still outstanding
+above the band.
+
 ### A truck no longer reports that it arrived at a loading port
 
 Contract Details lists shipments and trucking operations in one table and ran every row through the
