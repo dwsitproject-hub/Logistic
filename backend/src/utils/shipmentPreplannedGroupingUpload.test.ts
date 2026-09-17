@@ -29,6 +29,7 @@ function selected(
     incoterm: '',
     outstandingQtyMt: null,
     vessel: '',
+    qtyDeliveryMt: null,
     etas: emptyGroupingEtas(),
     ...over,
   };
@@ -41,11 +42,17 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Contract No');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('PO Number');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Vessel');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Qty Delivery (MT)');
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Qty Delivery (MT)')).toBe(
+      SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel') + 1,
+    );
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Arr. @ LP');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Charter Type');
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Loading Port');
     expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Preplanned/);
     expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Planned/);
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Qty Delivery \(MT\) opsional/);
+    expect(SHIPMENT_GROUPING_INSTRUCTION).toMatch(/Qty Delivery \(Klip\)/);
   });
 
   it('skips rows without Y even if Group is leftover', () => {
@@ -68,7 +75,7 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     expect(parsed.issues[0]?.reason).toBe('isi Group');
   });
 
-  it('clusters by Group and flags single-PO groups in matching', () => {
+  it('clusters by Group including a single-PO group', () => {
     const clusters = clusterShipmentGroupingRowsByGroup([
       selected({ excelRowNumber: 3, group: 'A', poNumber: '1', supplier: 'S' }),
       selected({ excelRowNumber: 4, group: 'A', poNumber: '2', supplier: 'S' }),
@@ -99,10 +106,36 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
     row[1] = 'A';
     row[7] = '1001';
     row[12] = 'GIAT ARMADA 02';
-    row[13] = '2026-07-01';
+    row[13] = '1500';
+    row[14] = '2026-07-01';
     const parsed = parseShipmentGroupingMatrix([headers, row]);
     expect(parsed.selectedRows[0]?.vessel).toBe('GIAT ARMADA 02');
+    expect(parsed.selectedRows[0]?.qtyDeliveryMt).toBe(1500);
     expect(parsed.selectedRows[0]?.etas.eta_arrival).toBe('2026-07-01');
+  });
+
+  it('treats Qty Delivery as optional and rejects invalid numbers', () => {
+    const headers = [...SHIPMENT_GROUPING_TEMPLATE_HEADERS];
+    const okRow = headers.map(() => '');
+    okRow[0] = 'Y';
+    okRow[1] = 'A';
+    okRow[7] = '1001';
+    okRow[12] = 'GIAT ARMADA 02';
+    const parsedOk = parseShipmentGroupingMatrix([headers, okRow]);
+    expect(parsedOk.selectedRows[0]?.qtyDeliveryMt).toBeNull();
+
+    const zeroRow = [...okRow];
+    zeroRow[7] = '1003';
+    zeroRow[13] = '0';
+    const parsedZero = parseShipmentGroupingMatrix([headers, zeroRow]);
+    expect(parsedZero.selectedRows[0]?.qtyDeliveryMt).toBeNull();
+
+    const badRow = [...okRow];
+    badRow[7] = '1002';
+    badRow[13] = 'abc';
+    const parsedBad = parseShipmentGroupingMatrix([headers, badRow]);
+    expect(parsedBad.selectedRows).toHaveLength(0);
+    expect(parsedBad.issues[0]?.reason).toMatch(/Qty Delivery/i);
   });
 
   it('embeds Master Vessel sheet and named-range list validation on the Vessel column', () => {
@@ -144,6 +177,7 @@ describe('shipmentPreplannedGroupingUpload parse', () => {
       defval: '',
     }) as unknown[][];
     expect(help.flat().join(' ')).toMatch(/sheet Master Vessel/);
+    expect(help.flat().join(' ')).toMatch(/Qty Delivery \(MT\)/);
   });
 });
 

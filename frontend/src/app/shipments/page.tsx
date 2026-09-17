@@ -9524,7 +9524,7 @@ function ShipmentsPageContent() {
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm text-gray-600">
-            Status will become <span className="font-medium">Cancelled</span> and Shipment Plan Qty / OS Qty (Plan)
+            Status will become <span className="font-medium">Cancelled</span> and OS Qty (Plan)
             assignments will be cleared.
           </p>
           <div className="space-y-2">

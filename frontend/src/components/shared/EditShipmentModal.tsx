@@ -77,7 +77,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -572,12 +572,6 @@ type ShipmentDetailRow = {
   product: string
   contract_qty: number
   outstanding_qty_actual: number
-  outstanding_qty_planning: number
-  outstanding_qty_planning_budget: number
-  sap_sto_qty: number
-  shipment_plan_qty: number
-  /** @deprecated alias for shipment_plan_qty */
-  sto_qty_assigned: number
   /** @deprecated alias for outstanding_qty_actual */
   outstanding_qty: number
   /** SAP STO-scoped delivered (read-only in PO table). */
@@ -628,11 +622,8 @@ function contractDetailRowFromApi(
 ): ShipmentDetailRow {
   const cn = String(d.contract_number ?? '').trim()
   const po = String(d.po_number ?? '').trim()
-  const shipmentPlanQty = parseApiNumber(d.shipment_plan_qty ?? d.sto_qty_assigned) ?? 0
   const contractQty = parseApiNumber(d.contract_qty) ?? 0
   const osActual = parseApiNumber(d.outstanding_qty_actual ?? d.outstanding_qty) ?? 0
-  const osPlan = parseApiNumber(d.outstanding_qty_planning) ?? 0
-  const osPlanBudget = parseApiNumber(d.outstanding_qty_planning_budget) ?? osPlan
   return {
     rowKey: `${shipmentId}-${cn}-${po || 'po'}`,
     contract_number: cn,
@@ -641,11 +632,6 @@ function contractDetailRowFromApi(
     product: String(d.product ?? '').trim(),
     contract_qty: contractQty,
     outstanding_qty_actual: osActual,
-    outstanding_qty_planning: osPlan,
-    outstanding_qty_planning_budget: osPlanBudget,
-    sap_sto_qty: parseApiNumber(d.sap_sto_qty) ?? 0,
-    shipment_plan_qty: shipmentPlanQty,
-    sto_qty_assigned: shipmentPlanQty,
     outstanding_qty: osActual,
     quantity_delivered_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
     quantity_receive_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
@@ -696,11 +682,6 @@ async function buildContractDetailRows(
         product: enriched.product,
         contract_qty: enriched.contract_qty,
         outstanding_qty_actual: enriched.outstanding_qty,
-        outstanding_qty_planning: enriched.outstanding_qty,
-        outstanding_qty_planning_budget: enriched.outstanding_qty,
-        sap_sto_qty: 0,
-        shipment_plan_qty: 0,
-        sto_qty_assigned: 0,
         outstanding_qty: enriched.outstanding_qty,
         quantity_delivered_sap: null,
         quantity_receive_sap: null,
@@ -826,7 +807,6 @@ export function EditShipmentModal({
   const [contractDetailTarget, setContractDetailTarget] =
     useState<ContractDetailModalContract | null>(null)
   const [contractDetailLoading, setContractDetailLoading] = useState(false)
-  const [planQtyEdits, setPlanQtyEdits] = useState<Record<string, number>>({})
   const [qtyEdits, setQtyEdits] = useState<VesselPortsQuantityEdits>({})
   const [sfalQty, setSfalQty] = useState<number | null>(null)
   const [sfbdQty, setSfbdQty] = useState<number | null>(null)
@@ -928,8 +908,6 @@ export function EditShipmentModal({
   })
   const showVesselSapFooter = shouldShowKlipSapFooter(vesselProvenance, sapVesselName, 'text')
 
-  const planQtyReadOnly = false
-
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
       detailRows.map((d) => ({
@@ -937,7 +915,6 @@ export function EditShipmentModal({
         contract_ext_no: d.contract_number,
         po_number: d.po_number,
         contract_qty: d.contract_qty,
-        sto_qty: d.sto_qty_assigned,
         quantity_delivered: d.quantity_delivered_klip,
         quantity_receive: d.quantity_receive_klip,
       })),
@@ -945,14 +922,6 @@ export function EditShipmentModal({
   )
 
   const vesselCapacityMt = parseApiNumber(vesselMeta.vessel_capacity)
-
-  const totalShipmentPlanKg = useMemo(() => {
-    let sum = 0
-    for (const row of detailRows) {
-      sum += planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
-    }
-    return sum
-  }, [detailRows, planQtyEdits])
 
   const poTableQtyTotals = useMemo(() => {
     let contractQty = 0
@@ -979,13 +948,19 @@ export function EditShipmentModal({
   const tcFreightBudgetIdrKg = useMemo(
     () =>
       computeShipmentFreightBudgetIdrKg(
-        detailRows.map((d) => ({
-          vessel_oa_budget_sap: d.vessel_oa_budget_sap,
-          shipment_plan_qty: planQtyEdits[d.rowKey] ?? d.shipment_plan_qty ?? 0,
-        })),
+        detailRows.map((d) => {
+          const edited = qtyEdits[d.rowKey]
+          return {
+            vessel_oa_budget_sap: d.vessel_oa_budget_sap,
+            quantity_kg:
+              edited?.quantity_delivered !== undefined
+                ? edited.quantity_delivered ?? 0
+                : d.quantity_delivered_klip ?? 0,
+          }
+        }),
         headerVesselOaBudget,
       ),
-    [detailRows, planQtyEdits, headerVesselOaBudget],
+    [detailRows, qtyEdits, headerVesselOaBudget],
   )
 
   const tcR4ShortageMt = useMemo(() => {
@@ -1092,9 +1067,10 @@ export function EditShipmentModal({
   const showRemarkField =
     requiresEditRemark && (canModifyCoreSections || canEditAtaQuality)
 
+  const totalDeliveredKlipKg = qtyTotals.quantity_delivered ?? 0
   const capacityPct =
     vesselCapacityMt != null && vesselCapacityMt > 0
-      ? Math.min(100, (totalShipmentPlanKg / 1000 / vesselCapacityMt) * 100)
+      ? Math.min(100, (totalDeliveredKlipKg / 1000 / vesselCapacityMt) * 100)
       : 0
 
   const resetState = useCallback(() => {
@@ -1106,7 +1082,6 @@ export function EditShipmentModal({
     setPendingMasterVessel(null)
     setVesselMeta({})
     setDetailRows([])
-    setPlanQtyEdits({})
     setQtyEdits({})
     setSfalQty(null)
     setSfbdQty(null)
@@ -1320,11 +1295,6 @@ export function EditShipmentModal({
         }
 
         setDetailRows(contractDetails)
-        setPlanQtyEdits(
-          Object.fromEntries(
-            contractDetails.map((detailRow) => [detailRow.rowKey, detailRow.shipment_plan_qty ?? 0]),
-          ),
-        )
         setQtyEdits({})
 
         const klipVn = String(row.vessel_name_klip ?? row.vessel_name ?? '').trim()
@@ -1597,7 +1567,7 @@ export function EditShipmentModal({
         contractRowId: selectedAddPoOption.key,
         stoQtyAssignedKg: 0,
       })
-      setNotification({ type: 'success', message: 'PO added — set Shipment Plan Qty and save changes.' })
+      setNotification({ type: 'success', message: 'PO added. Set Delivered Qty (Klip) after SLD/SDD, or via Upload Planning.' })
       const contractId = editContractId?.trim()
       const directId = editShipmentIdProp?.trim()
       const sto = editStoNumber?.trim()
@@ -1737,17 +1707,6 @@ export function EditShipmentModal({
     setSaving(true)
     setNotification(null)
     try {
-      if (!isLimitedViewSave && !planQtyReadOnly && detailRows.length > 0) {
-        await batchSaveShipmentPoPlanQty({
-          shipmentId,
-          rows: detailRows.map((row) => ({
-            contractNumber: row.contract_number,
-            poNumber: row.po_number || null,
-            shipmentPlanQtyKg: planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0,
-          })),
-        })
-      }
-
       await saveEditShipmentChanges({
         shipmentId,
         vesselName,
@@ -2543,7 +2502,7 @@ export function EditShipmentModal({
 
                 {editContext?.has_sap_sto && !readOnly && (
                   <p className="text-xs italic text-gray-500">
-                    SAP STO shipment — Shipment Plan Qty saves to KLIP planning. PO can still be added when OS Qty (Actual) &gt; 0.
+                    SAP STO shipment — PO can still be added when OS Qty (Actual) &gt; 0.
                   </p>
                 )}
 
@@ -2584,7 +2543,7 @@ export function EditShipmentModal({
                       </Button>
                     </div>
                     <p className="text-xs italic text-gray-500">
-                      Search by PO, contract, supplier, or product (min. 2 characters). Set Shipment Plan Qty in the table, then Save Changes.
+                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be set after SLD/SDD or via Upload Planning.
                     </p>
                   </div>
                 )}
@@ -2611,9 +2570,6 @@ export function EditShipmentModal({
                           </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="KLIP plan on this STO — may exceed OS Qty (Actual)">Shipment Plan Qty</span>
-                        </TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
                           Delivered Qty (Klip)
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
@@ -2626,7 +2582,6 @@ export function EditShipmentModal({
                         const qtyRow = qtyTableRows.find((r) => r.rowKey === row.rowKey)!
                         const deliveredKlipKg = resolveRowQty(qtyRow, 'quantity_delivered')
                         const receiveKlipKg = resolveRowQty(qtyRow, 'quantity_receive')
-                        const planKg = planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
                         return (
                           <TableRow key={row.rowKey}>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
@@ -2661,19 +2616,6 @@ export function EditShipmentModal({
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
-                            </TableCell>
-                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              {readOnly ? (
-                                <MtQtyReadOnly valueKg={planKg} />
-                              ) : (
-                                <MtQtyInput
-                                  valueKg={planKg}
-                                  disabled={!canModifyCoreSections || planQtyReadOnly}
-                                  onChange={(kg) =>
-                                    setPlanQtyEdits((p) => ({ ...p, [row.rowKey]: kg ?? 0 }))
-                                  }
-                                />
-                              )}
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
@@ -2729,9 +2671,6 @@ export function EditShipmentModal({
                           <MtQtyReadOnly valueKg={poTableQtyTotals.osQty} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={totalShipmentPlanKg} />
-                        </TableCell>
-                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={qtyTotals.quantity_delivered} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
@@ -2749,9 +2688,9 @@ export function EditShipmentModal({
                 {vesselCapacityMt != null && vesselCapacityMt > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <div className="mb-1 flex justify-between text-xs text-gray-600">
-                      <span>Total Shipment Plan Qty vs vessel capacity</span>
+                      <span>Total Delivered Qty (Klip) vs vessel capacity</span>
                       <span className="tabular-nums">
-                        {formatNumber(totalShipmentPlanKg / 1000)} / {formatNumber(vesselCapacityMt)} MT
+                        {formatNumber(totalDeliveredKlipKg / 1000)} / {formatNumber(vesselCapacityMt)} MT
                       </span>
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-gray-200">

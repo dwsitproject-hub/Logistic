@@ -57,9 +57,8 @@ export type CreateShipmentFormPayload = {
   operationId: string
   stoNumber: string
   contractNumbers: string[]
-  /** Planning allocation (MT) by contract key — Shipment Plan Qty only (not Delivery Qty). */
-  contractQtyAssigned: Record<string, string | number>
-  /** Planning allocation (MT) by contracts.id (PO line) — Shipment Plan Qty only (not Delivery Qty). */
+  /** Optional leftover planning allocation (MT). Add New no longer collects Shipment Plan Qty. */
+  contractQtyAssigned?: Record<string, string | number>
   poQtyAssigned?: Record<string, string | number>
   vesselName: string
   vesselCode: string
@@ -159,14 +158,9 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
       quantity_ordered: detail.contract_qty,
       outstanding_quantity: detail.outstanding_qty_actual ?? detail.outstanding_qty,
       outstanding_quantity_actual: detail.outstanding_qty_actual ?? detail.outstanding_qty,
-      outstanding_quantity_planning: detail.outstanding_qty_planning,
-      outstanding_quantity_planning_budget: detail.outstanding_qty_planning_budget,
       delivery_start_date: detail.delivery_start_date,
       delivery_end_date: detail.delivery_end_date,
       contract_ext_no: detail.contract_ext_no,
-      sto_qty_assigned: detail.sto_qty_assigned,
-      sap_sto_qty: detail.sap_sto_qty,
-      shipment_plan_qty: detail.shipment_plan_qty,
       locked_from_sap: detail.locked_from_sap,
       transport_mode: detail.transport_mode ?? detail.sea_land ?? null,
       incoterm: detail.incoterm,
@@ -384,26 +378,5 @@ export async function attachPurchaseOrderToShipment(args: {
   )
   if (!res.data?.success) {
     throw new Error(res.data?.error?.message || 'Failed to add PO to shipment')
-  }
-}
-
-export async function batchSaveShipmentPoPlanQty(args: {
-  shipmentId: string
-  rows: Array<{
-    contractNumber: string
-    poNumber?: string | null
-    shipmentPlanQtyKg: number
-  }>
-}): Promise<void> {
-  const api = (await import('@/lib/api')).default
-  const res = await api.put(`/shipments/${encodeURIComponent(args.shipmentId)}/po-plan-qty`, {
-    rows: args.rows.map((row) => ({
-      contractNumber: row.contractNumber,
-      poNumber: row.poNumber ?? null,
-      shipmentPlanQtyKg: row.shipmentPlanQtyKg,
-    })),
-  })
-  if (!res.data?.success) {
-    throw new Error(res.data?.error?.message || 'Failed to save Shipment Plan Qty')
   }
 }

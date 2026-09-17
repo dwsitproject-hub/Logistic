@@ -52,6 +52,9 @@ describe('shipmentGroupingTemplate', () => {
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS[0]).toBe('Select')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS[1]).toBe('Group')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Vessel')
+    expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Qty Delivery (MT)')).toBe(
+      SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel') + 1,
+    )
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Arr. @ LP')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).toContain('Done Disch')
     expect(SHIPMENT_GROUPING_TEMPLATE_HEADERS).not.toContain('Charter Type')
@@ -121,6 +124,10 @@ describe('shipmentGroupingTemplate', () => {
     expect(data[9]).toBe('2500')
     expect(data[10]).toBe('1200.5')
     expect(data[11]).toBe('Unplanned')
+    expect(data[12]).toBe('')
+    expect(data[13]).toBe('')
+    expect(data[14]).toBe('')
+    expect(data).toHaveLength(SHIPMENT_GROUPING_TEMPLATE_HEADERS.length)
   })
 
   it('skips rows without Y even if Group is leftover', () => {
@@ -228,6 +235,7 @@ describe('shipmentGroupingTemplate', () => {
     expect(text).toMatch(/contoh: 1, A, B/)
     expect(text).toMatch(/Preplanned/)
     expect(text).toMatch(/Planned/)
+    expect(text).toMatch(/Qty Delivery \(MT\)/)
     expect(text).toMatch(/otomatis/)
   })
 })

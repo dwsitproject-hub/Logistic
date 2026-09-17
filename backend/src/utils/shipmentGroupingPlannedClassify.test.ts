@@ -30,7 +30,7 @@ describe('shipmentGroupingPlannedClassify', () => {
     expect(classified.mode).toBe('preplanned');
   });
 
-  it('classifies vessel + all ETAs as planned', () => {
+  it('classifies vessel + all ETAs as planned without Qty Delivery', () => {
     const classified = classifyGroupingClusterMode({
       fields: { vessel: 'GIAT ARMADA 02', etas: allEtas() },
       allCif: false,

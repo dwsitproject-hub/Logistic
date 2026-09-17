@@ -5,12 +5,7 @@ import {
   sqlStoScopedDeliveredKgSql,
   sqlStoScopedReceiveKgSql,
 } from './contractLogisticsStoDetailSql';
-import {
-  sqlPoGlobalOutstandingPlanningKg,
-  sqlPoOutstandingPlanningRowBudgetKgExpr,
-  sqlPoStoAssignedKg,
-  sqlPoStoSapQtyKg,
-} from './contractPoGlobalMetricsSql';
+import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
 import { sqlShipmentListOsBaseQtyExpr } from './shipmentListQtySql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
@@ -457,30 +452,6 @@ export function buildContractDetailsForStoSql(): string {
         COALESCE(pl.contract_qty, 0) AS contract_qty,
         ${plOutstandingActual} AS outstanding_qty_actual,
         ${plOutstandingActual} AS outstanding_qty,
-        ${sqlPoGlobalOutstandingPlanningKg({
-          contractQtyExpr: 'pl.contract_qty',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-        })} AS outstanding_qty_planning,
-        ${sqlPoOutstandingPlanningRowBudgetKgExpr({
-          contractQtyExpr: 'pl.contract_qty',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-          stoKeyExpr: '$1::text',
-        })} AS outstanding_qty_planning_budget,
-        ${plSapStoQty} AS sap_sto_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-          contractQtyExpr: 'pl.contract_qty',
-        })} AS shipment_plan_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-          contractQtyExpr: 'pl.contract_qty',
-        })} AS sto_qty_assigned,
         ${plDeliveredKg} AS quantity_delivered,
         ${plReceiveKg} AS quantity_receive,
         ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'delivered')} AS quantity_delivered_klip,
@@ -524,66 +495,6 @@ export function buildContractDetailsForStoSql(): string {
         ${socContractQtyExpr} AS contract_qty,
         ${socOutstandingActual} AS outstanding_qty_actual,
         ${socOutstandingActual} AS outstanding_qty,
-        ${sqlPoGlobalOutstandingPlanningKg({
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${sqlSpdPoNumberExpr('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${socStoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-        })} AS outstanding_qty_planning,
-        ${sqlPoOutstandingPlanningRowBudgetKgExpr({
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${sqlSpdPoNumberExpr('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${socStoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-          stoKeyExpr: '$1::text',
-        })} AS outstanding_qty_planning_budget,
-        ${socSapStoQty} AS sap_sto_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${sqlSpdPoNumberExpr('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${socStoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-        })} AS shipment_plan_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${sqlSpdPoNumberExpr('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${socStoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-        })} AS sto_qty_assigned,
         ${socDeliveredKg} AS quantity_delivered,
         ${socReceiveKg} AS quantity_receive,
         ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'delivered')} AS quantity_delivered_klip,

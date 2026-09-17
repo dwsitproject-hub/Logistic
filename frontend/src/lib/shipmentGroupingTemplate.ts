@@ -20,7 +20,7 @@ export const SHIPMENT_GROUPING_ETA_HEADERS = [
 ] as const
 
 export const SHIPMENT_GROUPING_INSTRUCTION =
-  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Hanya Select+Group = Preplanned. Isi Vessel (dropdown master) dan semua ETA = Planned. Charter, loading, dan discharge diisi otomatis dari master/SAP. Baris tanpa Y tidak di-upload.'
+  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Hanya Select+Group = Preplanned. Isi Vessel (dropdown master) dan semua ETA = Planned. Qty Delivery (MT) opsional; jika diisi pada Planned, menjadi Qty Delivery (Klip). Charter, loading, dan discharge diisi otomatis dari master/SAP. Baris tanpa Y tidak di-upload.'
 
 export const SHIPMENT_GROUPING_SHEET_NAME = 'Grouping'
 export const SHIPMENT_GROUPING_HELP_SHEET_NAME = 'Cara isi'
@@ -39,6 +39,7 @@ export const SHIPMENT_GROUPING_TEMPLATE_HEADERS = [
   'OS Qty (MT)',
   'Status',
   'Vessel',
+  'Qty Delivery (MT)',
   ...SHIPMENT_GROUPING_ETA_HEADERS,
 ] as const
 
@@ -198,6 +199,7 @@ export function buildShipmentGroupingTemplateMatrix(
       formatGroupingQtyMtFromKg(row.outstandingQtyKg),
       'Unplanned',
       '',
+      '',
       ...SHIPMENT_GROUPING_ETA_HEADERS.map(() => ''),
     ])
   }
@@ -205,7 +207,7 @@ export function buildShipmentGroupingTemplateMatrix(
 }
 
 const GROUPING_COL_WIDTHS = [
-  10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12, 28, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+  10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12, 28, 16, 12, 12, 12, 12, 12, 12, 12, 12, 12,
 ]
 
 function applyGroupingSheetLayout(ws: XLSX.WorkSheet, dataRowCount: number): void {
@@ -243,14 +245,17 @@ function buildCaraIsiSheet(): XLSX.WorkSheet {
     [
       '2. Isi kolom Group dengan kode bundel yang sama untuk PO yang akan satu kapal (contoh: 1, A, B).',
     ],
-    ['3. Hanya Select + Group (tanpa Vessel/ETA) = status Preplanned. Minimal 2 PO per Group.'],
+    ['3. Hanya Select + Group (tanpa Vessel/ETA) = status Preplanned. 1 PO boleh menjadi 1 Group.'],
     [
-      '4. Isi Vessel (dropdown dari sheet Master Vessel) dan semua 8 kolom ETA = status Planned. Charter, Loading Port, dan Discharge Port diisi otomatis (master vessel + SAP). Satu Group = satu kapal.',
+      '4. Isi Vessel (dropdown dari sheet Master Vessel) dan semua 8 kolom ETA = status Planned. Qty Delivery (MT) opsional. Charter, Loading Port, dan Discharge Port diisi otomatis (master vessel + SAP). Satu Group = satu kapal.',
     ],
     ['5. Vessel tanpa semua ETA (kecuali semua PO CIF) ditolak — tidak menjadi Preplanned.'],
     ['6. Baris tanpa Y diabaikan saat upload, meskipun kolom Group terisi.'],
-    ['7. Planned boleh 1 PO jika Vessel + ETA lengkap. Preplanned tetap minimal 2 PO.'],
-    ['8. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
+    ['7. 1 PO boleh menjadi 1 Group, baik Preplanned maupun Planned (Planned tetap butuh Vessel + semua ETA).'],
+    [
+      '8. Qty Delivery (MT) opsional. Jika diisi saat Group menjadi Planned, nilai ini mengisi Qty Delivery (Klip).',
+    ],
+    ['9. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
   ]
   const ws = XLSX.utils.aoa_to_sheet(aoa)
   ws['!cols'] = [{ wch: 120 }]

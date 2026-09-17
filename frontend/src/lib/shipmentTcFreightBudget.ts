@@ -1,6 +1,7 @@
 export type ShipmentTcFreightBudgetRow = {
   vessel_oa_budget_sap: number | null
-  shipment_plan_qty: number
+  /** Weight for blending — Delivered Qty (Klip) when present. */
+  quantity_kg: number
 }
 
 function parseBudget(value: unknown): number | null {
@@ -9,14 +10,14 @@ function parseBudget(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-function parsePlanQty(value: unknown): number {
+function parseWeightQty(value: unknown): number {
   const n = Number(value)
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
 /**
  * Blended Freight Budget (IDR/KG) for a multi-PO shipment.
- * Qty-weighted by shipment_plan_qty; falls back to simple avg, single PO, then header.
+ * Qty-weighted by Delivered Qty (Klip); falls back to simple avg, single PO, then header.
  */
 export function computeShipmentFreightBudgetIdrKg(
   detailRows: ShipmentTcFreightBudgetRow[],
@@ -26,23 +27,23 @@ export function computeShipmentFreightBudgetIdrKg(
     return parseBudget(headerVesselOaBudget)
   }
 
-  const weighted: { budget: number; planQty: number }[] = []
+  const weighted: { budget: number; quantityKg: number }[] = []
   const budgets: number[] = []
 
   for (const row of detailRows) {
     const budget = parseBudget(row.vessel_oa_budget_sap)
     if (budget === null) continue
     budgets.push(budget)
-    const planQty = parsePlanQty(row.shipment_plan_qty)
-    if (planQty > 0) {
-      weighted.push({ budget, planQty })
+    const quantityKg = parseWeightQty(row.quantity_kg)
+    if (quantityKg > 0) {
+      weighted.push({ budget, quantityKg })
     }
   }
 
   if (weighted.length > 0) {
-    const totalQty = weighted.reduce((sum, item) => sum + item.planQty, 0)
+    const totalQty = weighted.reduce((sum, item) => sum + item.quantityKg, 0)
     if (totalQty > 0) {
-      const numerator = weighted.reduce((sum, item) => sum + item.budget * item.planQty, 0)
+      const numerator = weighted.reduce((sum, item) => sum + item.budget * item.quantityKg, 0)
       return numerator / totalQty
     }
   }

@@ -57,6 +57,8 @@ export interface CreateShipmentsFromContractsInput {
   portOfDischarge?: string | null;
   quantityShipped?: string | number | null;
   quantityDelivered?: string | number | null;
+  /** Per contract_id (business number) delivery qty in kg. Sets quantity_delivered and quantity_delivered_klip. */
+  quantityDeliveredByContract?: Record<string, string | number | null> | null;
   eta_arrival?: string | null;
   eta_berthed?: string | null;
   eta_loading_start?: string | null;
@@ -125,6 +127,7 @@ export async function createShipmentsFromContracts(
     portOfDischarge,
     quantityShipped,
     quantityDelivered,
+    quantityDeliveredByContract,
     eta_arrival,
     eta_berthed,
     eta_loading_start,
@@ -225,12 +228,28 @@ export async function createShipmentsFromContracts(
       ? etaByContract
       : {};
 
+  const qtyByContractMap =
+    quantityDeliveredByContract &&
+    typeof quantityDeliveredByContract === 'object' &&
+    !Array.isArray(quantityDeliveredByContract)
+      ? quantityDeliveredByContract
+      : {};
+
+  const parsePositiveQtyKg = (value: unknown): number | null => {
+    if (value == null || value === '') return null;
+    const n = typeof value === 'number' ? value : parseFloat(String(value).replace(/,/g, '').trim());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
   for (const contract of contractCheck.rows as Array<{ contract_id: string; id: string }>) {
     const contractIdKey = String(contract.contract_id).trim();
     const perContractEta =
       etaByContractMap[contractIdKey] && typeof etaByContractMap[contractIdKey] === 'object'
         ? etaByContractMap[contractIdKey]
         : legacyEta;
+    const quantityDeliveredKlipKg = parsePositiveQtyKg(qtyByContractMap[contractIdKey]);
+    const quantityDeliveredKg =
+      quantityDeliveredKlipKg ?? parsePositiveQtyKg(quantityDelivered);
 
     const shipmentId = hasStoNumber
       ? `${stoNumber}-${contract.contract_id}`
@@ -295,6 +314,7 @@ export async function createShipmentsFromContracts(
             port_of_discharge = COALESCE($11, port_of_discharge),
             quantity_shipped = COALESCE($12::numeric, quantity_shipped),
             quantity_delivered = COALESCE($13::numeric, quantity_delivered),
+            quantity_delivered_klip = COALESCE($25::numeric, quantity_delivered_klip),
             eta_arrival   = COALESCE($14::date, eta_arrival),
             eta_berthed   = COALESCE($15::date, eta_berthed),
             eta_loading_start = COALESCE($16::date, eta_loading_start),
@@ -321,7 +341,7 @@ export async function createShipmentsFromContracts(
           perContractEta.port_of_loading || portOfLoading || null,
           portOfDischarge || null,
           quantityShipped ? parseFloat(String(quantityShipped)) : null,
-          quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
+          quantityDeliveredKg,
           perContractEta.eta_arrival || null,
           perContractEta.eta_berthed || null,
           perContractEta.eta_loading_start || null,
@@ -333,6 +353,7 @@ export async function createShipmentsFromContracts(
           perContractEta.eta_discharge_complete || null,
           derivedStatus,
           existingShipmentId,
+          quantityDeliveredKlipKg,
         ],
       );
       resultId = existingShipmentId;
@@ -342,13 +363,13 @@ export async function createShipmentsFromContracts(
           INSERT INTO shipments (
             shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
             vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
-            port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered,
+            port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered, quantity_delivered_klip,
             eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
             eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
             status
           ) VALUES (
             $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
-            $12, $13, $14::numeric, $25::numeric,
+            $12, $13, $14::numeric, $25::numeric, $26::numeric,
             $15::date, $16::date, $17::date, $18::date, $19::date,
             $20::date, $21::date, $22::date, $23::date,
             $24
@@ -379,7 +400,8 @@ export async function createShipmentsFromContracts(
           perContractEta.eta_discharge_start || null,
           perContractEta.eta_discharge_complete || null,
           derivedStatus,
-          quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
+          quantityDeliveredKg,
+          quantityDeliveredKlipKg,
         ],
       );
       resultId = result.rows[0].id;

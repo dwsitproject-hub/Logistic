@@ -42,6 +42,10 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('spd.contract_number = pl.contract_number');
     expect(sql).toContain('AS quantity_delivered_klip');
     expect(sql).toContain('AS quantity_receive_klip');
+    expect(sql).not.toContain('AS shipment_plan_qty');
+    expect(sql).not.toContain('AS sto_qty_assigned');
+    expect(sql).not.toContain('AS outstanding_qty_planning');
+    expect(sql).not.toContain('AS sap_sto_qty');
   });
 
   it('uses shared STO+PO scoped delivery/receive SQL per PO line', () => {

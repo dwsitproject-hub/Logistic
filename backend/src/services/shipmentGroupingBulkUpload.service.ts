@@ -177,11 +177,11 @@ export async function applyShipmentGroupingBulkUpload(
     }
 
     if (classified.mode === 'preplanned') {
-      if (contractIds.length < 2) {
+      if (contractIds.length < 1) {
         failures.push({
           excelRowNumbers: rowNumbers(cluster.rows),
           group: cluster.group,
-          reason: 'Same Group with 1 eligible PO (need at least 2)',
+          reason: 'No eligible PO in Group',
         });
         continue;
       }
@@ -257,6 +257,7 @@ export async function applyShipmentGroupingBulkUpload(
     const missingContract: string[] = [];
     const dischargeNames = new Set<string>();
     const etaByContract: CreateShipmentEtaByContract = {};
+    const quantityDeliveredByContract: Record<string, number> = {};
     let firstLoadingPort = '';
     const contractQtyAssigned: Record<string, string> = {};
     const contractNumbers: string[] = [];
@@ -295,6 +296,9 @@ export async function applyShipmentGroupingBulkUpload(
         const po = String(match.row.poNumber || identity?.poNumber || '').trim();
         const assignmentKey = po ? `${contractNumber}::${po}` : contractNumber;
         contractQtyAssigned[assignmentKey] = String(qtyMt);
+      }
+      if (match.row.qtyDeliveryMt != null && Number.isFinite(match.row.qtyDeliveryMt) && match.row.qtyDeliveryMt > 0) {
+        quantityDeliveredByContract[contractNumber] = match.row.qtyDeliveryMt * 1000;
       }
     }
 
@@ -349,6 +353,8 @@ export async function applyShipmentGroupingBulkUpload(
         portOfLoading: firstLoadingPort || null,
         portOfDischarge: dischargePort || null,
         etaByContract,
+        quantityDeliveredByContract:
+          Object.keys(quantityDeliveredByContract).length > 0 ? quantityDeliveredByContract : null,
         userId,
       });
       const totalOsMt = clusterMatches.reduce((sum, m) => sum + qtyMtForMatch(m, eligibleById.get(m.contractId)), 0);
