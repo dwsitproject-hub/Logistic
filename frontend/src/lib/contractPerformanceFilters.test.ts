@@ -96,7 +96,8 @@ function tableContract(overrides: Partial<PerformanceTableContract> = {}): Perfo
     supplier: 'SUPP-1',
     plant_site: 'PLANT-A',
     delivery_end_date: '2026-05-01',
-    trade_cycle_days: 5,
+    // Late: anchor - completion is negative once the completion date passes the anchor.
+    trade_cycle_days: -5,
     import_status: 'OPEN',
     status: 'OPEN',
     ...overrides,
@@ -690,7 +691,7 @@ describe('Section 3 — performance tree inclusion guard', () => {
         tableContract({
           delivery_end_date: '2026-05-01',
           import_status: 'OPEN',
-          trade_cycle_days: 5,
+          trade_cycle_days: -5,
         }),
         'LATE',
       ),
@@ -714,7 +715,7 @@ describe('Section 3 — performance tree inclusion guard', () => {
           incoterm: 'CIF',
           delivery_end_date: '2026-05-01',
           import_status: 'OPEN',
-          trade_cycle_days: 3,
+          trade_cycle_days: -3,
         }),
         tableContract({
           contract_id: 'NO-DATE',
@@ -774,7 +775,7 @@ describe('Section 3 — performance tree inclusion guard', () => {
           supplier: 'ETAM',
           import_status: 'OPEN',
           delivery_end_date: '2026-05-01',
-          trade_cycle_days: 5,
+          trade_cycle_days: -5,
           contract_perf_in_tree: true,
         }),
         tableContract({
@@ -819,7 +820,7 @@ describe('Section 3 — performance tree inclusion guard', () => {
           supplier: 'ETAM',
           import_status: 'OPEN',
           delivery_end_date: '2026-05-01',
-          trade_cycle_days: 5,
+          trade_cycle_days: -5,
           contract_perf_in_tree: true,
         }),
         tableContract({
@@ -852,13 +853,14 @@ describe('AC5 — null trade_cycle_days = unscheduled (no Completion Date)', () 
     expect(contractMatchesLateOnTimeFilter(undefined, 'ON_TIME')).toBe(false)
   })
 
-  it('Positive trade_cycle_days is LATE; non-positive is ON_TIME', () => {
-    expect(contractMatchesLateOnTimeFilter(1,  'LATE')).toBe(true)
+  it('Negative trade_cycle_days is LATE; zero or positive is ON_TIME', () => {
+    // anchor - completion: a completion past its anchor is negative.
+    expect(contractMatchesLateOnTimeFilter(-1, 'LATE')).toBe(true)
     expect(contractMatchesLateOnTimeFilter(0,  'LATE')).toBe(false)
-    expect(contractMatchesLateOnTimeFilter(-5, 'LATE')).toBe(false)
+    expect(contractMatchesLateOnTimeFilter(5,  'LATE')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(0,  'ON_TIME')).toBe(true)
-    expect(contractMatchesLateOnTimeFilter(-3, 'ON_TIME')).toBe(true)
-    expect(contractMatchesLateOnTimeFilter(1,  'ON_TIME')).toBe(false)
+    expect(contractMatchesLateOnTimeFilter(3,  'ON_TIME')).toBe(true)
+    expect(contractMatchesLateOnTimeFilter(-1, 'ON_TIME')).toBe(false)
     // API flag takes precedence when present (e.g. contract_perf_on_time from GET /contracts).
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', false)).toBe(false)
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', true)).toBe(true)
@@ -872,12 +874,12 @@ describe('AC5 — null trade_cycle_days = unscheduled (no Completion Date)', () 
     })
     const openContractLate = tableContract({
       contract_id: 'OPEN-LATE',
-      trade_cycle_days: 10,
+      trade_cycle_days: -10,
       import_status: 'OPEN',
     })
     const openContractOnTime = tableContract({
       contract_id: 'OPEN-ON-TIME',
-      trade_cycle_days: -2,
+      trade_cycle_days: 2,
       import_status: 'OPEN',
     })
 
@@ -896,7 +898,7 @@ describe('AC5 — null trade_cycle_days = unscheduled (no Completion Date)', () 
 
   it('Section 3 does NOT include null-completion contracts when filter is ON_TIME', () => {
     const openContractNoEta = tableContract({ contract_id: 'OPEN-NO-ETA', trade_cycle_days: null })
-    const openContractOnTime = tableContract({ contract_id: 'OPEN-ON-TIME', trade_cycle_days: -2 })
+    const openContractOnTime = tableContract({ contract_id: 'OPEN-ON-TIME', trade_cycle_days: 2 })
     const { scope: s3Scope } = resolveSection3Scope(BASE_GLOBAL, EMPTY_CONTRACT_PERF_DRILLDOWN)
     const filtered = filterContractsForPerformanceTable(
       [openContractNoEta, openContractOnTime],
@@ -925,7 +927,7 @@ describe('Cross-section integration — all three sections must stay in sync', (
     hotspot({ contract_id: 'X3', product: 'PK',   incoterm: 'CIF', plant_site: 'PLANT-B', supplier: 'SUPP-1', count: 1, totalQtyDelivery: 200  }),
   ]
   const contracts: PerformanceTableContract[] = [
-    tableContract({ contract_id: 'X1', product: 'CPO',  incoterm: 'CIF', plant_site: 'PLANT-A', supplier: 'SUPP-1', trade_cycle_days: 5  }),
+    tableContract({ contract_id: 'X1', product: 'CPO',  incoterm: 'CIF', plant_site: 'PLANT-A', supplier: 'SUPP-1', trade_cycle_days: -5  }),
     tableContract({ contract_id: 'X2', product: 'CPO',  incoterm: 'FOB', plant_site: 'PLANT-A', supplier: 'SUPP-2', trade_cycle_days: -1 }),
     tableContract({ contract_id: 'X3', product: 'PK',   incoterm: 'CIF', plant_site: 'PLANT-B', supplier: 'SUPP-1', trade_cycle_days: 3  }),
   ]

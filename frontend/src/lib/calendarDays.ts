@@ -24,8 +24,9 @@ export function toCalendarDateKey(value: unknown): string | null {
   return null;
 }
 
+/** Mirrors the backend: every cycle is `anchor - completion`, so negative = Late. */
 export function isTradeCycleLate(tradeCycleDays: number | null | undefined): boolean {
-  return typeof tradeCycleDays === 'number' && Number.isFinite(tradeCycleDays) && tradeCycleDays > 0;
+  return typeof tradeCycleDays === 'number' && Number.isFinite(tradeCycleDays) && tradeCycleDays < 0;
 }
 
 export function isCompletionLateVsDue(dueEnd: unknown, completion: unknown): boolean | null {

@@ -475,7 +475,7 @@ export function contractMatchesLateOnTimeFilter(
   if (typeof contractPerfOnTime === 'boolean') {
     return lateOnTimeFilter === 'ON_TIME' ? contractPerfOnTime : !contractPerfOnTime
   }
-  return lateOnTimeFilter === 'LATE' ? tradeCycleDays > 0 : tradeCycleDays <= 0
+  return lateOnTimeFilter === 'LATE' ? tradeCycleDays < 0 : tradeCycleDays >= 0
 }
 
 /**
