@@ -652,41 +652,34 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
             WHEN ${_transportExpr} LIKE 'LAND%' AND open_standard_eta_trucking IS NOT NULL
               THEN (open_standard_eta_trucking::date - ${effectiveDeliveryEndDateSql})
             WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
-              THEN (last_ata_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
+              THEN (${effectiveDeliveryEndDateSql} - last_ata_vessel_complete_discharge::date)
             /*
-             * ETC before ETA at LP - it estimates the same event ATC records (discharge
-             * complete), while ETA at LP is the vessel arriving to START loading. Must stay in
-             * step with resolveSeaTradeCycleCompletionDate: this expression drives the Late /
-             * On Time filter and sort, so a difference here shows as rows filtered by one rule
-             * and displayed with another.
+             * ETC is the only estimate: it estimates the same event ATC records. ETA at the
+             * loading port was dropped on 2026-09-17 - it is the vessel arriving to START
+             * loading. Must stay in step with resolveCycleCompletionDate: this expression drives
+             * the Late / On Time filter and sort, so a difference here shows as rows filtered by
+             * one rule and displayed with another.
              */
             WHEN ${_transportExpr} LIKE 'SEA%' AND last_eta_vessel_complete_discharge IS NOT NULL
               THEN (
                 CASE
                   WHEN last_eta_vessel_complete_discharge::date < CURRENT_DATE
-                    THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
-                  ELSE (last_eta_vessel_complete_discharge::date - ${effectiveDeliveryEndDateSql})
-                END
-              )
-            WHEN ${_transportExpr} LIKE 'SEA%' AND open_standard_eta_vessel_loading IS NOT NULL
-              THEN (
-                CASE
-                  WHEN open_standard_eta_vessel_loading::date < CURRENT_DATE
-                    THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
-                  ELSE (open_standard_eta_vessel_loading::date - ${effectiveDeliveryEndDateSql})
+                    THEN (${effectiveDeliveryEndDateSql} - CURRENT_DATE)
+                  ELSE (${effectiveDeliveryEndDateSql} - last_eta_vessel_complete_discharge::date)
                 END
               )
             ELSE CASE
               WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE') AND ${_transportExpr} LIKE 'LAND%'
-                THEN (CURRENT_DATE - ${effectiveDeliveryEndDateSql})
+                THEN (${effectiveDeliveryEndDateSql} - CURRENT_DATE)
               ELSE NULL
             END END
         ELSE NULL
       END`;
 
+    // Negative = Late: the completion date ran past the due date delivery end.
     const lateConditionSql = lateOnTimeFilterRaw === 'LATE'
-      ? 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql > 0'
-      : 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql <= 0';
+      ? 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql < 0'
+      : 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql >= 0';
 
     /*
      * Contract Performance hides contracts with no Region/Site, and the View table has to hide the

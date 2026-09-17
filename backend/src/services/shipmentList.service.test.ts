@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   buildShipmentListPageQuery,
   buildShipmentListStatusFilteredCountQuery,
+  CACHE_TTL_MS,
   getCachedFilteredTotal,
   invalidateShipmentsListCache,
   normalizeShipmentListRows,
   seedShipmentListFilteredTotal,
 } from './shipmentList.service';
+
+describe('shipment list cache TTL', () => {
+  it('keeps PAGE/SUMMARY/OS memory for 60 minutes; writes invalidate', () => {
+    expect(CACHE_TTL_MS).toBe(60 * 60 * 1000);
+  });
+});
 
 describe('buildShipmentListStatusFilteredCountQuery', () => {
   it('counts filtered_shipments on full base CTE with toolbar + status outerSql', async () => {
@@ -235,7 +242,7 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('PREPLANNED');
   });
 
-  it('attaches SEA Trade Cycle on contract_backlog when ETA present; null without ETA', async () => {
+  it('attaches SEA Trade Cycle on contract_backlog when ETC present; null without ETC', async () => {
     const yesterday = new Date();
     yesterday.setHours(0, 0, 0, 0);
     yesterday.setDate(yesterday.getDate() - 2);
@@ -265,13 +272,14 @@ describe('normalizeShipmentListRows', () => {
         import_status: 'Open',
         transport_mode: 'SEA',
         delivery_end_date: dueIso,
-        open_standard_eta_vessel_loading: etaPastIso,
+        last_eta_vessel_complete_discharge: etaPastIso,
         last_ata_vessel_complete_discharge: null,
         contract_number: '1014000100',
       },
     ] as Parameters<typeof normalizeShipmentListRows>[0]);
     expect(typeof withPastEta[0]?.trade_cycle_days).toBe('number');
-    expect(Number(withPastEta[0]?.trade_cycle_days)).toBeGreaterThan(0);
+    // Due end has passed and the ETC with it, so the cycle is negative - Late.
+    expect(Number(withPastEta[0]?.trade_cycle_days)).toBeLessThan(0);
   });
 
   it('attaches SEA Trade Cycle on shipment execution rows', async () => {
@@ -292,11 +300,11 @@ describe('normalizeShipmentListRows', () => {
         is_contract_sap_closed: false,
         delivery_end_date: dueIso,
         ata_vessel_complete_discharge: null,
-        eta_vessel_arrival_at_loading_port: etaPastIso,
+        eta_vessel_complete_discharge: etaPastIso,
         contract_number: '1014000101',
       },
     ] as Parameters<typeof normalizeShipmentListRows>[0]);
     expect(typeof rows[0]?.trade_cycle_days).toBe('number');
-    expect(Number(rows[0]?.trade_cycle_days)).toBeGreaterThan(0);
+    expect(Number(rows[0]?.trade_cycle_days)).toBeLessThan(0);
   });
 });

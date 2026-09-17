@@ -1034,8 +1034,37 @@ export function isContractInLogisticsOpenOs(row: any): boolean {
  *   - OS still open: skip Last Receive & WB → Last Planning Delivery Date → ETA trucking
  * SEA: ATC at Discharge Port → ETA at LP → null (Open Trade Cycle uses today fallback separately).
  */
-export function resolveCycleCompletionDate(row: any, transport: string): Date | null {
+/**
+ * The completion date every cycle measures against: actual first, else the estimate, else nothing.
+ *
+ * One chain for Trade, Log, DP and Cash. Until 2026-09-17 only Trade had the estimate step, so the
+ * other three read "-" on any contract whose vessel had not finished discharging - 578 of 767 SEA
+ * contracts on the dev copy - while Trade showed a number for the same row.
+ *
+ *   SEA    actual = ATC (vessel completed discharge)   estimate = ETC
+ *   LAND   actual = last WB date                       estimate = last daily-planning date
+ *
+ * When only the estimate exists and it has already passed, the cycle measures against TODAY rather
+ * than a date the shipment demonstrably missed - otherwise a contract that is running late would
+ * stop getting later, freezing at a stale estimate.
+ *
+ * ETA at the loading port used to be the final fallback and is deliberately gone: it records the
+ * vessel ARRIVING to start loading, the beginning of the voyage, not its completion, so it made 50
+ * contracts look finished weeks before anything had been delivered. No estimate now means "-".
+ */
+export function resolveCycleCompletionDate(
+  row: any,
+  transport: string,
+  todayMid?: Date,
+): Date | null {
   const t = String(transport || '').trim().toUpperCase();
+  const clampToToday = (value: unknown): Date | null => {
+    const key = toCalendarDateKey(value);
+    if (!key) return null;
+    const now = todayMid ?? new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return due(key < todayKey ? todayKey : key);
+  };
 
   if (t.startsWith('LAND')) {
     const osFulfilled = isTruckingOutstandingWithinToleranceKg(
@@ -1049,23 +1078,21 @@ export function resolveCycleCompletionDate(row: any, transport: string): Date | 
         return due(row.last_trucking_wb_actuals_date);
       }
     }
-    if (hasCalendarDate(row.last_trucking_daily_deliverable_date)) {
-      return due(row.last_trucking_daily_deliverable_date);
-    }
-    if (hasCalendarDate(row.open_standard_eta_trucking)) {
-      return due(row.open_standard_eta_trucking);
-    }
-    return null;
+    /*
+     * LAND's estimate is the last daily-planning date, and it is clamped to today the same way
+     * SEA's ETC is - a plan that has already passed is not evidence the work finished.
+     *
+     * ETA trucking used to follow it and is gone for the same reason ETA at the loading port is:
+     * it is not an estimate of completion.
+     */
+    return clampToToday(row.last_trucking_daily_deliverable_date);
   }
 
   if (t.startsWith('SEA')) {
     if (hasCalendarDate(row.last_ata_vessel_complete_discharge)) {
       return due(row.last_ata_vessel_complete_discharge);
     }
-    if (hasCalendarDate(row.open_standard_eta_vessel_loading)) {
-      return due(row.open_standard_eta_vessel_loading);
-    }
-    return null;
+    return clampToToday(row.last_eta_vessel_complete_discharge);
   }
 
   return null;
@@ -1101,7 +1128,7 @@ export function computeOpenLogCycleDays(
 ): number | null {
   const ready = due(cargoReady);
   if (!ready) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionDate(row, transport, _todayMid);
   if (!end) return null;
   return diffCalendarDays(end, ready);
 }
@@ -1115,9 +1142,9 @@ export function computeOpenCashCycleDays(
 ): number | null {
   const payoff = hasCalendarDate(payoffDate) ? due(payoffDate) : resolveSapPayoffCalendarDate(row);
   if (!payoff) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionDate(row, transport, _todayMid);
   if (!end) return null;
-  return diffCalendarDays(payoff, end);
+  return diffCalendarDays(end, payoff);
 }
 
 /** Open DP Cycle: requires SAP DP Date; completion via resolveCycleCompletionDate. */
@@ -1129,9 +1156,9 @@ export function computeOpenDpCycleDays(
 ): number | null {
   const dp = hasCalendarDate(dpDate) ? due(dpDate) : resolveSapDpCalendarDate(row);
   if (!dp) return null;
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionDate(row, transport, _todayMid);
   if (!end) return null;
-  return diffCalendarDays(dp, end);
+  return diffCalendarDays(end, dp);
 }
 
 /** Closed Log / Cash / DP / Trade — same completion chain as Open. */
@@ -1176,12 +1203,9 @@ export function computeClosedTradeCycleDays(
   todayMid: Date = new Date(),
 ): number | null {
   if (!hasCalendarDate(deliveryEnd)) return null;
-  const t = String(transport || '').trim().toUpperCase();
-  const end = t.startsWith('SEA')
-    ? resolveSeaTradeCycleCompletionDate(row, todayMid)
-    : resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionDate(row, transport, todayMid);
   if (!end) return null;
-  return diffCalendarDays(deliveryEnd, end);
+  return diffCalendarDays(end, deliveryEnd);
 }
 
 /** Mirrors aggregateLatePerformanceRows contractPerfOnTime (Section 2 tree vs Section 3 filter). */
@@ -1241,16 +1265,13 @@ function computeOpenTradeCycleDays(
   deliveryEnd: Date,
 ): number | null {
   const t = String(transport || '').trim().toUpperCase();
-  if (t.startsWith('SEA')) {
-    const end = resolveSeaTradeCycleCompletionDate(row, todayMid);
-    if (!end) return null;
-    return diffCalendarDays(deliveryEnd, end);
-  }
-  const end = resolveCycleCompletionDate(row, transport);
+  const end = resolveCycleCompletionDate(row, transport, todayMid);
   if (!end) {
-    return openDueDateTradeCycleDays(deliveryEnd, todayMid);
+    // LAND keeps Condition B - with no completion signal at all, the cycle is due end vs today.
+    // SEA has no such fallback: no ATC and no ETC means "-", which is what was asked for.
+    return t.startsWith('SEA') ? null : openDueDateTradeCycleDays(deliveryEnd, todayMid);
   }
-  return diffCalendarDays(deliveryEnd, end);
+  return diffCalendarDays(end, deliveryEnd);
 }
 
 /** SQL fragment — mirrors resolveEffectiveDeliveryEnd (DB or latest SAP fields). */

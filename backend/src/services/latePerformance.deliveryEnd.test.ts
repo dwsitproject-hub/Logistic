@@ -53,8 +53,9 @@ describe('isContractPerfOnTimeTradeCycle', () => {
       open_standard_eta_vessel_loading: null,
     }
     expect(isContractPerfOnTimeTradeCycle(row, 0)).toBe(true)
-    expect(isContractPerfOnTimeTradeCycle(row, -1)).toBe(true)
-    expect(isContractPerfOnTimeTradeCycle(row, 1)).toBe(false)
+    expect(isContractPerfOnTimeTradeCycle(row, 1)).toBe(true)
+    // Negative = the completion date overran its anchor.
+    expect(isContractPerfOnTimeTradeCycle(row, -1)).toBe(false)
   })
 
   it('Condition A (standard ETA present): trade cycle 0 is on-time', () => {
@@ -80,6 +81,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
           last_trucking_daily_deliverable_date: '2026-06-15',
         },
         'LAND',
+        todayMid,
       )?.getDate(),
     ).toBe(1)
 
@@ -92,6 +94,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
           last_trucking_daily_deliverable_date: '2026-06-15',
         },
         'LAND',
+        todayMid,
       )?.getDate(),
     ).toBe(8)
 
@@ -104,11 +107,12 @@ describe('resolveCycleCompletionDate (no Today)', () => {
           last_trucking_daily_deliverable_date: '2026-06-15',
         },
         'LAND',
+        todayMid,
       )?.getDate(),
     ).toBe(15)
   })
 
-  it('LAND OS still open: skips Last Receive/WB and uses planning then ETA', () => {
+  it('LAND OS still open: skips Last Receive/WB, uses planning, and has no ETA fallback', () => {
     expect(
       resolveCycleCompletionDate(
         {
@@ -119,6 +123,7 @@ describe('resolveCycleCompletionDate (no Today)', () => {
           open_standard_eta_trucking: '2026-06-20',
         },
         'LAND',
+        todayMid,
       )?.getDate(),
     ).toBe(15)
 
@@ -132,8 +137,10 @@ describe('resolveCycleCompletionDate (no Today)', () => {
           open_standard_eta_trucking: '2026-06-20',
         },
         'LAND',
-      )?.getDate(),
-    ).toBe(20)
+        todayMid,
+      ),
+      // ETA trucking is not an estimate of completion - dropped 2026-09-17 with ETA at loading port.
+    ).toBeNull()
   })
 
   it('LAND OS within 0 MT band (≤499 kg) still allows WB Last Receive', () => {
@@ -145,30 +152,59 @@ describe('resolveCycleCompletionDate (no Today)', () => {
           last_trucking_daily_deliverable_date: '2026-06-15',
         },
         'LAND',
+        todayMid,
       )?.getDate(),
     ).toBe(8)
   })
 
-  it('SEA: ATC → ETA at LP', () => {
+  it('SEA: ATC → ETC, and ETA at loading port is not a completion date', () => {
     expect(
       resolveCycleCompletionDate(
         {
           last_ata_vessel_complete_discharge: '2026-06-20',
-          open_standard_eta_vessel_loading: '2026-06-10',
+          last_eta_vessel_complete_discharge: '2026-06-15',
         },
         'SEA',
+        todayMid,
       )?.getDate(),
     ).toBe(20)
 
+    // ETC in the future is used as-is.
     expect(
       resolveCycleCompletionDate(
         {
           last_ata_vessel_complete_discharge: null,
+          last_eta_vessel_complete_discharge: '2026-06-15',
+        },
+        'SEA',
+        todayMid,
+      )?.getDate(),
+    ).toBe(15)
+
+    // ETC already passed: measure against today, or a late contract would stop getting later.
+    expect(
+      resolveCycleCompletionDate(
+        {
+          last_ata_vessel_complete_discharge: null,
+          last_eta_vessel_complete_discharge: '2026-06-01',
+        },
+        'SEA',
+        todayMid,
+      )?.getDate(),
+    ).toBe(10)
+
+    // ETA at the loading port is the start of the voyage, not its completion: no longer a fallback.
+    expect(
+      resolveCycleCompletionDate(
+        {
+          last_ata_vessel_complete_discharge: null,
+          last_eta_vessel_complete_discharge: null,
           open_standard_eta_vessel_loading: '2026-06-10',
         },
         'SEA',
-      )?.getDate(),
-    ).toBe(10)
+        todayMid,
+      ),
+    ).toBeNull()
   })
 
   it('returns null when all completion sources are empty (no Today)', () => {
@@ -194,24 +230,25 @@ describe('resolveCycleCompletionDate (no Today)', () => {
     ).toBeNull()
   })
 
-  it('computeOpenCashCycleDays uses ATC then ETA at LP; null when both missing', () => {
+  it('computeOpenCashCycleDays uses ATC then ETC; null when both missing', () => {
     const withAtc = {
       import_status: 'OPEN',
       transport_mode: 'SEA',
       last_ata_vessel_complete_discharge: '2026-06-20',
-      open_standard_eta_vessel_loading: '2026-07-01',
+      last_eta_vessel_complete_discharge: '2026-07-01',
       latest_spd_data: { payment: { payoff_date: '2026-06-01' } },
     }
-    expect(computeOpenCashCycleDays(withAtc, 'SEA', todayMid)).toBe(19)
+    // payoff - completion: discharge finished 19 days after payoff, so the cycle is negative.
+    expect(computeOpenCashCycleDays(withAtc, 'SEA', todayMid)).toBe(-19)
 
-    const withEtaOnly = {
+    const withEtcOnly = {
       import_status: 'OPEN',
       transport_mode: 'SEA',
       last_ata_vessel_complete_discharge: null,
-      open_standard_eta_vessel_loading: '2026-06-10',
+      last_eta_vessel_complete_discharge: '2026-06-15',
       latest_spd_data: { payment: { payoff_date: '2026-06-01' } },
     }
-    expect(computeOpenCashCycleDays(withEtaOnly, 'SEA', todayMid)).toBe(9)
+    expect(computeOpenCashCycleDays(withEtcOnly, 'SEA', todayMid)).toBe(-14)
 
     const missing = {
       import_status: 'OPEN',
@@ -353,43 +390,43 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
     expect(isContractIncludedInPerfDrilldownTree(row, { lateOnTimeFilter: 'ALL' })).toBe(false)
   })
 
-  it('Open SEA ATA null + ETA before today uses today as completion', () => {
+  it('Open SEA ATC null + ETC before today uses today as completion', () => {
     const todayMid = new Date(2026, 5, 10)
     const row = {
       import_status: 'OPEN',
       transport_mode: 'SEA',
       delivery_end_date: '2026-06-01',
-      open_standard_eta_vessel_loading: '2026-06-05',
+      last_eta_vessel_complete_discharge: '2026-06-05',
       last_ata_vessel_complete_discharge: null,
     }
-    // today (10) - due (1) = 9
-    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(9)
+    // due (1) - today (10) = -9, and negative is Late.
+    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(-9)
   })
 
-  it('Open SEA ATA null + ETA on or after today uses ETA as completion', () => {
+  it('Open SEA ATC null + ETC on or after today uses ETC as completion', () => {
     const todayMid = new Date(2026, 5, 10)
     const row = {
       import_status: 'OPEN',
       transport_mode: 'SEA',
       delivery_end_date: '2026-06-01',
-      open_standard_eta_vessel_loading: '2026-06-20',
+      last_eta_vessel_complete_discharge: '2026-06-20',
       last_ata_vessel_complete_discharge: null,
     }
-    // ETA (20) - due (1) = 19
-    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(19)
+    // due (1) - ETC (20) = -19
+    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(-19)
   })
 
-  it('Open SEA prefers ATA over ETA when both present', () => {
+  it('Open SEA prefers ATC over ETC when both present', () => {
     const todayMid = new Date(2026, 5, 10)
     const row = {
       import_status: 'OPEN',
       transport_mode: 'SEA',
       delivery_end_date: '2026-06-01',
-      open_standard_eta_vessel_loading: '2026-06-20',
+      last_eta_vessel_complete_discharge: '2026-06-20',
       last_ata_vessel_complete_discharge: '2026-06-08',
     }
-    // ATA (8) - due (1) = 7
-    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(7)
+    // due (1) - ATC (8) = -7
+    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(-7)
   })
 
   it('Open LAND row with no milestones uses today fallback (Condition B)', () => {
@@ -404,7 +441,8 @@ describe('isContractIncludedInPerfDrilldownTreeWithComputed', () => {
       last_trucking_daily_deliverable_date: null,
       open_standard_eta_trucking: null,
     }
-    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(5)
+    // due (5) - today (10) = -5: already past due with nothing delivered, so Late.
+    expect(computePerfTradeCycleDaysForRow(row, todayMid)).toBe(-5)
 
     const lateRow = { ...row, delivery_end_date: '2020-01-01' }
     expect(isContractIncludedInPerfDrilldownTree(lateRow, { lateOnTimeFilter: 'LATE' })).toBe(true)

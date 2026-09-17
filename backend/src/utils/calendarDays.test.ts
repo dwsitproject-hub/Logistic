@@ -38,20 +38,21 @@ describe('computeLateIndicatorText', () => {
 describe('open drilldown Condition B (Open summary, empty standard ETA)', () => {
   const today = new Date(Date.UTC(2026, 5, 10));
 
-  it('Trade Cycle = today − due date delivery end (calendar days)', () => {
-    expect(openDueDateTradeCycleDays('2026-06-05', today)).toBe(5);
-    expect(openDueDateTradeCycleDays('2026-06-15', today)).toBe(-5);
+  it('Trade Cycle = due date delivery end − today (calendar days)', () => {
+    // Negative = Late: today has already passed the due end by 5 days.
+    expect(openDueDateTradeCycleDays('2026-06-05', today)).toBe(-5);
+    expect(openDueDateTradeCycleDays('2026-06-15', today)).toBe(5);
     expect(openDueDateTradeCycleDays('2026-06-10', today)).toBe(0);
   });
 
-  it('On Time when today ≤ due end (Trade Cycle ≤ 0); Late when today > due end', () => {
-    expect(isOpenConditionBOnTime(-5)).toBe(true);
+  it('On Time when today ≤ due end (Trade Cycle >= 0); Late when today > due end', () => {
+    expect(isOpenConditionBOnTime(5)).toBe(true);
     expect(isOpenConditionBOnTime(0)).toBe(true);
-    expect(isOpenConditionBOnTime(3)).toBe(false);
+    expect(isOpenConditionBOnTime(-3)).toBe(false);
   });
 
-  it('legacy Condition A keeps <= 0 as On Time', () => {
+  it('Condition A keeps >= 0 as On Time', () => {
     expect(isLegacyTradeCycleOnTime(0)).toBe(true);
-    expect(isLegacyTradeCycleOnTime(1)).toBe(false);
+    expect(isLegacyTradeCycleOnTime(-1)).toBe(false);
   });
 });

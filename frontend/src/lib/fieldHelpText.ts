@@ -3,24 +3,24 @@
 export const FIELD_HELP = {
   overUnderDelivery: `When contract status is Close: compares Outstanding Quantity vs 0 — "Over Delivery" when outstanding < 0, "Under Delivery" when outstanding > 0, or "Passed" when outstanding = 0. Open contracts show "-".`,
 
-  logCycle: `Cargo Readiness Date − Completion Date. LAND Completion: when OS ≈ 0 MT use Last Receive/WB, else Last Planning Delivery Date / ETA.`,
+  logCycle: `Log Cycle = Cargo Readiness Date − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
 
-  tradeCycle: `Completion Date vs Due Date Delivery End. SEA: ATA Discharge Complete; if ATA is empty use ETA at LP, or today when that ETA is before today; no ETA → "-". LAND: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
+  tradeCycle: `Trade Cycle = Due Date Delivery End − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
 
   statusCardAvgDp: `Average DP Cycle (days) for Open or Close contracts in scope. Only contracts with a valid SAP DP Date and computable cycle are included; if none qualify, the card shows "- days" (not 0 days).`,
 
   statusCardAvgLog: `Average Log Cycle (days) for Open or Close contracts in scope. Only contracts with cargo readiness and a valid completion end are included; if none qualify, the card shows "- days" (not 0 days).`,
 
-  cashCycle: `Completion Date vs Payoff Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
+  cashCycle: `Cash Cycle = Payoff Date − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
 
-  dpCycle: `Completion Date vs DP Date. LAND Completion: OS ≈ 0 MT → Last Receive/WB; otherwise planning/ETA.`,
+  dpCycle: `DP Cycle = DP Date − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
 
   /** Contract Performance — Open card, Section 2 drilldown, and View table share signed qty_move OS for all SAP Open contracts. Over-delivery: +MT (green). Remaining outstanding: MT (black). */
   contractPerfOutstandingQty: `Open card + Section 2 drilldown + View table use the same signed Outstanding Qty as Contracts list (qty_move / incoterm Delivery vs Receive). All SAP Open contracts in scope are included — not limited to Shipments/Trucking active strips. Over-delivery shows as +MT (green) and reduces Open card totals. B2B origin (empty Contract Reff PO): when parent Delivery/Receive is NULL or 0, qty_move uses SUM of children capped at origin Contract Qty (parent > 0 replaces, never parent+child). GR STO Open/Close on FOB/LCO follows children when parent GR STO is blank (any Open / all Close).`,
-  contractPerfTradeCycle: `Completion Date vs Due Date Delivery End. SEA: ATC (ATA Discharge Complete); if empty use ETC (ETA Discharge Complete), then ETA at LP — or today when that estimate is before today; none of the three → "-". LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA (Open without milestones uses today vs due).`,
-  contractPerfDpCycle: `Completion Date vs DP Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
-  contractPerfCashCycle: `Completion Date vs Payoff Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
-  contractPerfLogCycle: `Cargo Readiness Date − Completion Date. LAND: OS ≈ 0 MT → Last Receive/WB; else planning/ETA.`,
+  contractPerfTradeCycle: `Trade Cycle = Due Date Delivery End − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
+  contractPerfDpCycle: `DP Cycle = DP Date − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
+  contractPerfCashCycle: `Cash Cycle = Payoff Date − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
+  contractPerfLogCycle: `Log Cycle = Cargo Readiness Date − Completion Date. Completion Date = ATC; if empty, ETC — and today when the ETC has already passed; neither → "-". LAND reads WB as the ATC and Last Planning Delivery as the ETC. Negative = Late.`,
 
   outstandingQty: `Remaining quantity yet to be delivered. Green = Over Delivered (+MT); black = Still Outstanding.`,
 

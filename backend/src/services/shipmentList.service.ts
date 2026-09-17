@@ -128,7 +128,8 @@ const SUMMARY_CACHE = new Map<
   string,
   { summaryRow: Record<string, unknown>; totalCount: number; expiresAt: number }
 >();
-const CACHE_TTL_MS = 5 * 60 * 1000;
+/** Safety-net TTL. Freshness is write invalidation (SAP / shipment / Preplanned), not the clock. */
+export const CACHE_TTL_MS = 60 * 60 * 1000;
 const CACHE_VERSION = 'shipment-list-v36';
 const MAX_CACHE_ENTRIES = 80;
 const OUTSTANDING_QTY_CACHE = new Map<
@@ -139,8 +140,17 @@ const OUTSTANDING_QTY_CACHE = new Map<
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
 // so users are served from the cache instead of paying the full query cost. Does not
 // change responses — it only re-runs the identical loader off the request path.
-const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
-const SUMMARY_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS, maxEntries: 4 });
+// maxIdleMs matches shipment row-set KEEP_WARM_MAX_IDLE_MS so post-edit rewarm still
+// covers a YTD key after a longer pause. Loads >15s still skip timer refresh-ahead.
+const PAGE_KEEP_WARM = new ListCacheKeepWarm({
+  cacheTtlMs: CACHE_TTL_MS,
+  maxIdleMs: 3 * 60 * 60 * 1000,
+});
+const SUMMARY_KEEP_WARM = new ListCacheKeepWarm({
+  cacheTtlMs: CACHE_TTL_MS,
+  maxEntries: 4,
+  maxIdleMs: 3 * 60 * 60 * 1000,
+});
 
 /**
  * At most one heavy Shipments query (hydrate, live summary, OS strip) at a time, plus
@@ -942,10 +952,10 @@ export async function loadShipmentSummaryBundle(
    * overlay, which is why the Shipments summary stayed ~3.3s even with the warmer populating the
    * exact key the page asks for.
    *
-   * Freshness is unchanged in kind: the same CACHE_TTL_MS bounds the live path, and every write
-   * path clears these caches through registerListCacheInvalidator. What changes is that the live
-   * stage-count overlay is now at most CACHE_TTL_MS old on the daily path too, instead of being
-   * recomputed per request.
+   * CACHE_TTL_MS is only a safety net for changes that miss a write path. Every shipment /
+   * SAP / Preplanned write still clears these caches through registerListCacheInvalidator.
+   * The live stage-count overlay is at most CACHE_TTL_MS old on the daily path, instead of
+   * being recomputed per request.
    */
   const cached = SUMMARY_CACHE.get(opts.cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
@@ -1118,8 +1128,13 @@ function attachShipmentExecutionTradeCycleDays(
       transport_mode: 'SEA',
       delivery_end_date: row.delivery_end_date,
       last_ata_vessel_complete_discharge: row.ata_vessel_complete_discharge,
-      open_standard_eta_vessel_loading:
-        row.eta_vessel_arrival_at_loading_port ?? row.eta_arrival,
+      /*
+       * ETC, not the loading-port ETA. The completion chain stopped accepting the latter on
+       * 2026-09-17 - it records the vessel arriving to START loading - so feeding it here would
+       * leave the column blank on every row without an ATC.
+       */
+      last_eta_vessel_complete_discharge:
+        row.eta_vessel_complete_discharge ?? row.eta_discharge_complete,
     },
     todayMid,
   );
