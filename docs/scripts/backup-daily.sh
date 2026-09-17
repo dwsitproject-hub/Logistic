@@ -68,9 +68,52 @@ STAMP="$(date +%Y%m%d_%H%M%S)"
 OUT="${BACKUP_DIR}/klip_${STAMP}.dump"
 PART="${OUT}.part"
 
+#
+# pg_dump has to be at least the server's major version - it refuses outright, it does not warn.
+# Production runs PostgreSQL 18 while this host carries the 16 client that ships with Ubuntu 24.04,
+# so the host binary cannot be used. Rather than add a package repository to a database server, run
+# the matching client from a container; the image is pulled once and cached.
+#
+# Set PG_CLIENT=host to force the host binary, or PG_IMAGE to pin a specific image.
+#
+server_major() {
+  local v
+  v="$(psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -Atc 'SHOW server_version_num' 2>/dev/null)" || return 1
+  [ -n "${v}" ] || return 1
+  echo $(( v / 10000 ))
+}
+host_major() { pg_dump --version 2>/dev/null | grep -oE '[0-9]+' | head -1; }
+
+PG_CLIENT="${PG_CLIENT:-auto}"
+if [ "${PG_CLIENT}" = "auto" ]; then
+  SRV="$(server_major || true)"
+  HST="$(host_major || true)"
+  if [ -n "${SRV}" ] && [ -n "${HST}" ] && [ "${HST}" -ge "${SRV}" ] 2>/dev/null; then
+    PG_CLIENT="host"
+    log "using the host client (pg_dump ${HST} vs server ${SRV})"
+  elif command -v docker >/dev/null 2>&1; then
+    PG_CLIENT="docker"
+    PG_IMAGE="${PG_IMAGE:-postgres:${SRV:-18}-alpine}"
+    log "host pg_dump is ${HST:-unknown} but the server is ${SRV:-unknown} - using ${PG_IMAGE}"
+  else
+    fail "host pg_dump is ${HST:-unknown}, the server is ${SRV:-unknown}, and docker is not available to supply a matching client"
+  fi
+fi
+
+run_pg() {  # run_pg <pg_dump|pg_restore> [args...]
+  if [ "${PG_CLIENT}" = "docker" ]; then
+    docker run --rm -i -e PGPASSWORD="${PGPASSWORD}" -v "${BACKUP_DIR}:/backup" "${PG_IMAGE}" "$@"
+  else
+    "$@"
+  fi
+}
+
+# Inside the container the backup directory is /backup; on the host it is ${BACKUP_DIR}.
+if [ "${PG_CLIENT}" = "docker" ]; then PART_REF="/backup/$(basename "${PART}")"; else PART_REF="${PART}"; fi
+
 # 2. dump to .part, verify it can be read back, only then publish it under its real name
 log "dumping ${DB_NAME} from ${DB_HOST}:${DB_PORT}"
-if ! pg_dump -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -Fc "${DB_NAME}" > "${PART}"; then
+if ! run_pg pg_dump -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -Fc -f "${PART_REF}" "${DB_NAME}"; then
   rm -f "${PART}"
   fail "pg_dump failed"
 fi
@@ -78,7 +121,7 @@ fi
 SIZE_BYTES="$(stat -c%s "${PART}" 2>/dev/null || echo 0)"
 [ "${SIZE_BYTES}" -gt 1048576 ] || { rm -f "${PART}"; fail "dump is only ${SIZE_BYTES} bytes - treating as failed"; }
 
-if ! pg_restore --list "${PART}" > /dev/null 2>&1; then
+if ! run_pg pg_restore --list "${PART_REF}" > /dev/null 2>&1; then
   rm -f "${PART}"
   fail "dump did not verify with pg_restore --list - discarded"
 fi
