@@ -17,6 +17,7 @@ import {
   sqlWbActualDeliverySumKg,
   sqlWbActualReceiveSumKg,
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+  truckingRowOutstandingQtyKg,
 } from './truckingQuantitySql';
 
 describe('truckingQuantitySql', () => {
@@ -221,5 +222,40 @@ describe('truckingQuantitySql', () => {
     // Over-delivery (negative OS / UI "+N MT") → Completed
     expect(isTruckingPipelineCompleted('Open', -3000)).toBe(true);
     expect(isTruckingPipelineCompleted('Open', -1)).toBe(true);
+  });
+
+  describe('truckingRowOutstandingQtyKg', () => {
+    it('LCO measures the row against its delivery, FRC against its receive', () => {
+      const row = { rowQtyKg: 22_000, deliveredKg: 22_000, receivedKg: 21_000 };
+      expect(truckingRowOutstandingQtyKg({ incoterm: 'LCO', ...row })).toBe(0);
+      expect(truckingRowOutstandingQtyKg({ incoterm: 'FRC', ...row })).toBe(1_000);
+    });
+
+    it('a fully delivered row lands inside the tolerance band, so the status can reach Completed', () => {
+      // Contract Details showed rows reading 22 MT / 22 MT / 22 MT labelled Planned, because it
+      // passed no outstanding quantity at all and the 499 kg arm cannot fire on undefined.
+      const os = truckingRowOutstandingQtyKg({
+        incoterm: 'LCO', rowQtyKg: 22_000, deliveredKg: 22_000, receivedKg: 22_000,
+      });
+      expect(isTruckingPipelineCompleted('Open', os)).toBe(true);
+      expect(isTruckingPipelineCompleted('Open', undefined)).toBe(false);
+    });
+
+    it('returns undefined when the row has no quantity of its own', () => {
+      // Without this guard an unknown STO computes 0 - 0 = 0, lands inside the band, and reports
+      // Completed on the strength of knowing nothing.
+      expect(truckingRowOutstandingQtyKg({
+        incoterm: 'LCO', rowQtyKg: 0, deliveredKg: 0, receivedKg: 0,
+      })).toBeUndefined();
+      expect(truckingRowOutstandingQtyKg({
+        incoterm: 'LCO', rowQtyKg: null, deliveredKg: 5, receivedKg: 5,
+      })).toBeUndefined();
+    });
+
+    it('returns undefined for incoterms that do not define an outstanding quantity', () => {
+      expect(truckingRowOutstandingQtyKg({
+        incoterm: 'FOB', rowQtyKg: 22_000, deliveredKg: 0, receivedKg: 0,
+      })).toBeUndefined();
+    });
   });
 });

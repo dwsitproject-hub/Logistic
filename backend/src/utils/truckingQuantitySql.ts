@@ -473,6 +473,40 @@ export function isTruckingPipelineCompleted(
   );
 }
 
+/**
+ * Outstanding qty (kg) for ONE row, by incoterm - the JS mirror of
+ * sqlTruckingOutstandingQtyByIncoterm, used where the row carries its own quantities rather than
+ * the contract's. Returns undefined when the incoterm does not define an outstanding quantity, or
+ * when the row has no quantity to measure against.
+ *
+ * Contract Details' Table List STO is the caller that needed it. It rendered rows reading
+ * "22 MT ordered / 22 MT delivered / 22 MT received" and labelled them Planned, because it called
+ * deriveTruckingEffectiveStatus without an outstanding quantity at all: with it undefined the
+ * 499 kg tolerance arm can never fire, leaving GR-closed as the only route to COMPLETED. A row
+ * that shows its own quantities should be judged on them.
+ *
+ * The zero guard matters. Without it an STO whose quantity is unknown computes 0 - 0 = 0, lands
+ * inside the tolerance band and reports Completed on the strength of knowing nothing.
+ */
+export function truckingRowOutstandingQtyKg(input: {
+  incoterm: unknown;
+  rowQtyKg: unknown;
+  deliveredKg: unknown;
+  receivedKg: unknown;
+}): number | undefined {
+  const num = (v: unknown): number => {
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const rowQty = num(input.rowQtyKg);
+  if (rowQty <= 0) return undefined;
+
+  const incoterm = String(input.incoterm ?? '').trim().toUpperCase();
+  if (incoterm === 'FRC') return rowQty - num(input.receivedKg);
+  if (incoterm === 'LCO') return rowQty - num(input.deliveredKg);
+  return undefined;
+}
+
 /** @deprecated Use isTruckingPipelineCompleted */
 export const isTruckingCompletedByGrAndOs = isTruckingPipelineCompleted;
 

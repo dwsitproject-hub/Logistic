@@ -1904,6 +1904,26 @@ should. What was holding outstanding was the quantity itself, which is what GREA
 operations fell, 8,922 MT released, 3 reached Complete. The other 55 are genuinely still outstanding
 above the band.
 
+### A fully delivered STO row could not say so
+
+Contract Details' Table List STO printed rows reading "22 MT ordered / 22 MT delivered / 22 MT
+received" and labelled them **Planned**. The status came from
+`resolveContractLogisticsStoStatus`, which called `deriveTruckingEffectiveStatus` **without an
+outstanding quantity**. `isTruckingPipelineCompleted` is "GR closed OR outstanding <= 499 kg", and
+`isTruckingOutstandingWithinToleranceKg(undefined)` is `false` - so on an Open contract the
+tolerance arm could never fire and no row could ever reach COMPLETED, however much of it had
+arrived.
+
+This is why the production sweep found zero stuck operations while the screen showed several: the
+sweep measures at operation grain with the contract's outstanding quantity, and it was right. The
+table is at STO grain and was passing nothing.
+
+Each row is now judged on the quantities printed beside it, via `truckingRowOutstandingQtyKg` - the
+JS mirror of `sqlTruckingOutstandingQtyByIncoterm`, so LCO measures delivery and FRC measures
+receive, exactly as the SQL does. The zero guard is load-bearing: without it an STO whose quantity
+is unknown computes 0 - 0 = 0, lands inside the tolerance band, and reports Completed on the
+strength of knowing nothing.
+
 ### A truck no longer reports that it arrived at a loading port
 
 Contract Details lists shipments and trucking operations in one table and ran every row through the

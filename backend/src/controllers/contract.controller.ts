@@ -61,6 +61,7 @@ import {
   TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
   sqlTruckingResolvedDeliveryQty,
   sqlTruckingResolvedReceiveQty,
+  truckingRowOutstandingQtyKg,
 } from '../utils/truckingQuantitySql';
 import {
   sqlShipmentResolvedDeliveryKg,
@@ -2467,6 +2468,13 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           realizationEndDate: r.trucking_completion_date,
           realizationStartDate: r.trucking_start_date,
           stoNumber: r.sto_number,
+          // Judged on this row's own quantities, which are the ones printed beside the status.
+          outstandingQtyKg: truckingRowOutstandingQtyKg({
+            incoterm: contract.incoterm,
+            rowQtyKg: r.sto_quantity,
+            deliveredKg: r.quantity_delivered,
+            receivedKg: r.quantity_receive,
+          }),
         },
       });
       return {
@@ -2566,6 +2574,12 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           truckingOptions: {
             realizationEndDate: r.trucking_completion_date,
             stoNumber: r.sto_number,
+            outstandingQtyKg: truckingRowOutstandingQtyKg({
+              incoterm: contract.incoterm,
+              rowQtyKg: r.sto_quantity,
+              deliveredKg: r.quantity_delivered,
+              receivedKg: r.quantity_receive,
+            }),
           },
         });
         return {

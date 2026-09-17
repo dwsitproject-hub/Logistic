@@ -68,8 +68,17 @@ docker compose -f "${COMPOSE_FILE}" ps
 echo "==> Recent frontend logs"
 docker compose -f "${COMPOSE_FILE}" logs --tail=40 frontend
 
-echo "==> Local HTTP check :${FE_PORT}"
-curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:${FE_PORT}/" || echo "WARN: local HTTP check failed"
+# Poll rather than ask once - the container is about a second old here, and a single immediate
+# check prints 000 and a warning on a deploy that is perfectly fine.
+echo "==> Local HTTP check :${FE_PORT} (up to ${HEALTH_TIMEOUT:-60}s)"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
+fe_code=000
+for (( waited=0; waited < HEALTH_TIMEOUT; waited+=3 )); do
+  fe_code="$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${FE_PORT}/" || echo 000)"
+  [[ "${fe_code}" == "200" ]] && { echo "    HTTP ${fe_code} after ${waited}s"; break; }
+  sleep 3
+done
+[[ "${fe_code}" == "200" ]] || echo "WARN: local HTTP check still ${fe_code} after ${HEALTH_TIMEOUT}s"
 
 echo "Done. Verify in browser: http://147.139.176.70  then Ctrl+Shift+R"
 echo "API via Next rewrite: http://147.139.176.70/api/health"

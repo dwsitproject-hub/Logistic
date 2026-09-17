@@ -98,11 +98,25 @@ docker compose "${COMPOSE_ARGS[@]}" exec -T backend printenv DB_HOST DB_PORT
 echo "==> Recent backend logs"
 docker compose "${COMPOSE_ARGS[@]}" logs --tail=40 backend
 
-echo "==> Health check (local ${BACKEND_PORT})"
-curl -sf "http://127.0.0.1:${BACKEND_PORT}/health" && echo || {
-  echo "ERROR: /health failed — check logs: docker compose ${COMPOSE_ARGS[*]} logs -f backend"
+# Poll rather than ask once. The container is barely a second old at this point - it still has
+# migrations and seeding ahead of it - so a single immediate curl reports a failure that is really
+# just impatience, and it did so on every deploy until someone stopped believing it.
+echo "==> Health check (local ${BACKEND_PORT}, up to ${HEALTH_TIMEOUT:-60}s)"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
+health_ok=0
+for (( waited=0; waited < HEALTH_TIMEOUT; waited+=3 )); do
+  if curl -sf "http://127.0.0.1:${BACKEND_PORT}/health"; then
+    echo
+    echo "    healthy after ${waited}s"
+    health_ok=1
+    break
+  fi
+  sleep 3
+done
+if [[ "${health_ok}" != "1" ]]; then
+  echo "ERROR: /health still failing after ${HEALTH_TIMEOUT}s — check logs: docker compose ${COMPOSE_ARGS[*]} logs -f backend"
   exit 1
-}
+fi
 
 if [[ -f "${APP_DIR}/docs/scripts/verify-oidc-config.sh" ]]; then
   echo "==> OIDC env verification (optional on first PoC)"

@@ -115,6 +115,12 @@ export function resolveContractLogisticsStoStatus(input: {
     realizationEndDate?: unknown;
     dailyDeliverables?: unknown;
     stoNumber?: unknown;
+    /**
+     * The row's OWN outstanding quantity in kg. Without it isTruckingPipelineCompleted is left
+     * with "GR closed OR outstanding <= 499 kg" and no outstanding, so the tolerance arm cannot
+     * fire and an Open contract can never show a Completed row - however much of it has arrived.
+     */
+    outstandingQtyKg?: number;
   };
 }): string {
   if (input.logisticsType === 'trucking') {
@@ -126,6 +132,7 @@ export function resolveContractLogisticsStoStatus(input: {
         dailyDeliverables: input.truckingOptions?.dailyDeliverables,
         stoNumber: input.truckingOptions?.stoNumber,
         contractImportStatus: input.contractImportStatus,
+        outstandingQtyKg: input.truckingOptions?.outstandingQtyKg,
       },
     );
   }
