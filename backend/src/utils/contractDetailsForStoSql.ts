@@ -1,113 +1,247 @@
 
-import { sqlSapQtyDeliveredKgFromSpd } from './contractLogisticsStoDetailSql';
 import {
-  sqlNormalizeSapStoQtyToKgSql,
-  sqlPoGlobalOutstandingPlanningKg,
-  sqlPoOutstandingPlanningRowBudgetKgExpr,
-  sqlPoStoAssignedKg,
-  sqlPoStoSapQtyKg,
-} from './contractPoGlobalMetricsSql';
+  sqlSpdPoNumberExpr,
+  sqlStoLookupKeyMatchExpr,
+  sqlStoScopedDeliveredKgSql,
+  sqlStoScopedReceiveKgSql,
+} from './contractLogisticsStoDetailSql';
+import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
-
-function spdEffectiveSto(alias: string): string {
-  return `NULLIF(TRIM(COALESCE(
-  ${alias}.sto_number::text,
-  ${alias}.data->'raw'->>'STO No.',
-  ${alias}.data->'raw'->>'STO Number',
-  ${alias}.data->'shipment'->>'sto_no',
-  ${alias}.data->'contract'->>'sto_no'
-)), '')`;
-}
-
-function spdPoNumber(alias: string): string {
-  return `NULLIF(TRIM(COALESCE(
-  ${alias}.po_number::text,
-  ${alias}.data->'raw'->>'PO No.',
-  ${alias}.data->'raw'->>'PO Number',
-  ${alias}.data->'raw'->>'PO No',
-  ${alias}.data->'contract'->>'po_number',
-  ${alias}.data->>'PO No.'
-)), '')`;
-}
+import { sqlShipmentListOsBaseQtyExpr } from './shipmentListQtySql';
+import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
+import { LATEST_SPD_B2B_CTE, sqlB2bChildExcludeWhere } from './shippingPerformanceStoMetricsSql';
 
 /** PO number from SAP JSON (raw / contract) — default spd alias. */
-export const SPD_PO_NUMBER_SQL = spdPoNumber('spd');
+export const SPD_PO_NUMBER_SQL = sqlSpdPoNumberExpr('spd');
 
-const QTY_RECEIVE_NUM = `NULLIF(regexp_replace(COALESCE(
-  NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), ''),
-  ''
-), '[^0-9\\.-]', '', 'g'), '')::numeric`;
+/** Latest SAP Vessel OA Budget per contract (+ optional PO / STO scope). */
+function sqlVesselOaBudgetSapSubquery(
+  contractNumberExpr: string,
+  opts?: { poNumberExpr?: string; stoMatchExpr?: string },
+): string {
+  const poFilter = opts?.poNumberExpr
+    ? `AND (
+            ${opts.poNumberExpr} IS NULL
+            OR TRIM(COALESCE(${opts.poNumberExpr}, '')) = ''
+            OR ${sqlSpdPoNumberExpr('spd')} = ${opts.poNumberExpr}
+          )`
+    : '';
+  const stoFilter = opts?.stoMatchExpr ? `AND ${opts.stoMatchExpr}` : '';
+  return `(
+          SELECT CAST(REPLACE(REPLACE(TRIM(COALESCE(
+            spd.data->'raw'->>'Vessel OA Budget',
+            spd.data->'raw'->>'Vessell OA Budget',
+            spd.data->'raw'->>'vessel oa budget',
+            spd.data->'shipment'->>'vessel_oa_budget'
+          )), ',', ''), ' ', '') AS NUMERIC)
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = ${contractNumberExpr}
+            ${poFilter}
+            ${stoFilter}
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+        )`;
+}
 
 function stoScopedDeliveredKgSql(
   contractNumberExpr: string,
   contractQtyExpr: string,
-  stoMatch: (alias: string) => string,
-  poMatch: (alias: string) => string,
+  stoKeyExpr: string,
+  poNumberExpr: string,
+  incotermExpr?: string,
 ): string {
-  return `COALESCE((
-          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', contractQtyExpr)})
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = ${contractNumberExpr}
-            AND ${stoMatch('spd')}
-            AND ${poMatch('spd')}
-        ), 0)`;
+  return sqlStoScopedDeliveredKgSql({
+    contractNumberExpr,
+    contractQtyExpr,
+    stoKeyExpr,
+    poNumberExpr,
+    incotermExpr,
+  });
 }
 
 function stoScopedReceiveKgSql(
   contractNumberExpr: string,
   contractQtyExpr: string,
-  stoMatch: (alias: string) => string,
-  poMatch: (alias: string) => string,
+  stoKeyExpr: string,
+  poNumberExpr: string,
 ): string {
-  return `COALESCE((
-          SELECT SUM(${sqlNormalizeSapStoQtyToKgSql(QTY_RECEIVE_NUM, contractQtyExpr)})
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = ${contractNumberExpr}
-            AND ${stoMatch('spd')}
-            AND NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-            AND ${poMatch('spd')}
-        ), 0)`;
+  return sqlStoScopedReceiveKgSql({
+    contractNumberExpr,
+    contractQtyExpr,
+    stoKeyExpr,
+    poNumberExpr,
+  });
+}
+
+/**
+ * Distinct SAP STO count on this PO/contract — >1 means parallel multi-STO (OS base = STO Qty).
+ */
+function sqlPoSapStoCountExpr(contractNumberExpr: string, poNumberExpr: string): string {
+  const stoKey = sapStoNumberKeyExpr('spd_cnt');
+  return `(
+    SELECT COUNT(DISTINCT ${stoKey})
+    FROM sap_processed_data spd_cnt
+    WHERE TRIM(spd_cnt.contract_number) = TRIM(${contractNumberExpr})
+      AND (
+        NULLIF(TRIM(COALESCE(${poNumberExpr}::text, '')), '') IS NULL
+        OR TRIM(COALESCE(spd_cnt.po_number::text, '')) = TRIM(COALESCE(${poNumberExpr}::text, ''))
+      )
+      AND ${stoKey} IS NOT NULL
+  )`;
 }
 
 /**
  * STO-scoped OS actual — contract qty minus STO-scoped fulfilled (incoterm-aware).
- * Matches Shipping Performance / shipments list: sqlShipmentListOutstandingKgExpr.
+ * Parallel multi-STO POs use STO Qty as base (same as Shipments View Table).
  */
 function stoScopedOutstandingActualSql(opts: {
   contractQtyExpr: string;
   incotermExpr: string;
   contractNumberExpr: string;
-  stoMatch: (alias: string) => string;
-  poMatch: (alias: string) => string;
+  stoKeyExpr: string;
+  poNumberExpr: string;
+  stoQtyExpr: string;
 }): string {
+  const osBase = sqlShipmentListOsBaseQtyExpr({
+    poStoCountExpr: sqlPoSapStoCountExpr(opts.contractNumberExpr, opts.poNumberExpr),
+    stoQtyExpr: opts.stoQtyExpr,
+    contractQtyExpr: opts.contractQtyExpr,
+  });
   return shipmentOutstandingQtyExpr({
-    stoQtyExpr: `COALESCE(${opts.contractQtyExpr}, 0)`,
+    stoQtyExpr: `COALESCE((${osBase}), 0)`,
     receiveExpr: stoScopedReceiveKgSql(
       opts.contractNumberExpr,
       opts.contractQtyExpr,
-      opts.stoMatch,
-      opts.poMatch,
+      opts.stoKeyExpr,
+      opts.poNumberExpr,
     ),
     deliveryExpr: stoScopedDeliveredKgSql(
       opts.contractNumberExpr,
       opts.contractQtyExpr,
-      opts.stoMatch,
-      opts.poMatch,
+      opts.stoKeyExpr,
+      opts.poNumberExpr,
+      opts.incotermExpr,
     ),
     incotermExpr: opts.incotermExpr,
   });
 }
 
+/**
+ * Group membership for a sibling shipment `s` (joined to contracts `c`) under a STO /
+ * operation lookup key. Keep in sync with findSiblingShipmentIdForContract.
+ */
+export function sqlSiblingShipmentGroupMatchSql(opts: {
+  lookupKeySql: string;
+  contractNumberSql: string;
+  anchorShipmentIdSql?: string;
+}): string {
+  const lk = opts.lookupKeySql;
+  const cn = opts.contractNumberSql;
+  const parts: string[] = [
+    `TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${lk})`,
+    `TRIM(COALESCE(s.shipment_id::text, '')) = TRIM(${lk})`,
+    // Add-PO siblings often use "{STO}-{contract}" as shipment_id while lookup is STO only.
+    `TRIM(COALESCE(s.shipment_id::text, '')) LIKE TRIM(${lk}) || '-%'`,
+    `EXISTS (
+              SELECT 1
+              FROM contract_stos cs
+              WHERE cs.contract_id = c.id
+                AND TRIM(cs.sto_number::text) = TRIM(${lk})
+            )`,
+    // User Add-PO link under this lookup key + same vessel as another group member.
+    `(
+              EXISTS (
+                SELECT 1
+                FROM user_sto_contract_assignments usa
+                WHERE TRIM(usa.sto_number::text) = TRIM(${lk})
+                  AND TRIM(usa.contract_number) = TRIM(${cn})
+              )
+              AND (
+                TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${lk})
+                OR TRIM(COALESCE(s.shipment_id::text, '')) = TRIM(${lk})
+                OR TRIM(COALESCE(s.shipment_id::text, '')) LIKE TRIM(${lk}) || '-%'
+                OR EXISTS (
+                  SELECT 1
+                  FROM shipments s2
+                  WHERE COALESCE(s2.status, '') <> 'CANCELLED'
+                    AND LOWER(TRIM(COALESCE(s2.vessel_name, ''))) = LOWER(TRIM(COALESCE(s.vessel_name, '')))
+                    AND (
+                      TRIM(COALESCE(s2.operation_id::text, '')) = TRIM(${lk})
+                      OR TRIM(COALESCE(s2.shipment_id::text, '')) = TRIM(${lk})
+                    )
+                )
+              )
+            )`,
+  ];
+
+  if (opts.anchorShipmentIdSql) {
+    const anchor = opts.anchorShipmentIdSql;
+    parts.push(`s.id = ${anchor}`);
+    parts.push(`(
+              NULLIF(TRIM(COALESCE(s.operation_id::text, '')), '') IS NOT NULL
+              AND TRIM(s.operation_id::text) = (
+                SELECT NULLIF(TRIM(COALESCE(a.operation_id::text, '')), '')
+                FROM shipments a
+                WHERE a.id = ${anchor}
+              )
+            )`);
+    parts.push(`(
+              EXISTS (
+                SELECT 1
+                FROM user_sto_contract_assignments usa
+                WHERE TRIM(usa.sto_number::text) = TRIM(${lk})
+                  AND TRIM(usa.contract_number) = TRIM(${cn})
+              )
+              AND LOWER(TRIM(COALESCE(s.vessel_name, ''))) = (
+                SELECT LOWER(TRIM(COALESCE(a.vessel_name, '')))
+                FROM shipments a
+                WHERE a.id = ${anchor}
+              )
+            )`);
+  }
+
+  return parts.join('\n            OR ');
+}
+
+/**
+ * Sibling shipment under the same lookup key (operation_id / shipment_id / STO)
+ * for a contract_number — source of per-PO Delivered/Received Qty (KLIP).
+ */
+export function sqlSiblingShipmentKlipQtyExpr(
+  contractNumberExpr: string,
+  field: 'delivered' | 'receive',
+): string {
+  const valueExpr =
+    field === 'delivered'
+      ? `COALESCE(s.quantity_delivered_klip, s.quantity_delivered)`
+      : `s.actual_vessel_qty_receive`;
+  const matchSql = sqlSiblingShipmentGroupMatchSql({
+    lookupKeySql: '$1::text',
+    contractNumberSql: contractNumberExpr,
+  });
+  return `(
+          SELECT ${valueExpr}
+          FROM shipments s
+          INNER JOIN contracts c ON c.id = s.contract_id
+          WHERE COALESCE(s.status, '') <> 'CANCELLED'
+            AND TRIM(c.contract_id) = TRIM(${contractNumberExpr})
+            AND (
+              ${matchSql}
+            )
+          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+          LIMIT 1
+        )`;
+}
+
 /** SQL for GET /shipments/contracts/details — one row per PO line on the STO. */
 export function buildContractDetailsForStoSql(): string {
-  const stoMatch = (alias: string) => `(
-              TRIM(COALESCE(${alias}.sto_number::text, '')) = TRIM($1::text)
-              OR ${spdEffectiveSto(alias)} = TRIM($1::text)
-            )`;
-  const poMatch = (alias: string) => `(
-              pl.po_number IS NULL
-              OR ${spdPoNumber(alias)} = pl.po_number
-            )`;
+  /** Discovery only — never blank-STO fallback (would pull all empty-STO POs). */
+  const stoMatchDiscover = (alias: string) => sqlStoLookupKeyMatchExpr('$1::text', alias);
+  /** Qty / lock — blank STO allowed only for the row's contract. */
+  const stoMatchForContract = (alias: string, contractNumberExpr: string) =>
+    sqlStoLookupKeyMatchExpr('$1::text', alias, { contractNumberExpr });
+
+  const plStoMatch = (alias: string) => stoMatchForContract(alias, 'pl.contract_number');
 
   const plSapStoQty = sqlPoStoSapQtyKg({
     contractNumberExpr: 'pl.contract_number',
@@ -120,22 +254,24 @@ export function buildContractDetailsForStoSql(): string {
     contractQtyExpr: 'pl.contract_qty',
     incotermExpr: 'pl.incoterm',
     contractNumberExpr: 'pl.contract_number',
-    stoMatch,
-    poMatch,
+    stoKeyExpr: '$1::text',
+    poNumberExpr: 'pl.po_number',
+    stoQtyExpr: plSapStoQty,
   });
 
   const plDeliveredKg = stoScopedDeliveredKgSql(
     'pl.contract_number',
     'pl.contract_qty',
-    stoMatch,
-    poMatch,
+    '$1::text',
+    'pl.po_number',
+    'pl.incoterm',
   );
 
   const plReceiveKg = stoScopedReceiveKgSql(
     'pl.contract_number',
     'pl.contract_qty',
-    stoMatch,
-    poMatch,
+    '$1::text',
+    'pl.po_number',
   );
 
   const socContractQtyExpr = `COALESCE((
@@ -144,17 +280,12 @@ export function buildContractDetailsForStoSql(): string {
           WHERE spd.contract_number = soc.contract_number
         ), 0)`;
 
-  const socPoNumberExpr = `(SELECT ${spdPoNumber('spd')}
+  const socPoNumberExpr = `(SELECT ${sqlSpdPoNumberExpr('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${stoMatchForContract('spd', 'soc.contract_number')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1)`;
-
-  const sapOnlyPoMatch = (alias: string) => `(
-              ${socPoNumberExpr} IS NULL
-              OR ${spdPoNumber(alias)} = ${socPoNumberExpr}
-            )`;
 
   const socSapStoQty = sqlPoStoSapQtyKg({
     contractNumberExpr: 'soc.contract_number',
@@ -163,30 +294,86 @@ export function buildContractDetailsForStoSql(): string {
     stoKeyExpr: '$1::text',
   });
 
+  const socStoMatch = (alias: string) => stoMatchForContract(alias, 'soc.contract_number');
+
   const socOutstandingActual = stoScopedOutstandingActualSql({
     contractQtyExpr: socContractQtyExpr,
     incotermExpr: `(SELECT c.incoterm FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1)`,
     contractNumberExpr: 'soc.contract_number',
-    stoMatch,
-    poMatch: sapOnlyPoMatch,
+    stoKeyExpr: '$1::text',
+    poNumberExpr: socPoNumberExpr,
+    stoQtyExpr: socSapStoQty,
   });
 
   const socDeliveredKg = stoScopedDeliveredKgSql(
     'soc.contract_number',
     socContractQtyExpr,
-    stoMatch,
-    sapOnlyPoMatch,
+    '$1::text',
+    socPoNumberExpr,
   );
 
   const socReceiveKg = stoScopedReceiveKgSql(
     'soc.contract_number',
     socContractQtyExpr,
-    stoMatch,
-    sapOnlyPoMatch,
+    '$1::text',
+    socPoNumberExpr,
   );
 
   return `
-      WITH contract_candidates AS (
+      WITH ${LATEST_SPD_B2B_CTE.trim().replace(/^WITH\s+/i, '')},
+      /*
+       * One STO legitimately spans several POs, but only the ones SAP still reports for it.
+       *
+       * SAP files are uploaded out of order: a per-year slice ("EXPORT jan - dec 2025.XLSX",
+       * loaded 2026-09-03) can arrive AFTER the current export ("CPO 7 Sep 2026.XLSX",
+       * 2026-09-07 but carrying older row timestamps). Every KLIP-side link - contract_stos,
+       * contracts.sto_number, shipments - was populated from whichever file mentioned the pair,
+       * so an STO accumulated POs from retired slices and never dropped them. STO 1006017267
+       * listed 8 POs where operations expect 6.
+       *
+       * Ordering must use the IMPORT's created_at, not the row's: here the correct rows carry
+       * 2026-05-15 and the stale ones 2026-09-03, so row timestamps give exactly the wrong answer.
+       *
+       * A contract is dropped only when SAP knows this (contract, STO) pair AND none of those
+       * rows belong to the STO's newest import. KLIP-only links survive untouched, and a manual
+       * user_sto_contract_assignments entry always wins - a person said so on purpose.
+       *
+       * Deliberately NOT "absent from the latest file means cancelled" - that reading once
+       * withdrew 370 contracts wrongly (see README). This decides which POs a STO currently
+       * groups, and changes no contract's status.
+       *
+       * Measured on dev: of 10,172 STOs, 10,098 unchanged, 74 shrink, and none is left with no
+       * POs at all.
+       */
+      sto_latest_import AS (
+        SELECT spd.import_id
+        FROM sap_processed_data spd
+        INNER JOIN sap_data_imports i ON i.id = spd.import_id
+        WHERE ${stoMatchDiscover('spd')}
+        ORDER BY i.created_at DESC NULLS LAST
+        LIMIT 1
+      ),
+      stale_sto_contracts AS (
+        SELECT DISTINCT TRIM(spd.contract_number) AS contract_number
+        FROM sap_processed_data spd
+        WHERE spd.contract_number IS NOT NULL
+          AND TRIM(spd.contract_number) != ''
+          AND ${stoMatchDiscover('spd')}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sap_processed_data cur
+            INNER JOIN sto_latest_import li ON cur.import_id = li.import_id
+            WHERE TRIM(cur.contract_number) = TRIM(spd.contract_number)
+              AND ${stoMatchDiscover('cur')}
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM user_sto_contract_assignments u
+            WHERE TRIM(u.sto_number::text) = TRIM($1::text)
+              AND TRIM(u.contract_number) = TRIM(spd.contract_number)
+          )
+      ),
+      contract_candidates AS (
         SELECT DISTINCT contract_number
         FROM (
           SELECT unnest($2::text[]) AS contract_number
@@ -218,13 +405,20 @@ export function buildContractDetailsForStoSql(): string {
             AND c.contract_id IS NOT NULL
             AND TRIM(c.contract_id) != ''
           UNION
+          SELECT DISTINCT u.contract_number
+          FROM user_sto_contract_assignments u
+          WHERE TRIM(u.sto_number::text) = TRIM($1::text)
+            AND u.contract_number IS NOT NULL
+            AND TRIM(u.contract_number) != ''
+          UNION
           SELECT DISTINCT spd.contract_number
           FROM sap_processed_data spd
           WHERE spd.contract_number IS NOT NULL
             AND TRIM(spd.contract_number) != ''
-            AND ${stoMatch('spd')}
+            AND ${stoMatchDiscover('spd')}
         ) u
         WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+          AND TRIM(contract_number) NOT IN (SELECT contract_number FROM stale_sto_contracts)
       ),
       po_lines AS (
         SELECT
@@ -234,6 +428,7 @@ export function buildContractDetailsForStoSql(): string {
           c.incoterm,
           c.supplier,
           c.product,
+          c.transport_mode,
           c.delivery_start_date,
           c.delivery_end_date
         FROM contracts c
@@ -257,60 +452,42 @@ export function buildContractDetailsForStoSql(): string {
         COALESCE(pl.contract_qty, 0) AS contract_qty,
         ${plOutstandingActual} AS outstanding_qty_actual,
         ${plOutstandingActual} AS outstanding_qty,
-        ${sqlPoGlobalOutstandingPlanningKg({
-          contractQtyExpr: 'pl.contract_qty',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-        })} AS outstanding_qty_planning,
-        ${sqlPoOutstandingPlanningRowBudgetKgExpr({
-          contractQtyExpr: 'pl.contract_qty',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-          stoKeyExpr: '$1::text',
-        })} AS outstanding_qty_planning_budget,
-        ${plSapStoQty} AS sap_sto_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-          contractQtyExpr: 'pl.contract_qty',
-        })} AS shipment_plan_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'pl.contract_number',
-          poNumberExpr: `COALESCE(pl.po_number, '')`,
-          contractQtyExpr: 'pl.contract_qty',
-        })} AS sto_qty_assigned,
         ${plDeliveredKg} AS quantity_delivered,
         ${plReceiveKg} AS quantity_receive,
+        ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'delivered')} AS quantity_delivered_klip,
+        ${sqlSiblingShipmentKlipQtyExpr('pl.contract_number', 'receive')} AS quantity_receive_klip,
         (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
          FROM sap_processed_data spd
          WHERE spd.contract_number = pl.contract_number
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1) AS contract_ext_no,
+        ${sqlVesselOaBudgetSapSubquery('pl.contract_number', { poNumberExpr: 'pl.po_number' })} AS vessel_oa_budget_sap,
         EXISTS (
           SELECT 1
           FROM sap_processed_data spd_lock
           WHERE spd_lock.contract_number = pl.contract_number
-            AND ${stoMatch('spd_lock')}
+            AND ${plStoMatch('spd_lock')}
             AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
             AND (
               pl.po_number IS NULL
-              OR ${spdPoNumber('spd_lock')} = pl.po_number
+              OR ${sqlSpdPoNumberExpr('spd_lock')} = pl.po_number
             )
         ) AS locked_from_sap,
         pl.delivery_start_date,
-        pl.delivery_end_date
+        pl.delivery_end_date,
+        pl.transport_mode
       FROM po_lines pl
+      LEFT JOIN latest_spd_b2b b2b ON b2b.contract_number = pl.contract_number
+      WHERE ${sqlB2bChildExcludeWhere('b2b')}
 
       UNION ALL
 
       SELECT
         soc.contract_number,
-        (SELECT ${spdPoNumber('spd')}
+        (SELECT ${sqlSpdPoNumberExpr('spd')}
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
+           AND ${socStoMatch('spd')}
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1) AS po_number,
         (SELECT c.supplier FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1) AS supplier,
@@ -318,81 +495,32 @@ export function buildContractDetailsForStoSql(): string {
         ${socContractQtyExpr} AS contract_qty,
         ${socOutstandingActual} AS outstanding_qty_actual,
         ${socOutstandingActual} AS outstanding_qty,
-        ${sqlPoGlobalOutstandingPlanningKg({
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${spdPoNumber('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-        })} AS outstanding_qty_planning,
-        ${sqlPoOutstandingPlanningRowBudgetKgExpr({
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${spdPoNumber('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-          stoKeyExpr: '$1::text',
-        })} AS outstanding_qty_planning_budget,
-        ${socSapStoQty} AS sap_sto_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${spdPoNumber('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-        })} AS shipment_plan_qty,
-        ${sqlPoStoAssignedKg({
-          stoKeyExpr: '$1::text',
-          contractNumberExpr: 'soc.contract_number',
-          poNumberExpr: `(SELECT ${spdPoNumber('spd')}
-         FROM sap_processed_data spd
-         WHERE spd.contract_number = soc.contract_number
-           AND ${stoMatch('spd')}
-         ORDER BY spd.created_at DESC NULLS LAST
-         LIMIT 1)`,
-          contractQtyExpr: `COALESCE((
-          SELECT MAX(CAST(REPLACE(REPLACE(spd.data->'contract'->>'contract_quantity', ',', ''), ' ', '') AS NUMERIC))
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = soc.contract_number
-        ), 0)`,
-        })} AS sto_qty_assigned,
         ${socDeliveredKg} AS quantity_delivered,
         ${socReceiveKg} AS quantity_receive,
+        ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'delivered')} AS quantity_delivered_klip,
+        ${sqlSiblingShipmentKlipQtyExpr('soc.contract_number', 'receive')} AS quantity_receive_klip,
         (SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No')
          FROM sap_processed_data spd
          WHERE spd.contract_number = soc.contract_number
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1) AS contract_ext_no,
+        ${sqlVesselOaBudgetSapSubquery('soc.contract_number', {
+          poNumberExpr: socPoNumberExpr,
+          stoMatchExpr: socStoMatch('spd'),
+        })} AS vessel_oa_budget_sap,
         EXISTS (
           SELECT 1 FROM sap_processed_data spd_lock
           WHERE spd_lock.contract_number = soc.contract_number
-            AND ${stoMatch('spd_lock')}
+            AND ${socStoMatch('spd_lock')}
             AND spd_lock.data->'contract'->>'sto_quantity' IS NOT NULL
         ) AS locked_from_sap,
         NULL::date AS delivery_start_date,
-        NULL::date AS delivery_end_date
+        NULL::date AS delivery_end_date,
+        (
+          SELECT c.transport_mode FROM contracts c WHERE c.contract_id = soc.contract_number LIMIT 1
+        ) AS transport_mode
       FROM sap_only_contracts soc
+      LEFT JOIN latest_spd_b2b b2b ON b2b.contract_number = soc.contract_number
+      WHERE ${sqlB2bChildExcludeWhere('b2b')}
       ORDER BY contract_number, po_number NULLS LAST`;
 }

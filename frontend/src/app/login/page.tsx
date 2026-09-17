@@ -8,50 +8,50 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import ChangePasswordModal from '@/components/ChangePasswordModal'
 import api from '@/lib/api'
-import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
-
-type StoredAuthUser = {
-  id?: string
-  role?: string
-  is_first_login?: boolean
-}
-
-async function redirectAfterAuth(
-  user: StoredAuthUser,
-  router: ReturnType<typeof useRouter>,
-  setError: (msg: string) => void,
-) {
-  try {
-    const route = await resolvePostAuthRedirect(user.role, user.id)
-    if (!route) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      setError('Your account has no accessible pages. Contact your administrator.')
-      return
-    }
-    router.push(route)
-  } catch {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    setError('Failed to load your permissions. Please try again.')
-  }
-}
+import {
+  fetchCurrentUser,
+  storeUserLocally,
+} from '@/lib/authSession'
+import { redirectAfterAuth, resolvePostAuthRedirect, type StoredAuthUser } from '@/lib/navigationAccess'
 
 function LoginPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [checkingSession, setCheckingSession] = useState(true)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [isFirstLogin, setIsFirstLogin] = useState(false)
 
   useEffect(() => {
-    if (searchParams.get('error') === 'no_access') {
+    const errorCode = searchParams.get('error')
+    if (errorCode === 'no_access') {
       setError('Your account has no accessible pages. Contact your administrator.')
+    } else if (errorCode === 'sso_no_access') {
+      setError('Your account is not registered for SSO access. Contact your administrator.')
+    } else if (errorCode === 'sso_failed' || errorCode === 'sso_not_configured') {
+      setError('SSO login failed. Please try again or use your KLIP email/password.')
     }
   }, [searchParams])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const user = await fetchCurrentUser()
+        if (user?.id) {
+          const route = await resolvePostAuthRedirect(user.role, user.id)
+          router.replace(route || '/')
+          return
+        }
+      } catch {
+        /* not logged in */
+      } finally {
+        setCheckingSession(false)
+      }
+    })()
+  }, [router])
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -59,16 +59,21 @@ function LoginPageContent() {
     setLoading(true)
 
     try {
-      const response = await api.post('/auth/login', { username, password })
+      const response = await api.post('/auth/login', { email, password })
       const payload = response.data?.data
-      if (!payload?.token || !payload?.user) {
+      if (!payload?.user) {
         setError('Unexpected server response. Please contact support.')
         return
       }
       const { user, token, requirePasswordChange } = payload
 
+      if (!token) {
+        setError('Login succeeded but no auth token was returned. Contact support.')
+        return
+      }
+
+      storeUserLocally(user)
       localStorage.setItem('token', token)
-      localStorage.setItem('user', JSON.stringify(user))
 
       if (requirePasswordChange) {
         setIsFirstLogin(true)
@@ -94,12 +99,20 @@ function LoginPageContent() {
     if (userStr) {
       user = JSON.parse(userStr) as StoredAuthUser
       user.is_first_login = false
-      localStorage.setItem('user', JSON.stringify(user))
+      storeUserLocally(user)
     }
 
     setLoading(true)
     await redirectAfterAuth(user, router, setError)
     setLoading(false)
+  }
+
+  if (checkingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    )
   }
 
   return (
@@ -123,13 +136,13 @@ function LoginPageContent() {
         <CardContent>
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
-                id="username"
-                type="text"
-                placeholder="Enter your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="email"
+                type="email"
+                placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
               />
             </div>
@@ -171,4 +184,3 @@ export default function LoginPage() {
     </Suspense>
   )
 }
-

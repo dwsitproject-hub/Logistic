@@ -14,6 +14,10 @@ describe('shipmentsPageFilterState', () => {
     selectedProducts: ['PALM'],
     selectedGroupPlants: ['TP'],
     lateIndicatorFilter: 'ALL',
+    charterTypeFilter: 'ALL',
+    // Required on ShipmentsGlobalFilterScope; the fixture predated it, so every key this test
+    // built carried `undefined` for it and the assertions never noticed.
+    sourceTypeFilter: 'ALL',
     viewOption: 'all',
     viewFilterValue: '',
     columnFiltersJson: '{}',
@@ -41,6 +45,8 @@ describe('shipmentsPageFilterState', () => {
     expect(listKey.startsWith(globalKey)).toBe(true)
     expect(listKey).toContain('st:PLANNED')
     expect(listKey).toContain('p:2')
+    expect(listKey).toContain('sk:created_at')
+    expect(listKey).toContain('sd:desc')
   })
 
   it('togglePipelineStageFilter toggles active card modifier', () => {

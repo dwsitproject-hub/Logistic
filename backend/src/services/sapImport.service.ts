@@ -168,6 +168,12 @@ export class SapImportService {
         import('./contractLatestSpdSnapshot.service')
           .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
           .catch(() => {});
+        import('./b2bEndingChildSnapshot.service')
+          .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./oilLoss.service')
+          .then(({ invalidateOilLossCache }) => invalidateOilLossCache())
+          .catch(() => {});
       });
       
       logger.info(`SAP import completed: ${importId}`, {

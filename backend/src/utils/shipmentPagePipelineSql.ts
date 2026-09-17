@@ -3,18 +3,19 @@
  * Does NOT write to shipments.status; separate from Shipping Performance status logic.
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
-import { shipmentEffectiveStatusExpr, shipmentHasAnyEtaExpr } from './shipmentListFilters';
+import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
+import { shipmentEffectiveStatusExpr, shipmentHasAnyEtaExpr, shipmentHasDeliveryQtyExpr } from './shipmentListFilters';
 import {
   SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
   SHIPMENT_AT_LOADING_PORT_STATUSES,
   SHIPMENT_SAILED_STATUSES,
 } from './shipmentStatus';
-import { buildShipmentSeaMixTransportSql } from './shipmentStoTypeSql';
+import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 
 /** Pipeline stage keys used by GET /shipments?status=… (Shipments page only). */
 export const SHIPMENT_PAGE_PIPELINE_STAGES = [
   'UNPLANNED',
+  'PREPLANNED',
   'PLANNED',
   'AT_LOADING_PORT',
   'SAILED',
@@ -48,11 +49,50 @@ export function normalizeShipmentPagePipelineStageParam(
   const normalized = String(raw ?? '')
     .trim()
     .toUpperCase();
-  if (!normalized || normalized === 'ALL') return null;
+  if (!normalized || normalized === 'ALL' || normalized === 'OPEN' || normalized === 'CLOSE') {
+    return null;
+  }
   if (PIPELINE_STAGE_SET.has(normalized)) {
     return normalized as ShipmentPagePipelineStage;
   }
   return LEGACY_STATUS_TO_PIPELINE[normalized] ?? null;
+}
+
+/** Global Filters Open/Close buckets (Shipments page). */
+export const SHIPMENT_PAGE_OPEN_PIPELINE_STAGES: readonly ShipmentPagePipelineStage[] = [
+  'UNPLANNED',
+  'PREPLANNED',
+  'PLANNED',
+  'AT_LOADING_PORT',
+  'SAILED',
+  'AT_DISCHARGE_PORT',
+] as const;
+
+export const SHIPMENT_PAGE_CLOSE_PIPELINE_STAGES: readonly ShipmentPagePipelineStage[] = [
+  'COMPLETED',
+  'CANCELLED',
+] as const;
+
+/** Effective-status values included when Global Filters status = OPEN (shipment rows only). */
+export function shipmentPageOpenEffectiveStatuses(): string[] {
+  return [
+    'PLANNED',
+    ...SHIPMENT_AT_LOADING_PORT_STATUSES,
+    ...SHIPMENT_SAILED_STATUSES,
+    ...SHIPMENT_AT_DISCHARGE_PORT_STATUSES,
+  ];
+}
+
+export function shipmentPageCloseEffectiveStatuses(): string[] {
+  return ['COMPLETED', 'CANCELLED'];
+}
+
+export function isShipmentPageOpenCloseStatusParam(raw: string | undefined): 'OPEN' | 'CLOSE' | null {
+  const normalized = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (normalized === 'OPEN' || normalized === 'CLOSE') return normalized;
+  return null;
 }
 
 /** Summary-only pipeline cards → view-table detail statuses (last ATA / effective status). */
@@ -110,6 +150,7 @@ export function shipmentHasAnyDischargePortAtaExpr(alias: string): string {
     ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL
     OR ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL
     OR ${f}.ata_vessel_start_discharging IS NOT NULL
+    OR ${f}.ata_vessel_complete_discharge IS NOT NULL
   )`;
 }
 
@@ -123,22 +164,26 @@ export function shipmentPagePipelineStageExpr(alias: string): string {
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
       WHEN ${shipmentHasAnyDischargePortAtaExpr(f)} THEN 'AT_DISCHARGE_PORT'
       WHEN ${f}.ata_vessel_sailed_from_loading_port IS NOT NULL THEN 'SAILED'
       WHEN ${shipmentHasAnyLoadingPortAtaExpr(f)} THEN 'AT_LOADING_PORT'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
+      WHEN ${shipmentHasDeliveryQtyExpr(f)} THEN 'PLANNED'
       ELSE NULL
     END
   )`;
 }
 
-/** Table filter for Unplanned card — open contract STO/operation row without ETA or ATA milestones. */
+/**
+ * @deprecated Unplanned card is PO backlog only; STO open rows resolve to PLANNED.
+ * Kept for legacy attention SQL / tests that still reference the old execution slice.
+ */
 export function shipmentPagePipelineUnplannedRowPredicate(alias: string): string {
   const f = alias;
   return `(
     NOT COALESCE(${f}.is_contract_sap_closed, FALSE)
     AND NOT ${shipmentHasAnyEtaExpr(f)}
+    AND NOT ${shipmentHasDeliveryQtyExpr(f)}
     AND NOT ${shipmentHasAnyLoadingPortAtaExpr(f)}
     AND NOT ${shipmentHasAnyDischargePortAtaExpr(f)}
     AND ${f}.ata_vessel_sailed_from_loading_port IS NULL
@@ -154,6 +199,20 @@ export function sqlContractHasNoRegisteredEtaExpr(contractAlias = 'c'): string {
     FROM shipments s_eta
     LEFT JOIN vessel_loading_ports vlp_eta ON vlp_eta.shipment_id = s_eta.id
     WHERE s_eta.contract_id = ${contractAlias}.id
+      /*
+       * A cancelled shipment's ETA is not a registered plan.
+       *
+       * Without this, a contract whose shipments were all cancelled counts as "already planned"
+       * and drops out of the Unplanned backlog - while having no live shipment keeps it out of
+       * the execution arm too. It then sits in neither, exactly like the cancelled-shipment gap
+       * closed in contractBacklogCoreWhereSql, and its outstanding quantity disappears from the
+       * Shipments OS while Contract Performance still counts it.
+       *
+       * Found by diffing the two pages contract by contract: 1004030361 (CIF, 508 MT) was the
+       * single contract left in neither arm, and 508 MT was exactly the CIF discrepancy.
+       * Across the database this moves 9 contracts - 7 FOB, 2 CIF.
+       */
+      AND UPPER(TRIM(COALESCE(s_eta.status, ''))) <> 'CANCELLED'
       AND (
         s_eta.eta_arrival IS NOT NULL
         OR s_eta.eta_berthed IS NOT NULL
@@ -184,7 +243,9 @@ export function shipmentPageExcludeB2bChildCond(lAlias = 'l'): string {
 }
 
 /**
- * CTE: count distinct open SEA/MIX contracts with no registered ETA (Unplanned card).
+ * CTE: count distinct open CIF/FOB/CFR contracts with no registered ETA (Unplanned card).
+ * Contract-level scope (incoterm only) — STO Type T exclusion applies to execution rows
+ * via shipmentPipelineDailySummarySql / buildShipmentPageSeaRowScopeSql.
  * `contractScopeSql` — additional AND clauses on `c` (date/plant/contract toolbar scope).
  */
 export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''): string {
@@ -193,8 +254,8 @@ export function buildShipmentPageUnplannedOpenContractsCte(contractScopeSql = ''
         SELECT COUNT(DISTINCT c.contract_id)::bigint AS unplanned_contract_count
         FROM contracts c
         LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        WHERE ${buildShipmentSeaMixTransportSql('c')}
-          AND NOT (${sqlIsContractSapClosedExpr('c')})
+        WHERE ${buildShipmentPageSeaIncotermScopeSql('c')}
+          AND NOT (${sqlIsContractSapInactiveForOsExpr('c')})
           AND ${shipmentPageExcludeB2bChildCond('l')}
           AND ${sqlContractHasNoRegisteredEtaExpr('c')}
           ${contractScopeSql}
@@ -222,19 +283,84 @@ export function shipmentPagePipelineSummarySelectSql(): string {
         COUNT(*) FILTER (WHERE ${eff} = 'UNLOADING')::bigint AS discharge_port_unloading_count`;
 }
 
+import { sqlShipmentDisplayVesselName, sqlShipmentListDisplayVesselName } from './sapVesselFields';
+
+/** Normalized non-blank vessel identity used for distinct-vessel counts. */
+export function shipmentPipelineVesselKeyExpr(vesselNameExpr = 'vessel_name'): string {
+  return `NULLIF(UPPER(TRIM(COALESCE(${vesselNameExpr}, ''))), '')`;
+}
+
+/** Master → SAP → KLIP display name key (legacy / shipping-perf Master-first). */
+export function shipmentPipelineDisplayVesselKeyExpr(
+  masterExpr: string,
+  sapExpr: string,
+  klipExpr: string,
+): string {
+  return `NULLIF(UPPER(TRIM(${sqlShipmentDisplayVesselName(masterExpr, sapExpr, klipExpr)})), '')`;
+}
+
+/**
+ * List / card vessel key — Open+KLIP → KLIP; Open empty → SAP then Master; Close → Master then SAP.
+ */
+export function shipmentPipelineListDisplayVesselKeyExpr(
+  masterExpr: string,
+  sapExpr: string,
+  klipExpr: string,
+  closedExpr: string,
+): string {
+  return `NULLIF(UPPER(TRIM(${sqlShipmentListDisplayVesselName(masterExpr, sapExpr, klipExpr, closedExpr)})), '')`;
+}
+
+/** Display vessel key on enriched summary rows (master lateral + sap_latest). */
+export function shipmentPipelineEnrichedDisplayVesselKeyExpr(alias = 'e'): string {
+  return shipmentPipelineListDisplayVesselKeyExpr(
+    `${alias}.vessel_name_master`,
+    `${alias}.vessel_name_sap`,
+    `${alias}.vessel_name`,
+    `${alias}.is_contract_sap_closed`,
+  );
+}
+
+/**
+ * Summary SELECT — sorted distinct vessel names per pipeline card (blank names excluded).
+ * Unplanned is added separately by callers because its predicate needs a row alias.
+ */
+export function shipmentPagePipelineVesselNamesSelectSql(vesselKeyExpr: string): string {
+  const eff = 'effective_status';
+  const vessel = vesselKeyExpr;
+  const loadingGroup = `${eff} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING')`;
+  const dischargeGroup = `${eff} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING')`;
+  return `
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'PLANNED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS planned_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${loadingGroup} AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS at_loading_port_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'SAILED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS sailed_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${dischargeGroup} AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS at_discharge_port_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'COMPLETED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS completed_vessel_names,
+        COALESCE(ARRAY_AGG(DISTINCT ${vessel}) FILTER (WHERE ${eff} = 'CANCELLED' AND ${vessel} IS NOT NULL), ARRAY[]::text[]) AS cancelled_vessel_names`;
+}
+
 /** Filter list rows by pipeline card — maps grouped cards to detail effective statuses. */
 export function appendShipmentPipelineStageFilter(
   statusParam: string | undefined,
   startIndex: number,
 ): { sql: string; params: unknown[]; nextIndex: number } {
+  const openClose = isShipmentPageOpenCloseStatusParam(statusParam);
+  if (openClose === 'OPEN') {
+    return shipmentEffectiveStatusInListSql('sb', shipmentPageOpenEffectiveStatuses(), startIndex);
+  }
+  if (openClose === 'CLOSE') {
+    return shipmentEffectiveStatusInListSql('sb', shipmentPageCloseEffectiveStatuses(), startIndex);
+  }
+
   const stage = normalizeShipmentPagePipelineStageParam(statusParam);
   if (!stage) {
     return { sql: '', params: [], nextIndex: startIndex };
   }
 
-  if (stage === 'UNPLANNED') {
+  // Unplanned / Preplanned have no shipment rows; dedicated list resolvers handle them.
+  if (stage === 'UNPLANNED' || stage === 'PREPLANNED') {
     return {
-      sql: ` AND ${shipmentPagePipelineUnplannedRowPredicate('sb')}`,
+      sql: ' AND FALSE',
       params: [],
       nextIndex: startIndex,
     };

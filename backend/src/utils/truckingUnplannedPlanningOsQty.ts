@@ -1,8 +1,6 @@
 import { query } from '../database/connection';
-import {
-  buildQtyMoveCte,
-  sqlContractGlobalOutstandingExpr,
-} from './contractGlobalOutstandingSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import {
   sqlTruckingOutstandingQtyByIncoterm,
   sqlTruckingQuantityDeliveredCoalesce,
@@ -19,7 +17,8 @@ export type UnplannedPlanningOsQtyValidation =
       outstandingKg: number;
     };
 
-const KG_TOLERANCE = 0.01;
+/** ±1 MT — daily planning templates use whole MT; OS Qty in DB may have sub-MT precision. */
+const KG_TOLERANCE = 1000;
 
 export function formatPlanningQtyKgLabel(kg: number): string {
   if (!Number.isFinite(kg)) return '0';
@@ -33,9 +32,10 @@ export function formatPlanningQtyMtLabel(kg: number): string {
   return mt.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: false });
 }
 
-export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number }>): number {
+export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number | null | undefined }>): number {
   let sum = 0;
   for (const entry of entries) {
+    if (entry.qtyMt == null || !Number.isFinite(entry.qtyMt)) continue;
     sum += Math.round(entry.qtyMt * 100) / 100;
   }
   return sum;
@@ -44,6 +44,7 @@ export function sumPlanningEntriesKg(entries: Array<{ qtyMt: number }>): number 
 export function validatePlanningTotalAgainstOutstandingKg(
   totalPlanningKg: number,
   outstandingKg: number | null | undefined,
+  options?: { allowLess?: boolean },
 ): UnplannedPlanningOsQtyValidation {
   if (outstandingKg === null || outstandingKg === undefined || !Number.isFinite(outstandingKg)) {
     return {
@@ -61,6 +62,9 @@ export function validatePlanningTotalAgainstOutstandingKg(
   }
 
   if (diff < 0) {
+    if (options?.allowLess) {
+      return { ok: true };
+    }
     return {
       ok: false,
       reason: `Total daily planning qty (${formatPlanningQtyMtLabel(totalPlanningKg)} MT) is less than Outstanding Qty (${formatPlanningQtyMtLabel(outstandingKg)} MT)`,
@@ -82,7 +86,7 @@ export function validatePlanningTotalAgainstOutstandingKg(
 /** KLIP OS Qty actual (kg) for open contract backlog / unplanned rows. */
 export async function fetchContractOutstandingQtyKg(contractUuid: string): Promise<number | null> {
   const subquery = `SELECT c.contract_id FROM contracts c WHERE c.id = $1::uuid`;
-  const qtyMoveCte = buildQtyMoveCte({ kind: 'in_subquery', subquery });
+  const qtyMoveCte = await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery });
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',

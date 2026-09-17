@@ -76,14 +76,14 @@ const CONTRACT_COLUMNS: Array<{
   { key: 'sto_number', label: 'STO' },
   { key: 'quantity_delivery', label: 'Qty Delivery', align: 'right' },
   { key: 'quantity_received', label: 'Qty Received', align: 'right' },
-  { key: 'gain_loss_amount', label: 'Oil Loss (MT)', align: 'right' },
+  { key: 'gain_loss_amount', label: 'Oil Loss', align: 'right' },
   { key: 'gain_loss_percentage', label: 'Oil Loss %', align: 'right' },
   { key: 'status', label: 'Status' },
 ]
 
 function formatQtyMtFromKg(kg: number | null | undefined): string {
-  if (kg === null || kg === undefined || !Number.isFinite(Number(kg))) return '—'
-  const mt = Number(kg) / 1000
+  const n = kg === null || kg === undefined ? 0 : Number(kg)
+  const mt = Number.isFinite(n) ? n / 1000 : 0
   return mt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 })
 }
 
@@ -374,7 +374,7 @@ export default function TransporterHistoryModal({
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <div className="text-xs font-medium text-gray-500">Oil Loss (MT)</div>
+                    <div className="text-xs font-medium text-gray-500">Oil Loss</div>
                     <div className={cn('mt-0.5 text-sm font-bold tabular-nums', lossTone)}>
                       {formatOilLossMtFromKg(displayMtKg)}
                     </div>

@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
 
 export type ActiveTruckingOpRow = {
   id: string;
@@ -26,6 +27,39 @@ export function isActiveTruckingStatus(status: unknown): boolean {
   return String(status ?? '').toUpperCase() !== 'CANCELLED';
 }
 
+/** KLIP soft-dedupe losers are hidden from list and matching (not the Cancelled card). */
+export function sqlTruckingOpExcludeDedupedSql(truckingAlias = 't'): string {
+  return `${truckingAlias}.deduped_at IS NULL`;
+}
+
+/** Operational rows eligible for WB / planning / duplicate guards. */
+export function sqlTruckingOpIsActiveForMatchingSql(truckingAlias = 't'): string {
+  return `(
+    COALESCE(${truckingAlias}.status, '') <> 'CANCELLED'
+    AND ${sqlTruckingOpExcludeDedupedSql(truckingAlias)}
+  )`;
+}
+
+/** Visible in trucking list and pipeline summaries (excludes soft-deduped; Cancelled shown only on card filter). */
+export function sqlTruckingOpIsListVisibleSql(truckingAlias = 't'): string {
+  return sqlTruckingOpExcludeDedupedSql(truckingAlias);
+}
+
+/** Append to trucking list / pipeline base WHERE (alias `t`). */
+export const truckingListExcludeDedupedWhereSql = `AND ${sqlTruckingOpIsListVisibleSql('t')}`;
+
+/**
+ * Contract Details STO list/detail — same visibility as GET /trucking/:id.
+ * Hides soft-dedupe losers and leftover ops on non-FRC/LCO contracts.
+ */
+export function sqlContractDetailsTruckingOpVisible(
+  truckingAlias = 't',
+  contractAlias = 'c',
+): string {
+  return `${sqlTruckingOpExcludeDedupedSql(truckingAlias)}
+    AND ${buildTruckingPageIncotermScopeSql(contractAlias)}`;
+}
+
 export function formatDuplicateTruckingMessage(ops: Pick<ActiveTruckingOpRow, 'operation_id' | 'id'>[]): string {
   const labels = ops.map((o) => (o.operation_id && String(o.operation_id).trim()) || o.id);
   return `Contract already has trucking operation(s): ${labels.join(', ')}. Edit the existing operation or cancel it before creating a new one.`;
@@ -49,7 +83,7 @@ export async function findActiveTruckingOpsByContractId(contractUuid: string): P
      FROM trucking_operations t
      LEFT JOIN contracts c ON c.id = t.contract_id
      WHERE t.contract_id = $1::uuid
-       AND COALESCE(t.status, '') <> 'CANCELLED'
+       AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
      ORDER BY t.created_at ASC, t.id ASC`,
     [contractUuid],
   );
@@ -129,8 +163,8 @@ export type UnplannedPlanningTruckingOpRow = ActiveTruckingOpRow & {
 };
 
 /**
- * Resolve a single trucking operation for Unplanned planning upload (match PO / Contract Ext No).
- * Prefers rows that already have an Operation ID assigned.
+ * Resolve a single trucking operation for Unplanned planning upload.
+ * When PO is present, match by PO only (Contract Ext No is informational — ext mismatch must not block lookup).
  */
 export async function findTruckingOpForUnplannedPlanningUpload(args: {
   poNumber?: string;
@@ -141,20 +175,18 @@ export async function findTruckingOpForUnplannedPlanningUpload(args: {
   if (!po && !ext) return null;
 
   const params: string[] = [];
-  const matchParts: string[] = [];
+  let matchSql: string;
   if (po) {
     params.push(po);
-    matchParts.push(`TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`);
-  }
-  if (ext) {
+    matchSql = `TRIM(COALESCE(c.po_number::text, '')) = TRIM($${params.length}::text)`;
+  } else {
     params.push(ext);
     const p = `$${params.length}::text`;
-    matchParts.push(`(
+    matchSql = `(
       TRIM(UPPER(COALESCE(ext.ext_no, ''))) = TRIM(UPPER(${p}))
       OR TRIM(c.contract_id::text) = TRIM(${p})
-    )`);
+    )`;
   }
-  const matchSql = matchParts.length === 1 ? matchParts[0] : matchParts.join(' AND ');
 
   const result = await query(
     `WITH candidates AS (
@@ -211,7 +243,7 @@ export async function findTruckingOpForUnplannedPlanningUpload(args: {
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1
        ) ext ON true
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND (${matchSql})
      )
      SELECT *
@@ -305,7 +337,7 @@ export async function findTruckingOpForPlannedPlanningUpload(args: {
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1
        ) ext ON true
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND UPPER(COALESCE(t.status, '')) IN ('PLANNED', 'IN_PROGRESS')
          AND (${matchSql})
      )
@@ -354,8 +386,76 @@ export const SQL_TRUCKING_KEEPER_PRIORITY_ORDER = `
     WHEN 'PLANNED' THEN 6
     ELSE 7
   END ASC,
+  CASE
+    WHEN NULLIF(TRIM(t.loading_location), '') IS NOT NULL
+      OR NULLIF(TRIM(t.unloading_location), '') IS NOT NULL
+    THEN 0 ELSE 1
+  END ASC,
   COALESCE(jsonb_array_length(t.daily_deliverables), 0) DESC,
   t.updated_at DESC NULLS LAST,
   t.created_at DESC,
   t.id DESC
 `.trim();
+
+/**
+ * Prefer the op with more complete WB daily actuals, then fall back to status/planning priority.
+ * Alias `t` must be trucking_operations.
+ */
+export const SQL_TRUCKING_KEEPER_ORDER_BY_WB_COMPLETE = `
+  (
+    SELECT COUNT(DISTINCT da.progress_date)
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = t.id
+  ) DESC,
+  (
+    SELECT COALESCE(SUM(
+      COALESCE(da.quantity_delivery_kg, da.quantity_kg, 0)
+      + COALESCE(da.quantity_receive_kg, 0)
+    ), 0)
+    FROM trucking_daily_actuals da
+    WHERE da.trucking_operation_id = t.id
+  ) DESC,
+  ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}
+`.trim();
+
+export interface TruckingWbKeeperScore {
+  wbDistinctDates: number;
+  wbQtySumKg: number;
+  statusRank: number;
+  dailyDeliverablesLen: number;
+  updatedAtMs: number;
+  id: string;
+}
+
+const STATUS_RANK: Record<string, number> = {
+  COMPLETED: 1,
+  IN_PROGRESS: 2,
+  IN_TRANSIT: 3,
+  LOADING: 4,
+  UNLOADING: 5,
+  PLANNED: 6,
+};
+
+export function truckingStatusKeeperRank(status: unknown): number {
+  const key = String(status ?? '').trim().toUpperCase();
+  return STATUS_RANK[key] ?? 7;
+}
+
+/** Pure comparator: return <0 if a should rank before b (a is better keeper). */
+export function compareTruckingWbCompleteKeepers(
+  a: TruckingWbKeeperScore,
+  b: TruckingWbKeeperScore,
+): number {
+  if (b.wbDistinctDates !== a.wbDistinctDates) return b.wbDistinctDates - a.wbDistinctDates;
+  if (b.wbQtySumKg !== a.wbQtySumKg) return b.wbQtySumKg - a.wbQtySumKg;
+  if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+  if (b.dailyDeliverablesLen !== a.dailyDeliverablesLen) {
+    return b.dailyDeliverablesLen - a.dailyDeliverablesLen;
+  }
+  if (b.updatedAtMs !== a.updatedAtMs) return b.updatedAtMs - a.updatedAtMs;
+  return b.id.localeCompare(a.id);
+}
+
+export function pickTruckingWbCompleteKeeper<T extends TruckingWbKeeperScore>(rows: T[]): T {
+  return [...rows].sort(compareTruckingWbCompleteKeepers)[0];
+}

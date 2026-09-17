@@ -37,6 +37,10 @@ APPs/
       claim-mutu/
       claim-susut/
       suppliers/
+      SAP Data/
+        Original/                  ← drop SAP MASTER v2 Excel here (kept after import)
+        Success/                   ← daily success-row workbooks
+        Failed/                    ← daily failed-row workbooks + Remarks
       {uuid}_file.pdf              ← general documents module
     other-app/                     ← other applications under dev/
 ```
@@ -50,8 +54,13 @@ APPs/
 | Claim Mutu import | `claim-mutu/` |
 | Claim Susut import | `claim-susut/` |
 | Supplier import | `suppliers/` |
+| SAP MASTER v2 auto-import | `<SAP_AUTO_IMPORT_ROOT>/ORIGINAL/` (input, never moved), `Success/`, `Failed/` — see the note below |
 
-Transient imports (SAP Master, planning Excel, etc.) are **not** stored on Synology.
+Manual SAP upload in the UI still uses a temp file and is **not** written to Original. The **06:00** Asia/Jakarta scheduler (`SAP_AUTO_IMPORT_CRON`, default `0 6 * * *`) reads Original, runs the same MASTER v2 engine, writes Success/Failed workbooks (non-empty only), and emails ADMIN. Set `SAP_AUTO_IMPORT_ENABLED=true` after these folders exist on the share.
+
+If IT stores SAP files under a share labelled `Klip > SAP Data` outside `APPs/dev/klip`, either copy/symlink that tree to `dev/klip/SAP Data` or set `SAP_AUTO_IMPORT_ROOT` to a second bind mount. The Synology overlay (`docker-compose.backend.synology.yml`) is enough when the KLIP upload root is already `/app/uploads`.
+
+The Contract ETA reminder runs at 07:00; it is a separate job and still runs when SAP auto-import is enabled.
 
 ## One-time setup (backend server 172.28.92.57)
 
@@ -87,7 +96,64 @@ In `/opt/klip/.env` (and align `backend/.env`):
 ```env
 KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
 UPLOAD_DIR=/app/uploads
+SAP_AUTO_IMPORT_ENABLED=true
+SAP_AUTO_IMPORT_ROOT=/app/uploads/IMPORT DATA/LOGISTICS REPORT
 ```
+
+**The path moved on 2026-09-13.** IT now publishes to
+`\\172.30.1.94\APPs\dev\KLIP\IMPORT DATA\LOGISTICS REPORT\ORIGINAL`. Two things follow.
+
+The UNC path is not the value to configure - the backend is a Linux container and cannot resolve
+it. `//172.30.1.94/APPs` is mounted at `/mnt/synology-apps`, and `dev/klip` is bind-mounted to
+`/app/uploads`, so the value is the container-side path above. Setting the UNC form logs an error
+rather than failing silently.
+
+`ORIGINAL` is in capitals while the code's canonical name is `Original`. Linux is case-sensitive,
+so the subfolders are now resolved case-insensitively against what is actually on the share; a
+mismatch used to report `filesScanned: 0`, which reads exactly like a morning with no new files.
+Every run now logs the folder it scanned:
+
+```
+
+### Mounting IT's share (2026-09-13)
+
+The folders on the share are `ORIGINAL`, `SUCCEED` and `FAILED` - `SUCCEED` is not a case variant
+of `Success`, so it is handled as an accepted alias, not by case folding.
+
+The share is mounted **read-only** on the host, and SIT and production read the **same** folder.
+Both facts point the same way: KLIP reads the source and writes its result workbooks elsewhere.
+`SAP_AUTO_IMPORT_RESULTS_ROOT` does that, and `ORIGINAL` is never created or written to - IT owns
+those files and KLIP cannot alter them even by accident.
+
+Bring the share into the container with its own mount, separate from `/app/uploads`:
+
+```bash
+docker compose -f docker-compose.backend.yml                -f docker-compose.backend.remote-db.yml                -f docker-compose.backend.sap-share.yml up -d --build backend
+```
+
+With this in `/opt/klip/.env`:
+
+```env
+KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
+SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
+```
+
+**Check the container user before expecting reads to work.** The share's folders are mode `0550`
+owned by uid/gid `1001`, so the container's user must be 1001 or in group 1001 - otherwise every
+read is denied and the scan reports an empty folder rather than a permission error:
+
+```bash
+docker exec klip-backend id
+docker exec klip-backend ls /mnt/sap-import/ORIGINAL
+```
+
+A missing source folder is now logged explicitly ("the source folder does not exist") instead of
+surfacing as `filesScanned: 0`.
+
+```bash
+docker logs klip-backend 2>&1 | grep "auto-import scanning"
+
 
 ### 5. Deploy backend (Synology bind mount)
 
@@ -108,6 +174,9 @@ docker compose -f docker-compose.backend.yml exec backend sh -c 'touch /app/uplo
 
 # After uploading a commercial PDF in UI
 ls -la /mnt/synology-apps/dev/klip/commercial-documents/
+
+# SAP drop folders (scheduler reads Original/)
+ls -la /mnt/synology-apps/dev/klip/SAP\ Data/Original /mnt/synology-apps/dev/klip/SAP\ Data/Success /mnt/synology-apps/dev/klip/SAP\ Data/Failed
 ```
 
 On Synology File Station: **APPs → dev → klip** should show uploaded files.

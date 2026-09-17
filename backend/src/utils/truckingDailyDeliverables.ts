@@ -101,10 +101,11 @@ export function normalizeAndValidateDailyDeliverables(args: {
   return { ok: true, rows };
 }
 
-/** Upsert by date — incoming rows override existing dates; other dates are preserved. */
+/** Upsert by date — incoming rows override existing dates; clearDates remove dates; others preserved. */
 export function mergeDailyDeliverablesRows(
   existing: unknown,
   incoming: NormalizedDailyDeliverableRow[],
+  options?: { clearDates?: string[] },
 ): NormalizedDailyDeliverableRow[] {
   const byDate = new Map<string, number>();
   if (Array.isArray(existing)) {
@@ -116,11 +117,48 @@ export function mergeDailyDeliverablesRows(
       }
     }
   }
+  for (const date of options?.clearDates ?? []) {
+    const d = String(date ?? '').trim().slice(0, 10);
+    if (d) byDate.delete(d);
+  }
   for (const row of incoming) {
     byDate.set(row.date, row.quantity_delivered);
   }
   return Array.from(byDate.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, quantity_delivered]) => ({ date, quantity_delivered }));
+}
+
+/**
+ * Authoritative upload merge: drop all existing planning except WB-actual locked dates,
+ * then apply incoming file rows (+ optional clearDates for blank cells).
+ */
+export function prepareAuthoritativePlanningMerge(
+  existing: unknown,
+  incoming: NormalizedDailyDeliverableRow[],
+  options: { lockedDates: ReadonlySet<string> | string[]; clearDates?: string[] },
+): NormalizedDailyDeliverableRow[] {
+  const locked =
+    options.lockedDates instanceof Set ? options.lockedDates : new Set(options.lockedDates);
+  const preserved: NormalizedDailyDeliverableRow[] = [];
+  if (Array.isArray(existing)) {
+    for (const row of existing as DailyDeliverableInputRow[]) {
+      const date = String(row?.date ?? '').trim().slice(0, 10);
+      const qty = parseDailyDeliverableQuantity(row?.quantity_delivered);
+      if (date && locked.has(date) && qty !== null && qty >= 0) {
+        preserved.push({ date, quantity_delivered: qty });
+      }
+    }
+  }
+  return mergeDailyDeliverablesRows(preserved, incoming, { clearDates: options.clearDates });
+}
+
+/** Sum of quantity_delivered across normalized daily rows (kg). */
+export function sumDailyDeliverablesKg(rows: NormalizedDailyDeliverableRow[]): number {
+  let sum = 0;
+  for (const row of rows) {
+    sum += Math.round(Number(row.quantity_delivered) * 100) / 100;
+  }
+  return sum;
 }
 

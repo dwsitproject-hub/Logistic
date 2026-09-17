@@ -1,5 +1,14 @@
 import express from 'express';
-import { register, login, getProfile, updateProfile } from '../controllers/auth.controller';
+import {
+  register,
+  login,
+  getLoginOptions,
+  getProfile,
+  getMe,
+  logout,
+  updateProfile,
+} from '../controllers/auth.controller';
+import { ssoExchangeHandler } from '../controllers/sso.controller';
 import { authenticateToken } from '../middleware/auth';
 import { body } from 'express-validator';
 
@@ -18,14 +27,11 @@ const router = express.Router();
  *           schema:
  *             type: object
  *             required:
- *               - username
  *               - email
  *               - password
  *               - full_name
  *               - role
  *             properties:
- *               username:
- *                 type: string
  *               email:
  *                 type: string
  *               password:
@@ -44,7 +50,6 @@ const router = express.Router();
 router.post(
   '/register',
   [
-    body('username').notEmpty().isLength({ min: 3, max: 100 }),
     body('email').isEmail(),
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
@@ -66,10 +71,10 @@ router.post(
  *           schema:
  *             type: object
  *             required:
- *               - username
+ *               - email
  *               - password
  *             properties:
- *               username:
+ *               email:
  *                 type: string
  *               password:
  *                 type: string
@@ -79,7 +84,13 @@ router.post(
  *       401:
  *         description: Invalid credentials
  */
-router.post('/login', login);
+router.get('/login-options', getLoginOptions);
+
+router.post(
+  '/login',
+  [body('email').isEmail(), body('password').notEmpty()],
+  login
+);
 
 /**
  * @swagger
@@ -96,6 +107,10 @@ router.post('/login', login);
  *         description: Unauthorized
  */
 router.get('/profile', authenticateToken, getProfile);
+
+router.get('/me', authenticateToken, getMe);
+
+router.post('/logout', logout);
 
 /**
  * @swagger
@@ -123,6 +138,31 @@ router.get('/profile', authenticateToken, getProfile);
  *         description: Unauthorized
  */
 router.put('/profile', authenticateToken, updateProfile);
+
+/**
+ * @swagger
+ * /api/auth/sso/exchange:
+ *   post:
+ *     summary: Exchange a one-time Downstream Hub SSO code for a KLIP session
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - code
+ *             properties:
+ *               code:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Exchange successful
+ *       400:
+ *         description: Invalid or expired code
+ */
+router.post('/sso/exchange', ssoExchangeHandler);
 
 export default router;
 

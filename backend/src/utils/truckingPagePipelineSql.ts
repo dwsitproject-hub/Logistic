@@ -3,7 +3,7 @@
  * Does not replace contractLogisticsStoDisplay / other modules.
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapInactiveForOsExpr } from './contractDeliveryStatus';
 import { sqlHasTruckingKlipPlanning } from './truckingEffectiveStatus';
 import { sqlRealizationStartDate } from './truckingRealizationSql';
 import {
@@ -28,9 +28,28 @@ export function normalizeTruckingPagePipelineStageParam(
   const s = String(raw ?? '')
     .trim()
     .toUpperCase();
-  if (!s || s === 'ALL') return null;
+  if (!s || s === 'ALL' || s === 'OPEN' || s === 'CLOSE') return null;
   return PIPELINE_SET.has(s) ? (s as TruckingPagePipelineStage) : null;
 }
+
+export function isTruckingPageOpenCloseStatusParam(raw: string | undefined): 'OPEN' | 'CLOSE' | null {
+  const s = String(raw ?? '')
+    .trim()
+    .toUpperCase();
+  if (s === 'OPEN' || s === 'CLOSE') return s;
+  return null;
+}
+
+export const TRUCKING_PAGE_OPEN_STAGES: readonly TruckingPagePipelineStage[] = [
+  'UNPLANNED',
+  'PLANNED',
+  'IN_PROGRESS',
+] as const;
+
+export const TRUCKING_PAGE_CLOSE_STAGES: readonly TruckingPagePipelineStage[] = [
+  'COMPLETED',
+  'CANCELLED',
+] as const;
 
 /** KLIP ETA columns or Daily Planning (Add New Trucking) — not SAP receive / completion dates. */
 export function sqlTruckingPageHasEtaOrPlanning(truckingAlias = 't'): string {
@@ -49,78 +68,237 @@ export function sqlTruckingPageHasSto(stoExpr: string): string {
 }
 
 /**
- * Open SAP contract/PO with no KLIP planning/ETA yet — trucking Unplanned backlog.
+ * Open SAP contract/PO with no KLIP planning/ETA and no Start Receive yet — Unplanned backlog.
  * STO is not required. Closed SAP status is never Unplanned.
+ * Requires trucking_realizations join alias `tr` (same as list/pipeline queries).
  */
 export function sqlTruckingPageUnplannedPredicate(
   contractAlias = 'c',
   _stoExpr?: string,
   truckingAlias = 't',
   outstandingQtyExpr?: string,
+  grClosedExpr?: string,
+  sapAlias?: string,
+  /** Precomputed SAP-cancelled column (see sqlTruckingGrClosedLateral's is_cancelled). */
+  cancelledExpr?: string,
 ): string {
-  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
-  const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr)})`;
+  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr, cancelledExpr)})`;
+  const notCompleted = `NOT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)})`;
+  const noStartReceive = `${sqlRealizationStartDate(contractAlias, sapAlias)} IS NULL`;
   return `(
     ${contractOpen}
     AND NOT (${sqlTruckingPageHasEtaOrPlanning(truckingAlias)})
+    AND ${noStartReceive}
     AND ${notCompleted}
   )`;
 }
 
-/** COMPLETED = GR PO/STO Close (incoterm) OR GR Open with OS Qty within tolerance. */
+/** COMPLETED = GR PO/STO Close (incoterm) OR OS ≤ 499 kg (0 MT residual or over-delivery). */
 export function sqlTruckingPageIsCompletedExpr(
   contractAlias = 'c',
   outstandingQtyExpr?: string,
+  grClosedExpr?: string,
 ): string {
-  return sqlTruckingPipelineIsCompletedExpr(contractAlias, outstandingQtyExpr);
+  return sqlTruckingPipelineIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
 }
 
 /**
  * Mutually exclusive pipeline stage per trucking operation row (Section 2 + Section 3 filter).
+ * Start Receive (SAP AV or trucking_realizations / WB) → IN_PROGRESS without requiring daily planning.
  */
+/** Alias of {@link sqlTruckingIsCompletedLateral} when the caller joins it. */
+export const TRUCKING_LIST_IS_COMPLETED_ALIAS = 'tic_row';
+
+/**
+ * Resolve the completed test once per row. sqlTruckingPagePipelineStageExpr embeds it four
+ * times, and one expansion is 319KB of SQL carrying nine copies of the GR status expression -
+ * which is how buildTruckingListSelectClause reached 1,708KB.
+ */
+export function sqlTruckingIsCompletedLateral(
+  contractAlias = 'c',
+  outstandingQtyExpr?: string,
+  grClosedExpr?: string,
+  alias = TRUCKING_LIST_IS_COMPLETED_ALIAS,
+): string {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT (${sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr)}) AS is_completed
+      ) ${alias} ON TRUE`;
+}
+
+/**
+ * Column reference for the lateral above. Deliberately NOT wrapped in COALESCE: the stage
+ * expression uses `NOT (isCompleted)`, and a NULL there leaves the branch untaken while
+ * COALESCE(..., false) would make `NOT false` true and take it. Passing the raw column keeps
+ * three-valued logic identical to the inlined expression.
+ */
+export function sqlTruckingIsCompletedFromLateral(alias = TRUCKING_LIST_IS_COMPLETED_ALIAS): string {
+  return `${alias}.is_completed`;
+}
+
 export function sqlTruckingPagePipelineStageExpr(
   contractAlias = 'c',
   stoExpr?: string,
   outstandingQtyExpr?: string,
+  grClosedExpr?: string,
+  /**
+   * Alias of {@link sqlTruckingSapDatesLateral} when the caller joins it. Omit and the SAP receive
+   * date falls back to the correlated subquery, which this expression evaluates twice.
+   */
+  sapAlias?: string,
+  /** Precomputed is-completed column (see sqlTruckingIsCompletedLateral). */
+  isCompletedExpr?: string,
+  /**
+   * Precomputed SAP-cancelled column. Without it `sqlIsContractSapInactiveForOsExpr` re-derives
+   * Cancelled from scratch - one 26KB status expansion per call, twice in this expression.
+   */
+  cancelledExpr?: string,
 ): string {
   const stoCheck = stoExpr ?? `NULLIF(TRIM(${contractAlias}.sto_number::text), '')`;
-  const realizationStart = sqlRealizationStartDate(contractAlias);
-  const isCompleted = sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr);
+  const realizationStart = sqlRealizationStartDate(contractAlias, sapAlias);
+  /**
+   * `isCompleted` is embedded four times below (once directly, three times through
+   * `notCompleted`), and one expansion of it is 319KB of SQL. Callers that resolve it once per
+   * row - see sqlTruckingIsCompletedLateral - pass the column instead, which takes this whole
+   * expression from ~1,382KB to a few KB.
+   */
+  const isCompleted =
+    isCompletedExpr ??
+    sqlTruckingPageIsCompletedExpr(contractAlias, outstandingQtyExpr, grClosedExpr);
   const notCompleted = `NOT (${isCompleted})`;
-  const contractOpen = `NOT (${sqlIsContractSapClosedExpr(contractAlias)})`;
+  const contractOpen = `NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias, grClosedExpr, cancelledExpr)})`;
   return `CASE
     WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 'CANCELLED'
     WHEN ${isCompleted} THEN 'COMPLETED'
-    WHEN ${sqlHasTruckingKlipPlanning('t')}
-      AND ${realizationStart} IS NOT NULL
+    WHEN ${realizationStart} IS NOT NULL
       AND ${notCompleted}
       THEN 'IN_PROGRESS'
     WHEN ${contractOpen}
       AND ${sqlTruckingPageHasEtaOrPlanning('t')}
       AND ${notCompleted}
       THEN 'PLANNED'
-    WHEN ${sqlTruckingPageUnplannedPredicate(contractAlias, stoCheck, 't', outstandingQtyExpr)} THEN 'UNPLANNED'
+    WHEN ${sqlTruckingPageUnplannedPredicate(
+      contractAlias,
+      stoCheck,
+      't',
+      outstandingQtyExpr,
+      grClosedExpr,
+      sapAlias,
+      cancelledExpr,
+    )} THEN 'UNPLANNED'
     ELSE CASE
-      WHEN ${realizationStart} IS NOT NULL THEN 'IN_PROGRESS'
       WHEN ${sqlTruckingPageHasEtaOrPlanning('t')} THEN 'PLANNED'
       ELSE 'UNPLANNED'
     END
   END`;
 }
 
-/** Filter list rows by pipeline card (same expression as summary). */
+/** Filter list rows by pipeline card (same expression as summary).
+ * Planned card is special: includes PLANNED + IN_PROGRESS (In Progress card stays exact).
+ * Global Filters OPEN = Unplanned+Planned+In Progress; CLOSE = Completed+Cancelled.
+ */
 export function appendTruckingPipelineStageFilter(
   stage: string | undefined,
   stoExpr: string,
   startIndex: number,
+  /**
+   * Precomputed GR-close and completed columns from the laterals in
+   * buildTruckingListFromClause. This filter is appended to that same query, so the columns are
+   * in scope - verified by executing a WHERE over that FROM, not assumed. Without them the one
+   * stage expression here inlines 40 expansions and 1,382KB of SQL.
+   */
+  grClosedExpr?: string,
+  isCompletedExpr?: string,
+  cancelledExpr?: string,
 ): { sql: string; params: string[]; nextIndex: number } {
+  const openClose = isTruckingPageOpenCloseStatusParam(stage);
+  const stageExpr = sqlTruckingPagePipelineStageExpr(
+    'c',
+    stoExpr,
+    undefined,
+    grClosedExpr,
+    undefined,
+    isCompletedExpr,
+    cancelledExpr,
+  );
+  if (openClose === 'OPEN') {
+    return {
+      sql: ` AND ${stageExpr} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+  if (openClose === 'CLOSE') {
+    return {
+      sql: ` AND ${stageExpr} IN ('COMPLETED', 'CANCELLED')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+
   const normalized = normalizeTruckingPagePipelineStageParam(stage);
   if (!normalized) {
     return { sql: '', params: [], nextIndex: startIndex };
   }
+  if (normalized === 'PLANNED') {
+    return {
+      sql: ` AND ${stageExpr} IN ('PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
   return {
-    sql: ` AND ${sqlTruckingPagePipelineStageExpr('c', stoExpr, undefined)} = $${startIndex}`,
+    sql: ` AND ${stageExpr} = $${startIndex}`,
     params: [normalized],
     nextIndex: startIndex + 1,
   };
+}
+
+/**
+ * Status-scoped WHERE for expanded list rows (`tf.status`).
+ * Planned card → PLANNED + IN_PROGRESS; other cards exact match.
+ * Global Filters OPEN/CLOSE use the same buckets as list filter.
+ */
+export function buildTruckingExpandedStatusFilterWhere(
+  statusColumnExpr: string,
+  stageFilter: string | null | undefined,
+  startIndex: number,
+): { sql: string; params: string[]; nextIndex: number } {
+  const openClose = isTruckingPageOpenCloseStatusParam(stageFilter ?? undefined);
+  if (openClose === 'OPEN') {
+    return {
+      sql: ` WHERE ${statusColumnExpr} IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+  if (openClose === 'CLOSE') {
+    return {
+      sql: ` WHERE ${statusColumnExpr} IN ('COMPLETED', 'CANCELLED')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+
+  const normalized = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
+  if (!normalized) {
+    return { sql: '', params: [], nextIndex: startIndex };
+  }
+  if (normalized === 'PLANNED') {
+    return {
+      sql: ` WHERE ${statusColumnExpr} IN ('PLANNED', 'IN_PROGRESS')`,
+      params: [],
+      nextIndex: startIndex,
+    };
+  }
+  return {
+    sql: ` WHERE ${statusColumnExpr} = $${startIndex}`,
+    params: [normalized],
+    nextIndex: startIndex + 1,
+  };
+}
+
+/** True when UI Planned card should show Planned + In Progress rows. */
+export function isTruckingPlannedCardStatusFilter(stage: string | null | undefined): boolean {
+  return normalizeTruckingPagePipelineStageParam(stage ?? undefined) === 'PLANNED';
 }

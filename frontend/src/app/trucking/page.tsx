@@ -1,5 +1,6 @@
 'use client'
 
+import { TRUCKING_STATUS_LABELS, formatTruckingStatusLabel } from '@/lib/truckingStatusDisplay'
 import { useEffect, useState, useMemo, useRef, useCallback, Suspense, memo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
@@ -10,22 +11,39 @@ import { Badge } from '@/components/ui/badge'
 import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
+import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
-import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
+import { buildTruckingViewTableExportMatrix } from '@/lib/truckingViewTableExport'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { format } from 'date-fns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TruckingOutstandingQtyWithTooltip } from '@/components/trucking/TruckingOutstandingQtyWithTooltip'
 import { CreateTruckingOperationModal } from '@/components/trucking/CreateTruckingOperationModal'
+import {
+  TruckingStatusDistribution,
+  type TruckingStatusCardKey,
+} from '@/components/trucking/TruckingStatusDistribution'
+import { TruckingOutstandingQtySummary } from '@/components/trucking/TruckingOutstandingQtySummary'
+import { TruckingAttentionInsightsSection } from '@/components/trucking/TruckingAttentionInsightsSection'
+import { mapTruckingAttentionInsights } from '@/lib/truckingAttentionInsights'
+import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { LOGISTICS_SOURCE_FILTER_OPTIONS } from '@/lib/logisticsSourceFilter'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { useSapImportInFlight } from '@/hooks/useSapImportInFlight'
+import {
+  SAP_IMPORT_IN_PROGRESS_MESSAGE,
+  sapImportInProgressErrorMessage,
+} from '@/lib/sapImportInFlight'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import {
@@ -36,6 +54,7 @@ import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
+import { QtyLoadingDots } from '@/components/shared/QtyLoadingDots'
 import {
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -48,11 +67,14 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import {
   applyHPlusOnePlanningPromotions,
+  getCalendarFilledQtyDaysInMonth,
   getHPlusOneIsoDate,
+  getRowFilledQtyDateBounds,
   isDateInDueWindow,
   resolveCalendarCellQtyKg,
 } from '@/lib/truckingCalendarActuals'
@@ -60,7 +82,7 @@ import {
   buildTruckingActualsTemplateXlsxBlob,
   DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP,
   isActualsTemplateDownloadEnabled,
-  isPlannedPlanningTemplateMode,
+  isDailyPlanningTemplateMode,
   isUnplannedPlanningTemplateMode,
   isWidePlanningTemplateFile,
   triggerFailedUnplannedUploadRetemplateDownload,
@@ -72,8 +94,10 @@ import {
   TRUCKING_COLUMN_LAYOUT_VERSION_KEY,
   buildTruckingVisibleColumns,
   mergeTruckingColumnOrder,
+  migrateTruckingColumnLayout,
   truckingCompactColumnFallbackOrder,
   truckingDefaultVisibleColumnIds,
+  truckingTableColumnWidthPx,
 } from '@/lib/truckingColumns'
 import {
   OperationalNowrapCell,
@@ -81,19 +105,52 @@ import {
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
-import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  TRUCKING_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 
 const TRUCKING_ACTIONS_COL_WIDTH = 140
 
 /** Hide header Upload CSV + Create New above Global Filters — set true to restore. */
 const TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED = false
 
-const TRUCKING_STATUS_LABELS: Record<string, string> = {
-  UNPLANNED: 'Unplanned',
-  PLANNED: 'Planned',
-  IN_PROGRESS: 'In Progress',
-  COMPLETED: 'Completed',
-  CANCELLED: 'Cancelled',
+/** Hide List | Daily Planning Deliverables toggle — set true to restore the calendar tab. */
+const TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED = false
+
+const TRUCKING_GLOBAL_STATUS_OPTIONS = [
+  { value: 'ALL', label: 'All Status' },
+  { value: 'OPEN', label: 'Open' },
+  { value: 'CLOSE', label: 'Close' },
+] as const
+
+const TRUCKING_LATE_INDICATOR_OPTIONS = [
+  { value: 'ALL', label: 'All Late Indicator' },
+  { value: 'ON_TIME', label: 'On Time' },
+  { value: 'LATE', label: 'Late' },
+  { value: 'NA', label: 'N/A' },
+] as const
+
+const TRUCKING_OPEN_STAGES = new Set(['UNPLANNED', 'PLANNED', 'IN_PROGRESS', 'OPEN'])
+const TRUCKING_CLOSE_STAGES = new Set(['COMPLETED', 'CANCELLED', 'CLOSE'])
+
+function normalizeTruckingSummaryStatusFilter(status: string): string {
+  const stage = String(status ?? '').trim().toUpperCase()
+  if (stage === 'IN_PROGRESS') return 'PLANNED'
+  return stage
+}
+
+/** Map granular Section 2 card → Global Filters Open/Close display value. */
+function mapTruckingStatusToGlobalBucket(status: string): 'ALL' | 'OPEN' | 'CLOSE' {
+  const stage = normalizeTruckingSummaryStatusFilter(status)
+  if (!stage || stage === 'ALL') return 'ALL'
+  if (stage === 'OPEN' || stage === 'CLOSE') return stage
+  if (TRUCKING_CLOSE_STAGES.has(stage)) return 'CLOSE'
+  if (TRUCKING_OPEN_STAGES.has(stage)) return 'OPEN'
+  return 'ALL'
 }
 
 /** Parse API qty (kg) — handles numeric strings with commas. */
@@ -104,12 +161,21 @@ function parseTruckingQtyKg(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** Shipments / Trucking view-table qty — round to whole MT (no decimals). */
+const SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS = { maxFractionDigits: 0 } as const
+
 /** Display trucking qty stored in kg as MT (table, calendar, mobile). */
-function formatTruckingQtyMt(value: unknown): string {
+function formatTruckingQtyMt(
+  value: unknown,
+  opts: { maxFractionDigits?: number } = SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS,
+): string {
   const kg = parseTruckingQtyKg(value)
-  if (kg === null) return '—'
-  if (kg === 0) return '0 MT'
-  return formatQtyMtFromKg(kg)
+  return formatQtyMtFromKg(kg, opts)
+}
+
+/** View-table SAP delivery/receive qty — null/missing renders as 0 MT (display only). */
+function formatTruckingSapQtyMtDisplay(value: unknown): string {
+  return formatTruckingQtyMt(value, SHIPMENT_TRUCKING_QTY_DISPLAY_OPTS)
 }
 
 /** API daily_deliverables.quantity_delivered is kg; calendar drafts/edits are MT. */
@@ -137,13 +203,13 @@ function parseDailyPlanningMtDraft(raw: string): number | 'invalid' {
 function formatDailyPlanningQtyMtDisplay(value: unknown): string {
   if (value === null || value === undefined || value === '') return '0.00'
   const n = Number(String(value).replace(/,/g, '').trim())
-  if (!Number.isFinite(n)) return '—'
+  if (!Number.isFinite(n)) return '0.00'
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /** Aligns with list `formatNumber` / `formatKg`: comma thousands, period decimals. */
 function formatTruckingQtyPlain(n: number): string {
-  if (!Number.isFinite(n)) return '—'
+  if (!Number.isFinite(n)) return '0'
   if (n === 0) return '0'
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
 }
@@ -153,8 +219,7 @@ function truckingDbStatus(operation: Pick<TruckingOperation, 'status' | 'status_
 }
 
 function truckingStatusLabel(status: string | undefined | null): string {
-  const key = String(status ?? '').trim().toUpperCase()
-  return TRUCKING_STATUS_LABELS[key] ?? key
+  return formatTruckingStatusLabel(status)
 }
 
 function isTruckingPlanningEditLocked(status: string | undefined | null): boolean {
@@ -296,6 +361,8 @@ interface TruckingOperation {
   trucking_start_date: string
   trucking_completion_date: string
   eta_trucking_completion_date?: string | null
+  /** ATA for the Late Indicator - actual receipt (WB or SAP), never a planning date. */
+  ata_end_date?: string | null
   quantity_sent: number
   quantity_delivered: number
   quantity_receive?: number
@@ -304,6 +371,8 @@ interface TruckingOperation {
   gain_loss_amount: number
   oa_budget: number
   oa_actual: number
+  oa_budget_currency?: string | null
+  oa_actual_currency?: string | null
   estimated_km?: number
   status: string
   /** Raw DB status — use for edit lock (CANCELLED) when effective status differs. */
@@ -329,12 +398,15 @@ function mergeTruckingSapFields(
   hydrated: TruckingOperation[],
 ): TruckingOperation[] {
   if (!hydrated.length) return base
+  // PO-grain list: one row per operation id. Match hydrate by id (sto line optional fallback).
   const byId = new Map<string, TruckingOperation>()
   for (const row of hydrated) {
-    if (row.id) byId.set(String(row.id), row)
+    if (!row.id) continue
+    byId.set(String(row.id), row)
   }
   return base.map((row) => {
-    const match = row.id ? byId.get(String(row.id)) : undefined
+    if (!row.id) return row
+    const match = byId.get(String(row.id))
     if (!match) return row
     return {
       ...row,
@@ -347,6 +419,12 @@ function mergeTruckingSapFields(
       quantity_delivered: match.quantity_delivered ?? row.quantity_delivered,
       quantity_receive: match.quantity_receive ?? row.quantity_receive,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
+      sto_quantity: match.sto_quantity ?? row.sto_quantity,
+      contract_qty: match.contract_qty ?? row.contract_qty,
+      trucking_start_date: match.trucking_start_date ?? row.trucking_start_date,
+      trucking_completion_date: match.trucking_completion_date ?? row.trucking_completion_date,
+      loading_location: String(match.loading_location ?? '').trim() || row.loading_location,
+      unloading_location: String(match.unloading_location ?? '').trim() || row.unloading_location,
     }
   })
 }
@@ -510,11 +588,11 @@ const CALENDAR_META_COL_LABELS: Record<string, string> = {
   lt_spot: 'LT/SPOT',
   product: 'Product',
   group_name: 'Group Name',
-  outstanding_quantity: 'Outstanding Qty (MT)',
-  qty_sent: 'Qty Sent (MT)',
-  qty_sent_planning: 'Qty Sent planning (MT)',
-  qty_delivered: 'Delivery Qty (MT)',
-  qty_received: 'Received Qty (MT)',
+  outstanding_quantity: 'Outstanding Qty',
+  qty_sent: 'Qty Sent',
+  qty_sent_planning: 'Qty Sent planning',
+  qty_delivered: 'Delivery Qty',
+  qty_received: 'Received Qty',
 }
 
 const CALENDAR_NUMERIC_SORT_COLS = new Set([
@@ -528,12 +606,11 @@ const CALENDAR_NUMERIC_SORT_COLS = new Set([
 function getTruckingCalendarSortValue(
   row: TruckingCalendarRow,
   sortKey: string,
-  cellDrafts: Record<string, string>,
+  _cellDrafts: Record<string, string> = {},
 ): string | number {
   if (sortKey.startsWith('day:')) {
     const date = sortKey.slice(4)
-    const qtyMt = parseDailyPlanningMtDraft(cellDrafts[`${row.id}:${date}`] ?? '')
-    return qtyMt === 'invalid' ? 0 : qtyMt
+    return resolveCalendarCellQtyKg(row, date) / 1000
   }
 
   switch (sortKey) {
@@ -548,9 +625,9 @@ function getTruckingCalendarSortValue(
     case 'owner':
       return row.trucking_owner || ''
     case 'due_start':
-      return row.delivery_start_date || ''
+      return getRowFilledQtyDateBounds(row)?.start || ''
     case 'due_end':
-      return row.delivery_end_date || ''
+      return getRowFilledQtyDateBounds(row)?.end || ''
     case 'source_type':
       return row.source_type || ''
     case 'lt_spot':
@@ -615,31 +692,24 @@ function CalendarDeliverablesTable({
   month,
   rows,
   loading,
-  savingAll,
-  cellDrafts,
-  cellBaseline,
-  formatQty,
   visibleMetaCols,
   metaOrderIds,
   onReorderMetaCols,
-  onCellChange,
 }: {
   month: Date
   rows: TruckingCalendarRow[]
   loading: boolean
-  savingAll: boolean
-  cellDrafts: Record<string, string>
-  cellBaseline: Record<string, string>
-  formatQty: (n: number) => string
   visibleMetaCols: Set<string>
   metaOrderIds: string[]
   onReorderMetaCols: (dragId: string, dropId: string) => void
-  onCellChange: (id: string, date: string, value: string) => void
 }) {
   const yyyy = month.getFullYear()
   const mm = month.getMonth()
-  const daysInMonth = new Date(yyyy, mm + 1, 0).getDate()
-  const days = Array.from({ length: daysInMonth }, (_, i) => i + 1)
+  const tomorrowIso = getHPlusOneIsoDate()
+  const days = useMemo(
+    () => getCalendarFilledQtyDaysInMonth(rows, month, tomorrowIso),
+    [rows, month, tomorrowIso],
+  )
   const operationColW = 220
   const opShown = visibleMetaCols.has('operation_id')
   const stickyContractCols = CALENDAR_STICKY_CONTRACT_COL_IDS.filter((id) => visibleMetaCols.has(id))
@@ -660,9 +730,6 @@ function CalendarDeliverablesTable({
   const scrollTopRef = useRef<HTMLDivElement | null>(null)
   const scrollBottomRef = useRef<HTMLDivElement | null>(null)
   const isSyncing = useRef(false)
-  const editInputRef = useRef<HTMLInputElement | null>(null)
-  const [editingQtyCellKey, setEditingQtyCellKey] = useState<string | null>(null)
-  const editingQtyValueRef = useRef<string>('')
   const dayIso = (day: number) => {
     const m = String(mm + 1).padStart(2, '0')
     const d = String(day).padStart(2, '0')
@@ -682,34 +749,12 @@ function CalendarDeliverablesTable({
     if (!rows.length) return rows
     return [...rows].sort((a, b) =>
       compareCalendarSortValues(
-        getTruckingCalendarSortValue(a, sortKey, cellDrafts),
-        getTruckingCalendarSortValue(b, sortKey, cellDrafts),
+        getTruckingCalendarSortValue(a, sortKey, {}),
+        getTruckingCalendarSortValue(b, sortKey, {}),
         sortDir,
       ),
     )
-  }, [rows, sortKey, sortDir, cellDrafts])
-
-  useEffect(() => {
-    if (editingQtyCellKey) {
-      editInputRef.current?.focus()
-      editInputRef.current?.select()
-    }
-  }, [editingQtyCellKey])
-
-  const startInlineQtyEdit = useCallback((key: string, current: string) => {
-    if (savingAll) return
-    editingQtyValueRef.current = current
-    setEditingQtyCellKey(key)
-  }, [savingAll])
-
-  const commitInlineQtyEdit = useCallback((rowId: string, date: string) => {
-    onCellChange(rowId, date, editingQtyValueRef.current)
-    setEditingQtyCellKey(null)
-  }, [onCellChange])
-
-  const cancelInlineQtyEdit = useCallback(() => {
-    setEditingQtyCellKey(null)
-  }, [])
+  }, [rows, sortKey, sortDir])
 
   const orderedMetaCols = useMemo(() => {
     const all = [
@@ -754,7 +799,7 @@ function CalendarDeliverablesTable({
       top.removeEventListener('scroll', onTop)
       bottom.removeEventListener('scroll', onBottom)
     }
-  }, [rows.length, daysInMonth, opShown, stickyContractCols, visibleMetaCols])
+  }, [rows.length, days.length, opShown, stickyContractCols, visibleMetaCols])
 
   return (
     <div>
@@ -764,9 +809,9 @@ function CalendarDeliverablesTable({
         <div className="text-center py-10 text-gray-500">No trucking operations in this month window</div>
       ) : (
         <>
-        <p className="text-xs text-gray-500 mb-2">Daily quantity values are in MT.</p>
+        <p className="text-xs text-gray-500 mb-2">Daily quantity values are in MT (readonly).</p>
         <div ref={scrollTopRef} className="overflow-x-auto border rounded-md bg-white">
-          <div className="h-3" style={{ width: `${2000 + daysInMonth * 48}px` }} />
+          <div className="h-3" style={{ width: `${2000 + Math.max(days.length, 1) * 48}px` }} />
         </div>
         <div ref={scrollBottomRef} className="overflow-x-auto mt-2">
         <table className="min-w-[2000px] w-full text-xs border-separate border-spacing-0">
@@ -868,15 +913,10 @@ function CalendarDeliverablesTable({
               const contractExtLabel = formatOperationalTableTextDisplay(r.contract_ext_no || r.contract_number)
               const stoLabel = formatOperationalTableTextDisplay(r.sto_number)
               const supplierLabel = formatOperationalTableTextDisplay(r.supplier)
-              const dueStart = r.delivery_start_date
-                ? formatDateDMY(r.delivery_start_date || '')
-                : '-'
-              const dueEnd = r.delivery_end_date
-                ? formatDateDMY(r.delivery_end_date || '')
-                : '-'
+              const filledBounds = getRowFilledQtyDateBounds(r, tomorrowIso)
+              const dueStart = filledBounds ? formatDateDMY(filledBounds.start) : '-'
+              const dueEnd = filledBounds ? formatDateDMY(filledBounds.end) : '-'
               const qtySent = Number(r.quantity_sent || 0)
-              const qtyDel = Number(r.quantity_delivered || 0)
-              const qtyRecv = Number(r.quantity_receive ?? 0)
               const plannedSum = sumPlannedQty(r)
               const outQty = Number((r as any).outstanding_quantity ?? 0)
               return (
@@ -886,7 +926,7 @@ function CalendarDeliverablesTable({
                       className="sticky z-10 bg-white px-3 py-2 border-b border-gray-100 align-top"
                       style={{ left: 0, minWidth: operationColW, maxWidth: operationColW }}
                     >
-                      <div className="font-semibold text-gray-900 truncate" title={opLabel}>{opLabel}</div>
+                      <div className="text-gray-900 truncate" title={opLabel}>{opLabel}</div>
                       <div className="text-[10px] text-gray-500 truncate" title={`${r.loading_location || ''} → ${r.unloading_location || ''}`}>
                         {formatOperationalTableTextDisplay(r.loading_location)} → {formatOperationalTableTextDisplay(r.unloading_location)}
                       </div>
@@ -908,7 +948,7 @@ function CalendarDeliverablesTable({
                         style={{ left, minWidth: colW, maxWidth: colW }}
                       >
                         <div
-                          className="font-medium text-gray-900 whitespace-normal break-words leading-snug"
+                          className="text-gray-900 whitespace-normal break-words leading-snug"
                           title={label}
                         >
                           {label}
@@ -946,9 +986,9 @@ function CalendarDeliverablesTable({
                         case 'qty_sent_planning':
                           return formatTruckingQtyMt(plannedSum)
                         case 'qty_delivered':
-                          return formatTruckingQtyMt(qtyDel)
+                          return formatTruckingSapQtyMtDisplay(r.quantity_delivered)
                         case 'qty_received':
-                          return formatTruckingQtyMt(qtyRecv)
+                          return formatTruckingSapQtyMtDisplay(r.quantity_receive)
                         default:
                           return '-'
                       }
@@ -964,51 +1004,22 @@ function CalendarDeliverablesTable({
                   })}
                   {days.map((d) => {
                     const date = dayIso(d)
-                    const key = `${r.id}:${date}`
-                    const draftValue = cellDrafts[key] ?? ''
-                    const isDirty = (draftValue ?? '') !== (cellBaseline[key] ?? '')
-                    const isEditingThisCell = editingQtyCellKey === key
+                    const qtyKg = resolveCalendarCellQtyKg(r, date, tomorrowIso)
+                    const display =
+                      qtyKg > 0
+                        ? formatQtyMtFromKg(qtyKg).replace(/\s*MT$/i, '')
+                        : '0.00'
                     return (
                       <td
                         key={date}
-                        className={`px-2 py-1.5 border-b border-gray-100 text-right tabular-nums ${isDirty ? 'bg-amber-50/50' : ''}`}
+                        className="px-2 py-1.5 border-b border-gray-100 text-right tabular-nums"
                       >
-                        {isEditingThisCell ? (
-                          <input
-                            ref={editInputRef}
-                            key={key}
-                            defaultValue={draftValue}
-                            onChange={(e) => {
-                              editingQtyValueRef.current = e.target.value
-                            }}
-                            onBlur={() => commitInlineQtyEdit(r.id, date)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                commitInlineQtyEdit(r.id, date)
-                              } else if (e.key === 'Escape') {
-                                e.preventDefault()
-                                cancelInlineQtyEdit()
-                              }
-                            }}
-                            disabled={savingAll}
-                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-white text-right text-xs focus:border-blue-400 focus:ring-1 focus:ring-blue-200 disabled:opacity-60"
-                            placeholder="0"
-                            title={date}
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => startInlineQtyEdit(key, draftValue)}
-                            disabled={savingAll}
-                            className="w-[64px] h-7 px-2 rounded border border-gray-200 bg-gray-50 text-right text-xs text-gray-700 hover:bg-white disabled:opacity-60"
-                            title={`Click to edit ${date}`}
-                          >
-                            {draftValue
-                              ? formatDailyPlanningQtyMtDisplay(draftValue)
-                              : '0.00'}
-                          </button>
-                        )}
+                        <span
+                          className="inline-flex w-[64px] h-7 items-center justify-end px-2 rounded border border-gray-100 bg-gray-50 text-xs text-gray-700"
+                          title={date}
+                        >
+                          {display}
+                        </span>
                       </td>
                     )
                   })}
@@ -1017,6 +1028,11 @@ function CalendarDeliverablesTable({
             })}
           </tbody>
         </table>
+        {days.length === 0 ? (
+          <div className="text-center py-6 text-gray-500 text-sm">
+            No filled daily quantities in this month for the current rows.
+          </div>
+        ) : null}
         </div>
         </>
       )}
@@ -1026,7 +1042,10 @@ function CalendarDeliverablesTable({
 
 function TruckingPageContent() {
   const searchParams = useSearchParams()
+  const { active: sapImportActive } = useSapImportInFlight()
   const [truckingOperations, setTruckingOperations] = useState<TruckingOperation[]>([])
+  /** False until SAP hydrate (or status-scoped full-SAP list) — Delivery/Receive/OS show as —. */
+  const [qtyFieldsReady, setQtyFieldsReady] = useState(false)
   /** Stale-while-revalidate: true while list API is in flight; never clears existing rows. */
   const [listFetching, setListFetching] = useState(false)
   /** True while table scope filters change — shows loading shell without stale rows. */
@@ -1038,6 +1057,7 @@ function TruckingPageContent() {
   const [editedData, setEditedData] = useState<Partial<TruckingOperation>>({})
   const [statusFilter, setStatusFilter] = useState<string>('ALL')
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('ALL')
   const [loadingLocationFilter, setLoadingLocationFilter] = useState('')
   const [unloadingLocationFilter, setUnloadingLocationFilter] = useState('')
   type ColumnFilter =
@@ -1054,12 +1074,22 @@ function TruckingPageContent() {
     resetUserScopeFilters,
     handleProductsChange,
     handleGroupPlantsChange,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('trucking')
   const scopeSummaryRequestKey = useMemo(
     () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
     [selectedProducts, selectedGroupPlants],
   )
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
@@ -1068,6 +1098,7 @@ function TruckingPageContent() {
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [templateDownloading, setTemplateDownloading] = useState(false)
+  const [downloadingTable, setDownloadingTable] = useState(false)
   const onSuppliersChange = useCallback((values: string[]) => {
     setPage(1)
     setHasMore(true)
@@ -1090,10 +1121,12 @@ function TruckingPageContent() {
   const [totalCount, setTotalCount] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
   const [hasMore, setHasMore] = useState<boolean>(true)
-  /** Section 1 status circles — toolbar scope only (excludes status card filter). */
+  /** Section 1 status cards — toolbar scope only (excludes status card filter). */
   const [truckingSection1Summary, setTruckingSection1Summary] = useState<any>(null)
   /** Stale-while-revalidate: true while summary API is in flight; keeps prior card counts. */
   const [summaryFetching, setSummaryFetching] = useState(false)
+  /** Outstanding Qty strip — independent of status-card summaryFetching (static across status clicks). */
+  const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
   /** UI-only: active status card count from view-table pagination.total (summary API still authoritative for other cards). */
   const [statusCardTotalFromList, setStatusCardTotalFromList] = useState<{
     status: string
@@ -1101,6 +1134,8 @@ function TruckingPageContent() {
   } | null>(null)
   const truckingSummaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const listFetchGenRef = useRef(0)
+  /** Generation of the rows currently in state — older async writers must not clobber newer rows. */
+  const listRowsGenRef = useRef(0)
   const summaryFetchGenRef = useRef(0)
   const section1SummaryForceNextFetchRef = useRef(true)
 
@@ -1142,8 +1177,17 @@ function TruckingPageContent() {
     operationsUpdated: number
     operationsFailed: number
     rowsUpserted: number
-    rowParseFailures: Array<{ sheetName?: string; rowNumber: number; po_number: string; reason: string }>
+    rowParseFailures: Array<{
+      sheetName?: string
+      rowNumber: number
+      po_number: string
+      reason: string
+      cells?: string[]
+    }>
     operationFailures: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+    operationWarnings?: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+    operationDeduped?: Array<{ po_number: string; progress_date?: string; reason: string; operation_ids?: string[] }>
+    originalFilename?: string
   } | null>(null)
 
   const [bulkCreateUploadOpen, setBulkCreateUploadOpen] = useState(false)
@@ -1223,6 +1267,7 @@ function TruckingPageContent() {
   const calendarDailyPlanningSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     // Load per-user saved daily planning view (best effort).
     let cancelled = false
     ;(async () => {
@@ -1248,12 +1293,14 @@ function TruckingPageContent() {
   }, [])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     try {
       localStorage.setItem('trucking.daily_planning.metaOrder.v1', JSON.stringify(calendarMetaOrderIds))
     } catch {}
   }, [calendarMetaOrderIds])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     if (typeof window === 'undefined') return
     if (calendarDailyPlanningSaveTimerRef.current) clearTimeout(calendarDailyPlanningSaveTimerRef.current)
     calendarDailyPlanningSaveTimerRef.current = setTimeout(() => {
@@ -1320,6 +1367,7 @@ function TruckingPageContent() {
   }
 
   const fetchCalendarRows = useCallback(async () => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     setCalendarLoading(true)
     try {
       const from = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1)
@@ -1335,6 +1383,7 @@ function TruckingPageContent() {
       if (dateFrom) params.set('dateFrom', dateFrom)
       if (dateTo) params.set('dateTo', dateTo)
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') params.set('lateIndicator', lateIndicatorFilter)
+      if (sourceTypeFilter && sourceTypeFilter !== 'ALL') params.set('sourceType', sourceTypeFilter)
       const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
         selectedIncoterms,
         selectedProducts,
@@ -1384,6 +1433,7 @@ function TruckingPageContent() {
     dateFrom,
     dateTo,
     lateIndicatorFilter,
+    sourceTypeFilter,
     columnFilters,
     selectedIncoterms,
     selectedProducts,
@@ -1393,6 +1443,7 @@ function TruckingPageContent() {
   ])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     if (activeTab !== 'calendar') return
     if (!userScopeReady) return
     fetchCalendarRows()
@@ -1408,6 +1459,7 @@ function TruckingPageContent() {
     dateFrom,
     dateTo,
     lateIndicatorFilter,
+    sourceTypeFilter,
     columnFilters,
     selectedIncoterms,
     selectedProducts,
@@ -1417,6 +1469,7 @@ function TruckingPageContent() {
   ])
 
   useEffect(() => {
+    if (!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED) return
     if (activeTab !== 'calendar') return
     const baseline = buildCalendarCellDrafts(calendarRows, calendarMonth)
     setCalendarSavedBaseline(baseline)
@@ -1554,6 +1607,10 @@ function TruckingPageContent() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sapImportActive) {
+      alert(SAP_IMPORT_IN_PROGRESS_MESSAGE)
+      return
+    }
     setPlanningUploading(true)
     try {
       const fd = new FormData()
@@ -1576,7 +1633,12 @@ function TruckingPageContent() {
       }
       await fetchCalendarRows()
     } catch (err: any) {
-      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+      alert(
+        sapImportInProgressErrorMessage(err) ||
+          err?.response?.data?.error?.message ||
+          err?.message ||
+          'Upload failed',
+      )
     } finally {
       setPlanningUploading(false)
     }
@@ -1586,6 +1648,10 @@ function TruckingPageContent() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sapImportActive) {
+      alert(SAP_IMPORT_IN_PROGRESS_MESSAGE)
+      return
+    }
     setWbUploading(true)
     try {
       const fd = new FormData()
@@ -1605,17 +1671,27 @@ function TruckingPageContent() {
           rowsUpserted: Number(data.rowsUpserted ?? 0),
           rowParseFailures: data.rowParseFailures ?? [],
           operationFailures: data.operationFailures ?? [],
+          operationWarnings: data.operationWarnings ?? [],
+          operationDeduped: data.operationDeduped ?? [],
+          originalFilename: file.name,
         })
         setWbUploadOpen(true)
       }
+      // Result is ready — stop the Upload WB spinner before the list refresh.
+      // Refreshing the table can take long; users can already close the result modal.
+      setWbUploading(false)
       invalidateLogisticsListCaches()
       section1SummaryForceNextFetchRef.current = true
-      await fetchTruckingOperations(page, undefined, { force: true })
-      if (activeTab === 'calendar') {
-        await fetchCalendarRows()
-      }
+      void fetchTruckingOperations(page, undefined, { force: true })
+        .then(() => {
+          if (activeTab === 'calendar') return fetchCalendarRows()
+        })
+        .catch((err) => {
+          console.warn('Trucking list refresh after WB upload failed:', err)
+        })
     } catch (err: unknown) {
       const message =
+        sapImportInProgressErrorMessage(err) ||
         (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
           ?.message ||
         (err as Error)?.message ||
@@ -1665,8 +1741,16 @@ function TruckingPageContent() {
   } | null>(null)
 
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
-  const [sortKey, setSortKey] = useState<string>('supplier')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  /**
+   * View Table opens on newest-first, and does not remember a sort between visits.
+   *
+   * The old default was `supplier` asc, which was only ever needed by the Download Template
+   * button below - that builds its rows from this same list request, so it inherited whatever
+   * the table happened to be sorted by. It now pins its own order, leaving the table free to
+   * default to something a viewer actually wants to see first.
+   */
+  const [sortKey, setSortKey] = useState<string>('created_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
   const buildTruckingListSearchParams = useCallback(
     (opts?: {
@@ -1677,14 +1761,18 @@ function TruckingPageContent() {
       searchOverride?: string
       /** Full SAP join for exports (accurate contract ext no, qty, dates). */
       skipSapJoin?: boolean
+      /** Combined daily planning template includes Unplanned + Planned regardless of filter. */
+      omitStatus?: boolean
+      /** Pin the order instead of following the table (exports that need a fixed layout). */
+      sortOverride?: { key: string; dir: 'asc' | 'desc' }
     }) => {
       const params = new URLSearchParams()
       params.append('skipSapJoin', opts?.skipSapJoin === false ? 'false' : 'true')
       params.append('limit', String(opts?.limit ?? pageSize))
       params.append('page', String(opts?.page ?? page))
-      params.append('sortKey', sortKey)
-      params.append('sortDir', sortDir)
-      if (statusFilter && statusFilter !== 'ALL') {
+      params.append('sortKey', opts?.sortOverride?.key ?? sortKey)
+      params.append('sortDir', opts?.sortOverride?.dir ?? sortDir)
+      if (!opts?.omitStatus && statusFilter && statusFilter !== 'ALL') {
         params.append('status', statusFilter)
       }
       if (loadingLocationFilter) {
@@ -1710,6 +1798,9 @@ function TruckingPageContent() {
       }
       if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
         params.append('lateIndicator', lateIndicatorFilter)
+      }
+      if (sourceTypeFilter && sourceTypeFilter !== 'ALL') {
+        params.append('sourceType', sourceTypeFilter)
       }
       const stoParam = searchParams.get('sto')
       if (stoParam) {
@@ -1746,18 +1837,42 @@ function TruckingPageContent() {
       selectedProducts,
       selectedSuppliers,
       lateIndicatorFilter,
+      sourceTypeFilter,
       searchParams,
       selectedGroupPlants,
     ],
   )
 
   const downloadFilteredActualsTemplate = useCallback(async () => {
-    const unplannedMode = isUnplannedPlanningTemplateMode(statusFilter)
-    const plannedMode = isPlannedPlanningTemplateMode(statusFilter)
+    if (!isActualsTemplateDownloadEnabled(statusFilter)) {
+      alert('Download template is available when the status filter is Unplanned, Planned, or In Progress.')
+      return
+    }
     const exportPageSize = 500
 
     setTemplateDownloading(true)
     try {
+      // Materialize UNPLANNED ops (OP-LAND-…) for open-PO backlog so they appear in the export.
+      const ensureParams = buildTruckingListSearchParams({
+        page: 1,
+        limit: 1,
+        includeSummary: false,
+        omitStatus: true,
+      })
+      ensureParams.delete('page')
+      ensureParams.delete('limit')
+      ensureParams.delete('skipSapJoin')
+      ensureParams.delete('includeSummary')
+      ensureParams.delete('sortKey')
+      ensureParams.delete('sortDir')
+      try {
+        await api.post(`/trucking/ensure-unplanned-ops?${ensureParams.toString()}`)
+      } catch (ensureErr) {
+        console.error('Failed to ensure unplanned trucking ops:', ensureErr)
+        alert('Failed to generate Operation IDs for unplanned POs. Template download aborted.')
+        return
+      }
+
       const collected: TruckingOperation[] = []
       let exportPage = 1
       let exportTotalPages = 1
@@ -1768,6 +1883,11 @@ function TruckingPageContent() {
           limit: exportPageSize,
           includeSummary: false,
           skipSapJoin: false,
+          omitStatus: true,
+          // The template is grouped by supplier for whoever fills it in. It used to get that
+          // only because the table defaulted to a supplier sort - so a viewer who sorted by
+          // anything else silently downloaded a differently ordered template.
+          sortOverride: { key: 'supplier', dir: 'asc' },
         })
         const response = await api.get(`/trucking?${params.toString()}`)
         const envelope = response.data as {
@@ -1787,39 +1907,28 @@ function TruckingPageContent() {
         .filter((op) => {
           const osKg = parseTruckingQtyKg(op.outstanding_quantity) ?? 0
           if (osKg <= 0) return false
-          if (unplannedMode) return op.status === 'UNPLANNED'
-          if (plannedMode) return op.status === 'PLANNED' || op.status === 'IN_PROGRESS'
-          return false
+          return (
+            op.status === 'UNPLANNED' ||
+            op.status === 'PLANNED' ||
+            op.status === 'IN_PROGRESS'
+          )
         })
-        .map((op) =>
-          unplannedMode || plannedMode
-            ? {
-                contract_ext_no: op.contract_ext_no,
-                contract_number: op.contract_number,
-                po_number: op.po_number,
-                group_name: op.group_name,
-                supplier: op.supplier,
-                source_type: op.source_type,
-                contract_date: op.contract_date,
-                outstanding_quantity: op.outstanding_quantity,
-                daily_deliverables: op.daily_deliverables,
-                templateKind: unplannedMode ? ('unplanned' as const) : ('planned' as const),
-              }
-            : {
-                contract_ext_no: op.contract_ext_no,
-                contract_number: op.contract_number,
-                po_number: op.po_number,
-                planning_start_date: op.planning_start_date,
-                planning_end_date: op.planning_end_date,
-                daily_deliverables: op.daily_deliverables,
-              },
-        )
+        .map((op) => ({
+          contract_ext_no: op.contract_ext_no,
+          contract_number: op.contract_number,
+          po_number: op.po_number,
+          group_name: op.group_name,
+          supplier: op.supplier,
+          source_type: op.source_type,
+          contract_date: op.contract_date,
+          outstanding_quantity: op.outstanding_quantity,
+          daily_deliverables: op.daily_deliverables,
+          templateKind: op.status === 'UNPLANNED' ? ('unplanned' as const) : ('planned' as const),
+        }))
 
       if (rows.length === 0) {
         alert(
-          unplannedMode
-            ? 'No Unplanned operations with outstanding qty match the current filters.'
-            : 'No Planned or In Progress operations with outstanding qty match the current filters.',
+          'No Unplanned, Planned, or In Progress operations with outstanding qty match the current filters.',
         )
         return
       }
@@ -1828,11 +1937,14 @@ function TruckingPageContent() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = buildTruckingPlanningTemplateFilename(unplannedMode ? 'unplanned' : 'planned')
+      a.download = buildTruckingPlanningTemplateFilename('combined')
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
+
+      // Soft-refresh so View Table shows newly allocated Operation IDs.
+      void fetchTruckingOperations(undefined, undefined, { force: true })
     } catch (error) {
       console.error('Failed to download trucking template:', error)
       alert('Failed to download template. Please try again.')
@@ -1895,7 +2007,7 @@ function TruckingPageContent() {
     // Read URL parameters
     const statusParam = searchParams.get('status')
     if (statusParam) {
-      setStatusFilter(statusParam)
+      setStatusFilter(normalizeTruckingSummaryStatusFilter(statusParam))
     }
     setPage(1)
     setHasMore(true)
@@ -1916,7 +2028,7 @@ function TruckingPageContent() {
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
-      api.get('/contracts/filter-options/incoterms'),
+      api.get('/contracts/filter-options/incoterms?scope=trucking'),
       api.get('/dashboard/filter-options/products'),
       api.get('/dashboard/filter-options/suppliers'),
     ])
@@ -1932,8 +2044,8 @@ function TruckingPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
@@ -1961,6 +2073,17 @@ function TruckingPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lateIndicatorFilter])
 
+  const isFirstSourceTypeEffect = useRef(true)
+  useEffect(() => {
+    if (isFirstSourceTypeEffect.current) {
+      isFirstSourceTypeEffect.current = false
+      return
+    }
+    setPage(1)
+    fetchTruckingOperations(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceTypeFilter])
+
   const applySearch = useCallback(() => {
     setPage(1)
     setHasMore(true)
@@ -1974,6 +2097,7 @@ function TruckingPageContent() {
   /** Reset visible rows so Section 3 shows loading when table scope filters change. */
   const beginTableScopeRefresh = useCallback(() => {
     setTruckingOperations([])
+    setQtyFieldsReady(false)
     setTableScopeLoading(true)
     setStatusCardTotalFromList(null)
     setTotalCount(0)
@@ -1987,8 +2111,17 @@ function TruckingPageContent() {
   ) => {
     const listGen = ++listFetchGenRef.current
     const fetchStatusFilter = statusFilter
+    const forceOsRefresh = Boolean(options?.force || section1SummaryForceNextFetchRef.current)
     setListFetching(true)
     setSummaryFetching(true)
+    // OS strip is static across status cards — only reset/refetch spinner on toolbar/scope force.
+    if (forceOsRefresh) {
+      setOutstandingQtyFetching(true)
+      setTruckingSection1Summary((prev: any) =>
+        prev?.outstandingQty != null ? { ...prev, outstandingQty: undefined } : prev,
+      )
+    }
+    setQtyFieldsReady(false)
     try {
       const effectivePage = forcedPage ?? page
       const params = buildTruckingListSearchParams({
@@ -1997,6 +2130,11 @@ function TruckingPageContent() {
         includeSummary: false,
         searchOverride,
       })
+
+      /** Backend forces full SAP for status cards (not ALL / UNPLANNED) — qty already correct on first paint. */
+      const stageUpper = String(fetchStatusFilter ?? '').trim().toUpperCase()
+      const listAlreadyFullSap =
+        Boolean(stageUpper) && stageUpper !== 'ALL' && stageUpper !== 'UNPLANNED'
 
       const listUrl = `/trucking?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
@@ -2007,6 +2145,8 @@ function TruckingPageContent() {
       summaryParams.set('summaryOnly', 'true')
       summaryParams.set('page', '1')
       summaryParams.set('limit', '1')
+      // OS strip is static (Unplanned/Planned/In Progress) — do not scope by status card.
+      summaryParams.delete('osStatus')
       const summaryUrl = `/trucking?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -2017,7 +2157,17 @@ function TruckingPageContent() {
         }
       }) => {
         if (envelope?.data?.summary) {
-          setTruckingSection1Summary(envelope.data.summary)
+          setTruckingSection1Summary((prev: any) => {
+            const next = { ...envelope.data!.summary! }
+            // Keep prior OS if this envelope omitted it (avoid blanking the strip).
+            if (next.outstandingQty == null && prev?.outstandingQty != null) {
+              next.outstandingQty = prev.outstandingQty
+            }
+            return next
+          })
+          if (envelope.data.summary.outstandingQty != null || !forceOsRefresh) {
+            setOutstandingQtyFetching(false)
+          }
         }
         setSummaryFetching(false)
       }
@@ -2041,8 +2191,11 @@ function TruckingPageContent() {
           }
         }
       }) => {
+        if (listGen < listRowsGenRef.current) return
+        listRowsGenRef.current = listGen
         const items = envelope?.data?.truckingOperations || []
         setTruckingOperations(items)
+        if (listAlreadyFullSap) setQtyFieldsReady(true)
         const total = Number(envelope?.data?.pagination?.total ?? 0)
         const pages = Number(envelope?.data?.pagination?.totalPages || 1)
         setTotalCount(total)
@@ -2059,7 +2212,9 @@ function TruckingPageContent() {
         } else {
           setUnplannedBreakdown(null)
         }
-        const activeStage = String(fetchStatusFilter ?? '').trim().toUpperCase()
+        const activeStage = normalizeTruckingSummaryStatusFilter(
+          String(fetchStatusFilter ?? '').trim().toUpperCase(),
+        )
         if (activeStage && activeStage !== 'ALL') {
           const listTotal =
             activeStage === 'UNPLANNED'
@@ -2073,7 +2228,7 @@ function TruckingPageContent() {
 
       const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
         listCacheKey,
-        () => api.get(listUrl).then((r) => r.data),
+        (signal) => api.get(listUrl, { signal }).then((r) => r.data),
         {
           force: options?.force,
           onRevalidate: (fresh) => {
@@ -2092,7 +2247,7 @@ function TruckingPageContent() {
       const scheduleSummaryFetches = () => {
         if (listGen !== listFetchGenRef.current) return
         const summaryGen = ++summaryFetchGenRef.current
-        void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
+        void cachedGet(summaryCacheKey, (signal) => api.get(summaryUrl, { signal }).then((r) => r.data), {
           force: summaryForce,
           onRevalidate: (fresh) => {
             if (summaryGen !== summaryFetchGenRef.current) return
@@ -2104,10 +2259,23 @@ function TruckingPageContent() {
             applySummaryEnvelope(data)
           })
           .catch(() => {
-            if (summaryGen === summaryFetchGenRef.current) setSummaryFetching(false)
+            if (summaryGen === summaryFetchGenRef.current) {
+              setSummaryFetching(false)
+              setOutstandingQtyFetching(false)
+            }
           })
       }
-      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      // Status-card-only: OS already on screen — do not leave a dangling spinner.
+      if (!forceOsRefresh && truckingSection1Summary?.outstandingQty != null) {
+        setOutstandingQtyFetching(false)
+      }
+      if (!summaryForce && isCacheFresh(summaryCacheKey)) {
+        const cachedSummary = peekCache<{ data?: { summary?: typeof truckingSection1Summary } }>(
+          summaryCacheKey,
+        )
+        if (cachedSummary) applySummaryEnvelope(cachedSummary)
+        else setSummaryFetching(false)
+      } else if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
         window.requestIdleCallback(() => scheduleSummaryFetches(), { timeout: 2000 })
       } else {
         setTimeout(scheduleSummaryFetches, 250)
@@ -2117,31 +2285,40 @@ function TruckingPageContent() {
       const scheduleHydrate = () => {
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.delete('includeSummary')
+        hydrateParams.set('includeSummary', 'false')
         hydrateParams.set('skipSapJoin', 'false')
+        hydrateParams.set('hydrateOnly', 'true')
         const hydrateUrl = `/trucking?${hydrateParams.toString()}`
         const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
-        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
+        void cachedGet(hydrateCacheKey, (signal) => api.get(hydrateUrl, { signal }).then((r) => r.data), {
           force: options?.force,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
+            if (listGen !== listRowsGenRef.current) return
             const hydrated = fresh?.data?.truckingOperations || []
             if (hydrated.length) {
               setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           },
         })
           .then(({ data }) => {
             if (listGen !== listFetchGenRef.current) return
+            if (listGen !== listRowsGenRef.current) return
             const hydrated = data?.data?.truckingOperations || []
             if (hydrated.length) {
               setTruckingOperations((prev) => mergeTruckingSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           })
           .catch((err) => {
             console.warn('Trucking SAP hydrate failed (table shows shell data):', err)
+            if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
       }
-      if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+      if (listAlreadyFullSap) {
+        setQtyFieldsReady(true)
+      } else if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
         window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
       } else {
         setTimeout(scheduleHydrate, 250)
@@ -2149,41 +2326,18 @@ function TruckingPageContent() {
     } catch (error) {
       if (listGen !== listFetchGenRef.current) return
       console.error('Failed to fetch trucking operations:', error)
-      alert('Failed to load trucking operations. Please refresh the page.')
+      // No blocking alert — transient DB/network errors on staging should not interrupt
+      // the user. Existing rows stay on screen; the next refetch recovers silently.
       setListFetching(false)
       setSummaryFetching(false)
+      setOutstandingQtyFetching(false)
     }
   }
 
-  const uploadUnplannedPlanningFromWideTemplate = useCallback(async (file: File) => {
+  const uploadCombinedDailyPlanningFromWideTemplate = useCallback(async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    const res = await api.post('/trucking/unplanned-planning/bulk-upload', fd)
-    const data = res.data?.data
-    if (data) {
-      setBulkCreateSummary({
-        processedRows: Number(data.processedRows ?? 0),
-        operationsCreated: Number(data.operationsCreated ?? 0),
-        operationsUpdated: Number(data.operationsUpdated ?? 0),
-        operationsFailed: Number(data.operationsFailed ?? 0),
-        succeededRows: Number(data.succeededRows ?? 0),
-        rowParseFailures: data.rowParseFailures ?? [],
-        operationFailures: data.operationFailures ?? [],
-        operationWarnings: data.operationWarnings ?? [],
-        failedRetemplateRows: data.failedRetemplateRows ?? [],
-        uploadHeaderRow: data.uploadHeaderRow ?? [],
-      })
-      setBulkCreateUploadOpen(true)
-    }
-    invalidateLogisticsListCaches()
-    section1SummaryForceNextFetchRef.current = true
-    await fetchTruckingOperations(page, undefined, { force: true })
-  }, [fetchTruckingOperations, page])
-
-  const uploadPlannedPlanningFromWideTemplate = useCallback(async (file: File) => {
-    const fd = new FormData()
-    fd.append('file', file)
-    const res = await api.post('/trucking/planned-planning/bulk-upload', fd)
+    const res = await api.post('/trucking/daily-planning/bulk-upload', fd)
     const data = res.data?.data
     if (data) {
       setBulkCreateSummary({
@@ -2209,23 +2363,22 @@ function TruckingPageContent() {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
+    if (sapImportActive) {
+      alert(SAP_IMPORT_IN_PROGRESS_MESSAGE)
+      return
+    }
 
     setBulkCreateUploading(true)
     try {
-      if (isUnplannedPlanningTemplateMode(statusFilter)) {
-        await uploadUnplannedPlanningFromWideTemplate(file)
-        return
-      }
-
-      if (isPlannedPlanningTemplateMode(statusFilter)) {
+      if (isDailyPlanningTemplateMode(statusFilter)) {
         const isPlanningTemplate = await isWidePlanningTemplateFile(file)
         if (!isPlanningTemplate) {
           alert(
-            'Invalid file. Upload the Planned daily trucking template (Group, Supplier, …, date columns).',
+            'Invalid file. Upload the daily trucking template (Group, Supplier, …, Status, OS Qty, date columns).',
           )
           return
         }
-        await uploadPlannedPlanningFromWideTemplate(file)
+        await uploadCombinedDailyPlanningFromWideTemplate(file)
         return
       }
 
@@ -2240,7 +2393,12 @@ function TruckingPageContent() {
       }
       await fetchTruckingOperations(1, undefined, { force: true })
     } catch (err: any) {
-      alert(err?.response?.data?.error?.message || err?.message || 'Upload failed')
+      alert(
+        sapImportInProgressErrorMessage(err) ||
+          err?.response?.data?.error?.message ||
+          err?.message ||
+          'Upload failed',
+      )
     } finally {
       setBulkCreateUploading(false)
     }
@@ -2262,6 +2420,13 @@ function TruckingPageContent() {
       const response = await api.put(`/trucking/${operationId}`, editedData)
       
       if (response.data.success) {
+        const truckingEtaFields = [
+          'eta_delivery_start_date',
+          'eta_delivery_end_date',
+          'eta_trucking_start_date',
+          'eta_trucking_completion_date',
+        ] as const
+        const hasEtaEdit = truckingEtaFields.some((field) => field in editedData)
         setTruckingOperations(prev => prev.map(operation => 
           operation.id === operationId 
             ? { ...operation, ...response.data.data }
@@ -2269,6 +2434,7 @@ function TruckingPageContent() {
         ))
         setEditingId(null)
         setEditedData({})
+        if (hasEtaEdit) invalidateMissingEtaAlertCache()
         alert('Trucking operation updated successfully!')
       }
     } catch (error: any) {
@@ -2344,6 +2510,7 @@ function TruckingPageContent() {
     setPage(1)
     setHasMore(true)
     invalidateLogisticsListCaches()
+    invalidateMissingEtaAlertCache()
     section1SummaryForceNextFetchRef.current = true
     void fetchTruckingOperations(1, undefined, { force: true })
   }
@@ -2541,6 +2708,16 @@ function TruckingPageContent() {
     })
   }
 
+  const formatOaWithCurrency = (
+    amount: number | string | null | undefined,
+    currency?: string | null,
+  ) => {
+    const formatted = formatNumber(amount as number | string)
+    if (formatted === '-') return formatted
+    const cur = currency != null ? String(currency).trim() : ''
+    return cur ? `${formatted} ${cur}` : formatted
+  }
+
   const toKg = (mt: number | string | null | undefined) => {
     if (mt === null || mt === undefined || mt === '') return null
     const raw = typeof mt === 'string' ? mt : String(mt)
@@ -2561,11 +2738,20 @@ function TruckingPageContent() {
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
   // Helper function to calculate late indicator
+  /**
+   * Due date against ATA, then the daily-planning end date, then today.
+   *
+   * It used to read `trucking_completion_date` - which on a shell response is the planning date,
+   * not the actual - and `eta_trucking_completion_date`, which is 0 of 16,552 rows for trucking
+   * because ETA is a shipment concept. So the badge judged some rows on a plan and the ETA
+   * fallback never fired. `ata_end_date` and `planning_end_date` are the two the backend filter
+   * and sort now use, so all three finally agree.
+   */
   const getLateIndicator = (operation: TruckingOperation): { color: string; text: string } =>
     computeLateIndicatorDisplay(
       operation.delivery_end_date,
-      operation.trucking_completion_date,
-      operation.eta_trucking_completion_date,
+      operation.ata_end_date,
+      operation.planning_end_date,
     )
 
   const hasActiveTruckingFilters = useMemo(() => {
@@ -2574,6 +2760,7 @@ function TruckingPageContent() {
       searchTerm.trim() !== '' ||
       statusFilter !== 'ALL' ||
       lateIndicatorFilter !== 'ALL' ||
+      sourceTypeFilter !== 'ALL' ||
       !!loadingLocationFilter.trim() ||
       !!unloadingLocationFilter.trim() ||
       selectedGroupPlants.length > 0 ||
@@ -2589,6 +2776,7 @@ function TruckingPageContent() {
     searchTerm,
     statusFilter,
     lateIndicatorFilter,
+    sourceTypeFilter,
     loadingLocationFilter,
     unloadingLocationFilter,
     selectedGroupPlants,
@@ -2607,6 +2795,7 @@ function TruckingPageContent() {
     setSearchTerm('')
     setStatusFilter('ALL')
     setLateIndicatorFilter('ALL')
+    setSourceTypeFilter('ALL')
     setLoadingLocationFilter('')
     setUnloadingLocationFilter('')
     resetUserScopeFilters()
@@ -2619,12 +2808,15 @@ function TruckingPageContent() {
     setHasMore(true)
   }, [defaultContractDateRange, resetUserScopeFilters])
 
-  /** Section 1 status circles — toggles Section 2 dropdown + Section 3 API `status` param. */
-  const handleStatusCardClick = useCallback((status: string) => {
+  /** Section 2 status cards — toggles Section 3 API `status` param. */
+  const handleStatusCardClick = useCallback((status: TruckingStatusCardKey) => {
     beginTableScopeRefresh()
     setPage(1)
     setHasMore(true)
-    setStatusFilter((prev) => (prev === status ? 'ALL' : status))
+    const next = normalizeTruckingSummaryStatusFilter(status)
+    setStatusFilter((prev) =>
+      normalizeTruckingSummaryStatusFilter(prev) === next ? 'ALL' : next,
+    )
   }, [beginTableScopeRefresh])
 
   const truckingActiveFilterScopeLabel = useMemo(() => {
@@ -2635,6 +2827,9 @@ function TruckingPageContent() {
     if (lateIndicatorFilter !== 'ALL') {
       const lateLabels: Record<string, string> = { ON_TIME: 'On Time', LATE: 'Late', NA: 'N/A' }
       parts.push(`Late: ${lateLabels[lateIndicatorFilter] ?? lateIndicatorFilter}`)
+    }
+    if (sourceTypeFilter !== 'ALL') {
+      parts.push(`Source: ${sourceTypeFilter}`)
     }
     if (searchTerm.trim().length >= 2) {
       parts.push(`Search "${searchTerm.trim()}"`)
@@ -2656,7 +2851,7 @@ function TruckingPageContent() {
     }
     if (selectedGroupPlants.length > 0) {
       parts.push(
-        `Plant${selectedGroupPlants.length > 1 ? 's' : ''}: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
+        `Region/Plant: ${selectedGroupPlants.slice(0, 2).join(', ')}${selectedGroupPlants.length > 2 ? '…' : ''}`,
       )
     }
     if (Object.keys(columnFilters).length > 0) {
@@ -2673,6 +2868,7 @@ function TruckingPageContent() {
   }, [
     statusFilter,
     lateIndicatorFilter,
+    sourceTypeFilter,
     searchTerm,
     selectedIncoterms,
     selectedProducts,
@@ -2736,6 +2932,25 @@ function TruckingPageContent() {
   const filteredOperations = useMemo(() => {
     if (!statusFilter || statusFilter === 'ALL') return truckingOperations
     const stage = statusFilter.trim().toUpperCase()
+    if (stage === 'OPEN') {
+      return truckingOperations.filter((op) => {
+        const s = String(op.status ?? '').trim().toUpperCase()
+        return s === 'UNPLANNED' || s === 'PLANNED' || s === 'IN_PROGRESS'
+      })
+    }
+    if (stage === 'CLOSE') {
+      return truckingOperations.filter((op) => {
+        const s = String(op.status ?? '').trim().toUpperCase()
+        return s === 'COMPLETED' || s === 'CANCELLED'
+      })
+    }
+    // Planned card includes In Progress rows (backend filter + client safety net).
+    if (stage === 'PLANNED') {
+      return truckingOperations.filter((op) => {
+        const s = String(op.status ?? '').trim().toUpperCase()
+        return s === 'PLANNED' || s === 'IN_PROGRESS'
+      })
+    }
     return truckingOperations.filter(
       (op) => String(op.status ?? '').trim().toUpperCase() === stage,
     )
@@ -2756,6 +2971,8 @@ function TruckingPageContent() {
   /** Section 2 card counts — summary SQL + instant patch for the active status from view-table total. */
   const truckingStatusCardCounts = useMemo(() => {
     const s = truckingSection1Summary?.status
+    const plannedOnly = Number(s?.planned ?? 0)
+    const inProgressOnly = Number(s?.inProgress ?? 0)
     const counts: Record<string, number> = {
       UNPLANNED: Number(
         unplannedTableBreakdown?.totalTableRows ??
@@ -2763,14 +2980,14 @@ function TruckingPageContent() {
           s?.unplanned ??
           0,
       ),
-      PLANNED: Number(s?.planned ?? 0),
-      IN_PROGRESS: Number(s?.inProgress ?? 0),
+      // Planned/In Progress card total = Planned + In Progress (same scope as list filter).
+      PLANNED: plannedOnly + inProgressOnly,
       COMPLETED: Number(s?.completed ?? 0),
       CANCELLED: Number(s?.cancelled ?? 0),
     }
     if (
       statusCardTotalFromList &&
-      summaryFetching &&
+      String(statusFilter ?? '').trim().toUpperCase() === statusCardTotalFromList.status &&
       Object.prototype.hasOwnProperty.call(counts, statusCardTotalFromList.status)
     ) {
       counts[statusCardTotalFromList.status] = statusCardTotalFromList.total
@@ -2780,8 +2997,34 @@ function TruckingPageContent() {
     truckingSection1Summary,
     unplannedTableBreakdown?.totalTableRows,
     statusCardTotalFromList,
-    summaryFetching,
+    statusFilter,
   ])
+
+  /** Section 2 Contract Qty (kg) — Completed / Cancelled cards only. */
+  const truckingStatusCardContractQtys = useMemo(() => {
+    const q = truckingSection1Summary?.statusContractQty
+    return {
+      COMPLETED: Number(q?.completed ?? 0),
+      CANCELLED: Number(q?.cancelled ?? 0),
+    }
+  }, [truckingSection1Summary?.statusContractQty])
+
+  /** Where Section 1's quantities came from; null when they were computed live. */
+  const truckingSummaryFreshnessNote = useMemo(
+    () => describeTruckingSummaryFreshness(truckingSection1Summary?.summaryFreshness),
+    [truckingSection1Summary?.summaryFreshness],
+  )
+
+  /** Section 2 Outstanding Qty (kg) — Unplanned + Planned card (Planned = Planned + In Progress). */
+  const truckingStatusCardOutstandingQtys = useMemo(() => {
+    const q = truckingSection1Summary?.statusOutstandingQty
+    const plannedOnly = Number(q?.planned ?? 0)
+    const inProgressOnly = Number(q?.inProgress ?? 0)
+    return {
+      UNPLANNED: Number(q?.unplanned ?? 0),
+      PLANNED: plannedOnly + inProgressOnly,
+    }
+  }, [truckingSection1Summary?.statusOutstandingQty])
 
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
@@ -2851,13 +3094,22 @@ function TruckingPageContent() {
       label: 'STO',
       defaultVisible: true,
       sortable: true,
-      getSortValue: (o) => (isTruckingContractBacklogRow(o) ? '' : o.sto_number || ''),
-      render: (o) => (
-        <OperationalNowrapCell
-          value={isTruckingContractBacklogRow(o) ? '—' : o.sto_number}
-          title={isTruckingContractBacklogRow(o) ? '—' : o.sto_number || ''}
-        />
-      )
+      getSortValue: (o) =>
+        isTruckingContractBacklogRow(o)
+          ? ''
+          : o.sto_numbers || o.sto_number || '',
+      render: (o) => {
+        if (isTruckingContractBacklogRow(o)) {
+          return <OperationalNowrapCell value="—" title="—" />
+        }
+        const stoDisplay = o.sto_numbers || o.sto_number || ''
+        return (
+          <OperationalStackedCommaCell
+            value={stoDisplay}
+            title={stoDisplay}
+          />
+        )
+      }
     },
     {
       id: 'contract_date',
@@ -2894,7 +3146,11 @@ function TruckingPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.supplier || '',
-      render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.supplier)}</span>
+      render: (o) => (
+        <span className="text-sm truncate block" title={o.supplier || undefined}>
+          {formatOperationalTableTextDisplay(o.supplier)}
+        </span>
+      ),
     },
     {
       id: 'status',
@@ -2903,7 +3159,7 @@ function TruckingPageContent() {
       sortable: true,
       getSortValue: (o) => o.status || '',
       render: (o) => (
-        <Badge className={getStatusColor(o.status)}>
+        <Badge className={getStatusColor(o.status)} title={truckingStatusLabel(o.status)}>
           {truckingStatusLabel(o.status)}
         </Badge>
       )
@@ -2926,65 +3182,72 @@ function TruckingPageContent() {
     },
     {
       id: 'contract_qty',
-      label: 'Contract Qty (MT)',
+      label: 'Contract Qty',
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => o.contract_qty || 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(o.contract_qty)}
+          {qtyFieldsReady ? formatQtyMtFromKg(o.contract_qty) : <QtyLoadingDots />}
         </span>
       )
     },
     {
       id: 'sto_quantity',
-      label: 'STO Qty (MT)',
-      defaultVisible: true,
+      label: 'STO Qty',
+      defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.sto_quantity || 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatQtyMtFromKg(o.sto_quantity)}
+          {qtyFieldsReady ? formatQtyMtFromKg(o.sto_quantity) : <QtyLoadingDots />}
         </span>
       )
     },
     {
       id: 'quantity_delivered',
-      label: 'Delivery Qty (MT)',
+      label: 'Delivery Qty',
+      formulaHelp: FIELD_HELP.truckingDeliveryQty,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatTruckingQtyMt(o.quantity_delivered)}
+          {qtyFieldsReady ? formatTruckingSapQtyMtDisplay(o.quantity_delivered) : <QtyLoadingDots />}
         </span>
       )
     },
     {
       id: 'quantity_receive',
-      label: 'Received Qty (MT)',
+      label: 'Received Qty',
+      formulaHelp: FIELD_HELP.truckingReceivedQty,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => parseTruckingQtyKg(o.quantity_receive ?? o.quantity_delivered) ?? 0,
       render: (o) => (
         <span className="text-sm break-words tabular-nums">
-          {formatTruckingQtyMt(o.quantity_receive ?? o.quantity_delivered)}
+          {qtyFieldsReady
+            ? formatTruckingSapQtyMtDisplay(o.quantity_receive ?? o.quantity_delivered)
+            : <QtyLoadingDots />}
         </span>
       )
     },
     {
       id: 'outstanding_qty_mt',
-      label: 'Outstanding Qty (MT)',
+      label: 'Outstanding Qty',
       formulaHelp: FIELD_HELP.truckingOutstandingQtyMt,
       defaultVisible: true,
       sortable: true,
       getSortValue: (o) => typeof o.outstanding_quantity === 'number' ? o.outstanding_quantity : 0,
-      render: (o) => (
-        <TruckingOutstandingQtyWithTooltip
-          outstandingKg={o.outstanding_quantity}
-          incoterm={o.incoterm}
-        />
-      )
+      render: (o) =>
+        qtyFieldsReady ? (
+          <TruckingOutstandingQtyWithTooltip
+            outstandingKg={o.outstanding_quantity}
+            incoterm={o.incoterm}
+          />
+        ) : (
+          <QtyLoadingDots />
+        )
     },
     {
       id: 'trucking_start_date',
@@ -3047,18 +3310,6 @@ function TruckingPageContent() {
       render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.trucking_owner)}</span>
     },
     {
-      id: 'quantity_sent',
-      label: 'Qty Sent (Kg)',
-      defaultVisible: false,
-      sortable: true,
-      getSortValue: (o) => o.quantity_sent || 0,
-      render: (o) => (
-        <span className="text-sm break-words">
-          {formatKg(o.quantity_sent)}
-        </span>
-      )
-    },
-    {
       id: 'gain_loss_percentage',
       label: 'Gain/Loss %',
       formulaHelp: FIELD_HELP.gainLossPct,
@@ -3093,7 +3344,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.oa_budget || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.oa_budget)}
+          {formatOaWithCurrency(o.oa_budget, o.oa_budget_currency)}
         </span>
       )
     },
@@ -3106,7 +3357,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.oa_actual || 0,
       render: (o) => (
         <span className="text-sm break-words">
-          {formatNumber(o.oa_actual)}
+          {formatOaWithCurrency(o.oa_actual, o.oa_actual_currency)}
         </span>
       )
     },
@@ -3151,6 +3402,7 @@ function TruckingPageContent() {
     {
       id: 'buyer',
       label: 'Buyer',
+      formulaHelp: FIELD_HELP.b2bBuyer,
       defaultVisible: false,
       sortable: true,
       getSortValue: (o) => o.buyer || '',
@@ -3164,7 +3416,7 @@ function TruckingPageContent() {
       getSortValue: (o) => o.group_name || '',
       render: (o) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(o.group_name)}</span>
     }
-  ], [])
+  ], [qtyFieldsReady])
 
   const defaultVisibleColumnIds = useMemo(() => {
     return compactColumns
@@ -3201,35 +3453,66 @@ function TruckingPageContent() {
   useEffect(() => {
     const allIds = compactColumns.map((c) => c.id)
     const canonical = truckingCompactColumnFallbackOrder(allIds)
-    let forceLayoutReset = false
+    let needsLayoutMigration = false
     if (typeof window !== 'undefined') {
       try {
-        if (localStorage.getItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY) !== TRUCKING_COLUMN_LAYOUT_VERSION) {
-          forceLayoutReset = true
-          localStorage.setItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY, TRUCKING_COLUMN_LAYOUT_VERSION)
-          localStorage.setItem(columnOrderStorageKey, JSON.stringify(canonical))
-          localStorage.setItem(columnStorageKey, JSON.stringify(truckingDefaultVisibleColumnIds(allIds)))
-        }
+        needsLayoutMigration =
+          localStorage.getItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY) !== TRUCKING_COLUMN_LAYOUT_VERSION
       } catch {
-        forceLayoutReset = true
+        needsLayoutMigration = true
       }
     }
 
-    if (forceLayoutReset) {
-      const defaultVis = truckingDefaultVisibleColumnIds(allIds)
-      setVisibleColumnIds(new Set(defaultVis))
-      setColumnOrderIds(canonical)
+    const applyMigratedLayout = (visible: string[], order: string[]) => {
+      const migrated = migrateTruckingColumnLayout(visible, order, allIds)
+      setVisibleColumnIds(new Set(migrated.visibleColumnIds))
+      setColumnOrderIds(migrated.columnOrderIds)
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(TRUCKING_COLUMN_LAYOUT_VERSION_KEY, TRUCKING_COLUMN_LAYOUT_VERSION)
+          localStorage.setItem(columnOrderStorageKey, JSON.stringify(migrated.columnOrderIds))
+          localStorage.setItem(columnStorageKey, JSON.stringify(migrated.visibleColumnIds))
+        } catch {
+          // ignore
+        }
+      }
       void api
         .post('/user-preferences/me', {
           key: userViewPrefKey,
           value: {
-            visibleColumnIds: defaultVis,
-            columnOrderIds: canonical,
+            visibleColumnIds: migrated.visibleColumnIds,
+            columnOrderIds: migrated.columnOrderIds,
           },
         })
         .catch(() => {
           /* localStorage already updated */
         })
+    }
+
+    if (needsLayoutMigration) {
+      let savedVisible: string[] = []
+      let savedOrder: string[] = []
+      if (typeof window !== 'undefined') {
+        try {
+          const rawVis = localStorage.getItem(columnStorageKey)
+          if (rawVis) {
+            const parsed = JSON.parse(rawVis) as unknown
+            if (Array.isArray(parsed)) savedVisible = parsed.map(String)
+          }
+          const rawOrder = localStorage.getItem(columnOrderStorageKey)
+          if (rawOrder) {
+            const parsed = JSON.parse(rawOrder) as unknown
+            if (Array.isArray(parsed)) savedOrder = parsed.map(String)
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (savedVisible.length === 0) {
+        applyMigratedLayout(truckingDefaultVisibleColumnIds(allIds), canonical)
+      } else {
+        applyMigratedLayout(savedVisible, savedOrder)
+      }
       return
     }
 
@@ -3243,6 +3526,26 @@ function TruckingPageContent() {
 
   useEffect(() => {
     let cancelled = false
+    const hadSavedVisibleAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnStorageKey))
+      }
+    })()
+    const hadSavedOrderAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnOrderStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnOrderStorageKey))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
@@ -3250,8 +3553,12 @@ function TruckingPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
-        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
+        if (Array.isArray(cols) && cols.length > 0 && !hadSavedVisibleAtOpen) {
+          setVisibleColumnIds(new Set(cols.map((x: unknown) => String(x))))
+        }
+        if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen) {
+          setColumnOrderIds(order.map((x: unknown) => String(x)))
+        }
       } catch {
         // ignore
       }
@@ -3266,6 +3573,55 @@ function TruckingPageContent() {
     () => buildTruckingVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
     [columnOrderIds, compactColumns, visibleColumnIds],
   )
+
+  const downloadTruckingViewTable = async () => {
+    if (downloadingTable) return
+    const exportColumns = visibleColumns.map((col) => ({ id: col.id, label: col.label }))
+    if (exportColumns.length === 0) {
+      alert('No visible columns to download. Enable at least one column in Columns.')
+      return
+    }
+    setDownloadingTable(true)
+    try {
+      const exportPageSize = 500
+      const collected: TruckingOperation[] = []
+      let exportPage = 1
+      let exportTotalPages = 1
+      while (exportPage <= exportTotalPages) {
+        const params = buildTruckingListSearchParams({
+          page: exportPage,
+          limit: exportPageSize,
+          includeSummary: false,
+          skipSapJoin: false,
+        })
+        const response = await api.get(`/trucking?${params.toString()}`)
+        const envelope = response.data as {
+          data?: {
+            truckingOperations?: TruckingOperation[]
+            pagination?: { totalPages?: number }
+          }
+        }
+        collected.push(...(envelope?.data?.truckingOperations || []))
+        exportTotalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        exportPage += 1
+      }
+      if (collected.length === 0) {
+        alert('No trucking operations match the current filters.')
+        return
+      }
+      const matrix = buildTruckingViewTableExportMatrix(exportColumns, collected)
+      const today = new Date().toISOString().slice(0, 10)
+      downloadAoaXlsx(matrix, {
+        sheetName: 'Trucking',
+        fileName: `trucking-${today}.xlsx`,
+      })
+    } catch (error) {
+      console.error('Failed to download Trucking table:', error)
+      alert('Failed to download table. Please try again.')
+    } finally {
+      setDownloadingTable(false)
+    }
+  }
 
   const resetCompactColumnView = useCallback(() => {
     const allIds = compactColumns.map((c) => c.id)
@@ -3323,9 +3679,25 @@ function TruckingPageContent() {
 
   const sortedOperations = useMemo(() => {
     const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
+    const col = compactColumns.find((c) => c.id === sortKey)
+    const getSortValue = col?.sortable ? col.getSortValue : undefined
+    // Default ALL / status cards without SAP-STO priority: trust server ORDER BY.
     if (!prioritizeSapSto) return filteredOperations
-    return [...filteredOperations].sort((a, b) => compareSapStoListRowPriority(a, b))
-  }, [filteredOperations, statusFilter])
+
+    const dirMul = sortDir === 'asc' ? 1 : -1
+    return [...filteredOperations].sort((a, b) => {
+      const pri = compareSapStoListRowPriority(a, b)
+      if (pri !== 0) return pri
+      if (!getSortValue) return 0
+      const av = getSortValue(a)
+      const bv = getSortValue(b)
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dirMul
+      return (
+        String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' }) *
+        dirMul
+      )
+    })
+  }, [filteredOperations, statusFilter, compactColumns, sortKey, sortDir])
 
   const section3TableLoading =
     tableScopeLoading || (listFetching && truckingOperations.length === 0)
@@ -3408,7 +3780,7 @@ function TruckingPageContent() {
     }
   }, [visibleColumns, sortedOperations, editingId])
 
-  const truckingViewToggle = (
+  const truckingViewToggle = TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED ? (
     <div className="inline-flex rounded-lg border bg-white p-1">
       <button
         type="button"
@@ -3425,39 +3797,43 @@ function TruckingPageContent() {
         Daily Planning Deliverables
       </button>
     </div>
-  )
+  ) : null
+  const dailyPlanningUploadEligible = isDailyPlanningTemplateMode(statusFilter)
+  const sapImportUploadBlockedTitle = SAP_IMPORT_IN_PROGRESS_MESSAGE
 
   return (
     <Layout>
       <div className="space-y-6">
-        <input
-          type="file"
-          accept=".csv,.xlsx,.xls"
-          className="hidden"
-          id="bulk-create-trucking-input"
-          onChange={handleBulkCreateFileChange}
-          disabled={bulkCreateUploading}
-        />
-        <input
-          type="file"
-          accept=".xlsx,.xls"
-          className="hidden"
-          id="wb-rekap-upload-input"
-          onChange={handleWbRekapFileChange}
-          disabled={wbUploading}
-        />
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Trucking Operations</h1>
-          </div>
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-4">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              className="hidden"
+              id="bulk-create-trucking-input"
+              onChange={handleBulkCreateFileChange}
+              disabled={bulkCreateUploading || sapImportActive}
+            />
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              id="wb-rekap-upload-input"
+              onChange={handleWbRekapFileChange}
+              disabled={wbUploading || sapImportActive}
+            />
             <Button
               size="sm"
               variant="outline"
               className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
               onClick={() => document.getElementById('wb-rekap-upload-input')?.click()}
-              disabled={wbUploading}
+              disabled={wbUploading || sapImportActive}
+              title={
+                sapImportActive
+                  ? sapImportUploadBlockedTitle
+                  : 'Supported files: Bontang, Kumai, Lubuk Gaung, Palembang, Tj Buton, Tj Morawa, Tj Pura'
+              }
             >
               {wbUploading ? (
                 <>
@@ -3471,28 +3847,32 @@ function TruckingPageContent() {
                 </>
               )}
             </Button>
-            {(isUnplannedPlanningTemplateMode(statusFilter) ||
-              isPlannedPlanningTemplateMode(statusFilter)) ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
-                onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
-                disabled={bulkCreateUploading || listFetching}
-              >
-                {bulkCreateUploading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Uploading...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="h-4 w-4 mr-2" />
-                    Upload Daily Planning
-                  </>
-                )}
-              </Button>
-            ) : null}
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-red-600 text-red-700 hover:bg-red-50 disabled:border-red-200 disabled:bg-red-50/40 disabled:text-red-300 disabled:opacity-100 disabled:pointer-events-none"
+              onClick={() => document.getElementById('bulk-create-trucking-input')?.click()}
+              disabled={!dailyPlanningUploadEligible || bulkCreateUploading || listFetching || sapImportActive}
+              title={
+                sapImportActive
+                  ? sapImportUploadBlockedTitle
+                  : dailyPlanningUploadEligible
+                    ? 'Upload Daily Planning (Unplanned + Planned in one file; Status is informational)'
+                    : 'Upload Daily Planning tersedia pada status Unplanned atau Planned'
+              }
+            >
+              {bulkCreateUploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload Daily Planning
+                </>
+              )}
+            </Button>
             {TRUCKING_HEADER_CREATE_UPLOAD_UI_ENABLED ? (
               <>
                 {!isUnplannedPlanningTemplateMode(statusFilter) ? (
@@ -3548,33 +3928,32 @@ function TruckingPageContent() {
                     className="pl-10"
                   />
                 </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
+                <FilterSingleSelect
+                  value={mapTruckingStatusToGlobalBucket(statusFilter)}
+                  onChange={(value) => {
                     beginTableScopeRefresh()
                     setPage(1)
                     setHasMore(true)
-                    setStatusFilter(e.target.value)
+                    setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
                   }}
-                  className="rounded-lg border px-4 py-2"
-                >
-                  <option value="ALL">All Status</option>
-                  <option value="UNPLANNED">Unplanned</option>
-                  <option value="PLANNED">Planned</option>
-                  <option value="IN_PROGRESS">In Progress</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="CANCELLED">Cancelled</option>
-                </select>
-                <select
+                  options={[...TRUCKING_GLOBAL_STATUS_OPTIONS]}
+                  ariaLabel="Trucking status filter"
+                  className="min-w-[10rem]"
+                />
+                <FilterSingleSelect
                   value={lateIndicatorFilter}
-                  onChange={(e) => setLateIndicatorFilter(e.target.value)}
-                  className="rounded-lg border px-4 py-2"
-                >
-                  <option value="ALL">All Late Indicator</option>
-                  <option value="ON_TIME">On Time</option>
-                  <option value="LATE">Late</option>
-                  <option value="NA">N/A</option>
-                </select>
+                  onChange={setLateIndicatorFilter}
+                  options={[...TRUCKING_LATE_INDICATOR_OPTIONS]}
+                  ariaLabel="Late indicator filter"
+                  className="min-w-[11rem]"
+                />
+                <FilterSingleSelect
+                  value={sourceTypeFilter}
+                  onChange={setSourceTypeFilter}
+                  options={[...LOGISTICS_SOURCE_FILTER_OPTIONS]}
+                  ariaLabel="Source filter"
+                  className="min-w-[11rem]"
+                />
               </div>
 
               <PerformanceScopeFilters
@@ -3591,6 +3970,7 @@ function TruckingPageContent() {
                 selectedSuppliers={selectedSuppliers}
                 onSuppliersChange={onSuppliersChange}
                 groupPlantOptions={availableGroupPlants}
+                uppercaseGroupPlantLabels
                 selectedGroupPlants={selectedGroupPlants}
                 onGroupPlantsChange={handleGroupPlantsChange}
                 dateFrom={dateFrom}
@@ -3601,8 +3981,8 @@ function TruckingPageContent() {
                 incotermEmptyMessage="Loading incoterms..."
                 productEmptyMessage="Loading products..."
                 supplierEmptyMessage="Loading suppliers..."
-                groupPlantPlaceholder="Select group plant(s)"
-                groupPlantEmptyMessage="No group plants"
+                groupPlantPlaceholder="Select region/plant(s)"
+                groupPlantEmptyMessage="No region/plant values"
               />
 
               <div className="flex flex-wrap items-center gap-4">
@@ -3629,98 +4009,52 @@ function TruckingPageContent() {
           </CardContent>
         </Card>
 
+        {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
+        <TruckingAttentionInsightsSection
+          variant="trucking"
+          loading={summaryFetching}
+          data={mapTruckingAttentionInsights(truckingSection1Summary?.attentionInsights)}
+        />
+        ) : null}
+
         {/* Section 2: Summary Trucking Status */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              Summary Trucking Status
-              {summaryFetching ? (
-                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
-              ) : null}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-center gap-3 md:gap-6 overflow-x-auto py-4 px-4">
-              {[
-                {
-                  status: 'UNPLANNED',
-                  label: 'Unplanned',
-                  color: 'bg-slate-100',
-                  textColor: 'text-slate-800',
-                  badgeColor: 'bg-slate-600',
-                  help: FIELD_HELP.truckingStatusUnplanned,
-                },
-                {
-                  status: 'PLANNED',
-                  label: 'Planned',
-                  color: 'bg-blue-100',
-                  textColor: 'text-blue-800',
-                  badgeColor: 'bg-blue-600',
-                  help: FIELD_HELP.truckingStatusPlanned,
-                },
-                {
-                  status: 'IN_PROGRESS',
-                  label: 'In Progress',
-                  color: 'bg-yellow-100',
-                  textColor: 'text-yellow-800',
-                  badgeColor: 'bg-yellow-600',
-                  help: FIELD_HELP.truckingStatusInProgress,
-                },
-                {
-                  status: 'COMPLETED',
-                  label: 'Completed',
-                  color: 'bg-green-100',
-                  textColor: 'text-green-800',
-                  badgeColor: 'bg-green-600',
-                  help: FIELD_HELP.truckingStatusCompleted,
-                },
-                {
-                  status: 'CANCELLED',
-                  label: 'Cancelled',
-                  color: 'bg-red-100',
-                  textColor: 'text-red-800',
-                  badgeColor: 'bg-red-600',
-                  help: FIELD_HELP.truckingStatusCancelled,
-                },
-              ].map((statusInfo, index, array) => {
-                const isStatusActive = statusFilter === statusInfo.status
-                const count = truckingStatusCardCounts[statusInfo.status] ?? 0
-                return (
-                  <div key={statusInfo.status} className="flex items-center flex-shrink-0">
-                    <div className="relative">
-                      <button
-                        type="button"
-                        title={statusInfo.help}
-                        onClick={() => handleStatusCardClick(statusInfo.status)}
-                        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full ${statusInfo.color} flex items-center justify-center border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${
-                          isStatusActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
-                        }`}
-                      >
-                        <div className={`absolute -top-3 -right-3 ${statusInfo.badgeColor} text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10`}>
-                          {count}
-                        </div>
-                        <span className={`text-xs md:text-sm font-semibold ${statusInfo.textColor} text-center px-2 leading-tight ${isStatusActive ? 'font-bold' : ''}`}>
-                          {statusInfo.label}
-                        </span>
-                      </button>
-                    </div>
-                    {index < array.length - 1 && (
-                      <div className="flex-shrink-0 mx-2 md:mx-3">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="text-gray-400">
-                          <path d="M9 18L15 12L9 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </CardContent>
-        </Card>
+        <TruckingStatusDistribution
+          loading={summaryFetching}
+          statusFilter={statusFilter}
+          counts={truckingStatusCardCounts}
+          contractQtys={truckingStatusCardContractQtys}
+          outstandingQtys={truckingStatusCardOutstandingQtys}
+          onStageClick={handleStatusCardClick}
+        />
+
+        <TruckingOutstandingQtySummary
+          loading={outstandingQtyFetching}
+          data={truckingSection1Summary?.outstandingQty}
+        />
+
+        {/*
+          Section 1's quantities are precomputed by the scheduled refresh, which is what makes this
+          page load in seconds instead of ~23-37s. The cost is that they can trail a SAP import by
+          the build duration, so the as-of is shown rather than left for someone to discover. Only
+          rendered when the figures really did come from the snapshot - a badge that is always
+          there is a badge nobody reads.
+        */}
+        {truckingSummaryFreshnessNote ? (
+          <p
+            className={
+              truckingSummaryFreshnessNote.tone === 'pending'
+                ? 'px-1 text-xs text-amber-700'
+                : 'px-1 text-xs text-muted-foreground'
+            }
+            title={truckingSummaryFreshnessNote.detail}
+          >
+            {truckingSummaryFreshnessNote.label} — {truckingSummaryFreshnessNote.detail}
+          </p>
+        ) : null}
 
         {/* Section 3: Main View Table — calendar or list tab below */}
 
-        {activeTab === 'calendar' && (
+        {TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED && activeTab === 'calendar' && (
           <>
           <Card>
             <CardHeader className="space-y-3">
@@ -3747,12 +4081,6 @@ function TruckingPageContent() {
                     </>
                   ) : null}
                 </p>
-                <div className="text-xs text-gray-600 mt-1 max-w-xl">
-                  Planned qty from Add Trucking is shown until actual qty is recorded via cell edit, CSV upload, or auto-conversion on H+1 (tomorrow).
-                  Edit cells or upload CSV/Excel — qty saved as actual delivery (validation: due date range, quantity caps).
-                  {' '}
-                  Enter qty only on days within each row&apos;s Due Start – Due End (gray days are blocked). Amber = unsaved; click Save.
-                </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 {truckingViewToggle}
@@ -3781,8 +4109,8 @@ function TruckingPageContent() {
                             { id: 'due_end', label: 'Due End' },
                             { id: 'qty_sent', label: 'Qty Sent' },
                             { id: 'qty_sent_planning', label: 'Qty Sent (planning)' },
-                            { id: 'qty_delivered', label: 'Delivery Qty (MT)' },
-                            { id: 'qty_received', label: 'Received Qty (MT)' },
+                            { id: 'qty_delivered', label: 'Delivery Qty' },
+                            { id: 'qty_received', label: 'Received Qty' },
                             { id: 'source_type', label: 'Source Type' },
                             { id: 'lt_spot', label: 'LT/SPOT' },
                             { id: 'product', label: 'Product' },
@@ -3808,45 +4136,6 @@ function TruckingPageContent() {
                       </div>
                     ) : null}
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={downloadDailyPlanningTemplate}>
-                    <Download className="h-4 w-4 mr-1" />
-                    Template
-                  </Button>
-                  <input
-                    ref={planningFileInputRef}
-                    type="file"
-                    accept=".csv,.xlsx,.xls,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
-                    className="hidden"
-                    onChange={handleDailyPlanningFileChange}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={planningUploading}
-                    onClick={() => planningFileInputRef.current?.click()}
-                  >
-                    {planningUploading ? (
-                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    ) : (
-                      <Upload className="h-4 w-4 mr-1" />
-                    )}
-                    Upload
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!calendarHasUnsavedChanges || calendarSavingAll || calendarLoading}
-                    onClick={() => void saveAllCalendarDrafts()}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    {calendarSavingAll ? (
-                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                    ) : (
-                      <Save className="h-4 w-4 mr-1" />
-                    )}
-                    Save
-                  </Button>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -3911,17 +4200,9 @@ function TruckingPageContent() {
                 month={calendarMonth}
                 rows={calendarRows}
                 loading={calendarLoading}
-                savingAll={calendarSavingAll}
-                cellDrafts={calendarCellDrafts}
-                cellBaseline={calendarSavedBaseline}
-                formatQty={formatTruckingQtyPlain}
                 visibleMetaCols={calendarVisibleMetaCols}
                 metaOrderIds={calendarMetaOrderIds}
                 onReorderMetaCols={reorderCalendarMetaCols}
-                onCellChange={(id, date, value) => {
-                  const key = `${id}:${date}`
-                  setCalendarCellDrafts((prev) => ({ ...prev, [key]: value }))
-                }}
               />
             </CardContent>
           </Card>
@@ -4008,6 +4289,10 @@ function TruckingPageContent() {
                   Status:{' '}
                   <span className="font-semibold uppercase text-slate-800">{wbUploadSummary.status}</span>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Baris tanpa PO (subtotal/rekap) dan sheet non-tiket (COVER, PIVOT) diabaikan. Hanya PO yang ada
+                  di file dan gagal disimpan yang ditampilkan di bawah.
+                </p>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <div className="rounded-md border bg-slate-50 px-3 py-2">
                     <div className="text-xs text-muted-foreground">WB tickets parsed</div>
@@ -4054,26 +4339,49 @@ function TruckingPageContent() {
                     </ul>
                   </div>
                 ) : null}
-                {(wbUploadSummary.rowParseFailures?.length ?? 0) > 0 ? (
-                  <div>
-                    <div className="font-medium text-gray-900 mb-2">Row parse issues</div>
-                    <ul className="max-h-40 overflow-auto rounded border bg-white text-xs space-y-1 p-2">
-                      {wbUploadSummary.rowParseFailures.map((f, i) => (
-                        <li key={`wb-rpf-${i}`} className="text-gray-800">
-                          {f.sheetName ? `${f.sheetName} · ` : ''}
-                          <span className="font-mono">Line {f.rowNumber}</span>
-                          {f.po_number ? ` · PO ${f.po_number}` : ''}: {f.reason}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
                 {(wbUploadSummary.operationFailures?.length ?? 0) > 0 ? (
                   <div>
                     <div className="font-medium text-gray-900 mb-2">Failed PO / date (skipped)</div>
                     <ul className="max-h-48 overflow-auto rounded border bg-white text-xs space-y-2 p-2">
                       {wbUploadSummary.operationFailures.map((f, i) => (
                         <li key={`wb-of-${i}`} className="text-gray-800">
+                          <span className="font-semibold">PO {f.po_number}</span>
+                          {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.operationDeduped?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-emerald-900 mb-2">
+                      Auto-deduped (KLIP)
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Duplicate sibling operation(s) were merged into the keeper and hidden from the Trucking list.
+                      They are not counted in the Cancelled status card.
+                    </p>
+                    <ul className="max-h-40 overflow-auto rounded border border-emerald-200 bg-emerald-50 text-xs space-y-2 p-2">
+                      {wbUploadSummary.operationDeduped?.map((f, i) => (
+                        <li key={`wb-dedupe-${i}`} className="text-emerald-950">
+                          <span className="font-semibold">PO {f.po_number}</span>: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(wbUploadSummary.operationWarnings?.length ?? 0) > 0 ? (
+                  <div>
+                    <div className="font-medium text-amber-900 mb-2">
+                      Warnings (WB saved — review duplicate operations)
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Dua atau lebih operation trucking aktif untuk PO yang sama. WB actual disimpan ke operation
+                      keeper; cancel atau dedupe sibling operation di Trucking list bila perlu.
+                    </p>
+                    <ul className="max-h-40 overflow-auto rounded border border-amber-200 bg-amber-50 text-xs space-y-2 p-2">
+                      {wbUploadSummary.operationWarnings?.map((f, i) => (
+                        <li key={`wb-ow-${i}`} className="text-amber-950">
                           <span className="font-semibold">PO {f.po_number}</span>
                           {f.progress_date ? ` · ${f.progress_date}` : ''}: {f.reason}
                         </li>
@@ -4090,11 +4398,9 @@ function TruckingPageContent() {
           <DialogContent className="max-w-2xl max-h-[88vh]" aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle>
-                {isUnplannedPlanningTemplateMode(statusFilter)
-                  ? 'Unplanned planning upload result'
-                  : isPlannedPlanningTemplateMode(statusFilter)
-                    ? 'Planned planning upload result'
-                    : 'Bulk create trucking upload result'}
+                {isDailyPlanningTemplateMode(statusFilter)
+                  ? 'Daily planning upload result'
+                  : 'Bulk create trucking upload result'}
               </DialogTitle>
             </DialogHeader>
             {bulkCreateSummary ? (
@@ -4171,8 +4477,7 @@ function TruckingPageContent() {
                     </ul>
                   </div>
                 )}
-                {(isUnplannedPlanningTemplateMode(statusFilter) ||
-                  isPlannedPlanningTemplateMode(statusFilter)) &&
+                {isDailyPlanningTemplateMode(statusFilter) &&
                 (bulkCreateSummary.failedRetemplateRows?.length ?? 0) > 0 &&
                 (bulkCreateSummary.uploadHeaderRow?.length ?? 0) > 0 ? (
                   <div className="rounded-md border border-red-200 bg-red-50/70 p-3">
@@ -4196,9 +4501,10 @@ function TruckingPageContent() {
                             cells: row.cells,
                             reason: row.reason,
                           })),
-                          filename: buildTruckingPlanningTemplateFilename(
-                            isUnplannedPlanningTemplateMode(statusFilter) ? 'unplanned' : 'planned',
-                          ).replace('.xlsx', '-failed.xlsx'),
+                          filename: buildTruckingPlanningTemplateFilename('combined').replace(
+                            '.xlsx',
+                            '-failed.xlsx',
+                          ),
                         })
                       }
                     >
@@ -4276,51 +4582,38 @@ function TruckingPageContent() {
         </Dialog>
 
         {/* Trucking Operations List */}
-        {activeTab === 'list' && (
+        {(!TRUCKING_DAILY_PLANNING_CALENDAR_UI_ENABLED || activeTab === 'list') && (
         <Card>
-          <CardHeader className="space-y-3">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                All Trucking Operations
+          <CardHeader className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <CardTitle className="flex items-center gap-2 shrink-0">
+                All Trucking
                 {listFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                 ) : null}
               </CardTitle>
-              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
-                <span className="whitespace-nowrap tabular-nums text-gray-700">
-                  <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
-                  {tableHeaderCount.noun}
-                </span>
-                <span className="text-gray-400" aria-hidden>
-                  ·
-                </span>
-                <span className="whitespace-nowrap tabular-nums">
-                  Page {page}/{totalPages}
-                  {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
-                    <>
-                      {' · '}
-                      ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without trucking ·{' '}
-                      {unplannedTableBreakdown.executionRows.toLocaleString('en-US')} ops)
-                    </>
-                  ) : statusFilter !== 'UNPLANNED' ? (
-                    <> · {totalCount.toLocaleString('en-US')} rows</>
-                  ) : null}
-                </span>
-                {truckingActiveFilterScopeLabel ? (
-                  <>
-                    <span className="text-gray-400" aria-hidden>
-                      ·
-                    </span>
-                    <span className="whitespace-nowrap font-medium text-blue-700">
-                      {truckingActiveFilterScopeLabel}
-                    </span>
-                  </>
-                ) : null}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
               {truckingViewToggle}
               <div className="flex flex-wrap items-center gap-2 ml-auto">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                  onClick={() => void downloadTruckingViewTable()}
+                  disabled={
+                    listFetching ||
+                    section3TableLoading ||
+                    downloadingTable ||
+                    totalCount === 0 ||
+                    visibleColumns.length === 0
+                  }
+                >
+                  {downloadingTable ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-2" />
+                  )}
+                  Download Data
+                </Button>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span className="inline-flex">
@@ -4475,6 +4768,28 @@ function TruckingPageContent() {
                 )}
               </div>
             </div>
+            <p className="text-xs text-gray-500 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+              <span className="whitespace-nowrap tabular-nums text-gray-700">
+                <span className="font-semibold">{tableHeaderCount.value.toLocaleString('en-US')}</span>{' '}
+                {tableHeaderCount.noun}
+              </span>
+              <span className="text-gray-400" aria-hidden>
+                ·
+              </span>
+              <span className="whitespace-nowrap tabular-nums">
+                Page {page}/{totalPages}
+              </span>
+              {truckingActiveFilterScopeLabel ? (
+                <>
+                  <span className="text-gray-400" aria-hidden>
+                    ·
+                  </span>
+                  <span className="whitespace-nowrap font-medium text-blue-700">
+                    {truckingActiveFilterScopeLabel}
+                  </span>
+                </>
+              ) : null}
+            </p>
           </CardHeader>
           <CardContent>
             {showCreateForm ? (
@@ -4521,8 +4836,23 @@ function TruckingPageContent() {
                   >
                     <table
                       data-trucking-list-table
-                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}
+                      className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}
                     >
+                      <colgroup>
+                        {visibleColumns.map((col) => (
+                          <col
+                            key={col.id}
+                            style={{
+                              width: compactTableColWidthCss(
+                                truckingTableColumnWidthPx(col.id, col.label, {
+                                  hasFormulaHelp: Boolean(col.formulaHelp),
+                                }),
+                              ),
+                            }}
+                          />
+                        ))}
+                        <col style={{ width: TRUCKING_ACTIONS_COL_WIDTH }} />
+                      </colgroup>
                       <thead>
                       <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                         {visibleColumns.map(col => {
@@ -4598,16 +4928,28 @@ function TruckingPageContent() {
                         ) : sortedOperations.map((operation, idx) => {
                           const isEditing = editingId === operation.id
                           const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          // PO-grain: one React key per operation id.
                           return (
-                              <tr key={operation.id} className={stripeClass}>
+                              <tr key={`${operation.id}|${idx}`} className={stripeClass}>
                                 {visibleColumns.map(col => {
-                                  const opColClass = operationalTableColumnClass(
-                                    getOperationalColumnLayout('trucking', col.id),
-                                  )
-                                  return (
-                                  <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
-                                    <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                      {col.id === 'status' && isEditing ? (
+                                  const layout = getOperationalColumnLayout('trucking', col.id)
+                                  const opColClass = operationalTableColumnClass(layout)
+                                  const isStatusEdit = col.id === 'status' && isEditing
+                                  const useTruncateTooltip =
+                                    !isStatusEdit &&
+                                    shouldApplyOperationalTruncateTooltip(
+                                      col.id,
+                                      layout,
+                                      TRUCKING_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                    )
+                                  const truncateTooltip = useTruncateTooltip
+                                    ? operationalRowFieldTooltipText(
+                                        col.id,
+                                        operation as unknown as Record<string, unknown>,
+                                      )
+                                    : null
+                                  const cellContent =
+                                    isStatusEdit ? (
                                         truckingDbStatus(operation) === 'CANCELLED' ? (
                                           <Badge className={getStatusColor('CANCELLED')}>CANCELLED</Badge>
                                         ) : (
@@ -4622,6 +4964,16 @@ function TruckingPageContent() {
                                         )
                                       ) : (
                                         col.render(operation)
+                                      )
+                                  return (
+                                  <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}>
+                                    <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                      {useTruncateTooltip ? (
+                                        <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                          {cellContent}
+                                        </ContractPerfTruncatedCell>
+                                      ) : (
+                                        cellContent
                                       )}
                                     </div>
                                   </td>
@@ -4747,13 +5099,13 @@ function TruckingPageContent() {
                       <p>No trucking operations found</p>
                       {searchTerm ? <p className="text-sm mt-2">Try adjusting your search filters</p> : null}
                     </div>
-                  ) : sortedOperations.map((operation) => {
+                  ) : sortedOperations.map((operation, idx) => {
                   const isEditing = editingId === operation.id
                   const currentData = isEditing ? editedData : operation
 
                   return (
                     <div
-                      key={operation.id}
+                      key={`${operation.id}|${idx}`}
                       className={`border rounded-lg transition-colors ${isEditing ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                     >
                       <div className="p-4">
@@ -4987,7 +5339,9 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatNumber(operation.oa_budget)}</div>
+                              <div className="font-medium">
+                                {formatOaWithCurrency(operation.oa_budget, operation.oa_budget_currency)}
+                              </div>
                             )}
                           </div>
                           <div>
@@ -5001,7 +5355,9 @@ function TruckingPageContent() {
                                 className="h-8 text-sm"
                               />
                             ) : (
-                              <div className="font-medium">{formatNumber(operation.oa_actual)}</div>
+                              <div className="font-medium">
+                                {formatOaWithCurrency(operation.oa_actual, operation.oa_actual_currency)}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -5185,7 +5541,6 @@ export default function TruckingPage() {
       fallback={
         <Layout>
           <div className="space-y-6">
-            <h1 className="text-3xl font-bold">Trucking Operations</h1>
             <p className="text-sm text-gray-400">Loading…</p>
           </div>
         </Layout>

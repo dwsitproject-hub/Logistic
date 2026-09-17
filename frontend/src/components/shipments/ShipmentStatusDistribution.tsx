@@ -2,82 +2,150 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Ship } from 'lucide-react'
 import {
   formatDischargePortBreakdownTooltip,
   formatLoadingPortBreakdownTooltip,
+  pipelineCardQtyForStage,
   pipelineCountForStage,
+  pipelineVesselNamesForStage,
+  splitVesselNamesForCard,
   SHIPMENT_PAGE_PIPELINE_CARDS,
   type DischargePortBreakdown,
   type LoadingPortBreakdown,
+  type ShipmentPagePipelineContractQtyKg,
+  type ShipmentPagePipelineOutstandingQtyKg,
   type ShipmentPagePipelineStage,
   type ShipmentPagePipelineStatusCounts,
+  type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
+import { formatQtyMtFromKg } from '@/lib/utils'
 
 export interface ShipmentStatusDistributionProps {
   loading: boolean
   statusFilter: string
   counts: ShipmentPagePipelineStatusCounts
+  vesselNames?: ShipmentPagePipelineVesselNames
   loadingPortBreakdown: LoadingPortBreakdown
   dischargePortBreakdown: DischargePortBreakdown
   onStageClick: (stage: ShipmentPagePipelineStage) => void
+  /** Pre-planned grouping suggestion counts — tooltip on Unplanned card only. */
+  unplannedSuggestionSummary?: {
+    groupCount: number
+    ungroupedCount: number | null
+    isFilterScoped?: boolean
+  }
+  contractQtys?: Partial<ShipmentPagePipelineContractQtyKg>
+  outstandingQtys?: Partial<ShipmentPagePipelineOutstandingQtyKg>
 }
 
 export function ShipmentStatusDistribution({
   loading,
   statusFilter,
   counts,
+  vesselNames,
   loadingPortBreakdown,
   dischargePortBreakdown,
   onStageClick,
+  unplannedSuggestionSummary,
+  contractQtys,
+  outstandingQtys,
 }: ShipmentStatusDistributionProps) {
   const renderPipelineCard = (card: (typeof SHIPMENT_PAGE_PIPELINE_CARDS)[number]) => {
     const isActive = statusFilter === card.status
     const count = pipelineCountForStage(card.status, counts)
+    const cardQty = pipelineCardQtyForStage(card.status, contractQtys, outstandingQtys)
+    const stageVessels = pipelineVesselNamesForStage(card.status, vesselNames) ?? []
+    const { preview, moreCount } = splitVesselNamesForCard(stageVessels)
     const breakdownTooltip =
       card.breakdown === 'loading'
         ? formatLoadingPortBreakdownTooltip(loadingPortBreakdown)
         : card.breakdown === 'discharge'
           ? formatDischargePortBreakdownTooltip(dischargePortBreakdown)
           : null
-    const title = breakdownTooltip ? `${card.tooltip}\n\n${breakdownTooltip}` : card.tooltip
+    const vesselListTooltip =
+      stageVessels.length > 0
+        ? `Vessels (${stageVessels.length}):\n${stageVessels.join('\n')}`
+        : null
+    const suggestionTooltip =
+      card.status === 'UNPLANNED' && unplannedSuggestionSummary && unplannedSuggestionSummary.groupCount > 0
+        ? `${unplannedSuggestionSummary.groupCount} pre-planned grouping suggestion${
+            unplannedSuggestionSummary.groupCount === 1 ? '' : 's'
+          }${
+            unplannedSuggestionSummary.isFilterScoped ? ' matching current global filters' : ''
+          } ready to review in the table below${
+            unplannedSuggestionSummary.ungroupedCount != null &&
+            unplannedSuggestionSummary.ungroupedCount > 0
+              ? ` (${unplannedSuggestionSummary.ungroupedCount} contracts not yet grouped)`
+              : ''
+          }.`
+        : null
+    const tooltipBody = [card.tooltip, suggestionTooltip, breakdownTooltip, vesselListTooltip]
+      .filter(Boolean)
+      .join('\n\n')
 
     const button = (
       <button
         type="button"
-        title={breakdownTooltip ? undefined : card.tooltip}
         onClick={() => onStageClick(card.status)}
-        className={`relative w-24 h-24 md:w-28 md:h-28 rounded-full border-2 border-white shadow-lg transition-all cursor-pointer hover:shadow-xl hover:scale-[1.02] ${card.color} flex items-center justify-center ${
-          isActive ? 'ring-4 ring-blue-400 ring-offset-2' : ''
+        className={`relative flex h-full min-h-[11.5rem] w-40 flex-col md:w-44 rounded-xl border border-black/5 px-4 py-3 text-left shadow-sm transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 ${card.color} ${
+          isActive ? 'ring-2 ring-blue-500 ring-offset-2 shadow-md' : ''
         }`}
       >
         <div
-          className={`absolute -top-3 -right-3 text-white text-xs md:text-sm font-bold rounded-full w-8 h-8 md:w-9 md:h-9 flex items-center justify-center shadow-lg z-10 ${card.badgeColor}`}
-        >
-          {count}
-        </div>
-        <span
-          className={`text-xs md:text-sm font-semibold px-2 leading-tight ${card.textColor} text-center ${
+          className={`text-xs md:text-sm font-semibold leading-tight ${card.textColor} ${
             isActive ? 'font-bold' : ''
           }`}
         >
           {card.label}
-        </span>
+        </div>
+        <div className={`mt-1 text-2xl font-bold tabular-nums ${card.textColor}`}>
+          {count.toLocaleString('en-US')}
+        </div>
+        {cardQty ? (
+          <div
+            className={`mt-1.5 border-t border-black/10 pt-1.5 text-[11px] leading-snug ${card.textColor} opacity-80`}
+          >
+            <div className="font-medium">{cardQty.label}</div>
+            <div className="mt-0.5 tabular-nums font-semibold opacity-90">
+              {formatQtyMtFromKg(cardQty.kg)}
+            </div>
+          </div>
+        ) : null}
+        <div
+          className={`mt-1.5 flex min-h-[3.5rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
+        >
+          <div className="flex items-center gap-1 opacity-80">
+            <Ship className="h-3 w-3 shrink-0" aria-hidden />
+            <span>{stageVessels.length === 0 ? 'No vessels' : 'Vessels'}</span>
+          </div>
+          {preview.length > 0 ? (
+            <ul className="mt-1 space-y-0.5 opacity-90">
+              {preview.map((name) => (
+                <li key={name} className="truncate leading-tight" title={name}>
+                  {name}
+                </li>
+              ))}
+              {moreCount > 0 ? (
+                <li className="font-semibold opacity-80">+{moreCount.toLocaleString('en-US')} more</li>
+              ) : null}
+            </ul>
+          ) : null}
+        </div>
       </button>
     )
 
     return (
-      <div className="relative">
-        {breakdownTooltip ? (
-          <Tooltip delayDuration={200}>
-            <TooltipTrigger asChild>{button}</TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-xs whitespace-pre-wrap text-xs leading-relaxed">
-              {title}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          button
-        )}
+      <div className="relative h-full">
+        <Tooltip delayDuration={200}>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent
+            side="bottom"
+            className="max-h-72 max-w-xs overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed"
+          >
+            {tooltipBody}
+          </TooltipContent>
+        </Tooltip>
       </div>
     )
   }
@@ -101,15 +169,15 @@ export function ShipmentStatusDistribution({
           aria-label="Shipment pipeline status — scroll horizontally on small screens"
         >
           <div
-            className={`mx-auto flex w-max min-w-full items-center gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
+            className={`mx-auto flex w-max min-w-full items-stretch gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
               loading ? 'opacity-65' : 'opacity-100'
             }`}
           >
             {SHIPMENT_PAGE_PIPELINE_CARDS.map((card, index, array) => (
-              <div key={card.status} className="flex flex-shrink-0 items-center">
+              <div key={card.status} className="flex flex-shrink-0 items-stretch self-stretch">
                 {renderPipelineCard(card)}
                 {index < array.length - 1 && (
-                  <div className="mx-2 flex-shrink-0 md:mx-3">
+                  <div className="mx-2 flex flex-shrink-0 items-center self-center md:mx-3">
                     <svg
                       width="28"
                       height="28"

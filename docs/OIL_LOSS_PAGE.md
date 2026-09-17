@@ -261,8 +261,8 @@ Filter diterapkan di `filteredByTopFilters` **setelah** fetch API. **Tidak** men
 | Product | Truncate + tooltip |
 | Incoterm | Truncate + tooltip |
 | Qty Contract | MT |
-| Qty Delivery | MT (SAP) |
-| Qty Received | MT (SAP) |
+| Qty Delivery | MT (Contracts View Table / qty_move + UAT) |
+| Qty Received | MT (Contracts View Table / qty_move) |
 | Oil Loss (MT) | 2 desimal |
 | Oil Loss % | 2 desimal |
 | Status | Badge |
@@ -336,7 +336,7 @@ Status: `close`, `closed`, `completed`
 ### All Contract (`aggregateOilLossByContract`)
 
 - Group key: `contract_number` → `contract_ext_no` → `row.id`
-- Qty Delivery & Received: **dijumlahkan**
+- Qty Delivery & Received: **Contracts View Table formula** (API overlays `qty_move` + UAT); when merging SPD rows for the same contract, **take once** (do not sum)
 - Qty Contract: **MAX** per merge (bukan sum)
 - Oil Loss: dihitung ulang dari total delivery/received
 - Token multi-nilai (PO, STO): digabung unik dipisah koma
@@ -344,7 +344,7 @@ Status: `close`, `closed`, `completed`
 ### By Transporter (`aggregateOilLossByTransporter`)
 
 - Group key: `LOWER(TRIM(transporter))`
-- Qty Contract, Delivery, Received: **dijumlahkan**
+- Qty Contract, Delivery, Received: **dijumlahkan sekali per contract** (bukan per baris SPD)
 - Loading/Unloading: merge token unik
 - Oil Loss: dihitung ulang dari total
 

@@ -4,16 +4,20 @@ import { EditShipmentModal, type EditShipmentModalProps } from '@/components/sha
 
 export type ViewShipmentModalProps = Omit<
   EditShipmentModalProps,
-  'readOnly' | 'onSubmit'
+  'readOnly' | 'enableAtaQualityEditInView'
 >
 
-/** Read-only shipment detail modal — same layout as Edit Shipment without edit actions. */
-export function ViewShipmentModal(props: ViewShipmentModalProps) {
+/** Read-only shipment detail with optional ATA + Quality edit (when user has edit permission). */
+export function ViewShipmentModal({
+  onSubmit = async () => {},
+  ...props
+}: ViewShipmentModalProps) {
   return (
     <EditShipmentModal
       {...props}
+      onSubmit={onSubmit}
       readOnly
-      onSubmit={async () => {}}
+      enableAtaQualityEditInView
     />
   )
 }

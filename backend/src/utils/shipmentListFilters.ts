@@ -1,13 +1,17 @@
 /**
  * Server-side global search + column filters on grouped shipment list (`shipment_base` alias `sb`).
  */
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance'
+import { sqlContractOutstandingFromFields, sqlIncotermQuantityDeliveryCase } from './sapIncotermMetrics'
 
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import {
   LEGACY_SHIPMENT_STATUS_ALIASES,
   SHIPMENT_AUTO_STATUSES,
   SHIPMENT_DISCHARGE_ETA_PHASE_STATUSES,
   SHIPMENT_LOADING_ETA_PHASE_STATUSES,
+  sqlShipmentStatusRank,
   type ShipmentAutoStatus,
 } from './shipmentStatus'
 
@@ -138,10 +142,88 @@ const SB_COL: Record<string, string> = {
   created_at: 'sb.created_at',
 }
 
+/** 10-digit numeric SAP keys (STO or PO) — exact match enables inner WHERE fast path in list SQL. */
+export function isExactStoGlobalSearch(search: string): boolean {
+  const trimmed = String(search ?? '').trim();
+  return /^\d{10}$/.test(trimmed);
+}
+
+/** Inner shipment_base_core WHERE for exact 10-digit global search or ?sto= filter. */
+export function buildExactNumericGlobalSearchInnerSql(
+  stoKeySql: string,
+  paramIndex: number,
+): string {
+  const p = `$${paramIndex}`;
+  return `(
+        TRIM(${stoKeySql}) = TRIM(${p}::text)
+        OR s.shipment_id = ${p}
+        OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${p}::text)
+        OR TRIM(COALESCE(c.po_number::text, '')) = TRIM(${p}::text)
+        /*
+         * Exact STO search is identity-only (sto_key / shipment_id / operation_id).
+         * Do not match via contract_stos on the same contract: the list is one row per STO,
+         * so that EXISTS pulled every sibling STO on the PO.
+         *
+         * PO / contract numbers of the OTHER contracts on the same STO.
+         *
+         * The list groups by STO, and several contracts can share one STO number. The
+         * displayed PO and contract columns already aggregate across every contract on the
+         * STO (buildStoLinkedPoNumbersSql / buildStoLinkedContractNumbersSql), but the search
+         * above only ever compares the shipment's OWN contract. So a row could show
+         * "1011003113, 1011003143" while searching 1011003113 returned nothing - the PO was
+         * visible on the page and unfindable at the same time.
+         *
+         * Measured on a copy of staging: contracts 1011003113 / 1011003130 / 1011003143 all
+         * carry STO 1016010973. Searching 1011003143 found the row (it owns the shipment);
+         * the other two found nothing.
+         *
+         * The lookup starts from the PO/contract number, which identifies at most a handful
+         * of contracts, and only then checks whether one of them shares this row's STO - the
+         * cheap direction. It deliberately covers the two structural linkages (the contract's
+         * own sto_number and its contract_stos lines) rather than reusing the full
+         * contractsOnStoSubquery, whose SAP and shipment branches would add per-row JSONB work
+         * to every search.
+         *
+         * Note on B2B children: contractsOnStoSubquery also applies
+         * sqlB2bChildContractRowExcludeWhere, so a B2B child PO is not listed in the row's PO
+         * column. This branch does NOT replicate that exclusion, which means such a PO can
+         * find the row it participates in without being named on it (1011003130 above is a
+         * B2B child of 1001030778). That is intentional: searching is navigation, and
+         * "where is this PO's vessel activity?" is answered by the STO group row. The B2B
+         * exclusion exists to stop quantities being counted twice in aggregates, and this
+         * branch touches neither the row set nor any figure - only whether an existing row is
+         * reachable by that search term.
+         *
+         * Searching a PO still finds that STO group row. Searching a STO number does not
+         * fan out to other STO rows on the same PO.
+         */
+        OR EXISTS (
+          SELECT 1
+          FROM contracts c_ident
+          WHERE (
+              TRIM(COALESCE(c_ident.po_number::text, '')) = TRIM(${p}::text)
+              OR TRIM(COALESCE(c_ident.contract_id::text, '')) = TRIM(${p}::text)
+            )
+            AND (
+              TRIM(COALESCE(c_ident.sto_number::text, '')) = TRIM(${stoKeySql})
+              OR EXISTS (
+                SELECT 1
+                FROM contract_stos cs_ident
+                WHERE cs_ident.contract_id = c_ident.id
+                  AND TRIM(cs_ident.sto_number::text) = TRIM(${stoKeySql})
+              )
+            )
+        )
+      )`;
+}
+
 export function appendShipmentGlobalSearch(
   searchTrim: string,
   startIndex: number
 ): { sql: string; params: any[]; nextIndex: number } {
+  if (isExactStoGlobalSearch(searchTrim)) {
+    return { sql: '', params: [], nextIndex: startIndex };
+  }
   if (!searchTrim || searchTrim.length < 2) {
     return { sql: '', params: [], nextIndex: startIndex }
   }
@@ -153,6 +235,8 @@ export function appendShipmentGlobalSearch(
       OR COALESCE(sb.contract_numbers::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.po_numbers::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.sto_number::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.shipment_id::text, '') ILIKE ${likeExpr}
+      OR COALESCE(sb.operation_id::text, '') ILIKE ${likeExpr}
       OR COALESCE(sb.vessel_name::text, '') ILIKE ${likeExpr}
     )`
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 }
@@ -277,6 +361,51 @@ export function appendShipmentLateIndicatorFilter(
   return { sql: '', params: [], nextIndex: startIndex }
 }
 
+function normalizedCharterTypeBucketExpr(alias = 'sb'): string {
+  const raw = `UPPER(REPLACE(TRIM(COALESCE(${alias}.charter_type, '')), ' ', ''))`;
+  return `CASE
+    WHEN ${raw} IN ('T/C', 'TC') THEN 'T/C'
+    WHEN ${raw} IN ('V/C', 'VC') THEN 'V/C'
+    WHEN ${raw} = 'CIF' THEN 'CIF'
+    ELSE NULL
+  END`;
+}
+
+/** Toolbar charter-type filter (T/C, V/C, CIF). */
+export function appendShipmentCharterTypeFilter(
+  charterType: string | undefined,
+  startIndex: number,
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const v = String(charterType ?? 'ALL').trim().toUpperCase()
+  if (!v || v === 'ALL') {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  let bucket: string | null = null
+  if (v === 'T/C' || v === 'TC') bucket = 'T/C'
+  else if (v === 'V/C' || v === 'VC') bucket = 'V/C'
+  else if (v === 'CIF') bucket = 'CIF'
+  if (!bucket) {
+    return { sql: '', params: [], nextIndex: startIndex }
+  }
+  return {
+    sql: ` AND ${normalizedCharterTypeBucketExpr('sb')} = $${startIndex}::text`,
+    params: [bucket],
+    nextIndex: startIndex + 1,
+  }
+}
+
+/**
+ * Toolbar source filter (Interco / 3rd Party) on grouped shipment_base.
+ * Uses MAX(c.source_type) projected as sb.contract_source_type.
+ */
+export function appendShipmentSourceTypeFilter(
+  sourceType: string | undefined,
+  startIndex: number,
+): { sql: string; params: unknown[]; nextIndex: number } {
+  const sql = appendContractPerfSourceTypeFilter(sourceType, 'sb.contract_source_type')
+  return { sql, params: [], nextIndex: startIndex }
+}
+
 /** View-by dropdown: narrow to one dimension (optional). */
 export function appendShipmentViewOptionFilter(
   viewOption: string | undefined,
@@ -367,16 +496,63 @@ export function shipmentHasAnyEtaExpr(alias: string): string {
 }
 
 /**
+ * Delivery Qty signal on grouped shipment_base rows (legacy + KLIP).
+ * quantity_delivered_sap is page-level only — list display also uses it via deriveShipmentStatus.
+ */
+export function shipmentHasDeliveryQtyExpr(alias: string): string {
+  const f = alias
+  return `(COALESCE(${f}.quantity_delivered, 0) > 0 OR COALESCE(${f}.quantity_delivered_klip, 0) > 0)`
+}
+
+/**
  * Effective SEA shipment status on grouped list rows (`shipment_base` / `filtered_shipments`).
  * Mirrors deriveShipmentStatus — granular ATA tiers for Shipments module.
+ *
+ * One STO is one voyage: milestone dates are MAX-merged across PO/contract members, so
+ * AT Sailed / ATC Discharge on any shipment PO in the group drives the pipeline card.
+ *
+ * ATC completes the shipment, alongside GR Close. Waiting for GR left a vessel that had finished
+ * discharging reading UNLOADING until SAP closed the transaction — see deriveShipmentStatus, which
+ * this mirrors. Contract Open/Close is unaffected: it comes from isContractEffectivelyDone, which
+ * never reads shipment status.
+ *
+ * Persisted sibling `shipments.status` must not demote.
  */
-export function shipmentEffectiveStatusExpr(alias: string): string {
+export function shipmentEffectiveStatusExpr(
+  alias: string,
+  opts: { dischargeColumn?: string } = {},
+): string {
   const f = alias
+  /*
+   * `dischargeColumn` lets the OS path read `ata_vessel_complete_discharge_own_sto` instead.
+   *
+   * The plain column is a MAX over the whole STO group, and for FOB a group can contain a shipment
+   * whose own STO is a different one (see buildShipmentListAtaSelectSql) - so a finished voyage can
+   * mark a group of still-planned shipments as COMPLETED. The list column keeps the group-wide
+   * value, which is what the page has always displayed; only the OS buckets use the narrowed one,
+   * because only they decide whether a contract's quantity is still counted anywhere.
+   */
+  const atc = `${f}.${opts.dischargeColumn ?? 'ata_vessel_complete_discharge'}`;
   return `(
     CASE
       WHEN UPPER(TRIM(COALESCE(${f}.status, ''))) = 'CANCELLED' THEN 'CANCELLED'
       WHEN COALESCE(${f}.is_contract_sap_closed, FALSE) IS TRUE THEN 'COMPLETED'
-      WHEN ${f}.ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'
+      WHEN ${atc} IS NOT NULL THEN 'COMPLETED'
+      /*
+       * Nothing left outstanding finishes a shipment, even with GR still Open and no ATC.
+       * Trucking has had this since isTruckingPipelineCompleted, and the OS cards already apply
+       * it (shipmentOutstandingQtySummarySql); the list's status column was the last place that
+       * did not, so a row could read PLANNED while its own OS card counted it as finished.
+       *
+       * Sits AFTER the Cancelled and GR-Close arms so it can only ever add COMPLETED, never
+       * override a decision already made.
+       *
+       * The flag is computed once per STO group in the base CTE as BOOL_AND over the group's
+       * contracts - the same shape as is_contract_sap_closed above. BOOL_AND, not a summed OS:
+       * a contract can belong to several STO groups, so summing would need the per-STO division
+       * the aggregates apply to avoid overstating. Testing each contract sidesteps that entirely.
+       */
+      WHEN COALESCE(${f}.is_contract_os_within_band, FALSE) IS TRUE THEN 'COMPLETED'
       WHEN ${f}.ata_vessel_start_discharging IS NOT NULL THEN 'UNLOADING'
       WHEN ${f}.ata_vessel_berthed_at_discharge_port IS NOT NULL THEN 'BERTHED_DP'
       WHEN ${f}.ata_vessel_arrive_at_discharge_port IS NOT NULL THEN 'ARRIVED_DP'
@@ -386,9 +562,28 @@ export function shipmentEffectiveStatusExpr(alias: string): string {
       WHEN ${f}.ata_vessel_berthed_at_loading_port IS NOT NULL THEN 'BERTHED_LP'
       WHEN ${f}.ata_vessel_arrival_at_loading_port IS NOT NULL THEN 'ARRIVED_LP'
       WHEN ${shipmentHasAnyEtaExpr(f)} THEN 'PLANNED'
-      ELSE 'UNPLANNED'
+      WHEN ${shipmentHasDeliveryQtyExpr(f)} THEN 'PLANNED'
+      /* Open STO/shipment without ATA ladder = Planned (Unplanned card is PO backlog only). */
+      ELSE 'PLANNED'
     END
   )`
+}
+
+/** Aggregates for mixed persisted statuses on grouped STO rows (diagnostic / shipping-perf).
+ *  Pipeline cards use MAX ATA via shipmentEffectiveStatusExpr, not this floor. */
+export function sqlShipmentGroupStatusFloorAgg(shipmentAlias = 's'): string {
+  const s = shipmentAlias
+  const active = `${s}.id IS NOT NULL
+      AND NULLIF(TRIM(COALESCE(${s}.status, '')), '') IS NOT NULL
+      AND UPPER(TRIM(${s}.status)) NOT IN ('CANCELLED', 'CANCELED')`
+  /** Legacy DB UNPLANNED on open STOs maps to PLANNED so multi-contract floor cannot demote. */
+  const normalizedStatus = `CASE
+      WHEN UPPER(TRIM(${s}.status)) = 'UNPLANNED' THEN 'PLANNED'
+      ELSE UPPER(TRIM(${s}.status))
+    END`
+  return `(array_agg(${normalizedStatus} ORDER BY ${sqlShipmentStatusRank(normalizedStatus)} ASC)
+      FILTER (WHERE ${active}))[1] AS group_status_floor,
+    COUNT(DISTINCT ${normalizedStatus}) FILTER (WHERE ${active}) AS group_active_status_count`
 }
 
 /** Statuses that contribute to ETA Loading buckets (matches shipmentsPageDerivedData). */
@@ -545,4 +740,34 @@ export function appendShipmentEtaBucketFilters(
   }
 
   return { sql: parts.join(''), params: [], nextIndex: 0 }
+}
+
+/**
+ * Per-contract "nothing left outstanding", for the Shipments list base CTE.
+ *
+ * Reads `contract_qty_move_snapshot` through a joined alias (`qms`) rather than the `qty_move`
+ * CTE the OS cards use: the list query does not have that CTE in scope, and splicing one into a
+ * statement this size has changed plans badly here before. A primary-key join costs 33ms across
+ * every sea contract on dev. The numbers are identical either way - same table, same formula.
+ */
+export function shipmentListContractOsWithinBandExpr(
+  contractAlias = 'c',
+  snapshotAlias = 'qms',
+): string {
+  const incoterm = `COALESCE(${contractAlias}.incoterm, '')`
+  const delivery = sqlIncotermQuantityDeliveryCase(
+    incoterm,
+    `${snapshotAlias}.quantity_delivery_trucking`,
+    `${snapshotAlias}.quantity_delivery_vessel`,
+    `UPPER(TRIM(COALESCE(${contractAlias}.transport_mode, '')))`,
+  )
+  const outstanding = sqlContractOutstandingFromFields({
+    contractQtyExpr: `${contractAlias}.quantity_ordered`,
+    incotermExpr: incoterm,
+    receiveExpr: `${snapshotAlias}.quantity_receive`,
+    deliveryExpr: `(${delivery})`,
+    clampAtZero: true,
+  })
+  // A contract with no snapshot row has no evidence of completion - never assume it finished.
+  return `(${snapshotAlias}.contract_number IS NOT NULL AND (${outstanding}) <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})`
 }

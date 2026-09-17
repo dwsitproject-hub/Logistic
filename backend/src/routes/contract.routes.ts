@@ -2,7 +2,6 @@ import express from 'express';
 import multer from 'multer';
 import {
   getContracts,
-  getUnassignedCounts,
   getContract,
   getContractStoInformation,
   getContractLogisticsStoDetail,
@@ -10,6 +9,7 @@ import {
   getB2bPartiesForContract,
   getContractFilterIncoterms,
   getContractFilterGroupPlants,
+  getContractFilterMasterGroupPlants,
   getContractFilterB2bFlags,
   getLatePerformance,
   getLatePerformanceSummary,
@@ -21,8 +21,9 @@ import {
   bulkUpdateCargoReadiness,
 } from '../controllers/contract.controller';
 import { createContractRemark, getContractRemarks } from '../controllers/remarks.controller';
-import { authenticateToken, authorize } from '../middleware/auth';
+import { authenticateToken, authorize, authorizePermission } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
 
 const csvUpload = multer({
   storage: multer.memoryStorage(),
@@ -78,8 +79,8 @@ router.get('/late-performance/data', getLatePerformanceData);
 router.get('/late-performance', getLatePerformance);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/filter-options/group-plants', getContractFilterGroupPlants);
+router.get('/filter-options/master-group-plants', getContractFilterMasterGroupPlants);
 router.get('/filter-options/b2b-flags', getContractFilterB2bFlags);
-router.get('/unassigned-counts', getUnassignedCounts);
 router.get('/buyers', getDistinctBuyers);
 
 /**
@@ -106,7 +107,7 @@ router.get('/:id/sto-information', getContractStoInformation);
 router.get('/:id/logistics-sto-detail', getContractLogisticsStoDetail);
 router.get('/:id/activity-log', getContractActivityLog);
 router.get('/:id/remarks', getContractRemarks);
-router.post('/:id/remarks', createContractRemark);
+router.post('/:id/remarks', blockWhenWithdrawn('contract'), createContractRemark);
 router.get('/:id/b2b-parties', getB2bPartiesForContract);
 router.get('/:id', getContract);
 
@@ -196,7 +197,7 @@ router.post('/bulk-cargo-readiness', authorize('ADMIN', 'TRADING'), csvUpload.si
  *       404:
  *         description: Contract not found
  */
-router.put('/:id', authorize('ADMIN', 'TRADING'), auditLog('UPDATE', 'CONTRACT'), updateContract);
+router.put('/:id', authorizePermission('data.contracts', 'can_edit'), blockWhenWithdrawn('contract'), auditLog('UPDATE', 'CONTRACT'), updateContract);
 
 export default router;
 

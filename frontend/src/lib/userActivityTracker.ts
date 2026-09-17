@@ -1,4 +1,5 @@
 import api from '@/lib/api';
+import { isAuthenticatedLocally } from '@/lib/authSession';
 import type { UserActivityEventPayload, UserActivityEventType } from '@/lib/userActivityLog';
 
 const FLUSH_INTERVAL_MS = 5000;
@@ -17,7 +18,7 @@ function shouldSkipUrl(url?: string): boolean {
 
 function enqueue(event: UserActivityEventPayload): void {
   if (typeof window === 'undefined') return;
-  if (!localStorage.getItem('token')) return;
+  if (!isAuthenticatedLocally()) return;
 
   queue.push({
     ...event,
@@ -46,16 +47,18 @@ function ensureFlushLoop(): void {
 
   window.addEventListener('beforeunload', () => {
     if (!queue.length) return;
-    const token = localStorage.getItem('token');
+    if (!isAuthenticatedLocally()) return;
     const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:5001/api';
-    if (!token) return;
+    const token = localStorage.getItem('token');
     const body = JSON.stringify({ events: queue });
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
     void fetch(`${baseURL}/user-activity/events`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
+      credentials: 'include',
       body,
       keepalive: true,
     });

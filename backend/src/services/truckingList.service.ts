@@ -1,10 +1,15 @@
 import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
+import logger from '../utils/logger';
+import { runQueriesInBatches } from '../utils/runQueriesInBatches';
+import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
+import { sqlB2bEndingUnloadExpr } from '../utils/b2bOriginEndingSql';
 import {
   appendTruckingColumnFilters,
   appendTruckingGlobalSearch,
   appendTruckingLateIndicatorFilter,
+  appendTruckingSourceTypeFilter,
   parseColumnFiltersQuery,
 } from '../utils/truckingListFilters';
 import {
@@ -14,26 +19,62 @@ import {
   buildTruckingUnplannedContractToolbarScope,
 } from '../utils/truckingUnplannedHybridSql';
 import { deriveTruckingEffectiveStatus } from '../utils/truckingEffectiveStatus';
-import { appendTruckingPipelineStageFilter, normalizeTruckingPagePipelineStageParam } from '../utils/truckingPagePipelineSql';
+import {
+  appendTruckingPipelineStageFilter,
+  buildTruckingExpandedStatusFilterWhere,
+  normalizeTruckingPagePipelineStageParam,
+  sqlTruckingIsCompletedFromLateral,
+} from '../utils/truckingPagePipelineSql';
+import {
+  sqlTruckingGrCancelledFromLateral,
+  sqlTruckingGrClosedFromLateral,
+} from '../utils/truckingQuantitySql';
 import { truckingPageListScopeWhereSql } from '../utils/truckingIncotermScope';
+import { truckingListExcludeDedupedWhereSql } from '../utils/truckingOperationUniqueness';
 import { buildListOrderByWithSapStoPriority } from '../utils/listSapStoPrioritySql';
 import { wrapTruckingListQueryWithStoExpansion, buildTruckingExpansionKeysCountSql } from '../utils/truckingListStoExpandSql';
 import { ListCacheKeepWarm } from '../utils/listCacheKeepWarm';
+import { invalidateRegisteredListCaches } from '../utils/listCacheRegistry';
+import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import {
   buildTruckingExpansionKeyOrderBy,
   canUseTruckingStoKeyPaging,
 } from '../utils/truckingListStoPaging';
+import { resolveTruckingListSortField, resolveTruckingListSortRowKey } from '../utils/truckingListSort';
 import {
   buildTruckingListFromClause,
   buildTruckingListSelectClause,
   truckingListB2bExcludeSql,
 } from '../utils/truckingListSelectSql';
 import {
+  buildTruckingUnplannedBacklogCombinedQuery,
+  mergeTruckingOutstandingQtySummaries,
+  parseTruckingOutstandingQtySummaryRow,
+  type TruckingOutstandingQtySummary,
+} from '../utils/truckingOutstandingQtySummarySql';
+import { buildTruckingStatusSummaryCombinedQuery } from '../utils/truckingStatusSummaryCombinedSql';
+import {
+  buildTruckingCarryOverInsightsQuery,
+  buildTruckingOverdueInsightsAggregateQuery,
+  buildTruckingOverdueTopSuppliersQuery,
+  parseTruckingAttentionInsights,
+  type TruckingAttentionInsightsRow,
+} from '../utils/truckingAttentionInsightsSql';
+import {
+  hasPendingTruckingStageDeltas,
   isPipelineDailySummaryEligible,
+  loadTruckingStagePageFromSnapshot,
   loadTruckingSummaryFromDaily,
+  loadTruckingSection1FromStageSnapshot,
+  loadTruckingBacklogCountFromSnapshot,
+  loadTruckingBacklogSummaryFromSnapshot,
   toPipelineDailySummaryScope,
   markPipelineDailySummaryStale,
   type PipelineDailySummaryFilterInput,
+  type PipelineDailySummaryScope,
+  isPipelineDailySummaryFresh,
+  isPipelineDailySummaryUsable,
+  schedulePipelineDailySummaryRefreshIfNeeded,
 } from './pipelineDailySummary.service';
 
 /**
@@ -55,6 +96,29 @@ export interface TruckingListBuiltQuery {
   /** Toolbar-only fast path: page expansion keys before full STO expansion. */
   usesStoKeyPaging?: boolean;
   expansionPaging?: { limit: number; offset: number; orderBySql: string };
+  /**
+   * Page keys already resolved from the stage snapshot - the expansion joins to exactly these
+   * instead of ranking `trucking_source` itself. Set with `usesStoKeyPaging`, which is what
+   * drops the outer LIMIT/OFFSET: these keys *are* the page, so applying it again would slice
+   * a page out of a page.
+   */
+  resolvedExpansionKeys?: Array<{ operationId: string; stoLine?: string }>;
+  /** Resolve row stages from trucking_list_stage_snapshot (circles-consistent). */
+  useStageSnapshot?: boolean;
+}
+
+export interface TruckingStatusContractQtyKg {
+  unplanned: number;
+  planned: number;
+  inProgress: number;
+  completed: number;
+  cancelled: number;
+}
+
+export interface TruckingStatusOutstandingQtyKg {
+  unplanned: number;
+  planned: number;
+  inProgress: number;
 }
 
 export interface TruckingListResponseData {
@@ -71,10 +135,32 @@ export interface TruckingListResponseData {
       completed: number;
       cancelled: number;
     };
+    /** Sum of contract quantity_ordered (kg), one contract once per status bucket. */
+    statusContractQty?: TruckingStatusContractQtyKg;
+    /** Sum of outstanding_quantity (kg) for Unplanned / Planned / In Progress cards. */
+    statusOutstandingQty?: TruckingStatusOutstandingQtyKg;
     unplannedTable?: {
       contractRows: number;
       executionRows: number;
       totalTableRows: number;
+    };
+    outstandingQty?: TruckingOutstandingQtySummary;
+    attentionInsights?: TruckingAttentionInsightsRow;
+    /**
+     * Where Section 1's quantities came from, and as of when.
+     *
+     * `snapshot` means they were precomputed by the trucking pipeline refresh rather than scanned
+     * live, so they can trail a SAP import by the build duration (measured 234s). That trade was
+     * approved deliberately - the alternative was ~23-37s per page load - but a viewer looking at
+     * a quantity has no way to know it is a few minutes behind unless the page says so, which is
+     * why this is reported rather than kept internal.
+     */
+    summaryFreshness?: {
+      source: 'snapshot' | 'live';
+      /** ISO timestamp of the refresh these figures came from; null when live. */
+      asOf: string | null;
+      /** The refresh itself is marked stale - a rebuild is due or running. */
+      isStale: boolean;
     };
   };
   pagination: {
@@ -100,43 +186,27 @@ const MERGED_SUMMARY_CACHE = new Map<
   string,
   { summary: TruckingListResponseData['summary']; expiresAt: number }
 >();
-const UNPLANNED_BACKLOG_CACHE = new Map<string, { count: number; expiresAt: number }>();
+const UNPLANNED_BACKLOG_CACHE = new Map<
+  string,
+  {
+    count: number;
+    contractQtyKg: number;
+    osBacklog: TruckingOutstandingQtySummary;
+    expiresAt: number;
+  }
+>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_VERSION = 'trucking-list-v31';
+const CACHE_VERSION = 'trucking-list-v42';
 const MAX_CACHE_ENTRIES = 80;
 
 // Re-runs recent page loads in the background (refresh-ahead + re-warm after edits)
 // so users are served from the cache instead of paying the full query cost. Does not
 // change responses — it only re-runs the identical loader off the request path.
 const PAGE_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS });
-
-const SORT_FIELD_BY_KEY: Record<string, string> = {
-  created_at: 'created_at',
-  operation_id: 'operation_id',
-  status: 'status',
-  contract_number: 'contract_number',
-  po_number: 'po_number',
-  sto_number: 'sto_number',
-  supplier: 'supplier',
-  trucking_owner: 'trucking_owner',
-  loading_location: 'loading_location',
-  unloading_location: 'unloading_location',
-  trucking_start_date: 'trucking_start_date',
-  trucking_completion_date: 'trucking_completion_date',
-  delivery_start_date: 'delivery_start_date',
-  delivery_end_date: 'delivery_end_date',
-  quantity_delivered: 'quantity_delivered',
-  quantity_receive: 'quantity_receive',
-  outstanding_quantity: 'outstanding_quantity',
-  outstanding_qty_mt: 'outstanding_quantity',
-  quantity_sent: 'quantity_sent',
-  contract_qty: 'contract_qty',
-  incoterm: 'incoterm',
-  oa_budget: 'oa_budget',
-  oa_actual: 'oa_actual',
-  gain_loss_percentage: 'gain_loss_percentage',
-  gain_loss_amount: 'gain_loss_amount',
-};
+// Status circles + Outstanding Qty strip: the merged summary's outstanding-qty pair is
+// the heaviest cold cost on the page. Same registry pattern as PAGE_KEEP_WARM — it only
+// re-runs the identical loader off the request path (refresh-ahead + after invalidation).
+const SUMMARY_KEEP_WARM = new ListCacheKeepWarm({ cacheTtlMs: CACHE_TTL_MS, maxEntries: 4 });
 
 function stableColumnFiltersKey(colFilters: Record<string, unknown>): string {
   const keys = Object.keys(colFilters).sort();
@@ -158,6 +228,7 @@ function buildTruckingListCacheKey(input: {
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
+  sourceType?: string;
   skipSapJoin: boolean;
   page?: number;
   limit?: number;
@@ -177,6 +248,7 @@ function buildTruckingListCacheKey(input: {
     globalSearch: input.globalSearch,
     columnFilters: stableColumnFiltersKey(input.colFilters),
     lateIndicator: input.lateIndicator != null ? String(input.lateIndicator) : '',
+    sourceType: input.sourceType != null ? String(input.sourceType) : '',
     skipSapJoin: input.skipSapJoin,
     page: input.page ?? 1,
     limit: input.limit ?? 20,
@@ -199,6 +271,7 @@ export function buildTruckingListFilterCacheKey(input: {
   globalSearch: string;
   colFilters: Record<string, unknown>;
   lateIndicator?: string;
+  sourceType?: string;
 }): string {
   return buildTruckingListCacheKey({
     ...input,
@@ -219,7 +292,8 @@ export function buildTruckingSummaryCacheKey(filterCacheKey: string): string {
 }
 
 function buildTruckingMergedSummaryCacheKey(filterCacheKey: string): string {
-  return `${filterCacheKey}:summary-unplanned-merged`;
+  // Status-card osStatus no longer scopes OS; one merged summary per toolbar filters.
+  return `${filterCacheKey}:summary-unplanned-merged:active-os:attention-v1`;
 }
 
 function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
@@ -239,11 +313,17 @@ function buildTruckingUnplannedBacklogCacheKey(req: AuthRequest): string {
   })}`;
 }
 
-async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest): Promise<number> {
+/**
+ * Section 1 Summary/OS backlog — count + contract qty (kg) + OS bucket aggregates in one
+ * scan of the unplanned contract backlog. Strip/card OS uses outstanding qty (clamped at 0).
+ */
+async function loadTruckingUnplannedBacklogCombinedForRequest(
+  req: AuthRequest,
+): Promise<{ count: number; contractQtyKg: number; osBacklog: TruckingOutstandingQtySummary }> {
   const cacheKey = buildTruckingUnplannedBacklogCacheKey(req);
   const cached = UNPLANNED_BACKLOG_CACHE.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
-    return cached.count;
+    return { count: cached.count, contractQtyKg: cached.contractQtyKg, osBacklog: cached.osBacklog };
   }
   if (cached) UNPLANNED_BACKLOG_CACHE.delete(cacheKey);
 
@@ -260,29 +340,235 @@ async function countTruckingUnplannedContractBacklogForRequest(req: AuthRequest)
   const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
   idx = g.nextIndex;
   const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const params = [...scope.params, ...g.params, ...c.params];
+  const toolbarSql = `${g.sql}${c.sql}`;
+
+  /**
+   * An empty backlog needs no query.
+   *
+   * This one supplies the backlog's count, contract qty and OS buckets together, and all three are
+   * zero when no contract is in the backlog - yet it cost **5,789 ms** on the cold Trucking page
+   * for the default YTD window, where the backlog is genuinely empty. The count that settles it
+   * reads from the snapshot in 8 ms.
+   *
+   * Only when the request is toolbar-only: a global search or column filter narrows the backlog in
+   * ways the snapshot's dimension columns cannot express, so the shortcut would be answering a
+   * different question. Those fall through to the query below.
+   */
+  const canUseSnapshotBacklogCount = !globalSearch && Object.keys(colFilters ?? {}).length === 0 && !contract;
+  if (canUseSnapshotBacklogCount) {
+    let backlogCount = await loadTruckingBacklogCountFromSnapshot(
+      toPipelineDailySummaryScope({ dateFrom, dateTo, plants, colFilters } as Parameters<
+        typeof toPipelineDailySummaryScope
+      >[0]),
+    );
+    /*
+     * A Region/Plant filter cannot be counted from the daily summary - it keys on the
+     * master_plants dimension, not the toolbar's - so ask the database for the count directly.
+     *
+     * That is a query this path did not previously run, and it earns its place only because it
+     * decides whether to skip a much larger one: measured for BONTANG, the count is 1,375 ms
+     * against 6,501 ms for the combined query it lets us skip. The trade is real and stated: when
+     * the backlog is *not* empty both run, so a scope with backlog rows pays the count on top.
+     */
+    if (backlogCount === null && plants.length > 0) {
+      const countRes = await query(
+        await buildTruckingUnplannedBacklogCountQuery(scope.sql, toolbarSql),
+        params,
+      );
+      backlogCount = parseInt(String((countRes.rows[0] as { c?: unknown })?.c ?? '0'), 10) || 0;
+    }
+    if (backlogCount === 0) {
+      const empty = {
+        count: 0,
+        contractQtyKg: 0,
+        /* Parsed from null so the shape is exactly what the query's own parser would return. */
+        osBacklog: parseTruckingOutstandingQtySummaryRow(null),
+      };
+      UNPLANNED_BACKLOG_CACHE.set(cacheKey, { ...empty, expiresAt: Date.now() + CACHE_TTL_MS });
+      evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
+      return empty;
+    }
+  }
+
+  /*
+   * Serve the whole card from the daily summary when the request is toolbar-only.
+   *
+   * The query below is the single most expensive thing the cold Trucking page does: 34,493ms of a
+   * 39,226ms load on dev, 89% of it, in one 150KB statement returning a single row. The summary
+   * now stores what it computes, written by the same builder over the same predicate, and reading
+   * it back takes 7ms. Parity was verified before this was wired in - 503,920 kg either way.
+   *
+   * The same guard as the count above: a global search, column filter or contract filter narrows
+   * the backlog in ways the summary's dimensions cannot express, so those fall through. A
+   * Region/Plant scope returns null here for the same reason it does there, and also falls
+   * through.
+   */
+  if (canUseSnapshotBacklogCount) {
+    const fromSnapshot = await loadTruckingBacklogSummaryFromSnapshot(
+      toPipelineDailySummaryScope({ dateFrom, dateTo, plants, colFilters } as Parameters<
+        typeof toPipelineDailySummaryScope
+      >[0]),
+    );
+    if (fromSnapshot) {
+      const served = {
+        count: fromSnapshot.count,
+        contractQtyKg: fromSnapshot.contractQtyKg,
+        osBacklog: parseTruckingOutstandingQtySummaryRow(fromSnapshot.osRow),
+      };
+      UNPLANNED_BACKLOG_CACHE.set(cacheKey, { ...served, expiresAt: Date.now() + CACHE_TTL_MS });
+      evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
+      return served;
+    }
+  }
+
   const res = await query(
-    buildTruckingUnplannedBacklogCountQuery(scope.sql, `${g.sql}${c.sql}`),
-    [...scope.params, ...g.params, ...c.params],
+    await buildTruckingUnplannedBacklogCombinedQuery(scope.sql, toolbarSql),
+    params,
   );
-  const count = parseInt(String(res.rows[0]?.c ?? '0'), 10) || 0;
-  UNPLANNED_BACKLOG_CACHE.set(cacheKey, { count, expiresAt: Date.now() + CACHE_TTL_MS });
+  const row = (res.rows[0] || {}) as Record<string, unknown>;
+  const count = parseInt(String(row.c ?? '0'), 10) || 0;
+  const contractQtyKg = Number(row.contract_qty_kg || 0) || 0;
+  const osBacklog = parseTruckingOutstandingQtySummaryRow(row);
+  UNPLANNED_BACKLOG_CACHE.set(cacheKey, {
+    count,
+    contractQtyKg,
+    osBacklog,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
   evictMapIfNeeded(UNPLANNED_BACKLOG_CACHE, MAX_CACHE_ENTRIES);
-  return count;
+  return { count, contractQtyKg, osBacklog };
 }
 
-export function invalidateTruckingListCache(): void {
+function parseTruckingCombinedSummaryRow(
+  row: Record<string, unknown>,
+  opts: { includeCounts: boolean },
+): {
+  summary?: NonNullable<TruckingListResponseData['summary']>;
+  statusContractQty: TruckingStatusContractQtyKg;
+  statusOutstandingQty: TruckingStatusOutstandingQtyKg;
+  osExecution: TruckingOutstandingQtySummary;
+} {
+  const statusContractQty = parseTruckingStatusContractQtyFromSqlRow(row);
+  const statusOutstandingQty = parseTruckingStatusOutstandingQtyFromSqlRow(row);
+  const osExecution = parseTruckingOutstandingQtySummaryRow(row);
+  const summary = opts.includeCounts ? buildTruckingSummaryFromSqlRow(row) : undefined;
+  return { summary, statusContractQty, statusOutstandingQty, osExecution };
+}
+
+export function mergeTruckingGrClosedSnapshotContractQty(
+  live: TruckingStatusContractQtyKg,
+  snapshot: {
+    completedGrClosedContractQtyKg: number;
+    cancelledGrClosedContractQtyKg: number;
+  },
+): TruckingStatusContractQtyKg {
+  return {
+    ...live,
+    completed: live.completed + (Number(snapshot.completedGrClosedContractQtyKg) || 0),
+    cancelled: live.cancelled + (Number(snapshot.cancelledGrClosedContractQtyKg) || 0),
+  };
+}
+
+/** Single STO expansion for counts + card qty + card OS + strip OS (execution). */
+async function loadTruckingCombinedSummaryExecution(
+  built: TruckingListBuiltQuery,
+  opts: { includeCounts: boolean; grOpenOnly?: boolean },
+): Promise<ReturnType<typeof parseTruckingCombinedSummaryRow>> {
+  const qtyBuilt: TruckingListBuiltQuery = { ...built, skipSapJoin: false };
+  const q = buildTruckingStatusSummaryCombinedQuery(qtyBuilt, {
+    includeCounts: opts.includeCounts,
+    grOpenOnly: opts.grOpenOnly === true,
+  });
+  const res = await query(q.text, q.params);
+  return parseTruckingCombinedSummaryRow((res.rows[0] || {}) as Record<string, unknown>, opts);
+}
+
+/**
+ * Warm the default-scope merged summary (status circles + Outstanding Qty) at startup
+ * so the first visitor after a deploy/restart is served from memory. Uses the exact
+ * query params the Trucking page sends on first load (YTD in Asia/Jakarta — the user
+ * base's timezone, so the cache key matches the browser's default date scope).
+ * Best-effort: a failed warm just means the next request runs cold, as today.
+ */
+export function startTruckingListCacheWarmer(): Promise<void> {
+  const jakartaNow = new Date(Date.now() + 7 * 60 * 60 * 1000);
+  const dateTo = jakartaNow.toISOString().slice(0, 10);
+  const dateFrom = `${dateTo.slice(0, 4)}-01-01`;
+  const req = {
+    query: {
+      skipSapJoin: 'true',
+      limit: '1',
+      page: '1',
+      /*
+       * Same sort the View Table now opens on, because the response cache keys on it. Warming
+       * `supplier` while the page asks for `created_at` warms a key nobody requests.
+       */
+      sortKey: 'created_at',
+      sortDir: 'desc',
+      dateFrom,
+      dateTo,
+      summaryOnly: 'true',
+    },
+  } as unknown as AuthRequest;
+  /*
+   * Running the live loader also registers the key with SUMMARY_KEEP_WARM, so it stays
+   * fresh via refresh-ahead while the page is in use.
+   *
+   * The promise is returned so the startup queue can sequence this warmer instead of releasing
+   * it alongside the next job - see the note on startShippingPerformanceCacheWarmer. Both arms
+   * resolve to void, so a failed warm still leaves the page merely cold, never startup broken.
+   */
+  return resolveTruckingListForRequest(req).then(
+    () => {},
+    () => {},
+  );
+}
+
+export function clearTruckingListMemoryCaches(): void {
+  TRUCKING_RESPONSE_CACHE.clear();
   PAGE_CACHE.clear();
   COUNT_CACHE.clear();
   SUMMARY_CACHE.clear();
   MERGED_SUMMARY_CACHE.clear();
   UNPLANNED_BACKLOG_CACHE.clear();
-  markPipelineDailySummaryStale(['trucking']).catch(() => {});
+}
+
+/**
+ * @param options.scheduleSnapshotRefresh Defaults to true.
+ *
+ * A SAP import passes `false` and runs the rebuild itself afterwards: the trucking build reads
+ * the derived snapshots the import is in the middle of refreshing, so starting it here would
+ * publish a generation built from pre-import values. Caches are still cleared immediately -
+ * only the rebuild is deferred.
+ */
+export function invalidateTruckingListCache(options?: { scheduleSnapshotRefresh?: boolean }): void {
+  clearTruckingListMemoryCaches();
+  invalidateRegisteredListCaches();
+  markPipelineDailySummaryStale(['trucking'], {
+    schedule: options?.scheduleSnapshotRefresh !== false,
+  }).catch(() => {});
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
   PAGE_KEEP_WARM.rewarmRecentlyUsed();
+  SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
 }
 
-function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
+/**
+ * Re-run the recently used page and summary loads without clearing anything first.
+ *
+ * For after a rebuild has published: the caches were already cleared when the import started, and
+ * what is wanted now is for the warm set to be recomputed against the new snapshot rather than
+ * left for the first viewer to pay for.
+ */
+export function rewarmTruckingListCaches(): void {
+  clearTruckingListMemoryCaches();
+  PAGE_KEEP_WARM.rewarmRecentlyUsed();
+  SUMMARY_KEEP_WARM.rewarmRecentlyUsed();
+}
+
+/** Exported so the hybrid counts can be gated by the same predicate as every other snapshot read. */
+export function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFilterInput {
   const {
     status,
     location,
@@ -300,6 +586,7 @@ function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFi
       : '';
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
   return {
@@ -309,6 +596,7 @@ function buildPipelineDailyFilterInput(req: AuthRequest): PipelineDailySummaryFi
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam != null ? String(lateIndicatorParam) : undefined,
+    sourceType: sourceTypeParam != null ? String(sourceTypeParam) : undefined,
     status: status != null ? String(status) : undefined,
     sto: sto != null ? String(sto) : undefined,
     contract: contract != null ? String(contract) : undefined,
@@ -366,7 +654,7 @@ export function sortTruckingListRows(
   sortDir: 'ASC' | 'DESC',
   options?: { prioritizeSapSto?: boolean },
 ): TruckingListRow[] {
-  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const field = resolveTruckingListSortRowKey(sortKey);
   const prioritizeSapSto = options?.prioritizeSapSto === true;
   return [...rows].sort((a, b) => {
     if (prioritizeSapSto) {
@@ -384,7 +672,24 @@ export function sortTruckingListRows(
     }
     const primary = compareSortValues(a[field], b[field], sortDir);
     if (primary !== 0) return primary;
-    return compareSortValues(b.created_at, a.created_at, 'DESC');
+    /*
+     * These two tiebreaks have to match the SQL key order
+     * (`<field> <dir> NULLS LAST, ts.created_at DESC, ts.id`), because the SQL chooses which rows
+     * are fetched and this comparator decides which of them the page keeps. When they disagree, a
+     * row can land on two pages at once.
+     *
+     * It did. The previous line was `compareSortValues(b.created_at, a.created_at, 'DESC')` -
+     * arguments swapped *and* direction reversed, which is a double negation, so it sorted
+     * created_at **ascending** while the SQL sorted it descending. With no unique key after it,
+     * tied rows then kept whatever order their fetch produced - and page 1 fetches 20 rows while
+     * page 2 fetches 40, so the same tie block was arranged differently in each. Measured on the
+     * dev data, where six rows share supplier 'AGRAJAYA BAKTITAMA PT.' and created_at
+     * 2026-05-20 09:51:57.265719+00 across the 20-row boundary: operation 159a784a appeared on
+     * page 1 *and* page 2, and db3460bd appeared on neither.
+     */
+    const byCreatedAt = compareSortValues(a.created_at, b.created_at, 'DESC');
+    if (byCreatedAt !== 0) return byCreatedAt;
+    return String(a.id ?? '').localeCompare(String(b.id ?? ''));
   });
 }
 
@@ -454,6 +759,7 @@ export function buildTruckingListSummaryFromRows(rows: TruckingListRow[]) {
 
 export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
   const total = parseInt(String(row.total_count ?? '0'), 10) || 0;
+  const statusContractQty = parseTruckingStatusContractQtyFromSqlRow(row);
   return {
     total,
     status: {
@@ -466,25 +772,73 @@ export function buildTruckingSummaryFromSqlRow(row: Record<string, unknown>) {
       completed: Number(row.completed_count || 0),
       cancelled: Number(row.cancelled_count || 0),
     },
+    statusContractQty,
   };
 }
 
-/** Align Section 2 Unplanned card with hybrid table row total. */
+export function parseTruckingStatusContractQtyFromSqlRow(
+  row: Record<string, unknown>,
+): TruckingStatusContractQtyKg {
+  return {
+    unplanned: Number(row.unplanned_contract_qty || 0) || 0,
+    planned: Number(row.planned_contract_qty || 0) || 0,
+    inProgress: Number(row.in_progress_contract_qty || 0) || 0,
+    completed: Number(row.completed_contract_qty || 0) || 0,
+    cancelled: Number(row.cancelled_contract_qty || 0) || 0,
+  };
+}
+
+export function parseTruckingStatusOutstandingQtyFromSqlRow(
+  row: Record<string, unknown>,
+): TruckingStatusOutstandingQtyKg {
+  return {
+    unplanned: Number(row.unplanned_outstanding_qty || 0) || 0,
+    planned: Number(row.planned_outstanding_qty || 0) || 0,
+    inProgress: Number(row.in_progress_outstanding_qty || 0) || 0,
+  };
+}
+
+/** Add Unplanned backlog OS (no trucking op yet) onto the Unplanned card total. */
+export function mergeTruckingUnplannedBacklogOs(
+  statusOutstandingQty: TruckingStatusOutstandingQtyKg,
+  backlogOsTotalKg: number,
+): TruckingStatusOutstandingQtyKg {
+  return {
+    unplanned:
+      (Number(statusOutstandingQty.unplanned) || 0) + (Number(backlogOsTotalKg) || 0),
+    planned: Number(statusOutstandingQty.planned) || 0,
+    inProgress: Number(statusOutstandingQty.inProgress) || 0,
+  };
+}
+
+/** Align Section 2 Unplanned card with hybrid table row total (+ optional contract qty). */
 export function mergeTruckingUnplannedBreakdownIntoSummary(
   summary: TruckingListResponseData['summary'],
   breakdown: {
     contractRows: number;
     executionRows: number;
     totalTableRows: number;
+    /** When set, added to existing statusContractQty.unplanned (execution-only). */
+    backlogContractQtyKg?: number;
   },
 ): TruckingListResponseData['summary'] {
   if (!summary) return summary;
+  let statusContractQty = summary.statusContractQty;
+  if (statusContractQty && breakdown.backlogContractQtyKg != null) {
+    statusContractQty = {
+      ...statusContractQty,
+      unplanned:
+        (Number(statusContractQty.unplanned) || 0) +
+        (Number(breakdown.backlogContractQtyKg) || 0),
+    };
+  }
   return {
     ...summary,
     status: {
       ...summary.status,
       unplanned: breakdown.totalTableRows,
     },
+    ...(statusContractQty ? { statusContractQty } : {}),
     unplannedTable: {
       contractRows: breakdown.contractRows,
       executionRows: breakdown.executionRows,
@@ -495,25 +849,36 @@ export function mergeTruckingUnplannedBreakdownIntoSummary(
 
 export function buildTruckingListQuery(
   req: AuthRequest,
-  options?: { skipSapJoin?: boolean; omitStatusFilter?: boolean },
+  options?: {
+    skipSapJoin?: boolean;
+    omitStatusFilter?: boolean;
+    /**
+     * When true, plant toolbar matches status cards / daily snapshot (contract origin
+     * plant). When false, plant uses B2B ending overlay. The page list always passes true
+     * so ALL rows with Unplanned status match the Unplanned card.
+     */
+    originGroupPlant?: boolean;
+  },
 ): TruckingListBuiltQuery {
   const {
     status,
     location,
     loadingLocation,
     unloadingLocation,
-    dateFrom,
-    dateTo,
     sto,
     contract,
     plant,
     page = 1,
     limit = 20,
   } = req.query;
+  const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+    dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+    dateTo: (req.query as { dateTo?: unknown }).dateTo,
+  });
   const skipSapJoin =
     options?.skipSapJoin ??
     String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
   const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
@@ -521,12 +886,14 @@ export function buildTruckingListQuery(
       : '';
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
 
   let queryText = `
       SELECT 
         ${buildTruckingListSelectClause(skipSapJoin)}
       ${buildTruckingListFromClause(skipSapJoin)}
       WHERE 1=1
+        ${truckingListExcludeDedupedWhereSql}
         ${truckingListB2bExcludeSql(skipSapJoin)}
         ${truckingPageListScopeWhereSql}
     `;
@@ -539,10 +906,18 @@ export function buildTruckingListQuery(
     : `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`;
 
   if (status && !options?.omitStatusFilter) {
+    /**
+     * This filter is appended to the query built with buildTruckingListFromClause, so the
+     * GR-close and completed laterals are in scope - proven by executing a WHERE over that FROM.
+     * The trucking.controller caller builds its own FROM without them and keeps the defaults.
+     */
     const stageFilter = appendTruckingPipelineStageFilter(
       String(status),
       truckingStoExprForStatus,
       paramIndex,
+      sqlTruckingGrClosedFromLateral(),
+      sqlTruckingIsCompletedFromLateral(),
+      sqlTruckingGrCancelledFromLateral(),
     );
     queryText += stageFilter.sql;
     queryParams.push(...stageFilter.params);
@@ -562,7 +937,7 @@ export function buildTruckingListQuery(
   }
 
   if (unloadingLocation) {
-    queryText += ` AND t.unloading_location ILIKE $${paramIndex}`;
+    queryText += ` AND ${sqlB2bEndingUnloadExpr('t.unloading_location')} ILIKE $${paramIndex}`;
     queryParams.push(`%${unloadingLocation}%`);
     paramIndex += 1;
   }
@@ -609,11 +984,11 @@ export function buildTruckingListQuery(
 
   const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
   const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-  const groupPlantFilter = appendGroupPlantFilter(
+  const originGroupPlant = options?.originGroupPlant === true;
+  const groupPlantFilter = appendRegionSiteFilter(
     plants,
     paramIndex,
-    groupPlantExpr('c.plant_code', 'c.company_name'),
-    'c.plant_code',
+    sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
   );
   queryText += groupPlantFilter.sql;
   queryParams.push(...groupPlantFilter.params);
@@ -625,13 +1000,26 @@ export function buildTruckingListQuery(
   let fp = outerStart;
   const gSearch = appendTruckingGlobalSearch(globalSearch, fp);
   fp = gSearch.nextIndex;
-  const cCol = appendTruckingColumnFilters(colFilters, fp);
+  /**
+   * Same FROM as the stage filter above, so the laterals are in scope here too. Without
+   * these the map re-derived GR-close for status and for all three qty columns.
+   */
+  const cCol = appendTruckingColumnFilters(
+    colFilters,
+    fp,
+    sqlTruckingGrClosedFromLateral(),
+    sqlTruckingGrCancelledFromLateral(),
+    skipSapJoin,
+  );
   fp = cCol.nextIndex;
-  const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp);
+  // skipSapJoin decides where the Late Indicator's ATA comes from; the shell has no sapd lateral.
+  const li = appendTruckingLateIndicatorFilter(lateIndicatorParam, fp, skipSapJoin);
   fp = li.nextIndex;
+  const src = appendTruckingSourceTypeFilter(sourceTypeParam, fp);
+  fp = src.nextIndex;
 
-  const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}`;
-  const outerParams = [...gSearch.params, ...cCol.params, ...li.params];
+  const outerSql = `${gSearch.sql}${cCol.sql}${li.sql}${src.sql}`;
+  const outerParams = [...gSearch.params, ...cCol.params, ...li.params, ...src.params];
 
   const filterCacheKey = buildTruckingListFilterCacheKey({
     status,
@@ -646,6 +1034,7 @@ export function buildTruckingListQuery(
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam,
+    sourceType: sourceTypeParam,
   });
 
   const cacheKey = buildTruckingListCacheKey({
@@ -661,6 +1050,7 @@ export function buildTruckingListQuery(
     globalSearch,
     colFilters,
     lateIndicator: lateIndicatorParam,
+    sourceType: sourceTypeParam,
     skipSapJoin,
     page: Number(page),
     limit: Number(limit),
@@ -668,14 +1058,16 @@ export function buildTruckingListQuery(
     sortDir: sortDirRaw,
   });
 
+  const originPlantKey = originGroupPlant ? ':originPlant=1' : '';
+
   return {
     preOuterQuery: queryText,
     outerSql,
     innerParams,
     outerParams,
     skipSapJoin,
-    cacheKey,
-    filterCacheKey,
+    cacheKey: `${cacheKey}${originPlantKey}`,
+    filterCacheKey: `${filterCacheKey}${originPlantKey}`,
   };
 }
 
@@ -691,11 +1083,24 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
           status,
           status_db,
           contract_number,
+          contract_qty,
           trucking_start_date,
           trucking_completion_date
         FROM (
           ${expanded}
         ) trucking_source
+        -- Totals only: operations whose contract's PO was cancelled/deleted in SAP are excluded
+        -- from the status circles and quantity strip. The list query keeps showing them.
+        WHERE COALESCE(trucking_source.sap_presence, 'PRESENT') = 'PRESENT'
+      ),
+      per_contract AS (
+        SELECT
+          status,
+          contract_number,
+          MAX(COALESCE(contract_qty, 0))::numeric AS contract_qty
+        FROM filtered
+        WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+        GROUP BY status, contract_number
       )
       SELECT
         COUNT(*)::bigint AS total_count,
@@ -706,8 +1111,84 @@ export function buildTruckingSummaryQuery(built: TruckingListBuiltQuery): { text
         COUNT(*) FILTER (WHERE status = 'CANCELLED')::bigint AS cancelled_count,
         COUNT(*) FILTER (WHERE status_db = 'LOADING')::bigint AS loading_count,
         COUNT(*) FILTER (WHERE status_db = 'IN_TRANSIT')::bigint AS in_transit_count,
-        COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count
+        COUNT(*) FILTER (WHERE status_db = 'UNLOADING')::bigint AS unloading_count,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric FROM per_contract) AS unplanned_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'PLANNED'), 0)::numeric FROM per_contract) AS planned_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric FROM per_contract) AS in_progress_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'COMPLETED'), 0)::numeric FROM per_contract) AS completed_contract_qty,
+        (SELECT COALESCE(SUM(contract_qty) FILTER (WHERE status = 'CANCELLED'), 0)::numeric FROM per_contract) AS cancelled_contract_qty
       FROM filtered`;
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
+
+/** Live contract-qty-only aggregate (used when status counts come from daily summary).
+ * @deprecated Replaced by `buildTruckingStatusSummaryCombinedQuery` at runtime. */
+export function buildTruckingStatusContractQtyQuery(
+  built: TruckingListBuiltQuery,
+): { text: string; params: unknown[] } {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
+    selectOutstanding: true,
+    skipSapJoin: built.skipSapJoin,
+  });
+  const text = `
+      WITH filtered AS (
+        SELECT status, contract_number, contract_qty
+        FROM (
+          ${expanded}
+        ) trucking_source
+      ),
+      per_contract AS (
+        SELECT
+          status,
+          contract_number,
+          MAX(COALESCE(contract_qty, 0))::numeric AS contract_qty
+        FROM filtered
+        WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+        GROUP BY status, contract_number
+      )
+      SELECT
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric AS unplanned_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'COMPLETED'), 0)::numeric AS completed_contract_qty,
+        COALESCE(SUM(contract_qty) FILTER (WHERE status = 'CANCELLED'), 0)::numeric AS cancelled_contract_qty
+      FROM per_contract`;
+  return { text, params: [...built.innerParams, ...built.outerParams] };
+}
+
+/** Live outstanding-qty aggregate for Planned / In Progress status cards.
+ * @deprecated Replaced by `buildTruckingStatusSummaryCombinedQuery` at runtime. */
+export function buildTruckingStatusOutstandingQtyQuery(
+  built: TruckingListBuiltQuery,
+): { text: string; params: unknown[] } {
+  const innerSql = `${built.preOuterQuery}${built.outerSql}`;
+  const expanded = wrapTruckingListQueryWithStoExpansion(innerSql, {
+    selectOutstanding: true,
+    skipSapJoin: built.skipSapJoin,
+  });
+  const text = `
+      WITH filtered AS (
+        SELECT status, contract_number, outstanding_quantity
+        FROM (
+          ${expanded}
+        ) trucking_source
+      ),
+      per_contract AS (
+        SELECT
+          status,
+          contract_number,
+          MAX(COALESCE(outstanding_quantity, 0))::numeric AS outstanding_quantity
+        FROM filtered
+        WHERE NULLIF(TRIM(COALESCE(contract_number::text, '')), '') IS NOT NULL
+          AND status IN ('UNPLANNED', 'PLANNED', 'IN_PROGRESS')
+        GROUP BY status, contract_number
+      )
+      SELECT
+        COALESCE(SUM(GREATEST(0, outstanding_quantity)) FILTER (WHERE status = 'UNPLANNED'), 0)::numeric AS unplanned_outstanding_qty,
+        COALESCE(SUM(GREATEST(0, outstanding_quantity)) FILTER (WHERE status = 'PLANNED'), 0)::numeric AS planned_outstanding_qty,
+        COALESCE(SUM(GREATEST(0, outstanding_quantity)) FILTER (WHERE status = 'IN_PROGRESS'), 0)::numeric AS in_progress_outstanding_qty
+      FROM per_contract`;
   return { text, params: [...built.innerParams, ...built.outerParams] };
 }
 
@@ -716,7 +1197,9 @@ function buildTruckingFilteredExpansionSql(built: TruckingListBuiltQuery): strin
   return wrapTruckingListQueryWithStoExpansion(innerSql, {
     selectOutstanding: !built.skipSapJoin,
     skipSapJoin: built.skipSapJoin,
+    useStageSnapshot: built.useStageSnapshot === true,
     expansionPaging: built.expansionPaging,
+    resolvedExpansionKeys: built.resolvedExpansionKeys,
   });
 }
 
@@ -736,21 +1219,23 @@ export function buildPaginatedListQuery(
   offset: number,
   stageFilter?: string | null,
 ): { text: string; params: unknown[] } {
-  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const field = resolveTruckingListSortField(sortKey);
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
-  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
-  const stageWhereSql = normalizedStage && stageParamIdx
-    ? ` WHERE tf.status = $${stageParamIdx}`
-    : '';
-  const listParams = normalizedStage ? [...baseParams, normalizedStage] : [...baseParams];
+  const stageScoped = buildTruckingExpandedStatusFilterWhere(
+    'tf.status',
+    stageFilter,
+    baseParams.length + 1,
+  );
+  const stageWhereSql = stageScoped.sql;
+  const listParams =
+    stageScoped.params.length > 0 ? [...baseParams, ...stageScoped.params] : [...baseParams];
   const limitIdx = listParams.length + 1;
   const offsetIdx = listParams.length + 2;
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
-    `${field} ${sortDir} NULLS LAST, created_at DESC`,
-    normalizedStage ?? stageFilter,
+    `${field} ${sortDir} NULLS LAST, created_at DESC, id`,
+    normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
     ? `trucking_page AS (
@@ -793,21 +1278,23 @@ export function buildTruckingListPageQueryWithoutInlineCount(
   offset: number,
   stageFilter?: string | null,
 ): { text: string; params: unknown[] } {
-  const field = SORT_FIELD_BY_KEY[sortKey] || 'created_at';
+  const field = resolveTruckingListSortField(sortKey);
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
-  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
-  const stageWhereSql = normalizedStage && stageParamIdx
-    ? ` WHERE tf.status = $${stageParamIdx}`
-    : '';
-  const listParams = normalizedStage ? [...baseParams, normalizedStage] : [...baseParams];
+  const stageScoped = buildTruckingExpandedStatusFilterWhere(
+    'tf.status',
+    stageFilter,
+    baseParams.length + 1,
+  );
+  const stageWhereSql = stageScoped.sql;
+  const listParams =
+    stageScoped.params.length > 0 ? [...baseParams, ...stageScoped.params] : [...baseParams];
   const limitIdx = listParams.length + 1;
   const offsetIdx = listParams.length + 2;
   const expanded = buildTruckingFilteredExpansionSql(built);
   const orderBy = buildListOrderByWithSapStoPriority(
     'tf.sto_number',
-    `${field} ${sortDir} NULLS LAST, created_at DESC`,
-    normalizedStage ?? stageFilter,
+    `${field} ${sortDir} NULLS LAST, created_at DESC, id`,
+    normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined) ?? stageFilter,
   );
   const truckingPageCte = built.usesStoKeyPaging
     ? `trucking_page AS (
@@ -848,11 +1335,12 @@ function buildFilteredCountQuery(
   }
   const expanded = buildTruckingFilteredExpansionSql(built);
   const baseParams = [...built.innerParams, ...built.outerParams];
-  const normalizedStage = normalizeTruckingPagePipelineStageParam(stageFilter ?? undefined);
-  const stageParamIdx = normalizedStage ? baseParams.length + 1 : null;
-  const stageWhereSql = normalizedStage && stageParamIdx
-    ? ` WHERE tf.status = $${stageParamIdx}`
-    : '';
+  const stageScoped = buildTruckingExpandedStatusFilterWhere(
+    'tf.status',
+    stageFilter,
+    baseParams.length + 1,
+  );
+  const stageWhereSql = stageScoped.sql;
   const text = `
       WITH trucking_filtered AS (
         SELECT * FROM (
@@ -863,7 +1351,8 @@ function buildFilteredCountQuery(
       FROM trucking_filtered tf${stageWhereSql}`;
   return {
     text,
-    params: normalizedStage && stageParamIdx ? [...baseParams, normalizedStage] : baseParams,
+    params:
+      stageScoped.params.length > 0 ? [...baseParams, ...stageScoped.params] : baseParams,
   };
 }
 
@@ -904,7 +1393,13 @@ export async function loadTruckingListSummary(
 
   if (req) {
     const filters = buildPipelineDailyFilterInput(req);
-    if (isPipelineDailySummaryEligible(filters)) {
+    /*
+     * `trucking_pipeline_daily_summary` is a dimension aggregate, so a targeted refresh cannot
+     * update it - it only tracks full rebuilds. While an upload's deltas are pending, its counts
+     * describe the state before that upload, so Section 1 is routed through the stage snapshot,
+     * which the delta did refresh. See hasPendingTruckingStageDeltas.
+     */
+    if (isPipelineDailySummaryEligible(filters) && !(await hasPendingTruckingStageDeltas())) {
       const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
       if (fromDaily) {
         SUMMARY_CACHE.set(summaryCacheKey, {
@@ -925,6 +1420,47 @@ export async function loadTruckingListSummary(
   return summary;
 }
 
+async function loadTruckingAttentionInsightsForRequest(
+  req: AuthRequest,
+  totalOutstandingKg: number | null | undefined,
+): Promise<TruckingAttentionInsightsRow | undefined> {
+  if (!isAttentionInsightsEnabled()) return undefined;
+
+  const { dateFrom, dateTo, contract, plant } = req.query;
+  const globalSearch =
+    typeof (req.query as { search?: string }).search === 'string'
+      ? (req.query as { search?: string }).search!.trim()
+      : '';
+  const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
+  const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
+  const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
+  const scope = buildTruckingUnplannedContractToolbarScope({ dateFrom, dateTo, contract, plants });
+  let idx = scope.params.length + 1;
+  const g = appendTruckingUnplannedBacklogGlobalSearch(globalSearch, idx);
+  idx = g.nextIndex;
+  const c = appendTruckingUnplannedBacklogColumnFilters(colFilters, idx);
+  const params = [...scope.params, ...g.params, ...c.params];
+  const toolbarSql = `${g.sql}${c.sql}`;
+
+  const [aggregateRes, topSuppliersRes, carryRes] =
+    await runQueriesInBatches([
+      async () => query(await buildTruckingOverdueInsightsAggregateQuery(scope.sql, toolbarSql), params),
+      async () => query(await buildTruckingOverdueTopSuppliersQuery(scope.sql, toolbarSql, 3), params),
+      async () => query(await buildTruckingCarryOverInsightsQuery(scope.sql, toolbarSql), params),
+    ]);
+
+  return parseTruckingAttentionInsights({
+    aggregateRow: (aggregateRes.rows[0] || {}) as Record<string, unknown>,
+    topSupplierRows: topSuppliersRes.rows as Record<string, unknown>[],
+    carryRow: (carryRes.rows[0] || {}) as Record<string, unknown>,
+    lossRows: [],
+    totalOutstandingKg,
+  });
+}
+
+/** Concurrent identical summary loads share one execution (single-flight). */
+const MERGED_SUMMARY_IN_FLIGHT = new Map<string, Promise<TruckingListResponseData['summary']>>();
+
 export async function loadTruckingListSummaryWithBacklog(
   req: AuthRequest,
   built: TruckingListBuiltQuery,
@@ -932,42 +1468,282 @@ export async function loadTruckingListSummaryWithBacklog(
   const mergedCacheKey = buildTruckingMergedSummaryCacheKey(built.filterCacheKey);
   const cachedMerged = MERGED_SUMMARY_CACHE.get(mergedCacheKey);
   if (cachedMerged && Date.now() < cachedMerged.expiresAt) {
+    SUMMARY_KEEP_WARM.touch(mergedCacheKey);
     return cachedMerged.summary;
   }
   if (cachedMerged) MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
 
+  const inFlight = MERGED_SUMMARY_IN_FLIGHT.get(mergedCacheKey);
+  if (inFlight) return inFlight;
+  const run = runTruckingListSummaryWithBacklog(req, built, mergedCacheKey).finally(() =>
+    MERGED_SUMMARY_IN_FLIGHT.delete(mergedCacheKey),
+  );
+  MERGED_SUMMARY_IN_FLIGHT.set(mergedCacheKey, run);
+  return run;
+}
+
+async function runTruckingListSummaryWithBacklog(
+  req: AuthRequest,
+  built: TruckingListBuiltQuery,
+  mergedCacheKey: string,
+): Promise<TruckingListResponseData['summary']> {
+  const liveLoadStartedAt = Date.now();
+  // Registered after a live load so refresh-ahead / invalidation re-runs the identical
+  // loader (same req.query scope, same built query) off the request path.
+  const registerKeepWarm = () => {
+    SUMMARY_KEEP_WARM.register(
+      mergedCacheKey,
+      async () => {
+        MERGED_SUMMARY_CACHE.delete(mergedCacheKey);
+        await loadTruckingListSummaryWithBacklog(req, built);
+      },
+      Date.now() - liveLoadStartedAt,
+    );
+  };
+
+  const timingsMs: Record<string, number> = {};
+  const tCombined0 = performance.now();
+
   const filters = buildPipelineDailyFilterInput(req);
-  if (isPipelineDailySummaryEligible(filters)) {
-    const fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
-    if (fromDaily) {
-      MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
-        summary: fromDaily,
-        expiresAt: Date.now() + CACHE_TTL_MS,
-      });
-      evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
-      return fromDaily;
-    }
+  /*
+   * Two gates, because the two snapshots answer different questions.
+   *
+   * `trucking_pipeline_daily_summary` keys on the master_plants `group_plant`, so it cannot serve
+   * a Region/Plant filter - the toolbar's values are Discharge Destination. The stage snapshot
+   * can, since migration 164 gives it `region_site` written from the live filter's own
+   * expression. Sharing one flag between them sent Section 1 down the live path for every
+   * plant-filtered request: measured at **18,826 ms** for BONTANG against **37 ms** from the
+   * snapshot, and it was the single largest query on that page.
+   */
+  // Same routing as above: a pending delta means the daily aggregate's counts pre-date it.
+  const dailyEligible =
+    isPipelineDailySummaryEligible(filters) && !(await hasPendingTruckingStageDeltas());
+  /*
+   * Section 1 reads the stage snapshot, which can express more than the aggregate table:
+   * Region/Plant via region_site, Source via source_type, and Status not at all - because this
+   * summary is built with `omitStatusFilter: true` and reports every status regardless of the
+   * card selected, exactly as the snapshot form does.
+   *
+   * Source is admitted only for the two literals the predicate understands. The UI sends nothing
+   * else, but `appendContractPerfSourceTypeFilter` silently returns '' for anything it does not
+   * recognise, and an unfiltered answer to a filtered question is the failure mode this whole
+   * area has already produced three times.
+   */
+  const sourceTypeFilter = String(filters.sourceType ?? '').trim();
+  const sourceTypeIsExpressible =
+    !sourceTypeFilter ||
+    sourceTypeFilter.toUpperCase() === 'ALL' ||
+    sourceTypeFilter === 'Interco' ||
+    sourceTypeFilter === '3rd Party';
+  const stageSnapshotEligible =
+    sourceTypeIsExpressible &&
+    isPipelineDailySummaryEligible(filters, {
+      allowPlantFilter: true,
+      allowSourceTypeFilter: true,
+      allowStatusFilter: true,
+      allowLateIndicatorFilter: true,
+    });
+  let fromDaily: Awaited<ReturnType<typeof loadTruckingSummaryFromDaily>> | null = null;
+  if (dailyEligible) {
+    const t = performance.now();
+    fromDaily = await loadTruckingSummaryFromDaily(toPipelineDailySummaryScope(filters));
+    timingsMs.dailySummary = performance.now() - t;
   }
 
-  const [base, contractRows] = await Promise.all([
-    loadTruckingListSummary(built, req),
-    countTruckingUnplannedContractBacklogForRequest(req),
+  /**
+   * Section 1 from the snapshot when it has the figures, otherwise live.
+   *
+   * The live combined query is the most expensive thing on this page - measured 2026-09-10 at
+   * ~23-37s and ~3.0M root buffers, and `SELECT count(*) FROM filtered` costs the same as the
+   * whole summary, so all of it is producing the expanded row set rather than aggregating it.
+   * Four candidate tunings were measured and all four ruled out (SAP qty jsonb 17%,
+   * `enable_nestloop=off` 3x worse, grOpenOnly 2%, planning time a cold artefact), which left
+   * precomputation as the only move.
+   *
+   * Migration 163 has the trucking refresh compute these from the *same* expansion, once per
+   * build instead of once per request, and names the columns exactly as the live query aliases
+   * them - so the snapshot row goes through the identical parsers below. The trade was approved:
+   * Section 1 can lag a SAP import by the build duration (measured 234s), which is what the
+   * status circles in the same section already do. `summaryFreshness` reports the as-of so the
+   * page can say so.
+   */
+  const tSection1 = performance.now();
+  const section1Snapshot = stageSnapshotEligible
+    ? await loadTruckingSection1FromStageSnapshot(toPipelineDailySummaryScope(filters), {
+        /*
+         * Counts normally come from the daily summary; when that refused - a Region/Plant filter,
+         * or a stale summary - they have to come from here, or Section 1 loses its circles. The
+         * snapshot computes them from the same rows, and parity was verified with counts on:
+         * 22 figures, 0 differing, for no filter, BONTANG and TANJUNG PURA.
+         */
+        includeCounts: !fromDaily,
+        sourceType: sourceTypeFilter,
+        lateIndicator: filters.lateIndicator,
+      })
+    : null;
+  timingsMs.section1Snapshot = performance.now() - tSection1;
+  const sectionOneFromSnapshot = section1Snapshot !== null;
+  /*
+   * Timed separately because these two run concurrently and one of them has repeatedly turned out
+   * to be the whole cost - first the live combined summary, later the backlog pair. A single
+   * figure covering both sent an earlier diagnosis to the wrong half.
+   */
+  const tExecution = performance.now();
+  const tBacklog = performance.now();
+  const [combined, backlog] = await Promise.all([
+    sectionOneFromSnapshot
+      ? Promise.resolve(
+          /*
+           * Must match what the loader was asked for.
+           *
+           * This was hardcoded `false` because the daily summary always supplied the counts on
+           * this branch. Once a Region/Plant filter could reach it, the daily summary refused
+           * (different dimension), `fromDaily` became null, and the counts were fetched from the
+           * snapshot and then thrown away here - so `combined.summary` came back undefined, the
+           * function returned no summary at all, and every card read zero while the Outstanding
+           * strip waited for a value that never arrived.
+           */
+          parseTruckingCombinedSummaryRow(section1Snapshot!.row, { includeCounts: !fromDaily }),
+        )
+      : loadTruckingCombinedSummaryExecution(built, {
+          includeCounts: !fromDaily,
+          grOpenOnly: Boolean(fromDaily),
+        }).then((r) => {
+          timingsMs.liveCombinedExecution = performance.now() - tExecution;
+          return r;
+        }),
+    loadTruckingUnplannedBacklogCombinedForRequest(req).then((r) => {
+      timingsMs.backlog = performance.now() - tBacklog;
+      return r;
+    }),
   ]);
+  timingsMs.execution = performance.now() - tExecution;
+  timingsMs.dbCombinedSummary = performance.now() - tCombined0;
+
+  const liveContractQty: TruckingStatusContractQtyKg = {
+    ...combined.statusContractQty,
+    unplanned: combined.statusContractQty.unplanned + backlog.contractQtyKg,
+  };
+  /*
+   * The GR-closed merge exists because the live path runs with grOpenOnly and therefore only
+   * covers GR-open POs, so completed/cancelled qty has to be topped up from the snapshot. When
+   * the snapshot serves Section 1 it already holds the *full* completed/cancelled figures, so
+   * merging again would double-count them.
+   */
+  const statusContractQty =
+    fromDaily && !sectionOneFromSnapshot
+      ? mergeTruckingGrClosedSnapshotContractQty(liveContractQty, fromDaily)
+      : liveContractQty;
+  const statusOutstandingQty = mergeTruckingUnplannedBacklogOs(
+    combined.statusOutstandingQty,
+    backlog.osBacklog.totalKg,
+  );
+  const outstandingQty = mergeTruckingOutstandingQtySummaries(combined.osExecution, backlog.osBacklog);
+
+  if (fromDaily) {
+    const attentionInsights = isAttentionInsightsEnabled()
+      ? await loadTruckingAttentionInsightsForRequest(req, outstandingQty.totalKg).catch((err) => {
+          logger.error('Trucking attention insights failed (daily summary path)', err);
+          return undefined;
+        })
+      : undefined;
+    const dailyPublic = {
+      total: fromDaily.total,
+      status: fromDaily.status,
+      unplannedTable: fromDaily.unplannedTable,
+    };
+    const merged: NonNullable<TruckingListResponseData['summary']> = {
+      ...dailyPublic,
+      outstandingQty,
+      statusContractQty,
+      statusOutstandingQty,
+      /*
+       * The counts on this branch always come from the snapshot; the quantities come from it only
+       * when it carries them. Reported separately from the counts because that is the figure a
+       * viewer reads off a card.
+       */
+      summaryFreshness: {
+        source: sectionOneFromSnapshot ? 'snapshot' : 'live',
+        asOf: sectionOneFromSnapshot ? section1Snapshot!.refreshedAt : null,
+        isStale: sectionOneFromSnapshot ? section1Snapshot!.isStale : false,
+      },
+      ...(attentionInsights !== undefined ? { attentionInsights } : {}),
+    };
+    MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
+      summary: merged,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
+    registerKeepWarm();
+    if (process.env.LOG_TRUCKING_TIMING === '1' || process.env.NODE_ENV === 'development') {
+      logger.info('Trucking summaryOnly timings (ms)', {
+        ...timingsMs,
+        path: 'summary-daily-combined',
+        total: Date.now() - liveLoadStartedAt,
+      });
+    }
+    return merged;
+  }
+
+  const base = combined.summary;
   if (!base) return base;
 
+  const attentionInsights = isAttentionInsightsEnabled()
+    ? await loadTruckingAttentionInsightsForRequest(req, outstandingQty.totalKg).catch((err) => {
+        logger.error('Trucking attention insights failed', err);
+        return undefined;
+      })
+    : undefined;
   const executionRows = base.status?.unplanned ?? 0;
-  const merged = mergeTruckingUnplannedBreakdownIntoSummary(base, {
-    contractRows,
-    executionRows,
-    totalTableRows: contractRows + executionRows,
-  });
+  const merged = mergeTruckingUnplannedBreakdownIntoSummary(
+    { ...base, statusContractQty },
+    {
+      contractRows: backlog.count,
+      executionRows,
+      totalTableRows: backlog.count + executionRows,
+    },
+  );
+  if (!merged) return base;
+  const withOs: NonNullable<TruckingListResponseData['summary']> = {
+    ...merged,
+    statusContractQty,
+    statusOutstandingQty,
+    outstandingQty,
+    /*
+     * The same as-of the daily branch reports, and for the same reason.
+     *
+     * This branch runs whenever the daily summary refuses - a Region/Plant filter, a source,
+     * status or Late Indicator filter, or a pending delta - but the figures still come from the
+     * snapshot and are exactly as old. Without this the badge vanished precisely when a filter
+     * was applied, so the page stopped saying "as of" at the moment a user was most likely to be
+     * comparing a filtered figure against something else.
+     */
+    summaryFreshness: {
+      source: sectionOneFromSnapshot ? 'snapshot' : 'live',
+      asOf: sectionOneFromSnapshot ? section1Snapshot!.refreshedAt : null,
+      isStale: sectionOneFromSnapshot ? section1Snapshot!.isStale : false,
+    },
+    ...(attentionInsights !== undefined ? { attentionInsights } : {}),
+  };
   MERGED_SUMMARY_CACHE.set(mergedCacheKey, {
-    summary: merged,
+    summary: withOs,
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
   evictMapIfNeeded(MERGED_SUMMARY_CACHE, MAX_CACHE_ENTRIES);
-  return merged;
+  registerKeepWarm();
+  if (process.env.LOG_TRUCKING_TIMING === '1' || process.env.NODE_ENV === 'development') {
+    logger.info('Trucking summaryOnly timings (ms)', {
+      ...timingsMs,
+      path: 'summary-live-combined',
+      total: Date.now() - liveLoadStartedAt,
+    });
+  }
+  return withOs;
 }
+
+/** Concurrent identical page loads share one query run (single-flight) — the staging
+ *  DB CPU findings showed the same heavy report fired several times at once. */
+const PAGE_IN_FLIGHT = new Map<string, Promise<{ rows: TruckingListRow[]; total: number }>>();
 
 async function loadTruckingListPage(
   built: TruckingListBuiltQuery,
@@ -983,6 +1759,24 @@ async function loadTruckingListPage(
   }
   if (cached) PAGE_CACHE.delete(built.cacheKey);
 
+  const inFlight = PAGE_IN_FLIGHT.get(built.cacheKey);
+  if (inFlight) return inFlight;
+  const run = runTruckingListPageQuery(built, sortKey, sortDir, page, limit, stageFilter).finally(
+    () => PAGE_IN_FLIGHT.delete(built.cacheKey),
+  );
+  PAGE_IN_FLIGHT.set(built.cacheKey, run);
+  return run;
+}
+
+async function runTruckingListPageQuery(
+  built: TruckingListBuiltQuery,
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  page: number,
+  limit: number,
+  stageFilter?: string | null,
+): Promise<{ rows: TruckingListRow[]; total: number }> {
+  const liveLoadStartedAt = Date.now();
   const offset = (page - 1) * limit;
   const cachedTotal = getCachedFilteredTotal(built.filterCacheKey);
   const { text, params } =
@@ -1009,28 +1803,185 @@ async function loadTruckingListPage(
   evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
   // Remember how to re-run this exact load so the background warmer can refresh it
   // ahead of expiry / after invalidation. `built` is a plain built query context.
-  PAGE_KEEP_WARM.register(built.cacheKey, async () => {
-    PAGE_CACHE.delete(built.cacheKey);
-    COUNT_CACHE.delete(built.filterCacheKey);
-    await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter);
-  });
+  PAGE_KEEP_WARM.register(
+    built.cacheKey,
+    async () => {
+      PAGE_CACHE.delete(built.cacheKey);
+      COUNT_CACHE.delete(built.filterCacheKey);
+      await loadTruckingListPage(built, sortKey, sortDir, page, limit, stageFilter);
+    },
+    Date.now() - liveLoadStartedAt,
+  );
   return { rows, total };
 }
 
+/**
+ * Status-card page served from the stage snapshot: row keys + total come from the
+ * same daily refresh that computes the circles, so the filtered table total always
+ * equals the clicked circle; only the visible page is enriched (full expansion).
+ */
+async function loadTruckingStageSnapshotPage(
+  built: TruckingListBuiltQuery,
+  scope: PipelineDailySummaryScope,
+  stage: string,
+  sortDir: 'ASC' | 'DESC',
+  page: number,
+  limit: number,
+): Promise<{ rows: TruckingListRow[]; total: number } | null> {
+  const cached = PAGE_CACHE.get(built.cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return { rows: cached.rows, total: cached.total };
+  }
+  if (cached) PAGE_CACHE.delete(built.cacheKey);
+
+  const liveLoadStartedAt = Date.now();
+  const snapshotPage = await loadTruckingStagePageFromSnapshot(
+    scope,
+    stage,
+    sortDir,
+    limit,
+    (page - 1) * limit,
+  );
+  if (!snapshotPage) return null;
+
+  let rows: TruckingListRow[] = [];
+  if (snapshotPage.keys.length > 0) {
+    // Full-variant expansion restricted to the page keys (SAP-derived quantities so
+    // row fields match what the circles were computed from).
+    const expanded = wrapTruckingListQueryWithStoExpansion(
+      `${built.preOuterQuery}${built.outerSql}`,
+      {
+        selectOutstanding: true,
+        skipSapJoin: false,
+        useStageSnapshot: true,
+        resolvedExpansionKeys: snapshotPage.keys,
+      },
+    );
+    const orderBy = buildListOrderByWithSapStoPriority(
+      'tf.sto_number',
+      `${resolveTruckingListSortField('supplier')} ${sortDir} NULLS LAST, created_at DESC, id`,
+      stage,
+    );
+    const text = `
+      WITH trucking_filtered AS (
+        SELECT * FROM (
+          ${expanded}
+        ) expanded_sub
+      )
+      SELECT tf.* FROM trucking_filtered tf
+      ORDER BY ${orderBy}`;
+    const result = await query(text, [...built.innerParams, ...built.outerParams]);
+    rows = normalizeTruckingListRows(result.rows as TruckingListRow[]);
+  }
+
+  const total = snapshotPage.total;
+  cacheFilteredTotal(built.filterCacheKey, total);
+  PAGE_CACHE.set(built.cacheKey, { rows, total, expiresAt: Date.now() + CACHE_TTL_MS });
+  evictMapIfNeeded(PAGE_CACHE, MAX_CACHE_ENTRIES);
+  PAGE_KEEP_WARM.register(
+    built.cacheKey,
+    async () => {
+      PAGE_CACHE.delete(built.cacheKey);
+      COUNT_CACHE.delete(built.filterCacheKey);
+      await loadTruckingStageSnapshotPage(built, scope, stage, sortDir, page, limit);
+    },
+    Date.now() - liveLoadStartedAt,
+  );
+  return { rows, total };
+}
+
+/*
+ * Whole-response cache for the trucking list.
+ *
+ * The inner caches (PAGE_CACHE / SUMMARY_CACHE / MERGED_SUMMARY_CACHE) do not cover every
+ * branch: measured on a restore of staging, a status-filtered request cost 55.5s on the first
+ * call and 31.3s on an identical repeat - it never cached, on any request, for any user. Page
+ * turns did cache (58.6s then 17ms), so the gap was specific to the stage-filtered path.
+ *
+ * Rather than hunt every internal branch, cache the resolved response at the entry point. Any
+ * path that reaches this function is covered, including ones added later. The inner caches stay
+ * as they are and still short-circuit their own work.
+ *
+ * Safe to share across users: this module references req.user nowhere, so the payload is not
+ * user-scoped. Keyed on the sorted query parameters, which already encode page, limit, status,
+ * filters, search and sort. Same 5-minute TTL as the inner caches, and cleared by
+ * invalidateTruckingListCache so an edit cannot leave stale rows on screen.
+ */
+const TRUCKING_RESPONSE_CACHE = new Map<string, { data: TruckingListResponseData; expiresAt: number }>();
+const TRUCKING_RESPONSE_IN_FLIGHT = new Map<string, Promise<TruckingListResponseData>>();
+
+function truckingResponseCacheKey(query: Record<string, unknown>): string {
+  const keys = Object.keys(query).sort();
+  const norm: Record<string, unknown> = {};
+  for (const k of keys) norm[k] = query[k];
+  return JSON.stringify(norm);
+}
+
 export async function resolveTruckingListForRequest(req: AuthRequest): Promise<TruckingListResponseData> {
+  const cacheKey = truckingResponseCacheKey((req.query ?? {}) as Record<string, unknown>);
+
+  const cached = TRUCKING_RESPONSE_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+  if (cached) TRUCKING_RESPONSE_CACHE.delete(cacheKey);
+
+  const inFlight = TRUCKING_RESPONSE_IN_FLIGHT.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const run = resolveTruckingListForRequestUncached(req)
+    .then((data) => {
+      TRUCKING_RESPONSE_CACHE.set(cacheKey, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+      evictMapIfNeeded(TRUCKING_RESPONSE_CACHE, MAX_CACHE_ENTRIES);
+      return data;
+    })
+    .finally(() => {
+      TRUCKING_RESPONSE_IN_FLIGHT.delete(cacheKey);
+    });
+
+  TRUCKING_RESPONSE_IN_FLIGHT.set(cacheKey, run);
+  return run;
+}
+
+async function resolveTruckingListForRequestUncached(req: AuthRequest): Promise<TruckingListResponseData> {
   const { page = 1, limit = 20, status } = req.query;
   const summaryOnly =
     String((req.query as { summaryOnly?: string }).summaryOnly || '').toLowerCase() === 'true';
-  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'supplier');
+  const sortKey = String((req.query as { sortKey?: string }).sortKey || 'created_at');
   const sortDirRaw = String((req.query as { sortDir?: string }).sortDir || 'asc').toLowerCase();
   const sortDir: 'ASC' | 'DESC' = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
 
-  // Pipeline status is computed per expanded STO row — filter only after expansion.
-  const built = buildTruckingListQuery(req, { omitStatusFilter: true });
+  const stageFilter = typeof status === 'string' ? status : undefined;
+  const normalizedStatus = String(status ?? '').trim().toUpperCase();
+  const isUnplannedHybrid = normalizedStatus === 'UNPLANNED';
+  const isAllHybrid = !normalizedStatus || normalizedStatus === 'ALL';
+  /** Status cards need full SAP (GR/OS) — same path as Section 1 summary. */
+  const statusScopedList =
+    Boolean(stageFilter) &&
+    !isUnplannedHybrid &&
+    !isAllHybrid;
+
+  // Pipeline status is computed per operation (PO grain) — filter only after expansion.
+  // Status-scoped requests force the full SAP variant (circle-consistent fallback).
+  // Plant filter always uses origin plant so ALL-view Unplanned badges match the Unplanned card
+  // (B2B ending overlay was showing extra Unplanned rows for ending-plant Bontang).
+  const built = buildTruckingListQuery(req, {
+    omitStatusFilter: true,
+    originGroupPlant: true,
+    ...(statusScopedList ? { skipSapJoin: false } : {}),
+  });
+  // Resolve row stages from the daily-refresh snapshot when it is fresh so status
+  // clicks are served in ~2s from the same source as the circles; when stale, the
+  // full-SAP path above still keeps the totals circle-consistent (just slower).
+  /**
+   * Stage paging accepts a usable snapshot, refreshing in the background when stale - see
+   * the note in pipelineDailySummary.service. Requiring freshness put this on the live path
+   * for the 14.7 minutes a post-import trucking rebuild takes.
+   */
+  const useStageSnapshot = await isPipelineDailySummaryUsable('trucking');
+  if (useStageSnapshot && !(await isPipelineDailySummaryFresh('trucking'))) {
+    schedulePipelineDailySummaryRefreshIfNeeded();
+  }
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.max(1, Math.min(500, Number(limit) || 20));
-  const stageFilter = typeof status === 'string' ? status : undefined;
-  const isUnplannedHybrid = String(status ?? '').trim().toUpperCase() === 'UNPLANNED';
 
   const globalSearch =
     typeof (req.query as { search?: string }).search === 'string'
@@ -1038,6 +1989,7 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
       : '';
   const colFilters = parseColumnFiltersQuery((req.query as { columnFilters?: string }).columnFilters);
   const lateIndicatorParam = (req.query as { lateIndicator?: string }).lateIndicator;
+  const sourceTypeParam = (req.query as { sourceType?: string }).sourceType;
   const { location, loadingLocation, unloadingLocation, sto, contract } = req.query;
 
   const listUsesStoPaging = canUseTruckingStoKeyPaging({
@@ -1049,13 +2001,18 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     loadingLocation: typeof loadingLocation === 'string' ? loadingLocation : undefined,
     unloadingLocation: typeof unloadingLocation === 'string' ? unloadingLocation : undefined,
     lateIndicator: lateIndicatorParam,
+    sourceType: sourceTypeParam,
     globalSearch,
     colFilters,
     unplannedHybrid: isUnplannedHybrid,
+    allHybrid: isAllHybrid,
   });
 
   const listBuilt: TruckingListBuiltQuery = {
     ...built,
+    useStageSnapshot,
+    cacheKey: `${built.cacheKey}:stagesnap=${useStageSnapshot ? 1 : 0}`,
+    filterCacheKey: `${built.filterCacheKey}:sap=${built.skipSapJoin ? 0 : 1}:stagesnap=${useStageSnapshot ? 1 : 0}`,
     usesStoKeyPaging: listUsesStoPaging,
     expansionPaging: listUsesStoPaging
       ? {
@@ -1069,10 +2026,14 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
   const includeSummary =
     String((req.query as { includeSummary?: string }).includeSummary ?? 'true').toLowerCase() !== 'false';
 
-  const summaryBuilt = buildTruckingListQuery(req, {
-    skipSapJoin: false,
-    omitStatusFilter: true,
-  });
+  const summaryBuilt: TruckingListBuiltQuery = {
+    ...buildTruckingListQuery(req, {
+      skipSapJoin: false,
+      omitStatusFilter: true,
+      originGroupPlant: true,
+    }),
+    useStageSnapshot,
+  };
 
   if (summaryOnly) {
     const summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
@@ -1088,21 +2049,28 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
     };
   }
 
-  if (isUnplannedHybrid) {
+  if (isUnplannedHybrid || isAllHybrid) {
     const {
+      buildTruckingAllHybridContext,
       buildTruckingUnplannedHybridContext,
       resolveTruckingUnplannedHybridList,
     } = await import('./truckingUnplannedHybridList.service');
-    const ctx = buildTruckingUnplannedHybridContext(req, sortKey, sortDir);
+    const ctx = isAllHybrid
+      ? buildTruckingAllHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt })
+      : buildTruckingUnplannedHybridContext(req, sortKey, sortDir, { executionBuilt: listBuilt });
     const hybrid = await resolveTruckingUnplannedHybridList(req, ctx);
     let summary: TruckingListResponseData['summary'];
     if (includeSummary) {
-      summary = await loadTruckingListSummary(summaryBuilt, req);
-      summary = mergeTruckingUnplannedBreakdownIntoSummary(summary, hybrid.unplannedBreakdown);
+      if (isUnplannedHybrid) {
+        summary = await loadTruckingListSummary(summaryBuilt, req);
+        summary = mergeTruckingUnplannedBreakdownIntoSummary(summary, hybrid.unplannedBreakdown);
+      } else {
+        summary = await loadTruckingListSummaryWithBacklog(req, summaryBuilt);
+      }
     }
     return {
       truckingOperations: hybrid.truckingOperations,
-      unplannedBreakdown: hybrid.unplannedBreakdown,
+      ...(isUnplannedHybrid ? { unplannedBreakdown: hybrid.unplannedBreakdown } : {}),
       summary,
       pagination: hybrid.pagination,
     };
@@ -1110,14 +2078,38 @@ export async function resolveTruckingListForRequest(req: AuthRequest): Promise<T
 
   // Request-path access only (the background refresher must not keep itself alive).
   PAGE_KEEP_WARM.touch(listBuilt.cacheKey);
-  const { rows, total } = await loadTruckingListPage(
-    listBuilt,
-    sortKey,
-    sortDir,
-    pageNum,
-    limitNum,
-    stageFilter,
-  );
+
+  // Status-card clicks: serve keys + total from the stage snapshot so the filtered
+  // table always equals the circle the user clicked. Applies to toolbar-only scope
+  // with the default sort; anything else (or a stale snapshot) uses the live path.
+  let snapshotServed: { rows: TruckingListRow[]; total: number } | null = null;
+  const normalizedStageForSnapshot = normalizeTruckingPagePipelineStageParam(stageFilter);
+  if (
+    useStageSnapshot &&
+    normalizedStageForSnapshot &&
+    !isUnplannedHybrid &&
+    !isAllHybrid &&
+    sortKey === 'supplier' &&
+    !listUsesStoPaging
+  ) {
+    const dailyFilters = buildPipelineDailyFilterInput(req);
+    // Stage-snapshot path: region_site carries the toolbar's dimension (migration 164), and
+    // loadTruckingStagePageFromSnapshot refuses if the column is not populated yet.
+    if (isPipelineDailySummaryEligible({ ...dailyFilters, status: 'ALL' }, { allowPlantFilter: true })) {
+      snapshotServed = await loadTruckingStageSnapshotPage(
+        listBuilt,
+        toPipelineDailySummaryScope(dailyFilters),
+        normalizedStageForSnapshot,
+        sortDir,
+        pageNum,
+        limitNum,
+      );
+    }
+  }
+
+  const { rows, total } =
+    snapshotServed ??
+    (await loadTruckingListPage(listBuilt, sortKey, sortDir, pageNum, limitNum, stageFilter));
 
   let summary: TruckingListResponseData['summary'];
   if (includeSummary) {

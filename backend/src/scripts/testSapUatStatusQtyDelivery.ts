@@ -85,7 +85,7 @@ async function loginToken(): Promise<string> {
   const res = await fetch(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+    body: JSON.stringify({ email: 'admin@klip.com', password: 'admin123' }),
   });
   if (!res.ok) throw new Error(`Login failed: ${res.status}`);
   const json = (await res.json()) as { data?: { token?: string }; token?: string };

@@ -6,9 +6,12 @@ import {
   CLIENT_CACHE_GC_MS,
   CLIENT_CACHE_STALE_MS,
   invalidateClientCacheByPathPrefix,
+  invalidateMissingEtaAlertCache,
   isCacheFresh,
+  MISSING_ETA_ALERT_CACHE_KEY,
   peekCache,
   prefetchGet,
+  subscribeMissingEtaAlertRefresh,
 } from './clientDataCache'
 
 describe('buildCacheKey', () => {
@@ -78,6 +81,28 @@ describe('cachedGet', () => {
     expect(forced.fromCache).toBe(false)
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
+
+  it('force bypasses hung inFlight promise', async () => {
+    let resolveFirst: ((value: { v: number }) => void) | undefined
+    const first = new Promise<{ v: number }>((resolve) => {
+      resolveFirst = resolve
+    })
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => first)
+      .mockResolvedValueOnce({ v: 2 })
+    const key = buildCacheKey('GET', '/shipments?search=1016010973')
+
+    const pending = cachedGet(key, fetcher)
+    const forced = await cachedGet(key, fetcher, { force: true })
+
+    expect(forced.data).toEqual({ v: 2 })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+
+    resolveFirst?.({ v: 1 })
+    await pending
+    expect(peekCache(key)).toEqual({ v: 2 })
+  })
 })
 
 describe('prefetchGet', () => {
@@ -114,5 +139,54 @@ describe('invalidateClientCacheByPathPrefix', () => {
     invalidateClientCacheByPathPrefix('/contracts')
     expect(peekCache(contractsKey)).toBeNull()
     expect(peekCache(shipmentsKey)).not.toBeNull()
+  })
+
+  it('aborts in-flight GETs for the prefix so a later force fetch is not joined to a stale request', async () => {
+    let resolveSlow: ((value: { v: number }) => void) | undefined
+    const slow = new Promise<{ v: number }>((resolve) => {
+      resolveSlow = resolve
+    })
+    const key = buildCacheKey('GET', '/shipments?summaryOnly=true')
+    const pending = cachedGet(key, async () => slow)
+    invalidateClientCacheByPathPrefix('/shipments')
+    const fresh = await cachedGet(key, async () => ({ v: 2 }))
+    expect(fresh.data).toEqual({ v: 2 })
+    resolveSlow?.({ v: 1 })
+    await pending.catch(() => {})
+    expect(peekCache(key)).toEqual({ v: 2 })
+  })
+})
+
+describe('invalidateMissingEtaAlertCache', () => {
+  beforeEach(() => {
+    clearClientDataCache()
+  })
+
+  it('removes missing ETA alert cache entry', async () => {
+    await cachedGet(MISSING_ETA_ALERT_CACHE_KEY, async () => ({
+      total: 5,
+      items: [],
+      scopedAsStaff: false,
+      visible: true,
+    }))
+    expect(peekCache(MISSING_ETA_ALERT_CACHE_KEY)).not.toBeNull()
+    invalidateMissingEtaAlertCache()
+    expect(peekCache(MISSING_ETA_ALERT_CACHE_KEY)).toBeNull()
+  })
+
+  it('notifies subscribers on invalidation', async () => {
+    await cachedGet(MISSING_ETA_ALERT_CACHE_KEY, async () => ({
+      total: 1,
+      items: [],
+      scopedAsStaff: false,
+      visible: true,
+    }))
+    const listener = vi.fn()
+    const unsubscribe = subscribeMissingEtaAlertRefresh(listener)
+    invalidateMissingEtaAlertCache()
+    expect(listener).toHaveBeenCalledTimes(1)
+    unsubscribe()
+    invalidateMissingEtaAlertCache()
+    expect(listener).toHaveBeenCalledTimes(1)
   })
 })

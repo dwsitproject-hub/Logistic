@@ -15,6 +15,10 @@ type CacheEntry<T> = {
 
 const store = new Map<string, CacheEntry<unknown>>()
 const inFlight = new Map<string, Promise<unknown>>()
+/** AbortController for each in-flight fetch, keyed the same as `inFlight` - lets replaceInFlight
+ * actually cancel the superseded network request instead of only forgetting about it (see
+ * fetchAndStore). Populated only for callers that opt into the `(signal) => ...` fetcher shape. */
+const inFlightControllers = new Map<string, AbortController>()
 
 /** Normalize URL query (sorted keys, strip cache-bust params) for stable cache keys. */
 export function buildCacheKey(method: string, url: string): string {
@@ -49,18 +53,38 @@ function evictExpiredAndOverflow(): void {
   for (let i = 0; i < excess; i++) store.delete(oldest[i][0])
 }
 
-async function fetchAndStore<T>(cacheKey: string, fetcher: () => Promise<T>): Promise<T> {
+async function fetchAndStore<T>(
+  cacheKey: string,
+  fetcher: (signal?: AbortSignal) => Promise<T>,
+  options?: { replaceInFlight?: boolean },
+): Promise<T> {
   const existing = inFlight.get(cacheKey)
-  if (existing) return existing as Promise<T>
+  if (existing && !options?.replaceInFlight) return existing as Promise<T>
+  if (options?.replaceInFlight) {
+    // Actually cancel the superseded request (not just stop tracking it) - without this, every
+    // forced refetch (filter change, explicit reload) left the previous network call - and the
+    // backend query behind it - running to completion unabandoned. Observed live piling up 8-13
+    // duplicate multi-minute queries on the Contract Performance page (2026-09-03).
+    inFlightControllers.get(cacheKey)?.abort()
+    inFlightControllers.delete(cacheKey)
+    inFlight.delete(cacheKey)
+  }
 
-  const promise = fetcher()
+  const controller = new AbortController()
+  inFlightControllers.set(cacheKey, controller)
+
+  let promise: Promise<T>
+  promise = fetcher(controller.signal)
     .then((data) => {
-      store.set(cacheKey, { data, fetchedAt: Date.now() })
-      evictExpiredAndOverflow()
+      if (inFlightControllers.get(cacheKey) === controller) {
+        store.set(cacheKey, { data, fetchedAt: Date.now() })
+        evictExpiredAndOverflow()
+      }
       return data
     })
     .finally(() => {
-      inFlight.delete(cacheKey)
+      if (inFlight.get(cacheKey) === promise) inFlight.delete(cacheKey)
+      if (inFlightControllers.get(cacheKey) === controller) inFlightControllers.delete(cacheKey)
     })
 
   inFlight.set(cacheKey, promise)
@@ -91,7 +115,7 @@ export type CachedGetResult<T> = {
 
 export async function cachedGet<T>(
   cacheKey: string,
-  fetcher: () => Promise<T>,
+  fetcher: (signal?: AbortSignal) => Promise<T>,
   options?: {
     force?: boolean
     onRevalidate?: (data: T) => void
@@ -110,7 +134,7 @@ export async function cachedGet<T>(
     return { data: entry!.data as T, fromCache: true, revalidating: true }
   }
 
-  const data = await fetchAndStore(cacheKey, fetcher)
+  const data = await fetchAndStore(cacheKey, fetcher, { replaceInFlight: options?.force })
   return { data, fromCache: false, revalidating: false }
 }
 
@@ -128,11 +152,45 @@ export function prefetchGet(cacheKey: string, fetcher: () => Promise<unknown>): 
 
 const hrefPrefetchAt = new Map<string, number>()
 
+export const MISSING_ETA_ALERT_CACHE_KEY = buildCacheKey(
+  'GET',
+  '/alerts/missing-eta-cargo-readiness',
+)
+
+const missingEtaAlertSubscribers = new Set<() => void>()
+
+/** Subscribe to missing ETA cache invalidation (e.g. header bell force-refetch). */
+export function subscribeMissingEtaAlertRefresh(listener: () => void): () => void {
+  missingEtaAlertSubscribers.add(listener)
+  return () => {
+    missingEtaAlertSubscribers.delete(listener)
+  }
+}
+
+function notifyMissingEtaAlertSubscribers(): void {
+  for (const listener of missingEtaAlertSubscribers) {
+    try {
+      listener()
+    } catch {
+      // Non-blocking: subscriber errors must not break invalidation.
+    }
+  }
+}
+
+/** Drop missing ETA alert cache and notify mounted bell to refetch. */
+export function invalidateMissingEtaAlertCache(): void {
+  store.delete(MISSING_ETA_ALERT_CACHE_KEY)
+  inFlight.delete(MISSING_ETA_ALERT_CACHE_KEY)
+  notifyMissingEtaAlertSubscribers()
+}
+
 /** Clear all cached API responses and prefetch cooldowns (e.g. on logout). */
 export function clearClientDataCache(): void {
   store.clear()
+  inFlight.clear()
   prefetchCooldown.clear()
   hrefPrefetchAt.clear()
+  missingEtaAlertSubscribers.clear()
 }
 
 /** Drop cached GET responses whose path starts with the given prefix (e.g. `/contracts`). */
@@ -141,6 +199,12 @@ export function invalidateClientCacheByPathPrefix(pathPrefix: string): void {
   const needle = `GET:${normalized}`
   for (const key of store.keys()) {
     if (key.startsWith(needle)) store.delete(key)
+  }
+  for (const key of [...inFlight.keys()]) {
+    if (!key.startsWith(needle)) continue
+    inFlightControllers.get(key)?.abort()
+    inFlightControllers.delete(key)
+    inFlight.delete(key)
   }
 }
 

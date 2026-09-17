@@ -43,13 +43,13 @@ describe('contractPerformanceColumns', () => {
   })
 
   it('keeps CONTRACT_PERF_COLUMN_ORDER length', () => {
-    expect(CONTRACT_PERF_COLUMN_ORDER.length).toBe(14)
+    expect(CONTRACT_PERF_COLUMN_ORDER.length).toBe(15)
   })
 
   it('uses compact fixed widths for default visible columns', () => {
     const tracks = buildContractPerfColumnWidthTracks(CONTRACT_PERF_COLUMN_ORDER)
     expect(tracks.contract_date).toBe('minmax(88px, 88px)')
-    expect(tracks.supplier).toBe('minmax(112px, 112px)')
+    expect(tracks.supplier).toBe('minmax(152px, 152px)')
     const total = CONTRACT_PERF_COLUMN_ORDER.reduce((s, id) => s + contractPerfTableColumnWidthPx(id), 0)
     expect(total).toBeLessThan(1700)
   })
@@ -87,6 +87,7 @@ describe('contractPerformanceColumns', () => {
       'product',
       'status_overall',
       'contract_qty',
+      'delivery_qty',
       'outstanding_qty_mt',
       'trade_cycle_days',
       'dp_cycle_days',

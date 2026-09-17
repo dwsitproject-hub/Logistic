@@ -15,14 +15,20 @@ import {
 } from '@/components/ui/table'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
+  ModalReadonlyDateInput,
+  ModalReadonlyTextInput,
+} from '@/components/shared/ModalReadonlyControl'
+import {
   AlertCircle,
   Anchor,
   Check,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Edit2,
   FileText,
   FlaskConical,
+  Gauge,
   History,
   Loader2,
   MapPin,
@@ -33,17 +39,35 @@ import {
   Download,
   X,
 } from 'lucide-react'
-import api from '@/lib/api'
+import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
+import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
+import {
+  firstNonEmptyVesselField,
+  hasKlipVesselNameOverride,
+  isContractSapClosedFlag,
+  normalizeVesselNameKey,
+  shipmentVesselPrimaryName,
+} from '@/lib/shipmentVesselCompare'
+import { invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import {
   resolveShipmentApiLookupKey,
   resolveShipmentDisplayStoNumber,
 } from '@/lib/shipmentStoDisplay'
-import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
-import { formatQtyMtFromKg } from '@/lib/utils'
+import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
+import api from '@/lib/api'
+import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
 import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
-  mergeShipmentQtyOverridesOnContractRows,
+  DECIMAL_DOT_HINT,
+  blockCommaDecimalKeyDown,
+  parseDecimalDotInput,
+  sanitizeDecimalDotInput,
+} from '@/lib/decimalDotInput'
+import {
+  seedKlipQtyFromShipmentHeader,
   sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
 } from '@/lib/shipmentQuantityUnits'
@@ -53,7 +77,7 @@ import {
   type VesselPortsQuantityRow,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
 import type { AddNewShipmentSubmitPayload, ShipmentEditContextData, ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
-import { attachPurchaseOrderToShipment, batchSaveShipmentPoPlanQty } from '@/components/shared/addNewShipmentTypes'
+import { attachPurchaseOrderToShipment } from '@/components/shared/addNewShipmentTypes'
 import { ShipmentPoSearchCombobox } from '@/components/shared/ShipmentPoSearchCombobox'
 import {
   ContractDetailModal,
@@ -64,29 +88,72 @@ import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_COMPACT_TD,
   VESSEL_MODAL_COMPACT_TH,
+  VESSEL_MODAL_FOOTER_BAR_CLASS,
   VESSEL_MODAL_HEADER_CLASS,
   VESSEL_MODAL_OVERLAY_CLASS,
   VESSEL_MODAL_PANEL_CLASS,
   VESSEL_MODAL_SECTION_CLASS,
-  VESSEL_MODAL_SECTION_HEADER_CLASS,
+  VESSEL_MODAL_STEP_STRIP_CLASS,
   VESSEL_MODAL_TABLE_FOOTER_CLASS,
+  vesselModalSectionHeaderClass,
 } from '@/lib/vesselModalUi'
 import {
   saveEditShipmentChanges,
   saveShipmentEditRemark,
   type DischargeEtaFields,
   type EditEtaFields,
+  type LoadingAtaFields,
   type LoadingPortRef,
 } from '@/lib/editShipmentModalSave'
+import { FieldHelp } from '@/components/FieldHelp'
+import { computeShipmentFreightBudgetIdrKg } from '@/lib/shipmentTcFreightBudget'
+import { computeShipmentR4ShortageMt } from '@/lib/shipmentTcR4Shortage'
+import { TC_VESSEL_PERF_LABELS, TC_VESSEL_PERF_TOOLTIPS } from '@/lib/shipmentTcPerformanceLabels'
 import {
   buildShipmentEtaBaseline,
+  DISCHARGE_QUALITY_PORT_KEY,
+  hasShipmentAtaEdits,
+  hasShipmentQualityEdits,
   hasShipmentEtaEdits,
+  resolveCurrentQualityByPortKey,
   type ShipmentEtaBaseline,
   type ShipmentEtaBlockSnapshot,
 } from '@/lib/editShipmentRemarkGate'
 import {
+  shipmentQualityFieldsFromPort,
+  emptyShipmentQualityFields,
+  qualitySapReferenceFromPort,
+  type ShipmentQualityFields,
+} from '@/lib/shipmentQualityFields'
+import { isKlipEditedField } from '@/lib/klipProvenance'
+import { describeKlipFieldEdit, type KlipFieldEditInfo } from '@/lib/klipFieldHistory'
+import {
+  describePortProvenance,
+  summarizePortProvenance,
+} from '@/lib/klipSapProvenanceSummary'
+import {
+  KlipSapCompareField,
+  KlipSapCompareLegend,
+  KlipSapReferenceFooter,
+  KlipSapSourceBadge,
+  KlipSapValueWithBadge,
+} from '@/components/shared/KlipSapCompareField'
+import {
+  hasKlipSapMismatch,
+  resolveKlipSapProvenance,
+  shouldShowKlipSapFooter,
+} from '@/lib/klipSapCompare'
+import {
+  SectionActionGroup,
+  SectionAddButton,
+  SectionCancelButton,
+  SectionEditButton,
+} from '@/components/shared/ShipmentModalSectionActions'
+import {
   ataFieldsFromShipmentInfo,
   ataSapReferenceFromShipmentInfo,
+  ataPortColumnForField,
+  resolveAtaSapReferenceValue,
   emptyAtaFields,
   type ShipmentAtaApiField,
   type ShipmentAtaFields,
@@ -98,6 +165,7 @@ import {
 } from '@/components/PermissionsContext'
 import {
   formatShipmentStatusLabel,
+  normalizeShipmentStatusKey,
   shipmentStatusBadgeClass,
 } from '@/lib/shipmentStatusDisplay'
 const SHIPMENT_SLD_DOC_TYPE = 'SLD'
@@ -109,23 +177,21 @@ interface ShipmentDocumentItem {
   file_name: string
   created_at?: string
 }
-const ETA_INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900 tabular-nums'
-const INFO_VALUE_CLASS = 'text-sm font-medium text-gray-900'
 const VESSEL_MODAL_TABLE_QTY_VALUE_CLASS = 'text-xs font-normal tabular-nums text-gray-900'
 
 const LOADING_ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
-  { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port' },
-  { key: 'etaVesselBerthedAtLoadingPort', label: 'ETA Vessel Berthed at Loading Port' },
-  { key: 'etaVesselStartLoading', label: 'ETA Vessel Start Loading' },
-  { key: 'etaVesselCompletedLoading', label: 'ETA Vessel Completed Loading' },
-  { key: 'etaVesselSailedFromLoadingPort', label: 'ETA Vessel Sailed from Loading Port' },
+  { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA at Loading Port' },
+  { key: 'etaVesselBerthedAtLoadingPort', label: 'ETB at Loading Port' },
+  { key: 'etaVesselStartLoading', label: 'ETS Loading' },
+  { key: 'etaVesselCompletedLoading', label: 'ETC Loading' },
+  { key: 'etaVesselSailedFromLoadingPort', label: 'ET Sailed to Discharge Port' },
 ]
 
 const DISCHARGE_ETA_FIELD_ROWS: { key: keyof DischargeEtaFields; label: string }[] = [
-  { key: 'etaVesselArriveAtDischargePort', label: 'ETA Vessel Arrive at Discharge Port' },
-  { key: 'etaVesselBerthedAtDischargePort', label: 'ETA Vessel Berthed at Discharge Port' },
-  { key: 'etaVesselStartDischarging', label: 'ETA Vessel Start Discharging' },
-  { key: 'etaVesselCompleteDischarge', label: 'ETA Vessel Complete Discharge' },
+  { key: 'etaVesselArriveAtDischargePort', label: 'ETA at Discharge Port' },
+  { key: 'etaVesselBerthedAtDischargePort', label: 'ETB at Discharge Port' },
+  { key: 'etaVesselStartDischarging', label: 'ETS at Discharge Port' },
+  { key: 'etaVesselCompleteDischarge', label: 'ETC at Discharge Port' },
 ]
 
 const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
@@ -134,20 +200,21 @@ const ETA_FIELD_ROWS: { key: keyof EditEtaFields; label: string }[] = [
 ]
 
 const ATA_FIELD_ROWS: { key: ShipmentAtaApiField; label: string }[] = [
-  { key: 'ata_vessel_arrival_at_loading_port', label: 'Arrival at Loading Port' },
-  { key: 'ata_vessel_berthed_at_loading_port', label: 'Berthed at Loading Port' },
-  { key: 'ata_vessel_start_loading', label: 'Start Loading' },
-  { key: 'ata_vessel_completed_loading', label: 'Completed Loading' },
-  { key: 'ata_vessel_sailed_from_loading_port', label: 'Sailed from Loading Port' },
-  { key: 'ata_vessel_arrive_at_discharge_port', label: 'Arrive at Discharge Port' },
-  { key: 'ata_vessel_berthed_at_discharge_port', label: 'Berthed at Discharge Port' },
-  { key: 'ata_vessel_start_discharging', label: 'Start Discharging' },
-  { key: 'ata_vessel_complete_discharge', label: 'Complete Discharge' },
+  { key: 'ata_vessel_arrival_at_loading_port', label: 'ATA at Loading Port' },
+  { key: 'ata_vessel_berthed_at_loading_port', label: 'ATB at Loading Port' },
+  { key: 'ata_vessel_start_loading', label: 'ATS Loading' },
+  { key: 'ata_vessel_completed_loading', label: 'ATC Loading' },
+  { key: 'ata_vessel_sailed_from_loading_port', label: 'AT Sailed to Discharge Port' },
+  { key: 'ata_vessel_arrive_at_discharge_port', label: 'ATA at Discharge Port' },
+  { key: 'ata_vessel_berthed_at_discharge_port', label: 'ATB at Discharge Port' },
+  { key: 'ata_vessel_start_discharging', label: 'ATS Discharge' },
+  { key: 'ata_vessel_complete_discharge', label: 'ATC Discharge' },
 ]
 
-const LOADING_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => !row.key.includes('discharge'))
+// Use "discharg" so both "...discharge..." and "...discharging..." count as discharge ATA.
+const LOADING_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => !row.key.includes('discharg'))
 
-const DISCHARGE_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => row.key.includes('discharge'))
+const DISCHARGE_ATA_FIELD_ROWS = ATA_FIELD_ROWS.filter((row) => row.key.includes('discharg'))
 
 const QUALITY_METRICS: { portKey: string; label: string }[] = [
   { portKey: 'quality_ffa', label: 'FFA' },
@@ -201,14 +268,7 @@ function dischargeEtaFromInfo(
 function loadingAtaFromPortRow(
   portRow: LoadingPortRef | undefined,
   info: Record<string, unknown>,
-): Pick<
-  ShipmentAtaFields,
-  | 'ata_vessel_arrival_at_loading_port'
-  | 'ata_vessel_berthed_at_loading_port'
-  | 'ata_vessel_start_loading'
-  | 'ata_vessel_completed_loading'
-  | 'ata_vessel_sailed_from_loading_port'
-> {
+): LoadingAtaFields {
   return {
     ata_vessel_arrival_at_loading_port:
       sliceIsoDate(portRow?.ata_vessel_arrival as string) ||
@@ -226,6 +286,37 @@ function loadingAtaFromPortRow(
       sliceIsoDate(portRow?.ata_vessel_sailed as string) ||
       sliceIsoDate(info.ata_vessel_sailed_from_loading_port as string),
   }
+}
+
+function loadingPortAtaStateKey(portRow: Pick<LoadingPortRef, 'id' | 'port_sequence'>): string {
+  if (portRow.id && String(portRow.id).trim()) return String(portRow.id).trim()
+  return `seq-${portRow.port_sequence ?? 1}`
+}
+
+function buildQualityBaselineFromPorts(
+  loadingPortRows: LoadingPortRef[],
+  dischargePortRow: LoadingPortRef | undefined,
+  info: Record<string, unknown>,
+  anchorShipmentId: string,
+): Record<string, ShipmentQualityFields> {
+  const out: Record<string, ShipmentQualityFields> = {}
+  for (const portRow of loadingPortRows) {
+    const isAnchor =
+      Boolean(portRow.shipment_id) && String(portRow.shipment_id) === anchorShipmentId
+    out[loadingPortAtaStateKey(portRow)] = shipmentQualityFieldsFromPort(
+      portRow as Record<string, unknown>,
+      isAnchor ? info : {},
+      `quality_at_loading_loc_${portRow.port_sequence ?? 1}`,
+    )
+  }
+  if (dischargePortRow) {
+    out[DISCHARGE_QUALITY_PORT_KEY] = shipmentQualityFieldsFromPort(
+      dischargePortRow as Record<string, unknown>,
+      info,
+      'quality_at_discharge_loc_1',
+    )
+  }
+  return out
 }
 
 function loadingEtaFromPortRow(
@@ -256,17 +347,6 @@ function loadingEtaFromPortRow(
       sliceIsoDate(row.eta_sailed as string),
     ...emptyDischargeEtaFields(),
   }
-}
-
-function qualityMetricFromPort(
-  portRow: Record<string, unknown> | LoadingPortRef | undefined,
-  portKey: string,
-  info: Record<string, unknown>,
-  infoKey: string,
-): number | null {
-  const fromPort = parseApiNumber(portRow?.[portKey as keyof LoadingPortRef])
-  if (fromPort != null) return fromPort
-  return parseApiNumber(info[infoKey])
 }
 
 function sliceIsoDate(value: string | null | undefined): string {
@@ -313,11 +393,13 @@ function ReadOnlyInfoField({
   value,
   compact = false,
   className,
+  helpText,
 }: {
   label: string
   value: unknown
   compact?: boolean
   className?: string
+  helpText?: string
 }) {
   return (
     <div className={className}>
@@ -328,17 +410,46 @@ function ReadOnlyInfoField({
             : 'mb-1 block text-xs font-medium text-gray-600'
         }
       >
-        {label}
+        <span className="inline-flex items-center gap-1">
+          {label}
+          {helpText ? <FieldHelp text={helpText} /> : null}
+        </span>
       </label>
-      <div
-        className={
-          compact
-            ? `flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`
-            : INFO_VALUE_CLASS
-        }
-      >
-        {formatInfoDisplayValue(value)}
+      <ModalReadonlyTextInput
+        value={formatInfoDisplayValue(value)}
+        compact={compact}
+      />
+    </div>
+  )
+}
+
+function ModalPortKlipSapLabel({
+  portRow,
+  shipmentInfo,
+  sequence,
+}: {
+  portRow:
+    | { port_name?: unknown; sap_port_name?: unknown; is_discharge_port?: unknown }
+    | null
+    | undefined
+  shipmentInfo?: Record<string, unknown> | null
+  sequence?: number
+}) {
+  const klip = resolveKlipPortNameFromRow(portRow, shipmentInfo, sequence)
+  const sap = resolveSapPortNameFromRow(portRow, shipmentInfo, sequence)
+  const provenance = resolveKlipSapProvenance({
+    klipValue: klip,
+    sapValue: sap,
+    format: 'text',
+  })
+  const showFooter = shouldShowKlipSapFooter(provenance, sap, 'text')
+  return (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-600">
+        <span>{klip || '—'}</span>
+        <KlipSapSourceBadge provenance={provenance} />
       </div>
+      {showFooter ? <KlipSapReferenceFooter sapValue={sap} format="text" /> : null}
     </div>
   )
 }
@@ -358,7 +469,7 @@ function MtQtyInput({
         <div
           className={`flex min-h-0 items-center justify-end ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         >
-          {valueKg === null ? '—' : formatQtyMtFromKg(valueKg)}
+          {formatQtyMtFromKg(valueKg)}
         </div>
       </div>
     )
@@ -369,17 +480,20 @@ function MtQtyInput({
     <div className="text-right">
       <div className="relative w-full min-w-[5.5rem]">
         <Input
-          type="number"
-          step="0.01"
+          type="text"
+          inputMode="decimal"
+          autoComplete="off"
           value={mtDisplay}
+          onKeyDown={blockCommaDecimalKeyDown}
           onChange={(e) => {
             const raw = e.target.value
             if (raw === '') {
               onChange(0)
               return
             }
-            const mt = parseFloat(raw)
-            onChange(Number.isNaN(mt) ? 0 : mt * 1000)
+            if (sanitizeDecimalDotInput(raw) === null) return
+            const mt = parseDecimalDotInput(raw)
+            onChange(mt === null ? 0 : mt * 1000)
           }}
           className={`h-7 px-2 py-1 pr-9 text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}
         />
@@ -392,26 +506,62 @@ function MtQtyInput({
 }
 
 function MtQtyReadOnly({ valueKg }: { valueKg: number | null | undefined }) {
-  if (valueKg === null || valueKg === undefined) {
-    return (
-      <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
-        <div>—</div>
-      </div>
-    )
-  }
-  const kg = typeof valueKg === 'number' ? valueKg : Number(String(valueKg).replace(/,/g, '').trim())
-  if (!Number.isFinite(kg)) {
-    return (
-      <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
-        <div>—</div>
-      </div>
-    )
-  }
   return (
     <div className={`text-right ${VESSEL_MODAL_TABLE_QTY_VALUE_CLASS}`}>
-      <div>{formatQtyMtFromKg(kg)}</div>
+      <div>{formatQtyMtFromKg(valueKg)}</div>
     </div>
   )
+}
+
+/** T/C, TC, T-C, "Time Charter" all normalize to true. Mirrors backend normalizeCharterType. */
+function isTcCharterType(value: unknown): boolean {
+  const raw = String(value ?? '').trim().toUpperCase()
+  if (!raw) return false
+  if (raw === 'T/C' || raw === 'TC' || raw === 'T-C' || raw === 'TIME CHARTER') return true
+  return raw.includes('TIME')
+}
+
+/** Plain decimal metric input (not KG-scaled) for TC / SFAL / SFBD fields. Dot decimal only. */
+function MetricDecimalInput({
+  value,
+  onChange,
+  unit,
+}: {
+  value: number | null
+  onChange: (value: number | null) => void
+  unit?: string
+}) {
+  return (
+    <div className="relative w-full">
+      <Input
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        value={value === null ? '' : String(value)}
+        onKeyDown={blockCommaDecimalKeyDown}
+        onChange={(e) => {
+          const raw = e.target.value
+          if (raw === '') {
+            onChange(null)
+            return
+          }
+          if (sanitizeDecimalDotInput(raw) === null) return
+          onChange(parseDecimalDotInput(raw))
+        }}
+        className={`h-9 text-right ${unit ? 'pr-12' : ''}`}
+      />
+      {unit && (
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-normal text-gray-500">
+          {unit}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function formatMetricReadOnly(value: number | null, unit?: string): string | null {
+  if (value === null) return null
+  return unit ? `${formatNumber(value)} ${unit}` : formatNumber(value)
 }
 
 type ShipmentDetailRow = {
@@ -422,16 +572,18 @@ type ShipmentDetailRow = {
   product: string
   contract_qty: number
   outstanding_qty_actual: number
-  outstanding_qty_planning: number
-  outstanding_qty_planning_budget: number
-  sap_sto_qty: number
-  shipment_plan_qty: number
-  /** @deprecated alias for shipment_plan_qty */
-  sto_qty_assigned: number
   /** @deprecated alias for outstanding_qty_actual */
   outstanding_qty: number
-  quantity_delivered: number | null
-  quantity_receive: number | null
+  /** SAP STO-scoped delivered (read-only in PO table). */
+  quantity_delivered_sap: number | null
+  /** SAP STO-scoped receive (read-only in PO table). */
+  quantity_receive_sap: number | null
+  /** KLIP delivered seed (editable after SLD/SDD). */
+  quantity_delivered_klip: number | null
+  /** KLIP receive seed (editable after SLD/SDD). */
+  quantity_receive_klip: number | null
+  /** SAP Vessel OA Budget (IDR/KG) for this PO line. */
+  vessel_oa_budget_sap: number | null
 }
 
 async function fetchContractValidateEnrichment(contractNumber: string): Promise<{
@@ -470,11 +622,8 @@ function contractDetailRowFromApi(
 ): ShipmentDetailRow {
   const cn = String(d.contract_number ?? '').trim()
   const po = String(d.po_number ?? '').trim()
-  const shipmentPlanQty = parseApiNumber(d.shipment_plan_qty ?? d.sto_qty_assigned) ?? 0
   const contractQty = parseApiNumber(d.contract_qty) ?? 0
   const osActual = parseApiNumber(d.outstanding_qty_actual ?? d.outstanding_qty) ?? 0
-  const osPlan = parseApiNumber(d.outstanding_qty_planning) ?? 0
-  const osPlanBudget = parseApiNumber(d.outstanding_qty_planning_budget) ?? osPlan
   return {
     rowKey: `${shipmentId}-${cn}-${po || 'po'}`,
     contract_number: cn,
@@ -483,14 +632,12 @@ function contractDetailRowFromApi(
     product: String(d.product ?? '').trim(),
     contract_qty: contractQty,
     outstanding_qty_actual: osActual,
-    outstanding_qty_planning: osPlan,
-    outstanding_qty_planning_budget: osPlanBudget,
-    sap_sto_qty: parseApiNumber(d.sap_sto_qty) ?? 0,
-    shipment_plan_qty: shipmentPlanQty,
-    sto_qty_assigned: shipmentPlanQty,
     outstanding_qty: osActual,
-    quantity_delivered: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
-    quantity_receive: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
+    quantity_delivered_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_delivered), contractQty),
+    quantity_receive_sap: sapContractDetailQtyToKg(parseApiNumber(d.quantity_receive), contractQty),
+    quantity_delivered_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_delivered_klip)),
+    quantity_receive_klip: shipmentStoredQtyKg(parseApiNumber(d.quantity_receive_klip)),
+    vessel_oa_budget_sap: parseApiNumber(d.vessel_oa_budget_sap),
   }
 }
 
@@ -498,7 +645,6 @@ async function buildContractDetailRows(
   detailsData: Array<Record<string, unknown>>,
   shipmentId: string,
   contractNumbers: string[],
-  info: Record<string, unknown>,
 ): Promise<ShipmentDetailRow[]> {
   let contractDetails = detailsData.map((d) => contractDetailRowFromApi(d, shipmentId))
 
@@ -536,14 +682,12 @@ async function buildContractDetailRows(
         product: enriched.product,
         contract_qty: enriched.contract_qty,
         outstanding_qty_actual: enriched.outstanding_qty,
-        outstanding_qty_planning: enriched.outstanding_qty,
-        outstanding_qty_planning_budget: enriched.outstanding_qty,
-        sap_sto_qty: 0,
-        shipment_plan_qty: 0,
-        sto_qty_assigned: 0,
         outstanding_qty: enriched.outstanding_qty,
-        quantity_delivered: shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered)),
-        quantity_receive: shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive)),
+        quantity_delivered_sap: null,
+        quantity_receive_sap: null,
+        quantity_delivered_klip: null,
+        quantity_receive_klip: null,
+        vessel_oa_budget_sap: null,
       }
     })
   }
@@ -601,7 +745,7 @@ function formatActivityLabel(log: ActivityLogRow): string {
   const action = log.action?.toUpperCase() ?? 'UPDATE'
   if (action === 'UPDATE' && log.entity_type === 'SHIPMENT') return `Updated Shipment — ${user}`
   if (action === 'CREATE' && log.entity_type === 'LOADING_PORT') return `Added Loading Port — ${user}`
-  if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated ETA / Port — ${user}`
+  if (action === 'UPDATE' && log.entity_type === 'LOADING_PORT') return `Updated Estimation / Port — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'LOADING_PORT') return `Cancelled Port Activity — ${user}`
   if (action === 'CANCEL' && log.entity_type === 'SHIPMENT') return `Cancelled Shipment — ${user}`
   return `${action} ${entity} — ${user}`
@@ -619,6 +763,8 @@ export type EditShipmentModalProps = {
   editContractNumbers?: string | null
   /** Read-only mode (e.g. Cancelled shipments on Shipments view table). */
   readOnly?: boolean
+  /** Allow ATA + Quality edits while core sections stay read-only (View Shipment). */
+  enableAtaQualityEditInView?: boolean
   /** Raise z-index when opened above contract detail modal. */
   stacked?: boolean
   /** Called after PO attach so parent can refresh Shipments list. */
@@ -634,6 +780,7 @@ export function EditShipmentModal({
   editStoNumber = null,
   editContractNumbers = null,
   readOnly = false,
+  enableAtaQualityEditInView = false,
   stacked = false,
   onShipmentChanged,
 }: EditShipmentModalProps) {
@@ -648,6 +795,9 @@ export function EditShipmentModal({
 
   const [vesselName, setVesselName] = useState('')
   const [originalVesselName, setOriginalVesselName] = useState('')
+  const [sapVesselName, setSapVesselName] = useState('')
+  const [sapVesselCode, setSapVesselCode] = useState('')
+  const [pendingMasterVessel, setPendingMasterVessel] = useState<MasterVesselOption | null>(null)
   const [vesselMeta, setVesselMeta] = useState<Record<string, string>>({})
   const [operationId, setOperationId] = useState('')
   const [stoNumber, setStoNumber] = useState('')
@@ -657,12 +807,21 @@ export function EditShipmentModal({
   const [contractDetailTarget, setContractDetailTarget] =
     useState<ContractDetailModalContract | null>(null)
   const [contractDetailLoading, setContractDetailLoading] = useState(false)
-  const [planQtyEdits, setPlanQtyEdits] = useState<Record<string, number>>({})
   const [qtyEdits, setQtyEdits] = useState<VesselPortsQuantityEdits>({})
   const [sfalQty, setSfalQty] = useState<number | null>(null)
   const [sfbdQty, setSfbdQty] = useState<number | null>(null)
   const [originalSfalQty, setOriginalSfalQty] = useState<number | null>(null)
   const [originalSfbdQty, setOriginalSfbdQty] = useState<number | null>(null)
+  // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+  const [fuelConsumption, setFuelConsumption] = useState<number | null>(null)
+  const [freight, setFreight] = useState<number | null>(null)
+  const [pumpRate, setPumpRate] = useState<number | null>(null)
+  const [sailingSpeed, setSailingSpeed] = useState<number | null>(null)
+  const [originalFuelConsumption, setOriginalFuelConsumption] = useState<number | null>(null)
+  const [originalFreight, setOriginalFreight] = useState<number | null>(null)
+  const [originalPumpRate, setOriginalPumpRate] = useState<number | null>(null)
+  const [originalSailingSpeed, setOriginalSailingSpeed] = useState<number | null>(null)
+  const [originalShortage, setOriginalShortage] = useState<number | null>(null)
   const [originalDeliveredKg, setOriginalDeliveredKg] = useState<number | null>(null)
   const [originalReceiveKg, setOriginalReceiveKg] = useState<number | null>(null)
 
@@ -686,6 +845,20 @@ export function EditShipmentModal({
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataIsEditing, setAtaIsEditing] = useState(false)
+  const [loadingPortAtaByKey, setLoadingPortAtaByKey] = useState<Record<string, LoadingAtaFields>>({})
+  const [originalLoadingPortAtaByKey, setOriginalLoadingPortAtaByKey] = useState<
+    Record<string, LoadingAtaFields>
+  >({})
+  const [qualityIsEditing, setQualityIsEditing] = useState(false)
+  const [klipFieldHistory, setKlipFieldHistory] = useState<Record<string, KlipFieldEditInfo>>({})
+  const [showAtaDifferencesOnly, setShowAtaDifferencesOnly] = useState(false)
+  const [showQualityDifferencesOnly, setShowQualityDifferencesOnly] = useState(false)
+  const [qualityEditsByPortKey, setQualityEditsByPortKey] = useState<
+    Record<string, ShipmentQualityFields>
+  >({})
+  const [originalQualityByPortKey, setOriginalQualityByPortKey] = useState<
+    Record<string, ShipmentQualityFields>
+  >({})
   const [activityLog, setActivityLog] = useState<ActivityLogRow[]>([])
   const [activityLoading, setActivityLoading] = useState(false)
   const [shipmentRemarks, setShipmentRemarks] = useState<ShipmentRemarkRow[]>([])
@@ -700,14 +873,40 @@ export function EditShipmentModal({
   const initSessionRef = useRef<string | null>(null)
 
   const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
-  const canModifyShipment = canEditShipment && !readOnly
+  const isCancelledShipment = normalizeShipmentStatusKey(shipmentStatus) === 'CANCELLED'
+  const canModifyCoreSections = canEditShipment && !readOnly
+  const canEditAtaQuality =
+    canEditShipment &&
+    (!readOnly || enableAtaQualityEditInView) &&
+    !isCancelledShipment
   const canAddPoOnEdit =
     (canEditShipment || canAddShipment) &&
     !readOnly &&
     Boolean(shipmentId) &&
     editContext?.can_add_po === true
 
-  const planQtyReadOnly = editContext?.has_sap_sto === true
+  const applyMasterVessel = useCallback((v: MasterVesselOption) => {
+    const charterFromTerms = charterTypeFromMasterTerms(v.terms)
+    setVesselName(String(v.vessel_name ?? '').trim())
+    setPendingMasterVessel(v)
+    setVesselMeta((prev) => ({
+      ...prev,
+      vessel_code: v.vessel_code ?? '',
+      vessel_owner: v.vessel_owner ?? '',
+      vessel_capacity: v.vessel_capacity_mt != null ? String(v.vessel_capacity_mt) : prev.vessel_capacity,
+      vessel_hull_type: String(v.vessel_type ?? v.hull_type ?? prev.vessel_hull_type ?? ''),
+      charter_type: charterFromTerms || prev.charter_type,
+    }))
+  }, [])
+
+  const vesselOverride = hasKlipVesselNameOverride(vesselName, sapVesselName)
+  const vesselMismatch = hasKlipSapMismatch(vesselName, sapVesselName, 'text')
+  const vesselProvenance = resolveKlipSapProvenance({
+    klipValue: vesselName,
+    sapValue: sapVesselName,
+    format: 'text',
+  })
+  const showVesselSapFooter = shouldShowKlipSapFooter(vesselProvenance, sapVesselName, 'text')
 
   const qtyTableRows: VesselPortsQuantityRow[] = useMemo(
     () =>
@@ -716,35 +915,26 @@ export function EditShipmentModal({
         contract_ext_no: d.contract_number,
         po_number: d.po_number,
         contract_qty: d.contract_qty,
-        sto_qty: d.sto_qty_assigned,
-        quantity_delivered: d.quantity_delivered,
-        quantity_receive: d.quantity_receive,
+        quantity_delivered: d.quantity_delivered_klip,
+        quantity_receive: d.quantity_receive_klip,
       })),
     [detailRows],
   )
 
   const vesselCapacityMt = parseApiNumber(vesselMeta.vessel_capacity)
 
-  const totalShipmentPlanKg = useMemo(() => {
-    let sum = 0
-    for (const row of detailRows) {
-      sum += planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
-    }
-    return sum
-  }, [detailRows, planQtyEdits])
-
   const poTableQtyTotals = useMemo(() => {
     let contractQty = 0
-    let stoQty = 0
+    let sapDelivered = 0
+    let sapReceive = 0
     let osQty = 0
-    let osPlanQty = 0
     for (const row of detailRows) {
       contractQty += row.contract_qty ?? 0
-      stoQty += row.sap_sto_qty ?? 0
+      sapDelivered += row.quantity_delivered_sap ?? 0
+      sapReceive += row.quantity_receive_sap ?? 0
       osQty += row.outstanding_qty_actual ?? 0
-      osPlanQty += row.outstanding_qty_planning ?? 0
     }
-    return { contractQty, stoQty, osQty, osPlanQty }
+    return { contractQty, sapDelivered, sapReceive, osQty }
   }, [detailRows])
 
   const qtyTotals = useMemo(
@@ -752,12 +942,61 @@ export function EditShipmentModal({
     [qtyTableRows, qtyEdits],
   )
 
+  const isTcCharter = isTcCharterType(vesselMeta.charter_type)
+  const headerVesselOaBudget = parseApiNumber(shipmentInfo.vessel_oa_budget)
+
+  const tcFreightBudgetIdrKg = useMemo(
+    () =>
+      computeShipmentFreightBudgetIdrKg(
+        detailRows.map((d) => {
+          const edited = qtyEdits[d.rowKey]
+          return {
+            vessel_oa_budget_sap: d.vessel_oa_budget_sap,
+            quantity_kg:
+              edited?.quantity_delivered !== undefined
+                ? edited.quantity_delivered ?? 0
+                : d.quantity_delivered_klip ?? 0,
+          }
+        }),
+        headerVesselOaBudget,
+      ),
+    [detailRows, qtyEdits, headerVesselOaBudget],
+  )
+
+  const tcR4ShortageMt = useMemo(() => {
+    const rows = detailRows.map((d) => {
+      const edited = qtyEdits[d.rowKey]
+      return {
+        quantity_delivered_klip:
+          edited?.quantity_delivered !== undefined ? edited.quantity_delivered : d.quantity_delivered_klip,
+        quantity_delivered_sap: d.quantity_delivered_sap,
+        quantity_receive_klip:
+          edited?.quantity_receive !== undefined ? edited.quantity_receive : d.quantity_receive_klip,
+        quantity_receive_sap: d.quantity_receive_sap,
+      }
+    })
+    return computeShipmentR4ShortageMt(rows)
+  }, [detailRows, qtyEdits])
+
   const loadingPortRows = useMemo(
     () =>
       loadingPorts
         .filter((p) => !p.is_discharge_port)
         .slice()
         .sort((a, b) => (a.port_sequence ?? 0) - (b.port_sequence ?? 0)),
+    [loadingPorts],
+  )
+
+  /*
+   * The header's one-line answer to "does this shipment need checking?". Computed over every port,
+   * loading and discharge, because a disagreement can sit three scrolls down inside a collapsed
+   * block and would otherwise only be found by reading the whole modal.
+   */
+  const provenanceNote = useMemo(
+    () =>
+      describePortProvenance(
+        summarizePortProvenance(loadingPorts as unknown as Record<string, unknown>[]),
+      ),
     [loadingPorts],
   )
 
@@ -792,24 +1031,65 @@ export function EditShipmentModal({
     [etaBaseline, isMultiPortLoading, dischargeEtaFields, etaBlockSnapshots],
   )
 
-  const requiresEditRemark = hasEtaEdits || hasQtyEdits
-  const editRemarkMissing = requiresEditRemark && !editRemark.trim()
+  const hasAtaEdits = useMemo(
+    () =>
+      hasShipmentAtaEdits({
+        isMultiPortLoading,
+        ataFields,
+        originalAtaFields,
+        loadingPortAtaByKey,
+        originalLoadingPortAtaByKey,
+      }),
+    [
+      isMultiPortLoading,
+      ataFields,
+      originalAtaFields,
+      loadingPortAtaByKey,
+      originalLoadingPortAtaByKey,
+    ],
+  )
 
+  const currentQualityByPortKey = useMemo(
+    () => resolveCurrentQualityByPortKey(originalQualityByPortKey, qualityEditsByPortKey),
+    [originalQualityByPortKey, qualityEditsByPortKey],
+  )
+
+  const hasQualityEdits = useMemo(
+    () => hasShipmentQualityEdits(originalQualityByPortKey, currentQualityByPortKey),
+    [originalQualityByPortKey, currentQualityByPortKey],
+  )
+
+  const hasLimitedEdits = hasAtaEdits || hasQualityEdits
+
+  const requiresEditRemark = hasEtaEdits || hasQtyEdits || hasAtaEdits || hasQualityEdits
+  const editRemarkMissing = requiresEditRemark && !editRemark.trim()
+  const showSaveButton = canModifyCoreSections || (canEditAtaQuality && hasLimitedEdits)
+  const showRemarkField =
+    requiresEditRemark && (canModifyCoreSections || canEditAtaQuality)
+
+  const totalDeliveredKlipKg = qtyTotals.quantity_delivered ?? 0
   const capacityPct =
     vesselCapacityMt != null && vesselCapacityMt > 0
-      ? Math.min(100, (totalShipmentPlanKg / 1000 / vesselCapacityMt) * 100)
+      ? Math.min(100, (totalDeliveredKlipKg / 1000 / vesselCapacityMt) * 100)
       : 0
 
   const resetState = useCallback(() => {
     setShipmentId(null)
     setVesselName('')
     setOriginalVesselName('')
+    setSapVesselName('')
+    setSapVesselCode('')
+    setPendingMasterVessel(null)
     setVesselMeta({})
     setDetailRows([])
-    setPlanQtyEdits({})
     setQtyEdits({})
     setSfalQty(null)
     setSfbdQty(null)
+    setFuelConsumption(null)
+    setFreight(null)
+    setPumpRate(null)
+    setSailingSpeed(null)
+    setOriginalShortage(null)
     setEtaBlocks([])
     setDischargeEtaFields(emptyDischargeEtaFields())
     setEtaSectionEditing(false)
@@ -822,6 +1102,12 @@ export function EditShipmentModal({
     setOriginalAtaFields(emptyAtaFields())
     setAtaSapReference(emptyAtaFields())
     setAtaIsEditing(false)
+    setOriginalLoadingPortAtaByKey({})
+    setQualityIsEditing(false)
+    setShowAtaDifferencesOnly(false)
+    setShowQualityDifferencesOnly(false)
+    setQualityEditsByPortKey({})
+    setOriginalQualityByPortKey({})
     setHasUploadedSld(false)
     setHasUploadedSdd(false)
     setShipmentStatus(null)
@@ -924,7 +1210,9 @@ export function EditShipmentModal({
           sid = String(first.id)
         }
 
-        const payloadRes = await api.get(`/shipments/${sid}/edit-payload`)
+        const payloadRes = await api.get(`/shipments/${sid}/edit-payload`, {
+          params: preferredStoNumber?.trim() ? { sto: preferredStoNumber.trim() } : undefined,
+        })
         const payload = payloadRes.data?.data as {
           shipment?: Record<string, unknown>
           editContext?: ShipmentEditContextData | null
@@ -936,6 +1224,9 @@ export function EditShipmentModal({
 
         const row = { ...payload.shipment, id: sid } as Record<string, unknown>
         const editContext = payload.editContext ?? null
+        setKlipFieldHistory(
+          (payload as { fieldHistory?: Record<string, KlipFieldEditInfo> }).fieldHistory ?? {},
+        )
         const ports: LoadingPortRef[] = payload.ports ?? []
         const info: Record<string, unknown> = payload.shipmentInfo ?? {}
 
@@ -961,43 +1252,116 @@ export function EditShipmentModal({
         setEditContext(editContext)
         setSelectedAddPoOption(null)
 
-        const displaySto = resolveShipmentDisplayStoNumber(
-          row.contract_sto_number ?? row.sto_number,
-        )
+        // Display the list STO (preferredStoNumber = row sto_key). Payload also receives
+        // that STO so SAP delivered/receive/OS are scoped to the Type V sea leg, not the
+        // Type T shipment_id sibling on FOB mixed POs.
+        const preferredDisplaySto = resolveShipmentDisplayStoNumber(preferredStoNumber)
+        const displaySto =
+          preferredDisplaySto !== '-'
+            ? preferredDisplaySto
+            : resolveShipmentDisplayStoNumber(row.contract_sto_number ?? row.sto_number)
 
         const detailsData = Array.isArray(payload.contractDetails) ? payload.contractDetails : []
         let contractDetails = await buildContractDetailRows(
           detailsData,
           sid,
           contractNumbers,
-          info,
         )
 
+        const hasPerPoKlip = contractDetails.some(
+          (r) => r.quantity_delivered_klip != null || r.quantity_receive_klip != null,
+        )
+        const shipmentDeliveredKlipKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered_klip))
         const shipmentDeliveredKg = shipmentStoredQtyKg(parseApiNumber(info.quantity_delivered))
         const shipmentReceiveKg = shipmentStoredQtyKg(parseApiNumber(info.actual_vessel_qty_receive))
-        contractDetails = mergeShipmentQtyOverridesOnContractRows(
-          contractDetails,
-          shipmentDeliveredKg,
-          shipmentReceiveKg,
-        )
+        if (!hasPerPoKlip) {
+          // Legacy: header-only KLIP sum (pre per-PO persist) — redistribute for display.
+          const klipSeeded = seedKlipQtyFromShipmentHeader(
+            contractDetails.map((r) => ({
+              quantity_delivered: r.quantity_delivered_sap,
+              quantity_receive: r.quantity_receive_sap,
+            })),
+            {
+              shipmentDeliveredKlipKg,
+              shipmentDeliveredKg,
+              shipmentReceiveKg,
+            },
+          )
+          contractDetails = contractDetails.map((row, i) => ({
+            ...row,
+            quantity_delivered_klip: klipSeeded[i]?.quantity_delivered ?? null,
+            quantity_receive_klip: klipSeeded[i]?.quantity_receive ?? null,
+          }))
+        }
 
         setDetailRows(contractDetails)
-        setPlanQtyEdits(
-          Object.fromEntries(
-            contractDetails.map((detailRow) => [detailRow.rowKey, detailRow.shipment_plan_qty ?? 0]),
-          ),
-        )
+        setQtyEdits({})
 
-        const vn = String(row.vessel_name ?? '')
-        setVesselName(vn)
-        setOriginalVesselName(vn)
+        const klipVn = String(row.vessel_name_klip ?? row.vessel_name ?? '').trim()
+        const sapVn = String(row.vessel_name_sap ?? '').trim()
+        const masterVn = String(row.vessel_name_master ?? '').trim()
+        const grClosed = isContractSapClosedFlag(row.is_contract_sap_closed)
+        const primaryVn = shipmentVesselPrimaryName(klipVn, sapVn, {
+          masterName: masterVn,
+          contractSapClosed: grClosed,
+        })
+        const nameOverride = hasKlipVesselNameOverride(klipVn, sapVn)
+        const masterAlignedWithKlip =
+          !nameOverride ||
+          (Boolean(masterVn) &&
+            normalizeVesselNameKey(masterVn) === normalizeVesselNameKey(klipVn))
+        setSapVesselName(sapVn)
+        setSapVesselCode(String(row.vessel_code_sap ?? '').trim())
+        setVesselName(primaryVn)
+        setOriginalVesselName(primaryVn)
+        setPendingMasterVessel(
+          masterAlignedWithKlip && (masterVn || row.vessel_code_master)
+            ? {
+                id: String(
+                  row.master_vessel_resolved_id ?? row.master_vessel_id ?? '',
+                ),
+                vessel_code: String(row.vessel_code_master ?? row.vessel_code ?? '') || null,
+                vessel_name: masterVn || primaryVn,
+                vessel_capacity_mt:
+                  row.vessel_capacity_mt_master != null
+                    ? Number(row.vessel_capacity_mt_master)
+                    : null,
+                vessel_owner: String(row.vessel_owner_master ?? row.vessel_owner ?? '') || null,
+                vessel_type: String(row.vessel_type_master ?? '') || null,
+                terms: String(row.vessel_terms_master ?? '') || null,
+              }
+            : null,
+        )
+        const charterFromMaster = masterAlignedWithKlip
+          ? charterTypeFromMasterTerms(String(row.vessel_terms_master ?? '') || null)
+          : ''
         setVesselMeta({
-          vessel_code: String(row.vessel_code ?? ''),
-          vessel_owner: String(row.vessel_owner ?? ''),
-          vessel_capacity: String(row.vessel_capacity ?? ''),
+          vessel_code: firstNonEmptyVesselField(
+            row.vessel_code,
+            masterAlignedWithKlip ? row.vessel_code_master : null,
+            !nameOverride ? row.vessel_code_sap : null,
+          ),
+          // Owner from Master Vessel (no SAP compare line in UI).
+          vessel_owner: firstNonEmptyVesselField(
+            row.vessel_owner,
+            masterAlignedWithKlip ? row.vessel_owner_master : null,
+            !nameOverride ? row.vessel_owner_sap : null,
+          ),
+          vessel_capacity: firstNonEmptyVesselField(
+            row.vessel_capacity && String(row.vessel_capacity) !== '0' && String(row.vessel_capacity) !== '0.00'
+              ? row.vessel_capacity
+              : null,
+            masterAlignedWithKlip ? row.vessel_capacity_mt_master : null,
+          ),
           vessel_draft: String(row.vessel_draft ?? ''),
-          vessel_hull_type: String(row.vessel_hull_type ?? ''),
-          charter_type: String(row.charter_type ?? ''),
+          vessel_hull_type: firstNonEmptyVesselField(
+            row.vessel_hull_type,
+            masterAlignedWithKlip ? row.vessel_type_master : null,
+          ),
+          charter_type: firstNonEmptyVesselField(
+            charterFromMaster,
+            row.charter_type,
+          ),
           port_of_discharge: String(row.port_of_discharge ?? info.vessel_discharge_port_1 ?? ''),
         })
         setOperationId(String(row.operation_id ?? ''))
@@ -1008,17 +1372,15 @@ export function EditShipmentModal({
           .slice()
           .sort((a, b) => (a.port_sequence ?? 0) - (b.port_sequence ?? 0))
 
-        const resolveValidPortLabel = (value: unknown): string => {
-          const text = String(value ?? '').trim()
-          return text && text !== '0.00' ? text : ''
-        }
-        const pol =
-          resolveValidPortLabel(loadingPortRows[0]?.port_name) ||
-          resolveValidPortLabel(info.vessel_loading_port_1) ||
-          resolveValidPortLabel(row.port_of_loading)
-        const pod = String(info.vessel_discharge_port_1 ?? row.port_of_discharge ?? '')
-        setLoadingPort(pol)
-        setDischargePort(pod)
+        const polKlip =
+          resolveKlipPortInputValue(loadingPortRows[0]?.port_name) ||
+          resolveKlipPortInputValue(info.vessel_loading_port_1) ||
+          resolveKlipPortInputValue(row.port_of_loading)
+        const podKlip =
+          resolveKlipPortInputValue(info.vessel_discharge_port_1) ||
+          resolveKlipPortInputValue(row.port_of_discharge)
+        setLoadingPort(polKlip)
+        setDischargePort(podKlip)
 
         const sfal = parseApiNumber(info.sfal_qty ?? row.sfal_qty)
         const sfbd = parseApiNumber(info.sfbd_qty ?? row.sfbd_qty)
@@ -1027,12 +1389,28 @@ export function EditShipmentModal({
         setOriginalSfalQty(sfal)
         setOriginalSfbdQty(sfbd)
 
+        const fuelConsumptionVal = parseApiNumber(info.fuel_consumption ?? row.fuel_consumption)
+        const freightVal = parseApiNumber(info.freight ?? row.freight)
+        const pumpRateVal = parseApiNumber(info.pump_rate ?? row.pump_rate)
+        const sailingSpeedVal = parseApiNumber(info.sailing_speed ?? row.sailing_speed)
+        const shortageVal = parseApiNumber(info.shortage ?? row.shortage)
+        setFuelConsumption(fuelConsumptionVal)
+        setFreight(freightVal)
+        setPumpRate(pumpRateVal)
+        setSailingSpeed(sailingSpeedVal)
+        setOriginalFuelConsumption(fuelConsumptionVal)
+        setOriginalFreight(freightVal)
+        setOriginalPumpRate(pumpRateVal)
+        setOriginalSailingSpeed(sailingSpeedVal)
+        setOriginalShortage(shortageVal)
+
         const deliveredKg =
-          contractDetails.reduce((s, r) => s + (r.quantity_delivered ?? 0), 0) ||
-          shipmentDeliveredKg
+          contractDetails.reduce((s, r) => s + (r.quantity_delivered_klip ?? 0), 0)
+          || shipmentDeliveredKlipKg
+          || shipmentDeliveredKg
         const receiveKg =
-          contractDetails.reduce((s, r) => s + (r.quantity_receive ?? 0), 0) ||
-          shipmentReceiveKg
+          contractDetails.reduce((s, r) => s + (r.quantity_receive_klip ?? 0), 0)
+          || shipmentReceiveKg
         setOriginalDeliveredKg(deliveredKg)
         setOriginalReceiveKg(receiveKg)
 
@@ -1045,17 +1423,47 @@ export function EditShipmentModal({
         setEtaSectionEditing(false)
 
         if (multiPort) {
-          const blocks: EtaBlock[] = loadingPortRows.map((portRow) => ({
-            id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
-            portId: portRow.id,
-            portSequence: portRow.port_sequence ?? 1,
-            status: 'active' as const,
-            loadingPort: resolveValidPortLabel(portRow.port_name) || `Loading Port ${portRow.port_sequence ?? 1}`,
-            contractLabels: poLabels,
-            fields: loadingEtaFromPortRow(portRow, info, row),
-            isEditing: false,
-          }))
+          // Multi-contract STO group: each loading port belongs to one contract's shipment
+          // row — label it with that contract's PO(s) rather than the whole group's list.
+          const labelsByContract = new Map<string, string[]>()
+          for (const d of contractDetails) {
+            const cn = String(d.contract_number ?? '').trim()
+            if (!cn) continue
+            const label = d.po_number || d.contract_number
+            if (!label) continue
+            labelsByContract.set(cn, [...(labelsByContract.get(cn) ?? []), label])
+          }
+          // `info`/`row` are shipment-level fields scoped to the anchor shipment (sid) only —
+          // they must not leak into other ports' blocks, or every port with no data of its
+          // own on `vessel_loading_ports` would incorrectly display the anchor's dates.
+          const portBelongsToAnchor = (p: LoadingPortRef) =>
+            Boolean(p.shipment_id) && String(p.shipment_id) === sid
+          const blocks: EtaBlock[] = loadingPortRows.map((portRow) => {
+            const portContract = String(portRow.contract_number ?? '').trim()
+            const contractLabels =
+              (portContract && labelsByContract.get(portContract)) || poLabels
+            const isAnchorPort = portBelongsToAnchor(portRow)
+            return {
+              id: portRow.id || `port-${portRow.port_sequence ?? 1}`,
+              portId: portRow.id,
+              portSequence: portRow.port_sequence ?? 1,
+              status: 'active' as const,
+              loadingPort: resolveKlipPortInputValue(portRow.port_name),
+              contractLabels,
+              fields: loadingEtaFromPortRow(portRow, isAnchorPort ? info : {}, isAnchorPort ? row : {}),
+              isEditing: false,
+            }
+          })
           setEtaBlocks(blocks)
+          const ataByKey: Record<string, LoadingAtaFields> = {}
+          for (const portRow of loadingPortRows) {
+            ataByKey[loadingPortAtaStateKey(portRow)] = loadingAtaFromPortRow(
+              portRow,
+              portBelongsToAnchor(portRow) ? info : {},
+            )
+          }
+          setLoadingPortAtaByKey(ataByKey)
+          setOriginalLoadingPortAtaByKey({ ...ataByKey })
           setEtaBaseline(
             buildShipmentEtaBaseline({
               isMultiPortLoading: true,
@@ -1064,6 +1472,8 @@ export function EditShipmentModal({
             }),
           )
         } else {
+          setLoadingPortAtaByKey({})
+          setOriginalLoadingPortAtaByKey({})
           const loadingPortRow = loadingPortRows[0]
 
           const etaFields: EditEtaFields = {
@@ -1077,7 +1487,7 @@ export function EditShipmentModal({
               portId: loadingPortRow?.id,
               portSequence: loadingPortRow?.port_sequence ?? 1,
               status: 'active',
-              loadingPort: pol,
+              loadingPort: polKlip,
               contractLabels: poLabels,
               fields: etaFields,
               isEditing: false,
@@ -1092,6 +1502,13 @@ export function EditShipmentModal({
             }),
           )
         }
+        const dischargePortForQuality = ports.find((p) => p.is_discharge_port)
+        setOriginalQualityByPortKey(
+          buildQualityBaselineFromPorts(loadingPortRows, dischargePortForQuality, info, sid),
+        )
+        setQualityEditsByPortKey({})
+        setQualityIsEditing(false)
+        setAtaIsEditing(false)
         setEditRemark('')
 
         const plantCode = String(row.plant_code ?? '').trim()
@@ -1150,7 +1567,7 @@ export function EditShipmentModal({
         contractRowId: selectedAddPoOption.key,
         stoQtyAssignedKg: 0,
       })
-      setNotification({ type: 'success', message: 'PO added — set Shipment Plan Qty and save changes.' })
+      setNotification({ type: 'success', message: 'PO added. Set Delivered Qty (Klip) after SLD/SDD, or via Upload Planning.' })
       const contractId = editContractId?.trim()
       const directId = editShipmentIdProp?.trim()
       const sto = editStoNumber?.trim()
@@ -1252,25 +1669,37 @@ export function EditShipmentModal({
       setNotification({ type: 'error', message: 'You need Edit permission on Shipments.' })
       return
     }
-    const activeBlock = isMultiPortLoading
-      ? etaBlocks.find((b) => b.portSequence === 1) ?? etaBlocks[0]
-      : etaBlocks.find((b) => b.status === 'active')
-    if (!activeBlock) {
-      setNotification({ type: 'error', message: 'No active ETA block to save.' })
+
+    const isLimitedViewSave = readOnly && enableAtaQualityEditInView
+
+    if (isLimitedViewSave && !hasLimitedEdits) {
+      setNotification({ type: 'error', message: 'No ATA or Quality changes to save.' })
       return
     }
 
-    const saveActiveEta: EditEtaFields = isMultiPortLoading
-      ? {
-          ...activeBlock.fields,
-          ...dischargeEtaFields,
-        }
-      : activeBlock.fields
+    let saveActiveEta: EditEtaFields | null = null
+    if (!isLimitedViewSave) {
+      const activeBlock = isMultiPortLoading
+        ? etaBlocks.find((b) => b.portSequence === 1) ?? etaBlocks[0]
+        : etaBlocks.find((b) => b.status === 'active')
+      if (!activeBlock) {
+        setNotification({ type: 'error', message: 'No active Estimation block to save.' })
+        return
+      }
+
+      saveActiveEta = isMultiPortLoading
+        ? {
+            ...activeBlock.fields,
+            ...dischargeEtaFields,
+          }
+        : activeBlock.fields
+    }
 
     if (requiresEditRemark && !editRemark.trim()) {
       setNotification({
         type: 'error',
-        message: 'Remark is required when editing ETA, Quantity Delivered, or Quantity Receive.',
+        message:
+          'Remark is required when editing Estimation, quantities, ATA, or Quality.',
       })
       return
     }
@@ -1278,29 +1707,33 @@ export function EditShipmentModal({
     setSaving(true)
     setNotification(null)
     try {
-      if (!planQtyReadOnly && detailRows.length > 0) {
-        await batchSaveShipmentPoPlanQty({
-          shipmentId,
-          rows: detailRows.map((row) => ({
-            contractNumber: row.contract_number,
-            poNumber: row.po_number || null,
-            shipmentPlanQtyKg: planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0,
-          })),
-        })
-      }
-
-      const qtyUserEdited = hasVesselPortsQuantityUserEdits(qtyTableRows, qtyEdits)
       await saveEditShipmentChanges({
         shipmentId,
         vesselName,
         originalVesselName,
+        vesselCode: vesselMeta.vessel_code,
+        vesselOwner: vesselMeta.vessel_owner,
+        vesselCapacity: vesselMeta.vessel_capacity,
+        vesselHullType: vesselMeta.vessel_hull_type,
+        charterType: vesselMeta.charter_type,
+        masterVesselId: pendingMasterVessel?.id ?? null,
         sfalQty,
         sfbdQty,
         originalSfalQty,
         originalSfbdQty,
+        fuelConsumption,
+        freight,
+        pumpRate,
+        sailingSpeed,
+        autoPersistShortageMt: isTcCharter ? tcR4ShortageMt : undefined,
+        originalFuelConsumption,
+        originalFreight,
+        originalPumpRate,
+        originalSailingSpeed,
+        originalShortage,
         loadingPort,
         dischargePort,
-        activeEta: saveActiveEta,
+        activeEta: saveActiveEta ?? emptyEtaFields(),
         isMultiPortLoading,
         loadingPortEtas: isMultiPortLoading
           ? etaBlocks.map((block) => ({
@@ -1326,36 +1759,89 @@ export function EditShipmentModal({
         loadingPorts,
         ataFields,
         originalAtaFields,
+        loadingPortAtas: isMultiPortLoading
+          ? loadingPortRows.map((portRow) => {
+              const ataKey = loadingPortAtaStateKey(portRow)
+              return {
+                portId: portRow.id,
+                portSequence: portRow.port_sequence ?? 1,
+                fields:
+                  loadingPortAtaByKey[ataKey] ??
+                  loadingAtaFromPortRow(
+                    portRow,
+                    portRow.shipment_id && String(portRow.shipment_id) === shipmentId
+                      ? shipmentInfo
+                      : {},
+                  ),
+              }
+            })
+          : undefined,
+        qualityByPortKey: currentQualityByPortKey,
+        originalQualityByPortKey,
+        ataQualityOnly: isLimitedViewSave,
       })
 
       if (requiresEditRemark) {
         await saveShipmentEditRemark(shipmentId, editRemark)
       }
 
+      if (isLimitedViewSave) {
+        setNotification({ type: 'success', message: 'ATA and Quality updated successfully.' })
+        setAtaIsEditing(false)
+        setQualityIsEditing(false)
+        setEditRemark('')
+        const contractId = editContractId?.trim()
+        const directId = editShipmentIdProp?.trim()
+        const sto = editStoNumber?.trim()
+        if (directId) {
+          await loadShipment(contractId || directId, directId, sto)
+        } else if (contractId) {
+          await loadShipment(contractId, null, sto)
+        }
+        void loadActivityLog(shipmentId)
+        void loadShipmentRemarks(shipmentId)
+        onShipmentChanged?.()
+        return
+      }
+
+      // KLIP Delivered/Receive already persisted per PO via /po-klip-qty in
+      // saveEditShipmentChanges — do not re-PUT a summed qty onto the anchor row
+      // (that overwrote sibling per-PO values and made edits look unsaved).
       await onSubmit({
         kind: 'update',
         shipmentId,
         vessel_name: vesselName.trim() !== originalVesselName.trim() ? vesselName.trim() : undefined,
-        ...(qtyUserEdited && qtyTotals.quantity_delivered !== null
-          ? { quantity_delivered: qtyTotals.quantity_delivered }
-          : {}),
-        ...(qtyUserEdited && qtyTotals.quantity_receive !== null
-          ? { actual_vessel_qty_receive: qtyTotals.quantity_receive }
+        ...(vesselName.trim() !== originalVesselName.trim()
+          ? {
+              vessel_code: vesselMeta.vessel_code || undefined,
+              vessel_owner: vesselMeta.vessel_owner || undefined,
+              vessel_capacity: vesselMeta.vessel_capacity || undefined,
+              vessel_hull_type: vesselMeta.vessel_hull_type || undefined,
+              charter_type: vesselMeta.charter_type || undefined,
+              master_vessel_id: pendingMasterVessel?.id ?? undefined,
+            }
           : {}),
         sfal_qty: sfalQty,
         sfbd_qty: sfbdQty,
-        eta_arrival: toApiDateOnly(saveActiveEta.etaVesselArrivalAtLoadingPort),
-        eta_berthed: toApiDateOnly(saveActiveEta.etaVesselBerthedAtLoadingPort),
-        eta_loading_start: toApiDateOnly(saveActiveEta.etaVesselStartLoading),
-        eta_loading_complete: toApiDateOnly(saveActiveEta.etaVesselCompletedLoading),
-        eta_sailed: toApiDateOnly(saveActiveEta.etaVesselSailedFromLoadingPort),
-        eta_discharge_arrival: toApiDateOnly(saveActiveEta.etaVesselArriveAtDischargePort),
-        eta_discharge_berthed: toApiDateOnly(saveActiveEta.etaVesselBerthedAtDischargePort),
-        eta_discharge_start: toApiDateOnly(saveActiveEta.etaVesselStartDischarging),
-        eta_discharge_complete: toApiDateOnly(saveActiveEta.etaVesselCompleteDischarge),
+        fuel_consumption: fuelConsumption,
+        freight,
+        pump_rate: pumpRate,
+        sailing_speed: sailingSpeed,
+        ...(isTcCharter ? { shortage: tcR4ShortageMt } : {}),
+        eta_arrival: toApiDateOnly(saveActiveEta!.etaVesselArrivalAtLoadingPort),
+        eta_berthed: toApiDateOnly(saveActiveEta!.etaVesselBerthedAtLoadingPort),
+        eta_loading_start: toApiDateOnly(saveActiveEta!.etaVesselStartLoading),
+        eta_loading_complete: toApiDateOnly(saveActiveEta!.etaVesselCompletedLoading),
+        eta_sailed: toApiDateOnly(saveActiveEta!.etaVesselSailedFromLoadingPort),
+        eta_discharge_arrival: toApiDateOnly(saveActiveEta!.etaVesselArriveAtDischargePort),
+        eta_discharge_berthed: toApiDateOnly(saveActiveEta!.etaVesselBerthedAtDischargePort),
+        eta_discharge_start: toApiDateOnly(saveActiveEta!.etaVesselStartDischarging),
+        eta_discharge_complete: toApiDateOnly(saveActiveEta!.etaVesselCompleteDischarge),
       })
 
       setNotification({ type: 'success', message: 'Shipment updated successfully.' })
+      invalidateMissingEtaAlertCache()
+      onShipmentChanged?.()
       onClose()
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Failed to save shipment'
@@ -1408,6 +1894,109 @@ export function EditShipmentModal({
     })
   }
 
+  const handleCancelEtaEdit = () => {
+    if (isMultiPortLoading) {
+      if (etaBaseline) {
+        setDischargeEtaFields({ ...etaBaseline.dischargeEta })
+        setEtaBlocks((prev) =>
+          prev.map((block) => {
+            const baselinePort = etaBaseline.loadingPorts.find(
+              (p) => p.portSequence === block.portSequence,
+            )
+            if (!baselinePort || block.status !== 'active') {
+              return { ...block, isEditing: false }
+            }
+            return {
+              ...block,
+              isEditing: false,
+              fields: {
+                ...block.fields,
+                ...baselinePort.fields,
+              },
+            }
+          }),
+        )
+      }
+      setEtaSectionEditing(false)
+      return
+    }
+
+    const draft = etaBlocks.find((b) => b.status === 'active' && b.isDraft)
+    if (draft) {
+      handleCancelAddEta()
+      return
+    }
+
+    if (!etaBaseline?.singlePortActiveEta) {
+      setEtaBlocks((prev) =>
+        prev.map((b) => (b.status === 'active' ? { ...b, isEditing: false } : b)),
+      )
+      return
+    }
+
+    setEtaBlocks((prev) =>
+      prev.map((b) =>
+        b.status === 'active'
+          ? { ...b, isEditing: false, fields: { ...etaBaseline.singlePortActiveEta! } }
+          : b,
+      ),
+    )
+  }
+
+  const handleCancelAtaEdit = () => {
+    setAtaFields({ ...originalAtaFields })
+    setLoadingPortAtaByKey({ ...originalLoadingPortAtaByKey })
+    setAtaIsEditing(false)
+  }
+
+  const handleCancelQualityEdit = () => {
+    setQualityEditsByPortKey({})
+    setQualityIsEditing(false)
+  }
+
+  const qualityFieldsForPortKey = (portKey: string): ShipmentQualityFields =>
+    currentQualityByPortKey[portKey] ??
+    originalQualityByPortKey[portKey] ??
+    emptyShipmentQualityFields()
+
+  const resolveAtaSapReference = (
+    key: ShipmentAtaApiField,
+    portRow?: LoadingPortRef,
+  ): string => {
+    const isDischargeRow = Boolean(portRow?.is_discharge_port)
+    return resolveAtaSapReferenceValue(key, {
+      loadingPortRow: isDischargeRow ? undefined : (portRow as Record<string, unknown> | undefined),
+      // Discharge SAP chips must never read loading-port sap_ata_* (single-port layout bug).
+      dischargePortRow: isDischargeRow
+        ? (portRow as Record<string, unknown> | undefined)
+        : (dischargePortRow as Record<string, unknown> | undefined),
+      shipmentSapRef: ataSapReference,
+    })
+  }
+
+  const updateQualityField = (
+    portKey: string,
+    fieldKey: keyof ShipmentQualityFields,
+    raw: string,
+  ) => {
+    setQualityEditsByPortKey((prev) => {
+      const baseline = originalQualityByPortKey[portKey] ?? emptyShipmentQualityFields()
+      const current = prev[portKey] ?? baseline
+      const trimmed = raw.trim()
+      let nextValue: number | null
+      if (!trimmed) {
+        nextValue = null
+      } else {
+        const parsed = parseFloat(trimmed.replace(/,/g, ''))
+        nextValue = Number.isFinite(parsed) ? parsed : current[fieldKey]
+      }
+      return {
+        ...prev,
+        [portKey]: { ...current, [fieldKey]: nextValue },
+      }
+    })
+  }
+
   const updateActiveEtaField = (key: keyof EditEtaFields, value: string) => {
     setEtaBlocks((prev) =>
       prev.map((b) =>
@@ -1450,6 +2039,18 @@ export function EditShipmentModal({
 
   const activeEtaBlock = etaBlocks.find((b) => b.status === 'active')
   const historicalEtaBlocks = etaBlocks.filter((b) => b.status === 'historical')
+  const etaSectionIsEditing = isMultiPortLoading
+    ? etaSectionEditing
+    : Boolean(activeEtaBlock?.isEditing || activeEtaBlock?.isDraft)
+
+  const step1Done = Boolean(vesselName.trim())
+  const step2Done = detailRows.length > 0 || Boolean(stoNumber.trim())
+  const step3Done = Boolean(
+    activeEtaBlock &&
+      Object.values(activeEtaBlock.fields).some((v) => String(v ?? '').trim() !== ''),
+  )
+  const step4Done = Object.values(ataFields).some((v) => String(v ?? '').trim() !== '')
+  const step5Done = loadingPortRows.length > 0
 
   return (
     <>
@@ -1484,14 +2085,64 @@ export function EditShipmentModal({
                       ? `STO ${stoNumber} — read-only shipment execution details`
                       : 'Read-only view of shipment execution details'
                     : stoNumber
-                      ? `STO ${stoNumber} — edit ETA schedule and manual ATA (SAP reference preserved)`
-                      : 'Update vessel, quantities, ETA schedule, and manual ATA'}
+                      ? `STO ${stoNumber} — edit Estimation schedule and manual ATA (SAP reference preserved)`
+                      : 'Update vessel, quantities, Estimation schedule, and manual ATA'}
                 </p>
+                {provenanceNote ? (
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span
+                      className="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                      title="Dihitung dari perbandingan nilai KLIP terhadap referensi SAP pada setiap port"
+                    >
+                      {provenanceNote}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-[11px] font-medium text-blue-700 underline-offset-2 hover:underline"
+                      onClick={() => {
+                        const next = !(showAtaDifferencesOnly && showQualityDifferencesOnly)
+                        setShowAtaDifferencesOnly(next)
+                        setShowQualityDifferencesOnly(next)
+                      }}
+                    >
+                      {showAtaDifferencesOnly && showQualityDifferencesOnly
+                        ? 'Tampilkan semua field'
+                        : 'Tampilkan hanya yang berbeda'}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </div>
             <Button variant="ghost" size="icon" className="text-gray-400 hover:text-gray-600" onClick={onClose}>
               <X className="h-5 w-5" />
             </Button>
+          </div>
+          <div className={VESSEL_MODAL_STEP_STRIP_CLASS}>
+            {[
+              { num: 1, label: 'Vessel', done: step1Done },
+              { num: 2, label: 'Shipment Detail', done: step2Done },
+              { num: 3, label: 'Estimation', done: step3Done },
+              { num: 4, label: 'ATA', done: step4Done },
+              { num: 5, label: 'Quality', done: step5Done },
+            ].map((step, i, arr) => (
+              <div key={step.num} className="flex items-center">
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${
+                      step.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+                    }`}
+                  >
+                    {step.done ? <Check className="h-3.5 w-3.5" /> : step.num}
+                  </div>
+                  <span className={`text-xs font-medium ${step.done ? 'text-green-700' : 'text-gray-500'}`}>
+                    {step.label}
+                  </span>
+                </div>
+                {i < arr.length - 1 && (
+                  <ChevronRight className="mx-3 h-3.5 w-3.5 shrink-0 text-gray-300" />
+                )}
+              </div>
+            ))}
           </div>
         </div>
 
@@ -1523,40 +2174,182 @@ export function EditShipmentModal({
           <div className="space-y-5">
             {/* Section 1: Vessel Detail */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
-                  <Anchor className="h-3.5 w-3.5 text-blue-600" />
+              <div className={vesselModalSectionHeaderClass('cyan')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-100">
+                  <Anchor className="h-3.5 w-3.5 text-cyan-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">1. Vessel Detail</h4>
+                {step1Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 lg:grid-cols-3">
-                <ReadOnlyInfoField
-                  className="md:col-span-2 lg:col-span-3"
-                  label="Vessel Name"
-                  value={vesselName}
+                <div
+                  className={cn(
+                    'md:col-span-2 lg:col-span-3',
+                    vesselMismatch && 'border-l-2 border-amber-400 pl-2',
+                  )}
+                >
+                  <div className="mb-1 flex items-center gap-2">
+                    <label className="block text-xs font-medium text-gray-600">Vessel Name</label>
+                    <KlipSapCompareLegend className="ml-auto" />
+                  </div>
+                  <KlipSapValueWithBadge provenance={vesselProvenance}>
+                    {canModifyCoreSections ? (
+                      <MasterVesselCombobox
+                        value={vesselName}
+                        onSelect={applyMasterVessel}
+                        placeholder="Search and select from Master Vessel"
+                      />
+                    ) : (
+                      <ModalReadonlyTextInput value={formatInfoDisplayValue(vesselName)} />
+                    )}
+                  </KlipSapValueWithBadge>
+                  {showVesselSapFooter ? (
+                    <KlipSapReferenceFooter sapValue={sapVesselName} format="text" />
+                  ) : null}
+                </div>
+                <KlipSapCompareField
+                  label="Vessel Code"
+                  klipValue={
+                    formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(vesselMeta.vessel_code)
+                  }
+                  sapValue={
+                    formatVesselCodeDisplay(sapVesselCode) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(sapVesselCode)
+                  }
+                  format="text"
+                  compact
+                  showKlipBadge={hasKlipSapMismatch(
+                    formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(vesselMeta.vessel_code),
+                    formatVesselCodeDisplay(sapVesselCode) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(sapVesselCode),
+                    'text',
+                  )}
+                  showOverrideBadge={hasKlipSapMismatch(
+                    formatVesselCodeDisplay(vesselMeta.vessel_code) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(vesselMeta.vessel_code),
+                    formatVesselCodeDisplay(sapVesselCode) === '-'
+                      ? ''
+                      : formatVesselCodeDisplay(sapVesselCode),
+                    'text',
+                  )}
                 />
                 {[
-                  ['Vessel Code', vesselMeta.vessel_code],
                   ['Vessel Owner', vesselMeta.vessel_owner],
                   ['Vessel Capacity (MT)', vesselMeta.vessel_capacity],
                   ['Vessel Draft', vesselMeta.vessel_draft],
-                  ['Hull Type', vesselMeta.vessel_hull_type],
+                  ['Vessel Type', vesselMeta.vessel_hull_type],
                   ['Charter Type', vesselMeta.charter_type],
-                  ['Discharge Port', vesselMeta.port_of_discharge],
                   ['Plant / Site', plantSiteName],
                 ].map(([label, value]) => (
                   <ReadOnlyInfoField key={String(label)} label={String(label)} value={value} />
                 ))}
+                <KlipSapCompareField
+                  label="Discharge Port"
+                  klipValue={resolveKlipPortNameFromRow(
+                    dischargePortRow ?? {
+                      is_discharge_port: true,
+                      port_name: vesselMeta.port_of_discharge,
+                    },
+                    shipmentInfo,
+                  )}
+                  sapValue={resolveSapPortNameFromRow(
+                    dischargePortRow ?? { is_discharge_port: true },
+                    shipmentInfo,
+                  )}
+                  format="text"
+                  compact
+                />
               </div>
+
+              {isTcCharter && (
+                <div className="border-t border-gray-100 p-4">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Gauge className="h-4 w-4 text-cyan-600" />
+                    <h5 className="text-sm font-semibold text-gray-800">
+                      {TC_VESSEL_PERF_LABELS.sectionTitle}
+                    </h5>
+                  </div>
+                  {canModifyCoreSections ? (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.fuelConsumptionKl}
+                        </label>
+                        <MetricDecimalInput value={fuelConsumption} onChange={setFuelConsumption} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.freightActualIdrKg}
+                        </label>
+                        <MetricDecimalInput value={freight} onChange={setFreight} />
+                      </div>
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.freightBudgetIdrKg}
+                        value={formatMetricReadOnly(tcFreightBudgetIdrKg)}
+                      />
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.pumpRateMtH}
+                        </label>
+                        <MetricDecimalInput value={pumpRate} onChange={setPumpRate} />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-xs font-medium text-gray-600">
+                          {TC_VESSEL_PERF_LABELS.sailingSpeed}
+                        </label>
+                        <MetricDecimalInput value={sailingSpeed} onChange={setSailingSpeed} />
+                      </div>
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.shortageMt}
+                        value={formatMetricReadOnly(tcR4ShortageMt)}
+                        helpText={TC_VESSEL_PERF_TOOLTIPS.shortageMt}
+                      />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.fuelConsumptionKl}
+                        value={formatMetricReadOnly(fuelConsumption)}
+                      />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.freightActualIdrKg}
+                        value={formatMetricReadOnly(freight)}
+                      />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.freightBudgetIdrKg}
+                        value={formatMetricReadOnly(tcFreightBudgetIdrKg)}
+                      />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.pumpRateMtH}
+                        value={formatMetricReadOnly(pumpRate)}
+                      />
+                      <ReadOnlyInfoField label={TC_VESSEL_PERF_LABELS.sailingSpeed} value={formatMetricReadOnly(sailingSpeed)} />
+                      <ReadOnlyInfoField
+                        label={TC_VESSEL_PERF_LABELS.shortageMt}
+                        value={formatMetricReadOnly(tcR4ShortageMt)}
+                        helpText={TC_VESSEL_PERF_TOOLTIPS.shortageMt}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Section 2: Shipment Detail */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
+              <div className={vesselModalSectionHeaderClass('blue')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100">
                   <FileText className="h-3.5 w-3.5 text-blue-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">2. Shipment Detail</h4>
+                {step2Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="space-y-4 p-4">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1634,21 +2427,21 @@ export function EditShipmentModal({
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SLD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Receive qty.</p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Received Qty (Klip).</p>
                     <input
                       id="edit-shipment-sld"
                       type="file"
                       accept=".pdf,application/pdf"
                       className="hidden"
                       onChange={(e) => handleQtyDocUpload(SHIPMENT_SLD_DOC_TYPE, e)}
-                      disabled={!canModifyShipment || sldDocUploading || hasUploadedSld}
+                      disabled={!canModifyCoreSections || sldDocUploading || hasUploadedSld}
                     />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       className="mt-2 h-8 text-xs border-amber-300"
-                      disabled={!canModifyShipment || sldDocUploading || hasUploadedSld}
+                      disabled={!canModifyCoreSections || sldDocUploading || hasUploadedSld}
                       onClick={() => document.getElementById('edit-shipment-sld')?.click()}
                     >
                       {sldDocUploading ? (
@@ -1666,21 +2459,21 @@ export function EditShipmentModal({
                   </div>
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SDD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Receive qty.</p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Received Qty (Klip).</p>
                     <input
                       id="edit-shipment-sdd"
                       type="file"
                       accept=".pdf,application/pdf"
                       className="hidden"
                       onChange={(e) => handleQtyDocUpload(SHIPMENT_SDD_DOC_TYPE, e)}
-                      disabled={!canModifyShipment || sddDocUploading || hasUploadedSdd}
+                      disabled={!canModifyCoreSections || sddDocUploading || hasUploadedSdd}
                     />
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       className="mt-2 h-8 text-xs border-amber-300"
-                      disabled={!canModifyShipment || sddDocUploading || hasUploadedSdd}
+                      disabled={!canModifyCoreSections || sddDocUploading || hasUploadedSdd}
                       onClick={() => document.getElementById('edit-shipment-sdd')?.click()}
                     >
                       {sddDocUploading ? (
@@ -1700,13 +2493,16 @@ export function EditShipmentModal({
                 )}
                 {!readOnly && !isQuantityUnlocked && (
                   <p className="text-[11px] text-amber-800/80">
-                    Delivered / Receive quantities stay locked until at least one of SLD or SDD is uploaded.
+                    Delivered Qty (Klip) / Received Qty (Klip) stay locked until at least one of SLD or SDD is uploaded.
                   </p>
                 )}
+                {canModifyCoreSections && (
+                  <p className="text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+                )}
 
-                {planQtyReadOnly && !readOnly && (
+                {editContext?.has_sap_sto && !readOnly && (
                   <p className="text-xs italic text-gray-500">
-                    SAP STO shipment — Shipment Plan Qty is read-only. PO can still be added when global OS Qty (Plan) &gt; 0.
+                    SAP STO shipment — PO can still be added when OS Qty (Actual) &gt; 0.
                   </p>
                 )}
 
@@ -1714,7 +2510,7 @@ export function EditShipmentModal({
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <label className="text-xs font-semibold text-gray-700">Add PO to shipment</label>
-                      <span className="text-[10px] text-gray-500">Global OS Qty (Plan) &gt; 0</span>
+                      <span className="text-[10px] text-gray-500">OS Qty (Actual) &gt; 0</span>
                     </div>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                       <div className="min-w-0 flex-1">
@@ -1747,7 +2543,7 @@ export function EditShipmentModal({
                       </Button>
                     </div>
                     <p className="text-xs italic text-gray-500">
-                      Search by PO, contract, supplier, or product (min. 2 characters). Set Shipment Plan Qty in the table, then Save Changes.
+                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be set after SLD/SDD or via Upload Planning.
                     </p>
                   </div>
                 )}
@@ -1760,30 +2556,32 @@ export function EditShipmentModal({
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>Supplier</TableHead>
                         <TableHead className={VESSEL_MODAL_COMPACT_TH}>Product</TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Metric tons (1 MT = 1,000 kg)">Contract Qty (MT)</span>
+                          <span title="Metric tons (1 MT = 1,000 kg)">Contract Qty</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="SAP STO quantity">STO Qty (MT)</span>
+                          <span title="SAP STO-scoped delivered quantity">Delivered Qty (SAP)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">OS Qty (MT)</span>
+                          <span title="SAP STO-scoped receive quantity">Receive Qty (SAP)</span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="Global per PO — contract − SAP STO − all plans">OS Qty (Plan) (MT)</span>
+                          <span title="Contract qty minus STO-scoped SAP receive/delivery (incoterm-aware) — same as Shipping Performance">
+                            OS Qty
+                          </span>
                         </TableHead>
                         <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
-                          <span title="KLIP plan on this STO">Shipment Plan Qty (MT)</span>
+                          Delivered Qty (Klip)
                         </TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Delivered Qty (MT)</TableHead>
-                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>Receive Qty (MT)</TableHead>
+                        <TableHead className={`${VESSEL_MODAL_COMPACT_TH} text-right`}>
+                          Received Qty (Klip)
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {detailRows.map((row) => {
                         const qtyRow = qtyTableRows.find((r) => r.rowKey === row.rowKey)!
-                        const deliveredKg = resolveRowQty(qtyRow, 'quantity_delivered')
-                        const receiveKg = resolveRowQty(qtyRow, 'quantity_receive')
-                        const planKg = planQtyEdits[row.rowKey] ?? row.shipment_plan_qty ?? 0
+                        const deliveredKlipKg = resolveRowQty(qtyRow, 'quantity_delivered')
+                        const receiveKlipKg = resolveRowQty(qtyRow, 'quantity_receive')
                         return (
                           <TableRow key={row.rowKey}>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
@@ -1811,34 +2609,21 @@ export function EditShipmentModal({
                               <MtQtyReadOnly valueKg={row.contract_qty} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <MtQtyReadOnly valueKg={row.sap_sto_qty} />
+                              <MtQtyReadOnly valueKg={row.quantity_delivered_sap} />
+                            </TableCell>
+                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
+                              <MtQtyReadOnly valueKg={row.quantity_receive_sap} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               <MtQtyReadOnly valueKg={row.outstanding_qty_actual} />
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              <MtQtyReadOnly valueKg={row.outstanding_qty_planning} />
-                            </TableCell>
-                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
-                                <MtQtyReadOnly valueKg={planKg} />
+                                <MtQtyReadOnly valueKg={deliveredKlipKg} />
                               ) : (
                                 <MtQtyInput
-                                  valueKg={planKg}
-                                  disabled={!canModifyShipment || planQtyReadOnly}
-                                  onChange={(kg) =>
-                                    setPlanQtyEdits((p) => ({ ...p, [row.rowKey]: kg ?? 0 }))
-                                  }
-                                />
-                              )}
-                            </TableCell>
-                            <TableCell className={VESSEL_MODAL_COMPACT_TD}>
-                              {readOnly ? (
-                                <MtQtyReadOnly valueKg={deliveredKg} />
-                              ) : (
-                                <MtQtyInput
-                                  valueKg={deliveredKg}
-                                  disabled={!canModifyShipment || !isQuantityUnlocked}
+                                  valueKg={deliveredKlipKg}
+                                  disabled={!canModifyCoreSections || !isQuantityUnlocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
@@ -1850,11 +2635,11 @@ export function EditShipmentModal({
                             </TableCell>
                             <TableCell className={VESSEL_MODAL_COMPACT_TD}>
                               {readOnly ? (
-                                <MtQtyReadOnly valueKg={receiveKg} />
+                                <MtQtyReadOnly valueKg={receiveKlipKg} />
                               ) : (
                                 <MtQtyInput
-                                  valueKg={receiveKg}
-                                  disabled={!canModifyShipment || !isQuantityUnlocked}
+                                  valueKg={receiveKlipKg}
+                                  disabled={!canModifyCoreSections || !isQuantityUnlocked}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
@@ -1877,16 +2662,13 @@ export function EditShipmentModal({
                           <MtQtyReadOnly valueKg={poTableQtyTotals.contractQty} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={poTableQtyTotals.stoQty} />
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.sapDelivered} />
+                        </TableCell>
+                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
+                          <MtQtyReadOnly valueKg={poTableQtyTotals.sapReceive} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={poTableQtyTotals.osQty} />
-                        </TableCell>
-                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={poTableQtyTotals.osPlanQty} />
-                        </TableCell>
-                        <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
-                          <MtQtyReadOnly valueKg={totalShipmentPlanKg} />
                         </TableCell>
                         <TableCell className={`${VESSEL_MODAL_COMPACT_TD} text-right`}>
                           <MtQtyReadOnly valueKg={qtyTotals.quantity_delivered} />
@@ -1898,13 +2680,17 @@ export function EditShipmentModal({
                     </TableFooter>
                   </Table>
                 </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Grand Total Delivered / Received Qty (Klip) is the STO total shown on Shipments View Table.
+                  One PO with several STOs: each shipment row is that STO only.
+                </p>
 
                 {vesselCapacityMt != null && vesselCapacityMt > 0 && (
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                     <div className="mb-1 flex justify-between text-xs text-gray-600">
-                      <span>Total Shipment Plan Qty vs vessel capacity</span>
+                      <span>Total Delivered Qty (Klip) vs vessel capacity</span>
                       <span className="tabular-nums">
-                        {formatNumber(totalShipmentPlanKg / 1000)} / {formatNumber(vesselCapacityMt)} MT
+                        {formatNumber(totalDeliveredKlipKg / 1000)} / {formatNumber(vesselCapacityMt)} MT
                       </span>
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-gray-200">
@@ -1917,26 +2703,34 @@ export function EditShipmentModal({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {canModifyShipment ? (
+                  {canModifyCoreSections ? (
                     <>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty (MT)</label>
-                        <MtQtyInput valueKg={sfalQty} onChange={setSfalQty} />
+                        <MetricDecimalInput
+                          value={sfalQty === null ? null : sfalQty / 1000}
+                          onChange={(mt) => setSfalQty(mt === null ? null : mt * 1000)}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
                       </div>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFBD Qty (MT)</label>
-                        <MtQtyInput valueKg={sfbdQty} onChange={setSfbdQty} />
+                        <MetricDecimalInput
+                          value={sfbdQty === null ? null : sfbdQty / 1000}
+                          onChange={(mt) => setSfbdQty(mt === null ? null : mt * 1000)}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
                       </div>
                     </>
                   ) : (
                     <>
                       <ReadOnlyInfoField
                         label="SFAL Qty (MT)"
-                        value={sfalQty === null ? null : formatQtyMtFromKg(sfalQty)}
+                        value={formatMetricReadOnly(sfalQty === null ? 0 : sfalQty / 1000)}
                       />
                       <ReadOnlyInfoField
                         label="SFBD Qty (MT)"
-                        value={sfbdQty === null ? null : formatQtyMtFromKg(sfbdQty)}
+                        value={formatMetricReadOnly(sfbdQty === null ? 0 : sfbdQty / 1000)}
                       />
                     </>
                   )}
@@ -1946,24 +2740,39 @@ export function EditShipmentModal({
 
             {/* Section 3: ETA + Loading Port */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={`${VESSEL_MODAL_SECTION_HEADER_CLASS} justify-between gap-2`}>
+              <div className={vesselModalSectionHeaderClass('violet', 'justify-between gap-2')}>
                 <div className="flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-100">
-                    <Clock className="h-3.5 w-3.5 text-blue-600" />
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100">
+                    <Clock className="h-3.5 w-3.5 text-violet-600" />
                   </div>
-                  <h4 className="text-sm font-semibold text-gray-800">3. ETA + Loading Port</h4>
+                  <h4 className="text-sm font-semibold text-gray-800">3. Estimation + Loading Port</h4>
+                  {step3Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                {isMultiPortLoading && canModifyShipment && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => setEtaSectionEditing((v) => !v)}
-                  >
-                    <Edit2 className="h-3.5 w-3.5 mr-1" />
-                    {etaSectionEditing ? 'Lock' : 'Edit'}
-                  </Button>
+                {canModifyCoreSections && (
+                  <SectionActionGroup>
+                    {!etaSectionIsEditing ? (
+                      <>
+                        <SectionEditButton
+                          onClick={() => {
+                            if (isMultiPortLoading) {
+                              setEtaSectionEditing(true)
+                              return
+                            }
+                            setEtaBlocks((prev) =>
+                              prev.map((b) =>
+                                b.status === 'active' ? { ...b, isEditing: true } : b,
+                              ),
+                            )
+                          }}
+                        />
+                        {!isMultiPortLoading && !activeEtaBlock?.isDraft ? (
+                          <SectionAddButton onClick={handleAddEta} />
+                        ) : null}
+                      </>
+                    ) : (
+                      <SectionCancelButton onClick={handleCancelEtaEdit} />
+                    )}
+                  </SectionActionGroup>
                 )}
               </div>
               <div className="space-y-4 p-4">
@@ -1975,7 +2784,20 @@ export function EditShipmentModal({
                           <Badge className="bg-blue-600 text-white text-[10px]">
                             Loading Port {block.portSequence}
                           </Badge>
-                          <span className="text-xs text-gray-600">{block.loadingPort || '—'}</span>
+                          <span className="text-xs text-gray-600">
+                            {/* Multi-contract STO groups can have several ports sharing the same
+                                port_sequence (each contract's shipment numbers its own ports from 1),
+                                so match the exact row by portId — not by sequence, which would
+                                collide and always resolve to the first port. */}
+                            <ModalPortKlipSapLabel
+                              portRow={
+                                loadingPortRows.find((p) => p.id === block.portId) ??
+                                loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence)
+                              }
+                              shipmentInfo={shipmentInfo}
+                              sequence={block.portSequence}
+                            />
+                          </span>
                         </div>
                         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                           {LOADING_ETA_FIELD_ROWS.map(({ key, label }) => (
@@ -1983,16 +2805,14 @@ export function EditShipmentModal({
                               <label className="mb-1 block text-[10px] font-medium text-gray-600">
                                 {label}
                               </label>
-                              {etaSectionEditing && canModifyShipment ? (
+                              {etaSectionEditing && canModifyCoreSections ? (
                                 <DateInputDdMmYyyy
                                   valueIso={block.fields[key]}
                                   onChangeIso={(iso) => updateMultiPortEtaField(block.id, key, iso)}
                                   className="h-8 text-xs"
                                 />
                               ) : (
-                                <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                                  {formatDateDMY(block.fields[key]) || '—'}
-                                </div>
+                                <ModalReadonlyDateInput valueIso={block.fields[key]} compact />
                               )}
                             </div>
                           ))}
@@ -2003,7 +2823,7 @@ export function EditShipmentModal({
                     <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3">
                       <div className="mb-3 flex items-center gap-2">
                         <Badge variant="outline" className="border-indigo-300 text-[10px] text-indigo-700">
-                          Shared discharge ETA
+                          Shared discharge Estimation
                         </Badge>
                         <span className="text-xs text-gray-600">
                           One vessel timeline — unloading is the same for all loading ports
@@ -2015,16 +2835,14 @@ export function EditShipmentModal({
                             <label className="mb-1 block text-[10px] font-medium text-gray-600">
                               {label}
                             </label>
-                            {etaSectionEditing && canModifyShipment ? (
+                            {etaSectionEditing && canModifyCoreSections ? (
                               <DateInputDdMmYyyy
                                 valueIso={dischargeEtaFields[key]}
                                 onChangeIso={(iso) => updateDischargeEtaField(key, iso)}
                                 className="h-8 text-xs"
                               />
                             ) : (
-                              <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                                {formatDateDMY(dischargeEtaFields[key]) || '—'}
-                              </div>
+                              <ModalReadonlyDateInput valueIso={dischargeEtaFields[key]} compact />
                             )}
                           </div>
                         ))}
@@ -2035,7 +2853,7 @@ export function EditShipmentModal({
                   <>
                 {activeEtaBlock && (
                   <div className="rounded-lg border border-blue-100 bg-white p-3">
-                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
                       <Badge
                         className={
                           activeEtaBlock.isDraft
@@ -2043,58 +2861,25 @@ export function EditShipmentModal({
                             : 'bg-blue-600 text-white text-[10px]'
                         }
                       >
-                        {activeEtaBlock.isDraft ? 'New ETA' : 'Active ETA'}
+                        {activeEtaBlock.isDraft ? 'New Estimation' : 'Active Estimation'}
                       </Badge>
-                      {canModifyShipment && (
-                      <div className="flex gap-2">
-                        {activeEtaBlock.isDraft ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs text-red-600 hover:text-red-700"
-                            onClick={handleCancelAddEta}
-                          >
-                            <X className="h-3.5 w-3.5 mr-1" />
-                            Cancel
-                          </Button>
-                        ) : (
-                          <>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() =>
-                                setEtaBlocks((prev) =>
-                                  prev.map((b) =>
-                                    b.status === 'active' ? { ...b, isEditing: !b.isEditing } : b,
-                                  ),
-                                )
-                              }
-                            >
-                              <Edit2 className="h-3.5 w-3.5 mr-1" />
-                              {activeEtaBlock.isEditing ? 'Lock' : 'Edit'}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={handleAddEta}
-                            >
-                              <Plus className="h-3.5 w-3.5 mr-1" />
-                              Add
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                      )}
                     </div>
                     <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-xs font-medium text-gray-600">Loading Port</label>
-                        {activeEtaBlock.isEditing && canModifyShipment ? (
+                      <KlipSapCompareField
+                        label="Loading Port"
+                        klipValue={resolveKlipPortNameFromRow(
+                          loadingPortRows[0],
+                          shipmentInfo,
+                          loadingPortRows[0]?.port_sequence ?? 1,
+                        )}
+                        sapValue={resolveSapPortNameFromRow(
+                          loadingPortRows[0],
+                          shipmentInfo,
+                          loadingPortRows[0]?.port_sequence ?? 1,
+                        )}
+                        format="text"
+                        editing={activeEtaBlock.isEditing && canModifyCoreSections}
+                        editControl={
                           <Input
                             value={activeEtaBlock.loadingPort}
                             onChange={(e) =>
@@ -2106,33 +2891,27 @@ export function EditShipmentModal({
                             }
                             className="h-9 text-sm"
                           />
-                        ) : (
-                          <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                            {formatInfoDisplayValue(activeEtaBlock.loadingPort)}
-                          </div>
-                        )}
-                      </div>
+                        }
+                      />
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">Apply to PO</label>
-                        <div className={`flex min-h-9 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                          {formatInfoDisplayValue(activeEtaBlock.contractLabels.join(', '))}
-                        </div>
+                        <ModalReadonlyTextInput
+                          value={formatInfoDisplayValue(activeEtaBlock.contractLabels.join(', '))}
+                        />
                       </div>
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
                           <label className="mb-1 block text-[10px] font-medium text-gray-600">{label}</label>
-                          {activeEtaBlock.isEditing && canModifyShipment ? (
+                          {activeEtaBlock.isEditing && canModifyCoreSections ? (
                             <DateInputDdMmYyyy
                               valueIso={activeEtaBlock.fields[key]}
                               onChangeIso={(iso) => updateActiveEtaField(key, iso)}
                               className="h-8 text-xs"
                             />
                           ) : (
-                            <div className={`flex min-h-8 items-center ${ETA_INFO_VALUE_CLASS}`}>
-                              {formatDateDMY(activeEtaBlock.fields[key]) || '—'}
-                            </div>
+                            <ModalReadonlyDateInput valueIso={activeEtaBlock.fields[key]} compact />
                           )}
                         </div>
                       ))}
@@ -2144,15 +2923,24 @@ export function EditShipmentModal({
                   <div key={block.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3 opacity-80">
                     <div className="mb-2 flex items-center gap-2">
                       <Badge variant="outline" className="text-[10px]">
-                        Previous ETA (historical)
+                        Previous Estimation (historical)
                       </Badge>
-                      <span className="text-xs text-gray-500">{block.loadingPort || '—'}</span>
+                      <span className="text-xs text-gray-500">
+                        <ModalPortKlipSapLabel
+                          portRow={
+                            loadingPortRows.find((p) => p.id === block.portId) ??
+                            loadingPortRows.find((p) => (p.port_sequence ?? 1) === block.portSequence)
+                          }
+                          shipmentInfo={shipmentInfo}
+                          sequence={block.portSequence}
+                        />
+                      </span>
                     </div>
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
                       {ETA_FIELD_ROWS.map(({ key, label }) => (
                         <div key={key}>
-                          <div className="text-[10px] text-gray-500">{label}</div>
-                          <div className="text-xs font-medium">{formatDateDMY(block.fields[key]) || '—'}</div>
+                          <div className="mb-1 text-[10px] text-gray-500">{label}</div>
+                          <ModalReadonlyDateInput valueIso={block.fields[key]} compact />
                         </div>
                       ))}
                     </div>
@@ -2165,31 +2953,48 @@ export function EditShipmentModal({
 
             {/* Section 4: ATA */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={`${VESSEL_MODAL_SECTION_HEADER_CLASS} justify-between gap-2`}>
+              <div className={vesselModalSectionHeaderClass('emerald', 'justify-between gap-2')}>
                 <div className="flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100">
                     <MapPin className="h-3.5 w-3.5 text-emerald-600" />
                   </div>
                   <h4 className="text-sm font-semibold text-gray-800">4. ATA Vessel Information</h4>
+                  {step4Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                {canModifyShipment && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8"
-                    onClick={() => setAtaIsEditing((prev) => !prev)}
-                  >
-                    <Edit2 className="mr-1.5 h-3.5 w-3.5" />
-                    {ataIsEditing ? 'Done' : 'Edit ATA'}
-                  </Button>
+                {canEditAtaQuality && (
+                  <SectionActionGroup>
+                    <KlipSapCompareLegend />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setShowAtaDifferencesOnly((v) => !v)}
+                    >
+                      {showAtaDifferencesOnly ? 'Show all' : 'Diffs only'}
+                    </Button>
+                    {!ataIsEditing ? (
+                      <SectionEditButton onClick={() => setAtaIsEditing(true)} />
+                    ) : (
+                      <SectionCancelButton onClick={() => void handleCancelAtaEdit()} />
+                    )}
+                  </SectionActionGroup>
                 )}
+                {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" /> : null}
               </div>
               <div className="space-y-4 p-4">
                 {isMultiPortLoading ? (
                   <>
                     {loadingPortRows.map((portRow) => {
-                      const portAta = loadingAtaFromPortRow(portRow, shipmentInfo)
+                      const ataKey = loadingPortAtaStateKey(portRow)
+                      const portAta =
+                        loadingPortAtaByKey[ataKey] ??
+                        loadingAtaFromPortRow(
+                          portRow,
+                          portRow.shipment_id && String(portRow.shipment_id) === shipmentId
+                            ? shipmentInfo
+                            : {},
+                        )
                       return (
                         <div
                           key={portRow.id || `ata-port-${portRow.port_sequence ?? 1}`}
@@ -2199,62 +3004,107 @@ export function EditShipmentModal({
                             <Badge className="bg-emerald-600 text-white text-[10px]">
                               Loading Port {portRow.port_sequence ?? 1}
                             </Badge>
-                            <span className="text-xs text-gray-600">{portRow.port_name || '—'}</span>
+                            <span className="text-xs text-gray-600">
+                              <ModalPortKlipSapLabel
+                                portRow={portRow}
+                                shipmentInfo={shipmentInfo}
+                                sequence={portRow.port_sequence ?? 1}
+                              />
+                            </span>
                           </div>
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                            {LOADING_ATA_FIELD_ROWS.map(({ key, label }) => (
-                              <ReadOnlyInfoField
-                                key={`${portRow.id ?? portRow.port_sequence}-${key}`}
-                                compact
-                                label={`ATA ${label}`}
-                                value={formatDateDMY(
-                                  portAta[key as keyof ReturnType<typeof loadingAtaFromPortRow>],
-                                )}
-                              />
-                            ))}
+                            {LOADING_ATA_FIELD_ROWS.map(({ key, label }) => {
+                              const klipVal = portAta[key as keyof LoadingAtaFields]
+                              const sapVal = resolveAtaSapReference(key, portRow)
+                              return (
+                                <KlipSapCompareField
+                                  key={`${portRow.id ?? portRow.port_sequence}-${key}`}
+                                  label={label}
+                                  klipValue={klipVal}
+                                  sapValue={sapVal}
+                                  klipEdited={isKlipEditedField(
+                                    portRow.klip_edited_fields,
+                                    ataPortColumnForField(key),
+                                  )}
+                                  klipEditedBy={describeKlipFieldEdit(
+                                    klipFieldHistory,
+                                    ataPortColumnForField(key),
+                                  )}
+                                  format="date"
+                                  compact
+                                  showOverrideBadge={Boolean(klipVal && klipVal !== (sapVal || ''))}
+                                  hidden={
+                                    showAtaDifferencesOnly &&
+                                    !hasKlipSapMismatch(klipVal, sapVal, 'date')
+                                  }
+                                  editing={ataIsEditing && canEditAtaQuality}
+                                  editControl={
+                                    <DateInputDdMmYyyy
+                                      valueIso={klipVal}
+                                      onChangeIso={(iso) =>
+                                        setLoadingPortAtaByKey((prev) => ({
+                                          ...prev,
+                                          [ataKey]: {
+                                            ...portAta,
+                                            [key]: iso,
+                                          },
+                                        }))
+                                      }
+                                      className="h-8 text-xs"
+                                    />
+                                  }
+                                />
+                              )
+                            })}
                           </div>
                         </div>
                       )
                     })}
                     <div className="rounded-lg border border-emerald-100 bg-white p-3">
-                      <p className="mb-3 text-[10px] font-medium text-gray-600">Discharge Port</p>
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <p className="text-[10px] font-medium text-gray-600">Discharge Port</p>
+                        <ModalPortKlipSapLabel
+                          portRow={dischargePortRow ?? { is_discharge_port: true }}
+                          shipmentInfo={shipmentInfo}
+                        />
+                      </div>
                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                         {DISCHARGE_ATA_FIELD_ROWS.map(({ key, label }) => {
-                          const sapRef = ataSapReference[key]
-                          const hasOverride = Boolean(
-                            ataFields[key] && sapRef && ataFields[key] !== sapRef,
-                          )
+                          const sapRef = resolveAtaSapReference(key, dischargePortRow)
+                          const klipVal = ataFields[key]
+                          const hasOverride = Boolean(klipVal && klipVal !== (sapRef || ''))
                           return (
-                            <div key={key}>
-                              {ataIsEditing && canModifyShipment ? (
-                                <>
-                                  <label className="mb-1 block text-[10px] font-medium text-gray-600">
-                                    ATA {label}
-                                  </label>
-                                  <DateInputDdMmYyyy
-                                    valueIso={ataFields[key]}
-                                    onChangeIso={(iso) =>
-                                      setAtaFields((prev) => ({ ...prev, [key]: iso }))
-                                    }
-                                    className="h-8 text-xs"
-                                  />
-                                </>
-                              ) : (
-                                <ReadOnlyInfoField
-                                  compact
-                                  label={`ATA ${label}`}
-                                  value={formatDateDMY(ataFields[key])}
-                                />
+                            <KlipSapCompareField
+                              key={key}
+                              label={label}
+                              klipValue={klipVal}
+                              sapValue={sapRef}
+                              klipEdited={isKlipEditedField(
+                                dischargePortRow?.klip_edited_fields,
+                                ataPortColumnForField(key),
                               )}
-                              {sapRef ? (
-                                <div className="mt-1 text-[10px] text-gray-400">
-                                  SAP: {formatDateDMY(sapRef)}
-                                  {hasOverride ? (
-                                    <span className="ml-1 font-medium text-emerald-600">(manual)</span>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                            </div>
+                              klipEditedBy={describeKlipFieldEdit(
+                                klipFieldHistory,
+                                ataPortColumnForField(key),
+                              )}
+                              format="date"
+                              compact
+                              showOverrideBadge={hasOverride}
+                              hidden={
+                                showAtaDifferencesOnly &&
+                                !hasKlipSapMismatch(klipVal, sapRef, 'date')
+                              }
+                              editing={ataIsEditing && canEditAtaQuality}
+                              editControl={
+                                <DateInputDdMmYyyy
+                                  valueIso={klipVal}
+                                  onChangeIso={(iso) =>
+                                    setAtaFields((prev) => ({ ...prev, [key]: iso }))
+                                  }
+                                  className="h-8 text-xs"
+                                />
+                              }
+                            />
                           )
                         })}
                       </div>
@@ -2263,39 +3113,35 @@ export function EditShipmentModal({
                 ) : (
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
                     {ATA_FIELD_ROWS.map(({ key, label }) => {
-                      const sapRef = ataSapReference[key]
-                      const hasOverride = Boolean(ataFields[key] && sapRef && ataFields[key] !== sapRef)
+                      const loadingPortRow = loadingPortRows[0]
+                      // Discharge keys use dischargePortRow inside resolveAtaSapReference.
+                      const sapRef = resolveAtaSapReference(key, loadingPortRow)
+                      const klipVal = ataFields[key]
+                      const hasOverride = Boolean(klipVal && klipVal !== (sapRef || ''))
                       return (
-                        <div key={key}>
-                          {ataIsEditing && canModifyShipment ? (
-                            <>
-                              <label className="mb-1 block text-[10px] font-medium text-gray-600">
-                                ATA {label}
-                              </label>
-                              <DateInputDdMmYyyy
-                                valueIso={ataFields[key]}
-                                onChangeIso={(iso) =>
-                                  setAtaFields((prev) => ({ ...prev, [key]: iso }))
-                                }
-                                className="h-8 text-xs"
-                              />
-                            </>
-                          ) : (
-                            <ReadOnlyInfoField
-                              compact
-                              label={`ATA ${label}`}
-                              value={formatDateDMY(ataFields[key])}
+                        <KlipSapCompareField
+                          key={key}
+                          label={label}
+                          klipValue={klipVal}
+                          sapValue={sapRef}
+                          format="date"
+                          compact
+                          showOverrideBadge={hasOverride}
+                          hidden={
+                            showAtaDifferencesOnly &&
+                            !hasKlipSapMismatch(klipVal, sapRef, 'date')
+                          }
+                          editing={ataIsEditing && canEditAtaQuality}
+                          editControl={
+                            <DateInputDdMmYyyy
+                              valueIso={ataFields[key]}
+                              onChangeIso={(iso) =>
+                                setAtaFields((prev) => ({ ...prev, [key]: iso }))
+                              }
+                              className="h-8 text-xs"
                             />
-                          )}
-                          {sapRef ? (
-                            <div className="mt-1 text-[10px] text-gray-400">
-                              SAP: {formatDateDMY(sapRef)}
-                              {hasOverride ? (
-                                <span className="ml-1 font-medium text-emerald-600">(manual)</span>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </div>
+                          }
+                        />
                       )
                     })}
                   </div>
@@ -2305,14 +3151,43 @@ export function EditShipmentModal({
 
             {/* Section 5: Quality */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
-                  <FlaskConical className="h-3.5 w-3.5 text-violet-600" />
+              <div className={vesselModalSectionHeaderClass('violet', 'justify-between gap-2')}>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100">
+                    <FlaskConical className="h-3.5 w-3.5 text-violet-600" />
+                  </div>
+                  <h4 className="text-sm font-semibold text-gray-800">5. Quality Vessel Information</h4>
+                  {step5Done && <CheckCircle2 className="h-4 w-4 text-green-500" />}
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">5. Quality Vessel Information</h4>
+                {canEditAtaQuality && (
+                  <SectionActionGroup>
+                    <KlipSapCompareLegend />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => setShowQualityDifferencesOnly((v) => !v)}
+                    >
+                      {showQualityDifferencesOnly ? 'Show all' : 'Diffs only'}
+                    </Button>
+                    {!qualityIsEditing ? (
+                      <SectionEditButton onClick={() => setQualityIsEditing(true)} />
+                    ) : (
+                      <SectionCancelButton onClick={handleCancelQualityEdit} />
+                    )}
+                  </SectionActionGroup>
+                )}
+                {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" /> : null}
               </div>
               <div className="space-y-4 p-4">
-                {loadingPortRows.map((portRow) => (
+                {loadingPortRows.map((portRow) => {
+                  const qualityPortKey = loadingPortAtaStateKey(portRow)
+                  const portQuality = qualityFieldsForPortKey(qualityPortKey)
+                  const sapQuality = qualitySapReferenceFromPort(
+                    portRow as Record<string, unknown>,
+                  )
+                  return (
                   <div
                     key={portRow.id || `quality-loading-${portRow.port_sequence ?? 1}`}
                     className="rounded-lg border border-violet-100 bg-white p-3"
@@ -2325,46 +3200,101 @@ export function EditShipmentModal({
                       ) : null}
                       <span className="text-[10px] font-medium text-gray-600">Quality at Loading</span>
                       {isMultiPortLoading ? (
-                        <span className="text-xs text-gray-600">{portRow.port_name || '—'}</span>
+                        <span className="text-xs text-gray-600">
+                          <ModalPortKlipSapLabel
+                            portRow={portRow}
+                            shipmentInfo={shipmentInfo}
+                            sequence={portRow.port_sequence ?? 1}
+                          />
+                        </span>
                       ) : null}
                     </div>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                      {QUALITY_METRICS.map(({ portKey, label }) => (
-                        <ReadOnlyInfoField
-                          key={`${portRow.id ?? portRow.port_sequence}-${portKey}`}
-                          compact
-                          label={label}
-                          value={formatNumber(
-                            qualityMetricFromPort(
-                              portRow,
-                              portKey,
-                              shipmentInfo,
-                              `quality_at_loading_loc_${portRow.port_sequence ?? 1}_${portKey.replace('quality_', '')}`,
-                            ),
-                          )}
-                        />
-                      ))}
+                      {QUALITY_METRICS.map(({ portKey, label }) => {
+                        const fieldKey = portKey as keyof ShipmentQualityFields
+                        const klipVal = portQuality[fieldKey]
+                        const sapVal = sapQuality[fieldKey]
+                        return (
+                          <KlipSapCompareField
+                            key={`${portRow.id ?? portRow.port_sequence}-${portKey}`}
+                            label={label}
+                            klipValue={klipVal}
+                            sapValue={sapVal}
+                            klipEdited={isKlipEditedField(portRow.klip_edited_fields, portKey)}
+                            klipEditedBy={describeKlipFieldEdit(klipFieldHistory, portKey)}
+                            format="number"
+                            compact
+                            hidden={
+                              showQualityDifferencesOnly &&
+                              !hasKlipSapMismatch(klipVal, sapVal, 'number')
+                            }
+                            editing={qualityIsEditing && canEditAtaQuality}
+                            editControl={
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                value={klipVal != null ? String(klipVal) : ''}
+                                onChange={(e) =>
+                                  updateQualityField(qualityPortKey, fieldKey, e.target.value)
+                                }
+                                className="h-8 text-xs"
+                              />
+                            }
+                          />
+                        )
+                      })}
                     </div>
                   </div>
-                ))}
+                )})}
                 <div className="rounded-lg border border-violet-100 bg-white p-3">
-                  <p className="mb-3 text-[10px] font-medium text-gray-600">Quality at Discharge</p>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <p className="text-[10px] font-medium text-gray-600">Quality at Discharge</p>
+                  </div>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                    {QUALITY_METRICS.map(({ portKey, label }) => (
-                      <ReadOnlyInfoField
-                        key={`discharge-${portKey}`}
-                        compact
-                        label={label}
-                        value={formatNumber(
-                          qualityMetricFromPort(
-                            dischargePortRow,
+                    {QUALITY_METRICS.map(({ portKey, label }) => {
+                      const fieldKey = portKey as keyof ShipmentQualityFields
+                      const dischargeQuality = qualityFieldsForPortKey(DISCHARGE_QUALITY_PORT_KEY)
+                      const sapQuality = qualitySapReferenceFromPort(
+                        dischargePortRow as Record<string, unknown> | undefined,
+                      )
+                      const klipVal = dischargeQuality[fieldKey]
+                      const sapVal = sapQuality[fieldKey]
+                      return (
+                        <KlipSapCompareField
+                          key={`discharge-${portKey}`}
+                          label={label}
+                          klipValue={klipVal}
+                          sapValue={sapVal}
+                          klipEdited={isKlipEditedField(
+                            dischargePortRow?.klip_edited_fields,
                             portKey,
-                            shipmentInfo,
-                            `quality_at_discharge_loc_1_${portKey.replace('quality_', '')}`,
-                          ),
-                        )}
-                      />
-                    ))}
+                          )}
+                          klipEditedBy={describeKlipFieldEdit(klipFieldHistory, portKey)}
+                          format="number"
+                          compact
+                          hidden={
+                            showQualityDifferencesOnly &&
+                            !hasKlipSapMismatch(klipVal, sapVal, 'number')
+                          }
+                          editing={qualityIsEditing && canEditAtaQuality}
+                          editControl={
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={klipVal != null ? String(klipVal) : ''}
+                              onChange={(e) =>
+                                updateQualityField(
+                                  DISCHARGE_QUALITY_PORT_KEY,
+                                  fieldKey,
+                                  e.target.value,
+                                )
+                              }
+                              className="h-8 text-xs"
+                            />
+                          }
+                        />
+                      )
+                    })}
                   </div>
                 </div>
               </div>
@@ -2372,9 +3302,9 @@ export function EditShipmentModal({
 
             {/* Section 6: Remarks */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-100">
-                  <MessageSquare className="h-3.5 w-3.5 text-amber-700" />
+              <div className={vesselModalSectionHeaderClass('orange')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-100">
+                  <MessageSquare className="h-3.5 w-3.5 text-orange-700" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">6. Remarks</h4>
               </div>
@@ -2388,7 +3318,7 @@ export function EditShipmentModal({
                   <p className="text-sm text-gray-500">
                     {readOnly
                       ? 'No remarks recorded for this shipment yet.'
-                      : 'No remarks yet. A remark is required when you change ETA, Quantity Delivered, or Quantity Receive.'}
+                      : 'No remarks yet. A remark is required when you change Estimation, quantities, ATA, or Quality.'}
                   </p>
                 ) : (
                   <ul className="space-y-3">
@@ -2424,8 +3354,8 @@ export function EditShipmentModal({
 
             {/* Section 7: Activity History */}
             <div className={VESSEL_MODAL_SECTION_CLASS}>
-              <div className={VESSEL_MODAL_SECTION_HEADER_CLASS}>
-                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100">
+              <div className={vesselModalSectionHeaderClass('slate')}>
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
                   <History className="h-3.5 w-3.5 text-slate-600" />
                 </div>
                 <h4 className="text-sm font-semibold text-gray-800">7. Activity History</h4>
@@ -2458,8 +3388,8 @@ export function EditShipmentModal({
           </div>
         </div>
 
-        <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4 flex flex-col gap-3 rounded-b-lg">
-          {requiresEditRemark && canModifyShipment ? (
+        <div className={VESSEL_MODAL_FOOTER_BAR_CLASS}>
+          {showRemarkField ? (
             <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
               <label htmlFor="edit-shipment-remark" className="mb-1 block text-xs font-semibold text-amber-900">
                 Remark <span className="text-red-600">*</span>
@@ -2469,11 +3399,11 @@ export function EditShipmentModal({
                 rows={2}
                 value={editRemark}
                 onChange={(e) => setEditRemark(e.target.value)}
-                placeholder="Explain why ETA or quantities were changed…"
+                placeholder="Explain why Estimation, quantities, ATA, or Quality were changed…"
                 className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-amber-400 focus:outline-none focus:ring-1 focus:ring-amber-300"
               />
               <p className="mt-1 text-[11px] text-amber-800">
-                Required when changing ETA, Quantity Delivered, or Quantity Receive.
+                Required when changing Estimation, Quantity Delivered (Klip), Received Qty (Klip), ATA, or Quality.
               </p>
             </div>
           ) : null}
@@ -2481,14 +3411,20 @@ export function EditShipmentModal({
           <Button variant="outline" onClick={onClose} disabled={saving}>
             {readOnly ? 'Close' : 'Cancel'}
           </Button>
-          {!readOnly ? (
+          {showSaveButton ? (
             <Button
-              className="bg-blue-600 hover:bg-blue-700 text-white"
+              className="h-9 bg-blue-600 text-white hover:bg-blue-700"
               onClick={() => void handleSave()}
-              disabled={saving || loading || !shipmentId || !canModifyShipment || editRemarkMissing}
+              disabled={
+                saving ||
+                loading ||
+                !shipmentId ||
+                editRemarkMissing ||
+                (readOnly && !hasLimitedEdits)
+              }
               title={
                 editRemarkMissing
-                  ? 'Enter a remark before saving ETA or quantity changes'
+                  ? 'Enter a remark before saving changes'
                   : undefined
               }
             >

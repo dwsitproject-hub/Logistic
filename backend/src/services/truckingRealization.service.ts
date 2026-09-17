@@ -1,5 +1,7 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query } from '../database/connection';
+import { sqlTruckingOpIsActiveForMatchingSql } from '../utils/truckingOperationUniqueness';
+import { invalidateShippingPerformanceRowCache } from './shippingPerformance.service';
 
 type Queryable = Pick<PoolClient, 'query'> | typeof query;
 
@@ -89,16 +91,34 @@ export async function upsertTruckingRealization(
 export type TruckingDailyActualRow = {
   progress_date: string;
   quantity_kg: number;
+  quantity_delivery_kg?: number | null;
+  quantity_receive_kg?: number | null;
+  /** Empty string = legacy PO-level row (no STO on WB). */
+  sto_number?: string;
+};
+
+/** Input row for upsert/replace — only effective quantity_kg is required. */
+export type TruckingDailyActualInput = {
+  progress_date: string;
+  quantity_kg: number;
 };
 
 export async function listTruckingDailyActuals(
   truckingOperationId: string,
 ): Promise<TruckingDailyActualRow[]> {
   const result = await query(
-    `SELECT progress_date::text AS progress_date, quantity_kg::float8 AS quantity_kg
+    `SELECT
+       progress_date::text AS progress_date,
+       quantity_kg::float8 AS quantity_kg,
+       quantity_delivery_kg::float8 AS quantity_delivery_kg,
+       quantity_receive_kg::float8 AS quantity_receive_kg,
+       COALESCE(NULLIF(TRIM(sto_number), ''), '') AS sto_number
      FROM trucking_daily_actuals
      WHERE trucking_operation_id = $1
-     ORDER BY progress_date ASC`,
+     ORDER BY
+       CASE WHEN COALESCE(NULLIF(TRIM(sto_number), ''), '') = '' THEN 1 ELSE 0 END,
+       sto_number ASC,
+       progress_date ASC`,
     [truckingOperationId],
   );
   return result.rows as TruckingDailyActualRow[];
@@ -140,7 +160,7 @@ async function listActiveTruckingOpsByPo(
     `SELECT t.id, t.operation_id
      FROM trucking_operations t
      LEFT JOIN contracts c ON t.contract_id = c.id
-     WHERE COALESCE(t.status, '') <> 'CANCELLED'
+     WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
        AND LOWER(TRIM(COALESCE(c.po_number::text, ''))) = LOWER(TRIM($1))
      ORDER BY t.updated_at DESC NULLS LAST, t.id ASC`,
     [poNumber],
@@ -165,7 +185,7 @@ async function findTruckingOpByExtAndPo(
        ORDER BY spd.created_at DESC NULLS LAST
        LIMIT 1
      ) spd ON true
-     WHERE COALESCE(t.status, '') <> 'CANCELLED'
+     WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
        AND (
          LOWER(TRIM(COALESCE(c.contract_id::text, ''))) = LOWER(TRIM($1))
          OR LOWER(TRIM(COALESCE(spd.contract_ext_no, ''))) = LOWER(TRIM($1))
@@ -220,7 +240,7 @@ export async function resolveTruckingOperationByExtNoAndPo(
          ORDER BY spd.created_at DESC NULLS LAST
          LIMIT 1
        ) spd ON true
-       WHERE COALESCE(t.status, '') <> 'CANCELLED'
+       WHERE ${sqlTruckingOpIsActiveForMatchingSql('t')}
          AND (
            LOWER(TRIM(COALESCE(c.contract_id::text, ''))) = LOWER(TRIM($1))
            OR LOWER(TRIM(COALESCE(spd.contract_ext_no, ''))) = LOWER(TRIM($1))
@@ -259,7 +279,7 @@ export async function resolveTruckingOperationIdByExtNoAndPo(
 export async function replaceTruckingDailyActuals(
   executor: Queryable,
   truckingOperationId: string,
-  rows: TruckingDailyActualRow[],
+  rows: TruckingDailyActualInput[],
   source = 'manual',
 ): Promise<void> {
   const normalized = rows
@@ -276,9 +296,9 @@ export async function replaceTruckingDailyActuals(
   for (const row of normalized) {
     await runQuery(
       executor,
-      `INSERT INTO trucking_daily_actuals (trucking_operation_id, progress_date, quantity_kg, source)
-       VALUES ($1, $2::date, $3::numeric, $4)
-       ON CONFLICT (trucking_operation_id, progress_date) DO UPDATE SET
+      `INSERT INTO trucking_daily_actuals (trucking_operation_id, progress_date, quantity_kg, source, sto_number)
+       VALUES ($1, $2::date, $3::numeric, $4, '')
+       ON CONFLICT (trucking_operation_id, progress_date, sto_number) DO UPDATE SET
          quantity_kg = EXCLUDED.quantity_kg,
          source = EXCLUDED.source,
          updated_at = CURRENT_TIMESTAMP`,
@@ -287,19 +307,24 @@ export async function replaceTruckingDailyActuals(
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(executor, truckingOperationId);
-  setImmediate(() => {
-    import('./contractQtyMoveSnapshot.service')
-      .then(({ ContractQtyMoveSnapshotService }) =>
-        ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]),
-      )
-      .catch(() => {});
-  });
+  try {
+    const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
+    await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]);
+    const { scheduleContractPerformanceRefreshForTruckingOps } = await import(
+      './contractPerformanceSnapshot.service'
+    );
+    scheduleContractPerformanceRefreshForTruckingOps([truckingOperationId]);
+    /** Same reason as the WB path: this moves qty_move, which Shipping Performance reads. */
+    invalidateShippingPerformanceRowCache();
+  } catch {
+    // best-effort; snapshot fallback (is_stale) covers correctness if this fails
+  }
 }
 
 export async function upsertTruckingDailyActualRows(
   executor: Queryable,
   truckingOperationId: string,
-  rows: TruckingDailyActualRow[],
+  rows: TruckingDailyActualInput[],
   source = 'manual',
 ): Promise<void> {
   for (const row of rows) {
@@ -308,9 +333,9 @@ export async function upsertTruckingDailyActualRows(
     if (!date || !Number.isFinite(qty) || qty < 0) continue;
     await runQuery(
       executor,
-      `INSERT INTO trucking_daily_actuals (trucking_operation_id, progress_date, quantity_kg, source)
-       VALUES ($1, $2::date, $3::numeric, $4)
-       ON CONFLICT (trucking_operation_id, progress_date) DO UPDATE SET
+      `INSERT INTO trucking_daily_actuals (trucking_operation_id, progress_date, quantity_kg, source, sto_number)
+       VALUES ($1, $2::date, $3::numeric, $4, '')
+       ON CONFLICT (trucking_operation_id, progress_date, sto_number) DO UPDATE SET
          quantity_kg = EXCLUDED.quantity_kg,
          source = EXCLUDED.source,
          updated_at = CURRENT_TIMESTAMP`,
@@ -319,13 +344,18 @@ export async function upsertTruckingDailyActualRows(
   }
 
   await syncTruckingQuantityDeliveredFromDailyActuals(executor, truckingOperationId);
-  setImmediate(() => {
-    import('./contractQtyMoveSnapshot.service')
-      .then(({ ContractQtyMoveSnapshotService }) =>
-        ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]),
-      )
-      .catch(() => {});
-  });
+  try {
+    const { ContractQtyMoveSnapshotService } = await import('./contractQtyMoveSnapshot.service');
+    await ContractQtyMoveSnapshotService.refreshForTruckingOperationIds([truckingOperationId]);
+    const { scheduleContractPerformanceRefreshForTruckingOps } = await import(
+      './contractPerformanceSnapshot.service'
+    );
+    scheduleContractPerformanceRefreshForTruckingOps([truckingOperationId]);
+    /** Same reason as the WB path: this moves qty_move, which Shipping Performance reads. */
+    invalidateShippingPerformanceRowCache();
+  } catch {
+    // best-effort; snapshot fallback (is_stale) covers correctness if this fails
+  }
 }
 
 /** Derive DB status column from realization dates only (not planning). Last receive alone does not complete. */

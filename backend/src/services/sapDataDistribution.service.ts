@@ -1,18 +1,26 @@
 import { PoolClient } from 'pg';
 import logger from '../utils/logger';
+import { normalizeDischargeDestination } from '../utils/dischargeDestinationAlias';
 import { isLandSapRowEligibleForTruckingCreation } from '../utils/landTruckingEligibility';
 import {
   isTruckingPageIncoterm,
   resolveTruckingIncotermFromParsedData,
 } from '../utils/truckingIncotermScope';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
+import { isSapSeaStoLegForIncoterm, resolveSapStoTypeFromParsedData } from '../utils/sapSeaStoLeg';
+import {
+  resolveSapDistributionSeaLike,
+  shouldMaterializeSapShipment,
+} from '../utils/sapDistributionRouting';
 import { deriveShipmentStatus, sqlShipmentStatusRank } from '../utils/shipmentStatus';
 import {
   SQL_CONTRACT_IMPORT_STATUS,
   isContractDeliveryClosed,
+  sqlContractImportStatusForStoExpr,
 } from '../utils/contractDeliveryStatus';
 import { resolveSapVesselIdentity } from '../utils/sapVesselFields';
-import { resolveSapTruckingQuantityDelivered } from '../utils/sapMasterV2UatFormat';
+import { resolveSapTruckingQuantityDelivered, hasSapDeleteFlag } from '../utils/sapMasterV2UatFormat';
+import { KLIP_QTY_STORAGE_UOM, normalizeSapQtyToKg } from '../utils/sapQtyUom';
 import { ensureMasterVesselFromSap } from './masterVesselFromSap.service';
 import {
   denormalizeShipmentPortsFromSap,
@@ -25,6 +33,7 @@ import {
 } from './truckingRealization.service';
 import {
   finalizeSapShipmentAfterUpsert,
+  findKlipPlannedStoSupersedeCandidate,
   findSapShipmentSupersedeCandidate,
   findShipmentByPoAndSto,
   hasKlipShipmentActivity,
@@ -36,8 +45,14 @@ import {
   buildShipmentKlipProtectedSetSql,
   buildTruckingKlipProtectedSetSql,
 } from '../utils/klipSapFieldMerge';
-import { sqlHasTruckingKlipPlanning } from '../utils/truckingEffectiveStatus';
-import { SQL_TRUCKING_KEEPER_PRIORITY_ORDER } from '../utils/truckingOperationUniqueness';
+import { getOrCreateActiveTruckingOp } from '../utils/truckingActiveOp';
+import {
+  allocateNextSyntheticSequence,
+  buildSyntheticOperationId,
+  formatDDMMYYYY,
+} from '../utils/operationId';
+import { mergeContractRecords, mergeDuplicateContractsByPo } from './contractMerge.service';
+import { normalizePoNumber, shipmentPoSapIdKey } from '../utils/contractPoIdentity';
 
 export interface DistributionResult {
   contractId?: string;
@@ -129,10 +144,20 @@ export class SapDataDistributionService {
     // Try direct upsert path keys
     const contractNumber: string | undefined = parsedData?.contract?.contract_no || undefined;
     const poNumber: string | undefined = parsedData?.contract?.po_no || undefined;
-    if (contractNumber || poNumber) {
+    const poNorm = normalizePoNumber(poNumber);
+    if (poNorm) {
       const existing = await client.query(
-        `SELECT id FROM contracts WHERE contract_id = $1 OR po_number = $2 LIMIT 1`,
-        [contractNumber || null, poNumber || null]
+        `SELECT id FROM contracts WHERE TRIM(COALESCE(po_number::text, '')) = TRIM($1::text) LIMIT 1`,
+        [poNorm],
+      );
+      if (existing.rows.length > 0) {
+        return existing.rows[0].id as string;
+      }
+    }
+    if (contractNumber) {
+      const existing = await client.query(
+        `SELECT id FROM contracts WHERE contract_id = $1 LIMIT 1`,
+        [contractNumber],
       );
       if (existing.rows.length > 0) {
         return existing.rows[0].id as string;
@@ -169,7 +194,9 @@ export class SapDataDistributionService {
   static async distributeData(
     client: PoolClient,
     parsedData: any,
-    userId?: string
+    userId?: string,
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
+    qualitySurveyQueue?: Array<{ shipmentId: string; qualityData: any }>,
   ): Promise<DistributionResult> {
     const result: DistributionResult = {
       qualitySurveyIds: [],
@@ -178,6 +205,25 @@ export class SapDataDistributionService {
     };
     
     try {
+      // Concurrency guard for parallel chunked import workers (sapMasterV2Import.service.ts
+      // partitions rows so every row sharing a PO or contract number lands in the same worker
+      // chunk, which already prevents two chunks from touching the same contract concurrently
+      // in the common case). A PO can still be linked to a contract_number that a *different*
+      // row resolves to before that link is known, so take both locks for the WHOLE per-row
+      // distribution - not just the contract upsert - up front: two workers that do collide on
+      // the same underlying contract then serialize safely (the second blocks until the first's
+      // entire transaction commits) instead of racing on the same shipment/trucking rows.
+      const lockPoNumber = normalizePoNumber(parsedData?.contract?.po_no);
+      const lockContractNumber = parsedData?.contract?.contract_no
+        ? String(parsedData.contract.contract_no).trim() || null
+        : null;
+      if (lockPoNumber) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [`po:${lockPoNumber}`]);
+      }
+      if (lockContractNumber) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [`contract:${lockContractNumber}`]);
+      }
+
       // Normalize: in some files STO lives under shipment (not contract). Ensure contract upsert receives it.
       if (parsedData?.contract && parsedData?.shipment) {
         if (!parsedData.contract.sto_no && parsedData.shipment.sto_no) {
@@ -186,26 +232,35 @@ export class SapDataDistributionService {
         if (!parsedData.contract.sto_quantity && parsedData.shipment.sto_quantity) {
           parsedData.contract.sto_quantity = parsedData.shipment.sto_quantity;
         }
+        if (!parsedData.contract.sto_qty_uom && parsedData.shipment.sto_qty_uom) {
+          parsedData.contract.sto_qty_uom = parsedData.shipment.sto_qty_uom;
+        }
+        if (!parsedData.contract.delete_sto_status && parsedData.shipment.delete_sto_status) {
+          parsedData.contract.delete_sto_status = parsedData.shipment.delete_sto_status;
+        }
+      }
+      if (hasSapDeleteFlag(parsedData) && parsedData.contract) {
+        parsedData.contract.status = 'Cancelled';
       }
 
       // 1. Create or update contract
       if (this.hasContractData(parsedData.contract, parsedData)) {
         try {
-          logger.info('Attempting to upsert contract with data:', {
+          logger.debug('Attempting to upsert contract with data:', {
             contract_no: parsedData.contract?.contract_no,
             po_no: parsedData.contract?.po_no,
             supplier: parsedData.contract?.supplier,
             product: parsedData.contract?.product
           });
-          result.contractId = await this.upsertContract(client, parsedData.contract, userId);
-          logger.info('Contract upserted successfully:', result.contractId);
+          result.contractId = await this.upsertContract(client, parsedData.contract, userId, parsedData);
+          logger.debug('Contract upserted successfully:', result.contractId);
         } catch (contractError) {
           logger.error('Failed to upsert contract:', contractError);
           logger.error('Contract data:', JSON.stringify(parsedData.contract, null, 2));
           throw contractError;
         }
       } else {
-        logger.info('No contract data found, attempting to resolve from prior processed data');
+        logger.debug('No contract data found, attempting to resolve from prior processed data');
         // Fallback: try to resolve existing contract id from prior processed data
         result.contractId = await this.resolveContractId(client, parsedData);
       }
@@ -237,16 +292,21 @@ export class SapDataDistributionService {
         parsedData.shipment?.sto_no ||
         parsedData.shipment?.shipment_id
       );
-      // If mode is still unknown, infer SEA when we have STO/shipment identifiers but no explicit LAND
-      const assumeSea =
-        !isLand &&
-        !isSea &&
-        hasShipment &&
-        (hasVesselLike || hasStoInShipment);
-      
-      const seaLike = isSea || assumeSea;
+      const routingCtx = {
+        isLand,
+        isSea,
+        incotermLabel,
+        isTruckIncoterm,
+        hasShipment,
+        seaEligible,
+        hasVesselLike,
+        hasStoInShipment,
+        parsedData,
+      };
+      const { seaLike, assumeSea, landSeaStoLeg, cifCfrSeaLike } =
+        resolveSapDistributionSeaLike(routingCtx);
 
-      logger.info('Routing decision based on SEA / LAND:', {
+      logger.debug('Routing decision based on SEA / LAND:', {
         sea_land_raw: seaLandRaw,
         modeLabel,
         incotermLabel,
@@ -254,87 +314,32 @@ export class SapDataDistributionService {
         isLand,
         isSea: seaLike,
         hasShipmentData: hasShipment,
-        assumedSea: assumeSea
+        assumedSea: assumeSea,
+        landSeaStoLeg,
+        cifCfrSeaLike,
+        sapStoType: resolveSapStoTypeFromParsedData(parsedData),
       });
       
       // 2a. SEA: create/update shipment only when SAP row has at least one shipping anchor field
       // (STO No, ports, vessel, STO qty, qty delivery/receive, ATA milestones — see seaShipmentEligibility).
       // FRC/LCO incoterms route to trucking even when SAP Sea/Land is inconsistent.
-      if (seaLike && hasShipment && seaEligible && !isTruckIncoterm) {
-        try {
-          // Extract vessel data from shipment object (where it's actually stored)
-          const vesselIdentity = resolveSapVesselIdentity(
-            parsedData.shipment,
-            parsedData.vessel,
-            parsedData.raw,
-          );
-          const vesselData = {
-            vessel_name: vesselIdentity.vessel_name,
-            vessel_code: vesselIdentity.vessel_code,
-            vessel_owner: vesselIdentity.vessel_owner,
-            voyage_no: parsedData.shipment?.voyage_no,
-            vessel_draft: parsedData.shipment?.vessel_draft,
-            vessel_loa: parsedData.shipment?.vessel_loa,
-            vessel_capacity: parsedData.shipment?.vessel_capacity,
-            vessel_hull_type: parsedData.shipment?.vessel_hull_type,
-            vessel_registration_year:
-              parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
-            charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
-          };
-          
-          logger.info('Attempting to upsert shipment with data (SEA):', {
-            sto_no: parsedData.shipment?.sto_no,
-            vessel_name: vesselData.vessel_name,
-            contractId: result.contractId
-          });
-          const shipmentPayload = { ...(parsedData.shipment || {}) };
-          this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
-
-          const shipmentId = await this.upsertShipment(
-            client,
-            shipmentPayload,
-            result.contractId, // ensure we link shipment to whatever contract id we resolved
-            vesselData,
-            userId,
-            parsedData,
-          );
-          const shipmentUuid = this.toUuid(shipmentId);
-          if (!shipmentUuid) {
-            result.shipmentId = undefined;
-            logger.warn('Shipment upsert returned no UUID; skipping port sync and KLIP activity checks', {
-              contractId: result.contractId,
-              sto_no: parsedData.shipment?.sto_no,
-            });
-          } else {
-            result.shipmentId = shipmentUuid;
-            logger.info('Shipment upserted successfully:', result.shipmentId);
-
-            // Create or update vessel loading ports
-            await this.upsertVesselLoadingPorts(client, result.shipmentId, parsedData);
-            const klipProtectPorts = await hasKlipShipmentActivity(
-              client,
-              result.shipmentId,
-              result.contractId ?? undefined,
-            );
-            await denormalizeShipmentPortsFromSap(client, result.shipmentId, parsedData, {
-              protectKlip: klipProtectPorts,
-            });
-            logger.info('Vessel loading ports processed for shipment:', result.shipmentId);
-          }
-        } catch (shipmentError) {
-          logger.error('Failed to upsert shipment:', shipmentError);
-          logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
-          throw shipmentError;
-        }
+      if (shouldMaterializeSapShipment(routingCtx)) {
+        result.shipmentId = await this.createSeaShipmentFromParsedData(
+          client,
+          parsedData,
+          result.contractId,
+          userId,
+          shipmentPrefetchMap,
+        );
       } else if (seaLike && hasShipment && !seaEligible) {
-        logger.info('Skipping SEA shipment upsert: not eligible by anchor fields', {
+        logger.debug('Skipping SEA shipment upsert: not eligible by anchor fields', {
           contractId: result.contractId,
           sto_no: parsedData.shipment?.sto_no,
         });
       } else if (isTruckIncoterm && isLandSapRowEligibleForTruckingCreation(parsedData)) {
         // 2b. FRC/LCO: use parsedData.trucking[] (columns AV/AW Last/Start Receive) — NOT vessel shipment dates.
         try {
-          logger.info('Creating trucking operation(s) from SAP trucking data (FRC/LCO):', {
+          logger.debug('Creating trucking operation(s) from SAP trucking data (FRC/LCO):', {
             sto_no: parsedData.shipment?.sto_no,
             contractId: result.contractId,
             truckingLegs: parsedData.trucking?.length ?? 0,
@@ -367,10 +372,11 @@ export class SapDataDistributionService {
               client,
               undefined,
               result.contractId,
-              enriched
+              enriched,
+              parsedData,
             );
             if (truckingId) result.truckingOperationIds.push(truckingId);
-            logger.info('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
+            logger.debug('Trucking operation upserted from SAP (FRC/LCO):', truckingId);
           }
         } catch (truckingError) {
           logger.error('Failed to create trucking operation from SAP (FRC/LCO):', truckingError);
@@ -378,18 +384,37 @@ export class SapDataDistributionService {
           throw truckingError;
         }
       } else {
-        logger.info('No shipment/trucking data found to upsert or SEA/LAND value not set');
+        logger.debug('No shipment/trucking data found to upsert or SEA/LAND value not set');
+      }
+
+      // Delete PO/STO: force all linked live logistics rows Cancelled (Cancelled card),
+      // even when this import row did not materialize a new shipment/trucking upsert.
+      if (hasSapDeleteFlag(parsedData) && result.contractId) {
+        await this.cancelLinkedLogisticsForDeletedContract(client, result.contractId);
       }
       
       // 3. Create quality surveys (multiple) - only for SEA shipments
       if (seaLike && parsedData.quality && parsedData.quality.length > 0) {
         for (const qualityData of parsedData.quality) {
-          const surveyId = await this.createQualitySurvey(
-            client,
-            result.shipmentId,
-            qualityData
-          );
-          if (surveyId) result.qualitySurveyIds.push(surveyId);
+          if (qualitySurveyQueue) {
+            // Batched path (see flushQualitySurveyQueue): defer the actual INSERT to one
+            // multi-row statement flushed once per chunk instead of one INSERT per entry here.
+            // Replicates createQualitySurvey's own validity guards so the queue only ever holds
+            // what would actually have been inserted.
+            const shipmentUuid = this.toUuid(result.shipmentId);
+            const data = qualityData?.data;
+            if (shipmentUuid && data && Object.keys(data).length > 0) {
+              qualitySurveyQueue.push({ shipmentId: shipmentUuid, qualityData });
+              result.qualitySurveyIds.push(`pending:${qualitySurveyQueue.length}`);
+            }
+          } else {
+            const surveyId = await this.createQualitySurvey(
+              client,
+              result.shipmentId,
+              qualityData
+            );
+            if (surveyId) result.qualitySurveyIds.push(surveyId);
+          }
         }
       }
       
@@ -418,7 +443,8 @@ export class SapDataDistributionService {
             client,
             result.shipmentId,
             result.contractId,
-            truckingData
+            truckingData,
+            parsedData,
           );
           if (truckingId) result.truckingOperationIds.push(truckingId);
         }
@@ -432,12 +458,150 @@ export class SapDataDistributionService {
           result.contractId
         );
       }
+
+      if (!result.shipmentId && result.contractId) {
+        result.shipmentId = await this.ensureSeaShipmentIfEligible(
+          client,
+          parsedData,
+          result.contractId,
+          userId,
+        );
+      }
       
       return result;
       
     } catch (error) {
       logger.error('Data distribution failed', error);
       throw error;
+    }
+  }
+
+  /** Fallback after distribute when routing skipped shipment creation for an eligible SAP STO row. */
+  static async ensureSeaShipmentIfEligible(
+    client: PoolClient,
+    parsedData: any,
+    contractId: string | undefined,
+    userId?: string,
+  ): Promise<string | undefined> {
+    if (!contractId) return undefined;
+
+    const incotermLabel = resolveTruckingIncotermFromParsedData(parsedData);
+    if (isTruckingPageIncoterm(incotermLabel)) return undefined;
+    if (!isSeaSapRowEligibleForShipmentCreation(parsedData)) return undefined;
+    if (!isSapSeaStoLegForIncoterm(parsedData, incotermLabel)) return undefined;
+    if (incotermLabel === 'FOB' && resolveSapStoTypeFromParsedData(parsedData) === 'T') {
+      return undefined;
+    }
+    if (!this.hasShipmentData(parsedData.shipment)) return undefined;
+
+    const seaLandRaw = await this.resolveTransportModeRaw(client, contractId, parsedData.contract);
+    const modeLabel = this.parseTransportModeLabel(seaLandRaw);
+    const isLand = modeLabel === 'LAND';
+    const isSea = modeLabel === 'SEA';
+    const hasShipment = this.hasShipmentData(parsedData.shipment);
+    const seaEligible = isSeaSapRowEligibleForShipmentCreation(parsedData);
+    const hasVesselLike =
+      !!(
+        parsedData.shipment?.vessel_name ||
+        parsedData.shipment?.vessel_code ||
+        parsedData.shipment?.voyage_no ||
+        parsedData.shipment?.vessel_owner ||
+        parsedData.shipment?.vessel_loading_port_1 ||
+        parsedData.shipment?.vessel_discharge_port
+      );
+    const hasStoInShipment = !!(
+      parsedData.shipment?.sto_no ||
+      parsedData.shipment?.shipment_id
+    );
+    const routingCtx = {
+      isLand,
+      isSea,
+      incotermLabel,
+      isTruckIncoterm: false,
+      hasShipment,
+      seaEligible,
+      hasVesselLike,
+      hasStoInShipment,
+      parsedData,
+    };
+
+    if (!shouldMaterializeSapShipment(routingCtx)) return undefined;
+
+    return this.createSeaShipmentFromParsedData(client, parsedData, contractId, userId);
+  }
+
+  private static async createSeaShipmentFromParsedData(
+    client: PoolClient,
+    parsedData: any,
+    contractId: string | undefined,
+    userId?: string,
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
+  ): Promise<string | undefined> {
+    if (!contractId) return undefined;
+
+    try {
+      const vesselIdentity = resolveSapVesselIdentity(
+        parsedData.shipment,
+        parsedData.vessel,
+        parsedData.raw,
+      );
+      const vesselData = {
+        vessel_name: vesselIdentity.vessel_name,
+        vessel_code: vesselIdentity.vessel_code,
+        vessel_owner: vesselIdentity.vessel_owner,
+        voyage_no: parsedData.shipment?.voyage_no,
+        vessel_draft: parsedData.shipment?.vessel_draft,
+        vessel_loa: parsedData.shipment?.vessel_loa,
+        vessel_capacity: parsedData.shipment?.vessel_capacity,
+        vessel_hull_type: parsedData.shipment?.vessel_hull_type,
+        vessel_registration_year:
+          parsedData.shipment?.vessel_registration_year || parsedData.vessel?.registration_year,
+        charter_type: parsedData.shipment?.charter_type || parsedData.vessel?.charter_type,
+      };
+
+      logger.debug('Attempting to upsert shipment with data (SEA):', {
+        sto_no: parsedData.shipment?.sto_no,
+        vessel_name: vesselData.vessel_name,
+        contractId,
+      });
+      const shipmentPayload = { ...(parsedData.shipment || {}) };
+      this.enrichShipmentSfalSfbdFromRaw(shipmentPayload, parsedData.raw);
+
+      const { id: shipmentId, klipProtectShipmentFields } = await this.upsertShipment(
+        client,
+        shipmentPayload,
+        contractId,
+        vesselData,
+        userId,
+        parsedData,
+        shipmentPrefetchMap,
+      );
+      const shipmentUuid = this.toUuid(shipmentId);
+      if (!shipmentUuid) {
+        logger.warn('Shipment upsert returned no UUID; skipping port sync and KLIP activity checks', {
+          contractId,
+          sto_no: parsedData.shipment?.sto_no,
+        });
+        return undefined;
+      }
+
+      logger.debug('Shipment upserted successfully:', shipmentUuid);
+
+      await this.upsertVesselLoadingPorts(client, shipmentUuid, parsedData);
+      // Reuses klipProtectShipmentFields from upsertShipment above instead of calling
+      // hasKlipShipmentActivity(client, shipmentUuid, contractId) again - same function, same
+      // arguments (this is the same shipmentUuid/contractId upsertShipment just resolved), so the
+      // live read it performed there already answers this check; no behavior change, one fewer
+      // query per SEA row.
+      await denormalizeShipmentPortsFromSap(client, shipmentUuid, parsedData, {
+        protectKlip: klipProtectShipmentFields,
+      });
+      logger.debug('Vessel loading ports processed for shipment:', shipmentUuid);
+      return shipmentUuid;
+    } catch (shipmentError) {
+      logger.error('Failed to upsert shipment:', shipmentError);
+      logger.error('Shipment data:', JSON.stringify(parsedData.shipment, null, 2));
+      throw shipmentError;
     }
   }
   
@@ -449,41 +613,7 @@ export class SapDataDistributionService {
     fromContractUuid: string,
     toContractUuid: string
   ): Promise<void> {
-    if (fromContractUuid === toContractUuid) return;
-
-    await client.query(
-      `UPDATE shipments SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `UPDATE trucking_operations SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `UPDATE payments SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `UPDATE documents SET contract_id = $1 WHERE contract_id = $2`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(
-      `INSERT INTO contract_stos (
-         contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
-       )
-       SELECT $1, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code
-       FROM contract_stos
-       WHERE contract_id = $2
-       ON CONFLICT (contract_id, sto_number) DO UPDATE SET
-         sto_quantity = COALESCE(EXCLUDED.sto_quantity, contract_stos.sto_quantity),
-         sto_type = COALESCE(EXCLUDED.sto_type, contract_stos.sto_type),
-         sto_item = COALESCE(EXCLUDED.sto_item, contract_stos.sto_item),
-         sto_classification = COALESCE(EXCLUDED.sto_classification, contract_stos.sto_classification),
-         plant_code = COALESCE(EXCLUDED.plant_code, contract_stos.plant_code),
-         updated_at = CURRENT_TIMESTAMP`,
-      [toContractUuid, fromContractUuid]
-    );
-    await client.query(`DELETE FROM contracts WHERE id = $1`, [fromContractUuid]);
+    await mergeContractRecords(client, fromContractUuid, toContractUuid);
   }
 
   /**
@@ -512,17 +642,49 @@ export class SapDataDistributionService {
     if (existingReal.rows.length > 0) {
       const realUuid = existingReal.rows[0].id as string;
       if (realUuid !== placeholderUuid) {
-        logger.info(`Merging placeholder contract ${placeholderId} into existing ${contractNumber}`);
+        logger.debug(`Merging placeholder contract ${placeholderId} into existing ${contractNumber}`);
         await this.mergeContractRecords(client, placeholderUuid, realUuid);
       }
       return;
     }
 
-    logger.info(`Renaming placeholder contract ${placeholderId} to ${contractNumber}`);
+    logger.debug(`Renaming placeholder contract ${placeholderId} to ${contractNumber}`);
     await client.query(
       `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
       [contractNumber, placeholderUuid]
     );
+  }
+
+  /**
+   * When Delete PO/STO is set, mark all live linked shipments + trucking ops CANCELLED
+   * so Cancelled cards fill without requiring each historical logistics row to re-upsert.
+   */
+  private static async cancelLinkedLogisticsForDeletedContract(
+    client: PoolClient,
+    contractUuid: string,
+  ): Promise<void> {
+    const ship = await client.query(
+      `UPDATE shipments
+       SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+       WHERE contract_id = $1::uuid
+         AND COALESCE(status, '') <> 'CANCELLED'`,
+      [contractUuid],
+    );
+    const truck = await client.query(
+      `UPDATE trucking_operations
+       SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+       WHERE contract_id = $1::uuid
+         AND deduped_at IS NULL
+         AND COALESCE(status, '') <> 'CANCELLED'`,
+      [contractUuid],
+    );
+    if ((ship.rowCount ?? 0) > 0 || (truck.rowCount ?? 0) > 0) {
+      logger.debug('Cancelled linked logistics for Delete PO/STO contract', {
+        contractUuid,
+        shipments: ship.rowCount ?? 0,
+        trucking: truck.rowCount ?? 0,
+      });
+    }
   }
 
   /**
@@ -531,97 +693,234 @@ export class SapDataDistributionService {
   private static async upsertContract(
     client: PoolClient,
     contractData: any,
-    userId?: string
+    userId?: string,
+    parsedData?: Record<string, unknown>,
   ): Promise<string> {
     const contractNumber = contractData.contract_no != null ? String(contractData.contract_no).trim() || null : null;
-    const poNumber = contractData.po_no != null ? String(contractData.po_no).trim() || null : null;
-    const effectiveContractId = contractNumber || (poNumber ? `PO-${poNumber}` : null);
+    const poNumber = normalizePoNumber(contractData.po_no);
 
-    if (!effectiveContractId) {
-      throw new Error('Contract number or PO number is required');
+    if (!poNumber) {
+      throw new Error('PO number is required');
     }
 
-    // Serialize upserts for the same business contract_id within this transaction (batch + concurrent imports).
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [effectiveContractId]);
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1::text))`, [`po:${poNumber}`]);
+    await mergeDuplicateContractsByPo(client, poNumber);
 
-    // When we have a proper contract_no, reconcile PO-prefixed placeholder rows for the same PO.
+    const existingByPo = await client.query<{ id: string; contract_id: string }>(
+      `SELECT id, contract_id
+       FROM contracts
+       WHERE TRIM(COALESCE(po_number::text, '')) = TRIM($1::text)
+       LIMIT 1`,
+      [poNumber],
+    );
+
+    let effectiveContractId =
+      contractNumber ||
+      (existingByPo.rows[0]?.contract_id && !String(existingByPo.rows[0].contract_id).startsWith('PO-')
+        ? existingByPo.rows[0].contract_id
+        : null) ||
+      `PO-${poNumber}`;
+
     if (contractNumber && poNumber) {
       await this.reconcilePoPlaceholder(client, contractNumber, poNumber);
+      effectiveContractId = contractNumber;
+    } else if (!contractNumber && poNumber && existingByPo.rows[0]?.contract_id) {
+      const existingCid = String(existingByPo.rows[0].contract_id);
+      if (!existingCid.startsWith('PO-')) {
+        effectiveContractId = existingCid;
+      }
     }
 
-    const quantity = this.parseNumber(contractData.contract_quantity);
+    const quantity = normalizeSapQtyToKg(
+      this.parseNumber(contractData.contract_quantity),
+      contractData.contract_qty_uom,
+    );
+    /**
+     * SAP also emits STO-level rows whose "Contract No" is blank; in those rows the
+     * "Contract Quantity" column carries the STO quantity, not the contract quantity.
+     * They match the same PO, so letting them write contract-level qty overwrote the
+     * real figure (e.g. PO 1001030860: 1,000,000 kg replaced by 4,820 kg). A row that
+     * names its contract still wins outright - a genuine SAP reduction must be able to
+     * land - while a blank one may only RAISE the value (GREATEST ignores NULLs, so it
+     * also seeds an empty one). The outcome no longer depends on row processing order.
+     */
+    const rowCarriesContractNo = contractNumber != null;
     const unitPrice = this.parseNumber(contractData.unit_price);
     const contractValue = (quantity && unitPrice) ? quantity * unitPrice : null;
-    const statusNorm = this.normalizeContractStatus(contractData.status) || 'Open';
+    const forceCancelled = hasSapDeleteFlag(parsedData ?? { contract: contractData });
+    const statusNorm = forceCancelled
+      ? 'Cancelled'
+      : this.normalizeContractStatus(contractData.status) || 'Open';
     const statusForDb = this.statusForDb(statusNorm);
-
-    // Upsert: insert or update on conflict (contract_id unique) so re-upload of same contract updates instead of failing
-    const result = await client.query(
-      `INSERT INTO contracts (
-        contract_id, group_name, supplier, buyer, contract_date, product, po_number,
-        incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
-        delivery_start_date, delivery_end_date, source_type, contract_type,
-        status, sto_number, sto_quantity, logistics_classification, po_classification,
-        plant_code, created_by
-      ) VALUES (
-        $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, 'MT', $11::numeric, $12::numeric,
-        $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, $23
-      )
-      ON CONFLICT (contract_id) DO UPDATE SET
-        group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
-        supplier = COALESCE(EXCLUDED.supplier, contracts.supplier),
-        buyer = COALESCE(EXCLUDED.buyer, contracts.buyer),
-        contract_date = COALESCE(EXCLUDED.contract_date, contracts.contract_date),
-        product = COALESCE(EXCLUDED.product, contracts.product),
-        po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
-        incoterm = COALESCE(EXCLUDED.incoterm, contracts.incoterm),
-        transport_mode = COALESCE(EXCLUDED.transport_mode, contracts.transport_mode),
-        quantity_ordered = COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered),
-        unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
-        contract_value = COALESCE(EXCLUDED.contract_value, contracts.contract_value),
-        delivery_start_date = COALESCE(EXCLUDED.delivery_start_date, contracts.delivery_start_date),
-        delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
-        source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
-        contract_type = COALESCE(EXCLUDED.contract_type, contracts.contract_type),
-        status = COALESCE(EXCLUDED.status, contracts.status),
-        sto_number = COALESCE(EXCLUDED.sto_number, contracts.sto_number),
-        sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
-        logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
-        po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
-        plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
-        updated_at = CURRENT_TIMESTAMP
-      RETURNING id`,
-      [
-        effectiveContractId,
-        contractData.group,
-        contractData.supplier,
-        contractData.buyer || contractData.group || 'Unknown',
-        this.parseDate(contractData.contract_date),
-        contractData.product,
-        poNumber,
-        contractData.incoterm,
-        contractData.sea_land || contractData.transport_mode,
-        quantity,
-        unitPrice,
-        contractValue,
-        this.parseDate(contractData.due_date_delivery_start),
-        this.parseDate(contractData.due_date_delivery_end),
-        contractData.source,
-        contractData.contract_type || contractData.ltc_spot,
-        statusForDb,
-        contractData.sto_no,
-        this.parseNumber(contractData.sto_quantity),
-        contractData.logistics_area_classification,
-        contractData.sto_classification || contractData.po_classification,
-        contractData.plant_code || null,
-        userId
-      ]
+    const currencyRaw =
+      contractData.currency_unit_price ??
+      contractData.currency ??
+      (parsedData?.raw as Record<string, unknown> | undefined)?.['Currency Unit Price'] ??
+      null;
+    const currency =
+      currencyRaw != null && String(currencyRaw).trim() !== ''
+        ? String(currencyRaw).trim().toUpperCase()
+        : null;
+    const stoQuantity = normalizeSapQtyToKg(
+      this.parseNumber(contractData.sto_quantity),
+      contractData.sto_qty_uom ??
+        (parsedData?.shipment as Record<string, unknown> | undefined)?.sto_qty_uom,
     );
-    const contractUuid = result.rows[0].id as string;
+
+    const params = [
+      effectiveContractId,
+      contractData.group,
+      contractData.supplier,
+      contractData.buyer || contractData.group || 'Unknown',
+      this.parseDate(contractData.contract_date),
+      contractData.product,
+      poNumber,
+      contractData.incoterm,
+      contractData.sea_land || contractData.transport_mode,
+      quantity,
+      unitPrice,
+      contractValue,
+      this.parseDate(contractData.due_date_delivery_start),
+      this.parseDate(contractData.due_date_delivery_end),
+      contractData.source,
+      contractData.contract_type || contractData.ltc_spot,
+      statusForDb,
+      contractData.sto_no,
+      stoQuantity,
+      contractData.logistics_area_classification,
+      contractData.sto_classification || contractData.po_classification,
+      contractData.plant_code || null,
+      currency,
+      userId,
+    ];
+
+    let contractUuid: string;
+
+    if (existingByPo.rows.length > 0) {
+      const existingId = existingByPo.rows[0].id;
+      const renameContractId =
+        contractNumber &&
+        String(existingByPo.rows[0].contract_id).startsWith('PO-') &&
+        contractNumber !== existingByPo.rows[0].contract_id;
+
+      if (renameContractId) {
+        const conflict = await client.query(
+          `SELECT id FROM contracts WHERE contract_id = $1 AND id <> $2::uuid LIMIT 1`,
+          [contractNumber, existingId],
+        );
+        if (conflict.rows.length > 0) {
+          await this.mergeContractRecords(client, conflict.rows[0].id, existingId);
+        } else {
+          await client.query(
+            `UPDATE contracts SET contract_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
+            [contractNumber, existingId],
+          );
+        }
+      }
+
+      const updated = await client.query(
+        `UPDATE contracts SET
+          contract_id = CASE
+            WHEN $1::text IS NOT NULL AND $1::text !~ '^PO-' THEN $1::text
+            ELSE contract_id
+          END,
+          group_name = COALESCE($2, group_name),
+          supplier = COALESCE($3, supplier),
+          buyer = COALESCE($4, buyer),
+          contract_date = COALESCE($5::date, contract_date),
+          product = COALESCE($6, product),
+          po_number = COALESCE($7, po_number),
+          incoterm = COALESCE($8, incoterm),
+          transport_mode = COALESCE($9, transport_mode),
+          quantity_ordered = CASE
+            WHEN $24::boolean THEN COALESCE($10::numeric, quantity_ordered)
+            ELSE GREATEST(quantity_ordered, $10::numeric)
+          END,
+          unit = '${KLIP_QTY_STORAGE_UOM}',
+          unit_price = COALESCE($11::numeric, unit_price),
+          contract_value = CASE
+            WHEN $24::boolean THEN COALESCE($12::numeric, contract_value)
+            ELSE GREATEST(contract_value, $12::numeric)
+          END,
+          delivery_start_date = COALESCE($13::date, delivery_start_date),
+          delivery_end_date = COALESCE($14::date, delivery_end_date),
+          source_type = COALESCE($15, source_type),
+          contract_type = COALESCE($16, contract_type),
+          status = CASE
+            WHEN $17::text = 'CANCELLED' THEN 'CANCELLED'
+            ELSE COALESCE($17, status)
+          END,
+          sto_number = COALESCE($18, sto_number),
+          sto_quantity = COALESCE($19::numeric, sto_quantity),
+          logistics_classification = COALESCE($20, logistics_classification),
+          po_classification = COALESCE($21, po_classification),
+          plant_code = COALESCE($22, plant_code),
+          currency = COALESCE($23, currency),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = $25::uuid
+         RETURNING id`,
+        [...params.slice(0, 23), rowCarriesContractNo, existingId],
+      );
+      contractUuid = updated.rows[0].id as string;
+    } else {
+      const inserted = await client.query(
+        `INSERT INTO contracts (
+          contract_id, group_name, supplier, buyer, contract_date, product, po_number,
+          incoterm, transport_mode, quantity_ordered, unit, unit_price, contract_value,
+          delivery_start_date, delivery_end_date, source_type, contract_type,
+          status, sto_number, sto_quantity, logistics_classification, po_classification,
+          plant_code, currency, created_by
+        ) VALUES (
+          $1, $2, $3, $4, $5::date, $6, $7, $8, $9, $10::numeric, '${KLIP_QTY_STORAGE_UOM}', $11::numeric, $12::numeric,
+          $13::date, $14::date, $15, $16, $17, $18, $19::numeric, $20, $21, $22, COALESCE($23, 'USD'), $24
+        )
+        ON CONFLICT (contract_id) DO UPDATE SET
+          po_number = COALESCE(EXCLUDED.po_number, contracts.po_number),
+          group_name = COALESCE(EXCLUDED.group_name, contracts.group_name),
+          supplier = COALESCE(EXCLUDED.supplier, contracts.supplier),
+          buyer = COALESCE(EXCLUDED.buyer, contracts.buyer),
+          contract_date = COALESCE(EXCLUDED.contract_date, contracts.contract_date),
+          product = COALESCE(EXCLUDED.product, contracts.product),
+          incoterm = COALESCE(EXCLUDED.incoterm, contracts.incoterm),
+          transport_mode = COALESCE(EXCLUDED.transport_mode, contracts.transport_mode),
+          quantity_ordered = CASE
+            WHEN $25::boolean THEN COALESCE(EXCLUDED.quantity_ordered, contracts.quantity_ordered)
+            ELSE GREATEST(contracts.quantity_ordered, EXCLUDED.quantity_ordered)
+          END,
+          unit = EXCLUDED.unit,
+          unit_price = COALESCE(EXCLUDED.unit_price, contracts.unit_price),
+          contract_value = CASE
+            WHEN $25::boolean THEN COALESCE(EXCLUDED.contract_value, contracts.contract_value)
+            ELSE GREATEST(contracts.contract_value, EXCLUDED.contract_value)
+          END,
+          delivery_start_date = COALESCE(EXCLUDED.delivery_start_date, contracts.delivery_start_date),
+          delivery_end_date = COALESCE(EXCLUDED.delivery_end_date, contracts.delivery_end_date),
+          source_type = COALESCE(EXCLUDED.source_type, contracts.source_type),
+          contract_type = COALESCE(EXCLUDED.contract_type, contracts.contract_type),
+          status = CASE
+            WHEN EXCLUDED.status = 'CANCELLED' THEN 'CANCELLED'
+            ELSE COALESCE(EXCLUDED.status, contracts.status)
+          END,
+          sto_number = COALESCE(EXCLUDED.sto_number, contracts.sto_number),
+          sto_quantity = COALESCE(EXCLUDED.sto_quantity, contracts.sto_quantity),
+          logistics_classification = COALESCE(EXCLUDED.logistics_classification, contracts.logistics_classification),
+          po_classification = COALESCE(EXCLUDED.po_classification, contracts.po_classification),
+          plant_code = COALESCE(EXCLUDED.plant_code, contracts.plant_code),
+          currency = COALESCE(EXCLUDED.currency, contracts.currency),
+          updated_at = CURRENT_TIMESTAMP
+        RETURNING id`,
+        [...params, rowCarriesContractNo],
+      );
+      contractUuid = inserted.rows[0].id as string;
+    }
 
     // Persist each STO as a separate row in contract_stos to support multiple STOs per contract.
     const stoNo = contractData.sto_no != null ? String(contractData.sto_no).trim() || null : null;
     if (stoNo) {
+      const stoType =
+        String(contractData.sto_type ?? '').trim().toUpperCase() ||
+        resolveSapStoTypeFromParsedData(parsedData ?? { contract: contractData, raw: contractData?.raw }) ||
+        null;
       await client.query(
         `INSERT INTO contract_stos (contract_id, sto_number, sto_quantity, sto_type, sto_item, sto_classification, plant_code)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -635,8 +934,8 @@ export class SapDataDistributionService {
         [
           contractUuid,
           stoNo,
-          this.parseNumber(contractData.sto_quantity),
-          contractData.sto_type || null,
+          stoQuantity,
+          stoType || null,
           contractData.sto_item || null,
           contractData.sto_classification || contractData.po_classification || null,
           contractData.plant_code || null
@@ -657,7 +956,8 @@ export class SapDataDistributionService {
     vesselData: any,
     _userId?: string,
     parsedData?: Record<string, unknown>,
-  ): Promise<string | null> {
+    shipmentPrefetchMap?: Map<string, { id: string; contractId: string }>,
+  ): Promise<{ id: string | null; klipProtectShipmentFields: boolean }> {
     const contractUuid = this.toUuid(contractId);
     const shipmentIdFromSap = shipmentData.shipment_id || shipmentData.sto_no;
 
@@ -716,22 +1016,43 @@ export class SapDataDistributionService {
 
     const etaArrival = this.parseDate(shipmentData.eta_vessel_arrival_loading_port_1 || shipmentData.eta_arrival_loading_port_1);
     const ataArrival = this.parseDate(shipmentData.ata_vessel_arrival_at_loading_port_1);
+    // Loading/discharge ATB (berthed) — persisted to shipments for Shipping Performance deltas.
+    // ETA berthed is KLIP-only and is never written from SAP.
     const etaSailed = this.parseDate(shipmentData.eta_vessel_sailed_at_loading_port_1);
     const ataSailed = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port);
 
     const shipmentDate = this.parseDate(shipmentData.shipment_date);
     const arrivalDate = this.parseDate(shipmentData.arrival_date);
 
-    const quantityShipped = this.parseNumber(shipmentData.quantity_at_loading_port_1_based_on_bast ?? shipmentData.quantity_shipped);
+    const quantityShipped = normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.quantity_at_loading_port_1_based_on_bast ?? shipmentData.quantity_shipped),
+      shipmentData.quantity_delivery_uom,
+    );
     // SAP MASTER v2 columns normalize to `quantity_delivery` and `quantity_receive`.
     // Map those to shipment fields used throughout the app.
-    const quantityDelivery = this.parseNumber(shipmentData.quantity_delivery ?? shipmentData.quantity_delivered);
-    const quantityReceive = this.parseNumber(shipmentData.quantity_receive ?? shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered);
+    const quantityDelivery = normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.quantity_delivery ?? shipmentData.quantity_delivered),
+      shipmentData.quantity_delivery_uom,
+    );
+    const quantityReceive = normalizeSapQtyToKg(
+      this.parseNumber(
+        shipmentData.quantity_receive ??
+          shipmentData.actual_vessel_qty_receive ??
+          shipmentData.quantity_delivered,
+      ),
+      shipmentData.quantity_receive_uom,
+    );
     const actualVesselQtyReceive = quantityReceive;
-    const blQuantity = this.parseNumber(shipmentData.bl_quantity);
+    const blQuantity = normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.bl_quantity),
+      shipmentData.bl_quantity_uom,
+    );
     const sfalQty = this.parseSapFigureQtyKg(shipmentData.sfal, shipmentData.sfal_qty);
     const sfbdQty = this.parseSapFigureQtyKg(shipmentData.sfbd, shipmentData.sfbd_qty);
-    const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? this.parseNumber(shipmentData.quantity_delivered);
+    const quantityDelivered = quantityDelivery ?? actualVesselQtyReceive ?? normalizeSapQtyToKg(
+      this.parseNumber(shipmentData.quantity_delivered),
+      shipmentData.quantity_delivery_uom,
+    );
     let difference = this.parseNumber(shipmentData.difference_final_qty_vs_bl_qty);
     if (difference === null && actualVesselQtyReceive !== null && blQuantity !== null) {
       difference = actualVesselQtyReceive - blQuantity;
@@ -768,20 +1089,31 @@ export class SapDataDistributionService {
     const ataSailedLoading = this.parseDate(shipmentData.ata_vessel_sailed_at_loading_port_1 ?? shipmentData.ata_vessel_sailed_from_loading_port ?? shipmentData.ata_sailed);
     const ataDischargeBerthed = this.parseDate(shipmentData.ata_vessel_berthed_at_discharge_port ?? shipmentData.ata_discharge_berthed);
 
-    const statusForInsert = deriveShipmentStatus({
-      ata_arrival_at_loading_port: ataArrivalLoading,
-      ata_berthed_at_loading_port: ataBerthedLoading,
-      ata_start_loading: ataLoadingStart,
-      ata_completed_loading: ataLoadingComplete,
-      ata_sailed_from_loading_port: ataSailedLoading,
-      ata_arrive_at_discharge_port: ataDischargeArrival,
-      ata_berthed_at_discharge_port: ataDischargeBerthed,
-      ata_start_discharging: ataDischargeStart,
-      ata_complete_discharge: ataDischargeComplete,
-      contract_import_status: (await this.isContractSapClosedForUuid(client, contractUuid))
-        ? 'Close'
-        : null,
-    });
+    const contractSapClosed = await this.isContractSapClosedForUuid(
+      client,
+      contractUuid,
+      shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+    );
+
+    const forceCancelled = hasSapDeleteFlag(
+      (parsedData as { contract?: Record<string, unknown>; shipment?: Record<string, unknown>; raw?: Record<string, unknown> }) ?? {
+        shipment: shipmentData,
+      },
+    );
+    const statusForInsert = forceCancelled
+      ? 'CANCELLED'
+      : deriveShipmentStatus({
+          ata_arrival_at_loading_port: ataArrivalLoading,
+          ata_berthed_at_loading_port: ataBerthedLoading,
+          ata_start_loading: ataLoadingStart,
+          ata_completed_loading: ataLoadingComplete,
+          ata_sailed_from_loading_port: ataSailedLoading,
+          ata_arrive_at_discharge_port: ataDischargeArrival,
+          ata_berthed_at_discharge_port: ataDischargeBerthed,
+          ata_start_discharging: ataDischargeStart,
+          ata_complete_discharge: ataDischargeComplete,
+          contract_import_status: contractSapClosed ? 'Close' : null,
+        });
 
     // Strategy:
     // 1) Prefer direct match by shipment_id from SAP.
@@ -789,14 +1121,65 @@ export class SapDataDistributionService {
     //    whose vessel_name is at least 80% similar. If found, update that shipment instead of inserting.
 
     let targetShipmentId: string | null = null;
+    let contractPoNumber: string | null = null;
+    if (contractUuid) {
+      const poRes = await client.query<{ po_number: string | null }>(
+        `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
+        [contractUuid],
+      );
+      contractPoNumber = poRes.rows[0]?.po_number ?? null;
+    }
 
-    if (shipmentIdFromSap) {
+    if (shipmentIdFromSap && contractUuid) {
+      // Check the batch-prefetched exact-match map first (see
+      // prefetchExistingShipmentsByPoAndSapId in sapMasterV2Import.service.ts) before falling
+      // back to a live query. The prefetch is keyed by (contract's po_number, SAP shipment id) -
+      // resolved before any writes this run - so a hit must still be confirmed against THIS row's
+      // own resolved contractUuid: contract identity can change mid-chunk (placeholder rename/
+      // merge in upsertContract), which would make a stale prefetch hit point at the wrong
+      // contract. A miss or mismatch always falls through to the same live query as before.
+      const prefetchKey = contractPoNumber
+        ? shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap))
+        : null;
+      const prefetched = prefetchKey ? shipmentPrefetchMap?.get(prefetchKey) : undefined;
+      if (prefetched && prefetched.contractId === contractUuid) {
+        targetShipmentId = prefetched.id;
+      } else {
+        const existingByShipment = await client.query(
+          `SELECT id FROM shipments
+           WHERE contract_id = $1::uuid AND shipment_id = $2
+           LIMIT 1`,
+          [contractUuid, shipmentIdFromSap],
+        );
+        if (existingByShipment.rows.length > 0) {
+          targetShipmentId = existingByShipment.rows[0].id;
+        }
+      }
+    } else if (shipmentIdFromSap) {
       const existingByShipment = await client.query(
         `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
-        [shipmentIdFromSap]
+        [shipmentIdFromSap],
       );
       if (existingByShipment.rows.length > 0) {
         targetShipmentId = existingByShipment.rows[0].id;
+      }
+    }
+
+    if (!targetShipmentId && contractUuid && shipmentIdFromSap) {
+      const klipSupersedeId = await findKlipPlannedStoSupersedeCandidate(
+        client,
+        contractUuid,
+        String(shipmentIdFromSap).trim(),
+        contractPoNumber,
+      );
+      if (klipSupersedeId) {
+        targetShipmentId = klipSupersedeId;
+        logger.debug('upsertShipment: reusing KLIP-planned shipment for SAP STO change', {
+          contractId,
+          supersededShipmentUuid: klipSupersedeId,
+          sapShipmentId: shipmentIdFromSap,
+          poNumber: contractPoNumber,
+        });
       }
     }
 
@@ -808,7 +1191,7 @@ export class SapDataDistributionService {
       );
       if (supersedeId) {
         targetShipmentId = supersedeId;
-        logger.info('upsertShipment: reusing SAP-only shipment row for new STO from latest upload', {
+        logger.debug('upsertShipment: reusing SAP-only shipment row for new STO from latest upload', {
           contractId,
           supersededShipmentUuid: supersedeId,
           sapShipmentId: shipmentIdFromSap,
@@ -817,28 +1200,13 @@ export class SapDataDistributionService {
     }
 
     if (!targetShipmentId && contractUuid && isSapSourcedShipmentId(shipmentIdFromSap)) {
-      const poRes = await client.query<{ po_number: string | null }>(
-        `SELECT po_number FROM contracts WHERE id = $1::uuid LIMIT 1`,
-        [contractUuid],
-      );
       const poMatch = await findShipmentByPoAndSto(
         client,
-        poRes.rows[0]?.po_number,
+        contractPoNumber,
         String(shipmentIdFromSap).trim(),
       );
-      if (poMatch) {
+      if (poMatch && poMatch.contractUuid === contractUuid) {
         targetShipmentId = poMatch.id;
-        if (poMatch.contractUuid !== contractUuid) {
-          await client.query(
-            `UPDATE shipments SET contract_id = $1::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid`,
-            [contractUuid, poMatch.id],
-          );
-          logger.info('upsertShipment: reusing PO+STO shipment from sibling contract', {
-            contractId,
-            shipmentUuid: poMatch.id,
-            sapShipmentId: shipmentIdFromSap,
-          });
-        }
       }
     }
 
@@ -875,7 +1243,7 @@ export class SapDataDistributionService {
       );
       if (existingPlanned.rows.length > 0) {
         targetShipmentId = existingPlanned.rows[0].id;
-        logger.info('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
+        logger.debug('upsertShipment: matched planned MNL/MSEA shipment for SAP STO', {
           contractId,
           existingShipmentId: targetShipmentId,
           sapShipmentId: shipmentIdFromSap,
@@ -883,22 +1251,42 @@ export class SapDataDistributionService {
       }
     }
 
-    // SAP re-import: when contract has exactly one active shipment, update it instead of inserting a duplicate.
+    // SAP re-import: sole active row may be updated in place — but never rename/collapse a
+    // different numeric SAP STO into another (parallel multi-STO on the same PO/contract).
+    // True STO replacements use findKlipPlannedStoSupersedeCandidate (isStoReplacedInLatestSap).
     if (!targetShipmentId && contractUuid) {
-      const soleActive = await client.query<{ id: string }>(
-        `SELECT id FROM shipments
+      const soleActive = await client.query<{ id: string; shipment_id: string | null }>(
+        `SELECT id, shipment_id FROM shipments
          WHERE contract_id = $1::uuid
            AND COALESCE(status, '') <> 'CANCELLED'
          ORDER BY created_at DESC`,
         [contractUuid],
       );
       if (soleActive.rows.length === 1) {
-        targetShipmentId = soleActive.rows[0].id;
-        logger.info('upsertShipment: reusing sole active shipment on contract for SAP update', {
-          contractId,
-          existingShipmentId: targetShipmentId,
-          sapShipmentId: shipmentIdFromSap,
-        });
+        const sole = soleActive.rows[0];
+        const existingSid = String(sole.shipment_id ?? '').trim();
+        const newSid = String(shipmentIdFromSap ?? '').trim();
+        const bothDistinctSapSto =
+          Boolean(newSid) &&
+          Boolean(existingSid) &&
+          existingSid !== newSid &&
+          isSapSourcedShipmentId(existingSid) &&
+          isSapSourcedShipmentId(newSid);
+        if (bothDistinctSapSto) {
+          logger.debug('upsertShipment: skipping sole-active reuse for parallel SAP STO', {
+            contractId,
+            existingShipmentIdValue: existingSid,
+            sapShipmentId: shipmentIdFromSap,
+          });
+        } else {
+          targetShipmentId = sole.id;
+          logger.debug('upsertShipment: reusing sole active shipment on contract for SAP update', {
+            contractId,
+            existingShipmentId: targetShipmentId,
+            sapShipmentId: shipmentIdFromSap,
+            existingShipmentIdValue: existingSid || null,
+          });
+        }
       }
     }
 
@@ -944,6 +1332,7 @@ export class SapDataDistributionService {
           total_lead_time_days = COALESCE($32::int, total_lead_time_days),
           eta_arrival = COALESCE($33::date, eta_arrival),
           ata_arrival = COALESCE($34::date, ata_arrival),
+          ata_berthed = COALESCE($51::date, ata_berthed),
           eta_sailed = COALESCE($35::date, eta_sailed),
           ata_sailed = COALESCE($36::date, ata_sailed),
           eta_loading_start = COALESCE($37::date, eta_loading_start),
@@ -952,6 +1341,7 @@ export class SapDataDistributionService {
           ata_loading_complete = COALESCE($40::date, ata_loading_complete),
           eta_discharge_arrival = COALESCE($41::date, eta_discharge_arrival),
           ata_discharge_arrival = COALESCE($42::date, ata_discharge_arrival),
+          ata_discharge_berthed = COALESCE($52::date, ata_discharge_berthed),
           eta_discharge_start = COALESCE($43::date, eta_discharge_start),
           ata_discharge_start = COALESCE($44::date, ata_discharge_start),
           eta_discharge_complete = COALESCE($45::date, eta_discharge_complete),
@@ -959,12 +1349,16 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE($47::numeric, sfal_qty),
           sfbd_qty = COALESCE($48::numeric, sfbd_qty),
           status = CASE
+            WHEN $49::text IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
+            WHEN UPPER(TRIM(COALESCE(status, ''))) IN ('CANCELLED', 'CANCELED') THEN status
+            WHEN $50::boolean IS TRUE
+              THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('$49::text')} > ${sqlShipmentStatusRank('status')}
             THEN $49
             ELSE status
           END,
           updated_at = CURRENT_TIMESTAMP
-         WHERE id = $50`,
+         WHERE id = $53`,
         [
           contractUuid,
           voyageNo,
@@ -1015,6 +1409,9 @@ export class SapDataDistributionService {
           sfalQty,
           sfbdQty,
           statusForInsert,
+          contractSapClosed,
+          ataBerthedLoading,
+          ataDischargeBerthed,
           id
         ]
       );
@@ -1028,21 +1425,35 @@ export class SapDataDistributionService {
           contractUuid,
           id,
           shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+          contractPoNumber,
         );
         if (reconcile.cancelledShipmentIds.length > 0) {
-          logger.info('upsertShipment: cancelled superseded SAP shipment rows', {
+          logger.debug('upsertShipment: cancelled superseded SAP shipment rows', {
             contractId,
             keeperShipmentId: id,
             cancelled: reconcile.cancelledShipmentIds,
           });
         }
       }
-      return id;
-    } else if (shipmentIdFromSap) {
+      // Write-through: a later row in this same chunk sharing this exact PO+SAP-shipment-id must
+      // see this write without a round trip - mirrors existingProcessedMap's pattern in
+      // sapMasterV2Import.service.ts. finalizeSapShipmentAfterUpsert (above) may have just renamed
+      // shipments.shipment_id to shipmentIdFromSap, so this key is what a future lookup for this
+      // exact id will now correctly resolve to.
+      if (shipmentPrefetchMap && contractPoNumber && shipmentIdFromSap && contractUuid) {
+        shipmentPrefetchMap.set(shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap)), {
+          id,
+          contractId: contractUuid,
+        });
+      }
+      return { id, klipProtectShipmentFields };
+    } else if (shipmentIdFromSap && contractUuid) {
       let klipProtectShipmentFields = false;
       const existingForConflict = await client.query(
-        `SELECT id FROM shipments WHERE shipment_id = $1 LIMIT 1`,
-        [shipmentIdFromSap],
+        `SELECT id FROM shipments
+         WHERE contract_id = $1::uuid AND shipment_id = $2
+         LIMIT 1`,
+        [contractUuid, shipmentIdFromSap],
       );
       if (existingForConflict.rows.length > 0) {
         klipProtectShipmentFields = await hasKlipShipmentActivity(
@@ -1060,24 +1471,23 @@ export class SapDataDistributionService {
           shipment_id, contract_id, status, voyage_no, vessel_code, vessel_name, vessel_owner,
           vessel_draft, vessel_loa, vessel_capacity, vessel_hull_type, vessel_registration_year,
           charter_type, loading_method, discharge_method, port_of_loading, port_of_discharge,
-          eta_arrival, ata_arrival, eta_sailed, ata_sailed, shipment_date, arrival_date,
+          eta_arrival, ata_arrival, ata_berthed, eta_sailed, ata_sailed, shipment_date, arrival_date,
           quantity_shipped, quantity_delivered, bl_quantity, actual_vessel_qty_receive,
           difference_final_qty_vs_bl_qty, estimated_km, estimated_nautical_miles, vessel_oa_budget,
           vessel_oa_actual, average_vessel_speed, eta_loading_start, ata_loading_start,
           eta_loading_complete, ata_loading_complete, eta_discharge_arrival, ata_discharge_arrival,
-          eta_discharge_start, ata_discharge_start, eta_discharge_complete, ata_discharge_complete,
-          loading_rate, discharge_rate, loading_duration_days, discharge_duration_days,
-          total_lead_time_days, sfal_qty, sfbd_qty
+          ata_discharge_berthed, eta_discharge_start, ata_discharge_start, eta_discharge_complete,
+          ata_discharge_complete, loading_rate, discharge_rate, loading_duration_days,
+          discharge_duration_days, total_lead_time_days, sfal_qty, sfbd_qty
         ) VALUES (
           $1, $2::uuid, $3, $4, $5, $6, $7, $8::numeric, $9::numeric, $10::numeric, $11, $12::int,
-          $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date,
-          $24::numeric, $25::numeric, $26::numeric, $27::numeric, $28::numeric, $29::numeric, $30::numeric,
-          $31::numeric, $32::numeric, $33::numeric, $34::date, $35::date, $36::date, $37::date,
-          $38::date, $39::date, $40::date, $41::date, $42::date, $43::date, $44::numeric, $45::numeric,
-          $46::int, $47::int, $48::int, $49::numeric, $50::numeric
+          $13, $14, $15, $16, $17, $18::date, $19::date, $20::date, $21::date, $22::date, $23::date, $24::date,
+          $25::numeric, $26::numeric, $27::numeric, $28::numeric, $29::numeric, $30::numeric, $31::numeric,
+          $32::numeric, $33::numeric, $34::numeric, $35::date, $36::date, $37::date, $38::date,
+          $39::date, $40::date, $41::date, $42::date, $43::date, $44::date, $45::date,
+          $46::numeric, $47::numeric, $48::int, $49::int, $50::int, $51::numeric, $52::numeric
         )
-        ON CONFLICT (shipment_id) DO UPDATE SET
-          contract_id   = COALESCE(EXCLUDED.contract_id, shipments.contract_id),
+        ON CONFLICT (contract_id, shipment_id) DO UPDATE SET
           voyage_no     = COALESCE(EXCLUDED.voyage_no, shipments.voyage_no),
           ${shipmentConflictProtectedSql},
           vessel_owner  = COALESCE(EXCLUDED.vessel_owner, shipments.vessel_owner),
@@ -1091,6 +1501,7 @@ export class SapDataDistributionService {
           discharge_method = COALESCE(EXCLUDED.discharge_method, shipments.discharge_method),
           eta_arrival   = COALESCE(EXCLUDED.eta_arrival, shipments.eta_arrival),
           ata_arrival   = COALESCE(EXCLUDED.ata_arrival, shipments.ata_arrival),
+          ata_berthed   = COALESCE(EXCLUDED.ata_berthed, shipments.ata_berthed),
           eta_sailed    = COALESCE(EXCLUDED.eta_sailed, shipments.eta_sailed),
           ata_sailed    = COALESCE(EXCLUDED.ata_sailed, shipments.ata_sailed),
           shipment_date = COALESCE(EXCLUDED.shipment_date, shipments.shipment_date),
@@ -1109,6 +1520,7 @@ export class SapDataDistributionService {
           ata_loading_complete = COALESCE(EXCLUDED.ata_loading_complete, shipments.ata_loading_complete),
           eta_discharge_arrival = COALESCE(EXCLUDED.eta_discharge_arrival, shipments.eta_discharge_arrival),
           ata_discharge_arrival = COALESCE(EXCLUDED.ata_discharge_arrival, shipments.ata_discharge_arrival),
+          ata_discharge_berthed = COALESCE(EXCLUDED.ata_discharge_berthed, shipments.ata_discharge_berthed),
           eta_discharge_start = COALESCE(EXCLUDED.eta_discharge_start, shipments.eta_discharge_start),
           ata_discharge_start = COALESCE(EXCLUDED.ata_discharge_start, shipments.ata_discharge_start),
           eta_discharge_complete = COALESCE(EXCLUDED.eta_discharge_complete, shipments.eta_discharge_complete),
@@ -1121,6 +1533,12 @@ export class SapDataDistributionService {
           sfal_qty = COALESCE(EXCLUDED.sfal_qty, shipments.sfal_qty),
           sfbd_qty = COALESCE(EXCLUDED.sfbd_qty, shipments.sfbd_qty),
           status = CASE
+            WHEN EXCLUDED.status IN ('CANCELLED', 'CANCELED') THEN 'CANCELLED'
+            WHEN UPPER(TRIM(COALESCE(shipments.status, ''))) IN ('CANCELLED', 'CANCELED')
+              AND EXCLUDED.status NOT IN ('CANCELLED', 'CANCELED')
+              THEN EXCLUDED.status
+            WHEN $53::boolean IS TRUE
+              THEN 'COMPLETED'
             WHEN ${sqlShipmentStatusRank('EXCLUDED.status')} > ${sqlShipmentStatusRank('shipments.status')}
             THEN EXCLUDED.status
             ELSE shipments.status
@@ -1147,6 +1565,7 @@ export class SapDataDistributionService {
           portOfDischarge,
           etaArrival,
           ataArrival,
+          ataBerthedLoading,
           etaSailed,
           ataSailed,
           shipmentDate,
@@ -1167,6 +1586,7 @@ export class SapDataDistributionService {
           ataLoadingComplete,
           etaDischargeArrival,
           ataDischargeArrival,
+          ataDischargeBerthed,
           etaDischargeStart,
           ataDischargeStart,
           etaDischargeComplete,
@@ -1177,7 +1597,8 @@ export class SapDataDistributionService {
           dischargeDurationDays,
           totalLeadTimeDays,
           sfalQty,
-          sfbdQty
+          sfbdQty,
+          contractSapClosed,
         ]
       );
       await ensureMasterVesselFromSap(
@@ -1191,16 +1612,24 @@ export class SapDataDistributionService {
           contractUuid,
           newId,
           shipmentIdFromSap ? String(shipmentIdFromSap).trim() : null,
+          contractPoNumber,
         );
         if (reconcile.cancelledShipmentIds.length > 0) {
-          logger.info('upsertShipment: cancelled superseded SAP shipment rows after insert', {
+          logger.debug('upsertShipment: cancelled superseded SAP shipment rows after insert', {
             contractId,
             keeperShipmentId: newId,
             cancelled: reconcile.cancelledShipmentIds,
           });
         }
       }
-      return newId;
+      // Write-through - see the matching comment on the UPDATE branch's `return id;` above.
+      if (shipmentPrefetchMap && contractPoNumber) {
+        shipmentPrefetchMap.set(shipmentPoSapIdKey(contractPoNumber, String(shipmentIdFromSap)), {
+          id: newId,
+          contractId: contractUuid,
+        });
+      }
+      return { id: newId, klipProtectShipmentFields };
     }
 
     // If we reach here, we had neither a direct shipment_id nor a good vessel-name match.
@@ -1210,7 +1639,7 @@ export class SapDataDistributionService {
       contractId,
       vesselName
     });
-    return null;
+    return { id: null, klipProtectShipmentFields: false };
   }
   
   /**
@@ -1262,7 +1691,56 @@ export class SapDataDistributionService {
     
     return result.rows[0].id;
   }
-  
+
+  /**
+   * Batched counterpart to createQualitySurvey: one multi-row INSERT (chunked at 500 rows,
+   * matching bulkInsertRawData's batch size in sapMasterV2Import.service.ts) for every entry
+   * queued during a chunk's row loop, instead of one INSERT per entry. createQualitySurvey has no
+   * decision logic (plain INSERT, no ON CONFLICT, no dependency on other rows), so grouping
+   * entries from many rows into one statement changes nothing about which shipment a survey
+   * attaches to or its content - only how many round trips it costs. The caller (runImportChunk)
+   * is responsible for removing a row's queued-but-not-yet-flushed entries if that row's own
+   * SAVEPOINT is later rolled back.
+   */
+  static async flushQualitySurveyQueue(
+    client: PoolClient,
+    queue: Array<{ shipmentId: string; qualityData: any }>,
+  ): Promise<void> {
+    const BATCH_SIZE = 500;
+    for (let start = 0; start < queue.length; start += BATCH_SIZE) {
+      const batch = queue.slice(start, start + BATCH_SIZE);
+      const valueClauses: string[] = [];
+      const params: unknown[] = [];
+      batch.forEach((entry, idx) => {
+        const data = entry.qualityData?.data ?? {};
+        const base = idx * 10;
+        valueClauses.push(
+          `($${base + 1}::uuid, $${base + 2}, $${base + 3}::numeric, $${base + 4}::numeric, ` +
+            `$${base + 5}::numeric, $${base + 6}::numeric, $${base + 7}::numeric, $${base + 8}::numeric, ` +
+            `$${base + 9}::numeric, $${base + 10}::numeric)`,
+        );
+        params.push(
+          entry.shipmentId,
+          entry.qualityData?.location,
+          this.parseNumber(data.ffa),
+          this.parseNumber(data.m_i),
+          this.parseNumber(data.m_i), // M&I covers moisture and impurity
+          this.parseNumber(data.iv),
+          this.parseNumber(data.dobi),
+          this.parseNumber(data.color_red),
+          this.parseNumber(data.d_s),
+          this.parseNumber(data.stone),
+        );
+      });
+      await client.query(
+        `INSERT INTO quality_surveys (
+          shipment_id, location, ffa, moisture, impurity, iv, dobi, color_red, dirt_sand, stone
+        ) VALUES ${valueClauses.join(', ')}`,
+        params,
+      );
+    }
+  }
+
   /**
    * SAP upload uses "Trucking Start/Last Receive Date" (columns AV/AW), not
    * trucking_completion_date_at_starting_location. Resolve DB dates from all aliases.
@@ -1307,8 +1785,21 @@ export class SapDataDistributionService {
   private static async isContractSapClosedForUuid(
     client: PoolClient,
     contractUuid: string | null,
+    stoKey?: string | null,
   ): Promise<boolean> {
     if (!contractUuid) return false;
+    const sto = stoKey != null ? String(stoKey).trim() : '';
+    if (sto) {
+      const result = await client.query(
+        `SELECT ${sqlContractImportStatusForStoExpr('c', 'q.sto_key')} AS import_status
+         FROM contracts c
+         CROSS JOIN (SELECT $2::text AS sto_key) q
+         WHERE c.id = $1::uuid
+         LIMIT 1`,
+        [contractUuid, sto],
+      );
+      return isContractDeliveryClosed(result.rows[0]?.import_status);
+    }
     const result = await client.query(
       `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status FROM contracts c WHERE c.id = $1 LIMIT 1`,
       [contractUuid],
@@ -1342,6 +1833,40 @@ export class SapDataDistributionService {
     if (!data.quantity_delivered_via_trucking) {
       data.quantity_delivered_via_trucking = resolveSapTruckingQuantityDelivered(parsedData);
     }
+    if (!data.quantity_delivery_trucking_uom) {
+      data.quantity_delivery_trucking_uom =
+        parsedData?.shipment?.quantity_delivery_trucking_uom ??
+        pick(['Delivery Trucking UoM', 'delivery trucking uom']);
+    }
+    if (!data.quantity_receive_uom) {
+      data.quantity_receive_uom =
+        parsedData?.shipment?.quantity_receive_uom ??
+        pick(['Receive UoM', 'receive uom']);
+    }
+    if (!data.currency_trucking_oa_budget) {
+      data.currency_trucking_oa_budget = pick([
+        'Currency Trucking OA Budget',
+        'currency trucking oa budget',
+      ]);
+    }
+    if (!data.currency_trucking_oa_actual) {
+      data.currency_trucking_oa_actual = pick([
+        'Currency Trucking OA Actual',
+        'currency trucking oa actual',
+      ]);
+    }
+    if (!data.trucking_oa_budget_at_starting_location) {
+      data.trucking_oa_budget_at_starting_location = pick([
+        'Trucking OA Budget',
+        'Truck OA Budget',
+      ]);
+    }
+    if (!data.trucking_oa_actual_at_starting_location) {
+      data.trucking_oa_actual_at_starting_location = pick([
+        'Trucking OA Actual',
+        'Truck OA Actual',
+      ]);
+    }
     return { sequence: truckingData?.sequence ?? 1, data };
   }
 
@@ -1352,7 +1877,8 @@ export class SapDataDistributionService {
     client: PoolClient,
     shipmentId: string | undefined,
     contractId: string | undefined,
-    truckingData: any
+    truckingData: any,
+    parsedData?: Record<string, unknown>,
   ): Promise<string | null> {
     const shipmentUuid = this.toUuid(shipmentId);
     const contractUuid = this.toUuid(contractId);
@@ -1405,47 +1931,111 @@ export class SapDataDistributionService {
       unloadingLocation = null;
     }
 
-    // Derive a generic plant/location value for filters and dashboards
-    const location = unloadingLocation || loadingLocation || null;
+    // Plant/Site (`location`): prefer SAP Discharge Destination, then unload/load.
+    const shipment = (parsedData as { shipment?: Record<string, unknown>; raw?: Record<string, unknown> } | undefined)
+      ?.shipment;
+    const raw = (parsedData as { raw?: Record<string, unknown> } | undefined)?.raw;
+    /*
+     * Normalised on the way in, so `trucking_operations.location` stores what KLIP shows. Without
+     * this the column keeps SAP's port name and drifts from the Region/Site dimension every import
+     * (5,761 rows already said KIJING when the alias map was added). See
+     * dischargeDestinationAlias.ts - the read paths normalise too, so this is belt and braces
+     * rather than the only guard.
+     */
+    const dischargeDestination = [shipment?.discharge_destination, raw?.['Discharge Destination'], data.discharge_destination]
+      .map((v) => (v == null ? '' : normalizeDischargeDestination(v)))
+      .find((v) => v && v !== '0.00') || null;
+
+    const location = dischargeDestination || unloadingLocation || loadingLocation || null;
     
     const startDate = this.resolveTruckingStartDate(data);
     const completionDate = this.resolveTruckingCompletionDate(data);
     const contractSapClosed = await this.isContractSapClosedForUuid(client, contractUuid);
-    const status = this.deriveTruckingStatusForSap(startDate, completionDate, contractSapClosed);
+    const forceCancelled = hasSapDeleteFlag(
+      (parsedData as {
+        contract?: Record<string, unknown>;
+        shipment?: Record<string, unknown>;
+        raw?: Record<string, unknown>;
+      }) ?? { raw: data },
+    );
+    const status = forceCancelled
+      ? 'CANCELLED'
+      : this.deriveTruckingStatusForSap(startDate, completionDate, contractSapClosed);
 
     const truckingOwner = data.trucking_owner_at_starting_location;
+    const deliveryUom =
+      data.quantity_delivery_trucking_uom ??
+      data.quantity_delivery_uom ??
+      null;
+    const receiveUom = data.quantity_receive_uom ?? null;
+    const qtySent = normalizeSapQtyToKg(
+      this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
+      deliveryUom,
+    );
+    const qtyDelivered = normalizeSapQtyToKg(
+      this.parseNumber(data.quantity_delivered_via_trucking),
+      deliveryUom ?? receiveUom,
+    );
+    const oaBudgetCurrency =
+      data.currency_trucking_oa_budget != null &&
+      String(data.currency_trucking_oa_budget).trim() !== ''
+        ? String(data.currency_trucking_oa_budget).trim().toUpperCase()
+        : null;
+    const oaActualCurrency =
+      data.currency_trucking_oa_actual != null &&
+      String(data.currency_trucking_oa_actual).trim() !== ''
+        ? String(data.currency_trucking_oa_actual).trim().toUpperCase()
+        : null;
 
-    // Reuse existing active trucking row on this contract (never insert duplicate SAP siblings).
+    // Reuse the one active trucking row on this contract (unique index + find-or-create).
+    // When forcing CANCELLED from SAP delete flags, prefer an existing row (active first,
+    // else already-cancelled) so re-import does not spawn a second operation.
     let targetTruckingId: string | null = null;
     if (contractUuid) {
-      const existingForContract = await client.query<{ id: string; trucking_owner: string | null }>(
-        `SELECT t.id, t.trucking_owner
-         FROM trucking_operations t
-         WHERE t.contract_id = $1::uuid
-           AND COALESCE(t.status, '') <> 'CANCELLED'
-         ORDER BY
-           CASE WHEN ${sqlHasTruckingKlipPlanning('t')} THEN 0 ELSE 1 END,
-           ${SQL_TRUCKING_KEEPER_PRIORITY_ORDER}`,
-        [contractUuid],
-      );
-
-      if (existingForContract.rows.length > 0) {
-        const keeperRow = existingForContract.rows[0]!;
-        if (truckingOwner) {
-          let bestId = keeperRow.id;
-          let bestScore = 0;
-          for (const row of existingForContract.rows) {
-            const score = this.stringSimilarity(truckingOwner, row.trucking_owner);
-            if (score > bestScore) {
-              bestScore = score;
-              bestId = row.id;
-            }
-          }
-          targetTruckingId = bestScore >= 0.8 ? bestId : keeperRow.id;
-        } else {
-          targetTruckingId = keeperRow.id;
-        }
+      if (forceCancelled) {
+        const existingAny = await client.query<{ id: string }>(
+          `SELECT t.id
+           FROM trucking_operations t
+           WHERE t.contract_id = $1::uuid
+             AND t.deduped_at IS NULL
+           ORDER BY CASE WHEN COALESCE(t.status, '') = 'CANCELLED' THEN 1 ELSE 0 END,
+                    t.created_at ASC NULLS LAST, t.id ASC
+           LIMIT 1`,
+          [contractUuid],
+        );
+        targetTruckingId = existingAny.rows[0]?.id ?? null;
       }
+      if (!targetTruckingId) {
+        const created = await getOrCreateActiveTruckingOp(
+          (text, params) => client.query(text, params),
+          contractUuid,
+          {
+            allocateOperationId: async () => {
+              const dmy = formatDDMMYYYY(new Date());
+              const seq = await allocateNextSyntheticSequence(
+                (text, params) => client.query(text, params),
+                'trucking_operations',
+                'LAND',
+                dmy,
+              );
+              return buildSyntheticOperationId('LAND', dmy, seq);
+            },
+          },
+        );
+        targetTruckingId = created.id;
+      }
+    } else {
+      const existingForShipment = await client.query<{ id: string }>(
+        `SELECT t.id
+         FROM trucking_operations t
+         WHERE t.shipment_id = $1::uuid
+           AND (COALESCE(t.status, '') <> 'CANCELLED' OR $2::boolean)
+           AND t.deduped_at IS NULL
+         ORDER BY t.created_at ASC NULLS LAST, t.id ASC
+         LIMIT 1`,
+        [shipmentUuid, forceCancelled],
+      );
+      targetTruckingId = existingForShipment.rows[0]?.id ?? null;
     }
 
     if (targetTruckingId) {
@@ -1468,7 +2058,10 @@ export class SapDataDistributionService {
           oa_actual = COALESCE($9::numeric, oa_actual),
           quantity_sent = COALESCE($10::numeric, quantity_sent),
           gain_loss = COALESCE($12::numeric, gain_loss),
+          oa_budget_currency = COALESCE($16, oa_budget_currency),
+          oa_actual_currency = COALESCE($17, oa_actual_currency),
           status = CASE
+            WHEN $18::text = 'CANCELLED' THEN 'CANCELLED'
             WHEN status = 'CANCELLED' THEN status
             WHEN $14::date IS NOT NULL THEN 'COMPLETED'
             WHEN $13::date IS NOT NULL THEN 'IN_PROGRESS'
@@ -1486,12 +2079,15 @@ export class SapDataDistributionService {
           truckingOwner,
           this.parseNumber(data.trucking_oa_budget_at_starting_location),
           this.parseNumber(data.trucking_oa_actual_at_starting_location),
-          this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
-          this.parseNumber(data.quantity_delivered_via_trucking),
+          qtySent,
+          qtyDelivered,
           this.parseNumber(data.trucking_gain_loss_at_starting_location),
           startDate,
           completionDate,
-          targetTruckingId
+          targetTruckingId,
+          oaBudgetCurrency,
+          oaActualCurrency,
+          status,
         ]
       );
       if (startDate || completionDate) {
@@ -1513,11 +2109,12 @@ export class SapDataDistributionService {
         shipment_id, contract_id, location_sequence, cargo_readiness_date,
         loading_location, unloading_location, location, trucking_owner,
         oa_budget, oa_actual, quantity_sent, quantity_delivered, gain_loss,
-        trucking_start_date, trucking_completion_date, status
+        trucking_start_date, trucking_completion_date, status,
+        oa_budget_currency, oa_actual_currency
       ) VALUES (
         $1::uuid, $2::uuid, $3, $4::date, $5, $6, $7, $8,
         $9::numeric, $10::numeric, $11::numeric, $12::numeric, $13::numeric,
-        NULL, NULL, $14
+        NULL, NULL, $14, $15, $16
       ) RETURNING id`,
       [
         shipmentUuid,
@@ -1530,10 +2127,12 @@ export class SapDataDistributionService {
         truckingOwner,
         this.parseNumber(data.trucking_oa_budget_at_starting_location),
         this.parseNumber(data.trucking_oa_actual_at_starting_location),
-        this.parseNumber(data.quantity_sent_via_trucking_based_on_surat_jalan),
-        this.parseNumber(data.quantity_delivered_via_trucking),
+        qtySent,
+        qtyDelivered,
         this.parseNumber(data.trucking_gain_loss_at_starting_location),
-        status
+        status,
+        oaBudgetCurrency,
+        oaActualCurrency,
       ]
     );
     const newTruckingId = result.rows[0].id as string;
@@ -1634,15 +2233,9 @@ export class SapDataDistributionService {
   /**
    * Helper: Check if has contract data
    */
-  private static hasContractData(contractData: any, parsedData?: any): boolean {
+  private static hasContractData(contractData: any, _parsedData?: any): boolean {
     if (!contractData) return false;
-    // Accept if we have either a contract number or a PO number (common cases)
-    if (contractData.contract_no || contractData.po_no) return true;
-    // Relax condition: allow when STO exists and we have key attributes to update
-    const hasSto = parsedData?.shipment?.sto_no || contractData?.sto_no;
-    const hasBasicAttrs =
-      !!(contractData.group || contractData.supplier || contractData.product || contractData.contract_quantity);
-    return !!(hasSto && hasBasicAttrs);
+    return !!normalizePoNumber(contractData.po_no);
   }
   
   /**

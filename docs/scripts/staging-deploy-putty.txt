@@ -7,9 +7,14 @@ Repo di server: /opt/klip
 Branch:         SIT
 Panduan lengkap: docs/DEPLOY-SIT-GITHUB.md
 
-Urutan deploy:
-  STEP 1 — Laptop/PC dev: commit + push ke origin/SIT
-  STEP 2 — PuTTY: Backend (172.28.92.57) lalu Frontend (172.28.92.56)
+Urutan deploy (release WB + master vessel + dedupe):
+  STEP 1 — Laptop: export master vessel + push git (sudah selesai jika git push OK)
+  STEP 2 — PuTTY Backend (.57): staging-deploy-backend-full.sh  (deploy + migrate + dedupe + vessel)
+  STEP 3 — PuTTY Frontend (.56): staging-deploy-frontend.sh
+  STEP 4 — Browser verify
+
+Helper laptop (print PuTTY commands):
+  powershell -ExecutionPolicy Bypass -File docs/scripts/staging-deploy-sit.ps1
 
 ================================================================================
 STEP 1 — Push dari mesin development (Windows) — OTOMATIS
@@ -43,7 +48,37 @@ Catatan:
   - Jika ERROR "folder .git tidak ada": buka folder clone Git yang benar (bukan copy tanpa .git).
 
 ================================================================================
-STEP 2A — BACKEND (PuTTY → 172.28.92.57)
+STEP 2A — BACKEND FULL (PuTTY → 172.28.92.57) — deploy + dedupe + master vessel
+================================================================================
+Prasyarat laptop:
+  1. git push origin SIT sudah selesai
+  2. Export + upload master vessel SQL:
+       powershell -ExecutionPolicy Bypass -File docs/scripts/export-master-vessel-local.ps1
+       scp tmp/master_vessel_local_to_sit.sql ubuntu@172.28.92.57:/opt/klip/tmp/
+
+Login SSH ke backend server, lalu SATU perintah:
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  bash docs/scripts/staging-deploy-backend-full.sh
+
+Script full otomatis:
+  - docker rebuild backend
+  - DB migrate (135/136 master vessel)
+  - trucking dedupe ALL duplicate PO (--apply + cleanup CANCELLED losers)
+  - import master_vessel_local_to_sit.sql (jika file ada di tmp/)
+
+Opsi:
+  # Preview dedupe saja, tanpa ubah DB:
+  bash docs/scripts/staging-deploy-backend-full.sh --dedupe-dry-run --skip-master-vessel
+
+  # Deploy tanpa dedupe/vessel (hanya rebuild):
+  bash docs/scripts/staging-deploy-backend.sh
+
+Tunggu sampai health mengembalikan JSON sukses sebelum lanjut ke frontend.
+
+================================================================================
+STEP 2A-lite — BACKEND deploy saja (tanpa dedupe / master vessel)
 ================================================================================
 Login SSH ke backend server, lalu salin per blok berikut:
 
@@ -126,42 +161,387 @@ Di server yang bermasalah:
   docker compose -f docker-compose.frontend.yml up -d --build  # di .56
 
 ================================================================================
-Cleanup trucking duplicate + CANCELLED (database staging)
+Master Vessel + WB dedupe — detail (sudah di staging-deploy-backend-full.sh)
 ================================================================================
-Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+Full deploy sudah memanggil:
+  - run-fix-wb-trucking-dedupe-all-staging.sh --apply
+  - run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+  - sync-master-vessel-staging.sh --file tmp/master_vessel_local_to_sit.sql --apply
 
-Membersihkan:
-  1. Duplikat operation_id lintas PO (Unplanned upload lama)
-  2. Semua baris status CANCELLED
-  3. Duplikat per contract (sisakan 1 keeper terbaik)
-
-Audit trail: cleanup_audit_duplicate_trucking_op_id,
-             cleanup_audit_cancelled_trucking,
-             cleanup_audit_duplicate_trucking_per_contract
-
-  cd /opt/klip
-  git fetch origin && git checkout SIT && git pull origin SIT
-
-  # Preview (read-only):
-  bash docs/scripts/run-cleanup-trucking-staging.sh
-
-  # Execute:
-  bash docs/scripts/run-cleanup-trucking-staging.sh --apply
-
-Jika script belum ada di server (belum push/pull), salin 4 file SQL dari repo:
-  backend/src/scripts/sql/previewTruckingCleanupStaging.sql
-  backend/src/scripts/sql/cleanupDuplicateTruckingByOperationId.sql
-  backend/src/scripts/sql/deleteCancelledTruckingOperations.sql
-  backend/src/scripts/sql/cleanupDuplicateTruckingPerContract.sql
-
-Verifikasi UI: http://8.215.6.189/trucking (hard refresh Ctrl+Shift+R)
+Manual / troubleshooting — lihat bagian WB dedupe di bawah.
 
 ================================================================================
 Referensi
 ================================================================================
+  docs/scripts/staging-deploy-sit.ps1          (laptop helper — print steps)
+  docs/scripts/staging-deploy-backend-full.sh  (PuTTY .57 — deploy + data fix)
   docs/scripts/staging-deploy-backend.sh
   docs/scripts/staging-deploy-frontend.sh
+  docs/scripts/export-master-vessel-local.ps1
+  docs/scripts/sync-master-vessel-staging.sh
   docs/scripts/staging-deploy-all.sh   (jump host dengan SSH ke .57 & .56)
-  docs/DEPLOYMENT.md
+  docs/DEPLOY-SIT-GITHUB.md
 
+================================================================================
+WB Upload gagal: "Multiple FRC/LCO trucking operations share PO" — FIX ALL PO
+================================================================================
+(Penjelasan detail — otomatis ditangani oleh staging-deploy-backend-full.sh)
+Penyebab: lebih dari 1 trucking_operations aktif (status <> CANCELLED) untuk PO
+yang sama di DB SIT. Bukan data kotor di file Excel.
+
+Target: 1 keeper per PO (WB paling lengkap); loser di-CANCELLED (tetap di DB).
+
+Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+Prasyarat backup: postgresql-client di host .57
+  sudo apt-get install -y postgresql-client
+
+----- A) Pull code + rebuild backend -----
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  docker compose -f docker-compose.backend.yml up -d --build
+  curl -s http://127.0.0.1:5001/health
+
+----- B) Satu perintah (disarankan) — preview lalu apply -----
+
+  cd /opt/klip
+
+  # Preview: pre-flight count + dry-run JSON (keeper/loser), TIDAK mengubah DB
+  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh
+
+  # Apply: backup otomatis + cancel semua loser + verify
+  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply
+
+  # Hilangkan CANCELLED loser dari view table / kartu Cancelled (via backend DB):
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+  # Satu OP saja:
+  # bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply --op OP-LAND-130720260012
+
+  # Lewati backup (tidak disarankan):
+  # bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --skip-backup
+
+Script di atas memanggil run-dedupe-trucking-by-po-staging.sh --all:
+  - Merge trucking_daily_actuals dari loser ke keeper
+  - Set loser status = CANCELLED
+  - Refresh trucking pipeline snapshot
+
+----- C) Manual step-by-step (alternatif) -----
+
+  # Backup
+  bash docs/scripts/dump-sit-transactional-data.sh
+
+----- E) Restore shipments setelah TRUNCATE CASCADE (master vessel accident) -----
+
+  # List backup (shipments>0):
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --list
+
+  # Restore hanya tabel kosong (shipments, ports, …) — recommended:
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh --latest --apply
+
+  # Script otomatis refresh pipeline summary (Section 1 Planned–Cancelled cards).
+  # Jika card masih 0 setelah restore:
+  bash docs/scripts/refresh-pipeline-summary-staging.sh
+  # atau:
+  docker compose -f docker-compose.backend.yml exec -T backend npm run pipeline-summary:refresh:prod
+
+----- F) Trucking Section 1 COMPLETED / Total anomali -----
+
+  # Diagnose: bandingkan backup counts vs live DB + pipeline summary
+  bash docs/scripts/diag-trucking-summary-staging.sh
+  bash docs/scripts/diag-trucking-summary-staging.sh /opt/klip/backups/klip_sit_txn_20260811_164207.dump
+
+  # Jika backup trucking_operations >> live (wipe-recovery skip trucking saat restore shipments):
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \
+    /opt/klip/backups/klip_sit_txn_20260811_164207.dump \
+    --include-trucking --truncate-trucking-first --apply
+
+  # Jika ops sudah OK (6507) tapi daily_actuals/realizations=0 (pg_restore wb_imports duplicate):
+  bash docs/scripts/restore-sit-txn-from-backup-staging.sh \
+    /opt/klip/backups/klip_sit_txn_20260811_164207.dump \
+    --trucking-skip-operations --truncate-trucking-first --apply
+
+  # Bandingkan backup sebelum dedupe jika perlu (163607, 20260805_*):
+  grep trucking_operations /opt/klip/backups/klip_sit_txn_*_counts.txt | tail -5
+
+  # Jika counts OK tapi COMPLETED rendah karena dedupe (banyak CANCELLED):
+  ls -lt /opt/klip/tmp/trucking-po-dedupe-audit-*.csv 2>/dev/null | head -3
+  # Opsional bersihkan loser CANCELLED dari view (tidak restore COMPLETED count):
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+
+  # Jika pipeline_completed=0 tapi banyak COMPLETED ops:
+  bash docs/scripts/refresh-pipeline-summary-staging.sh
+
+  # Verifikasi browser: http://8.215.6.189/trucking (Ctrl+Shift+R)
+
+----- G) Backup DB transaksi SIT → restore ke local -----
+
+  Panduan lengkap: docs/scripts/dump-sit-txn-for-local-putty.txt
+
+  # PuTTY → backend .57 — dump dari DB .60:
+  cd /opt/klip
+  bash docs/scripts/dump-sit-transactional-data.sh
+  ls -lt /opt/klip/backups/klip_sit_txn_*.dump | head -1
+
+  # Copy ke laptop: WinSCP /opt/klip/backups/ → D:\Project\Klip\docs\
+
+  # Laptop — restore local Docker:
+  # powershell -File docs\scripts\restore-sit-txn-dump-local.ps1 -DumpPath "D:\Project\Klip\docs\klip_sit_txn_....dump"
+  # docker compose exec -T backend npm run pipeline-summary:refresh:prod
+
+  # Pre-flight SQL (read-only, via psql client di host .57):
+  # Load DB_* dari backend container, lalu:
+  # PGPASSWORD=... psql -h 172.28.92.60 -p 5442 -U postgres -d klip_db \
+  #   -f backend/src/scripts/sql/previewDuplicateTruckingByPo.sql
+
+  # Dry-run
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --all
+
+  # Apply
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --all --apply
+
+----- D) Verifikasi PO WB yang gagal -----
+
+  for PO in 1001030428 1001029797 1001030446; do
+    echo "=== PO $PO ==="
+    docker compose -f docker-compose.backend.yml exec -T backend node -e "
+const { Pool } = require('pg');
+const p = new Pool({ host: process.env.DB_HOST, port: +process.env.DB_PORT, database: process.env.DB_NAME, user: process.env.DB_USER, password: process.env.DB_PASSWORD });
+(async () => {
+  const r = await p.query(
+    \`SELECT t.operation_id, t.status,
+            (SELECT COUNT(DISTINCT da.progress_date)::int FROM trucking_daily_actuals da WHERE da.trucking_operation_id = t.id) AS wb_dates
+     FROM trucking_operations t JOIN contracts c ON c.id = t.contract_id
+     WHERE TRIM(c.po_number::text) = \$1 ORDER BY CASE WHEN UPPER(t.status)='CANCELLED' THEN 1 ELSE 0 END\`,
+    [process.argv[1]]
+  );
+  console.table(r.rows);
+  await p.end();
+})().catch(e => { console.error(e); process.exit(1); });
+" "$PO"
+  done
+
+  # Harapan: 1 baris aktif (keeper) per PO; sisanya CANCELLED
+
+----- E) Upload ulang WB di browser -----
+
+  http://8.215.6.189/trucking → Upload WB → file yang sama
+  Hard refresh: Ctrl+Shift+R
+  Status Upload tidak boleh lagi "Multiple FRC/LCO trucking operations share PO"
+
+----- F) Hilangkan CANCELLED duplicate dari View Table & kartu Cancelled -----
+
+Setelah dedupe (STEP B), loser masih status CANCELLED di DB → muncul di filter
+Cancelled dan kartu Cancelled (contoh PO 1001030428 / OP-LAND-130720260012).
+Hard-delete loser (keeper tetap):
+
+  cd /opt/klip
+  git pull origin SIT
+
+  # Preview — cek would_delete + delete_reason=active_keeper
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh
+
+  # Apply — hilangkan dari DB, UI, dan total Cancelled
+  bash docs/scripts/run-remove-cancelled-trucking-dedupe-losers-staging.sh --apply
+
+Atau gabung saat dedupe (jika belum dedupe):
+  bash docs/scripts/run-fix-wb-trucking-dedupe-all-staging.sh --apply --cleanup-cancelled
+
+JANGAN pakai run-cleanup-trucking-staging.sh (legacy — hapus SEMUA CANCELLED).
+
+Per-PO saja (bukan --all):
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --po 1001030428 --apply
+
+================================================================================
+Cleanup Trucking CANCELLED dedupe losers (preferred) — TARGETED HARD-DELETE
+================================================================================
+Hapus CANCELLED yang:
+  Rule A — masih punya keeper aktif di PO yang sama, ATAU
+  Rule B — orphan shell (tidak ada keeper aktif DAN tidak ada WB actuals).
+CANCELLED yang punya WB tanpa keeper TIDAK dihapus.
+
+Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+Script memakai DB yang sama dengan backend container (printenv DB_HOST/DB_PORT),
+mis. 172.28.92.60:5442 — BUKAN leftover klip-postgres lokal kecuali backend
+masih mengarah ke situ. Prasyarat: postgresql-client di host .57
+(apt-get install -y postgresql-client).
+
+
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh          # preview
+  # Review: would_delete, sample delete_reason, debug OP-LAND-150720260079
+  bash docs/scripts/run-cleanup-trucking-dedupe-losers-staging.sh --apply  # execute
+
+Audit table: cleanup_audit_cancelled_trucking_dedupe_losers (kolom delete_reason)
+Setelah apply: hard refresh Trucking (Ctrl+Shift+R); kartu Cancelled turun,
+keeper PO tetap.
+
+================================================================================
+Cleanup trucking duplicate + CANCELLED (database staging) — LEGACY DELETE ALL
+================================================================================
+PERINGATAN: script di bawah MENGHAPUS SEMUA baris CANCELLED dari DB (bukan
+hanya loser dedupe). Jangan pakai untuk membersihkan sisa dedupe — pakai
+run-cleanup-trucking-dedupe-losers-staging.sh di atas.
+Juga usang jika postgres container sudah tidak ada di backend (.57); DB
+sekarang di 172.28.92.60:5442.
+
+Jalankan di PuTTY → backend server 172.28.92.57 (bukan frontend .56).
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+  bash docs/scripts/run-cleanup-trucking-staging.sh          # preview
+  bash docs/scripts/run-cleanup-trucking-staging.sh --apply  # execute
+
+================================================================================
+PO-primary + Trucking PO dedupe (OP-LAND-300620260835 / PO 1001031094)
+================================================================================
+Kasus: Trucking View Table SIT masih menampilkan
+  OP-LAND-300620260835 = IN_PROGRESS
+padahal local sudah CANCELLED (duplikat PO; keeper = OP-LAND-160720260073).
+
+Penyebab: code/script sudah di-push (commit 5f9d3aa+), tapi one-shot data
+cleanup belum dijalankan di DB SIT. Migration 119 TIDAK membatalkan op ini.
+
+Target akhir (sama local):
+  OP-LAND-160720260073 | COMPLETED | kept (WB lengkap)
+  OP-LAND-300620260835 | CANCELLED | loser
+
+----- A) PuTTY → Backend 172.28.92.57 — pastikan code + migrate -----
+
+  cd /opt/klip
+  git fetch origin
+  git checkout SIT
+  git pull origin SIT
+  git log -1 --oneline
+  # Harus mengandung commit po-identity (mis. 5f9d3aa) atau lebih baru
+
+  docker compose -f docker-compose.backend.yml up -d --build
+  docker compose -f docker-compose.backend.yml ps
+  curl -s http://127.0.0.1:5001/health
+
+  # Cek migrate 119 sudah masuk schema_migrations
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c \
+    "SELECT filename, applied_at FROM schema_migrations
+     WHERE filename = '119_po_primary_identity.sql';"
+
+  # Jika 0 baris → jalankan migrate manual, lalu ulangi SELECT di atas
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/database/migrate.js
+
+  # Pastikan script compiled ada di image
+  docker compose -f docker-compose.backend.yml exec backend \
+    ls -la dist/scripts/cleanupDuplicateTruckingByPo.js \
+           dist/scripts/refreshTruckingPipelineSummary.js
+
+----- B) BEFORE — bukti 1 baris masih aktif (In Progress) -----
+
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c "
+  SELECT t.operation_id, t.status,
+         (SELECT COUNT(DISTINCT da.progress_date)
+            FROM trucking_daily_actuals da
+           WHERE da.trucking_operation_id = t.id) AS wb_dates
+  FROM trucking_operations t
+  JOIN contracts c ON c.id = t.contract_id
+  WHERE TRIM(c.po_number::text) = '1001031094'
+  ORDER BY t.operation_id;
+  "
+
+  # Harapan BEFORE: dua baris aktif ATAU satu IN_PROGRESS untuk 300620260835
+  # (status DB bisa IN_PROGRESS / PLANNED; UI menampilkan In Progress)
+
+----- C–E) Satu perintah (disarankan) -----
+
+  cd /opt/klip
+  git fetch origin && git checkout SIT && git pull origin SIT
+
+  # Dry-run dulu:
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh
+
+  # Apply cancel + refresh pipeline:
+  bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --apply
+
+  # PO lain / semua:
+  # bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --po <PO> --apply
+  # bash docs/scripts/run-dedupe-trucking-by-po-staging.sh --all --apply
+
+Script di atas memakai DB credential dari container backend (tidak perlu
+psql -U postgres), mengecek migrate 119, dry-run/apply dedupe, lalu refresh
+pipeline. TIDAK menghapus baris CANCELLED.
+
+----- C) Manual dry-run (jika script belum di-pull) -----
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --po 1001031094
+
+  # Harapan dry-run JSON:
+  #   rowsToCancel >= 1
+  #   cancel[].operation_id berisi OP-LAND-300620260835
+  #   keepers[].operation_id = OP-LAND-160720260073 (WB lebih lengkap)
+
+----- D) Manual APPLY cancel loser -----
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --po 1001031094 --apply
+
+----- E) Manual refresh pipeline -----
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/refreshTruckingPipelineSummary.js
+
+----- F) AFTER — verifikasi DB -----
+
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c "
+  SELECT t.operation_id, t.status,
+         (SELECT COUNT(DISTINCT da.progress_date)
+            FROM trucking_daily_actuals da
+           WHERE da.trucking_operation_id = t.id) AS wb_dates
+  FROM trucking_operations t
+  JOIN contracts c ON c.id = t.contract_id
+  WHERE TRIM(c.po_number::text) = '1001031094'
+  ORDER BY CASE WHEN UPPER(t.status)='CANCELLED' THEN 1 ELSE 0 END, t.operation_id;
+  "
+
+  # Harapan AFTER:
+  #   OP-LAND-160720260073 | COMPLETED | wb_dates > 0
+  #   OP-LAND-300620260835 | CANCELLED | wb_dates = 0
+
+  docker compose -f docker-compose.backend.yml exec -T postgres \
+    psql -U "${DB_USER:-postgres}" -d "${DB_NAME:-klip_db}" -c "
+  SELECT stage FROM trucking_list_stage_snapshot sn
+  JOIN trucking_operations t ON t.id = sn.operation_id
+  WHERE t.operation_id = 'OP-LAND-300620260835';
+  "
+
+  # Harapan snapshot stage = CANCELLED
+
+----- G) Browser -----
+
+  http://8.215.6.189/trucking
+  Hard refresh: Ctrl+Shift+R
+  - Default / In Progress: OP-LAND-300620260835 HILANG (1 baris keluar)
+  - Kartu Cancelled: OP-LAND-300620260835 MUNCUL
+  - PO 1001031094 aktif: hanya OP-LAND-160720260073
+
+Opsional semua PO dobel (setelah dry-run --all terlihat aman):
+
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --all
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/cleanupDuplicateTruckingByPo.js --all --apply
+  docker compose -f docker-compose.backend.yml exec backend \
+    node dist/scripts/refreshTruckingPipelineSummary.js
+
+Catatan DB user:
+  Jika psql gagal role postgres: ganti -U sesuai backend/.env (DB_USER),
+  contoh: -U klip_user -d klip_db
+  Atau exec lewat backend yang sudah punya env:
+    docker compose -f docker-compose.backend.yml exec backend \
+      node -e "const{Pool}=require('pg');const p=new Pool({host:process.env.DB_HOST,port:+process.env.DB_PORT||5432,database:process.env.DB_NAME,user:process.env.DB_USER,password:process.env.DB_PASSWORD});p.query(\"SELECT filename,applied_at FROM schema_migrations WHERE filename='119_po_primary_identity.sql'\").then(r=>{console.log(r.rows);return p.end();})"
+
+================================================================================
+(Legacy sections below — use staging-deploy-backend-full.sh for standard SIT release)
 ================================================================================

@@ -1,0 +1,476 @@
+/**
+ * Shipments Unplanned → Preplanned or Planned grouping Excel.
+ * Mirrors frontend/src/lib/shipmentGroupingTemplate.ts — keep columns/rules in sync.
+ */
+
+import * as XLSX from 'xlsx';
+import type { GroupingTemplateDbRow } from './shipmentPreplannedGroupingTemplateSql';
+import {
+  emptyGroupingEtas,
+  SHIPMENT_GROUPING_ETA_COLUMNS,
+  SHIPMENT_GROUPING_ETA_HEADERS,
+  type GroupingEtaKey,
+} from './shipmentGroupingEtaColumns';
+import { toIsoDate10FromCell } from './planningSheetDate';
+import { injectXlsxSheetDataValidations } from './injectXlsxSheetDataValidations';
+
+export const SHIPMENT_GROUPING_INSTRUCTION =
+  'Isi Y pada PO yang ikut batch ini. Isi Group dengan kode yang sama untuk PO yang akan satu kapal (contoh 1 atau A). Hanya Select+Group = Preplanned. Isi Vessel (dropdown master) dan semua ETA = Planned. Qty Delivery (MT) opsional; jika diisi pada Planned, menjadi Qty Delivery (Klip). Charter, loading, dan discharge diisi otomatis dari master/SAP. Baris tanpa Y tidak di-upload.';
+
+export const SHIPMENT_GROUPING_SHEET_NAME = 'Grouping';
+export const SHIPMENT_GROUPING_HELP_SHEET_NAME = 'Cara isi';
+/** Hidden list of master_vessels names. Excel dropdowns use named range VesselList. */
+export const SHIPMENT_GROUPING_LISTS_SHEET_NAME = 'Master Vessel';
+export const SHIPMENT_GROUPING_VESSEL_LIST_NAME = 'VesselList';
+
+export const SHIPMENT_GROUPING_TEMPLATE_HEADERS = [
+  'Select',
+  'Group',
+  'Supplier',
+  'Region/Plant',
+  'Product',
+  'Incoterm',
+  'Buyer',
+  'PO Number',
+  'Contract Date',
+  'Contract Qty (MT)',
+  'OS Qty (MT)',
+  'Status',
+  'Vessel',
+  'Qty Delivery (MT)',
+  ...SHIPMENT_GROUPING_ETA_HEADERS,
+] as const;
+
+export type ParsedShipmentGroupingRow = {
+  excelRowNumber: number;
+  selectY: boolean;
+  group: string;
+  poNumber: string;
+  supplier: string;
+  incoterm: string;
+  outstandingQtyMt: number | null;
+  vessel: string;
+  qtyDeliveryMt: number | null;
+  etas: Record<GroupingEtaKey, string>;
+};
+
+export type ShipmentGroupingParseIssue = {
+  excelRowNumber: number;
+  reason: string;
+};
+
+export type ShipmentGroupingParseResult = {
+  headerRowIndex: number;
+  selectedRows: ParsedShipmentGroupingRow[];
+  skippedWithoutY: number;
+  issues: ShipmentGroupingParseIssue[];
+};
+
+export function isSelectY(value: unknown): boolean {
+  return String(value ?? '').trim().toUpperCase() === 'Y';
+}
+
+export function normalizeGroupingMatchKey(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toUpperCase();
+}
+
+export function formatGroupingQtyMtFromKg(kg: unknown): string {
+  if (kg === null || kg === undefined || kg === '') return '';
+  const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg);
+  if (!Number.isFinite(n)) return '';
+  return (n / 1000).toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+    useGrouping: false,
+  });
+}
+
+function cellText(value: unknown): string {
+  if (value == null) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const yyyy = value.getFullYear();
+    const mm = String(value.getMonth() + 1).padStart(2, '0');
+    const dd = String(value.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return String(value).trim();
+}
+
+function sliceIsoDate(value: unknown): string {
+  const raw = cellText(value);
+  if (!raw) return '';
+  const iso = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (iso) return iso[1]!;
+  return raw;
+}
+
+function headerKey(value: unknown): string {
+  return cellText(value)
+    .toLowerCase()
+    .replace(/[_/]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+export function isShipmentGroupingTemplateHeaderRow(cells: unknown[]): boolean {
+  const keys = cells.map(headerKey);
+  const hasSelect = keys.some((k) => k === 'select');
+  const hasGroup = keys.some((k) => k === 'group');
+  const hasPo = keys.some(
+    (k) => k === 'po number' || k === 'po' || k === 'po no' || k === 'po_number',
+  );
+  return hasSelect && hasGroup && hasPo;
+}
+
+function colIndex(headerRow: unknown[], aliases: string[]): number {
+  const wanted = aliases.map((a) => a.toLowerCase());
+  return headerRow.findIndex((cell) => wanted.includes(headerKey(cell)));
+}
+
+function parseEtaCell(value: unknown): string {
+  return toIsoDate10FromCell(value) ?? (cellText(value) ? sliceIsoDate(value) : '');
+}
+
+function parseOutstandingQtyMt(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseOptionalQtyDeliveryMt(
+  value: unknown,
+): { ok: true; value: number | null } | { ok: false } {
+  if (value == null || value === '') return { ok: true, value: null };
+  const n = typeof value === 'number' ? value : Number(String(value).replace(/,/g, '').trim());
+  if (!Number.isFinite(n) || n < 0) return { ok: false };
+  return { ok: true, value: n > 0 ? n : null };
+}
+
+export function parseShipmentGroupingMatrix(matrix: unknown[][]): ShipmentGroupingParseResult {
+  const headerRowIndex = matrix.findIndex((row) => isShipmentGroupingTemplateHeaderRow(row ?? []));
+  if (headerRowIndex < 0) {
+    return {
+      headerRowIndex: -1,
+      selectedRows: [],
+      skippedWithoutY: 0,
+      issues: [{ excelRowNumber: 1, reason: 'Header row not found (need Select, Group, PO Number)' }],
+    };
+  }
+  const header = matrix[headerRowIndex] ?? [];
+  const selectIdx = colIndex(header, ['select']);
+  const groupIdx = colIndex(header, ['group']);
+  const poIdx = colIndex(header, ['po number', 'po', 'po no', 'po_number']);
+  const supplierIdx = colIndex(header, ['supplier']);
+  const incotermIdx = colIndex(header, ['incoterm']);
+  const osQtyIdx = colIndex(header, ['os qty (mt)', 'os qty']);
+  const vesselIdx = colIndex(header, ['vessel', 'vessel name']);
+  const qtyDeliveryIdx = colIndex(header, [
+    'qty delivery (mt)',
+    'qty delivery',
+    'quantity delivery',
+    'qty delivery mt',
+  ]);
+  const etaIdxByKey = Object.fromEntries(
+    SHIPMENT_GROUPING_ETA_COLUMNS.map((col) => [col.key, colIndex(header, [col.header, ...col.aliases])]),
+  ) as Record<GroupingEtaKey, number>;
+
+  const selectedRows: ParsedShipmentGroupingRow[] = [];
+  const issues: ShipmentGroupingParseIssue[] = [];
+  let skippedWithoutY = 0;
+
+  for (let i = headerRowIndex + 1; i < matrix.length; i += 1) {
+    const row = matrix[i] ?? [];
+    const excelRowNumber = i + 1;
+    const group = cellText(row[groupIdx]);
+    const poNumber = cellText(row[poIdx]);
+    const supplier = supplierIdx >= 0 ? cellText(row[supplierIdx]) : '';
+    if (!isSelectY(row[selectIdx])) {
+      skippedWithoutY += 1;
+      continue;
+    }
+    if (!group) {
+      issues.push({ excelRowNumber, reason: 'isi Group' });
+      continue;
+    }
+    if (!poNumber) {
+      issues.push({ excelRowNumber, reason: 'PO Number is required' });
+      continue;
+    }
+    const qtyDelivery =
+      qtyDeliveryIdx >= 0 ? parseOptionalQtyDeliveryMt(row[qtyDeliveryIdx]) : { ok: true as const, value: null };
+    if (!qtyDelivery.ok) {
+      issues.push({ excelRowNumber, reason: 'Qty Delivery (MT) must be a valid non-negative number' });
+      continue;
+    }
+    const etas = emptyGroupingEtas();
+    for (const col of SHIPMENT_GROUPING_ETA_COLUMNS) {
+      const idx = etaIdxByKey[col.key];
+      if (idx >= 0) etas[col.key] = parseEtaCell(row[idx]);
+    }
+    selectedRows.push({
+      excelRowNumber,
+      selectY: true,
+      group,
+      poNumber,
+      supplier,
+      incoterm: incotermIdx >= 0 ? cellText(row[incotermIdx]) : '',
+      outstandingQtyMt: osQtyIdx >= 0 ? parseOutstandingQtyMt(row[osQtyIdx]) : null,
+      vessel: vesselIdx >= 0 ? cellText(row[vesselIdx]) : '',
+      qtyDeliveryMt: qtyDelivery.value,
+      etas,
+    });
+  }
+
+  return { headerRowIndex, selectedRows, skippedWithoutY, issues };
+}
+
+export type ShipmentGroupingCluster = {
+  group: string;
+  rows: ParsedShipmentGroupingRow[];
+};
+
+export function clusterShipmentGroupingRowsByGroup(
+  rows: ParsedShipmentGroupingRow[],
+): ShipmentGroupingCluster[] {
+  const order: string[] = [];
+  const byGroup = new Map<string, ParsedShipmentGroupingRow[]>();
+  for (const row of rows) {
+    const key = row.group.trim();
+    if (!byGroup.has(key)) {
+      order.push(key);
+      byGroup.set(key, []);
+    }
+    byGroup.get(key)!.push(row);
+  }
+  return order.map((group) => ({ group, rows: byGroup.get(group)! }));
+}
+
+export type EligibleGroupingIdentity = {
+  id: string;
+  poNumber: string;
+  contractNumber?: string;
+  incoterm?: string;
+  outstandingQtyKg?: number;
+};
+
+export type GroupingRowMatch =
+  | { ok: true; contractId: string; row: ParsedShipmentGroupingRow }
+  | { ok: false; row: ParsedShipmentGroupingRow; reason: string };
+
+export function matchGroupingRowsToContracts(
+  rows: ParsedShipmentGroupingRow[],
+  eligible: EligibleGroupingIdentity[],
+): GroupingRowMatch[] {
+  const byPo = new Map<string, EligibleGroupingIdentity>();
+  for (const row of eligible) {
+    const poKey = normalizeGroupingMatchKey(row.poNumber);
+    if (poKey && !byPo.has(poKey)) byPo.set(poKey, row);
+  }
+
+  const usedIds = new Map<string, string>();
+  return rows.map((row) => {
+    const poKey = normalizeGroupingMatchKey(row.poNumber);
+    const hit = poKey ? byPo.get(poKey) : undefined;
+    if (!hit) {
+      return {
+        ok: false as const,
+        row,
+        reason: 'PO not eligible (already shipped, closed, or already Preplanned)',
+      };
+    }
+    const priorGroup = usedIds.get(hit.id);
+    if (priorGroup && priorGroup !== row.group.trim()) {
+      return {
+        ok: false as const,
+        row,
+        reason: `PO already assigned to Group ${priorGroup}`,
+      };
+    }
+    usedIds.set(hit.id, row.group.trim());
+    return { ok: true as const, contractId: hit.id, row };
+  });
+}
+
+function groupingTemplateSourceFromDb(row: GroupingTemplateDbRow): {
+  supplier: string;
+  plantSite: string;
+  product: string;
+  incoterm: string;
+  buyer: string;
+  poNumber: string;
+  contractDate: string;
+  contractQtyKg: number;
+  outstandingQtyKg: number;
+} {
+  return {
+    supplier: cellText(row.supplier),
+    plantSite: cellText(row.plant_site),
+    product: cellText(row.product),
+    incoterm: cellText(row.incoterm),
+    buyer: cellText(row.buyer),
+    poNumber: cellText(row.po_number),
+    contractDate: sliceIsoDate(row.contract_date),
+    contractQtyKg: Number(row.contract_qty_kg ?? 0),
+    outstandingQtyKg: Number(row.outstanding_qty_kg ?? 0),
+  };
+}
+
+export function buildShipmentGroupingTemplateMatrixFromDb(
+  rows: GroupingTemplateDbRow[],
+): (string | number)[][] {
+  const matrix: (string | number)[][] = [
+    [SHIPMENT_GROUPING_INSTRUCTION],
+    [...SHIPMENT_GROUPING_TEMPLATE_HEADERS],
+  ];
+  for (const raw of rows) {
+    const row = groupingTemplateSourceFromDb(raw);
+    matrix.push([
+      '',
+      '',
+      row.supplier,
+      row.plantSite,
+      row.product,
+      row.incoterm,
+      row.buyer,
+      row.poNumber,
+      row.contractDate,
+      formatGroupingQtyMtFromKg(row.contractQtyKg),
+      formatGroupingQtyMtFromKg(row.outstandingQtyKg),
+      'Unplanned',
+      '',
+      '',
+      ...SHIPMENT_GROUPING_ETA_HEADERS.map(() => ''),
+    ]);
+  }
+  return matrix;
+}
+
+const GROUPING_COL_WIDTHS = [
+  10, 16, 28, 22, 18, 12, 22, 16, 14, 16, 14, 12, 28, 16, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+];
+
+function excelColLetter(index: number): string {
+  let n = index + 1;
+  let s = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+function excelSheetRangeRef(sheetName: string, range: string): string {
+  const escaped = sheetName.replace(/'/g, "''");
+  return `'${escaped}'!${range}`;
+}
+
+function applyGroupingSheetLayout(ws: XLSX.WorkSheet, dataRowCount: number): void {
+  const headerRow = 1;
+  const lastCol = SHIPMENT_GROUPING_TEMPLATE_HEADERS.length - 1;
+  const lastDataRow = Math.max(headerRow, headerRow + dataRowCount);
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } }];
+  ws['!autofilter'] = {
+    ref: XLSX.utils.encode_range({
+      s: { c: 0, r: headerRow },
+      e: { c: lastCol, r: lastDataRow },
+    }),
+  };
+  (ws as XLSX.WorkSheet & { '!freeze'?: unknown })['!freeze'] = {
+    xSplit: 0,
+    ySplit: 2,
+    topLeftCell: 'A3',
+    activeCell: 'A3',
+  };
+  ws['!views'] = [{ state: 'frozen', ySplit: 2, topLeftCell: 'A3', activePane: 'bottomLeft' }];
+  ws['!cols'] = GROUPING_COL_WIDTHS.map((wch) => ({ wch }));
+}
+
+function buildCaraIsiSheet(): XLSX.WorkSheet {
+  const aoa = [
+    ['Cara isi template grouping Unplanned → Preplanned atau Planned'],
+    [''],
+    ['1. Isi kolom Select dengan Y untuk PO yang ikut batch ini.'],
+    [
+      '2. Isi kolom Group dengan kode bundel yang sama untuk PO yang akan satu kapal (contoh: 1, A, B).',
+    ],
+    ['3. Hanya Select + Group (tanpa Vessel/ETA) = status Preplanned. 1 PO boleh menjadi 1 Group.'],
+    [
+      '4. Isi Vessel (dropdown dari sheet Master Vessel) dan semua 8 kolom ETA = status Planned. Qty Delivery (MT) opsional. Charter, Loading Port, dan Discharge Port diisi otomatis (master vessel + SAP). Satu Group = satu kapal.',
+    ],
+    ['5. Vessel tanpa semua ETA (kecuali semua PO CIF) ditolak — tidak menjadi Preplanned.'],
+    ['6. Baris tanpa Y diabaikan saat upload, meskipun kolom Group terisi.'],
+    ['7. 1 PO boleh menjadi 1 Group, baik Preplanned maupun Planned (Planned tetap butuh Vessel + semua ETA).'],
+    [
+      '8. Qty Delivery (MT) opsional. Jika diisi saat Group menjadi Planned, nilai ini mengisi Qty Delivery (Klip).',
+    ],
+    ['9. Urutan unduhan: Supplier, Region/Plant, Product, Incoterm, Contract Date, PO.'],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 120 }];
+  return ws;
+}
+
+function buildMasterVesselSheet(vesselNames: string[]): XLSX.WorkSheet {
+  const aoa: string[][] = [['Vessel']];
+  for (const name of vesselNames) {
+    if (name) aoa.push([name]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 36 }];
+  ws['!autofilter'] = {
+    ref: XLSX.utils.encode_range({
+      s: { c: 0, r: 0 },
+      e: { c: 0, r: Math.max(0, vesselNames.length) },
+    }),
+  };
+  return ws;
+}
+
+export function buildShipmentGroupingTemplateXlsxBuffer(
+  rows: GroupingTemplateDbRow[],
+  options?: { vesselNames?: string[] },
+): Buffer {
+  const vesselNames = (options?.vesselNames ?? []).map((n) => String(n ?? '').trim()).filter(Boolean);
+  const matrix = buildShipmentGroupingTemplateMatrixFromDb(rows);
+  const ws = XLSX.utils.aoa_to_sheet(matrix);
+  applyGroupingSheetLayout(ws, rows.length);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, SHIPMENT_GROUPING_SHEET_NAME);
+  XLSX.utils.book_append_sheet(wb, buildCaraIsiSheet(), SHIPMENT_GROUPING_HELP_SHEET_NAME);
+  XLSX.utils.book_append_sheet(wb, buildMasterVesselSheet(vesselNames), SHIPMENT_GROUPING_LISTS_SHEET_NAME);
+  if (!wb.Workbook) wb.Workbook = {};
+  wb.Workbook.Sheets = [{ Hidden: 0 }, { Hidden: 0 }, { Hidden: 1 }];
+  if (vesselNames.length > 0) {
+    wb.Workbook.Names = [
+      {
+        Name: SHIPMENT_GROUPING_VESSEL_LIST_NAME,
+        Ref: excelSheetRangeRef(
+          SHIPMENT_GROUPING_LISTS_SHEET_NAME,
+          `$A$2:$A$${vesselNames.length + 1}`,
+        ),
+      },
+    ];
+  }
+  const raw = XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' }) as Buffer;
+  const dvEnd = Math.max(2 + Math.max(rows.length, 1), 200);
+  const validations = [
+    {
+      sqref: `A3:A${dvEnd}`,
+      formula: '"Y"',
+      error: 'Isi Y atau biarkan kosong',
+    },
+  ];
+  const vesselCol = SHIPMENT_GROUPING_TEMPLATE_HEADERS.indexOf('Vessel');
+  if (vesselCol >= 0 && vesselNames.length > 0) {
+    const col = excelColLetter(vesselCol);
+    validations.push({
+      sqref: `${col}3:${col}${dvEnd}`,
+      formula: SHIPMENT_GROUPING_VESSEL_LIST_NAME,
+      error: 'Pilih Vessel dari sheet Master Vessel',
+    });
+  }
+  return injectXlsxSheetDataValidations(raw, 'xl/worksheets/sheet1.xml', validations);
+}

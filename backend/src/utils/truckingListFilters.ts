@@ -2,62 +2,111 @@
  * Server-side global search + column filters for trucking list (`t` + `c` joins).
  */
 
+import { sqlTruckingLateIndicatorSortExpr } from './truckingListSort';
+import { sqlRealizationEndDate, sqlShellTruckingAtaEndDate } from './truckingRealizationSql';
 import { ColumnFilterPayload, parseColumnFiltersQuery } from './contractListFilters'
+import { appendContractPerfSourceTypeFilter } from '../controllers/contractSqlFragments'
 import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql'
+import { TRUCKING_LIST_CONTRACT_EXT_NO_FULL, TRUCKING_LIST_SAP_DATES_ALIAS } from './truckingListSelectSql'
+import { sqlB2bEndingBuyerExpr, sqlB2bEndingUnloadExpr } from './b2bOriginEndingSql'
 import {
-  sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingQuantityDeliveredCoalesce,
-  sqlTruckingQuantityReceiveCoalesce,
+  sqlTruckingListBaseOutstandingQtyExpr,
+  sqlTruckingListResolvedDeliveryQtyExpr,
+  sqlTruckingListResolvedReceiveQtyExpr,
 } from './truckingQuantitySql'
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias'
 
 export { parseColumnFiltersQuery }
 
-function lateIndicatorTruckingExpr(): string {
-  return `(
-  CASE
-    WHEN c.delivery_end_date IS NULL THEN '-'
-    WHEN t.trucking_completion_date IS NOT NULL THEN
-      CASE
-        WHEN c.delivery_end_date::date < t.trucking_completion_date::date THEN 'Late'
-        ELSE 'On Time'
-      END
-    WHEN t.eta_trucking_completion_date IS NOT NULL THEN
-      CASE
-        WHEN c.delivery_end_date::date < t.eta_trucking_completion_date::date THEN 'Late'
-        ELSE 'On Time'
-      END
-    WHEN c.delivery_end_date::date < CURRENT_DATE THEN 'Late'
-    ELSE 'On Time'
-  END
-)`;
+/**
+ * One definition of the Late Indicator, shared with the sort and with the snapshot form.
+ *
+ * This used to be a second, hand-copied CASE identical to
+ * `sqlTruckingLateIndicatorSortExpr`. Two copies that agree are the dangerous state rather than
+ * a safe one - nothing would have failed if either were edited - and the snapshot now applies
+ * this rule to its own stored columns, so "the two agree" had to stop being something checked by
+ * eye.
+ */
+/**
+ * One definition of the Late Indicator, shared with the sort, the badge and the snapshot.
+ *
+ * Due date against **ATA** (SAP Trucking Last Receive Date, or the last WB date), falling back to
+ * **ETA** (the last daily-planning deliverable date), and finally to today.
+ *
+ * All three places used to disagree on the inputs, so filtering Late could return rows whose
+ * badge read On Time. This filter passed the *planning* date into the ATA slot, and every place
+ * passed `eta_trucking_completion_date` as the ETA - a column that is 0 of 16,552 for trucking,
+ * because ETA is a shipment concept, so the fallback never fired anywhere. Correcting it moves
+ * 2,908 of 7,485 YTD rows.
+ *
+ * `skipSapJoin` decides only where ATA comes from: the shell has no sap_processed_data, so WB is
+ * all there is; the hydrate adds the SAP receive date.
+ */
+function lateIndicatorTruckingExpr(skipSapJoin: boolean): string {
+  const ata = skipSapJoin
+    ? sqlShellTruckingAtaEndDate()
+    : sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS);
+  return sqlTruckingLateIndicatorSortExpr(
+    'c.delivery_end_date',
+    ata,
+    // ETA = last daily-planning deliverable date. The expansion aliases this same column
+    // `planning_end_date`; here it is still the raw trucking_operations column.
+    't.trucking_completion_date',
+  );
 }
 
-const TRUCK_COL: Record<string, string> = {
-  late_indicator: lateIndicatorTruckingExpr(),
+/*
+ * Column expression map.
+ *
+ * A function rather than a constant so `status` can be built with an optional precomputed
+ * GR-close column: sqlTruckingPagePipelineStageExpr emits a correlated sap_processed_data
+ * subquery, and the trucking list statement carries 54 copies of it (693KB total, measured
+ * 2026-08-06). A module-level constant is evaluated once at import and cannot take a per-query
+ * value, so it had to become a function before the CTE can be wired in.
+ *
+ * Passing no grClosedExpr reproduces the previous map exactly.
+ */
+function truckCol(
+  grClosedExpr?: string,
+  cancelledExpr?: string,
+  /**
+   * Shell requests have no `sapd` lateral, so the Late Indicator's ATA must come from WB alone.
+   * Naming an alias the FROM does not emit is a 42P01 that empties the whole page rather than
+   * failing loudly - see klip-trucking-skipsapjoin-alias-scope.
+   */
+  skipSapJoin = false,
+): Record<string, string> {
+  return {
+  late_indicator: lateIndicatorTruckingExpr(skipSapJoin),
   operation_id: 't.operation_id',
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   sto_number: 'c.sto_number',
-  status: sqlTruckingPagePipelineStageExpr('c'),
-  location: 't.location',
+    status: sqlTruckingPagePipelineStageExpr(
+      'c',
+      undefined,
+      undefined,
+      grClosedExpr,
+      undefined,
+      undefined,
+      cancelledExpr,
+    ),
+  location: sqlNormalizeDischargeDestination('t.location'),
   loading_location: 't.loading_location',
-  unloading_location: 't.unloading_location',
+  unloading_location: sqlB2bEndingUnloadExpr('t.unloading_location'),
   trucking_owner: 't.trucking_owner',
   supplier: 'c.supplier',
   product: 'c.product',
   incoterm: 'c.incoterm',
-  buyer: 'c.buyer',
+  buyer: sqlB2bEndingBuyerExpr('c.buyer'),
   group_name: 'c.group_name',
-  contract_ext_no: `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`,
+  contract_ext_no: TRUCKING_LIST_CONTRACT_EXT_NO_FULL,
   contract_qty: 'c.quantity_ordered',
   sto_quantity: 'c.quantity_ordered',
   quantity_sent: 't.quantity_sent',
-  quantity_delivered: `COALESCE(t.quantity_delivered, 0)`,
-  quantity_receive: sqlTruckingQuantityReceiveCoalesce(),
-  outstanding_quantity: sqlTruckingOutstandingQtyByIncoterm(
-    sqlTruckingQuantityDeliveredCoalesce(),
-    sqlTruckingQuantityReceiveCoalesce(),
-  ),
+  quantity_delivered: sqlTruckingListResolvedDeliveryQtyExpr('t.id', 'c', grClosedExpr),
+  quantity_receive: sqlTruckingListResolvedReceiveQtyExpr('t.id', 'c', grClosedExpr),
+  outstanding_quantity: sqlTruckingListBaseOutstandingQtyExpr('c', grClosedExpr),
   oa_budget: 't.oa_budget',
   oa_actual: 't.oa_actual',
   estimated_km: 's.estimated_km',
@@ -70,7 +119,8 @@ const TRUCK_COL: Record<string, string> = {
   eta_trucking_completion_date: 't.eta_trucking_completion_date',
   delivery_start_date: 'c.delivery_start_date',
   delivery_end_date: 'c.delivery_end_date',
-  created_at: 't.created_at',
+    created_at: 't.created_at',
+  };
 }
 
 export function appendTruckingGlobalSearch(
@@ -82,7 +132,7 @@ export function appendTruckingGlobalSearch(
   }
   const p = startIndex
   const likeExpr = `$${p}::text`
-  const contractExtExpr = `(SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') FROM sap_processed_data spd WHERE spd.contract_number = c.contract_id ORDER BY spd.created_at DESC NULLS LAST LIMIT 1)`
+  const contractExtExpr = TRUCKING_LIST_CONTRACT_EXT_NO_FULL
   const sql = `
     AND (
       COALESCE(${contractExtExpr}, '') ILIKE ${likeExpr}
@@ -95,8 +145,14 @@ export function appendTruckingGlobalSearch(
 
 export function appendTruckingColumnFilters(
   filters: ColumnFilterPayload,
-  startIndex: number
+  startIndex: number,
+  /** Optional precomputed GR-close and SAP-cancelled columns; see truckCol(). */
+  grClosedExpr?: string,
+  cancelledExpr?: string,
+  /** Shell requests cannot reference the SAP dates lateral - see truckCol(). */
+  skipSapJoin = false,
 ): { sql: string; params: any[]; nextIndex: number } {
+  const TRUCK_COL = truckCol(grClosedExpr, cancelledExpr, skipSapJoin)
   const parts: string[] = []
   const params: any[] = []
   let pi = startIndex
@@ -179,13 +235,14 @@ export function appendTruckingColumnFilters(
 
 export function appendTruckingLateIndicatorFilter(
   lateIndicator: string | undefined,
-  startIndex: number
+  startIndex: number,
+  skipSapJoin = false
 ): { sql: string; params: any[]; nextIndex: number } {
   const v = String(lateIndicator ?? 'ALL').toUpperCase()
   if (v === 'ALL' || !v) {
     return { sql: '', params: [], nextIndex: startIndex }
   }
-  const expr = lateIndicatorTruckingExpr()
+  const expr = lateIndicatorTruckingExpr(skipSapJoin)
   if (v === 'ON_TIME') {
     return {
       sql: ` AND ${expr} = $${startIndex}::text`,
@@ -208,4 +265,14 @@ export function appendTruckingLateIndicatorFilter(
     }
   }
   return { sql: '', params: [], nextIndex: startIndex }
+}
+
+/** Toolbar source filter (Interco / 3rd Party) on contracts.source_type. */
+export function appendTruckingSourceTypeFilter(
+  sourceType: string | undefined,
+  startIndex: number,
+  columnExpr = 'c.source_type',
+): { sql: string; params: any[]; nextIndex: number } {
+  const sql = appendContractPerfSourceTypeFilter(sourceType, columnExpr)
+  return { sql, params: [], nextIndex: startIndex }
 }

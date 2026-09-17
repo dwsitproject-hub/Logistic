@@ -6,6 +6,7 @@ import {
   sqlTruckingPipelineIsCompletedExpr,
   sqlTruckingOutstandingWithinToleranceExpr,
 } from './truckingQuantitySql';
+import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
 export type TruckingEffectiveStatus =
   | 'UNPLANNED'
@@ -98,6 +99,7 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
     SELECT DISTINCT ON (COALESCE(NULLIF(TRIM(spd.contract_number), ''), NULLIF(TRIM(spd.sto_number), '')))
       spd.contract_number,
       spd.sto_number,
+      spd.created_at,
       COALESCE(
         spd.data->'raw'->>'Trucking Last Receive Date',
         spd.data->>'Trucking Last Receive Date',
@@ -117,6 +119,7 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
     SELECT
       contract_number,
       sto_number,
+      created_at,
       CASE
         WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
         WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
@@ -133,20 +136,17 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
       END AS start_receive_date
     FROM latest_sap
   ),
-  upserted AS (
-    INSERT INTO trucking_realizations (
-      trucking_operation_id,
-      realization_start_date,
-      realization_end_date,
-      source,
-      sap_synced_at
-    )
-    SELECT
-      t.id,
+  matched AS (
+    /*
+     * One row per trucking operation, newest SAP row wins.
+     * An operation can match parsed twice (once by contract number, once by STO),
+     * and INSERT .. ON CONFLICT rejects a statement that touches the same conflict
+     * key twice ("cannot affect row a second time"), so collapse the match here.
+     */
+    SELECT DISTINCT ON (t.id)
+      t.id AS trucking_operation_id,
       p.start_receive_date,
-      p.last_receive_date,
-      'sap',
-      CURRENT_TIMESTAMP
+      p.last_receive_date
     FROM trucking_operations t
     INNER JOIN contracts c ON t.contract_id = c.id
     INNER JOIN parsed p ON (
@@ -157,6 +157,23 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
       )
     )
     WHERE (p.start_receive_date IS NOT NULL OR p.last_receive_date IS NOT NULL)
+    ORDER BY t.id, p.created_at DESC NULLS LAST
+  ),
+  upserted AS (
+    INSERT INTO trucking_realizations (
+      trucking_operation_id,
+      realization_start_date,
+      realization_end_date,
+      source,
+      sap_synced_at
+    )
+    SELECT
+      m.trucking_operation_id,
+      m.start_receive_date,
+      m.last_receive_date,
+      'sap',
+      CURRENT_TIMESTAMP
+    FROM matched m
     ON CONFLICT (trucking_operation_id) DO UPDATE SET
       realization_start_date = COALESCE(trucking_realizations.realization_start_date, EXCLUDED.realization_start_date),
       realization_end_date = COALESCE(trucking_realizations.realization_end_date, EXCLUDED.realization_end_date),
@@ -181,8 +198,19 @@ export const SQL_RECONCILE_TRUCKING_STATUS_FROM_SAP = `
       ELSE COALESCE(t.status, 'PLANNED')
     END,
     updated_at = CURRENT_TIMESTAMP
-  FROM upserted u
-  INNER JOIN contracts c ON c.id = t.contract_id
+  /*
+   * contracts is joined through WHERE, not with an INNER JOIN in the FROM list.
+   *
+   * Postgres does not allow the UPDATE target (t) to be referenced from the ON clause of a join
+   * inside FROM - INNER JOIN contracts c ON c.id = t.contract_id raises
+   * "invalid reference to FROM-clause entry for table t" (42P01, errorMissingRTE). The whole
+   * statement therefore failed on every run since it was introduced on 2026-08-12, and the only
+   * trace was logger.warn('Trucking status reconcile from SAP failed (list continues)') - so
+   * SAP's Trucking Start/Last Receive Dates were never synced into trucking_realizations by this
+   * path, and trucking status was never reconciled by it either.
+   */
+  FROM upserted u, contracts c
   WHERE t.id = u.trucking_operation_id
-    AND t.status <> 'CANCELLED'
+    AND c.id = t.contract_id
+    AND ${sqlTruckingOpIsActiveForMatchingSql('t')}
 `;

@@ -6,6 +6,11 @@ import {
   listUserActivityDailySummary,
   type IngestUserActivityEvent,
 } from '../services/userActivityLog.service';
+import {
+  InvalidDateInputError,
+  parseOptionalStrictDateOnly,
+  parseOptionalStrictDateRange,
+} from '../utils/strictDateInput';
 
 export async function postUserActivityEvents(req: AuthRequest, res: Response): Promise<void> {
   try {
@@ -30,16 +35,24 @@ export async function postUserActivityEvents(req: AuthRequest, res: Response): P
 
 export async function getUserActivityDailySummary(req: AuthRequest, res: Response): Promise<void> {
   try {
-    const { dateFrom, dateTo, userId, page, limit } = req.query;
+    const { userId, page, limit } = req.query;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: req.query.dateFrom,
+      dateTo: req.query.dateTo,
+    });
     const data = await listUserActivityDailySummary({
-      dateFrom: typeof dateFrom === 'string' ? dateFrom : undefined,
-      dateTo: typeof dateTo === 'string' ? dateTo : undefined,
+      dateFrom,
+      dateTo,
       userId: typeof userId === 'string' ? userId : undefined,
       page: page ? Number(page) : undefined,
       limit: limit ? Number(limit) : undefined,
     });
     res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      res.status(400).json({ success: false, error: { message: error.message } });
+      return;
+    }
     res.status(500).json({
       success: false,
       error: { message: error instanceof Error ? error.message : 'Failed to load activity summary' },
@@ -50,7 +63,16 @@ export async function getUserActivityDailySummary(req: AuthRequest, res: Respons
 export async function getUserActivityDailyDetail(req: AuthRequest, res: Response): Promise<void> {
   try {
     const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
-    const activityDate = typeof req.query.date === 'string' ? req.query.date : '';
+    let activityDate: string;
+    try {
+      activityDate = parseOptionalStrictDateOnly(req.query.date, 'date') ?? '';
+    } catch (error) {
+      if (error instanceof InvalidDateInputError) {
+        res.status(400).json({ success: false, error: { message: error.message } });
+        return;
+      }
+      throw error;
+    }
     if (!userId || !activityDate) {
       res.status(400).json({
         success: false,

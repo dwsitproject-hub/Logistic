@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import pool from './connection';
 import logger from '../utils/logger';
+import { isTransientDbError, transientRetryDelayMs } from './transientDbError';
 
 const MIGRATIONS_TABLE = 'schema_migrations';
 
@@ -65,28 +66,52 @@ const applySqlFile = async (filePath: string, filename: string): Promise<void> =
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Total time startup will keep trying to reach the database before giving up.
+ *
+ * The previous budget was ~30s of attempt-counted backoff, and the transient test
+ * only recognised ECONNREFUSED / 57P03 / 53300. A CPU-saturated database fails
+ * differently: the pool gives up handing out a connection and `pg` raises a plain
+ * Error with no code ("timeout exceeded when trying to connect"). That was treated
+ * as permanent, so migrate() threw on the first attempt, the entrypoint exited, and
+ * the container crash-looped - each restart opening a fresh burst of connections
+ * into the database that was already struggling (staging, 2026-07-31: backend down
+ * with health 000 while the database was up and reachable).
+ *
+ * A busy database is a wait-for condition, not a fatal one, so the budget is now
+ * time-boxed and generous enough to ride out a CPU spike. It is deliberately finite:
+ * if the database is genuinely unreachable the container must still fail visibly
+ * rather than hang forever.
+ */
+const DB_STARTUP_WAIT_MS = Math.max(
+  5_000,
+  parseInt(process.env.DB_STARTUP_WAIT_MS || '180000'),
+);
+
 const withDbReady = async <T>(fn: () => Promise<T>): Promise<T> => {
-  // On container restarts, Postgres can be "healthy" but still briefly refuse connections.
-  // Retry for a short window to avoid failing the whole backend startup.
-  const maxAttempts = 20; // ~30s worst case with backoff below
+  const deadline = Date.now() + DB_STARTUP_WAIT_MS;
+  let attempt = 0;
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+
+  for (;;) {
+    attempt += 1;
     try {
       return await fn();
-    } catch (err: any) {
+    } catch (err: unknown) {
       lastErr = err;
-      const code = String(err?.code || '');
-      const msg = String(err?.message || '');
-      const transient =
-        code === 'ECONNREFUSED' ||
-        code === '57P03' || // cannot_connect_now
-        code === '53300' || // too_many_connections
-        msg.toLowerCase().includes('econnrefused');
 
-      if (!transient || attempt === maxAttempts) break;
+      // Deterministic failures (bad SQL in a migration, constraint violations) must
+      // fail fast - retrying cannot help and only loads a struggling server.
+      if (!isTransientDbError(err)) break;
 
-      const delay = Math.min(250 * Math.pow(1.35, attempt - 1), 2000);
-      logger.warn(`DB not ready yet (attempt ${attempt}/${maxAttempts}). Retrying in ${Math.round(delay)}ms...`);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+
+      const delay = Math.min(transientRetryDelayMs(attempt), remaining);
+      logger.warn(
+        `DB not ready yet (attempt ${attempt}, ${Math.round(remaining / 1000)}s of budget left). Retrying in ${delay}ms...`,
+        { code: (err as { code?: unknown })?.code, message: (err as { message?: unknown })?.message },
+      );
       await sleep(delay);
     }
   }

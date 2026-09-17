@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Download, FileText, Search, ChevronDown, ChevronRight } from 'lucide-react'
 import api from '@/lib/api'
+import { isAuthenticatedLocally } from '@/lib/authSession'
 import { formatDateTimeDMY } from '@/lib/dateFormat'
 
 interface Contract {
@@ -60,14 +61,14 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const hasToken = () => Boolean(localStorage.getItem('token'))
-    if (hasToken()) {
+    const hasAuth = () => isAuthenticatedLocally()
+    if (hasAuth()) {
       setAuthReady(true)
       return
     }
     const startedAt = Date.now()
     const interval = window.setInterval(() => {
-      if (hasToken()) {
+      if (hasAuth()) {
         window.clearInterval(interval)
         setAuthReady(true)
       } else if (Date.now() - startedAt > 3000) {
@@ -91,7 +92,7 @@ export default function DocumentsPage() {
       console.error('Failed to fetch contracts:', error)
       const status = (error as any)?.response?.status
       if (status === 401 || status === 403) return
-      alert('Failed to load contracts. Please try again.')
+      // No blocking alert — transient DB/network errors should not interrupt the user.
     } finally {
       setLoading(false)
     }
@@ -261,12 +262,7 @@ export default function DocumentsPage() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Documents</h1>
-            <p className="text-gray-600 mt-2">View and manage contract documents</p>
-          </div>
-        </div>
+        <p className="text-gray-600">View and manage contract documents</p>
 
         {/* Search */}
         <Card>

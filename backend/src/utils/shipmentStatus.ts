@@ -84,6 +84,10 @@ export type ShipmentMilestones = {
   ata_complete_discharge?: unknown;
   /** SAP import status or contracts.status — Close/Completed without ATA still resolves COMPLETED. */
   contract_import_status?: unknown;
+  /** Delivery qty signals (kg) — any > 0 keeps open STO in PLANNED when ATA are all null. */
+  quantity_delivered?: unknown;
+  quantity_delivered_klip?: unknown;
+  quantity_delivered_sap?: unknown;
 };
 
 const hasDate = (v: unknown): boolean => {
@@ -132,6 +136,35 @@ export function hasAnyEtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMil
   );
 }
 
+export function hasAnyAtaMilestone(m: Pick<ShipmentMilestones, keyof ShipmentMilestones>): boolean {
+  return (
+    hasDate(m.ata_arrival_at_loading_port) ||
+    hasDate(m.ata_berthed_at_loading_port) ||
+    hasDate(m.ata_start_loading) ||
+    hasDate(m.ata_completed_loading) ||
+    hasDate(m.ata_sailed_from_loading_port) ||
+    hasDate(m.ata_arrive_at_discharge_port) ||
+    hasDate(m.ata_berthed_at_discharge_port) ||
+    hasDate(m.ata_start_discharging) ||
+    hasDate(m.ata_complete_discharge)
+  );
+}
+
+function positiveQtyKg(v: unknown): boolean {
+  if (v == null || v === '') return false;
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, '').trim());
+  return Number.isFinite(n) && n > 0;
+}
+
+/** True when any Delivery Qty source (KLIP / SAP / legacy) has a positive value. */
+export function hasDeliveryQtySignal(m: Pick<ShipmentMilestones, keyof ShipmentMilestones>): boolean {
+  return (
+    positiveQtyKg(m.quantity_delivered_klip) ||
+    positiveQtyKg(m.quantity_delivered_sap) ||
+    positiveQtyKg(m.quantity_delivered)
+  );
+}
+
 export function normalizeShipmentDetailStatus(raw: string | null | undefined): ShipmentAutoStatus {
   const normalized = String(raw ?? '')
     .trim()
@@ -149,6 +182,18 @@ export function normalizeShipmentDetailStatus(raw: string | null | undefined): S
 /**
  * Derive SEA shipment status from milestones (latest ATA stage wins).
  * Maps 1:1 with summary breakdown tiers on the Shipments page.
+ *
+ * ATC completes the shipment. Discharge finished is the end of the voyage, and that is what this
+ * status describes - users enter the ATC precisely to record it. It used to wait for GR Close, so
+ * a vessel that had finished discharging still read UNLOADING until SAP closed the transaction,
+ * sometimes days later, and the Shipments page disagreed with what the operators could see.
+ *
+ * This is the shipment's status only. Contract Open/Close is decided separately by
+ * isContractEffectivelyDone, which reads ATC and outstanding qty directly and never consults
+ * shipment status - so nothing here can close a contract.
+ *
+ * Open STO without ATA ladder is PLANNED (Unplanned card = PO backlog only).
+ * Delivery Qty / ETA with no ATA also resolve to PLANNED.
  */
 export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus {
   if (isContractDeliveryClosed(m.contract_import_status)) return 'COMPLETED';
@@ -162,12 +207,14 @@ export function deriveShipmentStatus(m: ShipmentMilestones): ShipmentAutoStatus 
   if (hasDate(m.ata_berthed_at_loading_port)) return 'BERTHED_LP';
   if (hasDate(m.ata_arrival_at_loading_port)) return 'ARRIVED_LP';
   if (hasAnyEtaMilestone(m)) return 'PLANNED';
-  return 'UNPLANNED';
+  if (!hasAnyAtaMilestone(m) && hasDeliveryQtySignal(m)) return 'PLANNED';
+  return 'PLANNED';
 }
 
 /** Monotonic rank for SAP upsert — higher = further along execution ladder. */
 export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
-  UNPLANNED: 0,
+  /** Same rank as PLANNED — Unplanned card is PO-only; STO UNPLANNED is legacy alias. */
+  UNPLANNED: 1,
   PLANNED: 1,
   IN_PROGRESS: 2,
   ARRIVED_LP: 2,
@@ -189,7 +236,7 @@ export const SHIPMENT_STATUS_RANK: Readonly<Record<string, number>> = {
 export function sqlShipmentStatusRank(expr = 'status'): string {
   return `
 CASE UPPER(TRIM(COALESCE(${expr}, '')))
-  WHEN 'UNPLANNED' THEN 0
+  WHEN 'UNPLANNED' THEN 1
   WHEN 'PLANNED' THEN 1
   WHEN 'IN_PROGRESS' THEN 2
   WHEN 'ARRIVED_LP' THEN 2
@@ -203,7 +250,7 @@ CASE UPPER(TRIM(COALESCE(${expr}, '')))
   WHEN 'BERTHED_DP' THEN 8
   WHEN 'UNLOADING' THEN 9
   WHEN 'COMPLETED' THEN 10
-  ELSE 0
+  ELSE 1
 END`;
 }
 
@@ -214,7 +261,7 @@ export const SQL_SHIPMENT_STATUS_RANK = sqlShipmentStatusRank('status');
 export const SHIPMENT_PERSISTABLE_AUTO_STATUSES: readonly ShipmentAutoStatus[] =
   SHIPMENT_AUTO_STATUSES.filter((s) => s !== 'CANCELLED');
 
-/** @deprecated Use deriveShipmentStatus — ATA stages only (no ETA → UNPLANNED). */
+/** @deprecated Use deriveShipmentStatus — ATA stages only (no ETA → PLANNED). */
 export function deriveShipmentStatusFromAta(
   m: Pick<
     ShipmentMilestones,
@@ -232,7 +279,7 @@ export function deriveShipmentStatusFromAta(
   return deriveShipmentStatus(m);
 }
 
-/** @deprecated Use deriveShipmentStatus — ETA-only rows resolve to PLANNED / UNPLANNED. */
+/** @deprecated Use deriveShipmentStatus — ETA-only / open STO rows resolve to PLANNED. */
 export function deriveShipmentStatusFromEta(
   m: Pick<
     ShipmentMilestones,

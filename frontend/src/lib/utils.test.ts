@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { formatNumber, formatRupiah, toKgFromMt, formatKgFromMt, formatOutstandingQtyMtFromKg } from './utils';
+import {
+  formatNumber,
+  formatRupiah,
+  toKgFromMt,
+  formatKgFromMt,
+  formatQtyMtFromKg,
+  formatOutstandingQtyMtFromKg,
+  outstandingQtyMtColorClass,
+} from './utils';
 
 describe('formatNumber', () => {
   it('formats integers with grouping (positive)', () => {
@@ -27,17 +35,52 @@ describe('formatRupiah', () => {
   });
 });
 
+describe('formatQtyMtFromKg', () => {
+  it('formats kg as whole MT', () => {
+    expect(formatQtyMtFromKg(1000)).toBe('1 MT');
+    expect(formatQtyMtFromKg(1_500_000)).toBe('1,500 MT');
+  });
+
+  it('shows 0 MT for null, empty, or non-finite qty', () => {
+    expect(formatQtyMtFromKg(null)).toBe('0 MT');
+    expect(formatQtyMtFromKg(undefined)).toBe('0 MT');
+    expect(formatQtyMtFromKg('')).toBe('0 MT');
+    expect(formatQtyMtFromKg('abc')).toBe('0 MT');
+  });
+});
+
 describe('formatOutstandingQtyMtFromKg', () => {
-  it('shows +MT for over-delivery (negative kg)', () => {
-    expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+2.5 MT');
+  it('shows +MT for over-delivery (negative kg), rounded to whole MT by default', () => {
+    expect(formatOutstandingQtyMtFromKg(-2500)).toBe('+3 MT');
   });
 
-  it('shows MT without minus for remaining outstanding (positive kg)', () => {
-    expect(formatOutstandingQtyMtFromKg(1500)).toBe('1.5 MT');
+  it('shows MT without minus for remaining outstanding (positive kg), rounded by default', () => {
+    expect(formatOutstandingQtyMtFromKg(1500)).toBe('2 MT');
   });
 
-  it('shows zero MT for fully delivered', () => {
+  it('shows zero MT for fully delivered or missing qty', () => {
     expect(formatOutstandingQtyMtFromKg(0)).toBe('0 MT');
+    expect(formatOutstandingQtyMtFromKg(null)).toBe('0 MT');
+    expect(formatOutstandingQtyMtFromKg(undefined)).toBe('0 MT');
+    expect(outstandingQtyMtColorClass(null)).toBe('text-gray-500');
+  });
+
+  it('supports decimal display when maxFractionDigits is passed', () => {
+    expect(formatOutstandingQtyMtFromKg(1500, { maxFractionDigits: 2 })).toBe('1.5 MT');
+    expect(formatOutstandingQtyMtFromKg(-2500, { maxFractionDigits: 2 })).toBe('+2.5 MT');
+  });
+
+  it('treats sub-MT residuals that round to 0 as plain 0 MT (no + / no green)', () => {
+    // PO 1381002386 pattern: contract 112000 − receive 112060 = −60 kg → −0.06 MT
+    expect(formatOutstandingQtyMtFromKg(-60)).toBe('0 MT');
+    expect(formatOutstandingQtyMtFromKg(60)).toBe('0 MT');
+    expect(outstandingQtyMtColorClass(-60)).toBe('text-gray-500');
+    expect(outstandingQtyMtColorClass(60)).toBe('text-gray-500');
+  });
+
+  it('keeps green +MT when rounded whole MT is still non-zero over-delivery', () => {
+    expect(formatOutstandingQtyMtFromKg(-1000)).toBe('+1 MT');
+    expect(outstandingQtyMtColorClass(-1000)).toBe('text-green-600');
   });
 });
 

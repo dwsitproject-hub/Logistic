@@ -1,0 +1,172 @@
+/**
+ * Trucking View Table sort field maps (UI column id → SQL ORDER BY expression).
+ * Expansion-key paging ranks on trucking_source (ts) + contracts (c) + csla.
+ * Expanded list pagination orders on trucking_status_scoped aliases (no table prefix).
+ */
+
+import { buildListOrderByWithSapStoPriority } from './listSapStoPrioritySql';
+
+/** Late Indicators — same rules as trucking list column filter / UI badge. */
+export function sqlTruckingLateIndicatorSortExpr(
+  deliveryEndExpr: string,
+  completionExpr: string,
+  etaCompletionExpr: string,
+): string {
+  return `(
+  CASE
+    WHEN ${deliveryEndExpr} IS NULL THEN '-'
+    WHEN ${completionExpr} IS NOT NULL THEN
+      CASE
+        WHEN ${deliveryEndExpr}::date < ${completionExpr}::date THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN ${etaCompletionExpr} IS NOT NULL THEN
+      CASE
+        WHEN ${deliveryEndExpr}::date < ${etaCompletionExpr}::date THEN 'Late'
+        ELSE 'On Time'
+      END
+    WHEN ${deliveryEndExpr}::date < CURRENT_DATE THEN 'Late'
+    ELSE 'On Time'
+  END
+)`;
+}
+
+const AGGREGATED_STO_SORT = `COALESCE(csla.agg_sto_lines, NULLIF(TRIM(ts.sto_number::text), ''))`;
+
+/** UI sortKey → row/column alias used for ORDER BY (and in-memory hybrid sorts). */
+const SORT_ALIAS_BY_KEY: Record<string, string> = {
+  created_at: 'created_at',
+  operation_id: 'operation_id',
+  status: 'status',
+  contract_number: 'contract_number',
+  contract_date: 'contract_date',
+  contract_ext_no: 'contract_ext_no',
+  po_number: 'po_number',
+  sto_number: 'sto_number',
+  supplier: 'supplier',
+  product: 'product',
+  buyer: 'buyer',
+  group_name: 'group_name',
+  trucking_owner: 'trucking_owner',
+  location: 'location',
+  loading_location: 'loading_location',
+  unloading_location: 'unloading_location',
+  trucking_start_date: 'trucking_start_date',
+  trucking_completion_date: 'trucking_completion_date',
+  delivery_start_date: 'delivery_start_date',
+  delivery_end_date: 'delivery_end_date',
+  cargo_readiness_date: 'cargo_readiness_date',
+  quantity_delivered: 'quantity_delivered',
+  quantity_receive: 'quantity_receive',
+  quantity_sent: 'quantity_sent',
+  outstanding_quantity: 'outstanding_quantity',
+  /** UI column id for Outstanding Qty */
+  outstanding_qty_mt: 'outstanding_quantity',
+  contract_qty: 'contract_qty',
+  sto_quantity: 'sto_quantity',
+  incoterm: 'incoterm',
+  oa_budget: 'oa_budget',
+  oa_actual: 'oa_actual',
+  gain_loss_percentage: 'gain_loss_percentage',
+  gain_loss_amount: 'gain_loss_amount',
+  estimated_km: 'estimated_km',
+};
+
+/**
+ * Sort expressions on expansion_keys / ranked_expansion.
+ * Prefer columns already selected into trucking_source (ts.*) so OS/qty/ext no work.
+ */
+export function resolveTruckingExpansionKeySortField(sortKey: string): string {
+  if (sortKey === 'sto_number') return AGGREGATED_STO_SORT;
+  if (sortKey === 'late_indicator') {
+    /*
+     * ATA then the planning date, matching the filter and the badge.
+     *
+     * `ts.trucking_completion_date` was the wrong ATA on shell requests - it falls back to the
+     * planning date there - and `ts.eta_trucking_completion_date` is 0 of 16,552 for trucking,
+     * so the ETA fallback never fired. `ata_end_date` is the unconflated actual and
+     * `planning_end_date` is the last daily-planning deliverable date.
+     */
+    return sqlTruckingLateIndicatorSortExpr(
+      'ts.delivery_end_date',
+      'ts.ata_end_date',
+      'ts.planning_end_date',
+    );
+  }
+  const alias = SORT_ALIAS_BY_KEY[sortKey];
+  if (alias) return `ts.${alias}`;
+  return 'ts.created_at';
+}
+
+/**
+ * Sort expressions on expanded / status-scoped page CTE (unprefixed aliases).
+ */
+export function resolveTruckingListSortField(sortKey: string): string {
+  if (sortKey === 'late_indicator') {
+    // Same two slots as above, on the unprefixed page aliases.
+    return sqlTruckingLateIndicatorSortExpr(
+      'delivery_end_date',
+      'ata_end_date',
+      'planning_end_date',
+    );
+  }
+  return SORT_ALIAS_BY_KEY[sortKey] || 'created_at';
+}
+
+/** Row property for in-memory sorts (hybrid merge) — never a SQL CASE expression. */
+export function resolveTruckingListSortRowKey(sortKey: string): string {
+  if (sortKey === 'late_indicator') return 'created_at';
+  return SORT_ALIAS_BY_KEY[sortKey] || 'created_at';
+}
+
+export function buildTruckingExpansionKeyOrderBy(
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+  stageFilter?: string | null,
+): string {
+  const field = resolveTruckingExpansionKeySortField(sortKey);
+  return buildListOrderByWithSapStoPriority(
+    AGGREGATED_STO_SORT,
+    /*
+     * `ts.id` last, and it is not cosmetic: without a unique tiebreaker this ORDER BY leaves
+     * tied rows in whatever order the plan happens to produce, so paging can show a row twice or
+     * skip it entirely - page 1 and page 2 are separate queries with no guarantee they break the
+     * tie the same way.
+     *
+     * The dev data has such a block: six rows sharing supplier 'AGRAJAYA BAKTITAMA PT.' and
+     * created_at 2026-05-20 09:51:57.265719+00, straddling the 20-row page boundary. That is why
+     * the snapshot-paged version of this page picked a different row for page 1 - it orders by
+     * (supplier, created_at, operation_id) and was the only deterministic one of the two.
+     *
+     * `NULLS LAST` on created_at is what makes this order *identical* to the snapshot loader's
+     * rather than merely equal on today's data: DESC defaults to NULLS FIRST, and the snapshot
+     * spells NULLS LAST. No row is affected either way - trucking_operations.created_at is
+     * nullable but holds no NULLs, and neither do the snapshot's 15,562 rows - so this costs
+     * nothing and removes the one input that could have made the two pages disagree again.
+     */
+    `${field} ${sortDir} NULLS LAST, ts.created_at DESC NULLS LAST, ts.id`,
+    stageFilter,
+  );
+}
+
+/** @deprecated Prefer resolveTruckingExpansionKeySortField — kept for tests/exports. */
+export const TRUCKING_EXPANSION_KEY_SORT_FIELD: Record<string, string> = new Proxy(
+  {} as Record<string, string>,
+  {
+    get: (_t, prop: string) => resolveTruckingExpansionKeySortField(prop),
+    has: (_t, prop: string) =>
+      prop === 'late_indicator' ||
+      prop === 'sto_number' ||
+      Object.prototype.hasOwnProperty.call(SORT_ALIAS_BY_KEY, prop),
+  },
+);
+
+/** @deprecated Prefer resolveTruckingListSortField. */
+export const TRUCKING_LIST_SORT_FIELD_BY_KEY: Record<string, string> = new Proxy(
+  {} as Record<string, string>,
+  {
+    get: (_t, prop: string) => resolveTruckingListSortField(prop),
+    has: (_t, prop: string) =>
+      prop === 'late_indicator' || Object.prototype.hasOwnProperty.call(SORT_ALIAS_BY_KEY, prop),
+  },
+);

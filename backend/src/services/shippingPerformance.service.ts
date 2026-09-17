@@ -8,8 +8,13 @@ import {
 import { mergePoMetricsFromRows } from '../utils/shippingPerformancePoMetrics';
 import {
   buildShippingPerfStoMetricsCte,
+  perfStoStatusJoinSql,
+  SHIPPING_PERF_CONTRACT_OS_CTE,
+  buildShippingPerfViewTableQtySelectSql,
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
+import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
+import { shippingPerfOutstandingQtyKgForAggregate } from '../utils/shippingPerformanceOutstandingAgg';
 import {
   shippingPerfStoGroupKeyFromRow,
   shippingPerfStoMetricsKeyExpr,
@@ -18,6 +23,17 @@ import {
   sqlSapVesselNameFromSpdJsonb,
   sqlShipmentDisplayVesselName,
 } from '../utils/sapVesselFields';
+import { SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
+import {
+  aggregateImportStatusForStoGroup,
+} from '../utils/contractDeliveryStatus';
+import { deriveShipmentStatus } from '../utils/shipmentStatus';
+import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
+import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
+import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
+import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
+import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
+import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -70,14 +86,27 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
 
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const ROW_CACHE_KEY = 'shipping-performance-rows-v28';
+/**
+ * Bumped when TC vessel performance metrics (fuel/freight/pump rate/sailing speed/shortage) were
+ * added to the row SELECT, and again when the STO-group merge started surfacing these fields
+ * from whichever member row has them set (see mergeTcVesselMetricFields).
+ */
+const ROW_CACHE_KEY = 'shipping-performance-rows-v39';
 
 // Background warming keeps the (expensive) row cache populated so page loads are
 // served from memory instead of paying the full SQL cost. This does not change what
 // the query returns — it only pre-runs the identical query off the request path.
 const KEEP_WARM_CHECK_MS = 60 * 1000; // how often the warmer wakes up
 const KEEP_WARM_REFRESH_AFTER_MS = 4 * 60 * 1000; // renew cache once it is this old (< TTL)
-const KEEP_WARM_MAX_IDLE_MS = 15 * 60 * 1000; // stop warming when nobody is using the page
+/*
+ * Stop warming when nobody is using the page. Raised from 15 to 90 minutes: the underlying query
+ * costs ~3.5s even with the STO expression index, so the only way a visitor sees the page in well
+ * under 3s is to be served from cache. A 15-minute window expired over any normal gap - a meeting
+ * or lunch - and the next visitor paid the full query. 90 minutes covers those gaps while still
+ * going quiet outside working hours, so this adds at most one 3.5s query every 4 minutes and only
+ * while the page is genuinely in use.
+ */
+const KEEP_WARM_MAX_IDLE_MS = 90 * 60 * 1000;
 let lastAccessedAt = 0;
 let refreshInFlight: Promise<Record<string, unknown>[]> | null = null;
 let keepWarmTimer: NodeJS.Timeout | null = null;
@@ -107,7 +136,132 @@ function joinDistinctValues(rows: Record<string, unknown>[], field: string): str
   return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
 }
 
-function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
+/** Distinct YYYY-MM-DD contract dates across STO members (sorted ascending). */
+export function parseShippingPerfContractDateList(value: unknown): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  const values = new Set<string>();
+  for (const part of raw.split(',')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const iso = toIsoDate10FromCell(trimmed) ?? (/^\d{4}-\d{2}-\d{2}/.test(trimmed) ? trimmed.slice(0, 10) : null);
+    if (iso) values.add(iso);
+  }
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+function joinDistinctContractDates(rows: Record<string, unknown>[]): string {
+  const values = new Set<string>();
+  for (const row of rows) {
+    for (const iso of parseShippingPerfContractDateList(row.contract_date)) {
+      values.add(iso);
+    }
+  }
+  return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
+}
+
+/** True if any contract date falls within [dateFrom, dateTo] inclusive. */
+export function shippingPerfRowMatchesContractDateRange(
+  contractDate: unknown,
+  dateFrom: string,
+  dateTo: string,
+): boolean {
+  const dates = parseShippingPerfContractDateList(contractDate);
+  if (dates.length === 0) {
+    return !(dateFrom || dateTo);
+  }
+  return dates.some((iso) => {
+    if (dateFrom && iso < dateFrom) return false;
+    if (dateTo && iso > dateTo) return false;
+    return true;
+  });
+}
+
+/** Milestone date fields max-merged across STO members (Shipments list MAX ATA/ETA). */
+const SHIPPING_PERF_MILESTONE_FIELDS = [
+  'cargo_readiness_date',
+  'loading_eta_arrival',
+  'loading_eta_berthed',
+  'loading_eta_start',
+  'loading_eta_completed',
+  'loading_eta_sailed',
+  'discharge_eta_arrival',
+  'discharge_eta_berthed',
+  'discharge_eta_start',
+  'discharge_eta_completed',
+  'loading_ata_arrival',
+  'loading_ata_berthed',
+  'loading_ata_start',
+  'loading_ata_completed',
+  'loading_ata_sailed',
+  'discharge_ata_arrival',
+  'discharge_ata_berthed',
+  'discharge_ata_start',
+  'discharge_ata_completed',
+] as const;
+
+function toDateMs(value: unknown): number | null {
+  if (value == null || value === '') return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const ms = Date.parse(raw.length <= 10 ? `${raw}T00:00:00Z` : raw);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function maxMergeMilestoneFields(rows: Record<string, unknown>[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of SHIPPING_PERF_MILESTONE_FIELDS) {
+    let bestVal: unknown = null;
+    let bestMs = Number.NEGATIVE_INFINITY;
+    for (const row of rows) {
+      const v = row[field];
+      const ms = toDateMs(v);
+      if (ms == null) continue;
+      if (ms > bestMs) {
+        bestMs = ms;
+        bestVal = v;
+      }
+    }
+    if (bestVal != null) out[field] = bestVal;
+  }
+  return out;
+}
+
+/**
+ * Manually entered TC (Time Charter) vessel metrics — a per-voyage attribute, not per shipment
+ * row. STO groups can span multiple physical `shipments` rows (multi-contract STO, or duplicate
+ * legs); the priority `pick` used for most other display fields is not guaranteed to be the
+ * specific row a user edited. Surface the value from whichever member has it set instead of
+ * silently dropping it when `pick` resolves to a different (unset) member.
+ */
+const TC_VESSEL_METRIC_FIELDS = [
+  'fuel_consumption',
+  'freight',
+  'pump_rate',
+  'sailing_speed',
+  'shortage',
+  'vessel_oa_budget',
+] as const;
+
+function mergeTcVesselMetricFields(rows: Record<string, unknown>[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of TC_VESSEL_METRIC_FIELDS) {
+    for (const row of rows) {
+      const v = row[field];
+      if (v !== null && v !== undefined) {
+        out[field] = v;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge STO members like Shipments list: MAX milestones → derive once.
+ * Voyage ATA (not stale sibling DB status) drives the grouped status.
+ */
+export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<string, unknown> {
   const pick = rows.reduce((best, row) =>
     shippingPerfRowPriority(row) >= shippingPerfRowPriority(best) ? row : best,
   );
@@ -125,8 +279,10 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
       }
     : mergePoMetricsFromRows(rows);
 
-  return {
+  const merged: Record<string, unknown> = {
     ...pick,
+    ...maxMergeMilestoneFields(rows),
+    ...mergeTcVesselMetricFields(rows),
     sto_key: pick.sto_key ?? shippingPerfStoGroupKey(pick).replace(/^(sto:|ship:|op:|id:)/, ''),
     po_number:
       (pick.po_numbers as string | undefined) ??
@@ -135,6 +291,14 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
       (pick.contract_numbers as string | undefined) ??
       (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
+    contract_date: joinDistinctContractDates(rows) || pick.contract_date,
+    source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
+    supplier: joinDistinctValues(rows, 'supplier') || pick.supplier,
+    // One STO can span several contracts. Treat the group as still present if any member is,
+    // so a partially-cancelled STO keeps counting rather than vanishing from the totals.
+    sap_presence: rows.some((row) => String(row.sap_presence ?? 'PRESENT') !== 'WITHDRAWN')
+      ? 'PRESENT'
+      : 'WITHDRAWN',
     contract_qty: metrics.contractQty,
     sto_qty: metrics.stoQty,
     received_qty: metrics.receivedQty,
@@ -143,13 +307,73 @@ function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Record<stri
     outstanding_qty_actual: metrics.outstandingQtyActual,
     outstanding_qty_planning: metrics.outstandingQtyPlanning,
     outstanding_qty: metrics.outstandingQtyActual,
+    outstanding_qty_aggregate: rows.reduce((best, row) => {
+      const n = Number(row.outstanding_qty_aggregate ?? 0);
+      return Number.isFinite(n) && n > best ? n : best;
+    }, 0),
+    po_sto_count: Math.max(
+      ...rows.map((row) => {
+        const n = Number(row.po_sto_count ?? 1);
+        return Number.isFinite(n) && n > 1 ? n : 1;
+      }),
+    ),
+    import_status:
+      aggregateImportStatusForStoGroup(rows.map((row) => row.import_status)) ??
+      pick.import_status,
   };
+
+  const derived = deriveShippingPerfRowStatus(merged);
+  merged.status = derived;
+  Object.assign(merged, computeShippingPerfDeltaFields(merged));
+  return merged;
+}
+
+/** Align status with Shipments page (ATA ladder + GR Close). Preserves CANCELLED. */
+export function deriveShippingPerfRowStatus(row: Record<string, unknown>): string {
+  if (String(row.status ?? '').trim().toUpperCase() === 'CANCELLED') {
+    return 'CANCELLED';
+  }
+  return deriveShipmentStatus({
+    eta_arrival_at_loading_port: row.loading_eta_arrival,
+    eta_berthed_at_loading_port: row.loading_eta_berthed,
+    eta_start_loading: row.loading_eta_start,
+    eta_completed_loading: row.loading_eta_completed,
+    eta_sailed_from_loading_port: row.loading_eta_sailed,
+    eta_arrive_at_discharge_port: row.discharge_eta_arrival,
+    eta_berthed_at_discharge_port: row.discharge_eta_berthed,
+    eta_start_discharging: row.discharge_eta_start,
+    eta_complete_discharge: row.discharge_eta_completed,
+    ata_arrival_at_loading_port: row.loading_ata_arrival,
+    ata_berthed_at_loading_port: row.loading_ata_berthed,
+    ata_start_loading: row.loading_ata_start,
+    ata_completed_loading: row.loading_ata_completed,
+    ata_sailed_from_loading_port: row.loading_ata_sailed,
+    ata_arrive_at_discharge_port: row.discharge_ata_arrival,
+    ata_berthed_at_discharge_port: row.discharge_ata_berthed,
+    ata_start_discharging: row.discharge_ata_start,
+    ata_complete_discharge: row.discharge_ata_completed,
+    contract_import_status: row.import_status,
+    quantity_delivered: row.delivered_qty,
+    quantity_delivered_klip: row.quantity_delivered_klip,
+    quantity_delivered_sap: row.delivered_qty,
+  });
+}
+
+export function applyShippingPerfDerivedStatuses(
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  for (const row of rows) {
+    row.status = deriveShippingPerfRowStatus(row);
+  }
+  return rows;
 }
 
 /** Collapse raw shipment rows to one row per STO with STO-level contract / outstanding qty. */
 export function aggregateShippingPerformanceRowsBySto(
   rows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
+  // Keep persisted DB status until merge (Shipments floors on mixed DB status, then derives
+  // from MAX-merged milestones). Do not derive before grouping.
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const row of rows) {
     const key = shippingPerfStoGroupKey(row);
@@ -177,27 +401,78 @@ export function invalidateShippingPerformanceRowCache(): void {
   }
 }
 
-const SHIPPING_PERFORMANCE_SQL = `
-      WITH latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS contract_ext_no,
+const SHIPPING_PERF_SEA_ROW_SCOPE = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
+
+const SHIPPING_PERF_VIEW_TABLE_QTY = buildShippingPerfViewTableQtySelectSql();
+
+export async function buildShippingPerformanceSql(): Promise<string> {
+  /**
+   * `latest_spd_contract` is the latest SAP row per contract - which is exactly what
+   * contract_latest_spd_snapshot stores, one row per contract_number (18,711 = 18,711 distinct,
+   * verified). Built live it is a DISTINCT ON over every sap_processed_data row carrying its
+   * jsonb: 12.0s of a 111.7s EXPLAIN (ANALYZE) on 2026-09-08.
+   *
+   * One projection, two sources, so the snapshot form and the live form cannot drift apart. The
+   * only column the snapshot lacks is `spd.sto_number`, which the live form reads first when
+   * building effective_sto - and dropping it is provably a no-op here: across all 18,711 latest
+   * rows, 0 have that column set while the jsonb STO paths are empty, and 0 hold a different
+   * value from them, so effective_sto is identical either way.
+   *
+   * Gated on freshness, so a stale snapshot falls back to the live DISTINCT ON rather than
+   * serving pre-import values.
+   */
+  const latestSpdContractProjection = (dataExpr: string, stoColumnExpr?: string) => `
+          contract_number,
+          NULLIF(TRIM(COALESCE(
+            ${stoColumnExpr ? `${stoColumnExpr},
+            ` : ''}${dataExpr}->'raw'->>'STO No.',
+            ${dataExpr}->'raw'->>'STO Number',
+            ${dataExpr}->'shipment'->>'sto_no',
+            ${dataExpr}->'contract'->>'sto_no'
+          )), '') AS effective_sto,
+          COALESCE(${dataExpr}->'raw'->>'Contract Ext No', ${dataExpr}->>'Contract Ext No') AS contract_ext_no,
           UPPER(TRIM(COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
+            ${dataExpr}->'contract'->>'contract_type',
+            ${dataExpr}->>'B2B Flag',
             ''
           ))) AS b2b_flag,
           NULLIF(TRIM(COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          )), '') AS contract_reference_po
+            ${dataExpr}->'contract'->>'contract_reference_po',
+            ${dataExpr}->>'CONTRACT REFF PO',
+            ${dataExpr}->>'Contract Reff PO Ini',
+            ${dataExpr}->'raw'->>'Contract Reff PO Ini',
+            ${dataExpr}->'raw'->>'CONTRACT REFF PO'
+          )), '') AS contract_reference_po,
+          ${sapDischargeDestinationFromJson(dataExpr)} AS discharge_destination`;
+
+  const latestSpdContractCte = (await isContractLatestSpdSnapshotFresh())
+    ? `latest_spd_contract AS NOT MATERIALIZED (
+        SELECT ${latestSpdContractProjection('lspd.data')}
+        FROM contract_latest_spd_snapshot lspd
+        WHERE lspd.contract_number IS NOT NULL AND TRIM(lspd.contract_number) != ''
+      )`
+    : `latest_spd_contract AS (
+        SELECT DISTINCT ON (spd.contract_number) ${latestSpdContractProjection('spd.data', 'spd.sto_number::text')}
         FROM sap_processed_data spd
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      ),
+        /*
+         * spd.id DESC is the tiebreaker the shared helpers already use
+         * (contractLatestSpdSql.ts, all three builders) - this query was the one that lacked it.
+         * Without it the pick is arbitrary whenever a contract has several rows sharing the newest
+         * created_at, which is 2,382 of 18,711 contracts (12.7%) and in every one of those the
+         * tied rows carry different STO values, so effective_sto could change between runs, after
+         * a re-plan or after a VACUUM. It also made this CTE disagree with
+         * contract_latest_spd_snapshot on 1,523 contracts, which is what blocked reading it from
+         * there. (Blast radius today: 24 of 2,399 shipment rows reach the l.effective_sto
+         * fallback at all, and none of them sit on an ambiguous contract - so nothing visible
+         * moves. It is fixed because "nothing visible today" depends on which contracts happen to
+         * have a blank sto_number.)
+         */
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST, spd.id DESC
+      )`;
+
+  return `
+      WITH ${latestSpdContractCte},
       ship_keys AS (
         SELECT
           s.id AS shipment_pk,
@@ -205,7 +480,8 @@ const SHIPPING_PERFORMANCE_SQL = `
           ${shippingPerfStoMetricsKeyExpr('c', 's')} AS sto_key
         FROM shipments s
         INNER JOIN contracts c ON s.contract_id = c.id
-        WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+        WHERE ${SHIPPING_PERF_SEA_ROW_SCOPE}
       ),
       spd_keyed AS (
         SELECT
@@ -259,7 +535,8 @@ const SHIPPING_PERFORMANCE_SQL = `
           )), '')) AS remark,
           MAX(${sapSpdLoadingPortTextExpr('sk2')}) AS sap_vessel_loading_port_1,
           MAX(${sapSpdDischargePortTextExpr('sk2')}) AS sap_vessel_discharge_port,
-          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap
+          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap,
+          MAX(${sapDischargeDestinationFromJson('sk2.data')}) AS discharge_destination
         FROM ship_keys sk
         LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
         GROUP BY sk.shipment_pk
@@ -269,10 +546,14 @@ const SHIPPING_PERFORMANCE_SQL = `
           vlp.shipment_id,
           vlp.eta_vessel_arrival::date AS load_eta_arrival,
           vlp.eta_vessel_berthed_at_loading_port::date AS load_eta_berthed,
+          vlp.eta_loading_start::date AS load_eta_start,
           vlp.eta_loading_completed::date AS load_eta_completed,
+          vlp.eta_vessel_sailed::date AS load_eta_sailed,
           vlp.ata_vessel_arrival::date AS load_ata_arrival,
           vlp.ata_vessel_berthed::date AS load_ata_berthed,
-          vlp.ata_loading_completed::date AS load_ata_completed
+          vlp.ata_loading_start::date AS load_ata_start,
+          vlp.ata_loading_completed::date AS load_ata_completed,
+          vlp.ata_vessel_sailed::date AS load_ata_sailed
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = false
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
@@ -282,21 +563,35 @@ const SHIPPING_PERFORMANCE_SQL = `
           vlp.shipment_id,
           vlp.eta_vessel_arrive_at_discharge_port::date AS discharge_eta_arrival,
           vlp.eta_vessel_berthed_at_discharge_port::date AS discharge_eta_berthed,
+          vlp.eta_vessel_start_discharging::date AS discharge_eta_start,
           vlp.eta_vessel_complete_discharge::date AS discharge_eta_completed,
           vlp.ata_vessel_arrival::date AS discharge_ata_arrival,
           vlp.ata_vessel_berthed::date AS discharge_ata_berthed,
+          vlp.ata_loading_start::date AS discharge_ata_start,
           vlp.ata_loading_completed::date AS discharge_ata_completed
         FROM vessel_loading_ports vlp
         WHERE COALESCE(vlp.is_discharge_port, false) = true
         ORDER BY vlp.shipment_id, vlp.port_sequence NULLS LAST, vlp.id
       ),
-      ${buildShippingPerfStoMetricsCte()}
+      ${await resolveContractsQtyMoveCte({
+        kind: 'in_subquery',
+        subquery: `SELECT DISTINCT TRIM(sk.contract_id)
+          FROM ship_keys sk
+          WHERE sk.contract_id IS NOT NULL AND TRIM(sk.contract_id) <> ''`,
+      })},
+      ${buildShippingPerfStoMetricsCte()},
+      ${SHIPPING_PERF_CONTRACT_OS_CTE}
       SELECT
         s.id,
+        (SELECT COUNT(*)::int FROM remarks r WHERE r.related_entity_type = 'SHIPMENT' AND r.related_entity_id = s.id) AS remarks_count,
         s.shipment_id,
         NULLIF(TRIM(s.operation_id), '') AS operation_id,
         ${SHIPPING_PERF_STO_GROUP_KEY_EXPR} AS sto_key,
         COALESCE(sm.contract_numbers, c.contract_id::text) AS contract_number,
+        -- SAP presence of the owning contract, carried on the row: the page's cards are
+        -- aggregated in JS from this same row set, so exclusion happens there while the
+        -- table keeps showing the row.
+        COALESCE(c.sap_presence, 'PRESENT') AS sap_presence,
         COALESCE(sm.po_numbers, c.po_number::text) AS po_number,
         sm.po_numbers,
         sm.contract_numbers,
@@ -305,13 +600,23 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.contract_date::date AS contract_date,
         c.incoterm,
         c.product,
+        c.source_type,
         c.supplier,
+        pss.import_status AS import_status,
         COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
-        ${sqlShipmentDisplayVesselName('sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
+        ${sqlShipmentDisplayVesselName('mv.vessel_name_master', 'sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
+        NULLIF(TRIM(s.charter_type), '') AS charter_type,
+        s.fuel_consumption,
+        s.freight,
+        s.pump_rate,
+        s.sailing_speed,
+        s.shortage,
+        s.vessel_oa_budget,
         COALESCE(
-          NULLIF(TRIM(pnc.group_plant), ''),
-          NULLIF(TRIM(pna.group_plant), ''),
+          NULLIF(TRIM(b2b_end.discharge_destination), ''),
+          NULLIF(TRIM(sa.discharge_destination), ''),
+          NULLIF(TRIM(l.discharge_destination), ''),
           'Blank'
         ) AS plant_site,
         NULLIF(TRIM(s.port_of_loading), '') AS port_of_loading,
@@ -341,16 +646,22 @@ const SHIPPING_PERFORMANCE_SQL = `
         c.cargo_readiness_date::date AS cargo_readiness_date,
         COALESCE(lp.load_eta_arrival, s.eta_arrival::date) AS loading_eta_arrival,
         COALESCE(lp.load_eta_berthed, s.eta_berthed::date) AS loading_eta_berthed,
+        COALESCE(lp.load_eta_start, s.eta_loading_start::date) AS loading_eta_start,
         COALESCE(lp.load_eta_completed, s.eta_loading_complete::date) AS loading_eta_completed,
+        COALESCE(lp.load_eta_sailed, s.eta_sailed::date) AS loading_eta_sailed,
         COALESCE(dp.discharge_eta_arrival, s.eta_discharge_arrival::date) AS discharge_eta_arrival,
         COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) AS discharge_eta_berthed,
+        COALESCE(dp.discharge_eta_start, s.eta_discharge_start::date) AS discharge_eta_start,
         COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date) AS discharge_eta_completed,
-        COALESCE(lp.load_ata_arrival, s.ata_arrival::date) AS loading_ata_arrival,
-        COALESCE(lp.load_ata_berthed, s.ata_berthed::date) AS loading_ata_berthed,
-        COALESCE(lp.load_ata_completed, s.ata_loading_complete::date) AS loading_ata_completed,
-        COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) AS discharge_ata_arrival,
-        COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) AS discharge_ata_berthed,
-        COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date) AS discharge_ata_completed,
+        COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) AS loading_ata_arrival,
+        COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) AS loading_ata_berthed,
+        COALESCE(sao.ata_loading_start, s.ata_loading_start::date, lp.load_ata_start) AS loading_ata_start,
+        COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed) AS loading_ata_completed,
+        COALESCE(sao.ata_sailed, s.ata_sailed::date, lp.load_ata_sailed) AS loading_ata_sailed,
+        COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) AS discharge_ata_arrival,
+        COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) AS discharge_ata_berthed,
+        COALESCE(sao.ata_discharge_start, s.ata_discharge_start::date, dp.discharge_ata_start) AS discharge_ata_start,
+        COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed) AS discharge_ata_completed,
         (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - c.cargo_readiness_date::date)::int AS loading_delta_eta_etr_days,
         (COALESCE(lp.load_eta_arrival, s.eta_arrival::date) - COALESCE(lp.load_eta_berthed, s.eta_berthed::date))::int AS loading_delta_eta_etb_days,
         (COALESCE(lp.load_eta_berthed, s.eta_berthed::date) - COALESCE(lp.load_eta_completed, s.eta_loading_complete::date))::int AS loading_delta_etb_etc_days,
@@ -371,67 +682,59 @@ const SHIPPING_PERFORMANCE_SQL = `
             COALESCE((COALESCE(dp.discharge_eta_berthed, s.eta_discharge_berthed::date) - COALESCE(dp.discharge_eta_completed, s.eta_discharge_complete::date)), 0)
           )::int
         END AS total_delta_days,
-        (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
-        (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date))::int AS ata_loading_delta_eta_etb_days,
-        (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date))::int AS ata_loading_delta_etb_etc_days,
-        (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date))::int AS ata_discharge_delta_eta_etb_days,
-        (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date))::int AS ata_discharge_delta_etb_etc_days,
+        (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date)::int AS ata_loading_delta_eta_etr_days,
+        (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed))::int AS ata_loading_delta_eta_etb_days,
+        (COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed))::int AS ata_loading_delta_etb_etc_days,
+        (COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed))::int AS ata_discharge_delta_eta_etb_days,
+        (COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed))::int AS ata_discharge_delta_etb_etc_days,
         CASE
-          WHEN (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date) IS NULL
-            AND (COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)) IS NULL
-            AND (COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)) IS NULL
-            AND (COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)) IS NULL
-            AND (COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)) IS NULL
+          WHEN (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date) IS NULL
+            AND (COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed)) IS NULL
+            AND (COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed)) IS NULL
+            AND (COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed)) IS NULL
+            AND (COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed)) IS NULL
           THEN NULL
           ELSE (
-            COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - c.cargo_readiness_date::date), 0) +
-            COALESCE((COALESCE(lp.load_ata_arrival, s.ata_arrival::date) - COALESCE(lp.load_ata_berthed, s.ata_berthed::date)), 0) +
-            COALESCE((COALESCE(lp.load_ata_berthed, s.ata_berthed::date) - COALESCE(lp.load_ata_completed, s.ata_loading_complete::date)), 0) +
-            COALESCE((COALESCE(dp.discharge_ata_arrival, s.ata_discharge_arrival::date) - COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date)), 0) +
-            COALESCE((COALESCE(dp.discharge_ata_berthed, s.ata_discharge_berthed::date) - COALESCE(dp.discharge_ata_completed, s.ata_discharge_complete::date)), 0)
+            COALESCE((COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - c.cargo_readiness_date::date), 0) +
+            COALESCE((COALESCE(sao.ata_arrival, s.ata_arrival::date, lp.load_ata_arrival) - COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed)), 0) +
+            COALESCE((COALESCE(sao.ata_berthed, s.ata_berthed::date, lp.load_ata_berthed) - COALESCE(sao.ata_loading_complete, s.ata_loading_complete::date, lp.load_ata_completed)), 0) +
+            COALESCE((COALESCE(sao.ata_discharge_arrival, s.ata_discharge_arrival::date, dp.discharge_ata_arrival) - COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed)), 0) +
+            COALESCE((COALESCE(sao.ata_discharge_berthed, s.ata_discharge_berthed::date, dp.discharge_ata_berthed) - COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete::date, dp.discharge_ata_completed)), 0)
           )::int
         END AS ata_total_delta_days,
         sa.remark,
         COALESCE(sm.sto_qty, 0)::numeric AS sto_qty,
-        COALESCE(sm.received_qty, 0)::numeric AS received_qty,
-        COALESCE(sm.delivered_qty, 0)::numeric AS delivered_qty,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.receivedQtySql} AS received_qty,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.deliveredQtySql} AS delivered_qty,
         COALESCE(sm.planning_qty, 0)::numeric AS planning_qty,
-        COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty_actual,
+        COALESCE(sm.po_sto_count, 1)::int AS po_sto_count,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingActualSql} AS outstanding_qty_actual,
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingAggregateSql} AS outstanding_qty_aggregate,
         COALESCE(sm.outstanding_qty_planning, 0)::numeric AS outstanding_qty_planning,
-        COALESCE(sm.outstanding_qty_actual, 0)::numeric AS outstanding_qty
+        ${SHIPPING_PERF_VIEW_TABLE_QTY.outstandingActualSql} AS outstanding_qty
       FROM shipments s
       INNER JOIN contracts c ON s.contract_id = c.id
+      ${SHIPMENT_ATA_OVERRIDES_JOIN}
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+      ${perfStoStatusJoinSql()}
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
+      ${SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN}
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-          AND NULLIF(TRIM(c.company_name), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(c.company_name, '')))
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pnc ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(c.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pna ON TRUE
-      WHERE UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+      WHERE ${SHIPPING_PERF_SEA_ROW_SCOPE}
         AND COALESCE(s.status, '') <> 'CANCELLED'
         AND NOT (
           l.contract_number IS NOT NULL
           AND COALESCE(l.b2b_flag, '') = 'B2B'
           AND l.contract_reference_po IS NOT NULL
         )
-      ORDER BY s.created_at DESC`;
+      -- id tiebreaker: bulk-imported shipments share created_at, so without it row order
+      -- among ties is plan-dependent, and the STO-group merge picks fields from the last
+      -- tied row it sees. Ties keep a stable order now.
+      ORDER BY s.created_at DESC, s.id DESC`;
+}
 
 function parseStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
@@ -466,9 +769,9 @@ function filterGlobalRows(rows: Record<string, unknown>[], filters: ShippingPerf
     if (filters.incoterms.length > 0 && !filters.incoterms.includes(inc)) return false;
     const plant = String(row.plant_site || '').trim() || 'Blank';
     if (filters.plants.length > 0 && !filters.plants.includes(plant)) return false;
-    const cDate = toIsoDate10FromCell(row.contract_date) ?? '';
-    if (filters.dateFrom && cDate && cDate < filters.dateFrom) return false;
-    if (filters.dateTo && cDate && cDate > filters.dateTo) return false;
+    if (!shippingPerfRowMatchesContractDateRange(row.contract_date, filters.dateFrom, filters.dateTo)) {
+      return false;
+    }
     return true;
   });
 }
@@ -480,14 +783,6 @@ function deltaField(mode: SummaryMode, etaField: string): string {
 }
 
 function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMode): PerVesselPerfSummary {
-  const byVessel = new Map<string, Record<string, unknown>[]>();
-  for (const row of rows) {
-    const vessel = String(row.vessel_name || '').trim() || 'Unknown';
-    const bucket = byVessel.get(vessel);
-    if (bucket) bucket.push(row);
-    else byVessel.set(vessel, [row]);
-  }
-
   let rowCount = 0;
   let totalQty = 0;
   let sumLoadingEtaEtr = 0;
@@ -497,26 +792,26 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
   let sumDischargeEtbEtc = 0;
   let sumTotalDelta = 0;
   const contracts = new Set<string>();
+  const stoKeys = new Set<string>();
 
-  for (const vesselRows of byVessel.values()) {
-    for (const row of vesselRows) {
-      rowCount += 1;
-      const contractNumber = String(row.contract_number || '').trim();
-      if (contractNumber) contracts.add(contractNumber);
-      totalQty += Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
-      sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
-      sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
-      sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
-      sumDischargeEtaEtb += Number(row[deltaField(mode, 'discharge_delta_eta_etb_days')] ?? 0);
-      sumDischargeEtbEtc += Number(row[deltaField(mode, 'discharge_delta_etb_etc_days')] ?? 0);
-      sumTotalDelta += Number(row[mode === 'ata' ? 'ata_total_delta_days' : 'total_delta_days'] ?? 0);
-    }
+  for (const row of rows) {
+    rowCount += 1;
+    stoKeys.add(shippingPerfStoGroupKey(row));
+    const contractNumber = String(row.contract_number || '').trim();
+    if (contractNumber) contracts.add(contractNumber);
+    totalQty += shippingPerfOutstandingQtyKgForAggregate(row);
+    sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
+    sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
+    sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
+    sumDischargeEtaEtb += Number(row[deltaField(mode, 'discharge_delta_eta_etb_days')] ?? 0);
+    sumDischargeEtbEtc += Number(row[deltaField(mode, 'discharge_delta_etb_etc_days')] ?? 0);
+    sumTotalDelta += Number(row[mode === 'ata' ? 'ata_total_delta_days' : 'total_delta_days'] ?? 0);
   }
 
   if (rowCount === 0) return { ...EMPTY_SUMMARY };
 
   return {
-    vesselCount: byVessel.size,
+    vesselCount: stoKeys.size,
     contractCount: contracts.size,
     totalQty,
     avgLoadingEtaEtr: sumLoadingEtaEtr / rowCount,
@@ -547,7 +842,7 @@ function buildPerfTree(rows: Record<string, unknown>[]): ShippingPerfTreeNode[] 
     const plant = String(row.plant_site || '').trim() || 'Blank';
     const inc = String(row.incoterm || '').trim() || 'Blank';
     const ves = String(row.vessel_name || '').trim() || 'Unknown';
-    const qty = Number(row.outstanding_qty_actual ?? row.outstanding_qty ?? 0);
+    const qty = shippingPerfOutstandingQtyKgForAggregate(row);
 
     if (!root.has(prod)) root.set(prod, { count: 0, totalQty: 0, plants: new Map() });
     const pN = root.get(prod)!;
@@ -610,7 +905,7 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
-      const result = await query(SHIPPING_PERFORMANCE_SQL);
+      const result = await query(await buildShippingPerformanceSql());
       const rows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
       ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       return rows;
@@ -648,9 +943,22 @@ export async function warmShippingPerformanceRowCache(): Promise<void> {
  * active use, and renews the cache shortly before its TTL so users are always served
  * from memory. Data freshness is unchanged (cache is still at most CACHE_TTL_MS old).
  */
-export function startShippingPerformanceCacheWarmer(): void {
-  void warmShippingPerformanceRowCache();
-  if (keepWarmTimer) return;
+export function startShippingPerformanceCacheWarmer(): Promise<void> {
+  /**
+   * The initial warm is returned, not fire-and-forget.
+   *
+   * `runWarmupJobsSequentially` can only sequence a job that hands it a promise; a job returning
+   * void falls back to the 5s inter-job gap, which means the work carries on in parallel with
+   * whatever runs next. Measured on the dev host 2026-09-09: this warmer, Trucking and Oil Loss
+   * were all released in the 15s before the heaviest job (Shipments scope row sets) and were
+   * still running throughout it - the queue's "one heavy query in flight" property was broken at
+   * exactly the point it mattered most. Returning the promise restores it.
+   *
+   * `warmShippingPerformanceRowCache` swallows its own errors, so this can never reject and the
+   * queue's failure path stays unused.
+   */
+  const initialWarm = warmShippingPerformanceRowCache();
+  if (keepWarmTimer) return initialWarm;
   keepWarmTimer = setInterval(() => {
     if (Date.now() - lastAccessedAt > KEEP_WARM_MAX_IDLE_MS) return;
     if (refreshInFlight) return;
@@ -662,6 +970,7 @@ export function startShippingPerformanceCacheWarmer(): void {
   }, KEEP_WARM_CHECK_MS);
   // Do not keep the event loop alive solely for the warmer.
   keepWarmTimer.unref?.();
+  return initialWarm;
 }
 
 export function stopShippingPerformanceCacheWarmer(): void {
@@ -681,13 +990,21 @@ export async function runShippingPerformance(req: AuthRequest, part: ShippingPer
   const filteredRows = filterGlobalRows(rows, filters);
 
   if (part === 'rows') {
+    // The table keeps showing SAP-withdrawn rows (badged client-side) so their history stays
+    // reachable; only the aggregates below drop them.
     return { rows: filteredRows };
   }
 
+  // Contracts whose PO was cancelled/deleted in SAP must not contribute to the performance
+  // cards or the drilldown tree - they can never complete, so they would skew every average.
+  const countableRows = filteredRows.filter(
+    (row) => String(row.sap_presence ?? 'PRESENT') !== 'WITHDRAWN',
+  );
+
   if (part === 'summary') {
     return {
-      etaSummary: buildPerVesselSummary(filteredRows, 'eta'),
-      ataSummary: buildPerVesselSummary(filteredRows, 'ata'),
+      etaSummary: buildPerVesselSummary(countableRows, 'eta'),
+      ataSummary: buildPerVesselSummary(countableRows, 'ata'),
       meta: {
         incoterms: distinctValues(rows, 'incoterm'),
         plantSites: distinctValues(rows, 'plant_site'),
@@ -696,7 +1013,7 @@ export async function runShippingPerformance(req: AuthRequest, part: ShippingPer
   }
 
   return {
-    tree: buildPerfTree(filteredRows),
-    remarks: buildRemarksList(filteredRows),
+    tree: buildPerfTree(countableRows),
+    remarks: buildRemarksList(countableRows),
   };
 }

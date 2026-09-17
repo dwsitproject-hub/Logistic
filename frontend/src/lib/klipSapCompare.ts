@@ -1,0 +1,155 @@
+import { formatDateDMY } from '@/lib/dateFormat'
+
+export type KlipSapCompareFormat = 'date' | 'number' | 'text'
+
+function normalizeDate(value: unknown): string {
+  if (value == null || value === '') return ''
+  return String(value).trim().slice(0, 10)
+}
+
+function parseNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  const normalized = String(value).replace(/,/g, '').trim()
+  if (!normalized) return null
+  const parsed = parseFloat(normalized)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizeText(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  return String(value).replace(/\r/g, '').trim()
+}
+
+export function formatKlipSapDisplayValue(
+  value: unknown,
+  format: KlipSapCompareFormat,
+): string {
+  if (format === 'text') {
+    const text = normalizeText(value)
+    return text || '—'
+  }
+  if (format === 'date') {
+    const normalized = normalizeDate(value)
+    return normalized ? formatDateDMY(normalized) : '—'
+  }
+  const num = parseNumber(value)
+  if (num == null) return '—'
+  return num.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+export function klipSapValuesEqual(
+  klipValue: unknown,
+  sapValue: unknown,
+  format: KlipSapCompareFormat,
+): boolean {
+  if (format === 'text') {
+    const k = normalizeText(klipValue).toUpperCase()
+    const s = normalizeText(sapValue).toUpperCase()
+    if (!k && !s) return true
+    return k === s
+  }
+  if (format === 'date') {
+    const k = normalizeDate(klipValue)
+    const s = normalizeDate(sapValue)
+    if (!k && !s) return true
+    return k === s
+  }
+  const k = parseNumber(klipValue)
+  const s = parseNumber(sapValue)
+  if (k == null && s == null) return true
+  if (k == null || s == null) return false
+  return Math.abs(k - s) < 1e-9
+}
+
+export function formatDateDelta(klipValue: unknown, sapValue: unknown): string | null {
+  const k = normalizeDate(klipValue)
+  const s = normalizeDate(sapValue)
+  if (!k || !s || k === s) return null
+  const kMs = Date.parse(k)
+  const sMs = Date.parse(s)
+  if (Number.isNaN(kMs) || Number.isNaN(sMs)) return null
+  const days = Math.round((kMs - sMs) / (1000 * 60 * 60 * 24))
+  if (days === 0) return null
+  return days > 0 ? `+${days}d` : `${days}d`
+}
+
+export function formatNumberDelta(klipValue: unknown, sapValue: unknown): string | null {
+  const k = parseNumber(klipValue)
+  const s = parseNumber(sapValue)
+  if (k == null || s == null) return null
+  const delta = k - s
+  if (Math.abs(delta) < 1e-9) return null
+  const sign = delta > 0 ? '+' : ''
+  return `${sign}${delta.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+}
+
+export function formatKlipSapDelta(
+  klipValue: unknown,
+  sapValue: unknown,
+  format: KlipSapCompareFormat,
+): string | null {
+  if (format === 'text') return null
+  return format === 'date'
+    ? formatDateDelta(klipValue, sapValue)
+    : formatNumberDelta(klipValue, sapValue)
+}
+
+export function hasKlipSapMismatch(
+  klipValue: unknown,
+  sapValue: unknown,
+  format: KlipSapCompareFormat,
+): boolean {
+  const sapEmpty =
+    format === 'text'
+      ? !normalizeText(sapValue)
+      : format === 'date'
+        ? !normalizeDate(sapValue)
+        : parseNumber(sapValue) == null
+  if (sapEmpty) return false
+  return !klipSapValuesEqual(klipValue, sapValue, format)
+}
+
+/**
+ * Does this field hold anything at all, in the format's own terms?
+ *
+ * Needed to tell "no value" apart from "a value that happens to match SAP" - the badge means
+ * different things in those two cases, and treating them alike is how a blank field ended up
+ * claiming to be KLIP input.
+ */
+export function hasKlipSapValue(value: unknown, format: KlipSapCompareFormat): boolean {
+  return formatKlipSapDisplayValue(value, format) !== '—'
+}
+
+export type KlipSapProvenance = 'none' | 'sap' | 'klip'
+
+/**
+ * SAP-only: value matches SAP (or is the only source with a SAP counterpart).
+ * KLIP: recorded edit or value differs from SAP; also a filled value with no SAP reference.
+ * none: field is empty.
+ */
+export function resolveKlipSapProvenance({
+  klipValue,
+  sapValue,
+  format,
+  klipEdited = false,
+}: {
+  klipValue: unknown
+  sapValue: unknown
+  format: KlipSapCompareFormat
+  klipEdited?: boolean
+}): KlipSapProvenance {
+  if (!hasKlipSapValue(klipValue, format)) return 'none'
+  const mismatch = hasKlipSapMismatch(klipValue, sapValue, format)
+  if (klipEdited || mismatch) return 'klip'
+  if (hasKlipSapValue(sapValue, format)) return 'sap'
+  return 'klip'
+}
+
+export function shouldShowKlipSapFooter(
+  provenance: KlipSapProvenance,
+  sapValue: unknown,
+  format: KlipSapCompareFormat,
+): boolean {
+  return provenance === 'klip' && hasKlipSapValue(sapValue, format)
+}

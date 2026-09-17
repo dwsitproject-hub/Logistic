@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
 echo "[klip-backend] Ensuring upload directories exist..."
-mkdir -p uploads/claim-mutu uploads/documents
+mkdir -p uploads/claim-mutu uploads/documents \
+  "uploads/SAP Data/Original" "uploads/SAP Data/Success" "uploads/SAP Data/Failed"
 echo "[klip-backend] Running database migrations..."
 node dist/database/migrate.js
 echo "[klip-backend] Seeding default users (admin, trading, etc.)..."

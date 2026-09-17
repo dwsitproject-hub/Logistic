@@ -94,6 +94,12 @@ export const OIL_LOSS_TRUCK_TRANSPORT_WHERE_SQL = `(
   ${OIL_LOSS_RESOLVED_MODE_SQL} = 'LAND'
 )`;
 
+/** Vessel segment only (CIF/FOB + SEA or MIX+V) — Shipments Attention loss rows. */
+export const OIL_LOSS_VESSEL_ELIGIBILITY_WHERE_SQL = `(
+  ${OIL_LOSS_RESOLVED_INCOTERM_SQL} IN ('CIF', 'FOB')
+  AND ${OIL_LOSS_VESSEL_TRANSPORT_WHERE_SQL}
+)`;
+
 /** WHERE fragment — reference columns available on `enriched` / final row. */
 export const OIL_LOSS_ELIGIBILITY_WHERE_SQL = `(
   (

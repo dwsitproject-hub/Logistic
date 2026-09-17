@@ -1,15 +1,18 @@
-import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
 import {
-  buildQtyMoveCte,
-  sqlContractGlobalOutstandingExpr,
-} from './contractGlobalOutstandingSql';
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from './shipmentManualQtyResolveSql';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 
 /**
- * STO-level outstanding quantity (kg) using the same incoterm rules as the Contracts list:
+ * Outstanding quantity (kg) using the same incoterm rules as the Contracts list:
  * CIF/CFR/FRC → Quantity Receive; FOB/LCO → Quantity Delivery; others → receive or delivery.
+ * `baseQtyExpr` is typically Contract Qty (not STO Qty).
  */
 
 export function shipmentOutstandingQtyExpr(opts: {
+  /** @deprecated name kept for callers — pass Contract Qty (or other base), not STO Qty */
   stoQtyExpr: string;
   receiveExpr: string;
   deliveryExpr: string;
@@ -37,23 +40,30 @@ export function shipmentListOutstandingQtySql(
   saAlias = 'sa',
   slAlias = 'sl',
 ): string {
+  const closed = `COALESCE(${spAlias}.is_contract_sap_closed, FALSE)`;
   return shipmentOutstandingQtyExpr({
-    stoQtyExpr: `NULLIF(${saAlias}.sto_quantity, 0)`,
-    receiveExpr: shipmentManualQtyResolveSql(
+    // Contract Qty base (aligned with View Table / Shipping Perf OS Actual)
+    stoQtyExpr: `NULLIF(COALESCE(${saAlias}.contract_qty, ${spAlias}.contract_qty), 0)`,
+    receiveExpr: sqlShipmentResolvedReceiveKg(
+      closed,
       `${spAlias}.actual_vessel_qty_receive`,
       `${saAlias}.quantity_receive`,
     ),
-    deliveryExpr: shipmentManualQtyResolveSql(
-      `${spAlias}.quantity_delivered`,
+    deliveryExpr: sqlShipmentResolvedDeliveryKg(
+      closed,
+      `${spAlias}.quantity_delivered_klip`,
       `${saAlias}.quantity_delivered_sap`,
+      `${spAlias}.quantity_delivered`,
     ),
     incotermExpr: `COALESCE(${slAlias}.incoterm, ${spAlias}.incoterm)`,
   });
 }
 
 /** Page-scoped qty_move for shipments list (contracts on current page only). */
-export function shipmentListQtyMoveCteFromPage(pageCte = 'shipment_page'): string {
-  return buildQtyMoveCte({
+export async function shipmentListQtyMoveCteFromPage(
+  pageCte = 'shipment_page',
+): Promise<string> {
+  return resolveContractsQtyMoveCte({
     kind: 'in_subquery',
     subquery: `SELECT DISTINCT TRIM(cn) AS contract_number
       FROM ${pageCte} sp

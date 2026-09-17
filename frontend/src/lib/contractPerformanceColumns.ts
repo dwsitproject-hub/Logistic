@@ -3,7 +3,7 @@
  * Isolated from `/contracts` and other pages; do not import from shared table configs elsewhere.
  */
 
-import { migrateSavedColumnLayout } from '@/lib/columnLayoutMigration'
+import { migrateSavedColumnLayout, mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
 import {
   buildCompactTableColumnWidthTracks,
   resolveCompactColumnWidthPx,
@@ -13,6 +13,7 @@ import {
   getOperationalColumnLayout,
   type OperationalColumnLayout,
 } from '@/lib/operationalTableLayout'
+import { formatContractViewTableReceiveQtyMt } from '@/lib/contractPerformanceExport'
 import {
   formatSapOutstandingQtyMtDisplay,
   formatSapQtyMtDisplay,
@@ -39,6 +40,7 @@ export const CONTRACT_PERF_COLUMN_ORDER: readonly string[] = [
   'product',
   'status_overall',
   'contract_qty',
+  'delivery_qty',
   'outstanding_qty_mt',
   'trade_cycle_days',
   'dp_cycle_days',
@@ -50,10 +52,10 @@ export const CONTRACT_PERF_COLUMN_ORDER: readonly string[] = [
 export const CONTRACT_PERF_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = CONTRACT_PERF_COLUMN_ORDER
 
 /** Bump when default column order/visibility changes — triggers one-time local reset on the CP page. */
-export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v5'
+export const CONTRACT_PERF_COLUMN_LAYOUT_VERSION = 'cp-columns-v6'
 
 /** Contracts list (/contracts) — separate from Contract Performance layout version. */
-export const CONTRACTS_COLUMN_LAYOUT_VERSION = 'contracts-columns-v1'
+export const CONTRACTS_COLUMN_LAYOUT_VERSION = 'contracts-columns-v3'
 
 export const CONTRACTS_COLUMN_LAYOUT_VERSION_KEY = 'contracts.compact.columnLayoutVersion'
 
@@ -124,24 +126,7 @@ export function contractPerfCompactColumnFallbackOrder(allIds: string[]): string
 
 /** Preserve saved user order; append any new columns from canonical fallback. */
 export function mergeContractPerfColumnOrder(saved: string[], allIds: string[]): string[] {
-  const canonical = contractPerfCompactColumnFallbackOrder(allIds)
-  if (saved.length === 0) return canonical
-
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const id of saved) {
-    if (allIds.includes(id) && !seen.has(id)) {
-      out.push(id)
-      seen.add(id)
-    }
-  }
-  for (const id of canonical) {
-    if (!seen.has(id)) {
-      out.push(id)
-      seen.add(id)
-    }
-  }
-  return out
+  return mergePreservedColumnOrder(saved, allIds, contractPerfCompactColumnFallbackOrder(allIds))
 }
 
 /** Section 3 compact table — shared by Contract Performance and Contracts pages. */
@@ -171,13 +156,14 @@ export function getContractPerfTableColumnLayout(colId: string): OperationalColu
 /** Section 3 compact table — fixed px widths (Contract Performance only). */
 export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 88,
-  supplier: 112,
+  supplier: 152,
   contract_ext_no: 96,
   po_number: 80,
   source_type: 72,
   product: 96,
   incoterm: 64,
   contract_qty: 88,
+  delivery_qty: 96,
   outstanding_qty_mt: 96,
   trade_cycle_days: 80,
   dp_cycle_days: 72,
@@ -186,10 +172,7 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   month_delivery_end: 96,
   contract_id: 120,
   group_name: 120,
-  contract_aging: 100,
-  delivery_status: 100,
   status_overall: 88,
-  unusual_status: 88,
   received_qty: 120,
   outstanding_qty: 120,
   over_under_delivery_status: 140,
@@ -199,10 +182,10 @@ export const CONTRACT_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   delivery_start: 108,
   delivery_end: 108,
   cargo_readiness_date: 120,
+  last_planning_delivery_date: 140,
   vessel_name: 120,
   eta_vessel_completed_loading: 108,
   eta_vessel_complete_discharge: 108,
-  created_at: 100,
 }
 
 /** Multi-word / long text columns — ID columns use operational nowrap/stack layout instead. */
@@ -216,6 +199,7 @@ export const CONTRACT_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'contract_ext_no',
   'po_number',
   'contract_qty',
+  'delivery_qty',
   'outstanding_qty_mt',
   'received_qty',
 ])
@@ -261,6 +245,7 @@ export type ContractPerfCellTooltipSource = {
   sto_number?: string | null
   sto_numbers?: string | null
   quantity_ordered?: number | null
+  quantity_delivery?: number | null
   quantity_receive?: number | null
   outstanding_quantity?: number | null
 }
@@ -292,8 +277,10 @@ export function contractPerfCellTooltipText(
       return (row.sto_numbers || row.sto_number || '').trim() || null
     case 'contract_qty':
       return formatSapQtyMtDisplay(row.quantity_ordered)
+    case 'delivery_qty':
+      return formatSapQtyMtDisplay(row.quantity_delivery)
     case 'received_qty':
-      return formatSapQtyMtDisplay(row.quantity_receive)
+      return formatContractViewTableReceiveQtyMt(row.quantity_receive)
     case 'outstanding_qty_mt':
       return formatSapOutstandingQtyMtDisplay(row.outstanding_quantity)
     default:

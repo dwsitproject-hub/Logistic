@@ -1,3 +1,4 @@
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 /** SQL expression: latest SAP supplier name from sap_processed_data row `spd`. */
 export const sapSupplierFromProcessedDataSql = `
   NULLIF(TRIM(COALESCE(
@@ -19,3 +20,43 @@ export const sapTruckingLoadingLocationSql = `
     NULLIF(TRIM(spd.data->'raw'->>'Loading Location'), '')
   )), '')
 `;
+
+/** View-table overlay: SAP truck loading fields only (not Supplier). */
+export const sapTruckingListLoadingLocationSql = `
+  NULLIF(TRIM(COALESCE(
+    NULLIF(TRIM(spd.data->'raw'->>'Truck Loading Location'), ''),
+    NULLIF(TRIM(spd.data->'raw'->>'Truck Loading at Starting Location'), ''),
+    NULLIF(TRIM(spd.data->'trucking'->0->'data'->>'truck_loading_at_starting_location'), ''),
+    NULLIF(TRIM(spd.data->'raw'->>'Loading Location'), '')
+  )), '')
+`;
+
+/** View-table overlay: SAP truck discharge / unload fields. */
+export const sapTruckingListDischargeLocationSql = `
+  NULLIF(TRIM(COALESCE(
+    NULLIF(TRIM(spd.data->'raw'->>'Truck Discharge Location'), ''),
+    NULLIF(TRIM(spd.data->'raw'->>'Truck Unload Location'), ''),
+    NULLIF(TRIM(spd.data->'trucking'->0->'data'->>'truck_unloading_at_starting_location'), ''),
+    NULLIF(TRIM(spd.data->'raw'->>'Truck Unloading at Starting Location'), '')
+  )), '')
+`;
+
+/**
+ * SAP Discharge Destination — source of truth for Trucking modal Plant/Site
+ * and operational Region/Site filters. Prefer shipment JSON, then raw column.
+ */
+/**
+ * The single point where Discharge Destination is read out of SAP JSON, so the Region/Site alias
+ * map is applied here rather than at each of the eight call sites (see
+ * dischargeDestinationAlias.ts: KIJING is the port for the Tanjung Pura plants, which
+ * master_plants already groups as 'Tanjung Pura').
+ */
+export function sapDischargeDestinationFromJson(dataExpr: string): string {
+  return sqlNormalizeDischargeDestination(`NULLIF(TRIM(COALESCE(
+    NULLIF(TRIM(${dataExpr}->'shipment'->>'discharge_destination'), ''),
+    NULLIF(TRIM(${dataExpr}->'raw'->>'Discharge Destination'), ''),
+    NULLIF(TRIM(${dataExpr}->>'discharge_destination'), '')
+  )), '')`);
+}
+
+export const sapDischargeDestinationSql = sapDischargeDestinationFromJson('spd.data');

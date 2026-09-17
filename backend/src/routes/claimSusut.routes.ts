@@ -8,6 +8,10 @@ import {
   listClaimSusutImports,
   listClaimSusutRows,
   listClaimSusutByGroupOfTransport,
+  getClaimSusutFilterOptions,
+  getClaimSusutSummary,
+  getClaimSusutTree,
+  getClaimSusutImportById,
 } from '../controllers/claimSusut.controller';
 
 const router = express.Router();
@@ -42,6 +46,11 @@ router.post('/upload', upload.single('file'), auditLog('CREATE', 'CLAIM_SUSUT_IM
 
 // List imports
 router.get('/imports', listClaimSusutImports);
+router.get('/imports/:id', getClaimSusutImportById);
+
+router.get('/filter-options', getClaimSusutFilterOptions);
+router.get('/summary', getClaimSusutSummary);
+router.get('/tree', getClaimSusutTree);
 
 // List rows (defaults to latest import if importId not provided)
 router.get('/rows', listClaimSusutRows);

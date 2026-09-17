@@ -878,8 +878,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
   }
 
   const formatKg = (mt: unknown) => {
-    const n = parseNumberLoose(mt)
-    if (n === null) return '-'
+    const n = parseNumberLoose(mt) ?? 0
     if (quantityUnit === 'mt') return `${formatNumber(n / 1_000)} MT`
     return `${formatNumber(n)} Kg`
   }
@@ -1985,8 +1984,7 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
         {/* Welcome Section */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">{pageTitle}</h1>
-            <p className="text-gray-600 mt-2">
+            <p className="text-gray-600">
               Welcome to KPN Logistics Intelligence Platform
             </p>
           </div>

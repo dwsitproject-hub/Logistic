@@ -10,7 +10,6 @@ import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import api from '@/lib/api'
 import { AI_KLIP_AGENT_ACTIVITY_PAGE_PERMISSION } from '@/lib/aiKlipAgentActivity'
 import { formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
-import { ScrollText } from 'lucide-react'
 
 type ActivityLogRow = {
   id: string
@@ -131,15 +130,9 @@ function AiKlipAgentActivityPageContent() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <ScrollText className="h-8 w-8 text-violet-600" />
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Log Activity — AI Klip Agent</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            Audit trail of AI Klip Agent actions (Shipment Planner and Chat).
-          </p>
-        </div>
-      </div>
+      <p className="text-gray-500 text-sm">
+        Audit trail of AI Klip Agent actions (Shipment Planner and Chat).
+      </p>
 
       <Card>
         <CardHeader>

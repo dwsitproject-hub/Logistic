@@ -1,8 +1,12 @@
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
-import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import {
+  buildContractDetailsForStoSql,
+  sqlSiblingShipmentGroupMatchSql,
+} from '../utils/contractDetailsForStoSql';
 import {
   buildSeaContractsQtyMoveCte,
+  PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR,
   PO_GLOBAL_OUTSTANDING_PLANNING_EXPR,
 } from '../utils/contractPoGlobalMetricsSql';
 import { deriveShipmentStatus } from '../utils/shipmentStatus';
@@ -29,12 +33,13 @@ const PO_LINE_SELECT_FIELDS = `
     ${resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code')} AS plant_code,
     ${groupPlantExpr(resolvedPlantCodeSql('c.contract_id', 'c.po_number', 'c.plant_code'), 'c.company_name')} AS plant_site,
     ${contractExtNoSubquery('c.contract_id', 'c.po_number')} AS contract_ext_no,
-    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity_planning,
-    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity
+    ${PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR} AS outstanding_quantity,
+    ${PO_GLOBAL_OUTSTANDING_ACTUAL_EXPR} AS outstanding_quantity_actual,
+    ${PO_GLOBAL_OUTSTANDING_PLANNING_EXPR} AS outstanding_quantity_planning
 `;
 
-function buildPoLineByRowIdSql(): string {
-  const qtyMoveCte = buildSeaContractsQtyMoveCte();
+async function buildPoLineByRowIdSql(): Promise<string> {
+  const qtyMoveCte = await buildSeaContractsQtyMoveCte();
   return `
     WITH ${qtyMoveCte}
     SELECT
@@ -45,8 +50,8 @@ function buildPoLineByRowIdSql(): string {
   `;
 }
 
-function buildGlobalAvailablePoLinesSql(): string {
-  const qtyMoveCte = buildSeaContractsQtyMoveCte();
+async function buildGlobalAvailablePoLinesSql(): Promise<string> {
+  const qtyMoveCte = await buildSeaContractsQtyMoveCte();
   return `
     WITH ${qtyMoveCte},
     candidates AS (
@@ -65,7 +70,7 @@ function buildGlobalAvailablePoLinesSql(): string {
     )
     SELECT *
     FROM candidates
-    WHERE COALESCE(outstanding_quantity_planning, 0)::numeric > 0
+    WHERE COALESCE(outstanding_quantity, 0)::numeric > 0
     ORDER BY COALESCE(po_number, contract_id), contract_id
     LIMIT $2::int
   `;
@@ -73,6 +78,23 @@ function buildGlobalAvailablePoLinesSql(): string {
 
 export function poLineKey(contractNumber: string, poNumber: string | null | undefined): string {
   return `${String(contractNumber).trim().toLowerCase()}::${String(poNumber ?? '').trim().toLowerCase()}`;
+}
+
+/** Exact PO-line key, then unique contract match if the client omitted / mismatched PO. */
+export function lookupPoLineMetricKg(
+  byKey: Map<string, number>,
+  contractNumber: string,
+  poNumber: string | null | undefined,
+): number {
+  const exact = byKey.get(poLineKey(contractNumber, poNumber));
+  if (exact != null) return exact;
+  const prefix = `${String(contractNumber).trim().toLowerCase()}::`;
+  const matches: number[] = [];
+  for (const [key, kg] of byKey) {
+    if (key.startsWith(prefix)) matches.push(kg);
+  }
+  if (matches.length === 1) return matches[0];
+  return 0;
 }
 
 export async function upsertPoQtyAssignment(
@@ -83,6 +105,7 @@ export async function upsertPoQtyAssignment(
 ): Promise<void> {
   await ensureUserStoContractAssignmentsTable();
   const poKey = poNumber ? String(poNumber).trim() : '';
+  const qty = Number.isFinite(qtyKg) && qtyKg > 0 ? qtyKg : 0;
   await query(
     `
     DELETE FROM user_sto_contract_assignments
@@ -92,15 +115,15 @@ export async function upsertPoQtyAssignment(
     `,
     [assignmentKey, contractNumber, poKey],
   );
-  if (qtyKg > 0) {
-    await query(
-      `
-      INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
-      VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
-      `,
-      [assignmentKey, contractNumber, poKey || null, qtyKg],
-    );
-  }
+  // Always keep a row (including 0 kg) so Add PO links the contract into the STO group
+  // for Edit Shipment Section 2 discovery — previously qty 0 deleted the link and the PO vanished.
+  await query(
+    `
+    INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
+    VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
+    `,
+    [assignmentKey, contractNumber, poKey || null, qty],
+  );
 }
 
 /** @deprecated Prefer upsertPoQtyAssignment with kg. */
@@ -160,7 +183,7 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   const searchPattern = `%${searchRaw}%`;
 
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
-  const lines = await query(buildGlobalAvailablePoLinesSql(), [searchPattern, limit]);
+  const lines = await query(await buildGlobalAvailablePoLinesSql(), [searchPattern, limit]);
 
   const out: Record<string, unknown>[] = [];
   const seenRowIds = new Set<string>();
@@ -168,8 +191,8 @@ export async function listAvailablePurchaseOrdersForShipmentEdit(
   for (const row of lines.rows as Array<Record<string, unknown>>) {
     const rowId = String(row.contract_row_id ?? '');
     if (!rowId || seenRowIds.has(rowId)) continue;
-    const outstandingPlan = Number(row.outstanding_quantity_planning ?? row.outstanding_quantity ?? 0);
-    if (!Number.isFinite(outstandingPlan) || outstandingPlan <= 0) continue;
+    const outstandingActual = Number(row.outstanding_quantity_actual ?? row.outstanding_quantity ?? 0);
+    if (!Number.isFinite(outstandingActual) || outstandingActual <= 0) continue;
     const key = poLineKey(String(row.contract_id ?? ''), row.po_number as string | null);
     if (existingKeys.has(key)) continue;
     seenRowIds.add(rowId);
@@ -234,7 +257,7 @@ export async function attachPurchaseOrderToShipment(args: {
 
   await ensureUserStoContractAssignmentsTable();
 
-  const poLineRes = await query(buildPoLineByRowIdSql(), [contractRowId]);
+  const poLineRes = await query(await buildPoLineByRowIdSql(), [contractRowId]);
   if (poLineRes.rows.length === 0) {
     return { ok: false, status: 404, message: 'Contract / PO line not found' };
   }
@@ -246,16 +269,11 @@ export async function attachPurchaseOrderToShipment(args: {
 
   const contractNumber = String(poLine.contract_id ?? '').trim();
   const poNumber = poLine.po_number != null ? String(poLine.po_number).trim() : null;
-  const outstandingPlanKg = Number(poLine.outstanding_quantity_planning ?? poLine.outstanding_quantity ?? 0);
-  if (!Number.isFinite(outstandingPlanKg) || outstandingPlanKg <= 0) {
-    return { ok: false, status: 400, message: 'This PO has no outstanding planning quantity remaining' };
-  }
-  if (qtyKg > outstandingPlanKg + 1e-6) {
-    return {
-      ok: false,
-      status: 400,
-      message: `Shipment Plan Qty exceeds global OS Qty (Plan) (${Math.round(outstandingPlanKg)} kg)`,
-    };
+  const outstandingActualKg = Number(
+    poLine.outstanding_quantity_actual ?? poLine.outstanding_quantity ?? 0,
+  );
+  if (!Number.isFinite(outstandingActualKg) || outstandingActualKg <= 0) {
+    return { ok: false, status: 400, message: 'This PO has no outstanding actual quantity remaining' };
   }
 
   const existingKeys = await fetchExistingPoKeys(context.lookup_key, context.contract_numbers);
@@ -418,9 +436,8 @@ export async function attachPurchaseOrderToShipment(args: {
     resultShipmentUuid = String(insertRes.rows[0].id);
   }
 
-  if (qtyKg > 0) {
-    await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
-  }
+  // Always link PO to STO group (plan qty may be 0 until user sets Shipment Plan Qty).
+  await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
 
   return {
     ok: true,
@@ -451,22 +468,6 @@ export async function batchSaveShipmentPoPlanQty(args: {
 
   await ensureUserStoContractAssignmentsTable();
 
-  if (context.has_sap_sto) {
-    return { ok: true };
-  }
-
-  const contractList = context.contract_numbers
-    .split(',')
-    .map((c) => c.trim())
-    .filter(Boolean);
-  const detailsSql = buildContractDetailsForStoSql();
-  const detailsRes = await query(detailsSql, [context.lookup_key, contractList]);
-  const budgetByKey = new Map<string, number>();
-  for (const row of detailsRes.rows as Array<Record<string, unknown>>) {
-    const key = poLineKey(String(row.contract_number ?? ''), row.po_number as string | null);
-    budgetByKey.set(key, Number(row.outstanding_qty_planning_budget ?? row.outstanding_qty_planning ?? 0));
-  }
-
   for (const row of args.rows) {
     const contractNumber = String(row.contractNumber ?? '').trim();
     if (!contractNumber) continue;
@@ -476,16 +477,127 @@ export async function batchSaveShipmentPoPlanQty(args: {
       return { ok: false, status: 400, message: `Invalid Shipment Plan Qty for ${contractNumber}` };
     }
 
-    const budget = budgetByKey.get(poLineKey(contractNumber, poNumber)) ?? 0;
-    if (qtyKg > budget + 1e-6) {
+    await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
+  }
+
+  return { ok: true };
+}
+
+export interface PoKlipQtyRow {
+  contractNumber: string;
+  poNumber?: string | null;
+  quantityDeliveredKlipKg: number | null;
+  quantityReceiveKlipKg: number | null;
+}
+
+export type BatchSavePoKlipResult =
+  | { ok: true }
+  | { ok: false; status: number; message: string };
+
+async function findSiblingShipmentIdForContract(
+  lookupKey: string,
+  contractNumber: string,
+  anchorShipmentUuid: string,
+): Promise<string | null> {
+  const groupMatch = sqlSiblingShipmentGroupMatchSql({
+    lookupKeySql: '$2::text',
+    contractNumberSql: '$1::text',
+    anchorShipmentIdSql: '$3::uuid',
+  });
+  const result = await query(
+    `
+    SELECT s.id::text AS shipment_id
+    FROM shipments s
+    INNER JOIN contracts c ON c.id = s.contract_id
+    WHERE COALESCE(s.status, '') <> 'CANCELLED'
+      AND TRIM(c.contract_id) = TRIM($1::text)
+      AND (
+        ${groupMatch}
+      )
+    ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+    LIMIT 1
+    `,
+    [contractNumber, lookupKey, anchorShipmentUuid],
+  );
+  const id = result.rows[0]?.shipment_id;
+  return id != null && String(id).trim() !== '' ? String(id).trim() : null;
+}
+
+/** Persist Delivered/Received Qty (KLIP) onto each sibling shipment (one contract/PO row). */
+export async function batchSaveShipmentPoKlipQty(args: {
+  anchorShipmentUuid: string;
+  rows: PoKlipQtyRow[];
+}): Promise<BatchSavePoKlipResult> {
+  const context = await resolveShipmentEditContext(args.anchorShipmentUuid);
+  if (!context?.lookup_key) {
+    return { ok: false, status: 400, message: 'Could not resolve shipment STO / operation group' };
+  }
+
+  for (const row of args.rows) {
+    const contractNumber = String(row.contractNumber ?? '').trim();
+    if (!contractNumber) continue;
+
+    const delivered =
+      row.quantityDeliveredKlipKg == null || row.quantityDeliveredKlipKg === undefined
+        ? null
+        : Number(row.quantityDeliveredKlipKg);
+    const receive =
+      row.quantityReceiveKlipKg == null || row.quantityReceiveKlipKg === undefined
+        ? null
+        : Number(row.quantityReceiveKlipKg);
+
+    if (delivered != null && (!Number.isFinite(delivered) || delivered < 0)) {
       return {
         ok: false,
         status: 400,
-        message: `Shipment Plan Qty for ${contractNumber} exceeds OS Qty (Plan)`,
+        message: `Invalid Delivered Qty (KLIP) for ${contractNumber}`,
+      };
+    }
+    if (receive != null && (!Number.isFinite(receive) || receive < 0)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `Invalid Received Qty (KLIP) for ${contractNumber}`,
+      };
+    }
+    if (delivered == null && receive == null) continue;
+
+    const siblingId = await findSiblingShipmentIdForContract(
+      context.lookup_key,
+      contractNumber,
+      args.anchorShipmentUuid,
+    );
+    if (!siblingId) {
+      return {
+        ok: false,
+        status: 400,
+        message: `No sibling shipment found for contract ${contractNumber} under this STO / operation`,
       };
     }
 
-    await upsertPoQtyAssignment(context.lookup_key, contractNumber, poNumber, qtyKg);
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+    if (delivered != null) {
+      sets.push(`quantity_delivered = $${paramIndex}::numeric`);
+      values.push(delivered);
+      paramIndex++;
+      sets.push(`quantity_delivered_klip = $${paramIndex}::numeric`);
+      values.push(delivered);
+      paramIndex++;
+    }
+    if (receive != null) {
+      sets.push(`actual_vessel_qty_receive = $${paramIndex}::numeric`);
+      values.push(receive);
+      paramIndex++;
+    }
+    sets.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(siblingId);
+
+    await query(
+      `UPDATE shipments SET ${sets.join(', ')} WHERE id = $${paramIndex}::uuid`,
+      values,
+    );
   }
 
   return { ok: true };

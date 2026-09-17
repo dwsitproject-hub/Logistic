@@ -14,6 +14,7 @@ import {
   partitionShippingPerfVesselModalRows,
   resolveVesselModalHistoryDeltaDays,
   resolveVesselModalOpenDeltaDays,
+  resolveVesselModalTcMetricDisplay,
   sortShippingPerfVesselModalRows,
   VESSEL_MODAL_HISTORY_COLUMNS,
   VESSEL_MODAL_OPEN_COLUMNS,
@@ -25,6 +26,15 @@ import {
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatShipmentStatusLabel, shipmentStatusBadgeClass } from '@/lib/shipmentStatusDisplay'
 import { cn } from '@/lib/utils'
+import { computeROilLossSummary } from '@/lib/oilLossSummary'
+import { resolveShippingTcShortageMtForListRow } from '@/lib/shipmentTcR4Shortage'
+import {
+  TC_VESSEL_PERF_LABELS,
+  TC_VESSEL_PERF_TOOLTIPS,
+} from '@/lib/shipmentTcPerformanceLabels'
+import { FieldHelp } from '@/components/FieldHelp'
+import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
+import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 import { Anchor, Loader2, Ship, X } from 'lucide-react'
 
 export type VesselHistoryModalSelection = {
@@ -40,7 +50,8 @@ type MasterVesselProfile = {
   vessel_owner_group: string | null
   vessel_owner: string | null
   vessel_capacity_mt: number | null
-  hull_type: string | null
+  hull_type?: string | null
+  vessel_type?: string | null
   lambung_type: string | null
 }
 
@@ -106,16 +117,82 @@ function displayLabel(value: unknown, fallback = '-'): string {
   return formatSapDisplayValue(value, fallback)
 }
 
+/** Postgres `numeric` columns (e.g. TC vessel metrics) arrive as strings — coerce, don't reject. */
+function toFiniteNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 function avgAtaDelta(
   rows: VesselHistoryShipmentRow[],
   key: keyof VesselHistoryShipmentRow,
 ): number | null {
   const vals = rows
-    .map((r) => r[key])
-    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+    .map((r) => toFiniteNumber(r[key]))
+    .filter((v): v is number => v !== null)
   if (vals.length === 0) return null
   const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
   return Math.round(avg * 10) / 10
+}
+
+/** Port flow rate for one row = shipped MT / berth→complete days (actual). FOB→Delivered, else→Received. */
+function rowPortFlowRate(row: VesselHistoryShipmentRow, port: 'lp' | 'dp'): number | null {
+  const isFob = String(row.incoterm ?? '').trim().toUpperCase() === 'FOB'
+  const numeratorKg = isFob ? row.delivered_qty : row.received_qty
+  const delta =
+    port === 'lp' ? row.ata_loading_delta_etb_etc_days : row.ata_discharge_delta_etb_etc_days
+  const days = typeof delta === 'number' && Number.isFinite(delta) ? -delta : null
+  if (days === null || days <= 0) return null
+  if (typeof numeratorKg !== 'number' || !Number.isFinite(numeratorKg)) return null
+  return numeratorKg / 1000 / days
+}
+
+/** Vessel average of the per-shipment flow rate (nulls excluded). */
+function avgVesselFlowRate(rows: VesselHistoryShipmentRow[], port: 'lp' | 'dp'): number | null {
+  const vals = rows
+    .map((r) => rowPortFlowRate(r, port))
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v))
+  if (vals.length === 0) return null
+  return Math.round((vals.reduce((sum, v) => sum + v, 0) / vals.length) * 10) / 10
+}
+
+function formatFlowRate1(v: number | null): string {
+  return v == null || !Number.isFinite(v)
+    ? '-'
+    : v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+}
+
+function formatPct1(v: number | null): string {
+  return v == null || !Number.isFinite(v) ? '-' : `${v.toFixed(1)}%`
+}
+
+function formatMt1(v: number | null): string {
+  return v == null || !Number.isFinite(v)
+    ? '-'
+    : `${v.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} MT`
+}
+
+const TC_VESSEL_METRIC_COLUMN_KEYS = new Set<VesselModalOpenColumnKey | VesselModalHistoryColumnKey>([
+  'fuel_consumption',
+  'freight',
+  'vessel_oa_budget',
+  'pump_rate',
+  'sailing_speed',
+  'shortage',
+])
+
+function isTcVesselMetricColumn(
+  key: VesselModalOpenColumnKey | VesselModalHistoryColumnKey,
+): boolean {
+  return TC_VESSEL_METRIC_COLUMN_KEYS.has(key)
+}
+
+function formatTcVesselMetric(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '-'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
 function renderDeltaDaysCell(days: number | null) {
@@ -147,6 +224,13 @@ function renderOpenCell(row: ShippingPerfVesselModalAggregatedRow, key: VesselMo
   if (isVesselModalOpenDeltaColumn(key)) {
     return renderDeltaDaysCell(resolveVesselModalOpenDeltaDays(row, key))
   }
+  if (isTcVesselMetricColumn(key)) {
+    return (
+      <span className="tabular-nums">
+        {formatTcVesselMetric(resolveVesselModalTcMetricDisplay(row, key))}
+      </span>
+    )
+  }
   return <span>{displayLabel(row[key])}</span>
 }
 
@@ -167,6 +251,13 @@ function renderHistoryCell(row: ShippingPerfVesselModalAggregatedRow, key: Vesse
   }
   if (isVesselModalHistoryDeltaColumn(key)) {
     return renderDeltaDaysCell(resolveVesselModalHistoryDeltaDays(row, key))
+  }
+  if (isTcVesselMetricColumn(key)) {
+    return (
+      <span className="tabular-nums">
+        {formatTcVesselMetric(resolveVesselModalTcMetricDisplay(row, key))}
+      </span>
+    )
   }
   return <span>{displayLabel(row[key])}</span>
 }
@@ -332,6 +423,8 @@ export default function VesselHistoryModal({
 }: VesselHistoryModalProps) {
   const [profile, setProfile] = useState<MasterVesselProfile | null>(null)
   const [profileLoading, setProfileLoading] = useState(false)
+  const [oilLossRows, setOilLossRows] = useState<OilLossSourceRow[]>([])
+  const [oilLossLoading, setOilLossLoading] = useState(false)
 
   const vesselRows = useMemo(() => {
     if (!selection) return []
@@ -339,6 +432,55 @@ export default function VesselHistoryModal({
       (row) => normalizeVesselKey(row.vessel_name) === selection.vesselKey,
     )
   }, [sourceRows, selection])
+
+  // Vessel-average LP/DP flow rate (self-contained; matches the By-Vessel / table columns).
+  const avgLpFlowRate = useMemo(() => avgVesselFlowRate(vesselRows, 'lp'), [vesselRows])
+  const avgDpFlowRate = useMemo(() => avgVesselFlowRate(vesselRows, 'dp'), [vesselRows])
+
+  // TC vessel performance metrics — averaged across whatever shipments are in scope (all statuses),
+  // matching the By Vessel table's aggregateByVessel treatment (not restricted to Closed only).
+  const avgTcMetrics = useMemo(
+    () => ({
+      fuel_consumption: avgAtaDelta(vesselRows, 'fuel_consumption'),
+      freight: avgAtaDelta(vesselRows, 'freight'),
+      vessel_oa_budget: avgAtaDelta(vesselRows, 'vessel_oa_budget'),
+      pump_rate: avgAtaDelta(vesselRows, 'pump_rate'),
+      sailing_speed: avgAtaDelta(vesselRows, 'sailing_speed'),
+      shortage:
+        vesselRows.length > 0
+          ? (() => {
+              const vals = vesselRows
+                .map((row) =>
+                  resolveShippingTcShortageMtForListRow({
+                    shortage: toFiniteNumber(row.shortage),
+                    delivered_qty: toFiniteNumber(row.delivered_qty),
+                    received_qty: toFiniteNumber(row.received_qty),
+                  }),
+                )
+                .filter((v): v is number => v !== null)
+              if (vals.length === 0) return null
+              const avg = vals.reduce((sum, v) => sum + v, 0) / vals.length
+              return Math.round(avg * 100) / 100
+            })()
+          : null,
+    }),
+    [vesselRows],
+  )
+
+  // Per-vessel oil-loss R1-R4 (% and MT), from the same /api/oil-loss data the Oil Loss page uses.
+  const vesselOilLoss = useMemo(() => {
+    const target = normalizeVesselNameForMatch(selection?.vesselName)
+    const rows = target
+      ? oilLossRows.filter((r) => normalizeVesselNameForMatch(r.vessel_name) === target)
+      : []
+    return {
+      rowCount: rows.length,
+      r1: computeROilLossSummary(rows, 'r1'),
+      r2: computeROilLossSummary(rows, 'r2'),
+      r3: computeROilLossSummary(rows, 'r3'),
+      r4: computeROilLossSummary(rows, 'r4'),
+    }
+  }, [oilLossRows, selection])
 
   const { nextShipmentRows, onGoingRows, historyRows, historySourceRows } = useMemo(() => {
     const partitioned = partitionShippingPerfVesselModalRows(vesselRows)
@@ -373,7 +515,8 @@ export default function VesselHistoryModal({
           vessel_owner_group: exact.vessel_owner_group ?? null,
           vessel_owner: exact.vessel_owner ?? null,
           vessel_capacity_mt: parseMasterVesselCapacityMt(exact.vessel_capacity_mt),
-          hull_type: exact.hull_type ?? null,
+          vessel_type: exact.vessel_type ?? exact.hull_type ?? null,
+          hull_type: exact.vessel_type ?? exact.hull_type ?? null,
           lambung_type: exact.lambung_type ?? null,
         })
       }
@@ -389,6 +532,29 @@ export default function VesselHistoryModal({
     void fetchVesselProfile(selection.vesselName)
   }, [open, selection, fetchVesselProfile])
 
+  // Load closed-contract oil-loss data once per open; filtered to the vessel client-side.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setOilLossLoading(true)
+    api
+      .get('/oil-loss')
+      .then((r) => {
+        if (cancelled) return
+        const raw = Array.isArray(r.data?.data) ? (r.data.data as OilLossSourceRow[]) : []
+        setOilLossRows(filterOilLossEligibleRows(raw))
+      })
+      .catch((error) => {
+        console.error('Failed to load oil loss for vessel modal:', error)
+      })
+      .finally(() => {
+        if (!cancelled) setOilLossLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
   if (!open || !selection) return null
 
   const vesselTitle = formatVesselModalTitle(profile?.vessel_code, selection.vesselName)
@@ -397,13 +563,13 @@ export default function VesselHistoryModal({
     { label: 'Owner Group', value: displayLabel(profile?.vessel_owner_group) },
     { label: 'Owner', value: displayLabel(profile?.vessel_owner) },
     {
-      label: 'Capacity (MT)',
+      label: 'Capacity',
       value:
         profile?.vessel_capacity_mt != null
           ? profile.vessel_capacity_mt.toLocaleString('en-US', { maximumFractionDigits: 2 })
           : '-',
     },
-    { label: 'Hull Type', value: displayLabel(profile?.hull_type) },
+    { label: 'Vessel Type', value: displayLabel(profile?.vessel_type ?? profile?.hull_type) },
     { label: 'Lambung Type', value: displayLabel(profile?.lambung_type) },
   ]
 
@@ -474,6 +640,104 @@ export default function VesselHistoryModal({
                   Close performance averages (ATA)
                 </div>
                 <VesselAtaAveragesGrid historyShipments={historySourceRows} />
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-4 rounded-lg border border-gray-200 bg-gray-50/40 p-4 lg:grid-cols-2">
+              <div className="min-w-0">
+                <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Flow rate &amp; oil loss (vessel average)
+                  {oilLossLoading ? <Loader2 className="h-3 w-3 animate-spin text-gray-400" /> : null}
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                  {[
+                    { label: 'Avg LP Flow Rate', value: formatFlowRate1(avgLpFlowRate) },
+                    { label: 'Avg DP Flow Rate', value: formatFlowRate1(avgDpFlowRate) },
+                    {
+                      label: 'Avg R1 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r1.avgPct)} · ${formatMt1(vesselOilLoss.r1.avgMt)}`,
+                    },
+                    {
+                      label: 'Avg R2 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r2.avgPct)} · ${formatMt1(vesselOilLoss.r2.avgMt)}`,
+                    },
+                    {
+                      label: 'Avg R3 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r3.avgPct)} · ${formatMt1(vesselOilLoss.r3.avgMt)}`,
+                    },
+                    {
+                      label: 'Avg R4 Oil Loss',
+                      value: `${formatPct1(vesselOilLoss.r4.avgPct)} · ${formatMt1(vesselOilLoss.r4.avgMt)}`,
+                    },
+                  ].map((metric) => (
+                    <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
+                      <span
+                        className="truncate text-[10px] leading-tight text-gray-500"
+                        title={metric.label}
+                      >
+                        {metric.label}
+                      </span>
+                      <span className="text-[11px] font-bold tabular-nums text-gray-900">
+                        {metric.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] leading-snug text-gray-400">
+                  Flow rate = MT ÷ berth→complete days (FOB: Delivered, CIF/CFR: Received).
+                  Oil loss shown as avg % · avg MT across the vessel&apos;s closed contracts.
+                </p>
+              </div>
+              <div className="min-w-0 border-t border-gray-200 pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
+                  {TC_VESSEL_PERF_LABELS.sectionAvgTitle}
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                  {[
+                    {
+                      label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl,
+                      value: formatTcVesselMetric(avgTcMetrics.fuel_consumption),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.freightActualIdrKg,
+                      value: formatTcVesselMetric(avgTcMetrics.freight),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg,
+                      value: formatTcVesselMetric(avgTcMetrics.vessel_oa_budget),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.pumpRateMtH,
+                      value: formatTcVesselMetric(avgTcMetrics.pump_rate),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.sailingSpeed,
+                      value: formatTcVesselMetric(avgTcMetrics.sailing_speed),
+                    },
+                    {
+                      label: TC_VESSEL_PERF_LABELS.shortageMt,
+                      value: formatTcVesselMetric(avgTcMetrics.shortage),
+                      helpText: TC_VESSEL_PERF_TOOLTIPS.shortageMt,
+                    },
+                  ].map((metric) => (
+                    <div key={metric.label} className="flex min-w-0 flex-col gap-0.5">
+                      <span
+                        className="inline-flex items-center gap-1 truncate text-[10px] leading-tight text-gray-500"
+                        title={metric.label}
+                      >
+                        {metric.label}
+                        {'helpText' in metric && metric.helpText ? (
+                          <FieldHelp text={metric.helpText} iconClassName="h-3 w-3" />
+                        ) : null}
+                      </span>
+                      <span className="text-[11px] font-bold tabular-nums text-gray-900">{metric.value}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] leading-snug text-gray-400">
+                  Fuel/Freight Actual/Pump Rate/Speed are manually entered per shipment (T/C vessels).
+                  Freight Budget is from SAP. Shortage (MT) uses R4 oil loss when quantities allow.
+                  Averages across shipments in scope.
+                </p>
               </div>
             </div>
           </section>

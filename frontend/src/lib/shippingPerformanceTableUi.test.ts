@@ -27,9 +27,11 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
     'discharge_delta_eta_etb_days',
     'discharge_delta_etb_etc_days',
     'total_delta_days',
+    'lp_flow_rate',
+    'dp_flow_rate',
   ]
 
-  it('defines 16 default visible columns in prescribed order', () => {
+  it('defines 18 default visible columns in prescribed order', () => {
     expect(ALL_SHIPMENTS_PRESET_COLUMN_ORDER).toEqual([
       'vessel_name',
       'sto_number',
@@ -47,6 +49,8 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
       'discharge_delta_eta_etb_days',
       'discharge_delta_etb_etc_days',
       'total_delta_days',
+      'lp_flow_rate',
+      'dp_flow_rate',
     ])
   })
 
@@ -61,15 +65,27 @@ describe('shippingPerformanceTableUi — All Shipments preset', () => {
     expect(visible.outstanding_qty_planning).toBe(false)
   })
 
-  it('places preset columns first then extras in definition order', () => {
-    expect(ensureAllShipmentsPresetColumnOrder(allKeys, allKeys).slice(0, 16)).toEqual([
-      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
-    ])
-    expect(ensureAllShipmentsPresetColumnOrder(allKeys, allKeys)).toEqual([
-      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
-      'contract_ext_no',
+  it('preserves saved user order and appends missing keys', () => {
+    expect(
+      ensureAllShipmentsPresetColumnOrder(
+        ['delivered_qty', 'vessel_name', 'sto_number'],
+        allKeys,
+      ),
+    ).toEqual([
       'delivered_qty',
+      'vessel_name',
+      'sto_number',
+      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter(
+        (key) => key !== 'vessel_name' && key !== 'sto_number',
+      ),
+      'contract_ext_no',
       'outstanding_qty_planning',
+    ])
+  })
+
+  it('uses preset order when saved order is empty', () => {
+    expect(ensureAllShipmentsPresetColumnOrder([], allKeys).slice(0, 18)).toEqual([
+      ...ALL_SHIPMENTS_PRESET_COLUMN_ORDER,
     ])
   })
 })

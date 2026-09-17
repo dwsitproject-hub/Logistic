@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasKlipShipmentPlanning,
+  shippingPerfHasKlipPlanningOnGroupedBaseSql,
   shippingPerfOperationalStoKeyExpr,
+  sqlShipmentBaseCoreHasKlipPlanningAggSelect,
   shippingPerfStoGroupKeyFromRow,
   shippingPerfStoMetricsKeyExpr,
 } from './shippingPerformanceStoSql';
@@ -14,6 +16,17 @@ describe('shippingPerformanceStoSql', () => {
     expect(sql).toContain('daily_deliverables');
     expect(sql).toContain('operation_id');
     expect(sql.indexOf('c.sto_number')).toBeLessThan(sql.lastIndexOf('s.shipment_id'));
+  });
+
+  it('aggregates KLIP planning into has_klip_planning on grouped shipment_base', () => {
+    const agg = sqlShipmentBaseCoreHasKlipPlanningAggSelect('s');
+    expect(agg).toContain('BOOL_OR');
+    expect(agg).toContain('has_klip_planning');
+    expect(agg).toContain('daily_deliverables');
+
+    const grouped = shippingPerfHasKlipPlanningOnGroupedBaseSql('sb');
+    expect(grouped).toContain('sb.has_klip_planning');
+    expect(grouped).not.toContain('daily_deliverables');
   });
 
   it('metrics key prefers numeric shipment_id before shared operation_id', () => {

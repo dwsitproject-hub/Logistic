@@ -1,0 +1,27 @@
+-- The Shipments page remaps B2B child rows to their origin contract with a LATERAL lookup
+-- (shipmentB2bOriginSql.ts): `SELECT o.id FROM contracts o WHERE ... AND TRIM(o.po_number::text)
+-- = TRIM(l_link.contract_reference_po_raw) ORDER BY o.created_at DESC NULLS LAST LIMIT 1`.
+--
+-- A unique index on TRIM(po_number) already existed (contracts_po_number_uidx) but the planner
+-- could not use it: it is partial (WHERE NULLIF(TRIM(po_number::text),'') IS NOT NULL), and the
+-- lookup also needs `ORDER BY created_at DESC LIMIT 1`. So the planner walked
+-- idx_contracts_created_at_desc in created_at order and filtered on the PO instead - EXPLAIN
+-- (ANALYZE, BUFFERS) on the Shipments summary query showed
+-- `Index Scan ... on contracts o_1 ... Rows Removed by Filter: 15555, Buffers: shared hit=933768`
+-- (~7.3 GB of buffer touches) for a table of ~19,700 rows, repeated across 332 loops.
+--
+-- This index carries the equality column and the ordering column together, so the LIMIT 1 is one
+-- descent instead of a filtered scan. It is not partial, so it applies whatever the right-hand
+-- side of the comparison is.
+--
+-- Access-path only: an index changes how rows are found, never which rows come back. Measured on
+-- the dev DB with the same summary query and scope, the plan's root buffer count went
+-- 5,113,203 -> 4,176,563 (-18%) and the four `Rows Removed by Filter: 15555` nodes disappeared.
+-- Wall-clock on the 1 GiB dev container swings ~2x run to run, so buffers are the metric here.
+--
+-- Deliberately NOT CONCURRENTLY: applySqlFile wraps every migration in BEGIN/COMMIT, and
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction block. contracts is ~19,700 rows,
+-- so the plain build is brief. Already created by hand on the dev database, which IF NOT EXISTS
+-- makes harmless here.
+CREATE INDEX IF NOT EXISTS idx_contracts_po_trim_created_desc
+  ON contracts (TRIM(BOTH FROM po_number::text), created_at DESC NULLS LAST);

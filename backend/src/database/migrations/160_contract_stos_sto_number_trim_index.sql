@@ -1,0 +1,27 @@
+-- `contractsOnStoSubquery` (stoLinkedContractSql.ts) decides which contracts belong to a grouped
+-- Shipments row. One of its four OR branches is
+-- `EXISTS (SELECT 1 FROM contract_stos cs WHERE cs.contract_id = cc.id
+--          AND TRIM(cs.sto_number::text) = <grouped STO key>)`.
+--
+-- contract_stos already had idx_contract_stos_sto_number on the bare column, but the TRIM makes
+-- it unusable, so the semi-join was planned as a hashed SubPlan over a sequential scan of all
+-- ~12,400 contract_stos rows - re-run once per output row. EXPLAIN (ANALYZE, BUFFERS) on the
+-- Shipments summary query showed `Seq Scan on contract_stos cs_1 ... Rows Removed by Filter: 12412,
+-- loops=463, Buffers: shared hit=106490`, and the four copies of the subquery each paid it.
+--
+-- Access-path only: an index changes how rows are found, never which rows come back. Measured on
+-- the dev DB with the same summary query and scope, the plan's root buffer count went
+-- 4,159,674 -> 3,618,351 (-13%), and the new index is used by 7 plan nodes.
+--
+-- Still outstanding after this: the outer `Seq Scan on contracts cc_2` (630,471 buffers, 463
+-- loops). That one is not an index problem - the four-way OR has to be evaluated per contract
+-- row, so removing it means rewriting the subquery to gather candidate contract ids from the four
+-- sources and look them up by key, which is a behaviour-sensitive change and deliberately not
+-- bundled here.
+--
+-- Deliberately NOT CONCURRENTLY: applySqlFile wraps every migration in BEGIN/COMMIT, and
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction block. contract_stos is ~12,400 rows,
+-- so the plain build is brief. Already created by hand on the dev database, which IF NOT EXISTS
+-- makes harmless here.
+CREATE INDEX IF NOT EXISTS idx_contract_stos_sto_number_trim
+  ON contract_stos (TRIM(BOTH FROM sto_number::text));

@@ -4,6 +4,8 @@ import { PoolClient } from 'pg';
 import { query, getClient } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
+import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
+import { canonicalizeUserRegionSites, expandRegionSiteMatchNames } from '../utils/userRegionSite';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -45,10 +47,14 @@ async function fetchUserAssociations(userIds: string[]): Promise<UserAssociation
     ),
   ]);
 
+  const groupPlantRowsByUser = new Map<string, unknown[]>();
   for (const row of groupPlantsResult.rows) {
-    const list = groupPlantsByUser.get(row.user_id) ?? [];
+    const list = groupPlantRowsByUser.get(row.user_id) ?? [];
     list.push(row.group_plant);
-    groupPlantsByUser.set(row.user_id, list);
+    groupPlantRowsByUser.set(row.user_id, list);
+  }
+  for (const [userId, names] of groupPlantRowsByUser) {
+    groupPlantsByUser.set(userId, canonicalizeUserRegionSites(names));
   }
 
   for (const row of productsResult.rows) {
@@ -64,11 +70,13 @@ function enrichUserRow(row: Record<string, unknown>, associations: UserAssociati
   const userId = String(row.id);
   const junctionGroupPlants = associations.groupPlantsByUser.get(userId) ?? [];
   const legacyPlant = typeof row.plant === 'string' ? row.plant.trim() : '';
-  const groupPlants = junctionGroupPlants.length > 0
-    ? junctionGroupPlants
-    : legacyPlant
-      ? [legacyPlant]
-      : [];
+  const groupPlants = canonicalizeUserRegionSites(
+    junctionGroupPlants.length > 0
+      ? junctionGroupPlants
+      : legacyPlant
+        ? legacyPlant.split(',').map((part) => part.trim())
+        : [],
+  );
   const products = associations.productsByUser.get(userId) ?? [];
 
   return {
@@ -91,18 +99,19 @@ async function syncUserPlants(
     return [];
   }
 
-  const uniqueNames = [...new Set(groupPlantNames.map((name) => String(name).trim()).filter(Boolean))];
+  const uniqueNames = canonicalizeUserRegionSites(groupPlantNames);
   if (uniqueNames.length === 0) {
     return [];
   }
 
+  const matchNames = expandRegionSiteMatchNames(uniqueNames);
   const resolved = await client.query(
     `SELECT id, ${MASTER_PLANT_GROUP_PLANT_SQL} AS group_plant
      FROM master_plants mp
      WHERE TRIM(LOWER(${MASTER_PLANT_GROUP_PLANT_SQL})) = ANY(
        SELECT TRIM(LOWER(unnest($1::text[])))
      )`,
-    [uniqueNames]
+    [matchNames]
   );
 
   for (const row of resolved.rows) {
@@ -114,7 +123,15 @@ async function syncUserPlants(
     );
   }
 
-  return [...new Set(resolved.rows.map((row) => String(row.group_plant)))].sort();
+  const saved = canonicalizeUserRegionSites(resolved.rows.map((row) => row.group_plant));
+  if (saved.length !== uniqueNames.length) {
+    logger.warn('User region/plant assignment: some values did not match master_plants.group_plant', {
+      userId,
+      requested: uniqueNames,
+      saved,
+    });
+  }
+  return saved;
 }
 
 async function syncUserProducts(
@@ -232,7 +249,6 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
 
   try {
     const {
-      username,
       email,
       password,
       full_name,
@@ -244,6 +260,17 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       plants,
       products,
     } = req.body;
+
+    const normalizedEmail = normalizeEmail(email);
+    const username = deriveUsernameFromEmail(normalizedEmail);
+
+    if (!normalizedEmail) {
+      res.status(400).json({
+        success: false,
+        error: { message: 'Email is required' },
+      });
+      return;
+    }
 
     const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
     const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
@@ -278,14 +305,14 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const existingUser = await client.query(
-      'SELECT * FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR username = $2',
+      [normalizedEmail, username]
     );
 
     if (existingUser.rows.length > 0) {
       res.status(400).json({
         success: false,
-        error: { message: 'Username or email already exists' },
+        error: { message: 'Email already exists' },
       });
       return;
     }
@@ -303,7 +330,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
        RETURNING id, username, email, full_name, role, is_active, is_first_login, phone, department, level, transport_type, plant, created_at`,
       [
         username,
-        email,
+        normalizedEmail,
         password_hash,
         full_name,
         role,
@@ -327,7 +354,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
 
     await client.query('COMMIT');
 
-    logger.info(`User created by ${req.user?.username}: ${username}`);
+    logger.info(`User created by ${req.user?.username}: ${normalizedEmail}`);
 
     res.status(201).json({
       success: true,
@@ -361,7 +388,6 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
   try {
     const { id } = req.params;
     const {
-      username,
       email,
       full_name,
       role,
@@ -383,6 +409,13 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       });
       return;
     }
+
+    const normalizedEmail = email != null && String(email).trim() !== ''
+      ? normalizeEmail(email)
+      : null;
+    const nextUsername = normalizedEmail != null
+      ? deriveUsernameFromEmail(normalizedEmail)
+      : null;
 
     if (role) {
       const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
@@ -418,16 +451,20 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       }
     }
 
-    if (username || email) {
+    if (normalizedEmail || nextUsername) {
       const duplicateCheck = await client.query(
-        'SELECT * FROM users WHERE (username = $1 OR email = $2) AND id != $3',
-        [username || existingUser.rows[0].username, email || existingUser.rows[0].email, id]
+        'SELECT * FROM users WHERE (username = $1 OR LOWER(email) = LOWER($2)) AND id != $3',
+        [
+          nextUsername ?? existingUser.rows[0].username,
+          normalizedEmail ?? existingUser.rows[0].email,
+          id,
+        ]
       );
 
       if (duplicateCheck.rows.length > 0) {
         res.status(400).json({
           success: false,
-          error: { message: 'Username or email already exists' },
+          error: { message: 'Email already exists' },
         });
         return;
       }
@@ -455,8 +492,8 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const updateParams = [
-      username,
-      email,
+      nextUsername,
+      normalizedEmail,
       full_name,
       role,
       phone,
@@ -492,7 +529,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
 
     await client.query('COMMIT');
 
-    logger.info(`User updated by ${req.user?.username}: ${username || existingUser.rows[0].username}`);
+    logger.info(`User updated by ${req.user?.username}: ${normalizedEmail ?? existingUser.rows[0].email}`);
 
     const responseData = { ...result.rows[0] };
     if (savedPlants) {

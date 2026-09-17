@@ -19,7 +19,18 @@ import {
   type ShippingPerformancePortSource,
 } from '@/lib/shippingPerformancePorts'
 import { formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOutstandingQtyMtFromKg } from '@/lib/utils'
+
+/** Format multi-value contract_date (ISO, comma-separated) as one DMY line for table + tooltip. */
+export function formatShippingPerfContractDatesDisplay(raw: unknown): string {
+  const dates = String(raw ?? '')
+    .split(',')
+    .map((part) => part.trim().slice(0, 10))
+    .filter((iso) => /^\d{4}-\d{2}-\d{2}$/.test(iso))
+  if (dates.length === 0) return ''
+  return dates.map((iso) => formatDateDMY(iso)).join(', ')
+}
 
 /** All Shipments view — default column order (On Going ETA / Close ATA share keys; headers follow label mode). */
 export const ALL_SHIPMENTS_PRESET_COLUMN_ORDER = [
@@ -39,6 +50,8 @@ export const ALL_SHIPMENTS_PRESET_COLUMN_ORDER = [
   'discharge_delta_eta_etb_days',
   'discharge_delta_etb_etc_days',
   'total_delta_days',
+  'lp_flow_rate',
+  'dp_flow_rate',
 ] as const
 
 export type AllShipmentsPresetColumnKey = (typeof ALL_SHIPMENTS_PRESET_COLUMN_ORDER)[number]
@@ -56,17 +69,38 @@ export function buildAllShipmentsPresetVisibleColumns(
   return visible
 }
 
-/** Preset column order first, then remaining columns in definition order. */
+/** Preset used only when no saved order exists; otherwise preserve user order and append missing. */
 export function ensureAllShipmentsPresetColumnOrder(
   order: readonly string[],
   allColumnKeys: readonly string[],
 ): string[] {
   const known = new Set(allColumnKeys)
-  const preset = ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter((key) => known.has(key))
-  const presetSet = new Set<string>(preset)
-  const trailingFromOrder = order.filter((key) => known.has(key) && !presetSet.has(key))
-  const trailingMissing = allColumnKeys.filter((key) => !presetSet.has(key) && !trailingFromOrder.includes(key))
-  return [...preset, ...trailingFromOrder, ...trailingMissing]
+  if (order.length === 0) {
+    const preset = ALL_SHIPMENTS_PRESET_COLUMN_ORDER.filter((key) => known.has(key))
+    const trailing = allColumnKeys.filter((key) => !preset.includes(key as AllShipmentsPresetColumnKey))
+    return [...preset, ...trailing]
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const key of order) {
+    if (known.has(key) && !seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  for (const key of ALL_SHIPMENTS_PRESET_COLUMN_ORDER) {
+    if (known.has(key) && !seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  for (const key of allColumnKeys) {
+    if (!seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  return out
 }
 
 export function isAllShipmentsPresetVisibleColumn(key: string): boolean {
@@ -87,6 +121,7 @@ const SHIPPING_PERF_TABLE_COLUMN_LAYOUT_OVERRIDES: Partial<
   contract_number: 'truncate',
   sto_number: 'truncate',
   po_number: 'truncate',
+  contract_date: 'truncate',
 }
 
 export function getShippingPerfTableColumnLayout(
@@ -126,6 +161,7 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   shipment_count: 64,
   status: 80,
   po_number: 80,
+  contract_date: 100,
   contract_number: 88,
   sto_number: 80,
   sto_qty: 80,
@@ -140,6 +176,14 @@ export const SHIPPING_PERF_TABLE_COLUMN_WIDTH_PX: Readonly<Record<string, number
   discharge_delta_eta_etb_days: 80,
   discharge_delta_etb_etc_days: 80,
   total_delta_days: 56,
+  lp_flow_rate: 88,
+  dp_flow_rate: 88,
+  fuel_consumption: 128,
+  freight: 120,
+  vessel_oa_budget: 128,
+  pump_rate: 104,
+  sailing_speed: 96,
+  shortage: 104,
 }
 
 const DEFAULT_COLUMN_WIDTH_PX = 88
@@ -172,6 +216,7 @@ export const SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS = new Set([
   'contract_number',
   'po_number',
   'sto_number',
+  'contract_date',
   'contract_qty',
   'delivered_qty',
   'sto_qty',
@@ -190,6 +235,7 @@ export type ShippingPerfCellTooltipSource = ShippingPerformancePortSource & {
   contract_ext_no?: string | null
   contract_number?: string | null
   po_number?: string | null
+  contract_date?: string | null
   product?: string | null
   supplier?: string | null
   incoterm?: string | null
@@ -217,6 +263,10 @@ export function shippingPerfCellTooltipText(
       return String(row.contract_number ?? '').trim() || null
     case 'po_number':
       return String(row.po_number ?? '').trim() || null
+    case 'contract_date': {
+      const text = formatShippingPerfContractDatesDisplay(row.contract_date)
+      return text || null
+    }
     case 'product':
       return String(row.product ?? '').trim() || null
     case 'supplier':
@@ -253,7 +303,7 @@ export function shippingPerfCellTooltipText(
       }
       if (raw === null || raw === undefined) return null
       const mt = Number(raw) / 1000
-      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+      return `${mt.toLocaleString('en-US', { maximumFractionDigits: 0 })} MT`
     }
     case 'outstanding_qty_actual':
     case 'outstanding_qty_planning':

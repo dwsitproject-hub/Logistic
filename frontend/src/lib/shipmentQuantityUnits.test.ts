@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   mergeShipmentQtyOverridesOnContractRows,
+  preferHydratedQty,
   resolveShipmentListDeliveredKg,
   resolveShipmentListReceiveKg,
   sapContractDetailQtyToKg,
   sapDeliveredOrReceiveMtToKg,
+  seedKlipQtyFromShipmentHeader,
+  shipmentListDeliveredKgForViewTable,
+  shipmentListOutstandingKgForViewTable,
+  shipmentListReceiveKgForViewTable,
 } from './shipmentQuantityUnits'
 
 describe('sapDeliveredOrReceiveMtToKg', () => {
@@ -25,14 +30,83 @@ describe('sapContractDetailQtyToKg', () => {
   })
 })
 
+describe('preferHydratedQty', () => {
+  it('does not let a shell qty_move stub 0 hide hydrated SAP', () => {
+    expect(preferHydratedQty(3_002_849, 0)).toBe(3_002_849)
+    expect(preferHydratedQty(0, 3_002_849)).toBe(3_002_849)
+  })
+
+  it('prefers hydrated SAP over an inflated grouped header SUM', () => {
+    expect(preferHydratedQty(2_500_035, 4_000_000)).toBe(2_500_035)
+    expect(preferHydratedQty(0, 4_000_000)).toBe(4_000_000)
+  })
+})
+
 describe('resolveShipmentListDeliveredKg', () => {
-  it('prefers manual shipment qty when it differs from SAP', () => {
+  it('Open + KLIP qty present uses quantity_delivered_klip even if below SAP', () => {
     expect(
       resolveShipmentListDeliveredKg({
-        quantity_delivered: 1_005_000,
+        quantity_delivered_klip: 500_000,
         quantity_delivered_sap: 1_000_000,
+        is_contract_sap_closed: false,
       }),
-    ).toBe(1_005_000)
+    ).toBe(500_000)
+  })
+
+  it('Open without KLIP falls back to SAP', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered: 208_360,
+        quantity_delivered_sap: 4_000_000,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(4_000_000)
+  })
+
+  it('Open with null KLIP (planning-only, no delivery edit) uses SAP', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: null,
+        quantity_delivered_sap: 2_500_000,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(2_500_000)
+  })
+
+  it('Close always prefers SAP over KLIP', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: 5_000_000,
+        quantity_delivered_sap: 4_002_486,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(4_002_486)
+  })
+
+  it('Close with missing SAP falls back to legacy then KLIP so the table is not blank', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: 5_000_000,
+        quantity_delivered: 4_002_486,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(4_002_486)
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_klip: 5_000_000,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(5_000_000)
+  })
+
+  it('Close ignores stub SAP 0 and uses shipment header (STO 1006018954)', () => {
+    expect(
+      resolveShipmentListDeliveredKg({
+        quantity_delivered_sap: 0,
+        quantity_delivered: 3_002_849,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(3_002_849)
   })
 
   it('uses SAP when manual is 0 but SAP has delivery', () => {
@@ -44,36 +118,147 @@ describe('resolveShipmentListDeliveredKg', () => {
     ).toBe(497_115)
   })
 
-  it('uses SAP when manual matches or is absent', () => {
+  it('falls back to legacy quantity_delivered when KLIP and SAP are absent', () => {
     expect(
       resolveShipmentListDeliveredKg({
         quantity_delivered: 1_000_000,
-        quantity_delivered_sap: 1_000_000,
       }),
     ).toBe(1_000_000)
     expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 500_000 })).toBe(500_000)
     expect(resolveShipmentListDeliveredKg({ quantity_delivered_sap: 0 })).toBe(0)
     expect(resolveShipmentListDeliveredKg({})).toBeNull()
   })
+
+  it('View Table shows 0 when KLIP and SAP delivery qty are both null', () => {
+    expect(shipmentListDeliveredKgForViewTable({})).toBe(0)
+    expect(
+      shipmentListDeliveredKgForViewTable({
+        quantity_delivered_klip: null,
+        quantity_delivered_sap: null,
+        quantity_delivered: null,
+      }),
+    ).toBe(0)
+  })
 })
 
 describe('resolveShipmentListReceiveKg', () => {
-  it('prefers actual_vessel_qty_receive when it differs from SAP', () => {
+  it('Open + KLIP vessel receive uses actual_vessel_qty_receive even if below SAP', () => {
     expect(
       resolveShipmentListReceiveKg({
-        actual_vessel_qty_receive: 990_000,
+        actual_vessel_qty_receive: 500_000,
         quantity_receive: 1_000_000,
+        is_contract_sap_closed: false,
       }),
-    ).toBe(990_000)
+    ).toBe(500_000)
   })
 
-  it('uses SAP receive when manual row is 0', () => {
+  it('Open without KLIP falls back to SAP', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 0,
+        quantity_receive: 4_000_000,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(4_000_000)
+  })
+
+  it('Close always prefers SAP over KLIP vessel receive', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 5_000_000,
+        quantity_receive: 4_002_486,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(4_002_486)
+  })
+
+  it('Close with missing SAP receive falls back to vessel qty so the table is not blank', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 241_610,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(241_610)
+  })
+
+  it('Close ignores stub SAP receive 0 and uses vessel header', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        quantity_receive: 0,
+        actual_vessel_qty_receive: 3_002_849,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(3_002_849)
+  })
+
+  it('GR Close STO 1016010610 pattern: hydrated SAP receive beats duplicate MNL KLIP row', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        actual_vessel_qty_receive: 500_000,
+        quantity_receive: 241_610,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(241_610)
+  })
+
+  it('uses SAP receive when manual row is 0 and Open', () => {
     expect(
       resolveShipmentListReceiveKg({
         actual_vessel_qty_receive: 0,
         quantity_receive: 497_115,
+        is_contract_sap_closed: false,
       }),
     ).toBe(497_115)
+  })
+
+  it('Open prefers STO-summed per-PO KLIP over grouped header MAX', () => {
+    expect(
+      resolveShipmentListReceiveKg({
+        klip_receive_qty: 14_400_000,
+        actual_vessel_qty_receive: 3_600_000,
+        quantity_receive: 14_400_000,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(14_400_000)
+  })
+
+  it('View Table shows 0 when KLIP and SAP receive qty are both null', () => {
+    expect(shipmentListReceiveKgForViewTable({})).toBe(0)
+    expect(
+      shipmentListReceiveKgForViewTable({
+        actual_vessel_qty_receive: null,
+        quantity_receive: null,
+        is_contract_sap_closed: false,
+      }),
+    ).toBe(0)
+  })
+})
+
+describe('shipmentListOutstandingKgForViewTable', () => {
+  it('uses Contract Qty when Delivery/Receive are null (FOB)', () => {
+    expect(
+      shipmentListOutstandingKgForViewTable({
+        contract_qty: 2_500_000,
+        incoterm: 'FOB',
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(2_500_000)
+  })
+
+  it('prefers API outstanding when present', () => {
+    expect(
+      shipmentListOutstandingKgForViewTable({
+        outstanding_quantity: 100_000,
+        contract_qty: 2_500_000,
+        incoterm: 'FOB',
+        quantity_delivered_sap: 2_400_000,
+        is_contract_sap_closed: true,
+      }),
+    ).toBe(100_000)
+  })
+
+  it('stays null when Contract Qty is missing', () => {
+    expect(shipmentListOutstandingKgForViewTable({ incoterm: 'FOB' })).toBeNull()
   })
 })
 
@@ -111,5 +296,31 @@ describe('mergeShipmentQtyOverridesOnContractRows', () => {
     const merged = mergeShipmentQtyOverridesOnContractRows(rows, 1_010_000, null)
     expect(merged[0].quantity_delivered).toBe(610_000)
     expect(merged[1].quantity_delivered).toBe(400_000)
+  })
+})
+
+describe('seedKlipQtyFromShipmentHeader', () => {
+  it('returns null KLIP when no prior KLIP input', () => {
+    const seeded = seedKlipQtyFromShipmentHeader(
+      [{ quantity_delivered: 500_000, quantity_receive: 480_000 }],
+      {
+        shipmentDeliveredKlipKg: null,
+        shipmentDeliveredKg: 500_000,
+        shipmentReceiveKg: null,
+      },
+    )
+    expect(seeded).toEqual([{ quantity_delivered: null, quantity_receive: null }])
+  })
+
+  it('seeds single-PO from quantity_delivered_klip and actual_vessel receive', () => {
+    const seeded = seedKlipQtyFromShipmentHeader(
+      [{ quantity_delivered: 500_000, quantity_receive: 480_000 }],
+      {
+        shipmentDeliveredKlipKg: 510_000,
+        shipmentDeliveredKg: 500_000,
+        shipmentReceiveKg: 505_000,
+      },
+    )
+    expect(seeded).toEqual([{ quantity_delivered: 510_000, quantity_receive: 505_000 }])
   })
 })

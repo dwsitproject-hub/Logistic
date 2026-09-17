@@ -16,13 +16,13 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
-  FileCheck,
   FileDown,
   FileText,
   Loader2,
   Pencil,
   Search,
   SlidersHorizontal,
+  Upload,
   X,
 } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -30,6 +30,7 @@ import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
+import { filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import { cn } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -49,11 +50,20 @@ import {
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import { operationalTableColumnClass, getOperationalColumnLayout } from '@/lib/operationalTableLayout'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
+  COMMERCIAL_DOCS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
+import {
+  COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX,
   COMMERCIAL_DOCS_ALL_COLUMNS,
   COMMERCIAL_DOCS_COLUMN_BY_ID,
+  commercialDocsTableColumnWidthPx,
   type CommercialDocsColumnId,
   type CommercialDocsColumnMeta,
   isCommercialDocStatusColumn,
@@ -156,7 +166,20 @@ function CommercialDocumentsPageContent() {
     handleProductsChange,
     handleGroupPlantsChange,
     resetUserScopeFilters,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('contracts')
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   *
+   * This page also sets `uppercaseOptionLabels`, which restyles the label but not the value - so
+   * the mismatch was invisible in the list and visible only as the unticked box.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availablePlants)
+  }, [availablePlants, alignGroupPlantsToOptions])
 
   const rowsLengthRef = useRef(0)
   rowsLengthRef.current = rows.length
@@ -202,11 +225,11 @@ function CommercialDocumentsPageContent() {
       if (selectedIncoterms.length === 1) params.set('incoterm', selectedIncoterms[0])
       if (selectedProducts.length === 1) params.set('product', selectedProducts[0])
       if (selectedSuppliers.length === 1) params.set('supplier', selectedSuppliers[0])
-      if (selectedPlants.length === 1) params.set('plant', selectedPlants[0])
+      selectedPlants.forEach((p) => params.append('plant', p))
 
       const url = `/commercial-documents?${params.toString()}`
       const cacheKey = buildCacheKey('GET', url)
-      const { data } = await cachedGet(cacheKey, () => api.get(url).then((r) => r.data))
+      const { data } = await cachedGet(cacheKey, (signal) => api.get(url, { signal }).then((r) => r.data))
       const payload = data?.data
       setRows(payload?.rows || [])
       setTotalRows(payload?.pagination?.total ?? 0)
@@ -291,8 +314,8 @@ function CommercialDocumentsPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailablePlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailablePlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
@@ -435,10 +458,7 @@ function CommercialDocumentsPageContent() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Commercial Documents</h1>
-        <p className="text-sm text-gray-600 mt-1">Document completeness checking for commercial contracts</p>
-      </div>
+      <p className="text-sm text-gray-600">Document completeness checking for commercial contracts</p>
 
       {/* Section 2 */}
       <Card>
@@ -503,12 +523,14 @@ function CommercialDocumentsPageContent() {
               pinSelectedToTop
             />
             <SearchableMultiSelect
-              label="Group Plant"
-              placeholder="All group plants"
+              label="Region/Plant"
+              placeholder="Select region/plant(s)"
+              emptyMessage="No region/plant values"
               options={availablePlants}
               selected={selectedPlants}
               onChange={handleGroupPlantsChange}
               pinSelectedToTop
+              uppercaseOptionLabels
             />
           </div>
           <div className="flex flex-wrap items-center gap-4">
@@ -716,7 +738,22 @@ function CommercialDocumentsPageContent() {
                 requestAnimationFrame(() => { isSyncingScroll.current = false })
               }}
             >
-              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--commercial-docs`}>
+              <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--commercial-docs klip-compact-table--perf-narrow-cols`}>
+                <colgroup>
+                  {visibleColumns.map((col) => (
+                    <col
+                      key={col.id}
+                      style={{
+                        width: compactTableColWidthCss(
+                          commercialDocsTableColumnWidthPx(col.id, col.label, {
+                            hasFormulaHelp: Boolean(col.formulaHelp),
+                          }),
+                        ),
+                      }}
+                    />
+                  ))}
+                  <col style={{ width: COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX }} />
+                </colgroup>
                 <thead>
                   <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                     {visibleColumns.map((col) => {
@@ -796,6 +833,20 @@ function CommercialDocumentsPageContent() {
                             const columnLayout = getOperationalColumnLayout('commercial_documents', col.id)
                             const opColClass = operationalTableColumnClass(columnLayout)
                             const centerCell = col.centerCell || isCommercialDocStatusColumn(col.id)
+                            const useTruncateTooltip =
+                              !centerCell &&
+                              shouldApplyOperationalTruncateTooltip(
+                                col.id,
+                                columnLayout,
+                                COMMERCIAL_DOCS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                              )
+                            const truncateTooltip = useTruncateTooltip
+                              ? operationalRowFieldTooltipText(
+                                  col.id,
+                                  row as unknown as Record<string, unknown>,
+                                )
+                              : null
+                            const rendered = col.render(row)
                             return (
                               <td
                                 key={col.id}
@@ -818,7 +869,13 @@ function CommercialDocumentsPageContent() {
                                         ),
                                   )}
                                 >
-                                  {col.render(row)}
+                                  {useTruncateTooltip ? (
+                                    <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                      {rendered}
+                                    </ContractPerfTruncatedCell>
+                                  ) : (
+                                    rendered
+                                  )}
                                 </div>
                               </td>
                             )
@@ -845,7 +902,7 @@ function CommercialDocumentsPageContent() {
                                   canModifyDocuments
                                     ? hasUploads
                                       ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                                      : 'bg-green-50 border-green-200 text-green-700 hover:bg-green-100'
+                                      : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
                                     : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100'
                                 }
                               >
@@ -853,7 +910,7 @@ function CommercialDocumentsPageContent() {
                                   hasUploads ? (
                                     <Pencil className="h-4 w-4" />
                                   ) : (
-                                    <FileCheck className="h-4 w-4" />
+                                    <Upload className="h-4 w-4" />
                                   )
                                 ) : (
                                   <FileText className="h-4 w-4" />

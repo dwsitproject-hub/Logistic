@@ -4,6 +4,7 @@
  */
 export const SHIPMENT_STATUS_DISPLAY_LABELS: Record<string, string> = {
   UNPLANNED: 'Unplanned',
+  PREPLANNED: 'Preplanned',
   PLANNED: 'Planned',
   ARRIVED_LP: 'Arrived LP',
   BERTHED_LP: 'Berthed LP',
@@ -42,14 +43,27 @@ export function formatShipmentStatusLabel(status: string | null | undefined): st
   return SHIPMENT_STATUS_DISPLAY_LABELS[key] ?? raw
 }
 
+/**
+ * Split long status labels for narrow table columns (e.g. "Completed Loading" → 2 lines).
+ * Single-line statuses return a one-element array.
+ */
+export function shipmentStatusLabelLines(status: string | null | undefined): string[] {
+  const key = normalizeShipmentStatusKey(status)
+  if (key === 'COMPLETED_LOADING') return ['Completed', 'Loading']
+  return [formatShipmentStatusLabel(status)]
+}
+
 /** Tailwind badge classes aligned with Shipments list status chips. */
 export function shipmentStatusBadgeClass(status: string | null | undefined): string {
   switch (normalizeShipmentStatusKey(status)) {
     case 'UNPLANNED':
       return 'bg-slate-100 text-slate-800'
+    case 'PREPLANNED':
+      return 'bg-amber-100 text-amber-800'
     case 'PLANNED':
       return 'bg-blue-100 text-blue-800'
     case 'ARRIVED_LP':
+    case 'IN_PROGRESS': // legacy → Arrived LP
       return 'bg-yellow-100 text-yellow-800'
     case 'BERTHED_LP':
       return 'bg-amber-100 text-amber-800'
@@ -58,8 +72,10 @@ export function shipmentStatusBadgeClass(status: string | null | undefined): str
     case 'COMPLETED_LOADING':
       return 'bg-orange-200 text-orange-900'
     case 'SAILED':
+    case 'IN_TRANSIT': // legacy → Sailed (same purple chip)
       return 'bg-purple-100 text-purple-800'
     case 'ARRIVED_DP':
+    case 'ARRIVED': // legacy → Arrived DP
       return 'bg-indigo-100 text-indigo-800'
     case 'BERTHED_DP':
       return 'bg-cyan-100 text-cyan-800'

@@ -6,7 +6,12 @@ import {
 } from './shipmentStatus';
 
 describe('deriveShipmentStatus', () => {
-  it('returns COMPLETED when ATA complete discharge exists', () => {
+  /*
+   * Changed deliberately 2026-09-14. ATC records that discharge finished, which is the end of the
+   * voyage this status describes; waiting for SAP to close the transaction left the page reading
+   * UNLOADING for days after the operators could see the vessel was done.
+   */
+  it('returns COMPLETED when ATA complete discharge exists, even with GR still Open', () => {
     expect(
       deriveShipmentStatus({
         ata_complete_discharge: '2026-01-15',
@@ -14,7 +19,15 @@ describe('deriveShipmentStatus', () => {
     ).toBe('COMPLETED');
   });
 
-  it('returns COMPLETED for SAP Close contract without ATA', () => {
+  it('still stops at UNLOADING when discharge started but did not finish', () => {
+    expect(
+      deriveShipmentStatus({
+        ata_start_discharging: '2026-01-15',
+      }),
+    ).toBe('UNLOADING');
+  });
+
+  it('returns COMPLETED only for SAP GR Close, even without ATA', () => {
     expect(
       deriveShipmentStatus({
         contract_import_status: 'Close',
@@ -22,8 +35,35 @@ describe('deriveShipmentStatus', () => {
     ).toBe('COMPLETED');
   });
 
-  it('returns UNPLANNED when no ETA, ATA, or closed contract', () => {
-    expect(deriveShipmentStatus({})).toBe('UNPLANNED');
+  it('returns PLANNED when no ETA, ATA, delivery qty, or closed contract (STO open)', () => {
+    expect(deriveShipmentStatus({})).toBe('PLANNED');
+  });
+
+  it('returns PLANNED when Delivery Qty present and all ATA are null', () => {
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered_sap: 1_000_000,
+      }),
+    ).toBe('PLANNED');
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered_klip: 500_000,
+      }),
+    ).toBe('PLANNED');
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered: 250_000,
+      }),
+    ).toBe('PLANNED');
+  });
+
+  it('keeps ATA tier when Delivery Qty exists', () => {
+    expect(
+      deriveShipmentStatus({
+        quantity_delivered_sap: 1_000_000,
+        ata_arrival_at_loading_port: '2026-01-01',
+      }),
+    ).toBe('ARRIVED_LP');
   });
 
   it('maps loading-port ATA tiers', () => {
@@ -71,6 +111,18 @@ describe('deriveShipmentStatus', () => {
         ata_start_discharging: '2026-01-08',
       }),
     ).toBe('UNLOADING');
+    expect(
+      deriveShipmentStatus({
+        ata_complete_discharge: '2026-01-09',
+        contract_import_status: 'Open',
+      }),
+    ).toBe('COMPLETED');
+    expect(
+      deriveShipmentStatus({
+        ata_complete_discharge: '2026-01-09',
+        contract_import_status: 'Close',
+      }),
+    ).toBe('COMPLETED');
   });
 
   it('latest ATA milestone wins across phases', () => {

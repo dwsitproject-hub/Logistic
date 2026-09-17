@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
+import { isBlankFilterOption, sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR).
 // Copied from Dashboard to keep Plant/Site and Incoterm UX consistent.
@@ -16,6 +16,8 @@ export function SearchableMultiSelect({
   emptyMessage = 'Loading...',
   /** When true, selected values appear at the top of the list (for plotted Product / Group Plant). */
   pinSelectedToTop = false,
+  /** Display-only: uppercase the option labels (underlying value/filtering stays unchanged). */
+  uppercaseOptionLabels = false,
 }: {
   label: string
   options: string[]
@@ -24,15 +26,16 @@ export function SearchableMultiSelect({
   placeholder: string
   emptyMessage?: string
   pinSelectedToTop?: boolean
+  uppercaseOptionLabels?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const orderedOptions = useMemo(
-    () => (pinSelectedToTop ? sortFilterOptionsWithSelectedFirst(options, selected) : options),
-    [options, selected, pinSelectedToTop],
-  )
+  const orderedOptions = useMemo(() => {
+    const withoutBlank = options.filter((option) => !isBlankFilterOption(option))
+    return pinSelectedToTop ? sortFilterOptionsWithSelectedFirst(withoutBlank, selected) : withoutBlank
+  }, [options, selected, pinSelectedToTop])
 
   const filtered = search.trim()
     ? orderedOptions.filter((o) => o.toLowerCase().includes(search.toLowerCase().trim()))
@@ -61,7 +64,9 @@ export function SearchableMultiSelect({
 
   return (
     <div ref={containerRef} className="relative w-full">
-      <label className="text-sm font-medium text-gray-700 mb-1 block">{label}</label>
+      {label ? (
+        <label className="text-sm font-medium text-gray-700 mb-1 block">{label}</label>
+      ) : null}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -99,7 +104,7 @@ export function SearchableMultiSelect({
                     onChange={() => toggle(option)}
                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="truncate">{option}</span>
+                  <span className={`truncate${uppercaseOptionLabels ? ' uppercase' : ''}`}>{option}</span>
                 </label>
               ))
             )}

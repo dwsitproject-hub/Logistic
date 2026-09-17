@@ -9,7 +9,7 @@
  *   AC2  Global Filter Propagation
  *   AC3  Drilldown "Apply" — Section 3 count matches active node count
  *   AC4  Blank / null value handling in drilldown
- *   AC5  "Open" status fallback — null trade_cycle_days not dropped
+ *   AC5  null trade_cycle_days = unscheduled (excluded from Late/On Time)
  */
 
 import { describe, it, expect } from 'vitest'
@@ -57,11 +57,11 @@ import {
 const BASE_GLOBAL: ContractPerformanceGlobalFilters = {
   dateFrom: '',
   dateTo: '',
-  sourceFilter: 'All',
+  selectedSources: [],
+  selectedProducts: [],
   selectedIncoterms: [],
   selectedSuppliers: [],
   selectedGroupPlants: [],
-  productTabQuery: undefined,
   summaryCardStatus: 'Open',
   lateOnTimeFilter: 'ALL',
   perfDashMode: 'late',
@@ -96,7 +96,8 @@ function tableContract(overrides: Partial<PerformanceTableContract> = {}): Perfo
     supplier: 'SUPP-1',
     plant_site: 'PLANT-A',
     delivery_end_date: '2026-05-01',
-    trade_cycle_days: 5,
+    // Late: anchor - completion is negative once the completion date passes the anchor.
+    trade_cycle_days: -5,
     import_status: 'OPEN',
     status: 'OPEN',
     ...overrides,
@@ -234,7 +235,7 @@ describe('AC2 — Global Filter Propagation', () => {
   })
 
   it('filtering by product tab returns only matching rows across all sections', () => {
-    const global = { ...BASE_GLOBAL, productTabQuery: 'CPO' }
+    const global = { ...BASE_GLOBAL, selectedProducts: ['CPO'] }
     const scope  = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
     const result = filterPerformanceHotspots(allHotspots, scope, { applyDrilldown: false })
     expect(result.every((r) => normalizePerfProductGroupKey(r.product) === 'CPO')).toBe(true)
@@ -247,7 +248,7 @@ describe('AC2 — Global Filter Propagation', () => {
       hotspot({ contract_id: 'P-2', product: 'CRUDE POME', totalQtyDelivery: 200 }),
       hotspot({ contract_id: 'P-3', product: 'CPO', totalQtyDelivery: 50 }),
     ]
-    const global = { ...BASE_GLOBAL, productTabQuery: 'POME' }
+    const global = { ...BASE_GLOBAL, selectedProducts: ['POME'] }
     const scope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
     const result = filterPerformanceHotspots(rows, scope, { applyDrilldown: false })
     expect(result.map((r) => r.contract_id).sort()).toEqual(['P-1', 'P-2'])
@@ -261,7 +262,7 @@ describe('AC2 — Global Filter Propagation', () => {
     ]
     const global = {
       ...BASE_GLOBAL,
-      productTabQuery: contractPerfProductQueryValue('Shell Palm'),
+      selectedProducts: ['Shell Palm'],
     }
     const scope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
     expect(scope.resolvedProduct).toBe('SHELL PALM')
@@ -297,24 +298,24 @@ describe('AC2 — Global Filter Propagation', () => {
   it('isContractPerfSection3FilterApplied is true when Open or Close card is selected', () => {
     expect(
       isContractPerfSection3FilterApplied({
-        sourceFilter: 'All',
-        selectedProductTab: 'All',
+        selectedSources: [],
+        selectedProducts: [],
         summaryCardStatus: 'All',
         appliedDrilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
       }),
     ).toBe(false)
     expect(
       isContractPerfSection3FilterApplied({
-        sourceFilter: 'All',
-        selectedProductTab: 'All',
+        selectedSources: [],
+        selectedProducts: [],
         summaryCardStatus: 'Open',
         appliedDrilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
       }),
     ).toBe(true)
     expect(
       isContractPerfSection3FilterApplied({
-        sourceFilter: 'Interco',
-        selectedProductTab: 'CPO',
+        selectedSources: ['Interco'],
+        selectedProducts: ['CPO'],
         summaryCardStatus: 'Close',
         appliedDrilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
       }),
@@ -339,7 +340,7 @@ describe('AC2 — Global Filter Propagation', () => {
   })
 
   it('Section 1 card summary API omits status even when Open tab is active', () => {
-    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, productTabQuery: 'CPO' }
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, selectedProducts: ['CPO'] }
     const cardParams = buildLatePerformanceCardSummaryApiParams(global)
     expect(cardParams.get('status')).toBeNull()
     const treeScope = resolveContractPerformanceScope({ global, drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN })
@@ -367,7 +368,7 @@ describe('AC2 — Global Filter Propagation', () => {
   })
 
   it('Section 2 tree API omits applied drilldown path (card counts stay global)', () => {
-    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, productTabQuery: 'CPO' }
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const, selectedProducts: ['CPO'] }
     const drilldown: ContractPerfDrilldownFilters = {
       product: 'CPO',
       plant: 'PLANT-A',
@@ -392,11 +393,11 @@ describe('AC2 — Global Filter Propagation', () => {
     const toolbar = buildContractPerfToolbarGlobal({
       dateFrom: '2026-01-01',
       dateTo: '2026-06-03',
-      sourceFilter: 'All',
+      selectedSources: [],
       selectedIncoterms: [],
       selectedSuppliers: [],
       selectedGroupPlants: [],
-      productTabQuery: 'CPO',
+      selectedProducts: ['CPO'],
       lateOnTimeFilter: 'ALL',
       perfDashMode: 'late',
       perfTransportMode: 'ALL',
@@ -421,8 +422,8 @@ describe('AC2 — Global Filter Propagation', () => {
     const global: ContractPerformanceGlobalFilters = {
       ...BASE_GLOBAL,
       summaryCardStatus: 'Open',
-      productTabQuery: 'CPO',
-      sourceFilter: '3rd Party',
+      selectedProducts: ['CPO'],
+      selectedSources: ['3rd Party'],
       dateFrom: '2026-01-01',
       dateTo: '2026-06-22',
     }
@@ -443,7 +444,7 @@ describe('AC2 — Global Filter Propagation', () => {
     expect(params.get('status')).toBe('Open')
     expect(params.get('lateOnTimeFilter')).toBe('ALL')
     expect(params.get('excludeUnscheduled')).toBe('false')
-    expect(params.get('sourceType')).toBe('3rd Party')
+    expect(params.get('sourceTypes')).toBe('3rd Party')
     expect(params.get('product')).toBe('CPO')
     expect(params.get('supplier')).toBe('SUPP-1')
     expect(params.getAll('plant')).toEqual(['PLANT-A'])
@@ -461,6 +462,7 @@ describe('AC2 — Global Filter Propagation', () => {
       perfDashMode: 'late',
     })
     expect(params.get('excludeUnscheduled')).toBe('true')
+    expect(params.get('compact')).toBe('true')
   })
 })
 
@@ -478,16 +480,16 @@ describe('Contract Performance — source filter (contracts.source_type)', () =>
 
   it('appendContractPerformanceApiParams sends sourceType when not All', () => {
     const scope = resolveContractPerformanceScope({
-      global: { ...BASE_GLOBAL, sourceFilter: 'Interco' },
+      global: { ...BASE_GLOBAL, selectedSources: ['Interco'] },
       drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
     })
     const params = buildLatePerformanceApiParams(scope, false)
-    expect(params.get('sourceType')).toBe('Interco')
+    expect(params.get('sourceTypes')).toBe('Interco')
   })
 
   it('filterContractsForPerformanceTable applies source as first step', () => {
     const scope = resolveContractPerformanceScope({
-      global: { ...BASE_GLOBAL, sourceFilter: '3rd Party' },
+      global: { ...BASE_GLOBAL, selectedSources: ['3rd Party'] },
       drilldown: EMPTY_CONTRACT_PERF_DRILLDOWN,
     })
     const rows = filterContractsForPerformanceTable(
@@ -643,11 +645,11 @@ describe('AC4 — Blank / null value drilldown', () => {
 })
 
 // ---------------------------------------------------------------------------
-// AC5 — "Open" status fallback — null trade_cycle_days must not be dropped
+// AC5 — null trade_cycle_days = unscheduled (no Completion Date); exclude from late/on-time
 // ---------------------------------------------------------------------------
 
 describe('Section 3 — performance tree inclusion guard', () => {
-  it('excludes contracts without delivery end and closed unscheduled rows', () => {
+  it('excludes contracts without delivery end and unscheduled (null trade cycle) rows', () => {
     expect(
       contractMeetsPerformanceTreeInclusion(
         tableContract({ delivery_end_date: null, import_status: 'OPEN' }),
@@ -683,13 +685,13 @@ describe('Section 3 — performance tree inclusion guard', () => {
         }),
         'ON_TIME',
       ),
-    ).toBe(true)
+    ).toBe(false)
     expect(
       contractMeetsPerformanceTreeInclusion(
         tableContract({
           delivery_end_date: '2026-05-01',
           import_status: 'OPEN',
-          trade_cycle_days: 5,
+          trade_cycle_days: -5,
         }),
         'LATE',
       ),
@@ -713,7 +715,7 @@ describe('Section 3 — performance tree inclusion guard', () => {
           incoterm: 'CIF',
           delivery_end_date: '2026-05-01',
           import_status: 'OPEN',
-          trade_cycle_days: 3,
+          trade_cycle_days: -3,
         }),
         tableContract({
           contract_id: 'NO-DATE',
@@ -755,39 +757,116 @@ describe('Section 3 — performance tree inclusion guard', () => {
     )
     expect(rows.map((r) => r.contract_id)).toEqual(['IN-TREE'])
   })
+
+  it('ALL keeps Unscheduled rows under drilldown even when contract_perf_in_tree is false', () => {
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const }
+    const drilldown: ContractPerfDrilldownFilters = {
+      product: 'CPO',
+      plant: null,
+      incoterm: null,
+      supplier: 'ETAM',
+    }
+    const { scope: s3Scope } = resolveSection3Scope(global, drilldown)
+    const rows = filterContractsForPerformanceTable(
+      [
+        tableContract({
+          contract_id: 'LATE-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: '2026-05-01',
+          trade_cycle_days: -5,
+          contract_perf_in_tree: true,
+        }),
+        tableContract({
+          contract_id: 'UNSCHED-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: null,
+          trade_cycle_days: null,
+          contract_perf_in_tree: false,
+        }),
+        tableContract({
+          contract_id: 'OTHER-SUPPLIER',
+          product: 'CPO',
+          supplier: 'OTHER',
+          import_status: 'OPEN',
+          delivery_end_date: null,
+          trade_cycle_days: null,
+          contract_perf_in_tree: false,
+        }),
+      ],
+      s3Scope,
+      'ALL',
+    )
+    expect(rows.map((r) => r.contract_id).sort()).toEqual(['LATE-1', 'UNSCHED-1'])
+  })
+
+  it('LATE still drops Unscheduled when contract_perf_in_tree is false under drilldown', () => {
+    const global = { ...BASE_GLOBAL, summaryCardStatus: 'Open' as const }
+    const drilldown: ContractPerfDrilldownFilters = {
+      product: 'CPO',
+      plant: null,
+      incoterm: null,
+      supplier: 'ETAM',
+    }
+    const { scope: s3Scope } = resolveSection3Scope(global, drilldown)
+    const rows = filterContractsForPerformanceTable(
+      [
+        tableContract({
+          contract_id: 'LATE-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: '2026-05-01',
+          trade_cycle_days: -5,
+          contract_perf_in_tree: true,
+        }),
+        tableContract({
+          contract_id: 'UNSCHED-1',
+          product: 'CPO',
+          supplier: 'ETAM',
+          import_status: 'OPEN',
+          delivery_end_date: null,
+          trade_cycle_days: null,
+          contract_perf_in_tree: false,
+        }),
+      ],
+      s3Scope,
+      'LATE',
+    )
+    expect(rows.map((r) => r.contract_id)).toEqual(['LATE-1'])
+  })
 })
 
-describe('AC5 — Open status fallback / null trade_cycle_days handling', () => {
-  it('ALL filter includes contracts with null trade_cycle_days', () => {
+describe('AC5 — null trade_cycle_days = unscheduled (no Completion Date)', () => {
+  it('ALL filter includes contracts with null trade_cycle_days (segment filter only)', () => {
     expect(contractMatchesLateOnTimeFilter(null, 'ALL')).toBe(true)
     expect(contractMatchesLateOnTimeFilter(undefined, 'ALL')).toBe(true)
   })
 
-  it('LATE filter includes contracts with null trade_cycle_days (treated as late)', () => {
-    // Section 2 counts open contracts with no ETA in the late bucket.
-    // Section 3 must do the same — not silently drop them.
-    expect(contractMatchesLateOnTimeFilter(null, 'LATE')).toBe(true)
-    expect(contractMatchesLateOnTimeFilter(undefined, 'LATE')).toBe(true)
-  })
-
-  it('ON_TIME filter excludes contracts with null trade_cycle_days (no ETA = not on time)', () => {
+  it('LATE and ON_TIME filters exclude null trade_cycle_days (unscheduled)', () => {
+    expect(contractMatchesLateOnTimeFilter(null, 'LATE')).toBe(false)
+    expect(contractMatchesLateOnTimeFilter(undefined, 'LATE')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(null, 'ON_TIME')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(undefined, 'ON_TIME')).toBe(false)
   })
 
-  it('Positive trade_cycle_days is LATE; non-positive is ON_TIME', () => {
-    expect(contractMatchesLateOnTimeFilter(1,  'LATE')).toBe(true)
+  it('Negative trade_cycle_days is LATE; zero or positive is ON_TIME', () => {
+    // anchor - completion: a completion past its anchor is negative.
+    expect(contractMatchesLateOnTimeFilter(-1, 'LATE')).toBe(true)
     expect(contractMatchesLateOnTimeFilter(0,  'LATE')).toBe(false)
-    expect(contractMatchesLateOnTimeFilter(-5, 'LATE')).toBe(false)
+    expect(contractMatchesLateOnTimeFilter(5,  'LATE')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(0,  'ON_TIME')).toBe(true)
-    expect(contractMatchesLateOnTimeFilter(-3, 'ON_TIME')).toBe(true)
-    expect(contractMatchesLateOnTimeFilter(1,  'ON_TIME')).toBe(false)
-    // API flag mirrors Section 2 Condition B (0 = late when contract_perf_on_time is false).
+    expect(contractMatchesLateOnTimeFilter(3,  'ON_TIME')).toBe(true)
+    expect(contractMatchesLateOnTimeFilter(-1, 'ON_TIME')).toBe(false)
+    // API flag takes precedence when present (e.g. contract_perf_on_time from GET /contracts).
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', false)).toBe(false)
     expect(contractMatchesLateOnTimeFilter(0, 'ON_TIME', true)).toBe(true)
   })
 
-  it('Section 3 does NOT drop Open contracts with null trade_cycle_days when filter is LATE', () => {
+  it('Section 3 drops Open contracts with null trade_cycle_days when filter is LATE', () => {
     const openContractNoEta = tableContract({
       contract_id: 'OPEN-NO-ETA',
       trade_cycle_days: null,
@@ -795,12 +874,12 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
     })
     const openContractLate = tableContract({
       contract_id: 'OPEN-LATE',
-      trade_cycle_days: 10,
+      trade_cycle_days: -10,
       import_status: 'OPEN',
     })
     const openContractOnTime = tableContract({
       contract_id: 'OPEN-ON-TIME',
-      trade_cycle_days: -2,
+      trade_cycle_days: 2,
       import_status: 'OPEN',
     })
 
@@ -811,16 +890,15 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
       s3Scope,
       'LATE',
     )
-    // null ETA contract must be included (treated as late), plus the actual late one
-    expect(filtered.some((c) => c.contract_id === 'OPEN-NO-ETA')).toBe(true)
+    expect(filtered.some((c) => c.contract_id === 'OPEN-NO-ETA')).toBe(false)
     expect(filtered.some((c) => c.contract_id === 'OPEN-LATE')).toBe(true)
     expect(filtered.some((c) => c.contract_id === 'OPEN-ON-TIME')).toBe(false)
-    expect(filtered.length).toBe(2)
+    expect(filtered.length).toBe(1)
   })
 
-  it('Section 3 does NOT include null-ETA contracts when filter is ON_TIME', () => {
+  it('Section 3 does NOT include null-completion contracts when filter is ON_TIME', () => {
     const openContractNoEta = tableContract({ contract_id: 'OPEN-NO-ETA', trade_cycle_days: null })
-    const openContractOnTime = tableContract({ contract_id: 'OPEN-ON-TIME', trade_cycle_days: -2 })
+    const openContractOnTime = tableContract({ contract_id: 'OPEN-ON-TIME', trade_cycle_days: 2 })
     const { scope: s3Scope } = resolveSection3Scope(BASE_GLOBAL, EMPTY_CONTRACT_PERF_DRILLDOWN)
     const filtered = filterContractsForPerformanceTable(
       [openContractNoEta, openContractOnTime],
@@ -831,8 +909,8 @@ describe('AC5 — Open status fallback / null trade_cycle_days handling', () => 
     expect(filtered.some((c) => c.contract_id === 'OPEN-ON-TIME')).toBe(true)
   })
 
-  it('NaN trade_cycle_days is treated as null (fallback to LATE)', () => {
-    expect(contractMatchesLateOnTimeFilter(NaN, 'LATE')).toBe(true)
+  it('NaN trade_cycle_days is treated as null (unscheduled)', () => {
+    expect(contractMatchesLateOnTimeFilter(NaN, 'LATE')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(NaN, 'ON_TIME')).toBe(false)
     expect(contractMatchesLateOnTimeFilter(NaN, 'ALL')).toBe(true)
   })
@@ -849,7 +927,7 @@ describe('Cross-section integration — all three sections must stay in sync', (
     hotspot({ contract_id: 'X3', product: 'PK',   incoterm: 'CIF', plant_site: 'PLANT-B', supplier: 'SUPP-1', count: 1, totalQtyDelivery: 200  }),
   ]
   const contracts: PerformanceTableContract[] = [
-    tableContract({ contract_id: 'X1', product: 'CPO',  incoterm: 'CIF', plant_site: 'PLANT-A', supplier: 'SUPP-1', trade_cycle_days: 5  }),
+    tableContract({ contract_id: 'X1', product: 'CPO',  incoterm: 'CIF', plant_site: 'PLANT-A', supplier: 'SUPP-1', trade_cycle_days: -5  }),
     tableContract({ contract_id: 'X2', product: 'CPO',  incoterm: 'FOB', plant_site: 'PLANT-A', supplier: 'SUPP-2', trade_cycle_days: -1 }),
     tableContract({ contract_id: 'X3', product: 'PK',   incoterm: 'CIF', plant_site: 'PLANT-B', supplier: 'SUPP-1', trade_cycle_days: 3  }),
   ]
@@ -946,5 +1024,15 @@ describe('Cross-section integration — all three sections must stay in sync', (
     expect(resolvedIncoterms).toEqual([])
     expect(resolvedPlants).toEqual([])
     expect(contractStatus).toBe('Open')
+  })
+})
+
+describe('mapUserProductsToContractPerfOptions', () => {
+  it('maps role product assignments onto Section 1 multi-select labels', async () => {
+    const { mapUserProductsToContractPerfOptions } = await import('./contractPerformanceFilters')
+    expect(mapUserProductsToContractPerfOptions(['cpo', 'SHELL PALM', 'unknown'])).toEqual([
+      'CPO',
+      'Shell Palm',
+    ])
   })
 })

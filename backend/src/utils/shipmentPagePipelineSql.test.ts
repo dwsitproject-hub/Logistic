@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendShipmentPipelineStageFilter,
+  buildShipmentPageUnplannedOpenContractsCte,
   normalizeShipmentPagePipelineStageParam,
   shipmentHasAnyDischargePortAtaExpr,
   shipmentHasAnyLoadingPortAtaExpr,
   shipmentPagePipelineStageExpr,
   shipmentPagePipelineUnplannedRowPredicate,
+  shipmentPipelineDisplayVesselKeyExpr,
+  shipmentPipelineEnrichedDisplayVesselKeyExpr,
 } from './shipmentPagePipelineSql';
 
 describe('shipmentPagePipelineSql', () => {
@@ -24,17 +27,22 @@ describe('shipmentPagePipelineSql', () => {
     expect(sql).toContain('PLANNED');
     expect(sql).toContain('COMPLETED');
     expect(sql).toContain('CANCELLED');
+    expect(sql).toContain('is_contract_sap_closed');
+    expect(sql).not.toMatch(/ata_vessel_complete_discharge IS NOT NULL THEN 'COMPLETED'/);
   });
 
   it('uses loading and discharge ATA helpers', () => {
     expect(shipmentHasAnyLoadingPortAtaExpr('f')).toContain('ata_vessel_arrival_at_loading_port');
     expect(shipmentHasAnyDischargePortAtaExpr('f')).toContain('ata_vessel_start_discharging');
+    expect(shipmentHasAnyDischargePortAtaExpr('f')).toContain('ata_vessel_complete_discharge');
   });
 
-  it('filters unplanned rows without ETA or ATA', () => {
+  it('filters unplanned rows without ETA, ATA, or Delivery Qty', () => {
     const sql = shipmentPagePipelineUnplannedRowPredicate('sb');
     expect(sql).toContain('is_contract_sap_closed');
     expect(sql).toContain('eta_arrival');
+    expect(sql).toContain('quantity_delivered');
+    expect(sql).toContain('quantity_delivered_klip');
   });
 
   it('builds stage filter SQL for pipeline and unplanned', () => {
@@ -51,7 +59,44 @@ describe('shipmentPagePipelineSql', () => {
     expect(sailed.params).toEqual(['SAILED']);
 
     const unplanned = appendShipmentPipelineStageFilter('UNPLANNED', 3);
-    expect(unplanned.sql).toContain('is_contract_sap_closed');
+    expect(unplanned.sql).toBe(' AND FALSE');
     expect(unplanned.params).toEqual([]);
+  });
+
+  it('builds OPEN/CLOSE global status bucket filters', () => {
+    const open = appendShipmentPipelineStageFilter('OPEN', 2);
+    expect(open.sql).toContain('IN (');
+    expect(open.params).toEqual(
+      expect.arrayContaining(['PLANNED', 'ARRIVED_LP', 'SAILED', 'ARRIVED_DP']),
+    );
+    expect(open.params).not.toContain('COMPLETED');
+    expect(open.params).not.toContain('CANCELLED');
+
+    const close = appendShipmentPipelineStageFilter('CLOSE', 4);
+    expect(close.sql).toContain('IN ($4, $5)');
+    expect(close.params).toEqual(['COMPLETED', 'CANCELLED']);
+
+    expect(normalizeShipmentPagePipelineStageParam('OPEN')).toBeNull();
+    expect(normalizeShipmentPagePipelineStageParam('CLOSE')).toBeNull();
+  });
+
+  it('builds display vessel key from master, SAP, and KLIP fallbacks', () => {
+    const key = shipmentPipelineDisplayVesselKeyExpr(
+      'mv.vessel_name_master',
+      'sl.vessel_name_sap',
+      's.vessel_name',
+    );
+    expect(key).toContain('mv.vessel_name_master');
+    expect(key).toContain('sl.vessel_name_sap');
+    expect(key).toContain('s.vessel_name');
+    expect(shipmentPipelineEnrichedDisplayVesselKeyExpr('e')).toContain('e.vessel_name_master');
+    expect(shipmentPipelineEnrichedDisplayVesselKeyExpr('e')).toContain('e.is_contract_sap_closed');
+  });
+
+  it('limits unplanned open-contracts CTE to CIF/FOB/CFR', () => {
+    const cte = buildShipmentPageUnplannedOpenContractsCte();
+    expect(cte).toContain("'CIF'");
+    expect(cte).toContain("'FOB'");
+    expect(cte).toContain("'CFR'");
   });
 });

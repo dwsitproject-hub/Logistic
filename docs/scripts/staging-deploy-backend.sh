@@ -20,6 +20,10 @@ git checkout "${BRANCH}"
 git pull origin "${BRANCH}"
 
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}")
+if [[ -f "${APP_DIR}/docker-compose.backend.remote-db.yml" ]]; then
+  COMPOSE_ARGS+=(-f docker-compose.backend.remote-db.yml)
+  echo "==> Remote DB overlay (Aliyun RDS :5432) — will not start co-located klip-postgres"
+fi
 if [[ "${KLIP_UPLOAD_USE_SYNOLOGY:-0}" == "1" ]]; then
   if [[ -f "${APP_DIR}/docker-compose.backend.synology.yml" ]]; then
     COMPOSE_ARGS+=(-f docker-compose.backend.synology.yml)
@@ -40,7 +44,11 @@ else
 fi
 
 echo "==> Rebuild and restart backend stack"
-docker compose "${COMPOSE_ARGS[@]}" up -d --build
+if [[ -f "${APP_DIR}/docker-compose.backend.remote-db.yml" ]]; then
+  docker compose "${COMPOSE_ARGS[@]}" up -d --build backend
+else
+  docker compose "${COMPOSE_ARGS[@]}" up -d --build
+fi
 
 echo "==> Container status"
 docker compose "${COMPOSE_ARGS[@]}" ps
@@ -51,4 +59,12 @@ docker compose "${COMPOSE_ARGS[@]}" logs --tail=40 backend
 echo "==> Health check (local)"
 curl -sf "http://127.0.0.1:5001/health" && echo || echo "WARN: /health failed — check logs"
 
+if [[ -f "${APP_DIR}/docs/scripts/verify-oidc-config.sh" ]]; then
+  echo "==> OIDC env verification (Hub Admin alignment)"
+  bash "${APP_DIR}/docs/scripts/verify-oidc-config.sh" || echo "WARN: OIDC verify failed — set OIDC_* in /opt/klip/.env or backend/.env"
+fi
+
 echo "Done. Tail logs: docker compose ${COMPOSE_ARGS[*]} logs -f backend"
+echo ""
+echo "Post-deploy data fix (dedupe + master vessel):"
+echo "  bash docs/scripts/staging-deploy-backend-full.sh --skip-deploy"

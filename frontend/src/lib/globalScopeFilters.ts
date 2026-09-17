@@ -4,6 +4,7 @@ export type ToolbarMultiFilterState = {
   selectedIncoterms: string[]
   selectedProducts: string[]
   selectedSuppliers?: string[]
+  selectedGroups?: string[]
   selectedGroupPlants: string[]
 }
 
@@ -13,6 +14,57 @@ type MultiColumnFilter = {
   includeBlank?: boolean
 }
 
+export function isBlankFilterOption(value: unknown): boolean {
+  const text = String(value ?? '').trim()
+  return text.length === 0 || text.toLowerCase() === 'blank'
+}
+
+export function filterRegionSiteOptions(options: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const option of options) {
+    if (isBlankFilterOption(option)) continue
+    const trimmed = String(option).trim()
+    const key = trimmed.toUpperCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
+}
+
+/** Map stored Region/Plant labels onto the current dropdown option strings (case-insensitive). */
+export function alignSelectedToRegionSiteOptions(selected: string[], options: string[]): string[] {
+  const byKey = new Map<string, string>()
+  for (const option of filterRegionSiteOptions(options)) {
+    byKey.set(option.trim().toUpperCase(), option)
+  }
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const value of selected) {
+    const trimmed = String(value ?? '').trim()
+    if (isBlankFilterOption(trimmed)) continue
+    const key = trimmed.toUpperCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(byKey.get(key) ?? trimmed)
+  }
+  return out
+}
+
+export function valueInRegionSiteList(value: unknown, selected: string[]): boolean {
+  const destSelected = selected.filter((item) => !isBlankFilterOption(item))
+  if (destSelected.length === 0) return true
+  const row = String(value ?? '').trim()
+  if (isBlankFilterOption(row)) return false
+  const rowKey = row.toUpperCase()
+  return destSelected.some((item) => String(item).trim().toUpperCase() === rowKey)
+}
+
+export function filterIncotermOptions(options: string[]): string[] {
+  return options.filter((option) => !isBlankFilterOption(option))
+}
+
 export function appendToolbarMultiToColumnFilters(
   base: Record<string, unknown>,
   toolbar: Partial<ToolbarMultiFilterState>,
@@ -20,15 +72,22 @@ export function appendToolbarMultiToColumnFilters(
   const merged: Record<string, unknown> = { ...base }
 
   if (toolbar.selectedIncoterms && toolbar.selectedIncoterms.length > 0) {
-    const includeBlank = toolbar.selectedIncoterms.includes('Blank')
-    const values = toolbar.selectedIncoterms.filter((v) => v !== 'Blank')
-    merged.incoterm = { type: 'multi', values, includeBlank } satisfies MultiColumnFilter
+    const values = filterIncotermOptions(toolbar.selectedIncoterms)
+    if (values.length > 0) {
+      merged.incoterm = { type: 'multi', values } satisfies MultiColumnFilter
+    }
   }
 
   if (toolbar.selectedProducts && toolbar.selectedProducts.length > 0) {
     const includeBlank = toolbar.selectedProducts.includes('Blank')
     const values = toolbar.selectedProducts.filter((v) => v !== 'Blank')
     merged.product = { type: 'multi', values, includeBlank } satisfies MultiColumnFilter
+  }
+
+  if (toolbar.selectedGroups && toolbar.selectedGroups.length > 0) {
+    const includeBlank = toolbar.selectedGroups.includes('Blank')
+    const values = toolbar.selectedGroups.filter((v) => v !== 'Blank')
+    merged.group_name = { type: 'multi', values, includeBlank } satisfies MultiColumnFilter
   }
 
   if (toolbar.selectedSuppliers && toolbar.selectedSuppliers.length > 0) {
@@ -46,24 +105,36 @@ export function normalizeScopeGroupKey(value: unknown): string {
 }
 
 export function rowMatchesToolbarMultiFilters(
-  row: { incoterm?: unknown; product?: unknown; supplier?: unknown; plant_site?: unknown; group_plant?: unknown },
+  row: {
+    incoterm?: unknown
+    product?: unknown
+    supplier?: unknown
+    group_name?: unknown
+    plant_site?: unknown
+    group_plant?: unknown
+  },
   filters: Partial<ToolbarMultiFilterState>,
 ): boolean {
   if (filters.selectedIncoterms && filters.selectedIncoterms.length > 0) {
+    const selectedIncoterms = filterIncotermOptions(filters.selectedIncoterms)
+    if (selectedIncoterms.length === 0) return true
     const inc = normalizeScopeGroupKey(row.incoterm)
-    if (!filters.selectedIncoterms.includes(inc)) return false
+    if (!selectedIncoterms.includes(inc)) return false
   }
   if (filters.selectedProducts && filters.selectedProducts.length > 0) {
     const prod = normalizeScopeGroupKey(row.product)
     if (!filters.selectedProducts.includes(prod)) return false
+  }
+  if (filters.selectedGroups && filters.selectedGroups.length > 0) {
+    const group = normalizeScopeGroupKey(row.group_name)
+    if (!filters.selectedGroups.includes(group)) return false
   }
   if (filters.selectedSuppliers && filters.selectedSuppliers.length > 0) {
     const sup = normalizeScopeGroupKey(row.supplier)
     if (!filters.selectedSuppliers.includes(sup)) return false
   }
   if (filters.selectedGroupPlants && filters.selectedGroupPlants.length > 0) {
-    const groupPlant = normalizeScopeGroupKey(row.group_plant ?? row.plant_site)
-    if (!filters.selectedGroupPlants.includes(groupPlant)) return false
+    if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
   }
   return true
 }
@@ -88,6 +159,7 @@ export function hasToolbarMultiSelection(filters: Partial<ToolbarMultiFilterStat
   return (
     (filters.selectedIncoterms?.length ?? 0) > 0 ||
     (filters.selectedProducts?.length ?? 0) > 0 ||
+    (filters.selectedGroups?.length ?? 0) > 0 ||
     (filters.selectedSuppliers?.length ?? 0) > 0 ||
     (filters.selectedGroupPlants?.length ?? 0) > 0
   )

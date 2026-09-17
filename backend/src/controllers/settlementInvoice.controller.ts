@@ -34,6 +34,7 @@ function mapSummaryRow(row: Record<string, unknown>) {
   return {
     id: row.id,
     contract_ext_no: row.contract_ext_no,
+    po_number: row.po_number,
     commercial_document_file_id: row.commercial_document_file_id,
     contract_id: row.contract_id,
     gross_amount: row.gross_amount != null ? Number(row.gross_amount) : null,
@@ -87,14 +88,23 @@ export const ocrSettlementInvoice = async (req: AuthRequest, res: Response) => {
 
 export const getSettlementInvoiceSummary = async (req: AuthRequest, res: Response) => {
   try {
-    const contractExtNo = String(req.params.contractExtNo || '').trim();
-    if (!contractExtNo) {
-      return res.status(400).json({ success: false, error: { message: 'contract_ext_no is required' } });
+    const poNumber = String(req.params.poNumber || '').trim();
+    const contractExtNo = String(req.query.contract_ext_no || '').trim();
+    if (!poNumber) {
+      return res.status(400).json({ success: false, error: { message: 'po_number is required' } });
     }
 
     const result = await query(
-      `SELECT * FROM settlement_invoice_summaries WHERE contract_ext_no = $1 LIMIT 1`,
-      [contractExtNo],
+      `SELECT * FROM settlement_invoice_summaries
+       WHERE NULLIF(TRIM(po_number), '') = $1
+          OR (
+            NULLIF(TRIM(po_number), '') IS NULL
+            AND $2 <> ''
+            AND TRIM(contract_ext_no) = $2
+          )
+       ORDER BY CASE WHEN NULLIF(TRIM(po_number), '') = $1 THEN 0 ELSE 1 END, updated_at DESC NULLS LAST
+       LIMIT 1`,
+      [poNumber, contractExtNo],
     );
 
     if (result.rows.length === 0) {
@@ -110,7 +120,11 @@ export const getSettlementInvoiceSummary = async (req: AuthRequest, res: Respons
 
 export const upsertSettlementInvoiceSummary = async (req: AuthRequest, res: Response) => {
   try {
+    const poNumber = String(req.body?.po_number || '').trim();
     const contractExtNo = String(req.body?.contract_ext_no || '').trim();
+    if (!poNumber) {
+      return res.status(400).json({ success: false, error: { message: 'po_number is required' } });
+    }
     if (!contractExtNo) {
       return res.status(400).json({ success: false, error: { message: 'contract_ext_no is required' } });
     }
@@ -131,9 +145,50 @@ export const upsertSettlementInvoiceSummary = async (req: AuthRequest, res: Resp
     const contractId = req.body?.contract_id ? String(req.body.contract_id).trim() : null;
     const userId = req.user?.id ?? null;
 
-    const result = await query(
+    const updateResult = await query(
+      `UPDATE settlement_invoice_summaries SET
+         contract_ext_no = $2,
+         commercial_document_file_id = COALESCE($3::uuid, commercial_document_file_id),
+         contract_id = COALESCE($4::uuid, contract_id),
+         gross_amount = $5,
+         discount_amount = $6,
+         down_payment = $7,
+         subtotal = $8,
+         tax_base_amount = $9,
+         vat_12_percent = $10,
+         total_payable = $11,
+         updated_by = $12,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE NULLIF(TRIM(po_number), '') = $1
+       RETURNING *`,
+      [
+        poNumber,
+        contractExtNo,
+        commercialDocumentFileId,
+        contractId,
+        fields.gross_amount,
+        fields.discount_amount,
+        fields.down_payment,
+        fields.subtotal,
+        fields.tax_base_amount,
+        fields.vat_12_percent,
+        fields.total_payable,
+        userId,
+      ],
+    );
+
+    if (updateResult.rows.length > 0) {
+      return res.json({
+        success: true,
+        message: 'Settlement invoice summary saved',
+        data: mapSummaryRow(updateResult.rows[0]),
+      });
+    }
+
+    const insertResult = await query(
       `INSERT INTO settlement_invoice_summaries (
          contract_ext_no,
+         po_number,
          commercial_document_file_id,
          contract_id,
          gross_amount,
@@ -145,22 +200,11 @@ export const upsertSettlementInvoiceSummary = async (req: AuthRequest, res: Resp
          total_payable,
          created_by,
          updated_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
-       ON CONFLICT (contract_ext_no) DO UPDATE SET
-         commercial_document_file_id = COALESCE(EXCLUDED.commercial_document_file_id, settlement_invoice_summaries.commercial_document_file_id),
-         contract_id = COALESCE(EXCLUDED.contract_id, settlement_invoice_summaries.contract_id),
-         gross_amount = EXCLUDED.gross_amount,
-         discount_amount = EXCLUDED.discount_amount,
-         down_payment = EXCLUDED.down_payment,
-         subtotal = EXCLUDED.subtotal,
-         tax_base_amount = EXCLUDED.tax_base_amount,
-         vat_12_percent = EXCLUDED.vat_12_percent,
-         total_payable = EXCLUDED.total_payable,
-         updated_by = EXCLUDED.updated_by,
-         updated_at = CURRENT_TIMESTAMP
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
        RETURNING *`,
       [
         contractExtNo,
+        poNumber,
         commercialDocumentFileId,
         contractId,
         fields.gross_amount,
@@ -177,7 +221,7 @@ export const upsertSettlementInvoiceSummary = async (req: AuthRequest, res: Resp
     return res.json({
       success: true,
       message: 'Settlement invoice summary saved',
-      data: mapSummaryRow(result.rows[0]),
+      data: mapSummaryRow(insertResult.rows[0]),
     });
   } catch (err) {
     logger.error('upsertSettlementInvoiceSummary error:', err);

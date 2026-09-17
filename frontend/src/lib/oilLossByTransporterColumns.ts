@@ -4,10 +4,13 @@
  */
 
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
+import { sumNullableOilLossQtyKg } from '@/lib/oilLossAllContractColumns'
+import { mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
+import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { sumR4OilLossPctByContract } from '@/lib/oilLossSummary'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 
-export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-transporter-v2'
+export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION = 'oil-loss-by-transporter-v4'
 export const OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY =
   'oil-loss.by-transporter.compact.columnLayoutVersion'
 
@@ -17,8 +20,10 @@ export const OIL_LOSS_BY_TRANSPORTER_DEFAULT_VISIBLE_COLUMN_IDS: readonly string
   'quantity_contract',
   'quantity_delivery',
   'quantity_received',
-  'gain_loss_amount',
-  'gain_loss_percentage',
+  'r1',
+  'r2',
+  'r3',
+  'r4',
 ] as const
 
 export const OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
@@ -29,8 +34,10 @@ export const OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX: Readonly<Record<string, nu
   sto_number: 110,
   quantity_delivery: 96,
   quantity_received: 96,
-  gain_loss_amount: 96,
-  gain_loss_percentage: 88,
+  r1: 96,
+  r2: 96,
+  r3: 96,
+  r4: 96,
   contract_date: 100,
   po_number: 110,
   product: 120,
@@ -107,19 +114,30 @@ export function oilLossTransporterLabel(row: Pick<OilLossSourceRow, 'transporter
 }
 
 export function aggregateOilLossByTransporter(rows: OilLossSourceRow[]): OilLossByTransporterRow[] {
-  const buckets = new Map<string, { row: OilLossByTransporterRow; groupRows: OilLossSourceRow[] }>()
+  const buckets = new Map<
+    string,
+    { row: OilLossByTransporterRow; groupRows: OilLossSourceRow[]; seenContracts: Set<string> }
+  >()
 
   for (const row of rows) {
     const key = oilLossTransporterGroupKey(row)
-    const delivery = parseNum(row.quantity_sent) ?? 0
+    const delivery = parseNum(row.quantity_sent ?? row.quantity_delivery) ?? 0
     const received = parseNum(row.quantity_received) ?? 0
     const contractQty = parseNum(row.quantity_contract) ?? 0
     const transporterLabel = oilLossTransporterLabel(row)
+    const contractKey = [
+      String(row.contract_number ?? '').trim(),
+      String(row.contract_ext_no ?? '').trim(),
+      String(row.id ?? '').trim(),
+    ]
+      .filter(Boolean)
+      .join('|')
 
     const bucket = buckets.get(key)
     if (!bucket) {
       buckets.set(key, {
         groupRows: [row],
+        seenContracts: new Set([contractKey]),
         row: {
           id: key,
           transporter: transporterLabel,
@@ -160,12 +178,16 @@ export function aggregateOilLossByTransporter(rows: OilLossSourceRow[]): OilLoss
       mergeDistinctTokens(existing.unloading_location, row.unloading_location) || null
     existing.contract_ext_no = mergeDistinctTokens(existing.contract_ext_no, row.contract_ext_no) || null
     existing.sto_number = mergeDistinctTokens(existing.sto_number, row.sto_number) || null
-    existing.quantity_delivery = (existing.quantity_delivery ?? 0) + delivery
-    existing.quantity_received = (existing.quantity_received ?? 0) + received
+    // Contracts-level delivery/receive: count each contract once (not per SPD/STO row).
+    if (!bucket.seenContracts.has(contractKey)) {
+      bucket.seenContracts.add(contractKey)
+      existing.quantity_delivery = (existing.quantity_delivery ?? 0) + delivery
+      existing.quantity_received = (existing.quantity_received ?? 0) + received
+      existing.quantity_contract = (existing.quantity_contract ?? 0) + contractQty
+    }
     existing.gain_loss_amount = (existing.quantity_received ?? 0) - (existing.quantity_delivery ?? 0)
-    existing.quantity_contract = (existing.quantity_contract ?? 0) + contractQty
-    existing.quantity_sfal = (existing.quantity_sfal ?? 0) + (parseNum(row.quantity_sfal) ?? 0)
-    existing.quantity_sfbd = (existing.quantity_sfbd ?? 0) + (parseNum(row.quantity_sfbd) ?? 0)
+    existing.quantity_sfal = sumNullableOilLossQtyKg(existing.quantity_sfal, row.quantity_sfal)
+    existing.quantity_sfbd = sumNullableOilLossQtyKg(existing.quantity_sfbd, row.quantity_sfbd)
     existing.row_count += 1
   }
 
@@ -220,27 +242,7 @@ export function oilLossByTransporterCompactColumnFallbackOrder(allIds: string[])
 }
 
 export function mergeOilLossByTransporterColumnOrder(saved: string[], allIds: string[]): string[] {
-  const canonical = oilLossByTransporterCompactColumnFallbackOrder(allIds)
-  if (saved.length === 0) return canonical
-
-  const primary = OIL_LOSS_BY_TRANSPORTER_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
-  const primarySet = new Set(primary)
-  const extras: string[] = []
-  const seen = new Set<string>()
-
-  for (const id of saved) {
-    if (allIds.includes(id) && !primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  for (const id of canonical) {
-    if (!primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  return [...primary, ...extras]
+  return mergePreservedColumnOrder(saved, allIds, oilLossByTransporterCompactColumnFallbackOrder(allIds))
 }
 
 export function buildOilLossByTransporterVisibleColumns<T extends { id: string }>(
@@ -258,4 +260,20 @@ export function buildOilLossByTransporterVisibleColumns<T extends { id: string }
     if (col) out.push(col)
   }
   return out
+}
+
+const OIL_LOSS_BY_TRANSPORTER_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function oilLossByTransporterTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base =
+    OIL_LOSS_BY_TRANSPORTER_COLUMN_WIDTH_PX[colId] ?? OIL_LOSS_BY_TRANSPORTER_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
 }

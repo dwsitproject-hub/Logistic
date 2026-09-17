@@ -3,6 +3,7 @@
  * Matches Contract Performance compact header sizing behavior.
  */
 
+import { migrateSavedColumnLayout, mergePreservedColumnOrder } from '@/lib/columnLayoutMigration'
 import {
   buildCompactTableColumnWidthTracks,
   resolveCompactColumnWidthPx,
@@ -21,7 +22,7 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'product',
   'incoterm',
   'contract_qty',
-  'sto_quantity',
+  // sto_quantity kept in column picker only — list uses Contract Qty + Delivery/Receive.
   'quantity_delivered',
   'quantity_receive',
   'outstanding_qty_mt',
@@ -29,8 +30,14 @@ export const TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
   'trucking_completion_date',
 ] as const
 
-/** Bump when default column order/visibility changes — resets users without matching saved layout. */
-export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v3'
+/** Soft-hide on layout version bump (still available via Columns menu). */
+export const TRUCKING_SOFT_HIDE_COLUMN_IDS: readonly string[] = ['sto_quantity']
+
+/** Removed from the table and Columns menu while retaining the source field elsewhere. */
+export const TRUCKING_REMOVED_COLUMN_IDS: readonly string[] = ['quantity_sent']
+
+/** Bump when default column order/visibility changes — soft-migrates saved layouts. */
+export const TRUCKING_COLUMN_LAYOUT_VERSION = 'trucking-columns-v6'
 
 export const TRUCKING_COLUMN_LAYOUT_VERSION_KEY = 'trucking.compact.columnLayoutVersion'
 
@@ -40,7 +47,7 @@ export const TRUCKING_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
   contract_date: 100,
   contract_ext_no: 120,
   po_number: 72,
-  supplier: 88,
+  supplier: 152,
   status: 80,
   sto_number: 72,
   product: 88,
@@ -94,27 +101,35 @@ export function truckingCompactColumnFallbackOrder(allIds: string[]): string[] {
 }
 
 export function mergeTruckingColumnOrder(saved: string[], allIds: string[]): string[] {
-  const canonical = truckingCompactColumnFallbackOrder(allIds)
-  if (saved.length === 0) return canonical
+  return mergePreservedColumnOrder(saved, allIds, truckingCompactColumnFallbackOrder(allIds))
+}
 
-  const primary = TRUCKING_DEFAULT_VISIBLE_COLUMN_IDS.filter((id) => allIds.includes(id))
-  const primarySet = new Set(primary)
-  const extras: string[] = []
-  const seen = new Set<string>()
-
-  for (const id of saved) {
-    if (allIds.includes(id) && !primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
+export function migrateTruckingColumnLayout(
+  visibleColumnIds: readonly string[],
+  columnOrderIds: readonly string[],
+  allColumnIds: readonly string[],
+): { visibleColumnIds: string[]; columnOrderIds: string[] } {
+  const softHide = new Set(TRUCKING_SOFT_HIDE_COLUMN_IDS)
+  const migrated = migrateSavedColumnLayout({
+    visibleColumnIds,
+    columnOrderIds,
+    obsoleteColumnIds: TRUCKING_REMOVED_COLUMN_IDS,
+  })
+  const visibleRaw =
+    migrated.visibleColumnIds.length > 0
+      ? migrated.visibleColumnIds
+      : truckingDefaultVisibleColumnIds([...allColumnIds])
+  const visible = visibleRaw.filter((id) => !softHide.has(id))
+  // Keep soft-hidden ids in order so Columns menu still lists them after the primary set.
+  const orderBase = mergeTruckingColumnOrder(migrated.columnOrderIds, [...allColumnIds])
+  const orderWithSoftHidden = mergeTruckingColumnOrder(
+    [...orderBase, ...TRUCKING_SOFT_HIDE_COLUMN_IDS],
+    [...allColumnIds],
+  )
+  return {
+    visibleColumnIds: visible,
+    columnOrderIds: orderWithSoftHidden,
   }
-  for (const id of canonical) {
-    if (!primarySet.has(id) && !seen.has(id)) {
-      extras.push(id)
-      seen.add(id)
-    }
-  }
-  return [...primary, ...extras]
 }
 
 export function buildTruckingVisibleColumns<T extends { id: string }>(
@@ -130,14 +145,28 @@ export function buildTruckingVisibleColumns<T extends { id: string }>(
   return orderedIds.map((id) => byId.get(id)!).filter((c) => visibleIds.has(c.id))
 }
 
+const TRUCKING_DEFAULT_COLUMN_WIDTH_PX = 96
+
+/** Match Contract/Shipping Performance: base map + header longest-word floor. */
+export function truckingTableColumnWidthPx(
+  colId: string,
+  headerLabel?: string,
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const base = TRUCKING_COLUMN_WIDTH_PX[colId] ?? TRUCKING_DEFAULT_COLUMN_WIDTH_PX
+  return resolveCompactColumnWidthPx(base, headerLabel, {
+    hasFormulaHelp: options?.hasFormulaHelp,
+    hasSort: true,
+  })
+}
+
 export function buildTruckingColumnWidthTracks(
   visibleColumns: ReadonlyArray<string | CompactTableColumnWidthInput>,
   labelById?: ReadonlyMap<string, string>,
 ): Record<string, string> {
   return buildCompactTableColumnWidthTracks(visibleColumns, (id, label, formulaHelp) =>
-    resolveCompactColumnWidthPx(TRUCKING_COLUMN_WIDTH_PX[id] ?? 96, label ?? labelById?.get(id), {
+    truckingTableColumnWidthPx(id, label ?? labelById?.get(id), {
       hasFormulaHelp: Boolean(formulaHelp),
-      hasSort: true,
     }),
   )
 }

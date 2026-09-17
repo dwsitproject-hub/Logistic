@@ -3,6 +3,7 @@ import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { invalidateTruckingListCache } from '../services/truckingList.service';
+import { refreshTruckingStageSnapshotForOperationIds } from '../services/pipelineDailySummary.service';
 import {
   deriveDbStatusFromRealization,
   listTruckingDailyActuals,
@@ -93,7 +94,15 @@ export const getTruckingRealization = async (req: AuthRequest, res: Response) =>
       success: true,
       data: {
         ...row,
-        daily_actuals: dailyActuals,
+        daily_actuals: dailyActuals.map((a) => ({
+          date: a.progress_date,
+          progress_date: a.progress_date,
+          quantity_kg: a.quantity_kg,
+          quantity_delivered: a.quantity_kg,
+          quantity_delivery_kg:
+            a.quantity_delivery_kg != null ? a.quantity_delivery_kg : a.quantity_kg,
+          quantity_receive_kg: a.quantity_receive_kg,
+        })),
       },
     });
   } catch (err) {
@@ -582,6 +591,24 @@ export const bulkUploadWbRekap = async (req: AuthRequest, res: Response) => {
       sheets,
     });
 
+    /*
+     * Refresh the uploaded operations' snapshot rows before answering.
+     *
+     * The Trucking page reads its rows, their Outstanding Qty and Section 1's quantities from
+     * trucking_list_stage_snapshot, which only the full rebuild used to write - so until that
+     * ran (227s on dev, up to 27min on SIT) the page still showed the pre-upload OS Qty, which
+     * is precisely the figure the user opens it to check after an upload.
+     *
+     * Awaited rather than scheduled, because the page is opened straight after this response:
+     * measured ~2.5s fixed plus ~7ms per operation. It cannot fail the upload - the refresh
+     * swallows its own errors and leaves the snapshot exactly as stale as it already was.
+     *
+     * Before the cache invalidation below, so nothing that was cached mid-refresh survives it.
+     */
+    if (result.touchedOperationIds.length > 0) {
+      await refreshTruckingStageSnapshotForOperationIds(result.touchedOperationIds);
+    }
+
     invalidateTruckingListCache();
 
     return res.json({
@@ -599,6 +626,8 @@ export const bulkUploadWbRekap = async (req: AuthRequest, res: Response) => {
         rowsUpserted: result.rowsUpserted,
         rowParseFailures: result.rowParseFailures,
         operationFailures: result.operationFailures,
+        operationWarnings: result.operationWarnings,
+        operationDeduped: result.operationDeduped,
       },
     });
   } catch (err) {

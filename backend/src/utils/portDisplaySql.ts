@@ -54,13 +54,17 @@ export function sapDischargePortTextSubquery(contractIdRef: string): string {
   )`;
 }
 
-function resolvedPortNameCase(sapTextSubquery: string): string {
+export function humanReadablePortNameExpr(portTextExpr: string): string {
   return `CASE
-    WHEN ${sapTextSubquery} IS NULL THEN NULL
-    WHEN TRIM(${sapTextSubquery}) IN (${INVALID_PORT_LITERALS}) THEN NULL
-    WHEN ${isNumericPortCodeSql(sapTextSubquery)} THEN NULL
-    ELSE TRIM(${sapTextSubquery})
+    WHEN ${portTextExpr} IS NULL THEN NULL
+    WHEN TRIM(${portTextExpr}) IN (${INVALID_PORT_LITERALS}) THEN NULL
+    WHEN ${isNumericPortCodeSql(portTextExpr)} THEN NULL
+    ELSE TRIM(${portTextExpr})
   END`;
+}
+
+function resolvedPortNameCase(sapTextSubquery: string): string {
+  return humanReadablePortNameExpr(sapTextSubquery);
 }
 
 export function resolvedLoadingPortNameSql(contractIdRef: string): string {

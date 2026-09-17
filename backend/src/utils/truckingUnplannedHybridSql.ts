@@ -2,22 +2,47 @@
  * Trucking page — Unplanned hybrid list (open PO backlog + trucking execution rows).
  */
 
-import { sqlIsContractSapClosedExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import { resolveUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
+import { sqlIsContractSapInactiveForOsExpr, SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
+import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
+import {
+  sqlTruckingSourceIsInterco,
+  sqlTruckingSourceIsThirdParty,
+} from './truckingOutstandingQtySummarySql';
+import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { parseColumnFiltersQuery, type ColumnFilterPayload } from './contractListFilters';
-import { appendGroupPlantFilter, groupPlantExpr } from './groupPlantSql';
+import { groupPlantExpr } from './groupPlantSql';
+import {
+  appendRegionSiteFilter,
+  sqlContractHasResolvedRegionSiteExpr,
+  sqlRegionSiteDisplayForContract,
+  sqlRegionSiteRawForContract,
+} from './regionSiteSql';
+import {
+  sqlB2bEndingBuyerExpr,
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from './b2bOriginEndingSql';
 import {
   sqlPipelineIncotermKey,
   sqlPipelineProductKey,
 } from './pipelineDailySummaryToolbarScope';
 import { contractExtNoSubquery } from './portDisplaySql';
 import { buildTruckingPageIncotermScopeSql } from './truckingIncotermScope';
+import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
+
+export const TRUCKING_UNPLANNED_B2B_END_JOIN = sqlB2bOriginEndingChildLateralJoin({
+  originPoExpr: 'c.po_number',
+});
+
+/** Status cards + Unplanned hybrid: contract origin plant (same as pipeline daily snapshot). */
+const TRUCKING_UNPLANNED_GROUP_PLANT = groupPlantExpr('c.plant_code', 'c.company_name');
 
 const CB_COL: Record<string, string> = {
   contract_number: 'c.contract_id',
   po_number: 'c.po_number',
   supplier: 'c.supplier',
-  buyer: 'c.buyer',
+  buyer: sqlB2bEndingBuyerExpr('c.buyer'),
   product: 'c.product',
   group_name: 'c.group_name',
   incoterm: 'c.incoterm',
@@ -28,33 +53,52 @@ const CB_COL: Record<string, string> = {
   status: `'UNPLANNED'`,
 };
 
-export function buildTruckingUnplannedBacklogLatestSpdCte(): string {
-  return `
-      latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
-            spd.data->'raw'->>'B2B Flag',
-            spd.data->>'Contract Type'
-          ) AS b2b_flag_raw,
-          COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw,
-          COALESCE(
-            spd.data->'raw'->>'Contract Ext No',
-            spd.data->>'Contract Ext No'
-          ) AS contract_ext_no_raw,
-          spd.created_at
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-      )`;
+/** Output-column aliases from truckingUnplannedContractBacklogRowSelectSql (whitelist only). */
+const BACKLOG_PAGE_ORDER_ALIAS: Record<string, string> = {
+  created_at: 'created_at',
+  contract_date: 'contract_date',
+  supplier: 'supplier',
+  po_number: 'po_number',
+  contract_number: 'contract_number',
+  outstanding_quantity: 'outstanding_quantity',
+  contract_qty: 'contract_qty',
+  status: 'status',
+  delivery_start_date: 'delivery_start_date',
+  delivery_end_date: 'delivery_end_date',
+  incoterm: 'incoterm',
+  product: 'product',
+  buyer: 'buyer',
+  group_name: 'group_name',
+};
+
+export function buildTruckingUnplannedBacklogOrderBy(
+  sortKey: string,
+  sortDir: 'ASC' | 'DESC',
+): string {
+  const field = BACKLOG_PAGE_ORDER_ALIAS[sortKey] || 'contract_date';
+  const dir = sortDir === 'ASC' ? 'ASC' : 'DESC';
+  return `${field} ${dir} NULLS LAST, contract_id ASC`;
+}
+
+/**
+ * The same `latest_spd_contract` CTE the Shipments backlog uses.
+ *
+ * This was a second copy of the same three COALESCE families - b2b flag, contract reference PO,
+ * contract ext no - spelled out arm for arm, and the two copies happened to still agree. They no
+ * longer can: both now come from `contractLatestSpdDerivedSql`, and migration 161 already stores
+ * all three on `contract_latest_spd_snapshot`, so a fresh snapshot is read as columns instead of
+ * scanning sap_processed_data.
+ *
+ * That is where Trucking's cold time was going. Measured 2026-09-10, the cold page issued 13
+ * queries for 97,324ms of database time, and three of them were this CTE in its live form:
+ * 13,399ms + 12,156ms + 10,985ms = 36,540ms, 38% of the total.
+ *
+ * One behaviour change, and it is an improvement: the live form here ordered by
+ * `created_at DESC NULLS LAST` with no tiebreaker, so which SAP row won a tie was undefined. The
+ * snapshot resolves ties on `spd.id DESC`, as the shared live form now does too.
+ */
+export async function resolveTruckingUnplannedBacklogLatestSpdCte(): Promise<string> {
+  return resolveUnplannedContractBacklogLatestSpdCte();
 }
 
 /** Open FRC/LCO LAND/MIX contracts with no active trucking operation. */
@@ -65,7 +109,7 @@ export function truckingUnplannedContractBacklogBaseWhereSql(
   return `
     ${buildTruckingPageIncotermScopeSql(contractAlias)}
     AND UPPER(COALESCE(NULLIF(TRIM(${contractAlias}.transport_mode::text), ''), 'LAND')) IN ('LAND', 'MIX')
-    AND NOT (${sqlIsContractSapClosedExpr(contractAlias)})
+    AND NOT (${sqlIsContractSapInactiveForOsExpr(contractAlias)})
     AND NOT (
       ${contractAlias}.contract_id IS NOT NULL
       AND UPPER(NULLIF(TRIM(COALESCE(${spdAlias}.b2b_flag_raw, ${contractAlias}.contract_type::text, '')), '')) = 'B2B'
@@ -75,7 +119,7 @@ export function truckingUnplannedContractBacklogBaseWhereSql(
       SELECT 1
       FROM trucking_operations t_ns
       WHERE t_ns.contract_id = ${contractAlias}.id
-        AND COALESCE(t_ns.status, '') <> 'CANCELLED'
+        AND ${sqlTruckingOpIsActiveForMatchingSql('t_ns')}
     )`;
 }
 
@@ -91,7 +135,7 @@ export function truckingUnplannedContractBacklogRowSelectSql(outstandingExpr: st
     NULL::text AS operation_id,
     NULL::text AS location,
     NULL::text AS loading_location,
-    NULL::text AS unloading_location,
+    ${sqlB2bEndingUnloadExpr('NULL::text')} AS unloading_location,
     NULL::text AS trucking_owner,
     NULL::date AS cargo_readiness_date,
     NULL::jsonb AS daily_deliverables,
@@ -126,7 +170,7 @@ export function truckingUnplannedContractBacklogRowSelectSql(outstandingExpr: st
     c.delivery_start_date AS delivery_start_date,
     c.delivery_end_date AS delivery_end_date,
     c.supplier AS supplier,
-    c.buyer AS buyer,
+    ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
     c.product AS product,
     c.incoterm AS incoterm,
     c.group_name AS group_name,
@@ -153,7 +197,7 @@ export function appendTruckingUnplannedBacklogGlobalSearch(
       OR COALESCE(c.supplier::text, '') ILIKE ${likeExpr}
       OR COALESCE(c.product::text, '') ILIKE ${likeExpr}
       OR COALESCE(${contractExtNoSubquery('c.contract_id', 'c.po_number')}::text, '') ILIKE ${likeExpr}
-      OR COALESCE(${groupPlantExpr('c.plant_code', 'c.company_name')}::text, '') ILIKE ${likeExpr}
+      OR COALESCE(${sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number')}::text, '') ILIKE ${likeExpr}
     )`;
   return { sql, params: [`%${searchTrim}%`], nextIndex: startIndex + 1 };
 }
@@ -231,11 +275,10 @@ export function buildTruckingUnplannedContractToolbarScope(input: {
     params.push(input.contract);
     cp += 1;
   }
-  const plantFilter = appendGroupPlantFilter(
+  const plantFilter = appendRegionSiteFilter(
     input.plants,
     cp,
-    groupPlantExpr('c.plant_code', 'c.company_name'),
-    'c.plant_code',
+    sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
   );
   if (plantFilter.sql) {
     parts.push(plantFilter.sql.replace(/^ AND /, ''));
@@ -248,16 +291,17 @@ export function buildTruckingUnplannedContractToolbarScope(input: {
   };
 }
 
-export function buildTruckingUnplannedBacklogCountQuery(
+export async function buildTruckingUnplannedBacklogCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
     unplanned_trucking_backlog AS (
       SELECT c.id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
       WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
         ${contractScopeSql}
         ${toolbarSql}
@@ -265,67 +309,206 @@ export function buildTruckingUnplannedBacklogCountQuery(
     SELECT COUNT(*)::bigint AS c FROM unplanned_trucking_backlog`;
 }
 
-export function buildTruckingUnplannedBacklogPageQuery(
+/** Sum contract quantity_ordered for unplanned backlog (one row per contract). */
+export async function buildTruckingUnplannedBacklogContractQtyQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): Promise<string> {
+  return `
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
+    unplanned_trucking_backlog AS (
+      SELECT c.quantity_ordered
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
+        ${contractScopeSql}
+        ${toolbarSql}
+    )
+    SELECT COALESCE(SUM(COALESCE(quantity_ordered, 0)), 0)::numeric AS contract_qty_kg
+    FROM unplanned_trucking_backlog`;
+}
+
+export async function buildTruckingUnplannedBacklogPageQuery(
   contractScopeSql: string,
   toolbarSql: string,
   limit: number,
   offset: number,
-): string {
+  sortKey = 'contract_date',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
+): Promise<string> {
   const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
   const outstandingExpr = sqlContractGlobalOutstandingExpr({
     contractQtyExpr: 'c.quantity_ordered',
     incotermExpr: 'c.incoterm',
     contractNumberExpr: 'c.contract_id',
   });
-  const qtyMoveCte = buildQtyMoveCte({
-    kind: 'in_subquery',
-    subquery: `SELECT c.contract_id
+  /**
+   * The backlog predicate carries the GR-status expression and its correlated
+   * sap_processed_data subqueries, and it was written out twice - once to scope qty_move and
+   * once to select the rows - so Postgres evaluated it twice over every contract. Resolving
+   * the id set once in a MATERIALIZED CTE and joining it is access-path only: identical rows,
+   * one evaluation. Same pattern as the shipment backlog builders (measured up to 5.5x there).
+   * DISTINCT guards against the B2B ending lateral matching more than once; the outer query
+   * keeps that lateral, so any legitimate fan-out still happens exactly as before.
+   */
+  const backlogIdsCte = `backlog_contract_ids AS MATERIALIZED (
+      SELECT DISTINCT c.id, c.contract_id
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}`,
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      WHERE ${backlogWhere}
+    )`;
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
   });
+  const orderBy = buildTruckingUnplannedBacklogOrderBy(sortKey, sortDir);
   return `
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
+    ${backlogIdsCte},
     ${qtyMoveCte},
     unplanned_trucking_backlog AS (
       SELECT ${truckingUnplannedContractBacklogRowSelectSql(outstandingExpr)}
       FROM contracts c
+      INNER JOIN backlog_contract_ids b ON b.id = c.id
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${backlogWhere}
-      ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      ORDER BY ${orderBy}
       LIMIT ${limit} OFFSET ${offset}
     )
     SELECT * FROM unplanned_trucking_backlog`;
 }
 
+/**
+ * Backlog contract UUIDs eligible for ensure-unplanned-ops (OS qty > 0).
+ * Same filters as Unplanned hybrid backlog list.
+ */
+export async function buildTruckingUnplannedBacklogIdsWithOsQuery(
+  contractScopeSql: string,
+  toolbarSql: string,
+): Promise<string> {
+  const backlogWhere = `${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}${contractScopeSql}${toolbarSql}`;
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  /** Same double evaluation as the page query above - see the note there. */
+  const backlogIdsCte = `backlog_contract_ids AS MATERIALIZED (
+      SELECT DISTINCT c.id, c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      WHERE ${backlogWhere}
+    )`;
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: 'SELECT contract_id FROM backlog_contract_ids',
+  });
+  return `
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
+    ${backlogIdsCte},
+    ${qtyMoveCte}
+    SELECT c.id
+    FROM contracts c
+    INNER JOIN backlog_contract_ids b ON b.id = c.id
+    LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+    ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+    WHERE (${outstandingExpr}) > 0
+    ORDER BY c.contract_date DESC NULLS LAST, c.contract_id ASC`;
+}
+
 export function buildTruckingUnplannedBacklogSummaryCountQuery(
   contractScopeSql: string,
   toolbarSql: string,
-): string {
+): Promise<string> {
   return buildTruckingUnplannedBacklogCountQuery(contractScopeSql, toolbarSql);
 }
 
-/** Daily refresh — open contract backlog grouped by group_plant + contract_date. */
-export function buildTruckingUnplannedBacklogDailySummarySql(): string {
-  const plant = groupPlantExpr('c.plant_code', 'c.company_name');
+/**
+ * Daily refresh — open contract backlog grouped by group_plant + contract_date.
+ *
+ * Carries the backlog's outstanding qty as well as its row count. The live aggregate of that
+ * quantity was 35,078ms of a 39,226ms cold Trucking load on dev - 89% of the page, in one 150KB
+ * statement returning a single row - because per contract it expands the 26KB GR-status
+ * expression through the backlog predicate and the cancelled check inside the outstanding
+ * expression. The count beside it was already instant precisely because it was stored here.
+ *
+ * Only Interco vs 3rd Party needs columns: `incoterm` is already a dimension of this table, so
+ * the FRC/LCO halves of the card come from the existing grouping.
+ *
+ * The outstanding expression needs `qty_move` in scope, so the CTE is built over the same backlog
+ * predicate the rows are selected by - the quantity summed here is the same number the live
+ * aggregate produced, not an approximation of it.
+ */
+export async function buildTruckingUnplannedBacklogDailySummarySql(
+  targetTable = 'trucking_pipeline_daily_summary',
+): Promise<string> {
+  const plant = TRUCKING_UNPLANNED_GROUP_PLANT;
+  const backlogWhere = truckingUnplannedContractBacklogBaseWhereSql('c', 'l');
+  const outstandingExpr = sqlContractGlobalOutstandingExpr({
+    contractQtyExpr: 'c.quantity_ordered',
+    incotermExpr: 'c.incoterm',
+    contractNumberExpr: 'c.contract_id',
+  });
+  const qtyMoveCte = await resolveContractsQtyMoveCte({
+    kind: 'in_subquery',
+    subquery: `SELECT c.contract_id
+      FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      WHERE ${backlogWhere}`,
+  });
+  /*
+   * The OS sums exclude blank Region/Site; the COUNT and contract qty beside them do not.
+   *
+   * Contract Performance counts only contracts that resolve to a real Region/Site and is the agreed
+   * shared reference, so the OS has to match it - but the Unplanned card's count and contract qty
+   * come off the same scan and must keep every row. This snapshot is what the page actually serves
+   * (loadTruckingBacklogSummaryFromSnapshot), so leaving it out would make the live query and the
+   * served numbers disagree: changing only the live builders moved nothing at all.
+   */
+  const osSum = (pred: string) =>
+    `COALESCE(SUM(CASE WHEN (${pred})
+        AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}
+      THEN (${outstandingExpr})::numeric ELSE 0 END), 0)::numeric`;
   return `
-    INSERT INTO trucking_pipeline_daily_summary (group_plant, contract_date, product, incoterm, unplanned_contract_backlog)
-    WITH ${buildTruckingUnplannedBacklogLatestSpdCte()},
+    INSERT INTO ${targetTable} (
+      group_plant, contract_date, product, incoterm,
+      unplanned_contract_backlog, backlog_os_third_party_kg, backlog_os_interco_kg,
+      backlog_contract_qty_kg
+    )
+    WITH ${await resolveTruckingUnplannedBacklogLatestSpdCte()},
+    ${qtyMoveCte},
     backlog AS (
       SELECT
         ${plant} AS group_plant,
         COALESCE(c.contract_date, DATE '1970-01-01')::date AS contract_date,
         ${sqlPipelineProductKey('c.product')} AS product,
         ${sqlPipelineIncotermKey('c.incoterm')} AS incoterm,
-        COUNT(*)::bigint AS unplanned_contract_backlog
+        COUNT(*)::bigint AS unplanned_contract_backlog,
+        ${osSum(sqlTruckingSourceIsThirdParty('c.source_type'))} AS backlog_os_third_party_kg,
+        ${osSum(sqlTruckingSourceIsInterco('c.source_type'))} AS backlog_os_interco_kg,
+        COALESCE(SUM(COALESCE(c.quantity_ordered, 0)), 0)::numeric AS backlog_contract_qty_kg
       FROM contracts c
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-      WHERE ${truckingUnplannedContractBacklogBaseWhereSql('c', 'l')}
+      ${TRUCKING_UNPLANNED_B2B_END_JOIN}
+      WHERE ${backlogWhere}
       GROUP BY 1, 2, 3, 4
     )
-    SELECT group_plant, contract_date, product, incoterm, unplanned_contract_backlog FROM backlog
+    SELECT group_plant, contract_date, product, incoterm,
+           SUM(unplanned_contract_backlog)::bigint AS unplanned_contract_backlog,
+           SUM(backlog_os_third_party_kg)::numeric AS backlog_os_third_party_kg,
+           SUM(backlog_os_interco_kg)::numeric AS backlog_os_interco_kg,
+           SUM(backlog_contract_qty_kg)::numeric AS backlog_contract_qty_kg
+    FROM backlog
+    GROUP BY group_plant, contract_date, product, incoterm
     ON CONFLICT (group_plant, contract_date, product, incoterm) DO UPDATE SET
-      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog`;
+      unplanned_contract_backlog = EXCLUDED.unplanned_contract_backlog,
+      backlog_os_third_party_kg = EXCLUDED.backlog_os_third_party_kg,
+      backlog_os_interco_kg = EXCLUDED.backlog_os_interco_kg,
+      backlog_contract_qty_kg = EXCLUDED.backlog_contract_qty_kg`;
 }
 
 export { parseColumnFiltersQuery };

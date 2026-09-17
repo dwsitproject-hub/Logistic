@@ -23,6 +23,62 @@ export function quantityKgValuesEqual(a: unknown, b: unknown): boolean {
   return Math.abs(pa - pb) < 0.001
 }
 
+function resolveEffectiveQtyKg(
+  row: VesselPortsQuantityRow,
+  edits: VesselPortsQuantityEdits,
+  field: 'quantity_delivered' | 'quantity_receive',
+): number | null {
+  const edited = edits[row.rowKey]?.[field]
+  if (edited !== undefined) {
+    if (edited === null) return null
+    const n = Number(edited)
+    return Number.isFinite(n) ? n : null
+  }
+  const base = row[field]
+  if (base == null) return null
+  const n = Number(base)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Per-PO KLIP qty payload for PUT /shipments/:id/po-klip-qty (changed rows only). */
+export function buildPoKlipQtySaveRows(
+  rows: VesselPortsQuantityRow[],
+  edits: VesselPortsQuantityEdits,
+): Array<{
+  contractNumber: string
+  poNumber: string | null
+  quantityDeliveredKlipKg: number | null
+  quantityReceiveKlipKg: number | null
+}> {
+  return rows
+    .map((row) => {
+      const contractNumber = String(row.contract_ext_no ?? '').trim()
+      if (!contractNumber) return null
+      const edit = edits[row.rowKey]
+      if (!edit) return null
+      const deliveredChanged =
+        edit.quantity_delivered !== undefined
+        && !quantityKgValuesEqual(edit.quantity_delivered, row.quantity_delivered)
+      const receiveChanged =
+        edit.quantity_receive !== undefined
+        && !quantityKgValuesEqual(edit.quantity_receive, row.quantity_receive)
+      if (!deliveredChanged && !receiveChanged) return null
+      return {
+        contractNumber,
+        poNumber: row.po_number != null && String(row.po_number).trim() !== ''
+          ? String(row.po_number).trim()
+          : null,
+        quantityDeliveredKlipKg: deliveredChanged
+          ? resolveEffectiveQtyKg(row, edits, 'quantity_delivered')
+          : null,
+        quantityReceiveKlipKg: receiveChanged
+          ? resolveEffectiveQtyKg(row, edits, 'quantity_receive')
+          : null,
+      }
+    })
+    .filter((r): r is NonNullable<typeof r> => r != null)
+}
+
 /** True only when the user changed Delivered / Receive in the qty edit grid (not mere load/sum drift). */
 export function hasVesselPortsQuantityUserEdits(
   rows: VesselPortsQuantityRow[],

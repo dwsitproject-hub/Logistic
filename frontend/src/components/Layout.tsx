@@ -4,20 +4,27 @@ import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from './ui/button'
-import { TooltipProvider } from './ui/tooltip'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 import { AppTourProvider, useAppTour } from './AppTourProvider'
 import { PageActivityFab } from './PageActivityFab'
 import { UserActivityTracker } from './UserActivityTracker'
-import { LogOut, Menu, X, BookOpen } from 'lucide-react'
+import { BookOpen, Loader2, LogOut, Menu, X } from 'lucide-react'
+import { PageHeaderBusyProvider, usePageHeaderBusyState } from '@/components/PageHeaderBusyContext'
+import { resolvePageTitle } from '@/lib/resolvePageTitle'
 import {
   PermissionsProvider,
   clearPermissionsCache,
+  isAdminRole,
   usePermissions,
 } from '@/components/PermissionsContext'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
+import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
+import { HeaderMissingEtaAlertBell } from '@/components/HeaderMissingEtaAlertBell'
+import { SapImportInFlightBanner } from '@/components/SapImportInFlightBanner'
+import { cn } from '@/lib/utils'
 
 type UserLite = {
   id?: string
@@ -25,23 +32,10 @@ type UserLite = {
   role?: string
 }
 
-function readStoredUser(): UserLite | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-    if (!token || !userData) return null
-    return JSON.parse(userData) as UserLite
-  } catch {
-    return null
-  }
-}
-
 function LayoutChrome({
   children,
   user,
   pathname,
-  navigation,
   filteredNavigation,
   sidebarNavigationLoading,
   sidebarOpen,
@@ -52,7 +46,6 @@ function LayoutChrome({
   children: React.ReactNode
   user: UserLite
   pathname: string
-  navigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   filteredNavigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
   sidebarNavigationLoading?: boolean
   sidebarOpen: boolean
@@ -61,23 +54,26 @@ function LayoutChrome({
   onNavHover: (href: string) => void
 }) {
   const { startTour } = useAppTour()
-  const pageTitle = navigation.find((item) => item.href === pathname)?.name || 'KLIP'
+  const pageTitle = resolvePageTitle(pathname)
+  const { busy } = usePageHeaderBusyState()
 
   return (
     <div className="flex h-screen bg-gray-100">
       <aside
         data-tour="tour-sidebar"
         className={`${
-          sidebarOpen ? 'w-64' : 'w-20'
+          sidebarOpen ? 'w-52' : 'w-16'
         } bg-white border-r border-gray-200 transition-all duration-300 ease-in-out shrink-0 flex flex-col overflow-hidden`}
       >
-        <div className="flex items-center justify-between p-4 border-b shrink-0">
-          {sidebarOpen && <h1 className="text-2xl font-bold text-primary">KLIP</h1>}
+        <div className="flex h-16 min-h-16 items-center justify-between gap-1 border-b border-gray-200 px-3 shrink-0">
+          {sidebarOpen && (
+            <h1 className="text-xl font-bold text-primary leading-snug tracking-tight">KLIP</h1>
+          )}
           <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)}>
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </Button>
         </div>
-        <nav className="flex-1 overflow-y-auto p-4 space-y-2">
+        <nav className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
           {sidebarNavigationLoading
             ? Array.from({ length: 8 }).map((_, index) => (
                 <div
@@ -95,12 +91,14 @@ function LayoutChrome({
                 href={item.href}
                 prefetch={true}
                 onMouseEnter={() => onNavHover(item.href)}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                className={`flex items-start gap-2 px-2.5 py-2 rounded-lg text-sm leading-snug transition-colors ${
                   isActive ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'
                 }`}
               >
-                <Icon className="h-5 w-5" />
-                {sidebarOpen && <span>{item.name}</span>}
+                <Icon className="h-4 w-4 shrink-0 mt-0.5" />
+                {sidebarOpen && (
+                  <span className="min-w-0 whitespace-normal break-words">{item.name}</span>
+                )}
               </Link>
             )
           })}
@@ -108,27 +106,60 @@ function LayoutChrome({
       </aside>
 
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 relative">
-        <header data-tour="tour-header" className="bg-white border-b border-gray-200 px-6 py-4 shrink-0">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-gray-800 truncate">{pageTitle}</h2>
-            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => startTour()}
-                className="hidden sm:inline-flex"
-              >
-                <BookOpen className="h-4 w-4 sm:mr-2" />
-                <span className="hidden md:inline">App tour</span>
-              </Button>
+        <header
+          data-tour="tour-header"
+          className="flex h-16 min-h-16 shrink-0 items-center border-b border-gray-200 bg-white px-6"
+        >
+          <div className="flex w-full min-w-0 items-center justify-between gap-4">
+            <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+              <h2 className="truncate text-xl font-semibold leading-snug text-gray-800">{pageTitle}</h2>
+              {busy ? (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-label="Loading" />
+              ) : null}
+              <SapImportInFlightBanner />
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {!isAdminRole(user.role) && <HeaderMissingEtaAlertBell />}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => startTour()}
+                    aria-label="App tour"
+                    className={cn(
+                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-blue-200/90 shadow-sm transition-all',
+                      'bg-gradient-to-r from-blue-50 to-indigo-50',
+                      'hover:border-blue-300 hover:from-blue-100 hover:to-indigo-100',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2',
+                    )}
+                  >
+                    <BookOpen className="h-4 w-4 text-blue-700" aria-hidden />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">App tour</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    aria-label="Log out"
+                    className={cn(
+                      'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-amber-200/90 shadow-sm transition-all',
+                      'bg-gradient-to-r from-amber-50 to-orange-50',
+                      'hover:border-amber-300 hover:from-amber-100 hover:to-orange-100',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2',
+                    )}
+                  >
+                    <LogOut className="h-4 w-4 text-amber-700" aria-hidden />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Log out</TooltipContent>
+              </Tooltip>
               <div className="text-right max-w-[140px] sm:max-w-none">
                 <p className="text-sm font-medium text-gray-900">{user.full_name}</p>
                 <p className="text-xs text-gray-500">{user.role}</p>
               </div>
-              <Button variant="outline" size="icon" onClick={handleLogout} title="Log out">
-                <LogOut className="h-5 w-5" />
-              </Button>
             </div>
           </div>
         </header>
@@ -157,11 +188,12 @@ function LayoutWithPermissions({
   const perms = usePermissions()
 
   const handleLogout = () => {
-    clearClientDataCache()
-    clearPermissionsCache()
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    router.push('/login')
+    void (async () => {
+      clearClientDataCache()
+      clearPermissionsCache()
+      await logoutSession()
+      router.push('/login')
+    })()
   }
 
   const handleNavHover = (href: string) => {
@@ -204,19 +236,20 @@ function LayoutWithPermissions({
   return (
     <TooltipProvider delayDuration={200}>
       <AppTourProvider userId={user.id ?? null}>
-        <LayoutChrome
-          user={user}
-          pathname={pathname}
-          navigation={NAV_ITEMS}
-          filteredNavigation={sidebarNavigation}
-          sidebarNavigationLoading={sidebarNavigationLoading}
-          sidebarOpen={sidebarOpen}
-          setSidebarOpen={setSidebarOpen}
-          handleLogout={handleLogout}
-          onNavHover={handleNavHover}
-        >
-          {children}
-        </LayoutChrome>
+        <PageHeaderBusyProvider>
+          <LayoutChrome
+            user={user}
+            pathname={pathname}
+            filteredNavigation={sidebarNavigation}
+            sidebarNavigationLoading={sidebarNavigationLoading}
+            sidebarOpen={sidebarOpen}
+            setSidebarOpen={setSidebarOpen}
+            handleLogout={handleLogout}
+            onNavHover={handleNavHover}
+          >
+            {children}
+          </LayoutChrome>
+        </PageHeaderBusyProvider>
       </AppTourProvider>
     </TooltipProvider>
   )
@@ -224,17 +257,28 @@ function LayoutWithPermissions({
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
-  const [user, setUser] = useState<UserLite | null>(null)
+  // Hydrate from localStorage on client remount so route changes keep the shell visible
+  // while page content shows its own spinners (avoid full-screen blank "Loading...").
+  const [user, setUser] = useState<UserLite | null>(() => {
+    if (typeof window === 'undefined') return null
+    return readUserLocally()
+  })
 
   useEffect(() => {
-    const stored = readStoredUser()
-    if (!stored) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+    void (async () => {
+      const sessionUser = await fetchCurrentUser()
+      if (sessionUser) {
+        setUser(sessionUser)
+        return
+      }
+      const stored = readUserLocally()
+      if (stored) {
+        setUser(stored)
+        return
+      }
+      clearLocalAuth()
       router.replace('/login')
-      return
-    }
-    setUser(stored)
+    })()
   }, [router])
 
   if (!user) {

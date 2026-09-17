@@ -1,5 +1,23 @@
+import { sqlB2bChildGrStoStatusLookup } from './b2bOriginEndingSql';
 import { query } from '../database/connection';
-import { sqlIncotermImportStatusFromJson } from './sapIncotermMetrics';
+import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
+import {
+  INCOTERM_GR_PO_STATUS,
+  INCOTERM_GR_STO_STATUS,
+  sqlIncotermImportStatusFromRow,
+  sqlSapGrStoStatusFromRow,
+} from './sapIncotermMetrics';
+import { sapRowSource, sqlSapField } from './sapDerivedColumnSql';
+import {
+  sqlSpdHasDeletePoFlagFromRow,
+  sqlSpdHasDeleteStoFlagFromRow,
+} from './sapMasterV2UatFormat';
+import { sapStoNumberKeyExpr, sqlIsSapSeaStoRowExpr } from './shipmentStoTypeSql';
+import { shippingPerfStoMetricsKeyExpr } from './shippingPerformanceStoSql';
+
+function sqlIncotermList(values: readonly string[]): string {
+  return values.map((v) => `'${v}'`).join(', ');
+}
 
 /** Display-aligned contract delivery status: Open / Close / Cancelled (not legacy ACTIVE/COMPLETED). */
 export function normalizeContractDeliveryStatusForDisplay(status: unknown): string {
@@ -34,38 +52,334 @@ export function isContractDeliveryClosed(status: unknown): boolean {
   );
 }
 
-/** SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped row pick. */
+function isContractDeliveryOpen(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toUpperCase();
+  return normalized === 'OPEN' || normalized === 'ACTIVE';
+}
+
+function isContractDeliveryCancelled(status: unknown): boolean {
+  const normalized = String(status ?? '').trim().toUpperCase();
+  return normalized === 'CANCELLED' || normalized === 'CANCELED' || normalized === 'CANCEL';
+}
+
+/**
+ * STO group import status — mirrors SQL BOOL_AND(isContractSapClosedForSto):
+ * any Open wins; else Close only when every member is Close.
+ */
+export function aggregateImportStatusForStoGroup(statuses: unknown[]): string | null {
+  if (!statuses.length) return null;
+  const normalized = statuses.map((s) => normalizeContractDeliveryStatusForDisplay(s)).filter(Boolean);
+  if (!normalized.length) return null;
+  if (normalized.some(isContractDeliveryOpen)) return 'Open';
+  if (normalized.every(isContractDeliveryClosed)) return 'Close';
+  if (normalized.some(isContractDeliveryCancelled)) return 'Cancelled';
+  return normalized[0] ?? null;
+}
+
+/** True when every STO group member is GR Close (matches shipment list BOOL_AND). */
+export function isStoGroupSapClosed(statuses: unknown[]): boolean {
+  return aggregateImportStatusForStoGroup(statuses) === 'Close';
+}
+
+/**
+ * B2B origin GR STO: parent SAP value wins when filled; otherwise any-Open / all-Close from children.
+ * Parent Close + child Open → Close (replace, not merge).
+ */
+export function overlayB2bOriginGrStoStatus(
+  parentStatus: unknown,
+  childStatuses: unknown[],
+): string | null {
+  const parent = normalizeContractDeliveryStatusForDisplay(parentStatus);
+  if (parent) return parent;
+  return aggregateImportStatusForStoGroup(childStatuses);
+}
+
+/**
+ * True SAP STO identity on an SPD row — not blank and not KLIP synthetic OP-/MNL-/MSEA- ids.
+ * Header-only POs (no SAP STO) remain valid; those rows must keep voting in GR aggregation.
+ */
+function sqlSpdHasRealSapStoKeyExpr(spdAlias = 'spd'): string {
+  const key = sapStoNumberKeyExpr(spdAlias);
+  return `(
+    ${key} IS NOT NULL
+    AND TRIM((${key})::text) !~ '^(OP-|MNL-|MSEA-)'
+  )`;
+}
+
+/**
+ * SAP import status with incoterm matrix (GR PO vs GR STO) and PO-scoped rows.
+ *
+ * Important: do NOT take LIMIT 1 with per-row fallback to contracts.status.
+ * A blank GR STO/PO on the newest row used to become COMPLETED/Close via that
+ * fallback while sibling STO rows still had GR Open — Trucking then used Σ SAP
+ * instead of WB. Aggregate: any Open wins; else any Close; else (FRC/CIF/CFR only)
+ * contracts.status. LCO/FOB never fall back to contracts.status or GR PO when
+ * GR STO is blank — UI still shows "-" and pipeline must not treat that as Close.
+ *
+ * Per SPD row, Open if the incoterm GR field is Open (stale Close in
+ * `contract.gr_*` must not hide Open in raw). Do not use commercial Status.
+ *
+ * Dirty SAP header (blank / synthetic STO) with GR Open must not lock a PO Open when
+ * real SAP STO lines already carry GR Close. Prefer STO-line GR only when such lines
+ * exist; header-only POs (no SAP STO — common; KLIP may still have OP-* shipments)
+ * keep using the header row.
+ *
+ * Optional `stoKeyExpr`: for LCO/FOB (GR STO), restrict SPD rows to that STO so a
+ * Close STO is not held Open by a sibling STO under the same PO. CIF/CFR/FRC
+ * (GR PO) ignore stoKey and stay PO-wide. Omit stoKey for Contracts list / Trucking.
+ */
 export function sqlContractImportStatusExpr(
   contractAlias = 'c',
   poNumberRef = `${contractAlias}.po_number`,
+  stoKeyExpr?: string | null,
+  spdExtraAndSql = '',
 ): string {
-  const sapPick = sqlNormalizeContractDeliveryStatusExpr(
-    sqlIncotermImportStatusFromJson('spd.data', `${contractAlias}.incoterm`, `${contractAlias}.status::text`),
+  // NULL when the GR field is blank — never inject contracts.status per SPD row.
+  /*
+   * Reads migration 162's stored columns rather than `data`. Every alias below is a subquery over
+   * `sap_processed_data` (`spd`, `spd_gr`, `spd_del`, `spd_live`), so the columns are available -
+   * and this expression renders the GR PO and GR STO trees, which on the jsonb path is six blob
+   * detoasts each time it appears.
+   */
+  const sapStatusNorm = sqlNormalizeContractDeliveryStatusExpr(
+    sqlIncotermImportStatusFromRow('spd', `${contractAlias}.incoterm`, 'NULL'),
   );
+  const lineGrStatusRaw = sqlIncotermImportStatusFromRow(
+    'spd_gr',
+    `${contractAlias}.incoterm`,
+    'NULL',
+  );
+  const openNorm = (expr: string) =>
+    `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('OPEN', 'ACTIVE')`;
+  const inc = `UPPER(TRIM(COALESCE(${contractAlias}.incoterm, '')))`;
+  const spdRow = sapRowSource('spd');
+  const stoOpen = `(
+    ${openNorm(sqlSapField(spdRow, 'raw_gr_sto_status'))}
+    OR ${openNorm(sqlSapField(spdRow, 'contract_gr_sto_status'))}
+  )`;
+  const poOpen = `(
+    ${openNorm(sqlSapField(spdRow, 'raw_gr_po_status'))}
+    OR ${openNorm(sqlSapField(spdRow, 'contract_gr_po_status'))}
+  )`;
+  const closeNorm = (expr: string) =>
+    `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
+  // Incoterm-scoped: do not let commercial contract.status Open override Close GR STO on LCO.
+  const rowOpenSignal = `(
+    CASE
+      WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)}) THEN ${stoOpen}
+      WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_PO_STATUS)}) THEN ${poOpen}
+      ELSE (${stoOpen} OR ${poOpen})
+    END
+  )`;
+
+  const poMatch = (spdAlias: string) => `
+            AND (
+              NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+            )`;
+
+  const stoScope =
+    stoKeyExpr && String(stoKeyExpr).trim()
+      ? `
+            AND (
+              NULLIF(TRIM((${stoKeyExpr})::text), '') IS NULL
+              OR TRIM((${stoKeyExpr})::text) ~ '^OP-'
+              OR TRIM((${stoKeyExpr})::text) ~ '^(MNL-|MSEA-)'
+              OR ${inc} IN (${sqlIncotermList(INCOTERM_GR_PO_STATUS)})
+              OR ${sapStoNumberKeyExpr('spd')} = TRIM((${stoKeyExpr})::text)
+            )`
+      : '';
+
+  // Prefer real SAP STO lines when they exist with GR; keep blank/synthetic header otherwise.
+  // Scope to latest import so historical STOs (no longer in SAP) do not keep the PO Open.
+  const latestImportIdSubquery = `(
+            SELECT spd_li.import_id
+            FROM sap_processed_data spd_li
+            WHERE spd_li.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_li')}
+            ORDER BY spd_li.created_at DESC NULLS LAST
+            LIMIT 1
+          )`;
+  const latestImportOnly = (alias: string) =>
+    `AND ${alias}.import_id IS NOT DISTINCT FROM ${latestImportIdSubquery}`;
+
+  const preferSapStoLinesOverDirtyHeader = `
+            AND (
+              ${sqlSpdHasRealSapStoKeyExpr('spd')}
+              OR NOT EXISTS (
+                SELECT 1
+                FROM sap_processed_data spd_gr
+                WHERE spd_gr.contract_number = ${contractAlias}.contract_id
+                  ${poMatch('spd_gr')}
+                  ${latestImportOnly('spd_gr')}
+                  AND ${sqlSpdHasRealSapStoKeyExpr('spd_gr')}
+                  AND NULLIF(TRIM(COALESCE(${lineGrStatusRaw}, '')), '') IS NOT NULL
+              )
+            )`;
+
+  // Delete PO → Cancelled for the whole PO.
+  // Delete STO: per-STO Cancelled when stoKey is set; PO-wide Cancelled only when
+  // every real SAP STO in the latest import is deleted (partial cancel must not hide sibling Close/Open).
+  const deletePoExists = `EXISTS (
+          SELECT 1
+          FROM sap_processed_data spd_del
+          WHERE spd_del.contract_number = ${contractAlias}.contract_id
+            ${poMatch('spd_del')}
+            AND ${sqlSpdHasDeletePoFlagFromRow('spd_del')}
+        )`;
+  const thisStoDeleted =
+    stoKeyExpr && String(stoKeyExpr).trim()
+      ? `EXISTS (
+          SELECT 1
+          FROM sap_processed_data spd_del
+          WHERE spd_del.contract_number = ${contractAlias}.contract_id
+            ${poMatch('spd_del')}
+            ${latestImportOnly('spd_del')}
+            AND ${sapStoNumberKeyExpr('spd_del')} = TRIM((${stoKeyExpr})::text)
+            AND ${sqlSpdHasDeleteStoFlagFromRow('spd_del')}
+        )`
+      : 'FALSE';
+  const allRealStosDeleted = `(
+          EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_any
+            WHERE spd_any.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_any')}
+              ${latestImportOnly('spd_any')}
+              AND ${sqlSpdHasRealSapStoKeyExpr('spd_any')}
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_live
+            WHERE spd_live.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_live')}
+              ${latestImportOnly('spd_live')}
+              AND ${sqlSpdHasRealSapStoKeyExpr('spd_live')}
+              AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd_live')})
+          )
+        )`;
+  const headerOnlyDeleteSto = `(
+          NOT EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_any
+            WHERE spd_any.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_any')}
+              ${latestImportOnly('spd_any')}
+              AND ${sqlSpdHasRealSapStoKeyExpr('spd_any')}
+          )
+          AND EXISTS (
+            SELECT 1
+            FROM sap_processed_data spd_del
+            WHERE spd_del.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_del')}
+              ${latestImportOnly('spd_del')}
+              AND ${sqlSpdHasDeleteStoFlagFromRow('spd_del')}
+          )
+        )`;
+  const deleteFlagCancelled =
+    stoKeyExpr && String(stoKeyExpr).trim()
+      ? `
+      CASE
+        WHEN ${deletePoExists} THEN 'Cancelled'
+        WHEN ${thisStoDeleted} THEN 'Cancelled'
+        ELSE NULL
+      END`
+      : `
+      CASE
+        WHEN ${deletePoExists} THEN 'Cancelled'
+        WHEN ${allRealStosDeleted} THEN 'Cancelled'
+        WHEN ${headerOnlyDeleteSto} THEN 'Cancelled'
+        ELSE NULL
+      END`;
+
+  /*
+   * GR-STO incoterms (LCO and FOB): accept GR PO Close when SAP never wrote a GR STO status.
+   *
+   * They still read GR STO - every arm above is unchanged. But SAP routinely closes the PO
+   * without ever emitting a GR STO line, and for those the arms above all yield NULL: not Open,
+   * not Close. Anything gated on isContractDeliveryClosed(status) then hangs open forever.
+   * Measured on dev: 282 LCO contracts (343 trucking operations) and 423 FOB contracts.
+   *
+   * FOB was deliberately excluded when this arm was added, on the grounds that a sea incoterm has
+   * a different reach, and included once that reach was measured rather than assumed. It is
+   * narrow: of the 423 FOB contracts exactly ONE has a shipment at all, and that same one is the
+   * only one carrying a KLIP qty overlay - the single place a Close can move a quantity, since
+   * qty_move's shipment overlay gates on NOT grClosed. Six have trucking operations, and FOB is
+   * not in INCOTERM_QTY_TRUCKING, so their OS Qty is NULL either way and they simply reach
+   * COMPLETED through the closed PO.
+   *
+   * Placed last on purpose. COALESCE short-circuits, so this can only ever fill a NULL - a
+   * contract the SPD aggregate or the B2B child lookup already answered keeps that answer
+   * (54 Close, 3 Open, 1 Cancelled on dev were resolved earlier and stay put).
+   *
+   * One-directional by design: GR PO Open does NOT yield 'Open' here. Doing so would pull a
+   * further ~218 LCO and ~221 FOB contracts out of NULL and silently change Open/Close filters that
+   * nobody asked to change. No signal in, NULL out - exactly as today.
+   *
+   * Cost: one index lookup on idx_sap_processed_data_contract, and only for the contracts the
+   * arms above left NULL (~420 of 18,612 on dev). It reads the same latest-import, PO-matched,
+   * non-deleted rows the main aggregate does, so it adds no new access path.
+   */
+  const fbRow = sapRowSource('spd_pofb');
+  const fbPoOpen = `(
+    ${openNorm(sqlSapField(fbRow, 'raw_gr_po_status'))}
+    OR ${openNorm(sqlSapField(fbRow, 'contract_gr_po_status'))}
+  )`;
+  const fbPoClose = `(
+    ${closeNorm(sqlSapField(fbRow, 'raw_gr_po_status'))}
+    OR ${closeNorm(sqlSapField(fbRow, 'contract_gr_po_status'))}
+  )`;
+  const grPoCloseFallbackArm = `
+      CASE
+        WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)}) THEN (
+          SELECT CASE
+            WHEN COALESCE(BOOL_OR(${fbPoOpen}), FALSE) THEN NULL
+            WHEN COALESCE(BOOL_OR(${fbPoClose}), FALSE) THEN 'Close'
+            ELSE NULL
+          END
+          FROM sap_processed_data spd_pofb
+          WHERE spd_pofb.contract_number = ${contractAlias}.contract_id
+            ${poMatch('spd_pofb')}
+            ${latestImportOnly('spd_pofb')}
+            AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd_pofb')})
+        )
+        ELSE NULL
+      END`;
+
   return `
     COALESCE(
+      ${deleteFlagCancelled},
       (
-        SELECT ${sapPick}
-        FROM sap_processed_data spd
-        WHERE spd.contract_number = ${contractAlias}.contract_id
-          AND (
-            NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
-            OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
-            OR NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-          )
-        ORDER BY
-          CASE
-            WHEN NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NOT NULL
-              AND NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
-              THEN 0
-            WHEN NULLIF(TRIM(COALESCE(spd.po_number::text, '')), '') IS NULL
-              THEN 1
-            ELSE 2
-          END,
-          spd.created_at DESC NULLS LAST
-        LIMIT 1
+        SELECT CASE
+          WHEN BOOL_OR(s.row_open) OR BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')) THEN 'Close'
+          WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+          ELSE NULL
+        END
+        FROM (
+          SELECT
+            ${sapStatusNorm} AS st,
+            ${rowOpenSignal} AS row_open
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = ${contractAlias}.contract_id
+            ${poMatch('spd')}${stoScope}${preferSapStoLinesOverDirtyHeader}${spdExtraAndSql}
+            ${latestImportOnly('spd')}
+            AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd')})
+        ) s
+        WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
+          OR s.row_open
       ),
-      ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
+      CASE
+        WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)})
+        THEN ${sqlB2bChildGrStoStatusLookup(poNumberRef)}
+        ELSE NULL
+      END,
+      ${grPoCloseFallbackArm},
+      CASE
+        WHEN ${inc} IN (${sqlIncotermList(INCOTERM_GR_STO_STATUS)}) THEN NULL
+        ELSE ${sqlNormalizeContractDeliveryStatusExpr(`${contractAlias}.status`)}
+      END
     )`.trim();
 }
 
@@ -75,31 +389,370 @@ export function sqlContractListImportStatusAggExpr(contractAlias = 'c'): string 
   return `(array_agg((${inner}) ORDER BY ${contractAlias}.created_at DESC NULLS LAST))[1]`;
 }
 
+/**
+ * GR STO Status across SPD rows for a PO (or one STO when stoKeyExpr is set).
+ * Any Open wins; Close only when every scoped row is Close — not latest-SPD-only.
+ * Synthetic OP-/MNL-/MSEA- sto keys return NULL (no SAP GR STO).
+ * B2B child overlay stays in the contracts list outer COALESCE.
+ */
+export function sqlContractPoGrStoStatusExpr(
+  contractAlias = 'c',
+  poNumberRef = `${contractAlias}.po_number`,
+  stoKeyExpr?: string | null,
+): string {
+  /* Both use sites below select this inside `FROM sap_processed_data spd`, so the stored columns
+     from migration 162 are in scope. */
+  const grNorm = sqlNormalizeContractDeliveryStatusExpr(sqlSapGrStoStatusFromRow('spd'));
+  const openNorm = (expr: string) =>
+    `UPPER(TRIM(COALESCE(${sqlNormalizeContractDeliveryStatusExpr(expr)}, ''))) IN ('OPEN', 'ACTIVE')`;
+  const stoOpen = `(
+    ${openNorm(sqlSapField(sapRowSource('spd'), 'raw_gr_sto_status'))}
+    OR ${openNorm(sqlSapField(sapRowSource('spd'), 'contract_gr_sto_status'))}
+  )`;
+  const lineGrStatusRaw = sqlSapGrStoStatusFromRow('spd_gr');
+
+  const poMatch = (spdAlias: string) => `
+            AND (
+              NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') IS NULL
+              OR NULLIF(TRIM(COALESCE(${spdAlias}.po_number::text, '')), '') = NULLIF(TRIM(COALESCE(${poNumberRef}::text, '')), '')
+            )`;
+
+  const latestImportIdSubquery = `(
+            SELECT spd_li.import_id
+            FROM sap_processed_data spd_li
+            WHERE spd_li.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd_li')}
+            ORDER BY spd_li.created_at DESC NULLS LAST
+            LIMIT 1
+          )`;
+  const latestImportOnly = (alias: string) =>
+    `AND ${alias}.import_id IS NOT DISTINCT FROM ${latestImportIdSubquery}`;
+
+  const preferSapStoLinesOverDirtyHeader = `
+            AND (
+              ${sqlSpdHasRealSapStoKeyExpr('spd')}
+              OR NOT EXISTS (
+                SELECT 1
+                FROM sap_processed_data spd_gr
+                WHERE spd_gr.contract_number = ${contractAlias}.contract_id
+                  ${poMatch('spd_gr')}
+                  ${latestImportOnly('spd_gr')}
+                  AND ${sqlSpdHasRealSapStoKeyExpr('spd_gr')}
+                  AND NULLIF(TRIM(COALESCE(${lineGrStatusRaw}, '')), '') IS NOT NULL
+              )
+            )`;
+
+  const stoKeyTrimmed = stoKeyExpr && String(stoKeyExpr).trim() ? String(stoKeyExpr).trim() : '';
+  if (stoKeyTrimmed) {
+    const syntheticGuard = `
+      CASE
+        WHEN NULLIF(TRIM((${stoKeyTrimmed})::text), '') IS NULL THEN NULL
+        WHEN TRIM((${stoKeyTrimmed})::text) ~ '^(OP-|MNL-|MSEA-)' THEN NULL
+        ELSE (
+          SELECT CASE
+            WHEN BOOL_OR(s.row_open) OR BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+            WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')) THEN 'Close'
+            WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+            ELSE NULL
+          END
+          FROM (
+            SELECT
+              ${grNorm} AS st,
+              ${stoOpen} AS row_open
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = ${contractAlias}.contract_id
+              ${poMatch('spd')}
+              ${latestImportOnly('spd')}
+              AND ${sapStoNumberKeyExpr('spd')} = TRIM((${stoKeyTrimmed})::text)
+          ) s
+          WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
+            OR s.row_open
+        )
+      END`;
+    return syntheticGuard.trim();
+  }
+
+  return `
+    (
+      SELECT CASE
+        WHEN BOOL_OR(s.row_open) OR BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('OPEN', 'ACTIVE')) THEN 'Open'
+        WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')) THEN 'Close'
+        WHEN BOOL_OR(UPPER(TRIM(COALESCE(s.st, ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')) THEN 'Cancelled'
+        ELSE NULL
+      END
+      FROM (
+        SELECT
+          ${grNorm} AS st,
+          ${stoOpen} AS row_open
+        FROM sap_processed_data spd
+        WHERE spd.contract_number = ${contractAlias}.contract_id
+          ${poMatch('spd')}
+          ${preferSapStoLinesOverDirtyHeader}
+          ${latestImportOnly('spd')}
+          AND NOT (${sqlSpdHasDeleteStoFlagFromRow('spd')})
+      ) s
+      WHERE NULLIF(TRIM(COALESCE(s.st, '')), '') IS NOT NULL
+        OR s.row_open
+    )`.trim();
+}
+
+/** Contracts list — GR STO any-Open across STOs on the PO (not latest_spd-only). */
+export function sqlContractListGrStoStatusAggExpr(contractAlias = 'c'): string {
+  const inner = sqlContractPoGrStoStatusExpr(contractAlias);
+  return `(array_agg((${inner}) ORDER BY ${contractAlias}.created_at DESC NULLS LAST))[1]`;
+}
+
 export const SQL_CONTRACT_IMPORT_STATUS = sqlContractImportStatusExpr('c');
+
+/**
+ * A contract has effectively finished even though GR PO/STO still says Open: OS is within the
+ * ±0 MT tolerance, or ATC at discharge is filled (shipments.ata_discharge_complete, which SAP
+ * import and KLIP edits both write).
+ *
+ * Deliberately NOT folded into sqlContractImportStatusExpr / sqlIsContractSapClosedExpr:
+ * qty_move's trucking_wb_overlay and shipment_klip_overlay gate on `NOT (grClosed)`, so making
+ * that status depend on OS would make OS depend on itself - a contract flipping to Close would
+ * switch its own overlays off, change its own OS, and possibly stop qualifying. Keeping the raw
+ * GR status as the qty machinery's input and applying this on top at classification time breaks
+ * that cycle.
+ */
+export function isContractEffectivelyDone(row: Record<string, unknown> | null | undefined): boolean {
+  if (!row) return false;
+  const os = Number(row.outstanding_quantity);
+  if (Number.isFinite(os) && os <= OUTSTANDING_QTY_ZERO_TOLERANCE_KG) return true;
+  const atc = row.last_ata_vessel_complete_discharge;
+  if (atc == null || String(atc).trim() === '') return false;
+  /*
+   * An ATC only finishes the PO when the PO has one STO.
+   *
+   * `last_ata_vessel_complete_discharge` is a MAX across the PO, so on a PO carrying several STOs
+   * one discharged STO closed the whole contract while another was still Open with quantity left.
+   * PO 1004030633 is the worked case: STO 1006019438 discharged (97,340 kg, GR Close) while STO
+   * 1006019958 still held 402,660 kg with GR Open - Contract Performance called the PO Close and
+   * dropped its 403 MT, which Shipments went on counting. Multi-STO POs are not an edge case here:
+   * 2,706 POs have more than one STO against 2,592 with exactly one.
+   *
+   * The lagging-GR case the arm exists for is untouched: a single-STO PO whose vessel discharged
+   * while GR still says Open still closes.
+   */
+  const stoCount = Number(row.sto_count);
+  if (Number.isFinite(stoCount) && stoCount > 1) return false;
+  return true;
+}
+
+/**
+ * Open/Close as shown to the user and as used for cycle maths - the raw GR status, overridden to
+ * Close once the contract has effectively finished. Cancelled is never overridden.
+ */
+export function resolveContractEffectiveStatusText(
+  row: Record<string, unknown> | null | undefined,
+): string {
+  const raw = String((row?.import_status as string) || (row?.status as string) || '')
+    .trim()
+    .toUpperCase();
+  if (raw === 'CANCELLED' || raw === 'CANCELED' || raw === 'CANCEL') return raw;
+  return isContractEffectivelyDone(row) ? 'CLOSE' : raw;
+}
+
+/** SQL form of isContractEffectivelyDone, for row sets that carry OS and ATC columns. */
+export function sqlContractEffectivelyDoneExpr(opts: {
+  outstandingKgExpr: string;
+  atcExpr: string;
+  /** PO-level STO count; when it is above 1 an ATC no longer finishes the PO (see the JS form). */
+  stoCountExpr?: string;
+}): string {
+  const atcArm = opts.stoCountExpr
+    ? `((${opts.atcExpr}) IS NOT NULL
+      AND COALESCE((${opts.stoCountExpr})::numeric, 1) <= 1)`
+    : `(${opts.atcExpr}) IS NOT NULL`;
+  return `(
+    ((${opts.outstandingKgExpr}) IS NOT NULL
+      AND (${opts.outstandingKgExpr})::numeric <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})
+    OR ${atcArm}
+  )`;
+}
+
+/**
+ * One lateral that resolves the contract's SAP import status once per row.
+ *
+ * `sqlContractImportStatusExpr` is ~26KB of SQL carrying seven correlated
+ * `sap_processed_data` subqueries, and the trucking list expands it ~28 times in a single
+ * 999KB statement. Measured 2026-09-07 on the shell page query: 529 `sap_processed_data`
+ * scan nodes in one plan, **every one** keyed on `contract_number = c.contract_id`, costing
+ * 58.2s of index scans plus 32.0s of correlated Aggregate on a 99.9s execution. The answer
+ * is per-contract, so one expansion per row is enough; every consumer then derives from this
+ * column through the cheap text predicates (`...IsClosedExpr` / `...IsCancelledExpr`), which
+ * is exactly what `sqlIsContractSapClosedExpr(alias)` already composes internally - so the
+ * substitution is output-preserving by construction.
+ *
+ * Join it before any lateral that needs the status: later laterals may reference earlier ones.
+ */
+export const CONTRACT_SAP_STATUS_ALIAS = 'csap_row';
+
+export function sqlContractSapStatusLateral(
+  contractAlias = 'c',
+  alias = CONTRACT_SAP_STATUS_ALIAS,
+): string {
+  return `
+      LEFT JOIN LATERAL (
+        SELECT (${sqlContractImportStatusExpr(contractAlias)}) AS import_status
+      ) ${alias} ON TRUE`;
+}
+
+/** Column reference for the lateral above. */
+export function sqlContractSapImportStatusFromLateral(
+  alias = CONTRACT_SAP_STATUS_ALIAS,
+): string {
+  return `${alias}.import_status`;
+}
 
 /** SQL predicate: contract row matches Open import status (UAT GR PO/STO matrix). */
 export function sqlContractImportStatusIsOpenExpr(
   importStatusExpr: string,
   fallbackWhenNoSapExpr?: string,
+  effectivelyDoneExpr?: string,
 ): string {
   const open = `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('OPEN', 'ACTIVE')`;
-  if (!fallbackWhenNoSapExpr) return open;
-  return `(${open} OR (${fallbackWhenNoSapExpr}))`;
+  const raw = fallbackWhenNoSapExpr ? `(${open} OR (${fallbackWhenNoSapExpr}))` : open;
+  /** Effectively finished rows belong to Close, so they must drop out of Open. */
+  return effectivelyDoneExpr ? `(${raw} AND NOT ${effectivelyDoneExpr})` : raw;
 }
 
 /** SQL predicate: contract row matches Close import status (UAT GR PO/STO matrix). */
 export function sqlContractImportStatusIsClosedExpr(
   importStatusExpr: string,
   fallbackWhenNoSapExpr?: string,
+  effectivelyDoneExpr?: string,
 ): string {
   const closed = `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE')`;
-  if (!fallbackWhenNoSapExpr) return closed;
-  return `(${closed} OR (${fallbackWhenNoSapExpr}))`;
+  const raw = fallbackWhenNoSapExpr ? `(${closed} OR (${fallbackWhenNoSapExpr}))` : closed;
+  const cancelled = sqlContractImportStatusIsCancelledExpr(importStatusExpr);
+  /** Cancelled stays Cancelled - only Open rows may be pulled into Close. */
+  return effectivelyDoneExpr
+    ? `(${raw} OR (${effectivelyDoneExpr} AND NOT ${cancelled}))`
+    : raw;
+}
+
+/** SQL predicate: import status is Cancelled (Delete PO/STO or Cancel token). */
+export function sqlContractImportStatusIsCancelledExpr(importStatusExpr: string): string {
+  return `UPPER(TRIM(COALESCE((${importStatusExpr}), ''))) IN ('CANCELLED', 'CANCELED', 'CANCEL')`;
+}
+
+/**
+ * True when SAP Delete PO/STO marks the contract Cancelled.
+ * Use for OS/backlog exclusion — do NOT fold into sqlIsContractSapClosedExpr
+ * (that drives COMPLETED on shipment/trucking pipelines).
+ */
+/**
+ * `precomputed` mirrors `sqlIsContractSapClosedExpr`'s override: lets a caller substitute a
+ * column reference for the whole expression when it has already been resolved once per
+ * contract in an earlier CTE, instead of re-scanning `sap_processed_data` per caller.
+ */
+export function sqlIsContractSapCancelledExpr(contractAlias = 'c', precomputed?: string): string {
+  if (precomputed) return precomputed;
+  return sqlContractImportStatusIsCancelledExpr(sqlContractImportStatusExpr(contractAlias));
+}
+
+/**
+ * Inactive for outstanding / Unplanned backlog: GR Close OR Cancelled.
+ * Keep separate from Close-only COMPLETED derivation.
+ * Optional `grClosedPrecomputed` matches sqlIsContractSapClosedExpr's precomputed column.
+ */
+export function sqlIsContractSapInactiveForOsExpr(
+  contractAlias = 'c',
+  grClosedPrecomputed?: string,
+  cancelledPrecomputed?: string,
+): string {
+  return `(
+    ${sqlIsContractSapClosedExpr(contractAlias, grClosedPrecomputed)}
+    OR ${sqlIsContractSapCancelledExpr(contractAlias, cancelledPrecomputed)}
+  )`;
+}
+
+/** Shipment backlog inactive: GR Close (FOB sea-leg scoped) OR Cancelled. */
+export function sqlIsContractSapInactiveForShipmentBacklogExpr(
+  contractAlias = 'c',
+  closedForBacklogPrecomputed?: string,
+  cancelledPrecomputed?: string,
+): string {
+  return `(
+    ${sqlIsContractSapClosedForShipmentBacklogExpr(contractAlias, closedForBacklogPrecomputed)}
+    OR ${sqlIsContractSapCancelledExpr(contractAlias, cancelledPrecomputed)}
+  )`;
 }
 
 /** SQL predicate: true when SAP import status (or contracts.status fallback) is Close/Completed. */
-export function sqlIsContractSapClosedExpr(contractAlias = 'c'): string {
+/**
+ * Is this contract closed in SAP (GR Close / OS status)?
+ *
+ * `precomputed` lets a caller substitute a column reference for the whole expression, when the
+ * query has already resolved it once per contract in a CTE. The expression itself is large - it
+ * carries a correlated sap_processed_data subquery with several JSONB reads - and the trucking
+ * list emits it 54 times in a single 693KB statement (measured 2026-08-06), so Postgres evaluates
+ * the same per-contract answer dozens of times per row. Passing a precomputed column collapses
+ * that to one pass.
+ *
+ * Callers that pass nothing are completely unaffected, which deliberately keeps Contract
+ * Performance, Oil Loss and the shipment pipeline out of scope for this optimisation.
+ */
+export function sqlIsContractSapClosedExpr(
+  contractAlias = 'c',
+  precomputed?: string,
+): string {
+  if (precomputed) return precomputed;
   return sqlContractImportStatusIsClosedExpr(sqlContractImportStatusExpr(contractAlias));
+}
+
+/**
+ * SEA shipment / Shipping Performance: GR Close scoped to sto_key for LCO/FOB.
+ * Use for is_contract_sap_closed and Perf import_status so sibling STOs do not block Completed.
+ */
+export function sqlIsContractSapClosedForStoExpr(
+  contractAlias = 'c',
+  stoKeyExpr: string,
+): string {
+  return sqlContractImportStatusIsClosedExpr(
+    sqlContractImportStatusExpr(contractAlias, `${contractAlias}.po_number`, stoKeyExpr),
+  );
+}
+
+/**
+ * Shipment contract backlog: PO-wide GR status, but for FOB ignore Type T SPD rows
+ * when deciding if the contract is SAP-closed (truck legs must not block sea backlog).
+ */
+export function sqlShipmentBacklogSpdSeaLegFilterSql(contractAlias = 'c'): string {
+  const inc = `UPPER(TRIM(COALESCE(${contractAlias}.incoterm, '')))`;
+  return `
+    AND (
+      ${inc} <> 'FOB'
+      OR ${sqlIsSapSeaStoRowExpr('spd')}
+    )`.trim();
+}
+
+/** Closed check for Unplanned/Preplanned contract backlog cards (FOB Type V scoped). */
+export function sqlIsContractSapClosedForShipmentBacklogExpr(
+  contractAlias = 'c',
+  precomputed?: string,
+): string {
+  if (precomputed) return precomputed;
+  return sqlContractImportStatusIsClosedExpr(
+    sqlContractImportStatusExpr(
+      contractAlias,
+      `${contractAlias}.po_number`,
+      null,
+      sqlShipmentBacklogSpdSeaLegFilterSql(contractAlias),
+    ),
+  );
+}
+
+/** STO-scoped import status expression (Shipments / Perf / Contract Detail STO rows). */
+export function sqlContractImportStatusForStoExpr(
+  contractAlias = 'c',
+  stoKeyExpr: string,
+  poNumberRef = `${contractAlias}.po_number`,
+): string {
+  return sqlContractImportStatusExpr(contractAlias, poNumberRef, stoKeyExpr);
 }
 
 export async function getContractImportStatusForTruckingOperation(
@@ -132,8 +785,9 @@ export async function assertTruckingOperationContractOpen(
 export async function getContractImportStatusForShipment(
   shipmentId: string,
 ): Promise<string | null> {
+  const stoKey = shippingPerfStoMetricsKeyExpr('c', 's');
   const result = await query(
-    `SELECT ${SQL_CONTRACT_IMPORT_STATUS} AS import_status
+    `SELECT ${sqlContractImportStatusForStoExpr('c', stoKey)} AS import_status
      FROM shipments s
      LEFT JOIN contracts c ON s.contract_id = c.id
      WHERE s.id = $1::uuid

@@ -1,19 +1,17 @@
 import { Response } from 'express';
-import { query } from '../database/connection';
 import { AuthRequest } from '../middleware/auth';
 import { buildYtdOilLossSummary } from '../utils/oilLossSummary';
-import { buildOilLossGainSql, buildOilLossMainSql } from '../utils/oilLossQuerySql';
+import { loadOilLossPayload } from '../services/oilLoss.service';
 
 export const getOilLoss = async (_req: AuthRequest, res: Response) => {
   try {
-    const sql = buildOilLossMainSql();
-    const gainSql = buildOilLossGainSql();
-
-    const [result, gainResult] = await Promise.all([query(sql), query(gainSql)]);
-    const gainRow = gainResult.rows[0] ?? { total_gain_kg: 0, gain_count: 0 };
-    const ytdSummary = buildYtdOilLossSummary(result.rows);
+    // Rows + gain come from the in-memory cache (identical queries, pre-run off the
+    // request path). ytdSummary is recomputed per request because its YTD window
+    // depends on the current date.
+    const { rows, gainRow } = await loadOilLossPayload();
+    const ytdSummary = buildYtdOilLossSummary(rows);
     return res.json({
-      data: result.rows,
+      data: rows,
       ytdSummary,
       gainSummary: {
         totalGainKg: Number(gainRow.total_gain_kg),
@@ -21,8 +19,8 @@ export const getOilLoss = async (_req: AuthRequest, res: Response) => {
       },
       dataSources: {
         quantityDelivery:
-          'sap_processed_data (UAT: Quantity Delivery Trucking/Vessel by incoterm×transport)|shipments.quantity_delivered',
-        quantityReceive: 'sap_processed_data|shipments.actual_vessel_qty_receive',
+          'Contracts qty_move + UAT Incoterm×Mode (same as Contracts View Table)|fallback SPD resolved',
+        quantityReceive: 'Contracts qty_move.quantity_receive (same as Contracts View Table)|fallback SPD resolved',
         quantitySfal: 'sap_processed_data|shipments.sfal_qty',
         quantitySfbd: 'sap_processed_data|shipments.sfbd_qty',
       },

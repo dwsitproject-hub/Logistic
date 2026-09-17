@@ -26,20 +26,38 @@ export type TruckingActualsTemplateRow = {
   /** Contract OS Qty actual from KLIP (kg) — shown as MT on Unplanned template. */
   outstanding_quantity?: number
   daily_deliverables?: Array<{ date?: string; quantity_delivered?: number }>
-  /** Unplanned rows use date columns from today … today + 60 days. */
+  /** Unplanned rows use date columns from today … today + 3 calendar months. */
   templateKind?: 'default' | 'unplanned' | 'planned'
 }
 
+export const UNPLANNED_TEMPLATE_STATUS_HEADER = 'Status'
 export const UNPLANNED_TEMPLATE_OS_QTY_HEADER = 'OS Qty (MT)'
 export const UNPLANNED_TEMPLATE_PLAN_QTY_HEADER = 'Plan Qty (MT)'
 /** @deprecated Use UNPLANNED_TEMPLATE_OS_QTY_HEADER */
 export const UNPLANNED_TEMPLATE_OUTSTANDING_QTY_HEADER = UNPLANNED_TEMPLATE_OS_QTY_HEADER
 
+export const UNPLANNED_PLANNING_FORWARD_MONTHS = 3
+/** @deprecated Window end is now today + UNPLANNED_PLANNING_FORWARD_MONTHS calendar months */
 export const UNPLANNED_PLANNING_FORWARD_DAYS = 60
-/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
+/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_MONTHS months */
 export const UNPLANNED_PLANNING_START_BUFFER_DAYS = 0
-/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_DAYS */
+/** @deprecated Unplanned window is now today … today + UNPLANNED_PLANNING_FORWARD_MONTHS months */
 export const UNPLANNED_PLANNING_END_BUFFER_DAYS = UNPLANNED_PLANNING_FORWARD_DAYS
+
+/** Display label for Status column — informational only; upload matches by PO. */
+export function formatPlanningTemplateStatusLabel(
+  status: unknown,
+  templateKind?: TruckingActualsTemplateRow['templateKind'],
+): string {
+  if (templateKind === 'unplanned') return 'Unplanned'
+  if (templateKind === 'planned') return 'Planned'
+  const upper = String(status ?? '')
+    .trim()
+    .toUpperCase()
+  if (upper === 'UNPLANNED') return 'Unplanned'
+  if (upper === 'PLANNED' || upper === 'IN_PROGRESS') return 'Planned'
+  return ''
+}
 
 export const UNPLANNED_TEMPLATE_METADATA_HEADERS = [
   'Group',
@@ -48,22 +66,32 @@ export const UNPLANNED_TEMPLATE_METADATA_HEADERS = [
   'Contract Date',
   'Contract Ext No',
   'PO',
+  UNPLANNED_TEMPLATE_STATUS_HEADER,
   UNPLANNED_TEMPLATE_OS_QTY_HEADER,
   UNPLANNED_TEMPLATE_PLAN_QTY_HEADER,
 ] as const
 
+export const UNPLANNED_TEMPLATE_STATUS_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.indexOf(
+  UNPLANNED_TEMPLATE_STATUS_HEADER,
+)
 export const UNPLANNED_TEMPLATE_PLAN_QTY_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.length - 1
 export const UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX = UNPLANNED_TEMPLATE_METADATA_HEADERS.length
 
 const DOWNLOAD_TEMPLATE_DISABLED_TOOLTIP =
-  'Download template is available when the status filter is Unplanned, Planned, or In Progress.'
+  'Download template is available when the status filter is Unplanned, Planned, or In Progress. The file includes both Unplanned and Planned rows.'
 
 export function isActualsTemplateDownloadEnabled(statusFilter: string): boolean {
   return (
     statusFilter === 'UNPLANNED' ||
     statusFilter === 'PLANNED' ||
-    statusFilter === 'IN_PROGRESS'
+    statusFilter === 'IN_PROGRESS' ||
+    statusFilter === 'OPEN'
   )
+}
+
+/** Download / upload daily planning when filter is Unplanned, Planned, or In Progress. */
+export function isDailyPlanningTemplateMode(statusFilter: string): boolean {
+  return isActualsTemplateDownloadEnabled(statusFilter)
 }
 
 export function isUnplannedPlanningTemplateMode(statusFilter: string): boolean {
@@ -99,7 +127,22 @@ export function todayIsoDate(reference = new Date()): string {
   return `${yyyy}-${mm}-${dd}`
 }
 
-/** Unplanned planning window: today … today + 60 days (inclusive). */
+export function shiftIsoDateByMonths(isoDate: string, months: number): string {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!parts) return isoDate
+  const d = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
+  d.setMonth(d.getMonth() + months)
+  const yyyy = d.getFullYear()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+export function resolveUnplannedPlanningEndIso(startIso: string): string {
+  return shiftIsoDateByMonths(startIso, UNPLANNED_PLANNING_FORWARD_MONTHS)
+}
+
+/** Unplanned planning window: today … today + 3 calendar months (inclusive). */
 export function resolveUnplannedPlanningWindow(
   _deliveryEndIso?: string,
   referenceToday?: string,
@@ -107,7 +150,7 @@ export function resolveUnplannedPlanningWindow(
   const today = sliceIsoDate(referenceToday ?? todayIsoDate())
   if (!today) return null
   const startIso = today
-  const endIso = shiftIsoDate(today, UNPLANNED_PLANNING_FORWARD_DAYS)
+  const endIso = resolveUnplannedPlanningEndIso(today)
   if (startIso > endIso) return null
   return { startIso, endIso }
 }
@@ -154,22 +197,34 @@ export function formatTemplateQtyMtFromKg(kg: unknown, opts?: { maxFractionDigit
   })
 }
 
-/** @deprecated Use formatTemplateQtyMtFromKg */
-export function formatTemplateOutstandingQtyKg(kg: unknown): string {
-  return formatTemplateQtyMtFromKg(kg)
+/**
+ * OS Qty (MT) on Download Template — whole MT (round half up), e.g. 2.41 → 2, 205.78 → 206.
+ */
+export function formatTemplateOsQtyMtFromKg(kg: unknown): string {
+  if (kg === null || kg === undefined || kg === '') return ''
+  const n = typeof kg === 'string' ? Number(String(kg).replace(/,/g, '')) : Number(kg)
+  if (!Number.isFinite(n)) return ''
+  const mt = Math.round(n / 1000)
+  return String(mt)
 }
 
 /** @deprecated Use formatTemplateQtyMtFromKg */
+export function formatTemplateOutstandingQtyKg(kg: unknown): string {
+  return formatTemplateOsQtyMtFromKg(kg)
+}
+
+/** @deprecated Use formatTemplateOsQtyMtFromKg */
 export function formatTemplateOutstandingQtyMt(kg: unknown): string {
-  return formatTemplateQtyMtFromKg(kg)
+  return formatTemplateOsQtyMtFromKg(kg)
 }
 
 /** Detect qty unit from wide planning template metadata headers. */
 export function resolveWidePlanningTemplateQtyUnit(headerRow: unknown[]): 'kg' | 'mt' {
   for (const cell of headerRow) {
     const h = cellToString(cell).toLowerCase()
-    if (h.includes('(mt)') || h.includes('os qty') || h.includes('oq qty')) return 'mt'
+    // Explicit (kg) must win over bare "os qty" / "oq qty" labels.
     if (h.includes('(kg)')) return 'kg'
+    if (h.includes('(mt)') || h.includes('os qty') || h.includes('oq qty')) return 'mt'
     if (h.includes('outstanding') && h.includes('mt')) return 'mt'
   }
   return 'mt'
@@ -242,6 +297,9 @@ function isWideTemplateMetadataHeader(header: string): boolean {
     h === 'contract ext no' ||
     h === 'po' ||
     h === 'po number' ||
+    h === 'sto' ||
+    h === 'sto number' ||
+    h === 'status' ||
     h === 'os qty' ||
     h === 'os qty (kg)' ||
     h === 'os qty' ||
@@ -431,7 +489,8 @@ export function buildActualsTemplateMatrix(
         formatContractDateForTemplate(row.contract_date),
         ext,
         po,
-        formatTemplateQtyMtFromKg(row.outstanding_quantity),
+        formatPlanningTemplateStatusLabel(undefined, row.templateKind),
+        formatTemplateOsQtyMtFromKg(row.outstanding_quantity),
         computePlanQtyMtFromDeliverables(row),
         ...qtyCells,
       ])
@@ -488,7 +547,11 @@ function applyWideTemplateNumericQtyCells(ws: XLSX.WorkSheet, matrix: string[][]
 
     const osQty = parseTemplateQtyMtCell(row[osQtyColIdx])
     if (osQty != null) {
-      ws[XLSX.utils.encode_cell({ r, c: osQtyColIdx })] = { t: 'n', v: osQty }
+      ws[XLSX.utils.encode_cell({ r, c: osQtyColIdx })] = {
+        t: 'n',
+        v: Math.round(osQty),
+        z: '0',
+      }
     }
 
     for (let c = UNPLANNED_TEMPLATE_FIRST_DATE_COL_INDEX; c <= lastDateColIdx; c += 1) {

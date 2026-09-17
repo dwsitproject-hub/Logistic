@@ -1,3 +1,13 @@
+export type PrefilledVesselSnapshot = {
+  vesselName?: string
+  vesselCode?: string
+  vesselOwner?: string
+  vesselCapacity?: number | null
+  charterType?: string
+  portOfLoading?: string
+  portOfDischarge?: string
+}
+
 export type ShipmentPoOption = {
   /** Unique selection key — contracts.id (PO line) in contract-scoped mode, contract_id in global mode */
   key: string
@@ -6,6 +16,27 @@ export type ShipmentPoOption = {
   plantCode?: string | null
   label: string
   contractData?: Record<string, unknown>
+}
+
+/** Plant codes like AM10 — never Group Plant "Blank". */
+export function isUsablePlantCode(value: unknown): boolean {
+  const code = String(value ?? '').trim()
+  if (!code) return false
+  return code.toLowerCase() !== 'blank'
+}
+
+export function resolvePoPlantCode(row: {
+  plant_code?: unknown
+  plantCode?: unknown
+}): string {
+  const fromCode = row.plant_code ?? row.plantCode
+  return isUsablePlantCode(fromCode) ? String(fromCode).trim() : ''
+}
+
+export function formatPoPlantLabel(poNumber: string, plantCode?: string | null): string {
+  const po = String(poNumber ?? '').trim()
+  const plant = isUsablePlantCode(plantCode) ? String(plantCode).trim() : ''
+  return plant ? `${po} - ${plant}` : po
 }
 
 export type EtaDetailApiPayload = {
@@ -26,7 +57,8 @@ export type CreateShipmentFormPayload = {
   operationId: string
   stoNumber: string
   contractNumbers: string[]
-  contractQtyAssigned: Record<string, string | number>
+  /** Optional leftover planning allocation (MT). Add New no longer collects Shipment Plan Qty. */
+  contractQtyAssigned?: Record<string, string | number>
   poQtyAssigned?: Record<string, string | number>
   vesselName: string
   vesselCode: string
@@ -38,16 +70,28 @@ export type CreateShipmentFormPayload = {
   portOfLoading: string
   portOfDischarge: string
   etaByContract: Record<string, EtaDetailApiPayload>
+  prePlannedGroupId?: string
 }
 
 export type UpdateShipmentFormPayload = {
   kind: 'update'
   shipmentId: string
   vessel_name?: string | null
+  vessel_code?: string | null
+  vessel_owner?: string | null
+  vessel_capacity?: string | number | null
+  vessel_hull_type?: string | null
+  charter_type?: string | null
+  master_vessel_id?: string | null
   quantity_delivered?: number | null
   actual_vessel_qty_receive?: number | null
   sfal_qty?: number | null
   sfbd_qty?: number | null
+  fuel_consumption?: number | null
+  freight?: number | null
+  pump_rate?: number | null
+  sailing_speed?: number | null
+  shortage?: number | null
   eta_arrival: string | null
   eta_berthed: string | null
   eta_loading_start: string | null
@@ -65,17 +109,8 @@ export function mapPurchaseOrderToPoOption(row: Record<string, unknown>): Shipme
   const contractId = String(row.contract_id ?? '').trim()
   const poNumber = row.po_number != null ? String(row.po_number).trim() : ''
   const key = String(row.contract_row_id ?? row.id ?? `${contractId}::${poNumber}`).trim()
-  const plantCode =
-    row.plant_code != null
-      ? String(row.plant_code).trim()
-      : row.plant_site != null
-        ? String(row.plant_site).trim()
-        : ''
-  const label = poNumber
-    ? plantCode
-      ? `${poNumber} - ${plantCode}`
-      : poNumber
-    : contractId
+  const plantCode = resolvePoPlantCode(row)
+  const label = poNumber ? formatPoPlantLabel(poNumber, plantCode) : contractId
   return {
     key,
     contractId,
@@ -86,8 +121,9 @@ export function mapPurchaseOrderToPoOption(row: Record<string, unknown>): Shipme
       contract_id: contractId,
       po_number: poNumber || null,
       quantity_ordered: row.quantity_ordered,
-      outstanding_quantity: row.outstanding_quantity_planning ?? row.outstanding_quantity,
-      outstanding_quantity_planning: row.outstanding_quantity_planning ?? row.outstanding_quantity,
+      outstanding_quantity: row.outstanding_quantity ?? row.outstanding_quantity_actual,
+      outstanding_quantity_actual: row.outstanding_quantity_actual ?? row.outstanding_quantity,
+      outstanding_quantity_planning: row.outstanding_quantity_planning,
       delivery_start_date: row.delivery_start_date,
       delivery_end_date: row.delivery_end_date,
       supplier: row.supplier,
@@ -108,42 +144,81 @@ export function mapStoContractDetailToPoOption(detail: Record<string, unknown>):
   const contractId = String(detail.contract_number ?? detail.contract_id ?? '').trim()
   const poNumber = detail.po_number != null ? String(detail.po_number).trim() : ''
   const key = `${contractId}::${poNumber || contractId}`
-  const label = poNumber || contractId
+  const plantCode = resolvePoPlantCode(detail)
+  const label = formatPoPlantLabel(poNumber || contractId, plantCode)
   return {
     key,
     contractId,
     poNumber: poNumber || null,
-    plantCode: null,
+    plantCode: plantCode || null,
     label,
     contractData: {
       contract_id: contractId,
       po_number: poNumber || null,
       quantity_ordered: detail.contract_qty,
-      outstanding_quantity: detail.outstanding_qty,
-      outstanding_quantity_planning: detail.outstanding_qty_planning,
-      outstanding_quantity_planning_budget: detail.outstanding_qty_planning_budget,
+      outstanding_quantity: detail.outstanding_qty_actual ?? detail.outstanding_qty,
+      outstanding_quantity_actual: detail.outstanding_qty_actual ?? detail.outstanding_qty,
       delivery_start_date: detail.delivery_start_date,
       delivery_end_date: detail.delivery_end_date,
       contract_ext_no: detail.contract_ext_no,
-      sto_qty_assigned: detail.sto_qty_assigned,
-      sap_sto_qty: detail.sap_sto_qty,
-      shipment_plan_qty: detail.shipment_plan_qty,
       locked_from_sap: detail.locked_from_sap,
+      transport_mode: detail.transport_mode ?? detail.sea_land ?? null,
+      incoterm: detail.incoterm,
+      supplier: detail.supplier,
+      product: detail.product,
+      plant_code: plantCode || null,
     },
   }
 }
 
+function coalescePoField(preferred: unknown, fallback: unknown): unknown {
+  if (preferred != null && preferred !== '') return preferred
+  return fallback
+}
+
 function mergePoOptionMetadata(base: ShipmentPoOption, enriched: ShipmentPoOption): ShipmentPoOption {
+  const baseData = base.contractData ?? {}
+  const enrichedData = enriched.contractData ?? {}
+  const plantCode =
+    resolvePoPlantCode({
+      plantCode: coalescePoField(base.plantCode, enriched.plantCode) as string | undefined,
+      plant_code: coalescePoField(baseData.plant_code, enrichedData.plant_code),
+    }) || null
+  const poNumber = base.poNumber ?? enriched.poNumber
   return {
     ...enriched,
     key: base.key,
     contractId: base.contractId,
-    poNumber: base.poNumber ?? enriched.poNumber,
-    label: enriched.label || base.label,
-    plantCode: enriched.plantCode ?? base.plantCode,
+    poNumber,
+    plantCode,
+    label: formatPoPlantLabel(String(poNumber || base.contractId), plantCode),
     contractData: {
-      ...enriched.contractData,
-      ...base.contractData,
+      ...enrichedData,
+      ...baseData,
+      // Prefer non-empty base stubs, else enriched purchase-order fields.
+      quantity_ordered: coalescePoField(baseData.quantity_ordered, enrichedData.quantity_ordered),
+      outstanding_quantity: coalescePoField(
+        baseData.outstanding_quantity,
+        enrichedData.outstanding_quantity,
+      ),
+      outstanding_quantity_actual: coalescePoField(
+        baseData.outstanding_quantity_actual,
+        enrichedData.outstanding_quantity_actual,
+      ),
+      outstanding_quantity_planning: coalescePoField(
+        baseData.outstanding_quantity_planning,
+        enrichedData.outstanding_quantity_planning,
+      ),
+      supplier: coalescePoField(baseData.supplier, enrichedData.supplier),
+      product: coalescePoField(baseData.product, enrichedData.product),
+      delivery_start_date: coalescePoField(
+        baseData.delivery_start_date,
+        enrichedData.delivery_start_date,
+      ),
+      delivery_end_date: coalescePoField(baseData.delivery_end_date, enrichedData.delivery_end_date),
+      // Prefer a real transport_mode when STO prefill omitted it
+      transport_mode: coalescePoField(baseData.transport_mode, enrichedData.transport_mode),
+      plant_code: plantCode,
     },
   }
 }
@@ -171,6 +246,13 @@ async function enrichPoOptionsFromPurchaseOrders(options: ShipmentPoOption[]): P
   })
 }
 
+/** Enrich PO options with contract qty / OS / supplier / delivery dates from purchase-orders API. */
+export async function enrichShipmentPoOptions(
+  options: ShipmentPoOption[],
+): Promise<ShipmentPoOption[]> {
+  return enrichPoOptionsFromPurchaseOrders(options)
+}
+
 export function dedupeShipmentPoOptions(options: ShipmentPoOption[]): ShipmentPoOption[] {
   const seen = new Set<string>()
   const out: ShipmentPoOption[] = []
@@ -181,6 +263,30 @@ export function dedupeShipmentPoOptions(options: ShipmentPoOption[]): ShipmentPo
     out.push(opt)
   }
   return out
+}
+
+/**
+ * Resolve STO key for Plot / Add from a list row.
+ * Prefer the Shipments table STO (SAP group) over getShipmentById's contract.sto_number,
+ * which can belong to a single child PO and miss siblings on the same list STO.
+ */
+export function resolvePlotStoLookupKey(input: {
+  listSto?: string | null
+  editStoNumber?: string | null
+  apiStoNumber?: string | null
+  shipmentId?: string | null
+  operationId?: string | null
+}): string {
+  const listSto =
+    String(input.listSto ?? '').trim() || String(input.editStoNumber ?? '').trim()
+  const shipmentId = String(input.shipmentId ?? '').trim()
+  const shipmentIdAsSto = /^\d+$/.test(shipmentId) ? shipmentId : ''
+  return (
+    listSto ||
+    shipmentIdAsSto ||
+    String(input.apiStoNumber ?? '').trim() ||
+    String(input.operationId ?? '').trim()
+  )
 }
 
 /** PO lines linked to a grouped STO row (multi-contract / multi-PO). */
@@ -209,7 +315,7 @@ export async function fetchContractPurchaseOrderOptions(contractId: string): Pro
   return rows.map(mapPurchaseOrderToPoOption)
 }
 
-/** PO lines eligible to add on Edit Shipment (global search, global OS Qty Plan > 0). */
+/** PO lines eligible to add on Edit Shipment (global search, OS Qty Actual > 0). */
 export async function fetchShipmentAvailablePurchaseOrders(
   shipmentId: string,
   opts?: { search?: string; limit?: number },
@@ -272,26 +378,5 @@ export async function attachPurchaseOrderToShipment(args: {
   )
   if (!res.data?.success) {
     throw new Error(res.data?.error?.message || 'Failed to add PO to shipment')
-  }
-}
-
-export async function batchSaveShipmentPoPlanQty(args: {
-  shipmentId: string
-  rows: Array<{
-    contractNumber: string
-    poNumber?: string | null
-    shipmentPlanQtyKg: number
-  }>
-}): Promise<void> {
-  const api = (await import('@/lib/api')).default
-  const res = await api.put(`/shipments/${encodeURIComponent(args.shipmentId)}/po-plan-qty`, {
-    rows: args.rows.map((row) => ({
-      contractNumber: row.contractNumber,
-      poNumber: row.poNumber ?? null,
-      shipmentPlanQtyKg: row.shipmentPlanQtyKg,
-    })),
-  })
-  if (!res.data?.success) {
-    throw new Error(res.data?.error?.message || 'Failed to save Shipment Plan Qty')
   }
 }

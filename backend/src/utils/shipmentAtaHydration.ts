@@ -11,7 +11,6 @@ import {
   sqlEffectiveAtaStartDischarge,
   sqlEffectiveAtaStartLoading,
 } from './shipmentAtaOverrideSql';
-import { buildShipmentExcludeStoTypeTSql } from './shipmentStoTypeSql';
 
 const ATA_UI_KEYS = [
   'ata_vessel_arrival_at_loading_port',
@@ -80,7 +79,6 @@ async function mergeStoSiblingAta(
 
   const activeLoadingJoinFilter = ' AND COALESCE(vlp1.is_cancelled, false) = false';
   const activeDischargeJoinFilter = ' AND COALESCE(vlpd.is_cancelled, false) = false';
-  const excludeStoTypeT = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
 
   const result = await query(
     `WITH target AS (
@@ -88,21 +86,6 @@ async function mergeStoSiblingAta(
       FROM shipments s
       INNER JOIN contracts c ON c.id = s.contract_id
       WHERE s.id = $1::uuid
-    ),
-    latest_spd_contract AS (
-      SELECT DISTINCT ON (spd.contract_number)
-        spd.contract_number,
-        NULLIF(TRIM(COALESCE(
-          spd.sto_number::text,
-          spd.data->'raw'->>'STO No.',
-          spd.data->'raw'->>'STO Number',
-          spd.data->'shipment'->>'sto_no',
-          spd.data->'contract'->>'sto_no'
-        )), '') AS effective_sto,
-        spd.created_at
-      FROM sap_processed_data spd
-      WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-      ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
     )
     SELECT
       MAX(${sqlEffectiveAtaArrivalLoading()})::text AS ata_vessel_arrival_at_loading_port,
@@ -117,25 +100,20 @@ async function mergeStoSiblingAta(
     FROM shipments s
     INNER JOIN contracts c ON c.id = s.contract_id
     INNER JOIN target t ON c.sto_number::text = t.sto
-    LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
     LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
     LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
     ${SHIPMENT_ATA_OVERRIDES_JOIN}
-    WHERE t.sto IS NOT NULL
-      AND (${excludeStoTypeT})`,
+    WHERE t.sto IS NOT NULL`,
     [shipmentId],
   );
 
   const agg = result.rows[0] as Record<string, unknown> | undefined;
   if (!agg) return;
 
+  // Fill KLIP/effective ATA gaps only — never copy effective dates into sap_* chips.
   for (const key of ATA_UI_KEYS) {
     if (shipmentInfo[key] == null && agg[key] != null) {
       shipmentInfo[key] = agg[key];
-    }
-    const sapKey = `sap_${key}`;
-    if (shipmentInfo[sapKey] == null && agg[key] != null) {
-      shipmentInfo[sapKey] = agg[key];
     }
   }
 }
@@ -144,8 +122,9 @@ async function mergeSapAtaPerField(shipmentInfo: Record<string, unknown>): Promi
   const contractNumber = shipmentInfo.contract_number;
   if (!contractNumber) return;
 
-  const needsSap = ATA_UI_KEYS.some((k) => shipmentInfo[k] == null);
-  if (!needsSap) return;
+  const needsKlipGap = ATA_UI_KEYS.some((k) => shipmentInfo[k] == null);
+  const needsSapRef = ATA_UI_KEYS.some((k) => shipmentInfo[`sap_${k}`] == null);
+  if (!needsKlipGap && !needsSapRef) return;
 
   const sapResult = await query(
     `SELECT data
@@ -163,14 +142,14 @@ async function mergeSapAtaPerField(shipmentInfo: Record<string, unknown>): Promi
 
   for (const [uiKey, sapKey] of Object.entries(SAP_SHIPMENT_KEY_MAP)) {
     const typedUiKey = uiKey as (typeof ATA_UI_KEYS)[number];
-    if (shipmentInfo[typedUiKey] == null && sapKey in shp) {
-      const normalized = normalizeSapDate(shp[sapKey]);
-      if (normalized) shipmentInfo[typedUiKey] = normalized;
+    const normalized = sapKey in shp ? normalizeSapDate(shp[sapKey]) : null;
+    if (needsKlipGap && shipmentInfo[typedUiKey] == null && normalized) {
+      shipmentInfo[typedUiKey] = normalized;
     }
+    // sap_* only from SAP JSON — never from KLIP/effective. Leave null when SAP blank.
     const sapRefKey = `sap_${typedUiKey}`;
-    if (shipmentInfo[sapRefKey] == null && sapKey in shp) {
-      const normalized = normalizeSapDate(shp[sapKey]);
-      if (normalized) shipmentInfo[sapRefKey] = normalized;
+    if (shipmentInfo[sapRefKey] == null && normalized) {
+      shipmentInfo[sapRefKey] = normalized;
     }
   }
 }

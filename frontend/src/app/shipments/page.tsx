@@ -7,24 +7,64 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor } from 'lucide-react'
+import { Search, Filter, X, Ship, Package, Save, Loader2, Download, Upload, Check, Edit2, Plus, Pencil, FileText, ChevronDown, ChevronUp, ChevronRight, Minus, SlidersHorizontal, ArrowLeft, ArrowRight, GripVertical, Anchor, Undo2 } from 'lucide-react'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, invalidateLogisticsListCaches } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache } from '@/lib/clientDataCache'
 import { Checkbox } from '@/components/ui/checkbox'
 import { FieldHelp } from '@/components/FieldHelp'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { resolveShippingTcShortageMtForListRow } from '@/lib/shipmentTcR4Shortage'
+import { TC_VESSEL_PERF_LABELS, TC_VESSEL_PERF_TOOLTIPS } from '@/lib/shipmentTcPerformanceLabels'
 import {
   formatShipmentStatusLabel,
-  normalizeShipmentStatusKey,
+  shipmentStatusBadgeClass,
+  shipmentStatusLabelLines,
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from '@/lib/shipmentStatusDisplay'
 import { formatDateDMY, formatDateTimeDMY, toApiDateOnly } from '@/lib/dateFormat'
+import {
+  formatSignedCycleDaysCompact,
+  signedCycleDaysClass,
+} from '@/lib/cycleDaysDisplay'
+import { resolvePerformancePeriodDateRange } from '@/lib/performancePeriodFilters'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
+import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
+import {
+  isShipmentGroupingTemplateFile,
+  isShipmentGroupingTemplateMode,
+  SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP,
+  SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP,
+} from '@/lib/shipmentGroupingTemplate'
+import { buildShipmentViewTableExportMatrix } from '@/lib/shipmentViewTableExport'
+import { shipmentListHydrateVesselName } from '@/lib/shipmentVesselCompare'
 import { computeLateIndicatorDisplay } from '@/lib/calendarDays'
 import { AddNewShipmentModal } from '@/components/shared/AddNewShipmentModal'
-import type { ShipmentPoOption } from '@/components/shared/addNewShipmentTypes'
+import {
+  ContractDetailModal,
+  fetchContractForDetailModal,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
+import {
+  acceptPrePlannedGroup,
+  createManualPrePlannedGroup,
+  downloadShipmentGroupingTemplate,
+  dismissPrePlannedGroup,
+  fetchPrePlannedGroups,
+  filterPrePlannedGroupsByGlobalScope,
+  hasPrePlannedGlobalScopeFilters,
+  revertPrePlannedGroup,
+  uploadShipmentGroupingTemplate,
+  type PrePlannedGroup,
+  type ShipmentGroupingBulkUploadResult,
+} from '@/lib/prePlannedGroups'
+import {
+  enrichShipmentPoOptions,
+  formatPoPlantLabel,
+  resolvePoPlantCode,
+  type ShipmentPoOption,
+} from '@/components/shared/addNewShipmentTypes'
 import { ShipmentViewTableRowActions } from '@/components/shipments/ShipmentViewTableRowActions'
 import {
   buildVesselPortsQuantityRows,
@@ -43,11 +83,13 @@ import {
   VESSEL_MODAL_SUBSECTION_LABEL_CLASS,
 } from '@/lib/vesselModalUi'
 import { submitAddNewShipmentPayload } from '@/lib/addNewShipmentSubmit'
-import { shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
+import { resolveShipmentRowOpenTarget, shipmentRowHasRegisteredPlanning } from '@/lib/shipmentViewTableActions'
 import {
   mergeShipmentQtyOverridesOnContractRows,
-  resolveShipmentListDeliveredKg,
-  resolveShipmentListReceiveKg,
+  preferHydratedQty,
+  shipmentListDeliveredKgForViewTable,
+  shipmentListOutstandingKgForViewTable,
+  shipmentListReceiveKgForViewTable,
   resolveShipmentListStoKg,
   sapContractDetailQtyToKg,
   shipmentStoredQtyKg,
@@ -60,16 +102,14 @@ import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
 import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
-import {
-  compareSapStoListRowPriority,
-  shouldPrioritizeSapStoRows,
-} from '@/lib/listSapStoPriority'
 import {
   TableInitialLoadPlaceholder,
   TableInitialLoadPlaceholderContent,
 } from '@/components/performance/TableInitialLoadPlaceholder'
+import { QtyLoadingDots } from '@/components/shared/QtyLoadingDots'
 import {
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
@@ -82,21 +122,37 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
-import { formatQtyMtFromKg, formatNumber, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
+import { formatQtyMtFromKg, formatNumber, outstandingQtyMtColorClass } from '@/lib/utils'
+
+/** Shipments page qty display — whole MT (no decimals). */
+const SHIPMENT_QTY_MT_DISPLAY_OPTS = { maxFractionDigits: 0 } as const
 import {
   SHIPMENT_COLUMN_LAYOUT_VERSION,
   SHIPMENT_COLUMN_LAYOUT_VERSION_KEY,
+  SHIPMENT_EXPAND_COL_WIDTH_PX,
+  SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
+  SHIPMENT_MANUAL_SELECT_COLUMN_ID,
+  SHIPMENT_TRADE_CYCLE_COLUMN_ID,
+  SHIPMENT_STAGE_GATED_COLUMN_IDS,
+  SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS,
   buildShipmentVisibleColumns,
+  filterShipmentVisibleColumnIdsForStage,
+  isShipmentGroupingSuggestionColumnEligible,
+  isShipmentTradeCycleColumnEligible,
   mergeShipmentColumnOrder,
   migrateShipmentColumnLayout,
   shipmentCompactColumnFallbackOrder,
-  shipmentDefaultVisibleColumnIds,
+  shipmentDefaultVisibleColumnIdsForStage,
+  shipmentTableColumnWidthPx,
 } from '@/lib/shipmentColumns'
 import {
   resolveShipmentListDischargePorts,
   resolveShipmentListLoadingPorts,
 } from '@/lib/shipmentListPorts'
+import { resolveLoadingPortDisplayLabel } from '@/lib/loadingPortDisplay'
 import { resolveShipmentListSuppliers } from '@/lib/shipmentListSuppliers'
 import { groupShipmentsBySto } from '@/lib/shipmentStoGrouping'
 import {
@@ -107,17 +163,47 @@ import {
   type EtaBucketFilterKey,
 } from '@/lib/shipmentsPageDerivedData'
 import {
+  patchSection1SummaryAfterUnplannedToPlanned,
+  patchSection1SummaryAfterUnplannedToPreplanned,
   pipelineCountForStage,
   SHIPMENT_PAGE_PIPELINE_CARDS,
   SHIPMENT_PAGE_PIPELINE_LABELS,
   type DischargePortBreakdown,
   type LoadingPortBreakdown,
+  type ShipmentPagePipelineContractQtyKg,
+  type ShipmentPagePipelineOutstandingQtyKg,
   type ShipmentPagePipelineStage,
   type ShipmentPagePipelineStatusCounts,
+  type ShipmentPagePipelineVesselNames,
 } from '@/lib/shipmentPagePipeline'
 import { ShipmentStatusDistribution } from '@/components/shipments/ShipmentStatusDistribution'
+import { AttentionInsightsSection } from '@/components/logistics/AttentionInsightsSection'
+import { mapShipmentAttentionInsights } from '@/lib/shipmentAttentionInsights'
+import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
+import {
+  buildPrePlannedGroupLookupMap,
+  formatPrePlannedGroupBadge,
+  formatPrePlannedGroupTooltip,
+  resolvePrePlannedGroupForRow,
+  resolveShipmentContractNumber,
+} from '@/lib/prePlannedGroupTableSpans'
+import {
+  collectDistinctFormattedValues,
+  getPrePlannedGroupRepresentativeMember,
+  getPrePlannedGroupSortValue,
+  groupShipmentsByPrePlannedSuggestion,
+  prePlannedGroupColumnAggregationMode,
+  sumGroupQtyKgForColumn,
+  type PrePlannedTableGroup,
+} from '@/lib/prePlannedGroupTableRows'
+import {
+  EMPTY_SHIPMENT_ETC_NO_ATC_DUE,
+  EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
+  ShipmentOutstandingQtySummary,
+  reconcileOutstandingQtyStripForDisplay,
+} from '@/components/shipments/ShipmentOutstandingQtySummary'
 import { VesselIdleInsightChip } from '@/components/shipments/VesselIdleInsightChip'
-import { VesselIdleModal, type VesselIdleListRow } from '@/components/shipments/VesselIdleModal'
+import { VesselIdleModal, type VesselIdleListRow, type VesselWillFreeListRow } from '@/components/shipments/VesselIdleModal'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
   type VesselHistoryShipmentRow,
@@ -135,7 +221,14 @@ import {
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
-import { appendToolbarMultiToColumnFilters } from '@/lib/globalScopeFilters'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
+import { appendToolbarMultiToColumnFilters, filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
+import { readShipmentsCompactSort, writeShipmentsCompactSort } from '@/lib/shipmentsCompactSort'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { format } from 'date-fns'
 import {
@@ -197,6 +290,10 @@ interface Shipment {
   contract_id: string
   contract_number: string
   vessel_name: string
+  /** Stored KLIP name before Master/SAP overlay (list hydrate). */
+  vessel_name_klip?: string | null
+  vessel_name_sap?: string | null
+  vessel_name_master?: string | null
   vessel_code: string
   vessel_owner: string
   vessel_draft: number | null
@@ -209,9 +306,13 @@ interface Shipment {
   arrival_date: string
   port_of_loading: string
   port_of_discharge: string
-  plant_site: string // Group Plant (resolved from master_plants via contract plant_code)
+  plant_site: string // Region/Plant from SAP Discharge Destination
+  /** SAP / contracts plant code (e.g. AM10) — used in Add New PO labels. */
+  plant_code?: string | null
   quantity_shipped: number
   quantity_delivered: number
+  /** Explicit KLIP Delivery Qty (kg) from Shipment Qty / manual edit; independent of SAP. */
+  quantity_delivered_klip?: number | null
   inbound_weight: number
   outbound_weight: number
   gain_loss_percentage: number
@@ -222,6 +323,10 @@ interface Shipment {
   vessel_oa_actual?: number | null
   bl_quantity?: number | null
   actual_vessel_qty_receive?: number | null
+  /** STO-summed per-PO KLIP receive (Edit Shipment Grand Total grain). */
+  klip_receive_qty?: number | null
+  /** STO-summed per-PO KLIP delivery. */
+  klip_delivery_qty?: number | null
   difference_final_qty_vs_bl_qty?: number | null
   average_vessel_speed?: number | null
   status: string
@@ -265,6 +370,8 @@ interface Shipment {
   quantity_receive?: number
   outstanding_quantity?: number
   outstanding_qty_planning?: number
+  /** Same Trade Cycle days as Contract Performance (Unplanned card only in UI). */
+  trade_cycle_days?: number | null
   contract_qty?: number
   loading_ports?: string
   discharge_ports?: string
@@ -277,8 +384,16 @@ interface Shipment {
   vlp_loading_port_name?: string
   vlp_discharge_port_name?: string
   quantity_delivered_sap?: number
+  is_contract_sap_closed?: boolean
+  pre_planned_group_id?: string | null
   sfal_qty?: number | null
   sfbd_qty?: number | null
+  // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+  fuel_consumption?: number | null
+  freight?: number | null
+  pump_rate?: number | null
+  sailing_speed?: number | null
+  shortage?: number | null
   // Basic ETA loading dates at shipment level
   eta_arrival?: string
   eta_berthed?: string
@@ -339,11 +454,45 @@ interface VesselLoadingPort {
   quality_stone?: number | null
   is_discharge_port?: boolean
   is_cancelled?: boolean
+  sap_port_name?: string | null
   cancel_remark?: string | null
   cancelled_at?: string | null
   cancelled_by_name?: string | null
   created_at?: string
   updated_at?: string
+}
+
+function formatGroupLoadingPortsDisplay(
+  ports: VesselLoadingPort[],
+  contractSapClosed?: boolean | null,
+): string {
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const port of ports) {
+    if (port.is_discharge_port) continue
+    if (port.is_cancelled) continue
+    const label = resolveLoadingPortDisplayLabel({
+      klipPortName: port.port_name,
+      sapPortName: port.sap_port_name,
+      contractSapClosed,
+    })
+    if (!label || label === '-') continue
+    const key = label
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, ' ')
+      .trim()
+      .replace(/^(PORT|JETTY|TERMINAL|PELABUHAN|DERMAGA)(\s+OF)?\s+/, '')
+      .replace(/\s+/g, ' ')
+      .trim() || label.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(label)
+  }
+  return unique.join(', ')
+}
+
+function hasMultipleGroupLoadingPorts(ports: VesselLoadingPort[]): boolean {
+  return ports.filter((p) => !p.is_discharge_port).length > 1
 }
 
 function apiErrorMessage(error: unknown, fallback: string): string {
@@ -465,26 +614,46 @@ function shipmentQuantityValuesEqual(a: unknown, b: unknown): boolean {
 
 function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipment[] {
   if (!hydrated.length) return base
-  const byId = new Map<string, Shipment>()
+  // Rows are one-per-STO-key but can share a primary shipment id, so match by STO
+  // key first — an id-first lookup could stamp one STO's fields onto another.
+  const byStoKey = new Map<string, Shipment>()
+  const idRowCount = new Map<string, number>()
+  const soleById = new Map<string, Shipment>()
   for (const row of hydrated) {
-    if (row.id) byId.set(String(row.id), row)
     const stoKey = row.sto_key ?? row.sto_number
-    if (stoKey) byId.set(String(stoKey), row)
+    if (stoKey) byStoKey.set(String(stoKey), row)
+    if (row.id) {
+      const id = String(row.id)
+      idRowCount.set(id, (idRowCount.get(id) ?? 0) + 1)
+      if (idRowCount.get(id) === 1) soleById.set(id, row)
+      else soleById.delete(id)
+    }
   }
   return base.map((row) => {
     const match =
-      (row.id ? byId.get(String(row.id)) : undefined) ??
-      (row.sto_key ? byId.get(String(row.sto_key)) : undefined) ??
-      (row.sto_number ? byId.get(String(row.sto_number)) : undefined)
+      (row.sto_key ? byStoKey.get(String(row.sto_key)) : undefined) ??
+      (row.sto_number ? byStoKey.get(String(row.sto_number)) : undefined) ??
+      (row.id ? soleById.get(String(row.id)) : undefined)
     if (!match) return row
     return {
       ...row,
       contract_numbers: match.contract_numbers ?? row.contract_numbers,
       contract_ext_no: match.contract_ext_no ?? row.contract_ext_no,
       po_numbers: match.po_numbers ?? row.po_numbers,
-      sto_quantity: match.sto_quantity ?? row.sto_quantity,
-      quantity_receive: match.quantity_receive ?? row.quantity_receive,
-      quantity_delivered_sap: match.quantity_delivered_sap ?? row.quantity_delivered_sap,
+      sto_quantity: preferHydratedQty(match.sto_quantity, row.sto_quantity),
+      quantity_receive: preferHydratedQty(match.quantity_receive, row.quantity_receive),
+      quantity_delivered_sap: preferHydratedQty(match.quantity_delivered_sap, row.quantity_delivered_sap),
+      quantity_delivered_klip: preferHydratedQty(
+        match.klip_delivery_qty ?? match.quantity_delivered_klip,
+        row.klip_delivery_qty ?? row.quantity_delivered_klip,
+      ),
+      klip_receive_qty: preferHydratedQty(match.klip_receive_qty, row.klip_receive_qty),
+      klip_delivery_qty: preferHydratedQty(match.klip_delivery_qty, row.klip_delivery_qty),
+      actual_vessel_qty_receive: preferHydratedQty(
+        match.klip_receive_qty ?? match.actual_vessel_qty_receive,
+        row.klip_receive_qty ?? row.actual_vessel_qty_receive,
+      ),
+      is_contract_sap_closed: match.is_contract_sap_closed ?? row.is_contract_sap_closed,
       outstanding_quantity: match.outstanding_quantity ?? row.outstanding_quantity,
       outstanding_qty_planning: match.outstanding_qty_planning ?? row.outstanding_qty_planning,
       contract_qty: match.contract_qty ?? row.contract_qty,
@@ -499,7 +668,10 @@ function mergeShipmentSapFields(base: Shipment[], hydrated: Shipment[]): Shipmen
       incoterm: match.incoterm ?? row.incoterm,
       b2b_flag: match.b2b_flag ?? row.b2b_flag,
       source_type: match.source_type ?? row.source_type,
-      vessel_name: match.vessel_name?.trim() ? match.vessel_name : row.vessel_name,
+      vessel_name: shipmentListHydrateVesselName(row.vessel_name, match, row.is_contract_sap_closed),
+      vessel_name_klip: match.vessel_name_klip ?? row.vessel_name_klip,
+      vessel_name_sap: match.vessel_name_sap ?? row.vessel_name_sap,
+      vessel_name_master: match.vessel_name_master ?? row.vessel_name_master,
       vessel_code: match.vessel_code?.trim() ? match.vessel_code : row.vessel_code,
       vessel_owner: match.vessel_owner?.trim() ? match.vessel_owner : row.vessel_owner,
     }
@@ -711,8 +883,8 @@ function resolvePortsModalQuantityReceiveKg(
 }
 
 function formatQuantityKgDisplay(value: unknown): string {
-  const parsed = parseApiNumber(value)
-  return parsed !== null ? `${formatNumber(parsed)} Kg` : '—'
+  const parsed = parseApiNumber(value) ?? 0
+  return `${formatNumber(parsed)} Kg`
 }
 
 function resolvePortsModalQuantityDelivered(
@@ -720,8 +892,8 @@ function resolvePortsModalQuantityDelivered(
   shipment: Shipment | null,
   contractDetails?: PortsModalContractDetail[],
 ): string {
-  const kg = resolvePortsModalQuantityDeliveredKg(shipmentInfo, shipment, contractDetails)
-  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+  const kg = resolvePortsModalQuantityDeliveredKg(shipmentInfo, shipment, contractDetails) ?? 0
+  return formatQuantityKgDisplay(kg)
 }
 
 function resolvePortsModalQuantityReceive(
@@ -729,8 +901,8 @@ function resolvePortsModalQuantityReceive(
   shipment: Shipment | null,
   contractDetails?: PortsModalContractDetail[],
 ): string {
-  const kg = resolvePortsModalQuantityReceiveKg(shipmentInfo, shipment, contractDetails)
-  return kg !== null ? formatQuantityKgDisplay(kg) : '—'
+  const kg = resolvePortsModalQuantityReceiveKg(shipmentInfo, shipment, contractDetails) ?? 0
+  return formatQuantityKgDisplay(kg)
 }
 
 function ShipmentDetailReadOnlyField({
@@ -804,7 +976,7 @@ function ShipmentMtQuantityField({
           </span>
         </div>
       ) : (
-        <div className="font-medium">{formatQtyMtFromKg(kg)}</div>
+        <div className="font-medium">{formatQtyMtFromKg(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}</div>
       )}
     </div>
   )
@@ -823,8 +995,11 @@ function ShipmentsPageContent() {
   const [loading, setLoading] = useState(true)
   /** Stale-while-revalidate: in-flight list fetch without clearing visible rows. */
   const [listFetching, setListFetching] = useState(false)
+  const [downloadingTable, setDownloadingTable] = useState(false)
   /** Immediate table skeleton when status / ETA scope changes (not pagination). */
   const [tableScopeLoading, setTableScopeLoading] = useState(false)
+  /** SAP-derived qty columns show a loading indicator ("...") until hydrate merges real values. */
+  const [qtyFieldsReady, setQtyFieldsReady] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize] = useState(20)
   const [totalCount, setTotalCount] = useState(0)
@@ -833,6 +1008,7 @@ function ShipmentsPageContent() {
   const [shipmentsSection1Summary, setShipmentsSection1Summary] = useState<{
     total?: number
     status?: Partial<ShipmentPagePipelineStatusCounts>
+    statusVesselNames?: Partial<ShipmentPagePipelineVesselNames>
     loadingPortBreakdown?: Partial<LoadingPortBreakdown>
     dischargePortBreakdown?: Partial<DischargePortBreakdown>
     unplannedTable?: {
@@ -840,6 +1016,19 @@ function ShipmentsPageContent() {
       shipmentRows?: number
       totalTableRows?: number
     }
+    outstandingQty?: {
+      totalKg: number
+      thirdParty: { fobKg: number; cifKg: number; cfrKg: number }
+      interco: { fobKg: number; cifKg: number; cfrKg: number }
+      /** True when summaryOnly included full FOB/CIF/CFR × source buckets. */
+      bucketsComplete?: boolean
+      /** Residual so 3rd+Interco+Other = total; helper only. */
+      otherKg?: number
+    }
+    statusContractQty?: Partial<ShipmentPagePipelineContractQtyKg>
+    statusOutstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg>
+    etcNoAtcDueWithin7d?: { count: number; outstandingQtyKg: number }
+    attentionInsights?: ReturnType<typeof mapShipmentAttentionInsights>
     etaLoading?: Record<string, number>
     etaDischarge?: Record<string, number>
   } | null>(null)
@@ -854,9 +1043,14 @@ function ShipmentsPageContent() {
     etaDischarge?: Record<string, number>
   } | null>(null)
   const [summaryFetching, setSummaryFetching] = useState(false)
+  /** Outstanding Qty strip — usually arrives with summaryOnly (bucketsComplete). */
+  const [outstandingQtyFetching, setOutstandingQtyFetching] = useState(false)
+  const [section1LoadError, setSection1LoadError] = useState<string | null>(null)
   const [vesselIdleCount, setVesselIdleCount] = useState(0)
   const [vesselIdleList, setVesselIdleList] = useState<VesselIdleListRow[]>([])
+  const [vesselWillFreeList, setVesselWillFreeList] = useState<VesselWillFreeListRow[]>([])
   const [vesselIdleLoading, setVesselIdleLoading] = useState(false)
+  const [vesselIdleError, setVesselIdleError] = useState(false)
   const [vesselIdleModalOpen, setVesselIdleModalOpen] = useState(false)
   const [vesselHistoryModalOpen, setVesselHistoryModalOpen] = useState(false)
   const [selectedVesselForHistory, setSelectedVesselForHistory] =
@@ -874,7 +1068,10 @@ function ShipmentsPageContent() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editedData, setEditedData] = useState<Partial<Shipment>>({})
   const [statusFilter, setStatusFilter] = useState<ShipmentsPipelineStageFilter>('ALL')
+  const [etcNoAtcDueWithin7dFilter, setEtcNoAtcDueWithin7dFilter] = useState(false)
   const [lateIndicatorFilter, setLateIndicatorFilter] = useState<string>('ALL')
+  const [charterTypeFilter, setCharterTypeFilter] = useState<string>('ALL')
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('ALL')
   const [etaLoadingFilter, setEtaLoadingFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [etaDischargeFilter, setEtaDischargeFilter] = useState<'ALL' | 'MORE_THAN_7D' | 'D_MINUS_2' | 'D' | 'DELAY' | 'NO_ETA'>('ALL')
   const [vesselFilter, setVesselFilter] = useState('')
@@ -888,13 +1085,30 @@ function ShipmentsPageContent() {
     resetUserScopeFilters,
     handleProductsChange,
     handleGroupPlantsChange,
+    alignGroupPlantsToOptions,
   } = useUserScopeFilterDefaults('shipments')
+  /** Debounce Product / Group Plant so multi-select does not fire a cold fetch per click. */
+  const debouncedSelectedProducts = useDebouncedValue(selectedProducts, 400)
+  const debouncedSelectedGroupPlants = useDebouncedValue(selectedGroupPlants, 400)
   const scopeSummaryRequestKey = useMemo(
-    () => JSON.stringify({ p: [...selectedProducts].sort(), g: [...selectedGroupPlants].sort() }),
-    [selectedProducts, selectedGroupPlants],
+    () =>
+      JSON.stringify({
+        p: [...debouncedSelectedProducts].sort(),
+        g: [...debouncedSelectedGroupPlants].sort(),
+      }),
+    [debouncedSelectedProducts, debouncedSelectedGroupPlants],
   )
 
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
@@ -1038,18 +1252,14 @@ function ShipmentsPageContent() {
   }, [openHeaderFilterId])
   const [uploading, setUploading] = useState(false)
   const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null)
-  const [dateFrom, setDateFrom] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  })
+  const shipmentYtdRange = useMemo(() => resolvePerformancePeriodDateRange('YTD'), [])
+  const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolvePerformancePeriodDateRange('YTD').dateTo)
   const [uploadingId, setUploadingId] = useState<string>('')
   const listFetchGenRef = useRef(0)
+  const fetchShipmentsRef = useRef<
+    (forcedPage?: number, searchOverride?: string, options?: { force?: boolean }) => Promise<void>
+  >(async () => {})
 
   // Vessel loading ports state
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null)
@@ -1089,9 +1299,23 @@ function ShipmentsPageContent() {
   const [showDocs, setShowDocs] = useState(false)
 
   const [showAddShipment, setShowAddShipment] = useState(false)
+  const [contractDetailTarget, setContractDetailTarget] = useState<ContractDetailModalContract | null>(null)
   const [addShipmentPrefilledPOs, setAddShipmentPrefilledPOs] = useState<ShipmentPoOption[] | null>(null)
   const [addShipmentPrefilledSto, setAddShipmentPrefilledSto] = useState<string | null>(null)
   const [addShipmentPrefilledContractNumbers, setAddShipmentPrefilledContractNumbers] = useState<string[] | null>(null)
+  const [addShipmentPrePlannedGroupId, setAddShipmentPrePlannedGroupId] = useState<string | null>(null)
+  const [prePlannedGroups, setPrePlannedGroups] = useState<PrePlannedGroup[]>([])
+  const [prePlannedAcceptedGroups, setPrePlannedAcceptedGroups] = useState<PrePlannedGroup[]>([])
+  const [prePlannedUngroupedCount, setPrePlannedUngroupedCount] = useState(0)
+  const [acceptingPrePlannedGroupId, setAcceptingPrePlannedGroupId] = useState<string | null>(null)
+  const [revertingPrePlannedGroupId, setRevertingPrePlannedGroupId] = useState<string | null>(null)
+  /** Manual grouping "Select" column — contract_row_id set of user-checked Unplanned rows. */
+  const [selectedManualGroupContractIds, setSelectedManualGroupContractIds] = useState<Set<string>>(new Set())
+  const [creatingManualPrePlannedGroup, setCreatingManualPrePlannedGroup] = useState(false)
+  const [groupingTemplateDownloading, setGroupingTemplateDownloading] = useState(false)
+  const [groupingTemplateUploading, setGroupingTemplateUploading] = useState(false)
+  const [groupingUploadResult, setGroupingUploadResult] = useState<BulkUploadStatusResult | null>(null)
+  const groupingUploadInputRef = useRef<HTMLInputElement | null>(null)
   const [editShipmentFromTable, setEditShipmentFromTable] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -1121,6 +1345,8 @@ function ShipmentsPageContent() {
   const [dragColId, setDragColId] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<string>('created_at')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  /** Wait for localStorage sort restore so we do not fetch created_at then immediately vessel_name. */
+  const [sortHydrated, setSortHydrated] = useState(false)
 
   const globalFilterScope = useMemo(
     () => ({
@@ -1128,16 +1354,18 @@ function ShipmentsPageContent() {
       dateTo,
       searchTerm,
       selectedIncoterms,
-      selectedProducts,
+      selectedProducts: debouncedSelectedProducts,
       selectedSuppliers,
-      selectedGroupPlants,
+      selectedGroupPlants: debouncedSelectedGroupPlants,
       lateIndicatorFilter,
+      charterTypeFilter,
+      sourceTypeFilter,
       viewOption,
       viewFilterValue,
       columnFiltersJson: JSON.stringify(
         appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
           selectedIncoterms,
-          selectedProducts,
+          selectedProducts: debouncedSelectedProducts,
           selectedSuppliers,
         }),
       ),
@@ -1150,10 +1378,12 @@ function ShipmentsPageContent() {
       dateTo,
       searchTerm,
       selectedIncoterms,
-      selectedProducts,
+      debouncedSelectedProducts,
       selectedSuppliers,
-      selectedGroupPlants,
+      debouncedSelectedGroupPlants,
       lateIndicatorFilter,
+      charterTypeFilter,
+      sourceTypeFilter,
       viewOption,
       viewFilterValue,
       columnFilters,
@@ -1163,14 +1393,14 @@ function ShipmentsPageContent() {
 
   const listQueryKey = useMemo(
     () =>
-      buildShipmentsListQueryKey({
+      `${buildShipmentsListQueryKey({
         ...globalFilterScope,
         pipelineStage: statusFilter,
         page,
-        sortKey: '',
-        sortDir: '',
-      }),
-    [globalFilterScope, statusFilter, page],
+        sortKey,
+        sortDir,
+      })}|etc7:${etcNoAtcDueWithin7dFilter ? '1' : '0'}`,
+    [globalFilterScope, statusFilter, etcNoAtcDueWithin7dFilter, page, sortKey, sortDir],
   )
 
   // Desktop table horizontal scroll sync (top + bottom)
@@ -1233,20 +1463,24 @@ function ShipmentsPageContent() {
 
   /** Single consolidated fetch — global scope + pipeline stage + pagination/sort. */
   useEffect(() => {
-    if (!userScopeReady) return
+    if (!userScopeReady || !sortHydrated) return
     fetchShipments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userScopeReady, listQueryKey])
+  }, [userScopeReady, listQueryKey, sortHydrated])
 
   const fetchVesselIdle = useCallback(async () => {
     setVesselIdleLoading(true)
+    setVesselIdleError(false)
     try {
       const res = await api.get('/shipments/vessel-idle')
       const vessels = (res.data?.data?.vessels ?? []) as VesselIdleListRow[]
+      const willFree = (res.data?.data?.willFree ?? []) as VesselWillFreeListRow[]
       setVesselIdleList(vessels)
+      setVesselWillFreeList(willFree)
       setVesselIdleCount(Number(res.data?.data?.count ?? vessels.length))
     } catch (error) {
       console.error('Failed to fetch vessel idle list:', error)
+      setVesselIdleError(true)
     } finally {
       setVesselIdleLoading(false)
     }
@@ -1328,6 +1562,22 @@ function ShipmentsPageContent() {
     [resetPageForGlobalFilter],
   )
 
+  const onCharterTypeChange = useCallback(
+    (value: string) => {
+      resetPageForGlobalFilter()
+      setCharterTypeFilter(value)
+    },
+    [resetPageForGlobalFilter],
+  )
+
+  const onSourceTypeChange = useCallback(
+    (value: string) => {
+      resetPageForGlobalFilter()
+      setSourceTypeFilter(value)
+    },
+    [resetPageForGlobalFilter],
+  )
+
   const onProductsChangeWithPageReset = useCallback(
     (values: string[]) => {
       resetPageForGlobalFilter()
@@ -1356,7 +1606,7 @@ function ShipmentsPageContent() {
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
-      api.get('/contracts/filter-options/incoterms'),
+      api.get('/contracts/filter-options/incoterms?scope=shipment'),
       api.get('/dashboard/filter-options/products'),
       api.get('/dashboard/filter-options/suppliers'),
     ])
@@ -1372,8 +1622,8 @@ function ShipmentsPageContent() {
             : []) as string[]
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
+        setAvailableIncoterms(filterIncotermOptions(Array.isArray(incs) ? incs : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
       })
@@ -1390,11 +1640,6 @@ function ShipmentsPageContent() {
     }
   }, [])
 
-  const applySearch = useCallback(() => {
-    setPage(1)
-    setSearchTerm(searchDraft)
-  }, [searchDraft])
-
   const applyViewFilter = useCallback(() => {
     setPage(1)
   }, [])
@@ -1408,6 +1653,19 @@ function ShipmentsPageContent() {
     setTotalPages(1)
   }, [])
 
+  const applySearch = useCallback(() => {
+    const next = searchDraft.trim()
+    const sameScope = next === searchTerm.trim() && page === 1
+    beginTableScopeRefresh()
+    setPage(1)
+    setSearchTerm(searchDraft)
+    // Identical search does not change listQueryKey, so the list effect will not re-run —
+    // force a refetch or View Table loading stays stuck after beginTableScopeRefresh.
+    if (sameScope) {
+      void fetchShipmentsRef.current(1, searchDraft, { force: true })
+    }
+  }, [searchDraft, searchTerm, page, beginTableScopeRefresh])
+
   const handlePipelineStageChange = useCallback((stage: ShipmentsPipelineStageFilter) => {
     beginTableScopeRefresh()
     setPage(1)
@@ -1417,6 +1675,7 @@ function ShipmentsPageContent() {
       setEtaDischargeFilter('ALL')
     }
     setStatusFilter(stage)
+    setEtcNoAtcDueWithin7dFilter(false)
   }, [beginTableScopeRefresh])
 
   const handleStatusCardClick = useCallback(
@@ -1426,7 +1685,98 @@ function ShipmentsPageContent() {
     [handlePipelineStageChange, statusFilter],
   )
 
+  const handleEtcNoAtcDueCardClick = useCallback(() => {
+    beginTableScopeRefresh()
+    setEtcNoAtcDueWithin7dFilter((prev) => {
+      const next = !prev
+      if (next) {
+        setStatusFilter('ALL')
+        if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+          setSection2EtaSummary(null)
+          setEtaLoadingFilter('ALL')
+          setEtaDischargeFilter('ALL')
+        }
+      }
+      return next
+    })
+    setPage(1)
+  }, [beginTableScopeRefresh])
+
   // Column header filters apply only when user presses Enter inside the filter popover.
+
+  const buildShipmentListSearchParams = (opts: {
+    page: number
+    limit: number
+    skipSapJoin: boolean
+    searchOverride?: string
+  }) => {
+    const params = new URLSearchParams()
+    params.append('compact', 'true')
+    params.append('skipSapJoin', opts.skipSapJoin ? 'true' : 'false')
+    params.append('limit', String(opts.limit))
+    params.append('page', String(opts.page))
+    params.append('includeSummary', 'false')
+    if (statusFilter && statusFilter !== 'ALL') {
+      params.append('status', statusFilter)
+    }
+    if (etcNoAtcDueWithin7dFilter) {
+      params.append('etcNoAtcDueWithin7d', 'true')
+    }
+    if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
+      if (etaLoadingFilter !== 'ALL') {
+        params.append('etaLoading', etaLoadingFilter)
+      }
+      if (etaDischargeFilter !== 'ALL') {
+        params.append('etaDischarge', etaDischargeFilter)
+      }
+    }
+    if (dateFrom) params.append('dateFrom', dateFrom)
+    if (dateTo) params.append('dateTo', dateTo)
+    const searchTrim = (opts.searchOverride ?? searchTerm).trim()
+    if (searchTrim.length >= 2) {
+      params.append('search', searchTrim)
+    }
+    const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+      selectedIncoterms,
+      selectedProducts: debouncedSelectedProducts,
+      selectedSuppliers,
+    })
+    const cfKeys = Object.keys(mergedColumnFilters)
+    if (cfKeys.length > 0) {
+      params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+    }
+    if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
+      params.append('lateIndicator', lateIndicatorFilter)
+    }
+    if (charterTypeFilter && charterTypeFilter !== 'ALL') {
+      params.append('charterType', charterTypeFilter)
+    }
+    if (sourceTypeFilter && sourceTypeFilter !== 'ALL') {
+      params.append('sourceType', sourceTypeFilter)
+    }
+    if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
+      params.append('viewOption', viewOption)
+      params.append('viewQuery', viewFilterValue.trim())
+    }
+    const delayedParam = searchParams.get('delayed')
+    if (delayedParam === 'true') {
+      params.append('delayed', 'true')
+    }
+    const stoParam = searchParams.get('sto')
+    if (stoParam) {
+      params.append('sto', stoParam)
+    }
+    const contractParam = searchParams.get('contract')
+    if (contractParam) {
+      params.append('contract', contractParam)
+    }
+    if (debouncedSelectedGroupPlants.length > 0) {
+      debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
+    }
+    params.append('sortKey', sortKey)
+    params.append('sortDir', sortDir)
+    return params
+  }
 
   const fetchShipments = async (
     forcedPage?: number,
@@ -1435,79 +1785,56 @@ function ShipmentsPageContent() {
   ) => {
     const listGen = ++listFetchGenRef.current
     const hadRows = shipments.length > 0
+    const forceOsRefresh = Boolean(options?.force || section1SummaryForceNextFetchRef.current)
+    const hasSection1 = shipmentsSection1Summary != null
     if (!hadRows) setLoading(true)
     setListFetching(true)
-    setSummaryFetching(true)
+    // Status cards are toolbar-scoped — do not spin them on pagination/sort.
+    if (!hasSection1 || forceOsRefresh) {
+      setSummaryFetching(true)
+      setSection1LoadError(null)
+    }
+    // OS strip is static across status cards — only reset/refetch on global-filter force.
+    if (forceOsRefresh) {
+      setOutstandingQtyFetching(true)
+      setShipmentsSection1Summary((prev) =>
+        prev?.outstandingQty != null ? { ...prev, outstandingQty: undefined } : prev,
+      )
+    }
+    setQtyFieldsReady(false)
+    let startSection1Fetches = () => {
+      setSummaryFetching(false)
+      setOutstandingQtyFetching(false)
+    }
     try {
       const effectivePage = forcedPage ?? page
-      const params = new URLSearchParams()
-      params.append('compact', 'true')
-      params.append('skipSapJoin', 'true')
-      params.append('limit', String(pageSize))
-      params.append('page', String(effectivePage))
-      const isUnplannedHybridList = statusFilter === 'UNPLANNED'
-      if (isUnplannedHybridList) {
-        params.append('includeSummary', 'true')
-      } else {
-        // Section 1 summary comes from parallel summaryOnly request — skip duplicate SQL on list shell.
-        params.append('includeSummary', 'false')
-      }
-      if (statusFilter && statusFilter !== 'ALL') {
-        params.append('status', statusFilter)
-      }
-      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
-        if (etaLoadingFilter !== 'ALL') {
-          params.append('etaLoading', etaLoadingFilter)
-        }
-        if (etaDischargeFilter !== 'ALL') {
-          params.append('etaDischarge', etaDischargeFilter)
-        }
-      }
-      if (dateFrom) params.append('dateFrom', dateFrom)
-      if (dateTo) params.append('dateTo', dateTo)
-      const searchTrim = (searchOverride ?? searchTerm).trim()
-      if (searchTrim.length >= 2) {
-        params.append('search', searchTrim)
-      }
-      const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
-        selectedIncoterms,
-        selectedProducts,
-        selectedSuppliers,
+      const accurateSortKeys = new Set([
+        'quantity_delivered',
+        'quantity_receive',
+        'outstanding_quantity',
+        'outstanding_qty_planning',
+        'contract_qty',
+        'sto_quantity',
+        'loading_port',
+        'discharge_port',
+        'b2b_flag',
+        'contract_ext_no',
+      ])
+      const useAccurateQtySort = accurateSortKeys.has(sortKey)
+      const params = buildShipmentListSearchParams({
+        page: effectivePage,
+        limit: pageSize,
+        skipSapJoin: !useAccurateQtySort,
+        searchOverride,
       })
-      const cfKeys = Object.keys(mergedColumnFilters)
-      if (cfKeys.length > 0) {
-        params.append('columnFilters', JSON.stringify(mergedColumnFilters))
-      }
-      if (lateIndicatorFilter && lateIndicatorFilter !== 'ALL') {
-        params.append('lateIndicator', lateIndicatorFilter)
-      }
-      if (viewOption !== 'all' && viewFilterValue.trim().length > 0) {
-        params.append('viewOption', viewOption)
-        params.append('viewQuery', viewFilterValue.trim())
-      }
-
-      const delayedParam = searchParams.get('delayed')
-      if (delayedParam === 'true') {
-        params.append('delayed', 'true')
-      }
-
-      const stoParam = searchParams.get('sto')
-      if (stoParam) {
-        params.append('sto', stoParam)
-      }
-
-      const contractParam = searchParams.get('contract')
-      if (contractParam) {
-        params.append('contract', contractParam)
-      }
-      if (selectedGroupPlants.length > 0) {
-        selectedGroupPlants.forEach((p) => params.append('plant', p))
-      }
+      const searchTrim = (searchOverride ?? searchTerm).trim()
+      const forceListRefresh = Boolean(options?.force || searchTrim.length >= 2)
+      const isUnplannedHybridList = statusFilter === 'UNPLANNED'
 
       const listUrl = `/shipments?${params.toString()}`
       const listCacheKey = buildCacheKey('GET', listUrl)
 
-      /** Section 1 cards — toolbar scope only; parallel with table shell query. */
+      /** Section 1 cards — toolbar scope only; table search does not reshape Section 1. */
       const summaryParams = new URLSearchParams(params.toString())
       summaryParams.delete('status')
       summaryParams.delete('etaLoading')
@@ -1516,6 +1843,11 @@ function ShipmentsPageContent() {
       summaryParams.set('summaryOnly', 'true')
       summaryParams.set('page', '1')
       summaryParams.set('limit', '1')
+      // OS strip is static (active stages only) — do not scope by status card.
+      summaryParams.delete('osStatus')
+      if (searchTrim.length >= 2) {
+        summaryParams.delete('search')
+      }
       const summaryUrl = `/shipments?${summaryParams.toString()}`
       const summaryCacheKey = buildCacheKey('GET', summaryUrl)
       const summaryForce = options?.force || section1SummaryForceNextFetchRef.current
@@ -1534,12 +1866,91 @@ function ShipmentsPageContent() {
             shipmentRows?: number
             totalTableRows?: number
           }
+          outstandingQty?: NonNullable<typeof shipmentsSection1Summary>['outstandingQty']
         }
       }) => {
         if (envelope?.data?.summary) {
-          setShipmentsSection1Summary(envelope.data.summary)
+          setShipmentsSection1Summary((prev) => {
+            const next = { ...envelope.data!.summary! }
+            // Card-aligned total may arrive with summary; keep prior bucket breakdown until
+            // outstandingQtyOnly (or summary bucketsComplete) fills 3rd Party / Interco × FOB/CIF/CFR.
+            if (next.outstandingQty == null && prev?.outstandingQty != null) {
+              next.outstandingQty = prev.outstandingQty
+            } else if (
+              next.outstandingQty != null &&
+              prev?.outstandingQty != null &&
+              next.outstandingQty.bucketsComplete !== true &&
+              (next.outstandingQty.thirdParty?.fobKg ?? 0) === 0 &&
+              (next.outstandingQty.thirdParty?.cifKg ?? 0) === 0 &&
+              (next.outstandingQty.thirdParty?.cfrKg ?? 0) === 0 &&
+              (next.outstandingQty.interco?.fobKg ?? 0) === 0 &&
+              (next.outstandingQty.interco?.cifKg ?? 0) === 0 &&
+              (next.outstandingQty.interco?.cfrKg ?? 0) === 0
+            ) {
+              next.outstandingQty = {
+                ...next.outstandingQty,
+                thirdParty: prev.outstandingQty.thirdParty,
+                interco: prev.outstandingQty.interco,
+              }
+            }
+            // Defense in depth: strip Total = status-card OS sum; Other residual in helper only.
+            const cardOs = next.statusOutstandingQty ?? prev?.statusOutstandingQty
+            if (next.outstandingQty != null && cardOs != null) {
+              const cardTotalKg =
+                Number(cardOs.unplanned ?? 0) +
+                Number(cardOs.preplanned ?? 0) +
+                Number(cardOs.planned ?? 0) +
+                Number(cardOs.atLoadingPort ?? 0) +
+                Number(cardOs.sailed ?? 0) +
+                Number(cardOs.atDischargePort ?? 0)
+              next.outstandingQty = reconcileOutstandingQtyStripForDisplay(
+                next.outstandingQty,
+                cardTotalKg,
+              )
+            } else if (next.outstandingQty != null) {
+              next.outstandingQty = reconcileOutstandingQtyStripForDisplay(next.outstandingQty)
+            }
+            return next
+          })
+          setSummaryFetching(false)
+          setSection1LoadError(null)
+          section1SummaryForceNextFetchRef.current = false
+          // Full OS buckets arrive with summaryOnly; stop spinner when complete.
+          if (
+            envelope.data.summary.outstandingQty != null &&
+            envelope.data.summary.outstandingQty.bucketsComplete === true
+          ) {
+            setOutstandingQtyFetching(false)
+          } else if (envelope.data.summary.outstandingQty != null) {
+            // Progressive card-total only — dedicated OS request may still be in flight.
+          }
         }
-        setSummaryFetching(false)
+        if (envelope?.data?.outstandingQty) {
+          setShipmentsSection1Summary((prev) => {
+            const incoming = envelope.data!.outstandingQty!
+            const cardOs = prev?.statusOutstandingQty
+            const cardTotalKg =
+              cardOs != null
+                ? Number(cardOs.unplanned ?? 0) +
+                  Number(cardOs.preplanned ?? 0) +
+                  Number(cardOs.planned ?? 0) +
+                  Number(cardOs.atLoadingPort ?? 0) +
+                  Number(cardOs.sailed ?? 0) +
+                  Number(cardOs.atDischargePort ?? 0)
+                : null
+            return {
+              ...(prev ?? {}),
+              outstandingQty: reconcileOutstandingQtyStripForDisplay(
+                {
+                  ...incoming,
+                  bucketsComplete: incoming.bucketsComplete ?? true,
+                },
+                cardTotalKg,
+              ),
+            }
+          })
+          setOutstandingQtyFetching(false)
+        }
         const breakdown =
           envelope?.data?.unplannedBreakdown ??
           envelope?.data?.summary?.unplannedTable
@@ -1571,10 +1982,15 @@ function ShipmentsPageContent() {
         setTotalCount(total)
         setTotalPages(Math.max(1, pages))
         setTableScopeLoading(false)
-        if (envelope?.data?.summary) {
-          setShipmentsSection1Summary(envelope.data.summary)
-          setSummaryFetching(false)
+        // List may still carry a cached summary; Section 1 is owned by summaryOnly.
+        // Only apply OS strip from list if present — never replace status card totals from list.
+        if (envelope?.data?.summary?.outstandingQty != null) {
+          setShipmentsSection1Summary((prev) => ({
+            ...(prev ?? {}),
+            outstandingQty: envelope.data!.summary!.outstandingQty!,
+          }))
         }
+        // Table-only hybrid breakdown (do not feed Section 1 cards).
         const breakdown = envelope?.data?.unplannedBreakdown
         if (breakdown) {
           setUnplannedBreakdown({
@@ -1582,16 +1998,97 @@ function ShipmentsPageContent() {
             shipmentRows: Number(breakdown.shipmentRows ?? 0),
             totalTableRows: Number(breakdown.totalTableRows ?? 0),
           })
-        } else {
+        } else if (isUnplannedHybridList) {
           setUnplannedBreakdown(null)
         }
       }
 
-      const { data: listEnvelope, revalidating: listRevalidating } = await cachedGet(
+      // Section 1 cards after the list shell returns so summary/OS cannot starve the table query.
+      const SECTION1_SUMMARY_TIMEOUT_MS = 60_000
+      startSection1Fetches = () => {
+        if (listGen !== listFetchGenRef.current) return
+        void cachedGet(
+          summaryCacheKey,
+          (signal) => api.get(summaryUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS, signal }).then((r) => r.data),
+          {
+            force: summaryForce,
+            onRevalidate: (fresh) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(fresh)
+            },
+          },
+        )
+          .then(({ data }) => {
+            if (listGen !== listFetchGenRef.current) return
+            applySummaryEnvelope(data)
+          })
+          .catch((err: unknown) => {
+            console.error('Shipment Section 1 summary failed:', err)
+            if (listGen === listFetchGenRef.current) {
+              setSummaryFetching(false)
+              section1SummaryForceNextFetchRef.current = false
+              setSection1LoadError(apiErrorMessage(err, 'Failed to load shipment status summary'))
+              setShipmentsSection1Summary((prev) => prev ?? { total: 0 })
+            }
+          })
+
+        const needsOsStripFetch =
+          forceOsRefresh ||
+          shipmentsSection1Summary?.outstandingQty?.bucketsComplete !== true
+        if (needsOsStripFetch) {
+          if (forceOsRefresh || shipmentsSection1Summary?.outstandingQty == null) {
+            setOutstandingQtyFetching(true)
+          }
+          const osParams = new URLSearchParams(summaryParams.toString())
+          osParams.delete('summaryOnly')
+          osParams.delete('osStatus')
+          osParams.set('outstandingQtyOnly', 'true')
+          const osUrl = `/shipments?${osParams.toString()}`
+          const osCacheKey = buildCacheKey('GET', osUrl)
+          void cachedGet(
+            osCacheKey,
+            (signal) => api.get(osUrl, { timeout: SECTION1_SUMMARY_TIMEOUT_MS, signal }).then((r) => r.data),
+            {
+              force: forceOsRefresh,
+              onRevalidate: (fresh) => {
+                if (listGen !== listFetchGenRef.current) return
+                applySummaryEnvelope(fresh)
+              },
+            },
+          )
+            .then(({ data }) => {
+              if (listGen !== listFetchGenRef.current) return
+              applySummaryEnvelope(data)
+            })
+            .catch((err: unknown) => {
+              console.error('Shipment outstanding qty summary failed:', err)
+              if (listGen === listFetchGenRef.current) {
+                setOutstandingQtyFetching(false)
+                setShipmentsSection1Summary((prev) => ({
+                  ...(prev ?? {}),
+                  outstandingQty: reconcileOutstandingQtyStripForDisplay({
+                    ...(prev?.outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY),
+                    bucketsComplete: true,
+                  }),
+                }))
+              }
+            })
+        } else {
+          setOutstandingQtyFetching(false)
+        }
+      }
+
+      const LIST_SHELL_TIMEOUT_MS = 90_000
+      const kickSection1WithList = !options?.force
+      if (!kickSection1WithList) {
+        startSection1Fetches()
+      }
+
+      const { data: listEnvelope } = await cachedGet(
         listCacheKey,
-        () => api.get(listUrl).then((r) => r.data),
+        (signal) => api.get(listUrl, { timeout: LIST_SHELL_TIMEOUT_MS, signal }).then((r) => r.data),
         {
-          force: options?.force,
+          force: forceListRefresh,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             applyListEnvelope(fresh)
@@ -1599,116 +2096,106 @@ function ShipmentsPageContent() {
           },
         },
       )
-      section1SummaryForceNextFetchRef.current = false
       if (listGen !== listFetchGenRef.current) return
       applyListEnvelope(listEnvelope)
-      if (!listRevalidating) {
-        setListFetching(false)
+      // Show shell immediately; background revalidation may still refresh rows.
+      setListFetching(false)
+      if (searchTrim.length >= 2 || useAccurateQtySort) {
+        setQtyFieldsReady(true)
       }
-      if (isUnplannedHybridList && !listEnvelope?.data?.summary) {
-        setSummaryFetching(false)
+      if (kickSection1WithList) {
+        startSection1Fetches()
       }
 
-      /** Summary cards after table shell — avoids competing with list query on DB/CPU. */
-      const scheduleSummaryFetches = () => {
-        if (listGen !== listFetchGenRef.current) return
-
-        if (!isUnplannedHybridList) {
-          void cachedGet(summaryCacheKey, () => api.get(summaryUrl).then((r) => r.data), {
-            force: summaryForce,
-            onRevalidate: (fresh) => {
-              if (listGen !== listFetchGenRef.current) return
-              applySummaryEnvelope(fresh)
-            },
+      // Section 2 ETA scoped summary (only when a pipeline stage is selected).
+      if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
+        const section2Params = new URLSearchParams(params.toString())
+        section2Params.delete('status')
+        section2Params.delete('etaLoading')
+        section2Params.delete('etaDischarge')
+        section2Params.delete('includeSummary')
+        section2Params.set('summaryOnly', 'true')
+        section2Params.set('page', '1')
+        section2Params.set('limit', '1')
+        section2Params.set('scopeStatus', statusFilter)
+        const section2Url = `/shipments?${section2Params.toString()}`
+        const section2CacheKey = buildCacheKey('GET', section2Url)
+        const summaryGen = ++summaryFetchGenRef.current
+        void cachedGet(section2CacheKey, (signal) => api.get(section2Url, { signal }).then((r) => r.data), {
+          force: true,
+          onRevalidate: (fresh) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (fresh?.data?.summary) {
+              setSection2EtaSummary({
+                etaLoading: fresh.data.summary.etaLoading,
+                etaDischarge: fresh.data.summary.etaDischarge,
+              })
+            }
+          },
+        })
+          .then(({ data }) => {
+            if (summaryGen !== summaryFetchGenRef.current) return
+            if (data?.data?.summary) {
+              setSection2EtaSummary({
+                etaLoading: data.data.summary.etaLoading,
+                etaDischarge: data.data.summary.etaDischarge,
+              })
+            }
           })
-            .then(({ data }) => {
-              if (listGen !== listFetchGenRef.current) return
-              applySummaryEnvelope(data)
-            })
-            .catch(() => {
-              if (listGen === listFetchGenRef.current) setSummaryFetching(false)
-            })
-        }
-
-        if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && statusFilter !== 'ALL') {
-          const section2Params = new URLSearchParams(params.toString())
-          section2Params.delete('status')
-          section2Params.delete('etaLoading')
-          section2Params.delete('etaDischarge')
-          section2Params.delete('includeSummary')
-          section2Params.set('summaryOnly', 'true')
-          section2Params.set('page', '1')
-          section2Params.set('limit', '1')
-          section2Params.set('scopeStatus', statusFilter)
-          const section2Url = `/shipments?${section2Params.toString()}`
-          const section2CacheKey = buildCacheKey('GET', section2Url)
-          const summaryGen = ++summaryFetchGenRef.current
-          void cachedGet(section2CacheKey, () => api.get(section2Url).then((r) => r.data), {
-            force: true,
-            onRevalidate: (fresh) => {
-              if (summaryGen !== summaryFetchGenRef.current) return
-              if (fresh?.data?.summary) {
-                setSection2EtaSummary({
-                  etaLoading: fresh.data.summary.etaLoading,
-                  etaDischarge: fresh.data.summary.etaDischarge,
-                })
-              }
-            },
+          .catch(() => {
+            if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
           })
-            .then(({ data }) => {
-              if (summaryGen !== summaryFetchGenRef.current) return
-              if (data?.data?.summary) {
-                setSection2EtaSummary({
-                  etaLoading: data.data.summary.etaLoading,
-                  etaDischarge: data.data.summary.etaDischarge,
-                })
-              }
-            })
-            .catch(() => {
-              if (summaryGen === summaryFetchGenRef.current) setSection2EtaSummary(null)
-            })
-        } else {
-          setSection2EtaSummary(null)
-        }
+      } else {
+        setSection2EtaSummary(null)
       }
 
-      // SAP hydrate after table paint — avoids competing with shell query on DB/CPU.
+      // SAP hydrate after table paint — skip when the list request already enriched for sort.
       const scheduleHydrate = () => {
+        if (listGen !== listFetchGenRef.current) return
+        if (useAccurateQtySort) {
+          setQtyFieldsReady(true)
+          return
+        }
         const hydrateParams = new URLSearchParams(params.toString())
         hydrateParams.set('skipSapJoin', 'false')
         hydrateParams.set('includeSummary', 'false')
         hydrateParams.delete('summaryOnly')
         const hydrateUrl = `/shipments?${hydrateParams.toString()}`
         const hydrateCacheKey = buildCacheKey('GET', hydrateUrl)
-        void cachedGet(hydrateCacheKey, () => api.get(hydrateUrl).then((r) => r.data), {
-          force: options?.force,
+        const hydrateFallbackMs = searchTrim.length >= 2 ? 15000 : 45000
+        const hydrateFallbackTimer = window.setTimeout(() => {
+          if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
+        }, hydrateFallbackMs)
+        void cachedGet(hydrateCacheKey, (signal) => api.get(hydrateUrl, { signal }).then((r) => r.data), {
+          force: forceListRefresh,
           onRevalidate: (fresh) => {
             if (listGen !== listFetchGenRef.current) return
             const hydrated = fresh?.data?.shipments || []
             if (hydrated.length) {
               setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           },
         })
           .then(({ data }) => {
+            window.clearTimeout(hydrateFallbackTimer)
             if (listGen !== listFetchGenRef.current) return
             const hydrated = data?.data?.shipments || []
             if (hydrated.length) {
               setShipments((prev) => mergeShipmentSapFields(prev, hydrated))
             }
+            setQtyFieldsReady(true)
           })
           .catch((err) => {
+            window.clearTimeout(hydrateFallbackTimer)
             console.warn('Shipment SAP hydrate failed (table shows shell data):', err)
+            if (listGen === listFetchGenRef.current) setQtyFieldsReady(true)
           })
       }
-      const runDeferredFetches = () => {
-        scheduleSummaryFetches()
-        scheduleHydrate()
-      }
       if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(() => runDeferredFetches(), { timeout: 2000 })
+        window.requestIdleCallback(() => scheduleHydrate(), { timeout: 2000 })
       } else {
-        setTimeout(runDeferredFetches, 250)
+        setTimeout(scheduleHydrate, 250)
       }
     } catch (error: any) {
       if (listGen !== listFetchGenRef.current) return
@@ -1720,23 +2207,26 @@ function ShipmentsPageContent() {
         url: error.config?.url
       })
 
-      const errorMessage = error.response?.data?.error?.message
-        || error.response?.data?.message
-        || error.message
-        || 'Unknown error occurred'
-
-      alert(`Failed to load shipments: ${errorMessage}\n\nPlease check the console for more details.`)
+      // No blocking alert — transient DB/network errors on staging (e.g. "Connection
+      // terminated unexpectedly") should not interrupt the user. Keep whatever rows are
+      // already on screen; the next refetch (filter change, pagination, or poll) recovers
+      // silently, same as the Late Performance summary/tree failure handling.
       if (!hadRows) {
         setShipments([])
       }
       setListFetching(false)
-      setSummaryFetching(false)
+      startSection1Fetches()
       setTableScopeLoading(false)
+      setQtyFieldsReady(true)
     } finally {
-      setLoading(false)
-      setTableScopeLoading(false)
+      if (listGen === listFetchGenRef.current) {
+        setLoading(false)
+        setTableScopeLoading(false)
+        setListFetching(false)
+      }
     }
   }
+  fetchShipmentsRef.current = fetchShipments
 
   const shipIso = (d: Date) => {
     const yyyy = d.getFullYear()
@@ -1816,8 +2306,50 @@ function ShipmentsPageContent() {
     }
   }
 
+  const openContractDetailForShipmentRow = async (shipment: Shipment) => {
+    const contractNumber =
+      resolveShipmentEditContractId(shipment) ||
+      String(shipment.contract_number || shipment.contract_numbers || '').trim()
+    if (!contractNumber) {
+      alert('Contract number is required to open Contract Details.')
+      return
+    }
+    try {
+      const detail = await fetchContractForDetailModal(contractNumber)
+      if (!detail) {
+        alert(`Contract ${contractNumber} was not found.`)
+        return
+      }
+      setContractDetailTarget(detail)
+    } catch (err) {
+      console.error('openContractDetailForShipmentRow:', err)
+      alert('Failed to open Contract Details.')
+    }
+  }
+
   const handleOpenEditShipmentModal = (shipment: Shipment, options?: { readOnly?: boolean }) => {
     const readOnly = options?.readOnly === true
+    /*
+     * Contract backlog rows carry the CONTRACT's uuid in `id` (shipmentUnplannedHybridSql emits
+     * `c.id::text AS id`), because there is no shipment yet - that is what the row means. Passing
+     * it on made the modal call GET /shipments/<contract uuid>, which looks in `shipments.id` and
+     * answers 404. Only one narrow case was guarded before (read-only AND Cancelled), so every
+     * other backlog row failed.
+     *
+     * View has nothing to show, so it opens Contract Details. Edit has nothing to edit, so it
+     * opens Add New Shipment with the contract prefilled - which is what the user wanted when
+     * they clicked a row that has no shipment. Permission is then checked by the add handler,
+     * which is the right gate: the action really is a create.
+     */
+    const openTarget = resolveShipmentRowOpenTarget(shipment, { readOnly })
+    if (openTarget === 'contract_detail') {
+      void openContractDetailForShipmentRow(shipment)
+      return
+    }
+    if (openTarget === 'add_shipment') {
+      handleOpenAddShipmentForContractRow(shipment)
+      return
+    }
     if (!readOnly && perms.loaded && !canEditShipment) {
       alert('You need Edit permission on Shipments (data.shipments) to edit a shipment. Ask an admin to update your role.')
       return
@@ -1847,31 +2379,461 @@ function ShipmentsPageContent() {
     setAddShipmentPrefilledPOs(null)
     setAddShipmentPrefilledSto(null)
     setAddShipmentPrefilledContractNumbers(null)
+    setAddShipmentPrePlannedGroupId(null)
   }
+
+  const handleVesselIdleAddShipment = useCallback(() => {
+    if (perms.loaded && !canOpenAddShipmentModal) {
+      alert(
+        'You need Create or Edit permission on Shipments (data.shipments) to add a shipment. Ask an admin to update your role.',
+      )
+      return
+    }
+    setVesselIdleModalOpen(false)
+    handleCloseShipmentModal()
+    setShowAddShipment(true)
+  }, [canOpenAddShipmentModal, perms.loaded])
+
+  const refetchPrePlannedGroups = useCallback(async () => {
+    try {
+      const data = await fetchPrePlannedGroups({ status: 'SUGGESTED' })
+      setPrePlannedGroups(data.groups)
+      setPrePlannedUngroupedCount(data.ungroupedContractCount)
+    } catch {
+      setPrePlannedGroups([])
+      setPrePlannedUngroupedCount(0)
+    }
+  }, [])
+
+  const refetchPrePlannedAcceptedGroups = useCallback(async () => {
+    try {
+      const data = await fetchPrePlannedGroups({ status: 'ACCEPTED' })
+      setPrePlannedAcceptedGroups(data.groups.filter((g) => !g.shipmentId))
+    } catch {
+      setPrePlannedAcceptedGroups([])
+    }
+  }, [])
+
+  const handleAcceptPrePlannedGroup = useCallback(async (group: PrePlannedGroup) => {
+    if (acceptingPrePlannedGroupId) return
+    setAcceptingPrePlannedGroupId(group.id)
+    try {
+      await acceptPrePlannedGroup(group.id)
+      setShipmentsSection1Summary((prev) =>
+        patchSection1SummaryAfterUnplannedToPreplanned(prev, {
+          groupCount: 1,
+          contractRows: group.members.length,
+          outstandingQtyKg: Number(group.totalOsMt || 0) * 1000,
+        }) ?? prev,
+      )
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipmentsRef.current(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — UI will refresh on next fetch.
+    } finally {
+      setAcceptingPrePlannedGroupId(null)
+    }
+  }, [
+    acceptingPrePlannedGroupId,
+    page,
+    refetchPrePlannedAcceptedGroups,
+    refetchPrePlannedGroups,
+  ])
+
+  useEffect(() => {
+    void refetchPrePlannedGroups()
+    void refetchPrePlannedAcceptedGroups()
+  }, [refetchPrePlannedGroups, refetchPrePlannedAcceptedGroups])
+
+  const prePlannedGlobalScope = useMemo(
+    () => ({
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      selectedGroupPlants,
+    }),
+    [
+      dateFrom,
+      dateTo,
+      searchTerm,
+      selectedIncoterms,
+      selectedProducts,
+      selectedSuppliers,
+      selectedGroupPlants,
+    ],
+  )
+
+  const filteredPrePlannedGroups = useMemo(
+    () => filterPrePlannedGroupsByGlobalScope(prePlannedGroups, prePlannedGlobalScope),
+    [prePlannedGroups, prePlannedGlobalScope],
+  )
+
+  const filteredPrePlannedAcceptedGroups = useMemo(
+    () => filterPrePlannedGroupsByGlobalScope(prePlannedAcceptedGroups, prePlannedGlobalScope),
+    [prePlannedAcceptedGroups, prePlannedGlobalScope],
+  )
+
+  const prePlannedSuggestionsScoped = hasPrePlannedGlobalScopeFilters(prePlannedGlobalScope)
+
+  const displayedPrePlannedUngroupedCount = prePlannedSuggestionsScoped ? null : prePlannedUngroupedCount
+
+  const contractNumberToPrePlannedGroup = useMemo(
+    () => buildPrePlannedGroupLookupMap(filteredPrePlannedGroups),
+    [filteredPrePlannedGroups],
+  )
+
+  const contractNumberToAcceptedPrePlannedGroup = useMemo(
+    () => buildPrePlannedGroupLookupMap(filteredPrePlannedAcceptedGroups),
+    [filteredPrePlannedAcceptedGroups],
+  )
+
+  const handleDismissPrePlannedGroup = async (groupId: string) => {
+    try {
+      await dismissPrePlannedGroup(groupId)
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipmentsRef.current(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — the badge will simply retry to reflect current state on next refetch.
+    }
+  }
+
+  const handleRevertPrePlannedGroup = useCallback(async (groupId: string) => {
+    if (revertingPrePlannedGroupId) return
+    setRevertingPrePlannedGroupId(groupId)
+    try {
+      await revertPrePlannedGroup(groupId)
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipmentsRef.current(page, undefined, { force: true })
+    } catch {
+      // Silently ignore — UI will refresh on next fetch.
+    } finally {
+      setRevertingPrePlannedGroupId(null)
+    }
+  }, [
+    revertingPrePlannedGroupId,
+    page,
+    refetchPrePlannedAcceptedGroups,
+    refetchPrePlannedGroups,
+  ])
 
   const isContractBacklogRow = (shipment: Shipment): boolean =>
     String(shipment.row_kind ?? '').trim() === 'contract_backlog'
 
+  // Manual grouping selection only makes sense while viewing the Unplanned card —
+  // clear it whenever the user navigates away so it never carries stale ids.
+  useEffect(() => {
+    if (statusFilter !== 'UNPLANNED') {
+      setSelectedManualGroupContractIds((prev) => (prev.size === 0 ? prev : new Set()))
+    }
+  }, [statusFilter])
+
+  const toggleManualGroupRowSelection = useCallback((shipment: Shipment) => {
+    const key = String(shipment.contract_row_id || shipment.id || '').trim()
+    if (!key) return
+    setSelectedManualGroupContractIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  const handleCreateManualPrePlannedGroup = useCallback(async () => {
+    const contractIds = [...selectedManualGroupContractIds]
+    if (contractIds.length < 2 || creatingManualPrePlannedGroup) return
+    setCreatingManualPrePlannedGroup(true)
+    try {
+      const created = await createManualPrePlannedGroup(contractIds)
+      setSelectedManualGroupContractIds(new Set())
+      setShipmentsSection1Summary((prev) =>
+        patchSection1SummaryAfterUnplannedToPreplanned(prev, {
+          groupCount: 1,
+          contractRows: contractIds.length,
+          outstandingQtyKg: Number(created.totalOsMt || 0) * 1000,
+        }) ?? prev,
+      )
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      void fetchShipmentsRef.current(page, undefined, { force: true })
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error?.message ||
+        (error instanceof Error ? error.message : 'Failed to create Preplanned group')
+      alert(message)
+    } finally {
+      setCreatingManualPrePlannedGroup(false)
+    }
+  }, [
+    selectedManualGroupContractIds,
+    creatingManualPrePlannedGroup,
+    page,
+    refetchPrePlannedAcceptedGroups,
+    refetchPrePlannedGroups,
+  ])
+
+  const groupingTemplateEnabled = isShipmentGroupingTemplateMode(statusFilter)
+
+  const buildGroupingTemplateSearchParams = useCallback(() => {
+    const params = new URLSearchParams()
+    if (dateFrom) params.append('dateFrom', dateFrom)
+    if (dateTo) params.append('dateTo', dateTo)
+    const searchTrim = searchTerm.trim()
+    if (searchTrim.length >= 2) params.append('search', searchTrim)
+    const mergedColumnFilters = appendToolbarMultiToColumnFilters(columnFilters as Record<string, unknown>, {
+      selectedIncoterms,
+      selectedProducts: debouncedSelectedProducts,
+      selectedSuppliers,
+    })
+    const cfKeys = Object.keys(mergedColumnFilters)
+    if (cfKeys.length > 0) {
+      params.append('columnFilters', JSON.stringify(mergedColumnFilters))
+    }
+    const contractParam = searchParams.get('contract')
+    if (contractParam) params.append('contract', contractParam)
+    if (debouncedSelectedGroupPlants.length > 0) {
+      debouncedSelectedGroupPlants.forEach((p) => params.append('plant', p))
+    }
+    return params
+  }, [
+    dateFrom,
+    dateTo,
+    searchTerm,
+    columnFilters,
+    selectedIncoterms,
+    debouncedSelectedProducts,
+    selectedSuppliers,
+    searchParams,
+    debouncedSelectedGroupPlants,
+  ])
+
+  const downloadGroupingTemplate = useCallback(async () => {
+    if (!groupingTemplateEnabled || groupingTemplateDownloading) return
+    setGroupingTemplateDownloading(true)
+    try {
+      const { blob, truncated, rowCount, limit } = await downloadShipmentGroupingTemplate(
+        buildGroupingTemplateSearchParams(),
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'shipment-unplanned-grouping-template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      if (truncated) {
+        alert(
+          `Template capped at ${limit.toLocaleString('en-US')} Unplanned POs (${rowCount.toLocaleString('en-US')} exported). Tighten toolbar filters and download again.`,
+        )
+      }
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+      let message = err?.response?.data?.error?.message || err?.message || 'Failed to download grouping template'
+      const data = err?.response?.data as unknown
+      if (data instanceof Blob) {
+        try {
+          const parsed = JSON.parse(await data.text()) as { error?: { message?: string } }
+          if (parsed.error?.message) message = parsed.error.message
+        } catch {
+          /* keep message */
+        }
+      }
+      alert(message)
+    } finally {
+      setGroupingTemplateDownloading(false)
+    }
+  }, [groupingTemplateEnabled, groupingTemplateDownloading, buildGroupingTemplateSearchParams])
+
+  const mapGroupingUploadToModal = (data: ShipmentGroupingBulkUploadResult): BulkUploadStatusResult => {
+    const errors: string[] = []
+    for (const g of data.groups ?? []) {
+      const outcome = g.outcome === 'planned' ? 'Planned' : 'Preplanned'
+      errors.push(`Group ${g.group}${g.groupCode ? ` (${g.groupCode})` : ''}: ${outcome} (${g.contractCount} PO)`)
+    }
+    for (const f of data.failures) {
+      const rows = f.excelRowNumbers?.length ? `rows ${f.excelRowNumbers.join(', ')}` : 'group'
+      const group = f.group ? `Group ${f.group}` : ''
+      errors.push([rows, group, f.reason].filter(Boolean).join(' — '))
+    }
+    for (const w of data.warnings) {
+      errors.push(`Group ${w.group} (${w.groupCode}): ${w.reason}`)
+    }
+    return {
+      created: data.succeeded,
+      updated: data.warnings.length,
+      failed: data.failed,
+      errors,
+    }
+  }
+
+  const handleGroupingTemplateFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      e.target.value = ''
+      if (!file || groupingTemplateUploading) return
+      if (!groupingTemplateEnabled) {
+        alert(SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP)
+        return
+      }
+      setGroupingTemplateUploading(true)
+      try {
+        const valid = await isShipmentGroupingTemplateFile(file)
+        if (!valid) {
+          alert('Invalid file. Upload the Unplanned grouping template (Select, Group, PO Number).')
+          return
+        }
+        const data = await uploadShipmentGroupingTemplate(file)
+        setGroupingUploadResult(mapGroupingUploadToModal(data))
+        if (data.succeeded > 0) {
+          const preplannedGroups = (data.groups ?? []).filter((g) => g.outcome !== 'planned')
+          const plannedGroups = (data.groups ?? []).filter((g) => g.outcome === 'planned')
+          setShipmentsSection1Summary((prev) => {
+            let next = prev
+            if (preplannedGroups.length > 0) {
+              next =
+                patchSection1SummaryAfterUnplannedToPreplanned(next, {
+                  groupCount: preplannedGroups.length,
+                  contractRows: preplannedGroups.reduce((sum, g) => sum + Number(g.contractCount || 0), 0),
+                  outstandingQtyKg: preplannedGroups.reduce(
+                    (sum, g) => sum + Number(g.totalOsMt || 0) * 1000,
+                    0,
+                  ),
+                }) ?? next
+            }
+            if (plannedGroups.length > 0) {
+              next =
+                patchSection1SummaryAfterUnplannedToPlanned(next, {
+                  groupCount: plannedGroups.length,
+                  contractRows: plannedGroups.reduce((sum, g) => sum + Number(g.contractCount || 0), 0),
+                  outstandingQtyKg: plannedGroups.reduce(
+                    (sum, g) => sum + Number(g.totalOsMt || 0) * 1000,
+                    0,
+                  ),
+                }) ?? next
+            }
+            return next
+          })
+        }
+        await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+        invalidateLogisticsListCaches()
+        section1SummaryForceNextFetchRef.current = true
+        void fetchShipmentsRef.current(page, undefined, { force: true })
+      } catch (error: unknown) {
+        const err = error as { response?: { data?: { error?: { message?: string } } }; message?: string }
+        alert(err?.response?.data?.error?.message || err?.message || 'Failed to upload grouping template')
+      } finally {
+        setGroupingTemplateUploading(false)
+      }
+    },
+    [
+      groupingTemplateEnabled,
+      groupingTemplateUploading,
+      page,
+      refetchPrePlannedAcceptedGroups,
+      refetchPrePlannedGroups,
+    ],
+  )
+
   const contractBacklogRowToPoOption = (shipment: Shipment): ShipmentPoOption => {
     const contractId = String(shipment.contract_number || shipment.contract_numbers || '').trim()
     const poNumber = String(shipment.po_numbers ?? '').split(',')[0]?.trim() || null
-    const plantCode = shipment.plant_site ? String(shipment.plant_site).trim() : null
+    const plantCode = resolvePoPlantCode({ plant_code: shipment.plant_code })
     const key = String(shipment.contract_row_id || shipment.id || `${contractId}::${poNumber ?? ''}`).trim()
-    const label = poNumber
-      ? plantCode
-        ? `${poNumber} - ${plantCode}`
-        : poNumber
-      : contractId
-    return { key, contractId, poNumber, plantCode, label }
+    const label = formatPoPlantLabel(poNumber || contractId, plantCode)
+    return {
+      key,
+      contractId,
+      poNumber,
+      plantCode,
+      label,
+      contractData: {
+        contract_id: contractId,
+        po_number: poNumber,
+        quantity_ordered: shipment.contract_qty,
+        outstanding_quantity: shipment.outstanding_quantity,
+        outstanding_quantity_planning: shipment.outstanding_qty_planning ?? shipment.outstanding_quantity,
+        supplier: shipment.supplier,
+        buyer: shipment.buyer,
+        product: shipment.product,
+        incoterm: shipment.incoterm,
+        plant_code: plantCode,
+        plant_site: shipment.plant_site,
+        contract_ext_no: shipment.contract_ext_no,
+        delivery_start_date: shipment.delivery_start_date,
+        delivery_end_date: shipment.delivery_end_date,
+        port_of_loading: shipment.port_of_loading,
+        port_of_discharge: shipment.port_of_discharge,
+      },
+    }
+  }
+
+  const prePlannedMemberToPoOption = (
+    member: {
+      contractId: string
+      contractNumber: string
+      supplier?: string | null
+      product?: string | null
+      deliveryStart?: string | null
+      deliveryEnd?: string | null
+      osMtAtGrouping: number
+    },
+    group: { groupPlant: string | null; supplier: string | null; product: string | null },
+    backlogRow?: Shipment,
+  ): ShipmentPoOption => {
+    if (backlogRow) return contractBacklogRowToPoOption(backlogRow)
+    const osMt = Number(member.osMtAtGrouping)
+    const outstandingKg = Number.isFinite(osMt) ? osMt * 1000 : null
+    return {
+      key: member.contractId,
+      contractId: member.contractNumber,
+      poNumber: null,
+      plantCode: group.groupPlant,
+      label: member.contractNumber,
+      contractData: {
+        contract_id: member.contractNumber,
+        po_number: null,
+        // quantity_ordered filled via enrichShipmentPoOptions (purchase-orders API)
+        outstanding_quantity: outstandingKg,
+        outstanding_quantity_planning: outstandingKg,
+        supplier: member.supplier || group.supplier || null,
+        product: member.product || group.product || null,
+        plant_code: group.groupPlant,
+        delivery_start_date: member.deliveryStart || null,
+        delivery_end_date: member.deliveryEnd || null,
+      },
+    }
   }
 
   const handleOpenAddShipmentForContractRow = (shipment: Shipment) => {
+    if (
+      isContractBacklogRow(shipment) &&
+      String(shipment.status ?? '').trim().toUpperCase() === 'CANCELLED'
+    ) {
+      void openContractDetailForShipmentRow(shipment)
+      return
+    }
     if (perms.loaded && !canOpenAddShipmentModal) {
       alert('You need permission to create shipments. Ask an admin to update your role.')
       return
     }
 
-    if (shipmentRowHasRegisteredPlanning(shipment.status)) {
+    /*
+     * Only a real shipment row can be sent to the edit modal. A backlog row can reach this with
+     * status COMPLETED (the backlog SQL promotes low-OS rows), and bouncing that back to edit
+     * would both 404 on the contract uuid and, now that edit delegates here, loop between the
+     * two handlers.
+     */
+    if (!isContractBacklogRow(shipment) && shipmentRowHasRegisteredPlanning(shipment.status)) {
       handleOpenEditShipmentModal(shipment)
       return
     }
@@ -1885,9 +2847,60 @@ function ShipmentsPageContent() {
     setPlotShipmentFromTable(null)
 
     if (isContractBacklogRow(shipment)) {
+      const acceptedGroup = resolvePrePlannedGroupForRow(
+        shipment,
+        contractNumberToAcceptedPrePlannedGroup,
+      )
+      if (acceptedGroup || String(shipment.status ?? '').trim().toUpperCase() === 'PREPLANNED') {
+        const group = acceptedGroup
+        if (group) {
+          const contractNumbersFromGroup = group.members
+            .map((m) => m.contractNumber)
+            .filter(Boolean)
+          const backlogByKey = new Map<string, Shipment>()
+          for (const row of shipments) {
+            if (!isContractBacklogRow(row)) continue
+            const id = String(row.id ?? '').trim()
+            const rowId = String(row.contract_row_id ?? '').trim()
+            const cn = String(row.contract_number || row.contract_numbers || '').trim()
+            if (id) backlogByKey.set(id, row)
+            if (rowId) backlogByKey.set(rowId, row)
+            if (cn) backlogByKey.set(cn, row)
+          }
+          // Prefer the clicked row for its own member when list page is stale.
+          if (isContractBacklogRow(shipment)) {
+            const clickedId = String(shipment.id ?? '').trim()
+            const clickedRowId = String(shipment.contract_row_id ?? '').trim()
+            const clickedCn = String(shipment.contract_number || shipment.contract_numbers || '').trim()
+            if (clickedId) backlogByKey.set(clickedId, shipment)
+            if (clickedRowId) backlogByKey.set(clickedRowId, shipment)
+            if (clickedCn) backlogByKey.set(clickedCn, shipment)
+          }
+          const stubOptions: ShipmentPoOption[] = group.members.map((m) =>
+            prePlannedMemberToPoOption(
+              m,
+              group,
+              backlogByKey.get(m.contractId) ?? backlogByKey.get(m.contractNumber),
+            ),
+          )
+          setAddShipmentPrefilledSto(null)
+          setAddShipmentPrefilledContractNumbers(
+            contractNumbersFromGroup.length > 0 ? contractNumbersFromGroup : null,
+          )
+          setAddShipmentPrePlannedGroupId(group.id)
+          // Enrich Contract Qty (and fill any missing PO metadata) before opening.
+          void (async () => {
+            const poOptions = await enrichShipmentPoOptions(stubOptions)
+            setAddShipmentPrefilledPOs(poOptions)
+            setShowAddShipment(true)
+          })()
+          return
+        }
+      }
       setAddShipmentPrefilledPOs([contractBacklogRowToPoOption(shipment)])
       setAddShipmentPrefilledSto(null)
       setAddShipmentPrefilledContractNumbers(contractNumbers.length > 0 ? contractNumbers : null)
+      setAddShipmentPrePlannedGroupId(null)
       setShowAddShipment(true)
       return
     }
@@ -2070,7 +3083,7 @@ function ShipmentsPageContent() {
   const exportFilteredData = async () => {
     // Export actual filtered shipments data from the page
     const headers = [
-      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel Capacity (MT)','Hull Type','Charter Type','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID',
+      'STO Number','Contract Numbers','Status','Vessel Name','Vessel Code','Vessel Owner','Vessel Draft (m)','Vessel LOA','Vessel Capacity (MT)','Hull Type','Charter Type','Vessel OA Budget','Vessel OA Actual','Estimated KM','Estimated Nautical Miles','Average Vessel Speed','Port of Loading','Port of Discharge','Quantity Shipped (MT)','Quantity Delivered (MT)','BL Quantity (MT)','Actual Vessel Qty Receive (MT)','Difference Final Qty vs BL Qty (MT)','Inbound Weight (MT)','Outbound Weight (MT)','Gain/Loss %','Gain/Loss Amount (MT)','Shipment Date (YYYY-MM-DD)','Arrival Date (YYYY-MM-DD)','SLA Days','Is Delayed (TRUE/FALSE)','SAP Delivery ID','Fuel Consumption (KL)','Freight Actual (IDR/KG)','Freight Budget (IDR/KG)','Pump Rate (MT/H)','Sailing Speed','Shortage (MT)',
       // Loading port groups (1..3)
       'LP1 Port Name','LP1 Quantity (MT)','LP1 ETA Arrival','LP1 ATA Arrival','LP1 ETA Berthed','LP1 ATA Berthed','LP1 ETA Load Start','LP1 ATA Load Start','LP1 ETA Load Completed','LP1 ATA Load Completed','LP1 ETA Sailed','LP1 ATA Sailed','LP1 Loading Rate (MT/day)',
       'LP2 Port Name','LP2 Quantity (MT)','LP2 ETA Arrival','LP2 ATA Arrival','LP2 ETA Berthed','LP2 ATA Berthed','LP2 ETA Load Start','LP2 ATA Load Start','LP2 ETA Load Completed','LP2 ATA Load Completed','LP2 ETA Sailed','LP2 ATA Sailed','LP2 Loading Rate (MT/day)',
@@ -2145,7 +3158,22 @@ function ShipmentsPageContent() {
         escapeCsvValue(s.arrival_date ? String(s.arrival_date).substring(0,10) : ''),
         escapeCsvValue(s.sla_days),
         s.is_delayed ? 'TRUE' : 'FALSE',
-        escapeCsvValue(s.sap_delivery_id)
+        escapeCsvValue(s.sap_delivery_id),
+        escapeCsvValue(s.fuel_consumption ?? ''),
+        escapeCsvValue(s.freight ?? ''),
+        escapeCsvValue(s.vessel_oa_budget ?? ''),
+        escapeCsvValue(s.pump_rate ?? ''),
+        escapeCsvValue(s.sailing_speed ?? ''),
+        escapeCsvValue(
+          resolveShippingTcShortageMtForListRow({
+            shortage: s.shortage,
+            quantity_delivered: s.quantity_delivered,
+            quantity_delivered_klip: s.quantity_delivered_klip,
+            actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+            delivered_qty: s.quantity_delivered,
+            received_qty: s.actual_vessel_qty_receive,
+          }) ?? '',
+        ),
       ]
 
       // Escape loading port data
@@ -2417,23 +3445,7 @@ function ShipmentsPageContent() {
     }
   }
 
-  const getStatusColor = (status: string) => {
-    switch (normalizeShipmentStatusKey(status)) {
-      case 'UNPLANNED': return 'bg-slate-100 text-slate-800'
-      case 'PLANNED': return 'bg-blue-100 text-blue-800'
-      case 'ARRIVED_LP': return 'bg-yellow-100 text-yellow-800'
-      case 'BERTHED_LP': return 'bg-amber-100 text-amber-800'
-      case 'LOADING': return 'bg-orange-100 text-orange-800'
-      case 'COMPLETED_LOADING': return 'bg-orange-200 text-orange-900'
-      case 'SAILED': return 'bg-purple-100 text-purple-800'
-      case 'ARRIVED_DP': return 'bg-indigo-100 text-indigo-800'
-      case 'BERTHED_DP': return 'bg-cyan-100 text-cyan-800'
-      case 'UNLOADING': return 'bg-teal-100 text-teal-800'
-      case 'COMPLETED': return 'bg-green-100 text-green-800'
-      case 'CANCELLED': return 'bg-red-100 text-red-800'
-      default: return 'bg-gray-100 text-gray-800'
-    }
-  }
+  const getStatusColor = (status: string) => shipmentStatusBadgeClass(status)
 
   const parseNumberLoose = (v: unknown) => {
     if (v === null || v === undefined) return null
@@ -2474,9 +3486,14 @@ function ShipmentsPageContent() {
   }, [])
 
   const hasActiveShipmentFilters =
-    Boolean(dateFrom || dateTo || searchDraft || searchTerm) ||
+    Boolean(searchDraft || searchTerm) ||
+    dateFrom !== shipmentYtdRange.dateFrom ||
+    dateTo !== shipmentYtdRange.dateTo ||
     statusFilter !== 'ALL' ||
+    etcNoAtcDueWithin7dFilter ||
     lateIndicatorFilter !== 'ALL' ||
+    charterTypeFilter !== 'ALL' ||
+    sourceTypeFilter !== 'ALL' ||
     viewFilterValue !== '' ||
     viewOption !== 'all' ||
     selectedGroupPlants.length > 0 ||
@@ -2492,21 +3509,24 @@ function ShipmentsPageContent() {
     setSearchDraft('')
     setSearchTerm('')
     setStatusFilter('ALL')
+    setEtcNoAtcDueWithin7dFilter(false)
     setLateIndicatorFilter('ALL')
+    setCharterTypeFilter('ALL')
+    setSourceTypeFilter('ALL')
     setViewOption('all')
     setViewFilterValue('')
     resetUserScopeFilters()
     setSelectedIncoterms([])
     setSelectedSuppliers([])
-    setDateFrom('')
-    setDateTo('')
+    setDateFrom(shipmentYtdRange.dateFrom)
+    setDateTo(shipmentYtdRange.dateTo)
     setColumnFilters({})
     if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED) {
       setEtaLoadingFilter('ALL')
       setEtaDischargeFilter('ALL')
     }
     setPage(1)
-  }, [resetUserScopeFilters])
+  }, [resetUserScopeFilters, shipmentYtdRange.dateFrom, shipmentYtdRange.dateTo])
 
   const unplannedTableBreakdown = useMemo(() => {
     if (unplannedBreakdown) return unplannedBreakdown
@@ -2521,11 +3541,14 @@ function ShipmentsPageContent() {
 
   const section1StatusCounts = useMemo((): ShipmentPagePipelineStatusCounts => {
     const s = shipmentsSection1Summary?.status
-    const unplannedFromTable =
-      unplannedTableBreakdown?.totalTableRows ??
-      shipmentsSection1Summary?.unplannedTable?.totalTableRows
+    // Section 1 Unplanned must stay on summaryOnly / toolbar-scope totals.
+    // Do not prefer `unplannedBreakdown` (list hybrid) — that changes when opening the
+    // Unplanned table and previously made the card flicker vs Preplanned/ALL.
+    const unplannedFromSummary =
+      shipmentsSection1Summary?.unplannedTable?.totalTableRows ?? s?.unplanned
     return {
-      unplanned: Number(unplannedFromTable ?? s?.unplanned ?? 0),
+      unplanned: Number(unplannedFromSummary ?? 0),
+      preplanned: Number(s?.preplanned ?? 0),
       planned: Number(s?.planned ?? 0),
       atLoadingPort: Number(s?.atLoadingPort ?? 0),
       sailed: Number(s?.sailed ?? 0),
@@ -2534,7 +3557,48 @@ function ShipmentsPageContent() {
       cancelled: Number(s?.cancelled ?? 0),
       total: Number(shipmentsSection1Summary?.total ?? 0),
     }
-  }, [shipmentsSection1Summary, unplannedTableBreakdown?.totalTableRows])
+  }, [shipmentsSection1Summary])
+
+  const section1ContractQtys = useMemo((): Partial<ShipmentPagePipelineContractQtyKg> => {
+    const q = shipmentsSection1Summary?.statusContractQty
+    if (!q) return {}
+    return {
+      unplanned: Number(q.unplanned ?? 0),
+      preplanned: Number(q.preplanned ?? 0),
+      planned: Number(q.planned ?? 0),
+      completed: Number(q.completed ?? 0),
+      cancelled: Number(q.cancelled ?? 0),
+    }
+  }, [shipmentsSection1Summary?.statusContractQty])
+
+  const section1OutstandingQtys = useMemo((): Partial<ShipmentPagePipelineOutstandingQtyKg> => {
+    const q = shipmentsSection1Summary?.statusOutstandingQty
+    if (!q) return {}
+    return {
+      unplanned: Number(q.unplanned ?? 0),
+      preplanned: Number(q.preplanned ?? 0),
+      planned: Number(q.planned ?? 0),
+      atLoadingPort: Number(q.atLoadingPort ?? 0),
+      sailed: Number(q.sailed ?? 0),
+      atDischargePort: Number(q.atDischargePort ?? 0),
+    }
+  }, [shipmentsSection1Summary?.statusOutstandingQty])
+
+  const section1VesselNames = useMemo((): ShipmentPagePipelineVesselNames | undefined => {
+    const v = shipmentsSection1Summary?.statusVesselNames
+    if (!v) return undefined
+    const list = (x: unknown): string[] => (Array.isArray(x) ? x.map(String) : [])
+    return {
+      unplanned: list(v.unplanned),
+      preplanned: list(v.preplanned),
+      planned: list(v.planned),
+      atLoadingPort: list(v.atLoadingPort),
+      sailed: list(v.sailed),
+      atDischargePort: list(v.atDischargePort),
+      completed: list(v.completed),
+      cancelled: list(v.cancelled),
+    }
+  }, [shipmentsSection1Summary?.statusVesselNames])
 
   const loadingPortBreakdown = useMemo((): LoadingPortBreakdown => {
     const b = shipmentsSection1Summary?.loadingPortBreakdown
@@ -2607,11 +3671,13 @@ function ShipmentsPageContent() {
 
   const section2EtaScopeLabel = useMemo(() => {
     if (!SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED || statusFilter === 'ALL') return null
+    if (statusFilter === 'OPEN') return 'Open'
+    if (statusFilter === 'CLOSE') return 'Close'
     return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
   }, [statusFilter])
   const tableShipmentCount = useMemo(() => totalCount, [totalCount])
 
-  /** Unplanned: headline and Section 1 card both use hybrid table row total. */
+  /** Unplanned: hybrid table row total. Preplanned: unique Grouping Suggestion count. */
   const tableHeaderCount = useMemo(() => {
     if (statusFilter === 'UNPLANNED') {
       const rowTotal =
@@ -2623,6 +3689,18 @@ function ShipmentsPageContent() {
         noun: 'rows' as const,
       }
     }
+    if (statusFilter === 'PREPLANNED') {
+      const groupTotal =
+        tableShipmentCount > 0
+          ? tableShipmentCount
+          : filteredPrePlannedAcceptedGroups.length > 0
+            ? filteredPrePlannedAcceptedGroups.length
+            : section1StatusCounts.preplanned
+      return {
+        value: groupTotal,
+        noun: groupTotal === 1 ? 'Grouping' : 'Groupings',
+      }
+    }
     return {
       value: tableShipmentCount,
       noun: 'shipments' as const,
@@ -2631,6 +3709,8 @@ function ShipmentsPageContent() {
     statusFilter,
     unplannedTableBreakdown?.totalTableRows,
     section1StatusCounts.unplanned,
+    section1StatusCounts.preplanned,
+    filteredPrePlannedAcceptedGroups.length,
     tableShipmentCount,
   ])
 
@@ -2640,7 +3720,10 @@ function ShipmentsPageContent() {
     summaryFetching || (userScopeReady && shipmentsSection1Summary == null)
 
   const shipmentsTableScopeLabel = useMemo(() => {
+    if (etcNoAtcDueWithin7dFilter) return 'Late ATC'
     if (statusFilter !== 'ALL') {
+      if (statusFilter === 'OPEN') return 'Open'
+      if (statusFilter === 'CLOSE') return 'Close'
       return SHIPMENT_PAGE_PIPELINE_LABELS[statusFilter as ShipmentPagePipelineStage] ?? statusFilter
     }
     if (SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED && etaLoadingFilter !== 'ALL') {
@@ -2650,7 +3733,7 @@ function ShipmentsPageContent() {
       return ETA_DISCHARGE_FILTER_LABELS[etaDischargeFilter]
     }
     return null
-  }, [statusFilter, etaLoadingFilter, etaDischargeFilter])
+  }, [etcNoAtcDueWithin7dFilter, statusFilter, etaLoadingFilter, etaDischargeFilter])
 
   // Helper function to calculate late indicator for shipments
   const getLateIndicator = (shipment: Shipment): { color: string; text: string } =>
@@ -2662,7 +3745,7 @@ function ShipmentsPageContent() {
 
   // Excel-like filtering helpers
   const getFilterTypeForColumn = (colId: string): ColumnFilter['type'] => {
-    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'outstanding_quantity') return 'number'
+    if (colId === 'quantity_shipped' || colId === 'quantity_delivered' || colId === 'sto_quantity' || colId === 'contract_qty' || colId === 'outstanding_qty_planning' || colId === 'trade_cycle_days' || colId === 'inbound_weight' || colId === 'outbound_weight' || colId === 'gain_loss_percentage' || colId === 'gain_loss_amount' || colId === 'estimated_km' || colId === 'estimated_nautical_miles' || colId === 'vessel_oa_budget' || colId === 'vessel_oa_actual' || colId === 'bl_quantity' || colId === 'actual_vessel_qty_receive' || colId === 'difference_final_qty_vs_bl_qty' || colId === 'average_vessel_speed' || colId === 'vessel_draft' || colId === 'vessel_loa' || colId === 'vessel_capacity' || colId === 'vessel_registration_year' || colId === 'sla_days' || colId === 'sfal_qty' || colId === 'sfbd_qty' || colId === 'fuel_consumption' || colId === 'freight' || colId === 'freight_budget' || colId === 'pump_rate' || colId === 'sailing_speed' || colId === 'shortage' || colId === 'outstanding_quantity') return 'number'
     if (colId === 'shipment_date' || colId === 'arrival_date' || colId === 'contract_date' || colId === 'delivery_start' || colId === 'delivery_end' || colId === 'delivery_start_date' || colId === 'delivery_end_date' || colId === 'ata_vessel_completed_loading' || colId === 'ata_vessel_complete_discharge' || colId === 'eta_vessel_complete_discharge' || colId === 'created_at' || colId === 'eta_arrival' || colId === 'eta_berthed' || colId === 'eta_loading_start' || colId === 'eta_loading_complete' || colId === 'eta_sailed' || colId === 'eta_discharge_arrival' || colId === 'eta_discharge_berthed' || colId === 'eta_discharge_start' || colId === 'eta_discharge_complete' || colId === 'ata_vessel_arrival_at_loading_port' || colId === 'ata_vessel_berthed_at_loading_port' || colId === 'ata_vessel_start_loading' || colId === 'ata_vessel_sailed_from_loading_port' || colId === 'ata_vessel_arrive_at_discharge_port' || colId === 'ata_vessel_berthed_at_discharge_port' || colId === 'ata_vessel_start_discharging') return 'date'
     return 'text'
   }
@@ -2701,9 +3784,16 @@ function ShipmentsPageContent() {
       case 'sto_quantity': return typeof s.sto_quantity === 'number' ? s.sto_quantity : null
       case 'contract_qty': return typeof s.contract_qty === 'number' ? s.contract_qty : null
       case 'outstanding_qty_planning': return typeof s.outstanding_qty_planning === 'number' ? s.outstanding_qty_planning : null
-      case 'outstanding_quantity': return typeof s.outstanding_quantity === 'number' ? s.outstanding_quantity : null
+      case 'trade_cycle_days': return typeof s.trade_cycle_days === 'number' ? s.trade_cycle_days : null
+      case 'outstanding_quantity': return shipmentListOutstandingKgForViewTable(s)
       case 'sfal_qty': return typeof s.sfal_qty === 'number' ? s.sfal_qty : null
       case 'sfbd_qty': return typeof s.sfbd_qty === 'number' ? s.sfbd_qty : null
+      case 'fuel_consumption': return typeof s.fuel_consumption === 'number' ? s.fuel_consumption : null
+      case 'freight': return typeof s.freight === 'number' ? s.freight : null
+      case 'freight_budget': return typeof s.vessel_oa_budget === 'number' ? s.vessel_oa_budget : null
+      case 'pump_rate': return typeof s.pump_rate === 'number' ? s.pump_rate : null
+      case 'sailing_speed': return typeof s.sailing_speed === 'number' ? s.sailing_speed : null
+      case 'shortage': return typeof s.shortage === 'number' ? s.shortage : null
       case 'inbound_weight': return typeof s.inbound_weight === 'number' ? s.inbound_weight : null
       case 'outbound_weight': return typeof s.outbound_weight === 'number' ? s.outbound_weight : null
       case 'gain_loss_percentage': return typeof s.gain_loss_percentage === 'number' ? s.gain_loss_percentage : null
@@ -2947,7 +4037,6 @@ function ShipmentsPageContent() {
   // Column visibility and sorting
   const columnStorageKey = 'shipments.compact.visibleColumns'
   const columnOrderStorageKey = 'shipments.compact.columnOrder'
-  const sortStorageKey = 'shipments.compact.sort'
   const userViewPrefKey = 'shipments.compact.view.v2'
 
   const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => {
@@ -2986,7 +4075,7 @@ function ShipmentsPageContent() {
     }
   }, [columnOrderIds])
 
-  // Load per-user saved view (columns + order). Falls back to localStorage/defaults.
+  // Load per-user saved view (columns + order). LocalStorage wins when present.
   useEffect(() => {
     let cancelled = false
     const hadSavedVisibleAtOpen = (() => {
@@ -2999,6 +4088,16 @@ function ShipmentsPageContent() {
         return Boolean(localStorage.getItem(columnStorageKey))
       }
     })()
+    const hadSavedOrderAtOpen = (() => {
+      try {
+        const raw = localStorage.getItem(columnOrderStorageKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(columnOrderStorageKey))
+      }
+    })()
     ;(async () => {
       try {
         const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
@@ -3006,19 +4105,21 @@ function ShipmentsPageContent() {
         if (cancelled) return
         const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
         const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
+        const allIds = compactColumns.map((c) => c.id)
         if (Array.isArray(cols) && cols.length > 0) {
           const migrated = migrateShipmentColumnLayout(
             cols.map((x: unknown) => String(x)),
             Array.isArray(order) ? order.map((x: unknown) => String(x)) : [],
+            allIds,
           )
           if (!hadSavedVisibleAtOpen) {
             setVisibleColumnIds(new Set(migrated.visibleColumnIds))
           }
-          if (!hadSavedVisibleAtOpen && migrated.columnOrderIds.length > 0) {
+          if (!hadSavedOrderAtOpen && migrated.columnOrderIds.length > 0) {
             setColumnOrderIds(migrated.columnOrderIds)
           }
-        } else if (Array.isArray(order) && order.length > 0 && !hadSavedVisibleAtOpen) {
-          setColumnOrderIds(order.map((x: unknown) => String(x)))
+        } else if (Array.isArray(order) && order.length > 0 && !hadSavedOrderAtOpen) {
+          setColumnOrderIds(mergeShipmentColumnOrder(order.map((x: unknown) => String(x)), allIds))
         }
       } catch {
         // ignore
@@ -3054,19 +4155,16 @@ function ShipmentsPageContent() {
   }, [columnOrderIds, userViewPrefKey, visibleColumnIds])
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(sortStorageKey)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        setSortKey(parsed.key || 'created_at')
-        setSortDir(parsed.dir || 'desc')
-      }
-    } catch {}
+    const stored = readShipmentsCompactSort()
+    setSortKey(stored.sortKey)
+    setSortDir(stored.sortDir)
+    setSortHydrated(true)
   }, [])
 
   useEffect(() => {
-    localStorage.setItem(sortStorageKey, JSON.stringify({ key: sortKey, dir: sortDir }))
-  }, [sortKey, sortDir])
+    if (!sortHydrated) return
+    writeShipmentsCompactSort(sortKey, sortDir)
+  }, [sortKey, sortDir, sortHydrated])
 
   const toggleColumn = (colId: string) => {
     setVisibleColumnIds(prev => {
@@ -3094,6 +4192,37 @@ function ShipmentsPageContent() {
 
   const compactColumns: CompactColumn[] = useMemo(() => [
     {
+      id: SHIPMENT_MANUAL_SELECT_COLUMN_ID,
+      label: 'Grouping Manual',
+      formulaHelp:
+        'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Shown only on Unplanned / Preplanned cards; checkboxes are enabled on Unplanned only.',
+      defaultVisible: false,
+      sortable: false,
+      render: (s) => {
+        if (!isContractBacklogRow(s)) return null
+        const key = String(s.contract_row_id || s.id || '').trim()
+        if (!key) return null
+        const enabled = statusFilter === 'UNPLANNED'
+        const checkbox = (
+          <Checkbox
+            checked={selectedManualGroupContractIds.has(key)}
+            onCheckedChange={() => toggleManualGroupRowSelection(s)}
+            disabled={!enabled}
+            aria-label="Select for manual Preplanned grouping"
+          />
+        )
+        if (enabled) return checkbox
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex cursor-not-allowed">{checkbox}</span>
+            </TooltipTrigger>
+            <TooltipContent side="top">Select the Unplanned card to enable</TooltipContent>
+          </Tooltip>
+        )
+      },
+    },
+    {
       id: 'late_indicator',
       label: 'Late Indicators',
       formulaHelp: FIELD_HELP.shipmentLateIndicator,
@@ -3119,14 +4248,140 @@ function ShipmentsPageContent() {
       ),
     },
     {
+      id: 'pre_planned_group',
+      label: 'Grouping Suggestion',
+      formulaHelp:
+        'Auto-suggested vessel grouping for unplanned contracts with the same plant, buyer, incoterm, product, and supplier. All contracts from the same supplier are grouped together, then split when total outstanding qty or any contract qty exceeds the average vessel capacity for that plant. Accept moves contracts to Preplanned; dismiss removes the suggestion. On Preplanned rows, revert returns them to Unplanned suggestions.',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => {
+        if (!isContractBacklogRow(s)) return ''
+        const suggested = resolvePrePlannedGroupForRow(s, contractNumberToPrePlannedGroup)
+        const accepted = resolvePrePlannedGroupForRow(s, contractNumberToAcceptedPrePlannedGroup)
+        const groupCode = suggested?.groupCode ?? accepted?.groupCode ?? ''
+        return `${groupCode}\0${resolveShipmentContractNumber(s)}`
+      },
+      render: (s) => {
+        if (!isContractBacklogRow(s)) return <span className="text-xs text-gray-400">—</span>
+
+        const statusUpper = String(s.status ?? '').trim().toUpperCase()
+        const acceptedGroup = resolvePrePlannedGroupForRow(s, contractNumberToAcceptedPrePlannedGroup)
+        if (statusUpper === 'PREPLANNED' || acceptedGroup) {
+          const group = acceptedGroup
+          if (!group) return <span className="text-xs text-gray-400">—</span>
+          const tooltipText = formatPrePlannedGroupTooltip(group)
+          const isReverting = revertingPrePlannedGroupId === group.id
+          return (
+            <div className="flex items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge className="cursor-default whitespace-nowrap bg-amber-100 text-amber-800 hover:bg-amber-100">
+                    {formatPrePlannedGroupBadge(group)}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="whitespace-pre-wrap text-xs" side="top">
+                  {tooltipText}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-6 w-6 bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
+                    onClick={() => void handleRevertPrePlannedGroup(group.id)}
+                    disabled={isReverting}
+                    aria-label={isReverting ? 'Reverting preplanned grouping' : 'Revert preplanned grouping'}
+                    aria-busy={isReverting}
+                  >
+                    {isReverting ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Undo2 className="h-3 w-3" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isReverting ? 'Reverting to Unplanned…' : 'Revert to Unplanned'}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )
+        }
+
+        const group = resolvePrePlannedGroupForRow(s, contractNumberToPrePlannedGroup)
+        if (!group) return <span className="text-xs text-gray-400">—</span>
+        const tooltipText = formatPrePlannedGroupTooltip(group)
+        const isAccepting = acceptingPrePlannedGroupId === group.id
+        return (
+          <div className="flex items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge variant="secondary" className="cursor-default whitespace-nowrap">
+                  {formatPrePlannedGroupBadge(group)}
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="whitespace-pre-wrap text-xs" side="top">
+                {tooltipText}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-6 w-6 bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                  onClick={() => void handleAcceptPrePlannedGroup(group)}
+                  disabled={isAccepting}
+                  aria-label={isAccepting ? 'Accepting as Preplanned' : 'Accept grouping suggestion'}
+                  aria-busy={isAccepting}
+                >
+                  {isAccepting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Check className="h-3 w-3" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                {isAccepting ? 'Accepting as Preplanned…' : 'Accept as Preplanned'}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-6 w-6 bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"
+                  onClick={() => void handleDismissPrePlannedGroup(group.id)}
+                  disabled={isAccepting}
+                  aria-label="Dismiss grouping suggestion"
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Dismiss suggestion</TooltipContent>
+            </Tooltip>
+          </div>
+        )
+      },
+    },
+    {
       id: 'loading_port',
       label: 'Loading Port',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListLoadingPorts(s),
-      render: (s) => (
-        <span className="text-sm break-words">{formatOperationalTableTextDisplay(resolveShipmentListLoadingPorts(s))}</span>
-      ),
+      render: (s) => {
+        const loadingPorts = resolveShipmentListLoadingPorts(s)
+        return (
+          <OperationalStackedCommaCell
+            value={loadingPorts}
+            title={loadingPorts || ''}
+            truncateLongParts
+          />
+        )
+      },
     },
     {
       id: 'discharge_port',
@@ -3172,12 +4427,16 @@ function ShipmentsPageContent() {
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => resolveShipmentListSuppliers(s),
-      render: (s) => (
-        <OperationalStackedCommaCell
-          value={resolveShipmentListSuppliers(s)}
-          title={resolveShipmentListSuppliers(s) || ''}
-        />
-      ),
+      render: (s) => {
+        const supplier = resolveShipmentListSuppliers(s)
+        return (
+          <OperationalStackedCommaCell
+            value={supplier}
+            title={supplier || ''}
+            truncateLongParts
+          />
+        )
+      },
     },
     {
       id: 'vessel_name',
@@ -3188,16 +4447,39 @@ function ShipmentsPageContent() {
       render: (s) => <span className="text-sm break-words">{formatVesselTableDisplay(s.vessel_name)}</span>
     },
     {
+      id: 'charter_type',
+      label: 'Charter Type',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.charter_type || '',
+      render: (s) => (
+        <span className="text-sm uppercase">{formatSapDisplayValue(s.charter_type) || '—'}</span>
+      ),
+    },
+    {
       id: 'status',
       label: 'Status Shipment',
       defaultVisible: true,
       sortable: true,
       getSortValue: (s) => s.status || '',
-      render: (s) => (
-        <Badge className={getStatusColor(s.status)}>
-          {formatShipmentStatusLabel(s.status)}
-        </Badge>
-      )
+      render: (s) => {
+        const lines = shipmentStatusLabelLines(s.status)
+        return (
+          <Badge
+            className={`${getStatusColor(s.status)}${lines.length > 1 ? ' h-auto whitespace-normal leading-tight text-center' : ''}`}
+          >
+            {lines.length > 1 ? (
+              <span className="inline-block text-center leading-tight">
+                {lines[0]}
+                <br />
+                {lines[1]}
+              </span>
+            ) : (
+              lines[0]
+            )}
+          </Badge>
+        )
+      }
     },
     {
       id: 'product',
@@ -3225,43 +4507,53 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.contract_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.contract_qty)}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(s.contract_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       ),
     },
     {
       id: 'sto_quantity',
-      label: 'STO Qty (MT)',
+      label: 'STO Qty',
       defaultVisible: false,
       sortable: true,
       getSortValue: (s) => resolveShipmentListStoKg(s) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListStoKg(s))}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(resolveShipmentListStoKg(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       )
     },
     {
       id: 'quantity_delivered',
-      label: 'Delivery Qty (MT)',
+      label: 'Delivery Qty',
+      formulaHelp: FIELD_HELP.shipmentViewTableDeliveryQty,
       defaultVisible: false,
       sortable: true,
-      getSortValue: (s) => resolveShipmentListDeliveredKg(s) ?? 0,
+      getSortValue: (s) => shipmentListDeliveredKgForViewTable(s),
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListDeliveredKg(s))}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(shipmentListDeliveredKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       )
     },
     {
       id: 'quantity_receive',
-      label: 'Received Qty (MT)',
+      label: 'Received Qty',
+      formulaHelp: FIELD_HELP.shipmentReceivedQty,
       defaultVisible: false,
       sortable: true,
-      getSortValue: (s) => resolveShipmentListReceiveKg(s) ?? 0,
+      getSortValue: (s) => shipmentListReceiveKgForViewTable(s),
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(resolveShipmentListReceiveKg(s))}
+          {qtyFieldsReady
+            ? formatSapQtyMtDisplay(shipmentListReceiveKgForViewTable(s), SHIPMENT_QTY_MT_DISPLAY_OPTS)
+            : <QtyLoadingDots />}
         </span>
       )
     },
@@ -3271,35 +4563,35 @@ function ShipmentsPageContent() {
       formulaHelp: FIELD_HELP.shipmentOutstandingQtyMt,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_quantity) ?? 0,
+      getSortValue: (s) => shipmentListOutstandingKgForViewTable(s) ?? 0,
       render: (s) => {
-        const kg = shipmentStoredQtyKg(s.outstanding_quantity)
+        if (!qtyFieldsReady) return <QtyLoadingDots />
+        const kg = shipmentListOutstandingKgForViewTable(s)
         return (
           <span
-            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
+            className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
           >
-            {formatSapOutstandingQtyMtDisplay(s.outstanding_quantity)}
+            {formatSapOutstandingQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
           </span>
         )
       }
     },
     {
-      id: 'outstanding_qty_planning',
-      label: 'Outstanding Qty (Plan)',
-      formulaHelp: FIELD_HELP.shipmentOutstandingQtyPlanning,
+      id: SHIPMENT_TRADE_CYCLE_COLUMN_ID,
+      label: 'Trade Cycle',
+      formulaHelp: FIELD_HELP.contractPerfTradeCycle,
       defaultVisible: true,
       sortable: true,
-      getSortValue: (s) => shipmentStoredQtyKg(s.outstanding_qty_planning) ?? 0,
+      getSortValue: (s) => s.trade_cycle_days ?? 0,
       render: (s) => {
-        const kg = shipmentStoredQtyKg(s.outstanding_qty_planning)
+        if (s.trade_cycle_days == null) return <span className="text-sm font-normal">-</span>
         return (
-          <span
-            className={`text-sm break-words tabular-nums font-medium ${outstandingQtyMtColorClass(kg)}`}
-          >
-            {formatSapOutstandingQtyMtDisplay(s.outstanding_qty_planning)}
+          <span className={`text-sm font-normal tabular-nums ${signedCycleDaysClass(s.trade_cycle_days)}`}>
+            {formatSignedCycleDaysCompact(s.trade_cycle_days)}
           </span>
         )
       },
+      className: 'whitespace-nowrap',
     },
     {
       id: 'sfal_qty',
@@ -3310,7 +4602,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.sfal_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.sfal_qty)}
+          {formatSapQtyMtDisplay(s.sfal_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3323,7 +4615,7 @@ function ShipmentsPageContent() {
       getSortValue: (s) => shipmentStoredQtyKg(s.sfbd_qty) ?? 0,
       render: (s) => (
         <span className="text-sm break-words tabular-nums">
-          {formatSapQtyMtDisplay(s.sfbd_qty)}
+          {formatSapQtyMtDisplay(s.sfbd_qty, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
         </span>
       )
     },
@@ -3490,6 +4782,97 @@ function ShipmentsPageContent() {
       )
     },
     {
+      id: 'fuel_consumption',
+      label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.fuel_consumption || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.fuel_consumption != null ? formatNumber(s.fuel_consumption) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'freight',
+      label: TC_VESSEL_PERF_LABELS.freightActualIdrKg,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.freight || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.freight != null ? formatNumber(s.freight) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'freight_budget',
+      label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.vessel_oa_budget || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.vessel_oa_budget != null ? formatNumber(s.vessel_oa_budget) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'pump_rate',
+      label: TC_VESSEL_PERF_LABELS.pumpRateMtH,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.pump_rate || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.pump_rate != null ? formatNumber(s.pump_rate) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'sailing_speed',
+      label: TC_VESSEL_PERF_LABELS.sailingSpeed,
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (s) => s.sailing_speed || 0,
+      render: (s) => (
+        <span className="text-sm break-words">
+          {s.sailing_speed != null ? formatNumber(s.sailing_speed) : '-'}
+        </span>
+      )
+    },
+    {
+      id: 'shortage',
+      label: TC_VESSEL_PERF_LABELS.shortageMt,
+      defaultVisible: false,
+      sortable: true,
+      formulaHelp: TC_VESSEL_PERF_TOOLTIPS.shortageMt,
+      getSortValue: (s) =>
+        resolveShippingTcShortageMtForListRow({
+          shortage: s.shortage,
+          quantity_delivered: s.quantity_delivered,
+          quantity_delivered_klip: s.quantity_delivered_klip,
+          actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+          delivered_qty: s.quantity_delivered,
+          received_qty: s.actual_vessel_qty_receive,
+        }) || 0,
+      render: (s) => {
+        const shortageMt = resolveShippingTcShortageMtForListRow({
+          shortage: s.shortage,
+          quantity_delivered: s.quantity_delivered,
+          quantity_delivered_klip: s.quantity_delivered_klip,
+          actual_vessel_qty_receive: s.actual_vessel_qty_receive,
+          delivered_qty: s.quantity_delivered,
+          received_qty: s.actual_vessel_qty_receive,
+        })
+        return (
+          <span className="text-sm break-words">
+            {formatNumber(shortageMt ?? 0)}
+          </span>
+        )
+      }
+    },
+    {
       id: 'eta_arrival',
       label: 'ETA Arrival at Loading Port',
       defaultVisible: false,
@@ -3617,11 +5000,52 @@ function ShipmentsPageContent() {
       getSortValue: (s) => s.ata_vessel_start_discharging || '',
       render: (s) => <span className="text-sm">{formatShortDate(s.ata_vessel_start_discharging || '')}</span>,
     },
-  ], [])
+  ], [qtyFieldsReady, contractNumberToPrePlannedGroup, contractNumberToAcceptedPrePlannedGroup, acceptingPrePlannedGroupId, revertingPrePlannedGroupId, handleAcceptPrePlannedGroup, handleDismissPrePlannedGroup, handleRevertPrePlannedGroup, statusFilter, selectedManualGroupContractIds, toggleManualGroupRowSelection])
+
+  const shipmentColumnStageOptions = useMemo(
+    () => ({ pendingAtcDueWithin7d: etcNoAtcDueWithin7dFilter }),
+    [etcNoAtcDueWithin7dFilter],
+  )
 
   const defaultVisibleColumnIds = useMemo(() => {
-    return compactColumns.filter(c => c.defaultVisible).map(c => c.id)
-  }, [compactColumns])
+    const allIds = compactColumns.map((c) => c.id)
+    return shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter, shipmentColumnStageOptions)
+  }, [compactColumns, statusFilter, shipmentColumnStageOptions])
+
+  const compactColumnPickerColumns = useMemo(
+    () => {
+      const hidden = new Set<string>()
+      if (!isShipmentGroupingSuggestionColumnEligible(statusFilter)) {
+        for (const id of SHIPMENT_STAGE_GATED_COLUMN_IDS) hidden.add(id)
+      }
+      if (!isShipmentTradeCycleColumnEligible(statusFilter, shipmentColumnStageOptions)) {
+        for (const id of SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS) hidden.add(id)
+      }
+      if (hidden.size === 0) return compactColumns
+      return compactColumns.filter((c) => !hidden.has(c.id))
+    },
+    [compactColumns, statusFilter, shipmentColumnStageOptions],
+  )
+
+  useEffect(() => {
+    if (!isShipmentGroupingSuggestionColumnEligible(statusFilter)) return
+    setVisibleColumnIds((prev) => {
+      if (prev.has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)) return prev
+      const next = new Set(prev)
+      next.add(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)
+      return next
+    })
+  }, [statusFilter])
+
+  useEffect(() => {
+    if (!isShipmentTradeCycleColumnEligible(statusFilter, shipmentColumnStageOptions)) return
+    setVisibleColumnIds((prev) => {
+      if (prev.has(SHIPMENT_TRADE_CYCLE_COLUMN_ID)) return prev
+      const next = new Set(prev)
+      next.add(SHIPMENT_TRADE_CYCLE_COLUMN_ID)
+      return next
+    })
+  }, [statusFilter, shipmentColumnStageOptions])
 
   const compactColumnIdsKey = useMemo(() => compactColumns.map((c) => c.id).join('|'), [compactColumns])
 
@@ -3646,7 +5070,7 @@ function ShipmentsPageContent() {
     }
 
     const applyMigratedLayout = (visible: string[], order: string[]) => {
-      const migrated = migrateShipmentColumnLayout(visible, order)
+      const migrated = migrateShipmentColumnLayout(visible, order, allIds)
       const nextOrder = mergeShipmentColumnOrder(migrated.columnOrderIds, allIds)
       setVisibleColumnIds(new Set(migrated.visibleColumnIds))
       setColumnOrderIds(nextOrder)
@@ -3692,7 +5116,7 @@ function ShipmentsPageContent() {
         }
       }
       if (savedVisible.length === 0) {
-        applyMigratedLayout(shipmentDefaultVisibleColumnIds(allIds), canonical)
+        applyMigratedLayout(shipmentDefaultVisibleColumnIdsForStage(allIds, 'ALL'), canonical)
       } else {
         applyMigratedLayout(savedVisible, savedOrder)
       }
@@ -3707,10 +5131,60 @@ function ShipmentsPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compactColumnIdsKey])
 
-  const visibleColumns = useMemo(
-    () => buildShipmentVisibleColumns(compactColumns, visibleColumnIds, columnOrderIds),
-    [compactColumns, visibleColumnIds, columnOrderIds],
+  const effectiveVisibleColumnIds = useMemo(
+    () => filterShipmentVisibleColumnIdsForStage(visibleColumnIds, statusFilter, shipmentColumnStageOptions),
+    [visibleColumnIds, statusFilter, shipmentColumnStageOptions],
   )
+
+  const visibleColumns = useMemo(
+    () => buildShipmentVisibleColumns(compactColumns, effectiveVisibleColumnIds, columnOrderIds),
+    [compactColumns, effectiveVisibleColumnIds, columnOrderIds],
+  )
+
+  const downloadShipmentViewTable = async () => {
+    if (downloadingTable) return
+    const exportColumns = visibleColumns.map((col) => ({ id: col.id, label: col.label }))
+    if (exportColumns.length === 0) {
+      alert('No visible columns to download. Enable at least one column in Columns.')
+      return
+    }
+    setDownloadingTable(true)
+    try {
+      const exportPageSize = 500
+      const collected: Shipment[] = []
+      let exportPage = 1
+      let exportTotalPages = 1
+      while (exportPage <= exportTotalPages) {
+        const params = buildShipmentListSearchParams({
+          page: exportPage,
+          limit: exportPageSize,
+          skipSapJoin: false,
+        })
+        const response = await api.get(`/shipments?${params.toString()}`)
+        const envelope = response.data as {
+          data?: { shipments?: Shipment[]; pagination?: { totalPages?: number } }
+        }
+        collected.push(...(envelope?.data?.shipments || []))
+        exportTotalPages = Number(envelope?.data?.pagination?.totalPages || 1)
+        exportPage += 1
+      }
+      if (collected.length === 0) {
+        alert('No shipments match the current filters.')
+        return
+      }
+      const matrix = buildShipmentViewTableExportMatrix(exportColumns, collected)
+      const today = new Date().toISOString().slice(0, 10)
+      downloadAoaXlsx(matrix, {
+        sheetName: 'Shipments',
+        fileName: `shipments-${today}.xlsx`,
+      })
+    } catch (error) {
+      console.error('Failed to download Shipments table:', error)
+      alert('Failed to download table. Please try again.')
+    } finally {
+      setDownloadingTable(false)
+    }
+  }
 
   const moveColumnOrder = (id: string, direction: 'up' | 'down') => {
     setColumnOrderIds((prev) => {
@@ -3739,38 +5213,115 @@ function ShipmentsPageContent() {
     })
   }
 
-  const sortedShipments = useMemo(() => {
-    const col = compactColumns.find(c => c.id === sortKey)
-    const base = shipments
-    const prioritizeSapSto = shouldPrioritizeSapStoRows(statusFilter)
-    if (!col?.sortable || !col.getSortValue) {
-      if (!prioritizeSapSto) return base
-      return [...base].sort((a, b) => compareSapStoListRowPriority(a, b))
-    }
+  /** Server-side sort — preserve API row order (STO priority + ORDER BY in SQL). */
+  const sortedShipments = useMemo(() => shipments, [shipments])
 
-    const sorted = [...base].sort((a, b) => {
-      if (prioritizeSapSto) {
-        const stoCmp = compareSapStoListRowPriority(a, b)
-        if (stoCmp !== 0) return stoCmp
-      }
-      const aVal = col.getSortValue!(a)
-      const bVal = col.getSortValue!(b)
-      const dirMul = sortDir === 'asc' ? 1 : -1
+  const paginatedShipments = sortedShipments
 
+  const prePlannedTableGroups = useMemo(() => {
+    if (statusFilter !== 'PREPLANNED') return null
+    return groupShipmentsByPrePlannedSuggestion(
+      paginatedShipments,
+      contractNumberToAcceptedPrePlannedGroup,
+    )
+  }, [statusFilter, paginatedShipments, contractNumberToAcceptedPrePlannedGroup])
+
+  const sortedPrePlannedTableGroups = useMemo(() => {
+    if (!prePlannedTableGroups) return null
+    const col = compactColumns.find((c) => c.id === sortKey)
+    if (!col?.sortable) return prePlannedTableGroups
+
+    const dirMul = sortDir === 'asc' ? 1 : -1
+    return [...prePlannedTableGroups].sort((a, b) => {
+      const aVal = getPrePlannedGroupSortValue(a, sortKey, getColumnRawValue)
+      const bVal = getPrePlannedGroupSortValue(b, sortKey, getColumnRawValue)
       if (typeof aVal === 'number' && typeof bVal === 'number') {
         return (aVal - bVal) * dirMul
       }
       return String(aVal).localeCompare(String(bVal)) * dirMul
     })
-
-    return sorted
-  }, [compactColumns, shipments, sortDir, sortKey, statusFilter])
-
-  const paginatedShipments = sortedShipments
+  }, [prePlannedTableGroups, compactColumns, sortKey, sortDir, getColumnRawValue])
 
   const stoGroupedShipments = useMemo(
     () => groupShipmentsBySto(paginatedShipments),
     [paginatedShipments],
+  )
+
+  /** Left expand/chevron column only when STO grouping needs collapse (otherwise it looks like empty left gap). */
+  const showStoExpandColumn = useMemo(
+    () =>
+      statusFilter !== 'PREPLANNED' &&
+      stoGroupedShipments.some((group) => group.rows.length > 1),
+    [statusFilter, stoGroupedShipments],
+  )
+
+  const renderPrePlannedGroupedCell = useCallback(
+    (col: CompactColumn, group: PrePlannedTableGroup<Shipment>) => {
+      const rep = getPrePlannedGroupRepresentativeMember(group)
+      const mode = prePlannedGroupColumnAggregationMode(col.id)
+
+      if (col.id === 'shipment_id') {
+        return <span className="text-sm">—</span>
+      }
+
+      if (mode === 'sumKg') {
+        if (!qtyFieldsReady) {
+          return <QtyLoadingDots />
+        }
+        const kg = sumGroupQtyKgForColumn(group.members, col.id)
+        const displayKg = kg ?? 0
+        if (col.id === 'outstanding_quantity') {
+          return (
+            <span
+              className={`text-sm break-words tabular-nums ${outstandingQtyMtColorClass(kg)}`}
+            >
+              {formatSapOutstandingQtyMtDisplay(kg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+            </span>
+          )
+        }
+        return (
+          <span className="text-sm break-words tabular-nums">
+            {formatSapQtyMtDisplay(displayKg, SHIPMENT_QTY_MT_DISPLAY_OPTS)}
+          </span>
+        )
+      }
+
+      if (mode === 'stackDistinct') {
+        const isDateCol =
+          col.id === 'contract_date' ||
+          col.id === 'delivery_start_date' ||
+          col.id === 'delivery_end_date' ||
+          col.id === 'delivery_start' ||
+          col.id === 'delivery_end'
+        const lines = collectDistinctFormattedValues(
+          group.members,
+          (m) => {
+            const raw = getColumnRawValue(m, col.id)
+            if (raw == null || raw === '') return ''
+            return String(raw)
+          },
+          isDateCol ? (v) => formatShortDate(v) : undefined,
+        )
+        if (lines.length === 0) {
+          return <span className="text-sm">-</span>
+        }
+        if (lines.length === 1) {
+          return <span className="text-sm">{lines[0]}</span>
+        }
+        return (
+          <span className="text-sm flex flex-col gap-0.5">
+            {lines.map((line, i) => (
+              <span key={`${line}-${i}`} className="block whitespace-nowrap">
+                {line}
+              </span>
+            ))}
+          </span>
+        )
+      }
+
+      return col.render(rep)
+    },
+    [qtyFieldsReady],
   )
 
   const toggleStoGroupCollapse = useCallback((stoKey: string) => {
@@ -3795,7 +5346,7 @@ function ShipmentsPageContent() {
 
   const resetCompactColumnView = useCallback(() => {
     const allIds = compactColumns.map((c) => c.id)
-    const vis = new Set(shipmentDefaultVisibleColumnIds(allIds))
+    const vis = new Set(shipmentDefaultVisibleColumnIdsForStage(allIds, statusFilter, shipmentColumnStageOptions))
     const order = shipmentCompactColumnFallbackOrder(allIds)
     setVisibleColumnIds(vis)
     setColumnOrderIds(order)
@@ -3807,7 +5358,7 @@ function ShipmentsPageContent() {
         // ignore
       }
     }
-  }, [compactColumns, columnStorageKey, columnOrderStorageKey])
+  }, [compactColumns, columnStorageKey, columnOrderStorageKey, statusFilter, shipmentColumnStageOptions])
 
   const allVisibleIds = useMemo(() => sortedShipments.map(s => s.id), [sortedShipments])
   const expandedCount = expandedShipmentIds.size
@@ -4727,14 +6278,12 @@ function ShipmentsPageContent() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-            <h1 className="text-3xl font-bold">Shipments</h1>
-          </div>
+        <div className="flex items-center justify-end gap-4">
           <div className="flex flex-wrap items-center justify-end gap-2">
             <VesselIdleInsightChip
               count={vesselIdleCount}
               loading={vesselIdleLoading}
+              error={vesselIdleError}
               onClick={handleVesselIdleClick}
             />
             {SHIPMENTS_CSV_BULK_IMPORT_UI_ENABLED ? (
@@ -4815,6 +6364,10 @@ function ShipmentsPageContent() {
           onPipelineStageChange={handlePipelineStageChange}
           lateIndicatorFilter={lateIndicatorFilter}
           onLateIndicatorChange={onLateIndicatorChange}
+          charterTypeFilter={charterTypeFilter}
+          onCharterTypeChange={onCharterTypeChange}
+          sourceTypeFilter={sourceTypeFilter}
+          onSourceTypeChange={onSourceTypeChange}
           availableIncoterms={availableIncoterms}
           selectedIncoterms={selectedIncoterms}
           onIncotermsChange={onIncotermsChange}
@@ -4835,13 +6388,35 @@ function ShipmentsPageContent() {
           onClearFilters={clearShipmentFilters}
         />
 
+        {section1LoadError ? (
+          <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            {section1LoadError}
+          </p>
+        ) : null}
+
+        {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
+        <AttentionInsightsSection
+          variant="shipment"
+          loading={section1DataLoading}
+          data={mapShipmentAttentionInsights(shipmentsSection1Summary?.attentionInsights)}
+        />
+        ) : null}
+
         <ShipmentStatusDistribution
           loading={section1DataLoading}
           statusFilter={statusFilter}
           counts={section1StatusCounts}
+          vesselNames={section1VesselNames}
           loadingPortBreakdown={loadingPortBreakdown}
           dischargePortBreakdown={dischargePortBreakdown}
           onStageClick={handleStatusCardClick}
+          contractQtys={section1ContractQtys}
+          outstandingQtys={section1OutstandingQtys}
+          unplannedSuggestionSummary={{
+            groupCount: filteredPrePlannedGroups.length,
+            ungroupedCount: displayedPrePlannedUngroupedCount,
+            isFilterScoped: prePlannedSuggestionsScoped,
+          }}
         />
 
         {/* Section 2 — ETA Loading / Discharge (hidden while SHIPMENTS_ETA_STATUS_SECTIONS_ENABLED is false) */}
@@ -5189,8 +6764,8 @@ function ShipmentsPageContent() {
                         const kgToMt = (kg: number) => kg / 1000
                         const fmtMt = (mt: number) =>
                           Number.isFinite(mt)
-                            ? mt.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: mt === 0 ? 0 : 2 })
-                            : '—'
+                            ? mt.toLocaleString('en-US', { maximumFractionDigits: 0 })
+                            : '0'
                         const dueStart = r.delivery_start_date ? formatDateDMY(r.delivery_start_date) : '-'
                         const dueEnd = r.delivery_end_date ? formatDateDMY(r.delivery_end_date) : '-'
                         const blQty = Number(r.bl_quantity ?? r.quantity_shipped ?? 0)
@@ -5229,20 +6804,20 @@ function ShipmentsPageContent() {
                         return (
                           <tr key={r.id} className="hover:bg-gray-50">
                             <td className="sticky left-0 z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[220px] align-top">
-                              <div className="font-semibold text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
+                              <div className="text-gray-900 truncate" title={r.shipment_id}>{r.shipment_id}</div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.sto_number || ''}>
                                 STO: {resolveShipmentDisplayStoNumber(r.sto_number)}
                               </div>
                               <div className="text-[10px] text-gray-500 truncate" title={r.vessel_name || ''}>Vessel: {r.vessel_name || '—'}</div>
                             </td>
                             <td className="sticky left-[220px] z-10 bg-white px-3 py-2 border-b border-gray-100 min-w-[260px] align-top">
-                              <div className="font-medium text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
+                              <div className="text-gray-900 whitespace-normal break-words" title={r.contract_ext_no || ''}>{r.contract_ext_no || '—'}</div>
                               <div className="text-[10px] text-gray-500 whitespace-normal break-words" title={resolveShipmentListSuppliers(r) || ''}>{resolveShipmentListSuppliers(r) || '—'}</div>
                             </td>
                             {shipCalendarMetaOrderIds.map((id) => {
                               if (id === 'due_start') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueStart}</td>
                               if (id === 'due_end') return <td key={id} className="px-3 py-2 border-b border-gray-100 tabular-nums">{dueEnd}</td>
-                              return <td key={id} className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{blQty ? `${fmtMt(blQtyMt)} MT` : '—'}</td>
+                              return <td key={id} className="px-3 py-2 border-b border-gray-100 text-right tabular-nums">{`${fmtMt(blQtyMt)} MT`}</td>
                             })}
                             {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
                               const date = dayIso(d)
@@ -5300,7 +6875,7 @@ function ShipmentsPageContent() {
                                       {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-500" /> : null}
                                     </div>
                                   ) : qtyKg ? (
-                                    <span className="font-medium text-slate-900">{fmtMt(qtyMt)}</span>
+                                    <span className="text-slate-900">{fmtMt(qtyMt)}</span>
                                   ) : (
                                     <span className="text-gray-300">—</span>
                                   )}
@@ -5379,6 +6954,26 @@ function ShipmentsPageContent() {
           result={bulkUploadResult}
         />
 
+        <BulkUploadStatusModal
+          open={!!groupingUploadResult}
+          onOpenChange={(open) => { if (!open) setGroupingUploadResult(null) }}
+          title="Upload Planning result"
+          result={groupingUploadResult}
+          createdLabel="Groups created"
+          updatedLabel="Warnings"
+          failedLabel="Failed"
+          errorsTitle="Group / row issues"
+        />
+
+        <ShipmentOutstandingQtySummary
+          loading={outstandingQtyFetching}
+          data={shipmentsSection1Summary?.outstandingQty}
+          etcNoAtcDue={shipmentsSection1Summary?.etcNoAtcDueWithin7d ?? EMPTY_SHIPMENT_ETC_NO_ATC_DUE}
+          etcNoAtcDueLoading={summaryFetching}
+          etcNoAtcDueActive={etcNoAtcDueWithin7dFilter}
+          onEtcNoAtcDueClick={handleEtcNoAtcDueCardClick}
+        />
+
         {/* Shipments List */}
         <Card>
           <CardHeader>
@@ -5403,11 +6998,36 @@ function ShipmentsPageContent() {
                       {statusFilter === 'UNPLANNED' && unplannedTableBreakdown ? (
                         <>
                           {' · '}
-                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')} without shipment ·{' '}
-                          {unplannedTableBreakdown.shipmentRows.toLocaleString('en-US')} STO groups)
+                          ({unplannedTableBreakdown.contractRows.toLocaleString('en-US')}{' '}
+                          {unplannedTableBreakdown.contractRows === 1 ? 'PO' : 'POs'} without shipment)
+                        </>
+                      ) : null}
+                      {statusFilter === 'PREPLANNED' ? (
+                        <>
+                          {' · '}
+                          ({tableShipmentCount.toLocaleString('en-US')}{' '}
+                          {tableShipmentCount === 1 ? 'grouping' : 'groupings'})
                         </>
                       ) : null}
                     </span>
+                    {statusFilter === 'UNPLANNED' && filteredPrePlannedGroups.length > 0 ? (
+                      <span className="whitespace-nowrap">
+                        <span className="text-gray-400" aria-hidden>
+                          ·
+                        </span>{' '}
+                        <span className="font-medium text-blue-700">
+                          {filteredPrePlannedGroups.length} grouping suggestion
+                          {filteredPrePlannedGroups.length === 1 ? '' : 's'}
+                          {prePlannedSuggestionsScoped ? ' (filtered)' : ''}
+                        </span>
+                        {displayedPrePlannedUngroupedCount != null && displayedPrePlannedUngroupedCount > 0 ? (
+                          <span className="text-gray-500">
+                            {' '}
+                            ({displayedPrePlannedUngroupedCount.toLocaleString('en-US')} ungrouped)
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
                     {shipmentsTableScopeLabel ? (
                       <>
                         <span className="text-gray-400" aria-hidden>
@@ -5421,6 +7041,121 @@ function ShipmentsPageContent() {
                   </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {statusFilter === 'UNPLANNED' && selectedManualGroupContractIds.size > 0 ? (
+                  <div className="flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5">
+                    <span className="text-xs font-medium text-blue-800 whitespace-nowrap">
+                      {selectedManualGroupContractIds.size} selected
+                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span>
+                          <Button
+                            size="sm"
+                            className="h-7 bg-blue-600 hover:bg-blue-700 text-white text-xs"
+                            onClick={() => void handleCreateManualPrePlannedGroup()}
+                            disabled={selectedManualGroupContractIds.size < 2 || creatingManualPrePlannedGroup}
+                          >
+                            {creatingManualPrePlannedGroup ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                Creating…
+                              </>
+                            ) : (
+                              'Accept as Preplanned Group'
+                            )}
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {selectedManualGroupContractIds.size < 2 ? (
+                        <TooltipContent side="top">Select at least 2 contracts</TooltipContent>
+                      ) : null}
+                    </Tooltip>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-blue-700 hover:bg-blue-100"
+                      aria-label="Clear selection"
+                      onClick={() => setSelectedManualGroupContractIds(new Set())}
+                      disabled={creatingManualPrePlannedGroup}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-blue-600 text-blue-700 hover:bg-blue-50 disabled:opacity-50 disabled:pointer-events-none"
+                  onClick={() => void downloadShipmentViewTable()}
+                  disabled={
+                    listFetching ||
+                    section3TableLoading ||
+                    downloadingTable ||
+                    totalCount === 0 ||
+                    visibleColumns.length === 0
+                  }
+                >
+                  {downloadingTable ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4 mr-2" />
+                  )}
+                  Download Data
+                </Button>
+                <input
+                  ref={groupingUploadInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => void handleGroupingTemplateFileChange(e)}
+                  disabled={!groupingTemplateEnabled || groupingTemplateUploading}
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        onClick={() => void downloadGroupingTemplate()}
+                        disabled={!groupingTemplateEnabled || groupingTemplateDownloading}
+                      >
+                        {groupingTemplateDownloading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4 mr-2" />
+                        )}
+                        Download Unplanned
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!groupingTemplateEnabled ? (
+                    <TooltipContent side="top">{SHIPMENT_GROUPING_DOWNLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                  ) : null}
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-green-600 text-green-700 hover:bg-green-50 disabled:opacity-50 disabled:pointer-events-none"
+                        onClick={() => groupingUploadInputRef.current?.click()}
+                        disabled={!groupingTemplateEnabled || groupingTemplateUploading}
+                      >
+                        {groupingTemplateUploading ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Upload className="h-4 w-4 mr-2" />
+                        )}
+                        Upload Planning
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {!groupingTemplateEnabled ? (
+                    <TooltipContent side="top">{SHIPMENT_GROUPING_UPLOAD_DISABLED_TOOLTIP}</TooltipContent>
+                  ) : null}
+                </Tooltip>
                 <div className="relative">
                   <Button
                     variant="outline"
@@ -5440,18 +7175,18 @@ function ShipmentsPageContent() {
                         </Button>
                       </div>
                       <div className="flex items-center gap-1 mb-2">
-                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumns.map(c => c.id)))}>Select All</Button>
+                        <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(compactColumnPickerColumns.map(c => c.id)))}>Select All</Button>
                         <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set())}>Unselect All</Button>
                         <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => resetCompactColumnView()}>Reset</Button>
                       </div>
                       <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
                         {(() => {
                           const visibleIds = new Set(visibleColumns.map((c) => c.id))
-                          const byId = new Map(compactColumns.map((c) => [c.id, c] as const))
+                          const byId = new Map(compactColumnPickerColumns.map((c) => [c.id, c] as const))
                           const orderedIds =
                             columnOrderIds.length > 0
                               ? columnOrderIds
-                              : shipmentCompactColumnFallbackOrder(compactColumns.map((c) => c.id))
+                              : shipmentCompactColumnFallbackOrder(compactColumnPickerColumns.map((c) => c.id))
                           const hiddenCols = orderedIds
                             .map((id) => byId.get(id))
                             .filter((c): c is CompactColumn => !!c && !visibleIds.has(c.id))
@@ -5585,14 +7320,33 @@ function ShipmentsPageContent() {
                       })
                     }}
                   >
-                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS}`}>
+                      <table className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}>
+                        <colgroup>
+                          {showStoExpandColumn ? (
+                            <col style={{ width: SHIPMENT_EXPAND_COL_WIDTH_PX }} />
+                          ) : null}
+                          {visibleColumns.map((col) => (
+                            <col
+                              key={col.id}
+                              style={{
+                                width: compactTableColWidthCss(
+                                  shipmentTableColumnWidthPx(col.id, col.label, {
+                                    hasFormulaHelp: Boolean(col.formulaHelp),
+                                  }),
+                                ),
+                              }}
+                            />
+                          ))}
+                          <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
+                        </colgroup>
                         <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
-                          <th
-                            scope="col"
-                            className={`w-10 align-bottom sticky top-0 z-20 bg-gray-50 ${CONTRACT_PERF_TABLE_CELL_PAD}`}
-                          />
-                        {visibleColumns.map(col => {
+                          {showStoExpandColumn ? (
+                            <th
+                              scope="col"
+                              className="w-10 align-bottom sticky top-0 z-20 bg-gray-50 px-1 py-1.5"
+                            />
+                          ) : null}                        {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const opColClass = operationalTableColumnClass(
                             getOperationalColumnLayout('shipments', col.id),
@@ -5651,19 +7405,67 @@ function ShipmentsPageContent() {
                       {/* Rows */}
                         {section3TableLoading || (listFetching && shipments.length === 0) ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length + 2}
+                            colSpan={visibleColumns.length + 1 + (showStoExpandColumn ? 1 : 0)}
                             icon={Package}
                           />
                         ) : !(listFetching || tableScopeLoading) && sortedShipments.length === 0 ? (
                           <tr>
-                            <td colSpan={visibleColumns.length + 2} className="px-4 py-10 text-center text-gray-500 bg-white">
+                            <td colSpan={visibleColumns.length + 1 + (showStoExpandColumn ? 1 : 0)} className="px-4 py-10 text-center text-gray-500 bg-white">
                               <Package className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p>No shipments found</p>
                               {searchTerm && <p className="text-sm mt-2">Try adjusting your search filters</p>}
+                              {!searchTerm && totalCount > 0 && page === 1 && (
+                                <p className="text-sm mt-2 text-amber-700">Count may be updating — try refreshing the page.</p>
+                              )}
                             </td>
                           </tr>
                         ) : (() => {
                           let stripeIdx = 0
+
+                          if (statusFilter === 'PREPLANNED' && sortedPrePlannedTableGroups) {
+                            return sortedPrePlannedTableGroups.map((group) => {
+                              const rep = getPrePlannedGroupRepresentativeMember(group)
+                              const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                              stripeIdx += 1
+                              return (
+                                <tr key={group.groupKey} className={rowBg}>
+                                  {visibleColumns.map((col) => {
+                                    const layout = getOperationalColumnLayout('shipments', col.id)
+                                    const opColClass = operationalTableColumnClass(layout)
+                                    const cellContent = renderPrePlannedGroupedCell(col, group)
+                                    return (
+                                      <td
+                                        key={col.id}
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
+                                      >
+                                        <div
+                                          className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}
+                                        >
+                                          {cellContent}
+                                        </div>
+                                      </td>
+                                    )
+                                  })}
+                                  <td
+                                    className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
+                                  >
+                                    <ShipmentViewTableRowActions
+                                      shipment={rep}
+                                      onAddShipment={() => void handleOpenAddShipmentForContractRow(rep)}
+                                      onEditShipment={() => handleOpenEditShipmentModal(rep)}
+                                      onViewShipment={() => handleOpenViewShipmentModal(rep)}
+                                      onCancelShipment={() => openCancelShipmentDialog(rep)}
+                                      cancelShipmentLoading={
+                                        cancelShipmentSubmitting && cancelShipmentTarget?.id === rep.id
+                                      }
+                                      onViewDocs={() => void handleViewDocuments(rep)}
+                                    />
+                                  </td>
+                                </tr>
+                              )
+                            })
+                          }
+
                           return stoGroupedShipments.flatMap((group) => {
                             const isMultiStoGroup = group.rows.length > 1
                             const stoGroupCollapsed = collapsedStoGroupKeys.has(group.stoKey)
@@ -5675,22 +7477,23 @@ function ShipmentsPageContent() {
                                   key={`sto-group-${group.stoKey}`}
                                   className="bg-slate-100 border-y border-slate-200"
                                 >
-                                  <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleStoGroupCollapse(group.stoKey)}
-                                      className="p-1 text-slate-600 hover:text-slate-900"
-                                      title={stoGroupCollapsed ? 'Expand STO group' : 'Collapse STO group'}
-                                      aria-expanded={!stoGroupCollapsed}
-                                    >
-                                      {stoGroupCollapsed ? (
-                                        <ChevronRight className="h-5 w-5" />
-                                      ) : (
-                                        <ChevronDown className="h-5 w-5" />
-                                      )}
-                                    </button>
-                                  </td>
-                                  {visibleColumns.map((col) => {
+                                  {showStoExpandColumn ? (
+                                    <td className="align-middle w-10 px-1 py-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleStoGroupCollapse(group.stoKey)}
+                                        className="p-1 text-slate-600 hover:text-slate-900"
+                                        title={stoGroupCollapsed ? 'Expand STO group' : 'Collapse STO group'}
+                                        aria-expanded={!stoGroupCollapsed}
+                                      >
+                                        {stoGroupCollapsed ? (
+                                          <ChevronRight className="h-5 w-5" />
+                                        ) : (
+                                          <ChevronDown className="h-5 w-5" />
+                                        )}
+                                      </button>
+                                    </td>
+                                  ) : null}                                  {visibleColumns.map((col) => {
                                     const opColClass = operationalTableColumnClass(
                                       getOperationalColumnLayout('shipments', col.id),
                                     )
@@ -5701,7 +7504,7 @@ function ShipmentsPageContent() {
                                           className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} bg-slate-100`}
                                         >
                                           <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                            <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                                            <span className="text-sm text-slate-900">{group.stoDisplay}</span>
                                             <Badge variant="outline" className="ml-2 text-xs font-normal">
                                               {group.rows.length} rows
                                             </Badge>
@@ -5733,37 +7536,58 @@ function ShipmentsPageContent() {
                               stripeIdx += 1
                               const isStoChildRow = isMultiStoGroup
                               nodes.push(
-                            <Fragment key={shipment.id}>
+                            // STO-expanded rows can repeat shipment.id across STO groups;
+                            // duplicate keys corrupt list reconciliation and leave stale rows.
+                            <Fragment key={`${group.stoKey}|${shipment.id}`}>
                               <tr className={`${rowBg} ${isStoChildRow ? 'border-l-2 border-slate-200' : ''}`}>
-                                <td className={`align-middle w-10 ${CONTRACT_PERF_TABLE_CELL_PAD}`}>
-                                  {isStoChildRow ? (
-                                    <span className="inline-block w-5" aria-hidden />
-                                  ) : (
-                                  <div className="hidden">
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleExpanded(shipment.id)}
-                                      className="p-1 text-gray-500 hover:text-gray-800"
-                                      title={expandedShipmentIds.has(shipment.id) ? 'Collapse' : 'Expand'}
-                                    >
-                                      {expandedShipmentIds.has(shipment.id) ? (
-                                        <ChevronDown className="h-5 w-5" />
-                                      ) : (
-                                        <ChevronRight className="h-5 w-5" />
-                                      )}
-                                    </button>
-                                  </div>
-                                  )}
-                                </td>
+                                {showStoExpandColumn ? (
+                                  <td className="align-middle w-10 px-1 py-1.5">
+                                    {isStoChildRow ? (
+                                      <span className="inline-block w-5" aria-hidden />
+                                    ) : null}
+                                  </td>
+                                ) : null}
 
-                                  {visibleColumns.map(col => {
-                                    const opColClass = operationalTableColumnClass(
-                                      getOperationalColumnLayout('shipments', col.id),
-                                    )
-                                    return (
-                                    <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
-                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
-                                      {col.id === 'vessel_name' && tableInlineEditActive ? (
+                                  {visibleColumns.map(col => {                                    const layout = getOperationalColumnLayout('shipments', col.id)
+                                    const opColClass = operationalTableColumnClass(layout)
+                                    const isInteractiveEdit =
+                                      tableInlineEditActive &&
+                                      (col.id === 'vessel_name' ||
+                                        col.id === 'vessel_code' ||
+                                        col.id === 'vessel_owner' ||
+                                        col.id === 'vessel_capacity' ||
+                                        col.id === 'vessel_hull_type' ||
+                                        col.id === 'port_of_loading' ||
+                                        col.id === 'status')
+                                    const useTruncateTooltip =
+                                      !isInteractiveEdit &&
+                                      !(isStoChildRow && col.id === 'shipment_id') &&
+                                      shouldApplyOperationalTruncateTooltip(
+                                        col.id,
+                                        layout,
+                                        SHIPMENTS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                      )
+                                    const truncateTooltip = useTruncateTooltip
+                                      ? col.id === 'supplier' || col.id === 'loading_port'
+                                        ? (() => {
+                                            const text =
+                                              col.id === 'supplier'
+                                                ? resolveShipmentListSuppliers(shipment)
+                                                : resolveShipmentListLoadingPorts(shipment)
+                                            if (!text || text === '-') return null
+                                            return text
+                                              .split(',')
+                                              .map((part) => part.trim())
+                                              .filter(Boolean)
+                                              .join('\n')
+                                          })()
+                                        : operationalRowFieldTooltipText(
+                                            col.id,
+                                            shipment as unknown as Record<string, unknown>,
+                                          )
+                                      : null
+                                    const cellContent =
+                                      col.id === 'vessel_name' && tableInlineEditActive ? (
                                         <div className="relative">
                                           <Input
                                             value={editedData.vessel_name ?? shipment.vessel_name ?? ''}
@@ -5888,6 +7712,16 @@ function ShipmentsPageContent() {
                                         <span className="text-xs text-gray-400">—</span>
                                       ) : (
                                         col.render(shipment)
+                                      )
+                                    return (
+                                    <td key={col.id} className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}>
+                                      <div className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}>
+                                      {useTruncateTooltip ? (
+                                        <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                          {cellContent}
+                                        </ContractPerfTruncatedCell>
+                                      ) : (
+                                        cellContent
                                       )}
                                       </div>
                                     </td>
@@ -5939,7 +7773,7 @@ function ShipmentsPageContent() {
                               </tr>
                               {false && expandedShipmentIds.has(shipment.id) && (
                                 <tr key={`${shipment.id}-expanded`} className={rowBg}>
-                                  <td colSpan={visibleColumns.length + 2} className="px-3 py-3">
+                                  <td colSpan={visibleColumns.length + 1 + (showStoExpandColumn ? 1 : 0)} className="px-3 py-3">
                                   <div className="p-3 border rounded bg-white">
                                     {/* Basic Info */}
                                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mb-4 pb-4 border-b">
@@ -6076,6 +7910,54 @@ function ShipmentsPageContent() {
                     <div className="rounded-lg border bg-white px-4 py-10 text-center text-sm text-gray-500">
                       No shipments found
                     </div>
+                  ) : statusFilter === 'PREPLANNED' && sortedPrePlannedTableGroups ? (
+                  sortedPrePlannedTableGroups.map((group) => {
+                    const rep = getPrePlannedGroupRepresentativeMember(group)
+                    return (
+                      <div
+                        key={group.groupKey}
+                        className="border rounded-lg transition-colors hover:bg-gray-50"
+                      >
+                        <div className="p-4 flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-3 mb-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div className="min-w-0">
+                                <div className="font-semibold truncate">
+                                  {group.group ? formatPrePlannedGroupBadge(group.group) : 'Preplanned group'}
+                                </div>
+                                <div className="text-xs text-gray-600 truncate">
+                                  {group.members.length}{' '}
+                                  {group.members.length === 1 ? 'contract' : 'contracts'}
+                                </div>
+                              </div>
+                              <Badge className={getStatusColor(rep.status)}>
+                                {formatShipmentStatusLabel(rep.status)}
+                              </Badge>
+                            </div>
+                            <ShipmentViewTableRowActions
+                              shipment={rep}
+                              onAddShipment={() => void handleOpenAddShipmentForContractRow(rep)}
+                              onEditShipment={() => handleOpenEditShipmentModal(rep)}
+                              onViewShipment={() => handleOpenViewShipmentModal(rep)}
+                              onCancelShipment={() => openCancelShipmentDialog(rep)}
+                              cancelShipmentLoading={
+                                cancelShipmentSubmitting && cancelShipmentTarget?.id === rep.id
+                              }
+                              onViewDocs={() => void handleViewDocuments(rep)}
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            {visibleColumns.slice(0, 8).map((col) => (
+                              <div key={col.id}>
+                                <div className="text-gray-500">{col.label}</div>
+                                <div className="font-medium">{renderPrePlannedGroupedCell(col, group)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
                   ) : (
                   stoGroupedShipments.flatMap((group) => {
                     const isMultiStoGroup = group.rows.length > 1
@@ -6100,7 +7982,7 @@ function ShipmentsPageContent() {
                               <ChevronDown className="h-5 w-5" />
                             )}
                           </button>
-                          <span className="text-sm font-semibold text-slate-900">{group.stoDisplay}</span>
+                          <span className="text-sm text-slate-900">{group.stoDisplay}</span>
                           <Badge variant="outline" className="text-xs font-normal">
                             {group.rows.length} rows
                           </Badge>
@@ -6116,10 +7998,10 @@ function ShipmentsPageContent() {
                     const hasShipmentEditData = Boolean(shipment.vessel_name?.trim())
                     nodes.push(
                       <div
-                        key={shipment.id}
+                        key={`${group.stoKey}|${shipment.id}`}
                         className={`border rounded-lg transition-colors ${isMultiStoGroup ? 'ml-3 border-l-2 border-slate-200' : ''} ${tableInlineEditActive ? 'border-blue-300 bg-blue-50' : 'hover:bg-gray-50'}`}
                       >
-                        <div className="p-4">
+                        <div className="p-4 flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-3 mb-3">
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="hidden">
@@ -6326,7 +8208,14 @@ function ShipmentsPageContent() {
                 {totalPages > 1 && (
                   <div className="mt-6 flex items-center justify-between border-t pt-4">
                     <div className="text-sm text-gray-700">
-                      Showing page {page} of {totalPages} ({tableShipmentCount} total shipments)
+                      Showing page {page} of {totalPages} (
+                      {tableShipmentCount}{' '}
+                      {statusFilter === 'PREPLANNED'
+                        ? tableShipmentCount === 1
+                          ? 'grouping'
+                          : 'groupings'
+                        : 'total shipments'}
+                      )
                     </div>
                     <div className="flex items-center gap-2">
                       <Button
@@ -6448,7 +8337,7 @@ function ShipmentsPageContent() {
                             ),
                             color: 'text-gray-800',
                           },
-                          { label: 'Loading Port', value: shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
+                          { label: 'Loading Port', value: formatGroupLoadingPortsDisplay(loadingPorts, selectedShipment?.is_contract_sap_closed) || shipmentInfo.vessel_loading_port_1 || '—', color: 'text-blue-700' },
                           { label: 'Discharge Port', value: shipmentInfo.vessel_discharge_port_1 || '—', color: 'text-cyan-700' },
                         ].map((m) => (
                           <div key={m.label} className="px-4 py-3">
@@ -6676,7 +8565,9 @@ function ShipmentsPageContent() {
                           onChange={(next) => setEditedShipmentInfo({ ...editedShipmentInfo, sfbd_qty: next })}
                         />
                         <div>
-                          <div className="text-gray-500">Vessel Loading Port 1</div>
+                          <div className="text-gray-500">
+                            {hasMultipleGroupLoadingPorts(loadingPorts) ? 'Loading Ports' : 'Vessel Loading Port 1'}
+                          </div>
                           {editingShipmentInfo ? (
                             <div className="mt-1">
                               <MasterLoadingPortCombobox
@@ -6686,10 +8577,19 @@ function ShipmentsPageContent() {
                                 }
                                 placeholder="Search Master Port..."
                                 className="h-8 text-sm"
+                                disabled={hasMultipleGroupLoadingPorts(loadingPorts)}
                               />
+                              {hasMultipleGroupLoadingPorts(loadingPorts) && (
+                                <p className="text-[11px] text-gray-500 mt-1">
+                                  Multiple contracts — edit each loading port in the sections below.
+                                </p>
+                              )}
                             </div>
                           ) : (
-                          <div className="font-medium">{formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}</div>
+                          <div className="font-medium">
+                            {formatGroupLoadingPortsDisplay(loadingPorts, selectedShipment?.is_contract_sap_closed) ||
+                              formatSapDisplayValue(shipmentInfo.vessel_loading_port_1)}
+                          </div>
                           )}
                         </div>
                         <div>
@@ -7112,17 +9012,17 @@ function ShipmentsPageContent() {
                     return null
                   }
 
-                  // Multiple sets: new section for each additional loading or discharge port (first set stays in Shipment Information)
-                  const additionalLoading = loadingPortsList.slice(1)
-                  const additionalDischarge = dischargePortsList.slice(1)
+                  // Multiple sets: section per loading/discharge port (multi-contract STO groups show all loading ports)
+                  const additionalLoading = loadingPortsList.length > 1 ? loadingPortsList : loadingPortsList.slice(1)
+                  const additionalDischarge = dischargePortsList.length > 1 ? dischargePortsList : dischargePortsList.slice(1)
                   const additionalPorts = [...additionalLoading, ...additionalDischarge]
 
                   return (
                     <>
                   {additionalPorts.map((port) => {
                     const sectionTitle = port.is_discharge_port
-                      ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}`
-                      : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}`
+                      ? `Discharge Port ${dischargePortsList.indexOf(port) + 1} — ${port.port_name || 'Unnamed'}${port.contract_number ? ` (Contract ${port.contract_number})` : ''}`
+                      : `Loading Port ${port.port_sequence} — ${port.port_name || 'Unnamed'}${port.contract_number ? ` (Contract ${port.contract_number})` : ''}`
                     const quantityLabel = port.is_discharge_port ? 'Received Quantity (Kg)' : 'Quantity at Loading Port (Kg)'
                     const rateLabel = port.is_discharge_port ? 'Discharge Rate (Kg/day)' : 'Loading Rate (Kg/day)'
 
@@ -7239,9 +9139,7 @@ function ShipmentsPageContent() {
                               />
                             ) : (
                               <div className="font-medium">
-                                {displayData.quantity_at_loading_port !== null && displayData.quantity_at_loading_port !== undefined
-                                  ? formatNumber(displayData.quantity_at_loading_port)
-                                  : '-'}
+                                {formatNumber(displayData.quantity_at_loading_port ?? 0)}
                               </div>
                             )}
                           </div>
@@ -7626,7 +9524,7 @@ function ShipmentsPageContent() {
             </DialogDescription>
           </DialogHeader>
           <p className="text-sm text-gray-600">
-            Status will become <span className="font-medium">Cancelled</span> and Shipment Plan Qty / OS Qty (Plan)
+            Status will become <span className="font-medium">Cancelled</span> and OS Qty (Plan)
             assignments will be cleared.
           </p>
           <div className="space-y-2">
@@ -7716,9 +9614,11 @@ function ShipmentsPageContent() {
         prefilledPOs={addShipmentPrefilledPOs}
         prefilledStoNumber={addShipmentPrefilledSto}
         prefilledContractNumbers={addShipmentPrefilledContractNumbers}
+        prePlannedGroupId={addShipmentPrePlannedGroupId}
         onClose={handleCloseShipmentModal}
         onShipmentChanged={() => {
           invalidateLogisticsListCaches()
+          invalidateMissingEtaAlertCache()
           section1SummaryForceNextFetchRef.current = true
           void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
@@ -7728,18 +9628,30 @@ function ShipmentsPageContent() {
           await submitAddNewShipmentPayload(payload)
           handleCloseShipmentModal()
           invalidateLogisticsListCaches()
+          invalidateMissingEtaAlertCache()
           section1SummaryForceNextFetchRef.current = true
+          void refetchPrePlannedGroups()
+          void refetchPrePlannedAcceptedGroups()
           void fetchVesselIdle()
           void fetchShipments(1, undefined, { force: true })
         }}
+      />
+
+      <ContractDetailModal
+        contract={contractDetailTarget}
+        onClose={() => setContractDetailTarget(null)}
+        stacked
       />
 
       <VesselIdleModal
         open={vesselIdleModalOpen}
         loading={vesselIdleLoading}
         vessels={vesselIdleList}
+        willFree={vesselWillFreeList}
         onClose={() => setVesselIdleModalOpen(false)}
         onVesselNameClick={handleVesselIdleNameClick}
+        onAddShipment={handleVesselIdleAddShipment}
+        canAddShipment={!perms.loaded || canOpenAddShipmentModal}
       />
 
       <VesselHistoryModal

@@ -6,8 +6,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Bot, Upload, Sparkles } from 'lucide-react'
+import { Upload, Sparkles } from 'lucide-react'
 import api from '@/lib/api'
+import AgentReportView from './AgentReportView'
+
+type AgentReportTable = {
+  title: string
+  columns: Array<{ key: string; label: string; align?: 'left' | 'right' }>
+  rows: Array<Record<string, string | number | null>>
+  totals?: Record<string, string | number | null>
+  chart?: { type: 'bar' | 'pie'; labelKey: string; valueKey: string; valueLabel: string }
+}
 
 type AgentResponse = {
   answer: string
@@ -15,6 +24,7 @@ type AgentResponse = {
   insights: string
   comparison: string
   clarification?: string
+  reportTable?: AgentReportTable | null
 }
 
 type ChatItem =
@@ -81,8 +91,6 @@ export default function KlipAgentAiPage() {
     <Layout>
       <div className="mx-auto max-w-5xl h-[calc(100vh-140px)] flex flex-col">
         <div className="mb-3 flex items-center gap-2">
-          <Bot className="h-5 w-5 text-blue-600" />
-          <h1 className="text-lg font-semibold">KLIP Agent AI</h1>
           <Badge variant="outline" className="text-[10px]">Beta</Badge>
         </div>
 
@@ -157,7 +165,12 @@ export default function KlipAgentAiPage() {
                         <div className="font-semibold text-gray-800 mb-1">Direct Answer</div>
                         <div className="whitespace-pre-wrap">{item.data.answer || '-'}</div>
                       </div>
-                      {item.data.report ? (
+                      {item.data.reportTable ? (
+                        <div>
+                          <div className="font-semibold text-gray-800 mb-1">Report</div>
+                          <AgentReportView table={item.data.reportTable} />
+                        </div>
+                      ) : item.data.report ? (
                         <div>
                           <div className="font-semibold text-gray-800 mb-1">Report</div>
                           <div className="whitespace-pre-wrap">{item.data.report}</div>

@@ -2,15 +2,18 @@
 
 import { Search, X } from 'lucide-react'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
-import {
-  SHIPMENT_PAGE_PIPELINE_CARDS,
-  type ShipmentPagePipelineStage,
-} from '@/lib/shipmentPagePipeline'
 import type { ShipmentsPipelineStageFilter } from '@/lib/shipmentsPageFilterState'
+import {
+  mapShipmentPipelineStageToGlobalStatusBucket,
+  SHIPMENT_GLOBAL_STATUS_OPTIONS,
+} from '@/lib/shipmentsPageFilterState'
+import { SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS } from '@/lib/shipmentCharterTypeFilter'
+import { LOGISTICS_SOURCE_FILTER_OPTIONS } from '@/lib/logisticsSourceFilter'
 
 export interface ShipmentsGlobalFiltersSectionProps {
   searchDraft: string
@@ -20,6 +23,10 @@ export interface ShipmentsGlobalFiltersSectionProps {
   onPipelineStageChange: (stage: ShipmentsPipelineStageFilter) => void
   lateIndicatorFilter: string
   onLateIndicatorChange: (value: string) => void
+  charterTypeFilter: string
+  onCharterTypeChange: (value: string) => void
+  sourceTypeFilter: string
+  onSourceTypeChange: (value: string) => void
   availableIncoterms: string[]
   selectedIncoterms: string[]
   onIncotermsChange: (values: string[]) => void
@@ -40,6 +47,13 @@ export interface ShipmentsGlobalFiltersSectionProps {
   onClearFilters: () => void
 }
 
+const LATE_INDICATOR_OPTIONS = [
+  { value: 'ALL', label: 'All Late Indicator' },
+  { value: 'ON_TIME', label: 'On Time' },
+  { value: 'LATE', label: 'Late' },
+  { value: 'NA', label: 'N/A' },
+] as const
+
 export function ShipmentsGlobalFiltersSection({
   searchDraft,
   onSearchDraftChange,
@@ -48,6 +62,10 @@ export function ShipmentsGlobalFiltersSection({
   onPipelineStageChange,
   lateIndicatorFilter,
   onLateIndicatorChange,
+  charterTypeFilter,
+  onCharterTypeChange,
+  sourceTypeFilter,
+  onSourceTypeChange,
   availableIncoterms,
   selectedIncoterms,
   onIncotermsChange,
@@ -67,6 +85,8 @@ export function ShipmentsGlobalFiltersSection({
   hasActiveFilters,
   onClearFilters,
 }: ShipmentsGlobalFiltersSectionProps) {
+  const globalStatusValue = mapShipmentPipelineStageToGlobalStatusBucket(pipelineStage)
+
   return (
     <Card aria-label="Global filters">
       <CardHeader className="pb-3">
@@ -74,7 +94,7 @@ export function ShipmentsGlobalFiltersSection({
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-4">
-          <div className="flex flex-wrap gap-4">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="relative min-w-[12rem] flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
               <Input
@@ -90,32 +110,34 @@ export function ShipmentsGlobalFiltersSection({
                 className="pl-10"
               />
             </div>
-            <select
-              value={pipelineStage}
-              onChange={(e) =>
-                onPipelineStageChange(e.target.value as ShipmentsPipelineStageFilter)
-              }
-              className="rounded-lg border px-4 py-2"
-              aria-label="Pipeline status filter"
-            >
-              <option value="ALL">All Status</option>
-              {SHIPMENT_PAGE_PIPELINE_CARDS.map((card) => (
-                <option key={card.status} value={card.status}>
-                  {card.label}
-                </option>
-              ))}
-            </select>
-            <select
+            <FilterSingleSelect
+              value={globalStatusValue}
+              onChange={(value) => onPipelineStageChange(value as ShipmentsPipelineStageFilter)}
+              options={[...SHIPMENT_GLOBAL_STATUS_OPTIONS]}
+              ariaLabel="Pipeline status filter"
+              className="min-w-[11rem]"
+            />
+            <FilterSingleSelect
               value={lateIndicatorFilter}
-              onChange={(e) => onLateIndicatorChange(e.target.value)}
-              className="rounded-lg border px-4 py-2"
-              aria-label="Late indicator filter"
-            >
-              <option value="ALL">All Late Indicator</option>
-              <option value="ON_TIME">On Time</option>
-              <option value="LATE">Late</option>
-              <option value="NA">N/A</option>
-            </select>
+              onChange={onLateIndicatorChange}
+              options={LATE_INDICATOR_OPTIONS}
+              ariaLabel="Late indicator filter"
+              className="min-w-[11rem]"
+            />
+            <FilterSingleSelect
+              value={charterTypeFilter}
+              onChange={onCharterTypeChange}
+              options={SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS}
+              ariaLabel="Charter type filter"
+              className="min-w-[11rem]"
+            />
+            <FilterSingleSelect
+              value={sourceTypeFilter}
+              onChange={onSourceTypeChange}
+              options={[...LOGISTICS_SOURCE_FILTER_OPTIONS]}
+              ariaLabel="Source filter"
+              className="min-w-[11rem]"
+            />
           </div>
 
           <PerformanceScopeFilters
@@ -132,6 +154,7 @@ export function ShipmentsGlobalFiltersSection({
             selectedSuppliers={selectedSuppliers}
             onSuppliersChange={onSuppliersChange}
             groupPlantOptions={availableGroupPlants}
+            uppercaseGroupPlantLabels
             selectedGroupPlants={selectedGroupPlants}
             onGroupPlantsChange={onGroupPlantsChange}
             dateFrom={dateFrom}
@@ -142,8 +165,8 @@ export function ShipmentsGlobalFiltersSection({
             incotermEmptyMessage="Loading incoterms..."
             productEmptyMessage="Loading products..."
             supplierEmptyMessage="Loading suppliers..."
-            groupPlantPlaceholder="Select group plant(s)"
-            groupPlantEmptyMessage="No group plants"
+            groupPlantPlaceholder="Select region/plant(s)"
+            groupPlantEmptyMessage="No region/plant values"
           />
 
           <div className="flex flex-wrap gap-4 items-center">

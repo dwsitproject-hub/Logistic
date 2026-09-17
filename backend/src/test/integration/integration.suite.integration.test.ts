@@ -6,8 +6,8 @@ import { seedIntegrationFixtures, type IntegrationFixtureIds } from './seedFixtu
 
 let fx: IntegrationFixtureIds;
 
-async function login(username: string, password: string): Promise<string> {
-  const res = await request(app).post('/api/auth/login').send({ username, password }).expect(200);
+async function login(email: string, password: string): Promise<string> {
+  const res = await request(app).post('/api/auth/login').send({ email, password }).expect(200);
   return res.body.data.token as string;
 }
 
@@ -18,7 +18,7 @@ beforeAll(async () => {
 describe('Integration: fixtures + getContracts (Postgres)', () => {
 
   it('lists ITEST contracts via API and search filters server-side', async () => {
-    const token = await login('admin', 'admin123');
+    const token = await login('admin@klip.com', 'admin123');
     const all = await request(app)
       .get('/api/contracts?limit=100')
       .set('Authorization', `Bearer ${token}`)
@@ -37,7 +37,7 @@ describe('Integration: fixtures + getContracts (Postgres)', () => {
   });
 
   it('outstanding quantity matches contract qty minus summed STO (500 delivered)', async () => {
-    const token = await login('admin', 'admin123');
+    const token = await login('admin@klip.com', 'admin123');
     const res = await request(app)
       .get('/api/contracts?limit=100&contract_id=ITEST-A')
       .set('Authorization', `Bearer ${token}`)
@@ -59,7 +59,7 @@ describe('Integration: dashboard stats vs raw SQL', () => {
   });
 
   it('totalQuantity matches SUM(quantity_ordered) over contracts', async () => {
-    const token = await login('admin', 'admin123');
+    const token = await login('admin@klip.com', 'admin123');
     const api = await request(app)
       .get('/api/dashboard/stats')
       .set('Authorization', `Bearer ${token}`)
@@ -135,7 +135,7 @@ describe('Integration: role-permission matrix (sample of routes)', () => {
   let financeT: string;
 
   beforeAll(async () => {
-    adminT = await login('admin', 'admin123');
+    adminT = await login('admin@klip.com', 'admin123');
     tradingT = await login('trading', 'trading123');
     financeT = await login('finance', 'finance123');
   });
@@ -171,7 +171,7 @@ describe('Integration: document upload validation and optional ClamAV', () => {
   let adminT: string;
 
   beforeAll(async () => {
-    adminT = await login('admin', 'admin123');
+    adminT = await login('admin@klip.com', 'admin123');
   });
 
   it('rejects unsupported MIME type (400)', async () => {
@@ -217,7 +217,7 @@ describe('Integration: document upload validation and optional ClamAV', () => {
 
 describe('Integration: EICAR blocked when ClamAV is up', () => {
   it.skipIf(!process.env.CLAMD_HOST)('rejects EICAR test string as infected', async () => {
-    const adminT = await login('admin', 'admin123');
+    const adminT = await login('admin@klip.com', 'admin123');
     const eicar =
       'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
     const pdfWrapped = Buffer.from(

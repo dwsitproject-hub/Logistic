@@ -1,198 +1,310 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  buildShipmentListCacheKey,
-  buildShipmentListEmptyCountQuery,
   buildShipmentListPageQuery,
-  buildShipmentListPageQueryWithoutInlineCount,
-  buildShipmentPipelineDailyFilterInput,
+  buildShipmentListStatusFilteredCountQuery,
+  CACHE_TTL_MS,
   getCachedFilteredTotal,
   invalidateShipmentsListCache,
-  loadShipmentSummaryBundle,
+  normalizeShipmentListRows,
+  seedShipmentListFilteredTotal,
 } from './shipmentList.service';
-import {
-  isPipelineDailySummaryEligible,
-  loadShipmentSummaryFromDaily,
-} from './pipelineDailySummary.service';
 
-vi.mock('./pipelineDailySummary.service', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./pipelineDailySummary.service')>();
-  return {
-    ...actual,
-    isPipelineDailySummaryEligible: vi.fn(actual.isPipelineDailySummaryEligible),
-    loadShipmentSummaryFromDaily: vi.fn(actual.loadShipmentSummaryFromDaily),
-    markPipelineDailySummaryStale: vi.fn(actual.markPipelineDailySummaryStale),
-  };
+describe('shipment list cache TTL', () => {
+  it('keeps PAGE/SUMMARY/OS memory for 60 minutes; writes invalidate', () => {
+    expect(CACHE_TTL_MS).toBe(60 * 60 * 1000);
+  });
 });
 
-const baseCtx = {
-  shipmentBaseCteSql: 'WITH shipment_base_core AS (SELECT 1)',
-  outerSql: '',
-  innerParams: ['2026-01-01', '2026-06-29'],
-  outerParams: [] as unknown[],
-  skipSapJoin: true,
-  cacheKey: 'test',
-  filterCacheKey: 'test-filter',
-};
-
-describe('shipmentList.service', () => {
-  it('buildShipmentListCacheKey is stable for plant order', () => {
-    const base = {
-      plants: ['A', 'B'],
-      globalSearch: '',
-      colFilters: {},
+describe('buildShipmentListStatusFilteredCountQuery', () => {
+  it('counts filtered_shipments on full base CTE with toolbar + status outerSql', async () => {
+    const q = buildShipmentListStatusFilteredCountQuery({
+      shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+      countShipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+      outerSql: ' AND sb.product = $3',
+      innerParams: [1, 2],
+      outerParams: ['CPO'],
       skipSapJoin: true,
-      page: 1,
-      limit: 20,
-      status: 'ALL',
-      etaLoading: 'ALL',
-      etaDischarge: 'ALL',
-    };
-    const a = buildShipmentListCacheKey(base);
-    const b = buildShipmentListCacheKey({ ...base, plants: ['B', 'A'] });
-    expect(a).toBe(b);
-  });
-
-  it('buildShipmentListCacheKey differs for shell vs SAP hydrate', () => {
-    const shell = buildShipmentListCacheKey({
-      plants: [],
-      globalSearch: '',
-      colFilters: {},
-      skipSapJoin: true,
-      page: 1,
-      limit: 20,
+      cacheKey: 'k',
+      filterCacheKey: 'fk',
+      tableStatusFilter: 'AT_DISCHARGE_PORT',
+      useLiveStatusFilteredCount: true,
     });
-    const sap = buildShipmentListCacheKey({
-      plants: [],
-      globalSearch: '',
-      colFilters: {},
-      skipSapJoin: false,
-      page: 1,
-      limit: 20,
-    });
-    expect(shell).not.toBe(sap);
+    expect(q.text).toContain('filtered_shipments AS');
+    expect(q.text).toContain('COUNT(*)::bigint AS c');
+    expect(q.text).toContain("COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'");
+    expect(q.text).not.toContain('paged_sto');
+    expect(q.params).toEqual([1, 2, 'CPO']);
   });
+});
 
-  it('invalidateShipmentsListCache clears cached rows without throwing', () => {
-    expect(() => invalidateShipmentsListCache()).not.toThrow();
-  });
-
-  it('buildShipmentListPageQuery embeds __filter_total in one query (C)', () => {
-    const { text } = buildShipmentListPageQuery(baseCtx, 20, 0);
-    expect(text).toContain('__filter_total');
-    expect(text).toContain('FROM filtered_shipments');
-    expect(text).toContain('LIMIT $3 OFFSET $4');
-  });
-
-  it('buildShipmentListPageQuery prioritizes STO rows for PLANNED', () => {
-    const { text } = buildShipmentListPageQuery(
-      { ...baseCtx, tableStatusFilter: 'PLANNED' },
-      20,
-      0,
-    );
-    expect(text).toContain('fs.sto_number');
-    expect(text).toContain('THEN 0');
-    expect(text).toContain('fs.created_at DESC');
-  });
-
-  it('buildShipmentListPageQuery uses ranked_sto total when STO paging (A)', () => {
-    const { text, params } = buildShipmentListPageQuery(
-      { ...baseCtx, usesStoKeyPaging: true, shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1), paged_sto AS (SELECT 1)' },
-      20,
-      0,
-    );
-    expect(text).toContain('FROM ranked_sto) AS __filter_total');
-    expect(text).not.toMatch(/shipment_page AS[\s\S]*LIMIT \$/);
-    expect(params).toEqual([...baseCtx.innerParams]);
-  });
-
-  it('buildShipmentListEmptyCountQuery counts ranked_sto when STO paging', () => {
-    const { text } = buildShipmentListEmptyCountQuery({
-      ...baseCtx,
-      usesStoKeyPaging: true,
-      shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1), paged_sto AS (SELECT 1)',
-    });
-    expect(text).toContain('FROM ranked_sto');
-    expect(text).not.toContain('paged_sto');
-  });
-
-  it('buildShipmentListPageQueryWithoutInlineCount omits __filter_total', () => {
-    const { text } = buildShipmentListPageQueryWithoutInlineCount(baseCtx, 20, 0);
-    expect(text).not.toContain('__filter_total');
-    expect(text).toContain('LIMIT $3 OFFSET $4');
-  });
-
-  it('buildShipmentListPageQueryWithoutInlineCount omits LIMIT when STO paging', () => {
-    const { text, params } = buildShipmentListPageQueryWithoutInlineCount(
-      { ...baseCtx, usesStoKeyPaging: true, shipmentBaseCteSql: 'WITH ranked_sto AS (SELECT 1)' },
-      20,
-      0,
-    );
-    expect(text).not.toContain('__filter_total');
-    expect(text).not.toMatch(/shipment_page AS[\s\S]*LIMIT \$/);
-    expect(params).toEqual([...baseCtx.innerParams]);
-  });
-
-  it('getCachedFilteredTotal returns null when cache is empty', () => {
+describe('seedShipmentListFilteredTotal', () => {
+  it('seeds COUNT_CACHE so status-card paging can skip a second live COUNT', async () => {
     invalidateShipmentsListCache();
-    expect(getCachedFilteredTotal('missing-filter-key')).toBeNull();
+    const filterCacheKey = 'opt3-snapshot-gate-seed-test';
+    expect(getCachedFilteredTotal(filterCacheKey)).toBeNull();
+    seedShipmentListFilteredTotal(filterCacheKey, 42);
+    expect(getCachedFilteredTotal(filterCacheKey)).toBe(42);
+    invalidateShipmentsListCache();
+    expect(getCachedFilteredTotal(filterCacheKey)).toBeNull();
   });
+});
 
-  it('buildShipmentPipelineDailyFilterInput maps toolbar query params', () => {
-    const req = {
-      query: {
-        dateFrom: '2026-01-01',
-        dateTo: '2026-06-30',
-        plant: ['PRC Karawang'],
-        status: 'ALL',
-        scopeStatus: 'ALL',
-        etaLoading: 'ALL',
-        etaDischarge: 'ALL',
-        search: '',
+describe('buildShipmentListPageQuery', () => {
+  it('selects SQL effective_status so table badges match status cards', async () => {
+    const q = await buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k',
+        filterCacheKey: 'fk',
       },
-    } as Parameters<typeof buildShipmentPipelineDailyFilterInput>[0];
-    const filters = buildShipmentPipelineDailyFilterInput(req);
-    expect(filters.dateFrom).toBe('2026-01-01');
-    expect(filters.plants).toEqual(['PRC Karawang']);
-    expect(isPipelineDailySummaryEligible(filters)).toBe(true);
+      50,
+      0,
+    );
+    expect(q.text).toContain('AS effective_status');
+    expect(q.text).toContain("COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'");
+    expect(q.text).toContain('sp.master_vessel_id');
+    expect(q.text).toContain('vessel_name_master');
   });
 
-  it('buildShipmentPipelineDailyFilterInput rejects card filters for daily eligibility', () => {
-    const req = {
-      query: { status: 'PLANNED', dateFrom: '2026-01-01' },
-    } as Parameters<typeof buildShipmentPipelineDailyFilterInput>[0];
-    expect(isPipelineDailySummaryEligible(buildShipmentPipelineDailyFilterInput(req))).toBe(false);
+  it('skipSapJoin shell omits qty_move and sto_metrics so first paint cannot drift OS/receive/delivery', async () => {
+    const q = await buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-shell',
+        filterCacheKey: 'fk-shell',
+        sortKey: 'created_at',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).not.toMatch(/\bqty_move\b/);
+    expect(q.text).not.toMatch(/LEFT JOIN sto_metrics\b/);
+    expect(q.text).not.toMatch(/LEFT JOIN sap_agg\b/);
+    expect(q.text).not.toContain('AS outstanding_quantity');
+    expect(q.text).not.toContain('AS quantity_receive');
+    expect(q.text).toContain('AS effective_status');
+    expect(q.text).toContain('vessel_name_master');
   });
 
-  describe('loadShipmentSummaryBundle', () => {
-    beforeEach(() => {
-      invalidateShipmentsListCache();
-      vi.mocked(isPipelineDailySummaryEligible).mockReturnValue(true);
-      vi.mocked(loadShipmentSummaryFromDaily).mockReset();
-    });
+  it('hydrate skipSapJoin=false keeps list qty SQL for OS, receive, and delivery', async () => {
+    const q = await buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: false,
+        cacheKey: 'k-hydrate',
+        filterCacheKey: 'fk-hydrate',
+        sortKey: 'created_at',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toMatch(/\bqty_move\b/);
+    expect(q.text).toMatch(/LEFT JOIN sto_metrics sm ON/);
+    expect(q.text).toContain('AS outstanding_quantity');
+    expect(q.text).toContain('AS quantity_receive');
+    expect(q.text).toContain('AS quantity_delivered_sap');
+    expect(q.text).toContain('sm.po_sto_count');
+    expect(q.text).toContain('quantity_delivered_klip');
+  });
 
-    it('uses daily summary without calling hybrid unplanned breakdown', async () => {
-      vi.mocked(loadShipmentSummaryFromDaily).mockResolvedValue({
-        summaryRow: { planned_count: 10, total_count: 20 },
-        totalCount: 20,
-        unplannedBreakdown: { contractRows: 3, shipmentRows: 2, totalTableRows: 5 },
-      });
-      const loadUnplannedBreakdown = vi.fn();
-      const req = { query: { dateFrom: '2026-01-01', dateTo: '2026-06-30' } } as Parameters<
-        typeof loadShipmentSummaryBundle
-      >[0];
+  it('enriches before ORDER BY for contract_qty even when skipSapJoin is true', async () => {
+    const q = await buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-qty',
+        filterCacheKey: 'fk-qty',
+        sortKey: 'contract_qty',
+        sortDir: 'DESC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toContain('list_enriched AS');
+    expect(q.text).toContain('le.contract_qty DESC');
+  });
 
-      const result = await loadShipmentSummaryBundle(req, {
-        summaryCountQuery: 'SELECT 1',
-        params: [],
-        cacheKey: 'test-daily-bundle',
-        loadUnplannedBreakdown,
-      });
+  it('enriches before ORDER BY for outstanding_quantity even when skipSapJoin is true', async () => {
+    const q = await buildShipmentListPageQuery(
+      {
+        shipmentBaseCteSql: 'WITH shipment_base AS (SELECT 1 AS id)',
+        outerSql: '',
+        innerParams: [],
+        outerParams: [],
+        skipSapJoin: true,
+        cacheKey: 'k-os',
+        filterCacheKey: 'fk-os',
+        sortKey: 'outstanding_quantity',
+        sortDir: 'ASC',
+      },
+      20,
+      0,
+    );
+    expect(q.text).toContain('list_enriched AS');
+    expect(q.text).toContain('le.outstanding_quantity ASC');
+    expect(q.text).not.toMatch(/ORDER BY\s+fs\.created_at ASC/);
+    expect(q.text).toMatch(/\bqty_move\b/);
+    expect(q.text).toContain('AS outstanding_quantity');
+  });
+});
 
-      expect(result.source).toBe('daily');
-      expect(result.totalCount).toBe(20);
-      expect(result.unplannedBreakdown.totalTableRows).toBe(5);
-      expect(loadUnplannedBreakdown).not.toHaveBeenCalled();
-      expect(loadShipmentSummaryFromDaily).toHaveBeenCalledOnce();
-    });
+describe('normalizeShipmentListRows', () => {
+  it('does not floor to SAILED when is_contract_sap_closed is TRUE (GR Close)', async () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'shipment',
+        sto_number: '1016010610',
+        is_contract_sap_closed: true,
+        group_status_floor: 'SAILED',
+        group_active_status_count: 3,
+        ata_vessel_sailed_from_loading_port: '2026-05-15',
+        status: 'SAILED',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('COMPLETED');
+  });
+
+  it('does not floor ATA sailed when GR is Open and members disagree', async () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'shipment',
+        sto_number: 'STO-MIX-1',
+        is_contract_sap_closed: false,
+        group_status_floor: 'UNPLANNED',
+        group_active_status_count: 2,
+        ata_vessel_sailed_from_loading_port: '2026-07-18',
+        status: 'PLANNED',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('SAILED');
+  });
+
+  it('keeps SQL effective_status when JS ATA would promote to Arrived LP', async () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'shipment',
+        sto_number: '1006019385',
+        effective_status: 'PLANNED',
+        ata_vessel_arrival_at_loading_port: '2026-07-05',
+        status: 'PLANNED',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('PLANNED');
+    expect(rows[0]?.effective_status).toBeUndefined();
+  });
+
+  it('keeps COMPLETED on contract_backlog rows (low remaining OS)', async () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'COMPLETED',
+        contract_number: '1014000001',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('COMPLETED');
+  });
+
+  it('keeps CANCELLED on contract_backlog rows', async () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'CANCELLED',
+        contract_number: '1014000003',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('CANCELLED');
+  });
+
+  it('keeps PREPLANNED on contract_backlog rows', async () => {
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'PREPLANNED',
+        contract_number: '1014000002',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(rows[0]?.status).toBe('PREPLANNED');
+  });
+
+  it('attaches SEA Trade Cycle on contract_backlog when ETC present; null without ETC', async () => {
+    const yesterday = new Date();
+    yesterday.setHours(0, 0, 0, 0);
+    yesterday.setDate(yesterday.getDate() - 2);
+    const dueIso = yesterday.toISOString().slice(0, 10);
+    const etaPast = new Date();
+    etaPast.setHours(0, 0, 0, 0);
+    etaPast.setDate(etaPast.getDate() - 1);
+    const etaPastIso = etaPast.toISOString().slice(0, 10);
+
+    const withoutEta = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'UNPLANNED',
+        import_status: 'Open',
+        transport_mode: 'SEA',
+        delivery_end_date: dueIso,
+        contract_number: '1014000099',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(withoutEta[0]?.status).toBe('UNPLANNED');
+    expect(withoutEta[0]?.trade_cycle_days).toBeNull();
+
+    const withPastEta = normalizeShipmentListRows([
+      {
+        row_kind: 'contract_backlog',
+        status: 'UNPLANNED',
+        import_status: 'Open',
+        transport_mode: 'SEA',
+        delivery_end_date: dueIso,
+        last_eta_vessel_complete_discharge: etaPastIso,
+        last_ata_vessel_complete_discharge: null,
+        contract_number: '1014000100',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(typeof withPastEta[0]?.trade_cycle_days).toBe('number');
+    // Due end has passed and the ETC with it, so the cycle is negative - Late.
+    expect(Number(withPastEta[0]?.trade_cycle_days)).toBeLessThan(0);
+  });
+
+  it('attaches SEA Trade Cycle on shipment execution rows', async () => {
+    const yesterday = new Date();
+    yesterday.setHours(0, 0, 0, 0);
+    yesterday.setDate(yesterday.getDate() - 2);
+    const dueIso = yesterday.toISOString().slice(0, 10);
+    const etaPast = new Date();
+    etaPast.setHours(0, 0, 0, 0);
+    etaPast.setDate(etaPast.getDate() - 1);
+    const etaPastIso = etaPast.toISOString().slice(0, 10);
+
+    const rows = normalizeShipmentListRows([
+      {
+        row_kind: 'shipment_execution',
+        status: 'UNLOADING',
+        effective_status: 'UNLOADING',
+        is_contract_sap_closed: false,
+        delivery_end_date: dueIso,
+        ata_vessel_complete_discharge: null,
+        eta_vessel_complete_discharge: etaPastIso,
+        contract_number: '1014000101',
+      },
+    ] as Parameters<typeof normalizeShipmentListRows>[0]);
+    expect(typeof rows[0]?.trade_cycle_days).toBe('number');
+    expect(Number(rows[0]?.trade_cycle_days)).toBeLessThan(0);
   });
 });

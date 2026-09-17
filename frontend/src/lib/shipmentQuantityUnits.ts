@@ -97,42 +97,194 @@ export function mergeShipmentQtyOverridesOnContractRows<
   return rows
 }
 
-/** Shipments list table — kg for display. Prefer KLIP manual row when it differs from SAP. */
+/**
+ * Seed per-PO KLIP delivered/receive for Edit Shipment PO table without overwriting SAP display.
+ * Prefers quantity_delivered_klip; falls back to legacy quantity_delivered only when it differs
+ * from the SAP row sum. Receive uses actual_vessel_qty_receive when meaningful.
+ */
+export function seedKlipQtyFromShipmentHeader(
+  sapRows: Array<{ quantity_delivered?: number | null; quantity_receive?: number | null }>,
+  opts: {
+    shipmentDeliveredKlipKg: number | null
+    shipmentDeliveredKg: number | null
+    shipmentReceiveKg: number | null
+  },
+): Array<{ quantity_delivered: number | null; quantity_receive: number | null }> {
+  if (sapRows.length === 0) return []
+
+  const sumDelivered = sapRows.reduce((s, r) => s + (r.quantity_delivered ?? 0), 0)
+
+  const deliveredKg = isMeaningfulManualShipmentQtyKg(opts.shipmentDeliveredKlipKg)
+    ? opts.shipmentDeliveredKlipKg
+    : (
+        isMeaningfulManualShipmentQtyKg(opts.shipmentDeliveredKg)
+        && Math.abs(sumDelivered - opts.shipmentDeliveredKg!) > 0.5
+      )
+      ? opts.shipmentDeliveredKg
+      : null
+  const receiveKg = isMeaningfulManualShipmentQtyKg(opts.shipmentReceiveKg)
+    ? opts.shipmentReceiveKg
+    : null
+
+  if (deliveredKg == null && receiveKg == null) {
+    return sapRows.map(() => ({ quantity_delivered: null, quantity_receive: null }))
+  }
+
+  if (sapRows.length === 1) {
+    return [{ quantity_delivered: deliveredKg, quantity_receive: receiveKg }]
+  }
+
+  const baseline = sapRows.map((r) => ({
+    quantity_delivered: r.quantity_delivered ?? null,
+    quantity_receive: r.quantity_receive ?? null,
+  }))
+  const merged = mergeShipmentQtyOverridesOnContractRows(baseline, deliveredKg, receiveKg)
+
+  return merged.map((m, i) => ({
+    quantity_delivered:
+      deliveredKg != null ? (m.quantity_delivered ?? baseline[i]?.quantity_delivered ?? null) : null,
+    quantity_receive:
+      receiveKg != null ? (m.quantity_receive ?? baseline[i]?.quantity_receive ?? null) : null,
+  }))
+}
+
+/**
+ * Shipments list table — kg for display.
+ * Open + KLIP qty present → quantity_delivered_klip
+ * Open without KLIP → SAP fallback
+ * Close → SAP; if SAP is missing, legacy then KLIP so the table is not blank
+ * Legacy quantity_delivered is only a last-resort fallback when KLIP/SAP are both absent.
+ */
 export function resolveShipmentListDeliveredKg(shipment: {
+  klip_delivery_qty?: number | string | null
+  quantity_delivered_klip?: number | string | null
   quantity_delivered?: number | string | null
   total_quantity_delivered?: number | string | null
   quantity_delivered_sap?: number | string | null
+  is_contract_sap_closed?: boolean | null
 }): number | null {
-  const manual =
+  const closed = Boolean(shipment.is_contract_sap_closed)
+  const klip =
+    shipmentStoredQtyKg(shipment.klip_delivery_qty)
+    ?? shipmentStoredQtyKg(shipment.quantity_delivered_klip)
+  const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
+  const legacy =
     shipmentStoredQtyKg(shipment.quantity_delivered)
     ?? shipmentStoredQtyKg(shipment.total_quantity_delivered)
-  const sap = shipmentStoredQtyKg(shipment.quantity_delivered_sap)
-  if (
-    isMeaningfulManualShipmentQtyKg(manual)
-    && sap !== null
-    && Math.abs(manual! - sap) > 0.5
-  ) {
-    return manual
+
+  if (closed) {
+    if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+    if (isMeaningfulManualShipmentQtyKg(legacy)) return legacy
+    if (isMeaningfulManualShipmentQtyKg(klip)) return klip
+    return sap
   }
-  if (sap !== null) return sap
-  return manual
+  if (isMeaningfulManualShipmentQtyKg(klip)) {
+    return klip
+  }
+  if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+  return legacy ?? sap
 }
 
-export function resolveShipmentListReceiveKg(shipment: {
+/**
+ * Shipments View Table: empty Delivery Qty (KLIP + SAP null) shows 0.
+ */
+export function shipmentListDeliveredKgForViewTable(
+  shipment: Parameters<typeof resolveShipmentListDeliveredKg>[0],
+): number {
+  return resolveShipmentListDeliveredKg(shipment) ?? 0
+}
+
+/**
+ * Shipments View Table: empty Received Qty (KLIP + SAP null) shows 0.
+ */
+export function shipmentListReceiveKgForViewTable(
+  shipment: Parameters<typeof resolveShipmentListReceiveKg>[0],
+): number {
+  return resolveShipmentListReceiveKg(shipment) ?? 0
+}
+
+export function shipmentListFulfilledKgForViewTable(shipment: {
   actual_vessel_qty_receive?: number | string | null
   quantity_receive?: number | string | null
+  quantity_delivered_klip?: number | string | null
+  quantity_delivered?: number | string | null
+  total_quantity_delivered?: number | string | null
+  quantity_delivered_sap?: number | string | null
+  is_contract_sap_closed?: boolean | null
+  incoterm?: string | null
+}): number {
+  const inc = String(shipment.incoterm ?? '').trim().toUpperCase()
+  const receive = shipmentListReceiveKgForViewTable(shipment)
+  const delivery = shipmentListDeliveredKgForViewTable(shipment)
+  if (['FRC', 'CIF', 'CFR'].includes(inc)) return receive
+  if (['LCO', 'FOB'].includes(inc)) return delivery
+  return receive || delivery
+}
+
+/**
+ * View Table Outstanding Qty: Contract Qty − fulfilled (null Delivery/Receive = 0).
+ * Prefers API OS when present; otherwise computes so skip-SAP first paint is not "-".
+ */
+export function shipmentListOutstandingKgForViewTable(shipment: {
+  outstanding_quantity?: number | string | null
+  contract_qty?: number | string | null
+  actual_vessel_qty_receive?: number | string | null
+  quantity_receive?: number | string | null
+  quantity_delivered_klip?: number | string | null
+  quantity_delivered?: number | string | null
+  total_quantity_delivered?: number | string | null
+  quantity_delivered_sap?: number | string | null
+  is_contract_sap_closed?: boolean | null
+  incoterm?: string | null
 }): number | null {
-  const manual = shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
+  const api = shipmentStoredQtyKg(shipment.outstanding_quantity)
+  if (api !== null) return api
+  const contract = shipmentStoredQtyKg(shipment.contract_qty)
+  if (contract === null) return null
+  return contract - shipmentListFulfilledKgForViewTable(shipment)
+}
+
+/**
+ * Shipments list Receive Qty — kg for display.
+ * Same Open/Close rules as Delivery (not "vessel only if higher than SAP"):
+ * Close → SAP Quantity Receive; if SAP is missing, vessel receive so the table is not blank
+ * Open + meaningful actual_vessel_qty_receive (KLIP) → vessel receive
+ * Open without KLIP → SAP; last resort vessel/manual
+ */
+export function resolveShipmentListReceiveKg(shipment: {
+  klip_receive_qty?: number | string | null
+  actual_vessel_qty_receive?: number | string | null
+  quantity_receive?: number | string | null
+  is_contract_sap_closed?: boolean | null
+}): number | null {
+  const closed = Boolean(shipment.is_contract_sap_closed)
+  const klip =
+    shipmentStoredQtyKg(shipment.klip_receive_qty)
+    ?? shipmentStoredQtyKg(shipment.actual_vessel_qty_receive)
   const sap = shipmentStoredQtyKg(shipment.quantity_receive)
-  if (
-    isMeaningfulManualShipmentQtyKg(manual)
-    && sap !== null
-    && Math.abs(manual! - sap) > 0.5
-  ) {
-    return manual
+
+  if (closed) {
+    if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+    if (isMeaningfulManualShipmentQtyKg(klip)) return klip
+    return sap
   }
-  if (sap !== null) return sap
-  return manual
+  if (isMeaningfulManualShipmentQtyKg(klip)) {
+    return klip
+  }
+  if (isMeaningfulManualShipmentQtyKg(sap)) return sap
+  return klip ?? sap
+}
+
+/** Prefer hydrated SAP; use the shell only when hydrate is null/0 (do not keep an inflated header SUM). */
+export function preferHydratedQty(
+  hydrated: number | string | null | undefined,
+  shell: number | string | null | undefined,
+): number | undefined {
+  const h = shipmentStoredQtyKg(hydrated)
+  const s = shipmentStoredQtyKg(shell)
+  if (h !== null && h !== 0) return h
+  if (s !== null && s !== 0) return s
+  return h ?? s ?? undefined
 }
 
 export function resolveShipmentListStoKg(shipment: {

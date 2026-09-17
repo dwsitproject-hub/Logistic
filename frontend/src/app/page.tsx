@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { fetchCurrentUser, readUserLocally } from '@/lib/authSession'
 import { resolvePostAuthRedirect } from '@/lib/navigationAccess'
 
 export default function Home() {
@@ -10,27 +11,25 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true)
-    const token = localStorage.getItem('token')
-    if (!token) {
-      router.replace('/login')
-      return
-    }
+    void (async () => {
+      const sessionUser = await fetchCurrentUser()
+      const user = sessionUser ?? readUserLocally()
+      if (!user?.id) {
+        router.replace('/login')
+        return
+      }
 
-    const userStr = localStorage.getItem('user')
-    const user = userStr ? (JSON.parse(userStr) as { id?: string; role?: string }) : null
-    void resolvePostAuthRedirect(user?.role, user?.id)
-      .then((route) => {
+      try {
+        const route = await resolvePostAuthRedirect(user.role, user.id)
         if (route) {
           router.replace(route)
           return
         }
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
         router.replace('/login?error=no_access')
-      })
-      .catch(() => {
+      } catch {
         router.replace('/login')
-      })
+      }
+    })()
   }, [router])
 
   if (!mounted) {
@@ -46,4 +45,3 @@ export default function Home() {
 
   return null
 }
-

@@ -5,7 +5,17 @@
  * - Outstanding quantity (contract qty − incoterm delivery)
  */
 
-export const INCOTERM_GR_PO_STATUS = ['FRC', 'CIF'] as const;
+import { sqlCoalesceSapRawQtyFields } from './sapQtyPlaceholderSql';
+import {
+  SAP_FIELD_ARMS,
+  sapDataSource,
+  sapRowSource,
+  sqlSapCoalesceArms,
+  sqlSapFields,
+  type SapFieldSource,
+} from './sapDerivedColumnSql';
+
+export const INCOTERM_GR_PO_STATUS = ['FRC', 'CIF', 'CFR'] as const;
 export const INCOTERM_GR_STO_STATUS = ['LCO', 'FOB'] as const;
 export const INCOTERM_QTY_TRUCKING = ['FRC', 'LCO'] as const;
 export const INCOTERM_QTY_VESSEL = ['FOB', 'CIF'] as const;
@@ -34,63 +44,160 @@ export function usesVesselQuantityDelivery(incoterm: unknown): boolean {
   return (INCOTERM_QTY_VESSEL as readonly string[]).includes(normalizeIncotermCode(incoterm));
 }
 
-/** Parse SAP numeric text/JSON field to numeric SQL expression. */
+/** Parse SAP numeric text/JSON field to numeric SQL expression. Blank Excel cells stay NULL. */
 export function sqlParseSapNumeric(coalesceExpr: string): string {
-  return `CAST(REPLACE(REPLACE(COALESCE(${coalesceExpr}), ',', ''), ' ', '') AS NUMERIC)`;
+  return `NULLIF(REPLACE(REPLACE(NULLIF(TRIM(COALESCE(${coalesceExpr}, '')), ''), ',', ''), ' ', ''), '')::numeric`;
 }
 
-/** Quantity Delivery Trucking from sap_processed_data row. */
+/**
+ * Quantity Delivery Trucking / Vessel.
+ *
+ * These take a *source*, not an alias, and that is not pedantry: `shipmentListSapAggSql` calls
+ * them with alias `sk`, which is the `spd_keyed` CTE. It carries `data` but none of migration
+ * 162's columns, so an alias that silently meant "read the columns" would have produced SQL
+ * naming columns that do not exist. The caller decides, where the FROM clause is known.
+ *
+ * Arms and their order come from SAP_FIELD_ARMS, shared with every other reader.
+ */
+function sqlSapQtyTrucking(source: SapFieldSource): string {
+  return sqlParseSapNumeric(
+    sqlCoalesceSapRawQtyFields(sqlSapFields(source, SAP_FIELD_ARMS.qtyTrucking)),
+  );
+}
+
+function sqlSapQtyVessel(source: SapFieldSource): string {
+  return sqlParseSapNumeric(
+    sqlCoalesceSapRawQtyFields(sqlSapFields(source, SAP_FIELD_ARMS.qtyVessel)),
+  );
+}
+
+/** Trucking quantity off a real sap_processed_data alias - reads the stored columns. */
 export function sqlSapQtyTruckingFromSpd(spdAlias = 'spd'): string {
-  return sqlParseSapNumeric(`
-    ${spdAlias}.data->'raw'->>'Quantity Delivery Trucking',
-    ${spdAlias}.data->'raw'->>'Quantity Delivered Trucking',
-    ${spdAlias}.data->'shipment'->>'quantity_delivery_trucking',
-    ${spdAlias}.data->'contract'->>'quantity_delivery_trucking'
-  `);
+  return sqlSapQtyTrucking(sapRowSource(spdAlias));
 }
 
-/** Quantity Delivery Vessel from sap_processed_data row. */
+/** Trucking quantity from anything that only carries `data` (a CTE, a snapshot). */
+export function sqlSapQtyTruckingFromData(spdDataExpr: string): string {
+  return sqlSapQtyTrucking(sapDataSource(spdDataExpr));
+}
+
+/** Vessel quantity off a real sap_processed_data alias. */
 export function sqlSapQtyVesselFromSpd(spdAlias = 'spd'): string {
-  return sqlParseSapNumeric(`
-    ${spdAlias}.data->'raw'->>'Quantity Delivery Vessel',
-    ${spdAlias}.data->'raw'->>'Quantity Delivered',
-    ${spdAlias}.data->'raw'->>'Quantity Delivery',
-    ${spdAlias}.data->'shipment'->>'quantity_delivery',
-    ${spdAlias}.data->'contract'->>'quantity_delivery'
-  `);
+  return sqlSapQtyVessel(sapRowSource(spdAlias));
 }
 
-/** GR PO / GR STO status fields from SAP JSON. */
-export function sqlSapGrPoStatusFromJson(spdDataExpr: string): string {
-  return `NULLIF(TRIM(COALESCE(
-    ${spdDataExpr}->'contract'->>'status',
-    ${spdDataExpr}->'raw'->>'GR PO Status',
-    ${spdDataExpr}->'raw'->>'Status',
-    ${spdDataExpr}->>'status'
+/** Vessel quantity from a `data` expression. */
+export function sqlSapQtyVesselFromData(spdDataExpr: string): string {
+  return sqlSapQtyVessel(sapDataSource(spdDataExpr));
+}
+
+import {
+  sqlSpdHasDeletePoFlagExpr,
+  sqlSpdHasDeletePoFlagFromRow,
+  sqlSpdHasDeleteStoFlagExpr,
+  sqlSpdHasDeleteStoFlagFromRow,
+} from './sapMasterV2UatFormat';
+
+/**
+ * GR PO status fields from SAP JSON — GR PO only (not commercial Status).
+ * Generic Status Open on blank-GR rows used to keep import status Open forever
+ * and block Shipment Completed when GR PO was already Close.
+ * Delete PO Status non-blank → Cancelled (SAP Data v3).
+ */
+function sqlSapGrPoStatus(source: SapFieldSource): string {
+  const gr = `NULLIF(TRIM(COALESCE(
+    ${sqlSapCoalesceArms(source, SAP_FIELD_ARMS.grPoStatus)}
   )), '')`;
+  const deleted =
+    source.kind === 'row'
+      ? sqlSpdHasDeletePoFlagFromRow(source.alias)
+      : sqlSpdHasDeletePoFlagExpr(source.dataExpr);
+  return `CASE
+    WHEN ${deleted} THEN 'Cancelled'
+    ELSE ${gr}
+  END`;
+}
+
+export function sqlSapGrPoStatusFromJson(spdDataExpr: string): string {
+  return sqlSapGrPoStatus(sapDataSource(spdDataExpr));
+}
+
+/**
+ * Same value, read from migration 162's stored columns instead of the jsonb blob.
+ *
+ * Only valid on a real `sap_processed_data` alias. Each jsonb arm re-detoasts the whole `data`
+ * value, and this expression appears 36+ times per row inside the Shipments `sto_metrics` CTE.
+ */
+export function sqlSapGrPoStatusFromRow(alias = 'spd'): string {
+  return sqlSapGrPoStatus(sapRowSource(alias));
+}
+
+/**
+ * GR STO status fields from SAP JSON.
+ * Prefer raw Excel columns over normalized `contract.*` — stale Close in contract JSON
+ * used to win over Open in raw and force Trucking list onto Σ SAP instead of WB.
+ * Delete STO Status non-blank → Cancelled (SAP Data v3).
+ */
+function sqlSapGrStoStatus(source: SapFieldSource): string {
+  const gr = `NULLIF(TRIM(COALESCE(
+    ${sqlSapCoalesceArms(source, SAP_FIELD_ARMS.grStoStatus)}
+  )), '')`;
+  const deleted =
+    source.kind === 'row'
+      ? sqlSpdHasDeleteStoFlagFromRow(source.alias)
+      : sqlSpdHasDeleteStoFlagExpr(source.dataExpr);
+  return `CASE
+    WHEN ${deleted} THEN 'Cancelled'
+    ELSE ${gr}
+  END`;
 }
 
 export function sqlSapGrStoStatusFromJson(spdDataExpr: string): string {
-  return `NULLIF(TRIM(COALESCE(
-    ${spdDataExpr}->'contract'->>'gr_sto_status',
-    ${spdDataExpr}->'raw'->>'GR STO Status',
-    ${spdDataExpr}->>'gr_sto_status'
-  )), '')`;
+  return sqlSapGrStoStatus(sapDataSource(spdDataExpr));
+}
+
+/** Same value off a sap_processed_data alias - see sqlSapGrPoStatusFromRow. */
+export function sqlSapGrStoStatusFromRow(alias = 'spd'): string {
+  return sqlSapGrStoStatus(sapRowSource(alias));
 }
 
 /** Incoterm-based import status from latest SAP JSON + contracts.incoterm. */
-export function sqlIncotermImportStatusFromJson(
-  spdDataExpr: string,
+function sqlIncotermImportStatus(
+  source: SapFieldSource,
   incotermExpr: string,
   fallbackExpr?: string,
 ): string {
   const inc = `UPPER(TRIM(COALESCE(${incotermExpr}, '')))`;
   const fb = fallbackExpr ?? 'NULL';
+  const grPo = sqlSapGrPoStatus(source);
+  const grSto = sqlSapGrStoStatus(source);
   return `CASE
-    WHEN ${inc} IN (${sqlList(INCOTERM_GR_PO_STATUS)}) THEN COALESCE(${sqlSapGrPoStatusFromJson(spdDataExpr)}, ${fb})
-    WHEN ${inc} IN (${sqlList(INCOTERM_GR_STO_STATUS)}) THEN COALESCE(${sqlSapGrStoStatusFromJson(spdDataExpr)}, ${fb})
-    ELSE COALESCE(${sqlSapGrPoStatusFromJson(spdDataExpr)}, ${sqlSapGrStoStatusFromJson(spdDataExpr)}, ${fb})
+    WHEN ${inc} IN (${sqlList(INCOTERM_GR_PO_STATUS)}) THEN COALESCE(${grPo}, ${fb})
+    WHEN ${inc} IN (${sqlList(INCOTERM_GR_STO_STATUS)}) THEN COALESCE(${grSto}, ${fb})
+    ELSE COALESCE(${grPo}, ${grSto}, ${fb})
   END`;
+}
+
+export function sqlIncotermImportStatusFromJson(
+  spdDataExpr: string,
+  incotermExpr: string,
+  fallbackExpr?: string,
+): string {
+  return sqlIncotermImportStatus(sapDataSource(spdDataExpr), incotermExpr, fallbackExpr);
+}
+
+/**
+ * Same status off a sap_processed_data alias.
+ *
+ * This one is worth the most: it renders the GR PO *and* GR STO expressions, so on the jsonb path
+ * it is up to six blob accesses every time it appears - and it appears throughout `sto_metrics`.
+ */
+export function sqlIncotermImportStatusFromRow(
+  alias: string,
+  incotermExpr: string,
+  fallbackExpr?: string,
+): string {
+  return sqlIncotermImportStatus(sapRowSource(alias), incotermExpr, fallbackExpr);
 }
 
 /** Resolved transport mode (LAND / SEA / MIX) from contracts + latest SAP JSON. */
@@ -110,7 +217,10 @@ export function sqlTransportModeFromContractAndJson(
 
 /**
  * SAP UAT quantity delivery matrix (transport + incoterm).
- * MIX: trucking sum covers STO Type T legs, vessel sum covers STO Type V legs.
+ * FRC/LCO → trucking. FOB/CIF/CFR → vessel.
+ * MIX + FOB/CIF: vessel if present, else trucking (Type T only). Do not add both —
+ * trucking on a FOB MIX PO is the land leg of the same cargo (PO-level vessel qty
+ * repeated on Type T rows), not a second delivery.
  */
 export function sqlUatQuantityDeliveryCase(opts: {
   incotermExpr: string;
@@ -122,11 +232,12 @@ export function sqlUatQuantityDeliveryCase(opts: {
   const tm = `UPPER(TRIM(COALESCE(${opts.transportExpr}, '')))`;
   const trucking = `COALESCE(${opts.truckingQtyExpr}, 0)`;
   const vessel = `COALESCE(${opts.vesselQtyExpr}, 0)`;
+  const mixVesselThenTrucking = `COALESCE(NULLIF(${vessel}, 0), ${trucking})`;
   return `CASE
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_TRUCKING)}) AND ${tm} IN ('LAND', '') THEN ${trucking}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_TRUCKING)}) THEN ${trucking}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'SEA' THEN ${vessel}
-    WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'MIX' THEN (${trucking} + ${vessel})
+    WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'MIX' THEN ${mixVesselThenTrucking}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) AND ${tm} = 'LAND' THEN ${vessel}
     WHEN ${inc} IN (${sqlList(INCOTERM_QTY_VESSEL)}) THEN ${vessel}
     ELSE COALESCE(NULLIF(${opts.vesselQtyExpr}, 0), NULLIF(${opts.truckingQtyExpr}, 0), 0)
@@ -254,6 +365,25 @@ export function sqlIncotermOutstandingCase(opts: {
   )`;
 }
 
+/**
+ * qty_move join delivery for LCO/FOB outstanding.
+ * Use trucking vs vessel by incoterm — not `qm.quantity_delivery`
+ * (vessel-first COALESCE), which hides a larger trucking total when any STO
+ * has generic SAP "Quantity Delivery" parsed as vessel.
+ */
+export function sqlQtyMoveJoinIncotermDelivery(
+  incotermExpr: string,
+  qmAlias = 'qm',
+  transportExpr?: string,
+): string {
+  return sqlIncotermQuantityDeliveryCase(
+    incotermExpr,
+    `${qmAlias}.quantity_delivery_trucking`,
+    `${qmAlias}.quantity_delivery_vessel`,
+    transportExpr,
+  );
+}
+
 /** qty_move subquery delivery for a contract number expression. */
 export function sqlQtyMoveIncotermDelivery(
   incotermExpr: string,
@@ -295,7 +425,7 @@ export function resolveUatQuantityDeliveryTs(
   }
   if ((INCOTERM_QTY_VESSEL as readonly string[]).includes(inc)) {
     if (tm === 'SEA') return vessel;
-    if (tm === 'MIX') return trucking + vessel;
+    if (tm === 'MIX') return vessel || trucking;
     if (tm === 'LAND') return vessel;
     return vessel;
   }

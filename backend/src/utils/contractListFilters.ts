@@ -3,6 +3,11 @@
  */
 
 import { sqlContractOutstandingSignedExpr } from './sapIncotermMetrics';
+import {
+  likeContainsPattern,
+  parseOptionalStrictDateOnly,
+  sqlIlikeParam,
+} from './strictDateInput';
 
 export type ColumnFilterPayload = Record<
   string,
@@ -56,15 +61,13 @@ const BASE_COL_SQL: Record<string, string> = {
   delivery_start: 'base.delivery_start_date',
   delivery_end: 'base.delivery_end_date',
   cargo_readiness_date: 'base.cargo_readiness_date',
-  created_at: 'base.created_at',
   contract_qty: 'base.quantity_ordered',
   outstanding_qty: sqlContractOutstandingSignedExpr({
     contractQtyExpr: 'base.quantity_ordered',
     incotermExpr: 'base.incoterm',
     receiveExpr: 'base.quantity_receive',
-    deliveryExpr: 'base.quantity_delivery_sap',
+    deliveryExpr: 'base.quantity_delivery',
   }),
-  delivery_status: `COALESCE(base.import_status, base.status::text, '')`,
 }
 
 export function appendGlobalSearchBase(
@@ -75,20 +78,20 @@ export function appendGlobalSearchBase(
     return { sql: '', params: [], nextIndex: paramIndex }
   }
   const p = paramIndex
-  const likeExpr = `$${p}::text`
+  const likeOp = sqlIlikeParam(p)
   const sql = `
     AND (
-      base.contract_id::text ILIKE ${likeExpr}
-      OR COALESCE(base.po_numbers, '') ILIKE ${likeExpr}
-      OR COALESCE(base.sto_number::text, '') ILIKE ${likeExpr}
-      OR COALESCE(base.sto_numbers_agg::text, '') ILIKE ${likeExpr}
-      OR COALESCE(base.supplier, '') ILIKE ${likeExpr}
-      OR COALESCE(base.product, '') ILIKE ${likeExpr}
-      OR COALESCE(base.buyer, '') ILIKE ${likeExpr}
-      OR COALESCE(base.group_name, '') ILIKE ${likeExpr}
-      OR COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No', '') ILIKE ${likeExpr}
+      base.contract_id::text ${likeOp}
+      OR COALESCE(base.po_numbers, '') ${likeOp}
+      OR COALESCE(base.sto_number::text, '') ${likeOp}
+      OR COALESCE(base.sto_numbers_agg::text, '') ${likeOp}
+      OR COALESCE(base.supplier, '') ${likeOp}
+      OR COALESCE(base.product, '') ${likeOp}
+      OR COALESCE(base.buyer, '') ${likeOp}
+      OR COALESCE(base.group_name, '') ${likeOp}
+      OR COALESCE(base.latest_spd_data->'raw'->>'Contract Ext No', base.latest_spd_data->>'Contract Ext No', '') ${likeOp}
     )`
-  return { sql, params: [`%${searchTrim}%`], nextIndex: paramIndex + 1 }
+  return { sql, params: [likeContainsPattern(searchTrim)], nextIndex: paramIndex + 1 }
 }
 
 export function appendColumnFiltersBase(
@@ -121,8 +124,8 @@ export function appendColumnFiltersBase(
         params.push(v)
         pi += 1
       } else {
-        parts.push(` AND ${expr}::text ILIKE $${pi}`)
-        params.push(`%${v}%`)
+        parts.push(` AND ${expr}::text ${sqlIlikeParam(pi)}`)
+        params.push(likeContainsPattern(v))
         pi += 1
       }
       continue
@@ -146,14 +149,20 @@ export function appendColumnFiltersBase(
 
     if (f.type === 'date') {
       if (f.from) {
-        parts.push(` AND (${expr})::date >= $${pi}::date`)
-        params.push(f.from)
-        pi += 1
+        const from = parseOptionalStrictDateOnly(f.from, `${colId}.from`)
+        if (from) {
+          parts.push(` AND (${expr})::date >= $${pi}::date`)
+          params.push(from)
+          pi += 1
+        }
       }
       if (f.to) {
-        parts.push(` AND (${expr})::date <= $${pi}::date`)
-        params.push(f.to)
-        pi += 1
+        const to = parseOptionalStrictDateOnly(f.to, `${colId}.to`)
+        if (to) {
+          parts.push(` AND (${expr})::date <= $${pi}::date`)
+          params.push(to)
+          pi += 1
+        }
       }
       continue
     }

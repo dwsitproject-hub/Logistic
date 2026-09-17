@@ -2,6 +2,10 @@
  * Latest sap_processed_data row per contract — same rules as Contracts list `latest_spd` CTE.
  */
 
+import {
+  LATEST_SPD_DERIVED_COLUMNS,
+  latestSpdDerivedExprs,
+} from './contractLatestSpdDerivedSql';
 export type LatestSpdContractFilter =
   | { kind: 'join_scope'; scopeCteName: string }
   | { kind: 'in_subquery'; subquery: string };
@@ -52,26 +56,41 @@ export function buildLatestSpdFromSnapshotCte(scopeCteName = 'contract_scope'): 
       )`;
 }
 
+/**
+ * The derived columns as the refresh writes them.
+ *
+ * Column order must match LATEST_SPD_DERIVED_COLUMNS, so both come from the same array. The
+ * refresh reads the live SAP row, so `sto_number` is the real column here - unlike a snapshot
+ * read, which has none.
+ */
+function latestSpdDerivedSelectListForRefresh(): string {
+  const exprs = latestSpdDerivedExprs('spd.data', 'spd.sto_number');
+  return LATEST_SPD_DERIVED_COLUMNS.map((col) => exprs[col]).join(',\n      ');
+}
+
 export function buildContractLatestSpdSnapshotRefreshSql(): string {
   return `
     INSERT INTO contract_latest_spd_snapshot (
       contract_number,
       data,
       spd_created_at,
-      refreshed_at
+      refreshed_at,
+      ${LATEST_SPD_DERIVED_COLUMNS.join(',\n      ')}
     )
     SELECT DISTINCT ON (spd.contract_number)
       spd.contract_number,
       spd.data,
       spd.created_at,
-      NOW()
+      NOW(),
+      ${latestSpdDerivedSelectListForRefresh()}
     FROM sap_processed_data spd
     WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
     ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST, spd.id DESC
     ON CONFLICT (contract_number) DO UPDATE SET
       data = EXCLUDED.data,
       spd_created_at = EXCLUDED.spd_created_at,
-      refreshed_at = EXCLUDED.refreshed_at`;
+      refreshed_at = EXCLUDED.refreshed_at,
+      ${LATEST_SPD_DERIVED_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(',\n      ')}`;
 }
 
 export function buildContractLatestSpdSnapshotUpsertSql(): string {
@@ -80,13 +99,15 @@ export function buildContractLatestSpdSnapshotUpsertSql(): string {
       contract_number,
       data,
       spd_created_at,
-      refreshed_at
+      refreshed_at,
+      ${LATEST_SPD_DERIVED_COLUMNS.join(',\n      ')}
     )
     SELECT DISTINCT ON (spd.contract_number)
       spd.contract_number,
       spd.data,
       spd.created_at,
-      NOW()
+      NOW(),
+      ${latestSpdDerivedSelectListForRefresh()}
     FROM sap_processed_data spd
     WHERE spd.contract_number IS NOT NULL
       AND TRIM(spd.contract_number) != ''
@@ -95,5 +116,6 @@ export function buildContractLatestSpdSnapshotUpsertSql(): string {
     ON CONFLICT (contract_number) DO UPDATE SET
       data = EXCLUDED.data,
       spd_created_at = EXCLUDED.spd_created_at,
-      refreshed_at = EXCLUDED.refreshed_at`;
+      refreshed_at = EXCLUDED.refreshed_at,
+      ${LATEST_SPD_DERIVED_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(',\n      ')}`;
 }

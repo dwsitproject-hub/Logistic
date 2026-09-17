@@ -3,6 +3,8 @@ import { ExcelImportService } from './excelImport.service';
 import logger from '../utils/logger';
 import { FinanceMaterializedViewService } from './financeMaterializedView.service';
 import { PipelineDailySummaryService } from './pipelineDailySummary.service';
+import { runContractEtaReminderJob } from './contractEtaReminder.service';
+import { runSapFolderAutoImportJob } from './sapFolderAutoImport.service';
 
 export interface ScheduledImport {
   id: string;
@@ -29,8 +31,57 @@ export class SchedulerService {
     
     // Start all active schedules
     this.startAllSchedules();
-    
+
+    // Independent cron (not part of the Excel-import ScheduledImport framework/admin UI).
+    this.startContractEtaReminderCron();
+    this.startSapFolderAutoImportCron();
+
     logger.info('Scheduler service initialized successfully');
+  }
+
+  /**
+   * Daily email to Logistics users (above Staff level) listing open contracts missing ETA
+   * near their Cargo Readiness Date. Configurable via CONTRACT_ETA_REMINDER_ENABLED /
+   * CONTRACT_ETA_REMINDER_CRON; defaults to 07:00 Asia/Jakarta.
+   */
+  private static startContractEtaReminderCron(): void {
+    if (String(process.env.CONTRACT_ETA_REMINDER_ENABLED ?? 'true').toLowerCase() === 'false') {
+      logger.info('Contract ETA reminder cron is disabled (CONTRACT_ETA_REMINDER_ENABLED=false)');
+      return;
+    }
+    const schedule = process.env.CONTRACT_ETA_REMINDER_CRON || '0 7 * * *';
+    cron.schedule(
+      schedule,
+      async () => {
+        await runContractEtaReminderJob();
+      },
+      { timezone: 'Asia/Jakarta' },
+    );
+    logger.info(`Contract ETA reminder cron scheduled: ${schedule} (Asia/Jakarta)`);
+  }
+
+  /**
+   * Daily MASTER v2 import from the Synology SAP folder (independent of logistics_overview Excel
+   * jobs). Defaults to 06:00 Asia/Jakarta; disabled unless SAP_AUTO_IMPORT_ENABLED=true. Safe to
+   * overlap the Contract ETA reminder cron.
+   *
+   * The folder is IT's, not ours, and it moves: it is `SAP_AUTO_IMPORT_ROOT` plus an Original /
+   * Success / Failed subfolder, resolved case-insensitively (see sapAutoImportPaths).
+   */
+  private static startSapFolderAutoImportCron(): void {
+    if (String(process.env.SAP_AUTO_IMPORT_ENABLED || 'false').toLowerCase() !== 'true') {
+      logger.info('SAP folder auto-import cron is disabled (SAP_AUTO_IMPORT_ENABLED is not true)');
+      return;
+    }
+    const schedule = process.env.SAP_AUTO_IMPORT_CRON || '0 6 * * *';
+    cron.schedule(
+      schedule,
+      async () => {
+        await runSapFolderAutoImportJob();
+      },
+      { timezone: 'Asia/Jakarta' },
+    );
+    logger.info(`SAP folder auto-import cron scheduled: ${schedule} (Asia/Jakarta)`);
   }
   
   /**
@@ -72,6 +123,15 @@ export class SchedulerService {
         config: {
           type: 'pipeline_daily_summary',
           description: 'Refresh trucking/shipment pipeline daily summary tables'
+        }
+      },
+      {
+        name: 'Pre-Planned Groups Nightly Rebuild',
+        schedule: '30 6 * * *', // 6:30 AM JKT — after pipeline snapshots
+        isActive: true,
+        config: {
+          type: 'pre_planned_rebuild',
+          description: 'Recompute suggested vessel groups for Unplanned contracts'
         }
       }
     ];
@@ -179,6 +239,15 @@ export class SchedulerService {
           await import('./contractLatestSpdSnapshot.service').then(({ ContractLatestSpdSnapshotService }) =>
             ContractLatestSpdSnapshotService.refreshAll(),
           );
+          await import('./b2bEndingChildSnapshot.service').then(({ B2bEndingChildSnapshotService }) =>
+            B2bEndingChildSnapshotService.refreshAll(),
+          );
+          result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
+          break;
+        case 'pre_planned_rebuild':
+          await import('./prePlannedGroup.service').then(({ rebuildPrePlannedGroups }) =>
+            rebuildPrePlannedGroups('nightly-cron'),
+          );
           result = { success: true, totalRecords: 0, processedRecords: 0, failedRecords: 0 };
           break;
         default:
@@ -217,6 +286,9 @@ export class SchedulerService {
           .catch(() => {});
         import('./contractLatestSpdSnapshot.service')
           .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+          .catch(() => {});
+        import('./b2bEndingChildSnapshot.service')
+          .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
           .catch(() => {});
       });
       

@@ -3,6 +3,8 @@
  * All sections MUST derive scope and row sets from this module — no localized filter() copies.
  */
 
+import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
+
 export type ContractPerfProductTab = 'All' | 'CPO' | 'PK' | 'POME' | 'Shell Palm'
 
 export const CONTRACT_PERF_PRODUCT_TABS: ContractPerfProductTab[] = ['All', 'CPO', 'PK', 'POME', 'Shell Palm']
@@ -22,6 +24,30 @@ export const CONTRACT_PERF_PRODUCT_TAB_API_VALUE: Record<
 export type ContractPerfSourceFilter = 'All' | 'Interco' | '3rd Party'
 
 export const CONTRACT_PERF_SOURCE_TABS: ContractPerfSourceFilter[] = ['All', 'Interco', '3rd Party']
+
+/** Multi-select Source options (Section 1 — empty selection = all). */
+export const CONTRACT_PERF_SOURCE_MULTI_OPTIONS = ['Interco', '3rd Party'] as const
+
+/** Multi-select Product options (Section 1 — empty selection = all). */
+export const CONTRACT_PERF_PRODUCT_MULTI_OPTIONS = [
+  'CPO',
+  'PK',
+  'POME',
+  'Shell Palm',
+] as const
+
+/** Map auth/role product assignments onto Contract/Shipping Performance multi-select labels. */
+export function mapUserProductsToContractPerfOptions(products: string[]): string[] {
+  const matched: string[] = []
+  for (const product of products) {
+    const match = CONTRACT_PERF_PRODUCT_MULTI_OPTIONS.find(
+      (option) =>
+        normalizePerfProductGroupKey(option) === normalizePerfProductGroupKey(product),
+    )
+    if (match && !matched.includes(match)) matched.push(match)
+  }
+  return matched
+}
 
 export type ContractPerfDrilldownFilters = {
   product: string | null
@@ -68,11 +94,11 @@ export type ContractPerfColumnFilter =
 export type ContractPerformanceGlobalFilters = {
   dateFrom: string
   dateTo: string
-  sourceFilter: ContractPerfSourceFilter
+  selectedSources: string[]
+  selectedProducts: string[]
   selectedIncoterms: string[]
   selectedSuppliers: string[]
   selectedGroupPlants: string[]
-  productTabQuery: string | undefined
   summaryCardStatus: 'All' | 'Open' | 'Close'
   lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME'
   perfDashMode: 'late' | 'ontrack'
@@ -86,6 +112,7 @@ export type ContractPerformanceScope = {
   global: ContractPerformanceGlobalFilters
   drilldown: ContractPerfDrilldownFilters
   resolvedProduct: string | undefined
+  resolvedProducts: string[]
   resolvedPlants: string[]
   resolvedIncoterms: string[]
   resolvedSupplier: string | null
@@ -146,6 +173,44 @@ export function matchesContractPerfSourceFilter(
   return true
 }
 
+export function contractPerfProductLabelToApiValue(label: string): string {
+  const trimmed = String(label ?? '').trim()
+  if (!trimmed) return ''
+  const tab = trimmed as Exclude<ContractPerfProductTab, 'All'>
+  if (tab in CONTRACT_PERF_PRODUCT_TAB_API_VALUE) {
+    return CONTRACT_PERF_PRODUCT_TAB_API_VALUE[tab]
+  }
+  return trimmed.toUpperCase()
+}
+
+export function contractPerfProductMultiApiValues(selectedProducts: readonly string[]): string[] {
+  return selectedProducts
+    .map((p) => contractPerfProductLabelToApiValue(p))
+    .filter(Boolean)
+}
+
+/** OR match — empty selection = all sources. */
+export function matchesContractPerfSourceMultiFilter(
+  sourceType: unknown,
+  selectedSources: readonly string[],
+): boolean {
+  if (!selectedSources.length) return true
+  return selectedSources.some((source) =>
+    matchesContractPerfSourceFilter(sourceType, source as ContractPerfSourceFilter),
+  )
+}
+
+/** OR substring match — empty selection = all products. */
+export function matchesContractPerfProductMultiFilter(
+  rowProduct: unknown,
+  selectedProducts: readonly string[],
+): boolean {
+  if (!selectedProducts.length) return true
+  return selectedProducts.some((product) =>
+    matchesContractPerfProductTabFilter(rowProduct, contractPerfProductLabelToApiValue(product)),
+  )
+}
+
 export function isContractPerfDrilldownValueSet(value: string | null | undefined): value is string {
   return value != null && value !== ''
 }
@@ -161,14 +226,14 @@ export function hasContractPerfDrilldownSelection(selection: ContractPerfDrilldo
 
 /** Section 3 lazy gate — reveal table when any top-level or drilldown filter is active. */
 export function isContractPerfSection3FilterApplied(input: {
-  sourceFilter: ContractPerfSourceFilter
-  selectedProductTab: ContractPerfProductTab
+  selectedSources: string[]
+  selectedProducts: string[]
   summaryCardStatus: 'All' | 'Open' | 'Close'
   appliedDrilldown: ContractPerfDrilldownFilters
 }): boolean {
   return (
-    input.sourceFilter !== 'All' ||
-    input.selectedProductTab !== 'All' ||
+    input.selectedSources.length > 0 ||
+    input.selectedProducts.length > 0 ||
     input.summaryCardStatus === 'Open' ||
     input.summaryCardStatus === 'Close' ||
     hasContractPerfDrilldownSelection(input.appliedDrilldown)
@@ -251,7 +316,8 @@ export function matchesPerformanceDimensionFilter(
   }
   const filterKey =
     mode === 'product' ? normalizePerfProductGroupKey(filterValue) : filterValue
-  return rowKey === filterKey
+  if (mode === 'product') return rowKey === filterKey
+  return rowKey.toUpperCase() === String(filterKey).trim().toUpperCase()
 }
 
 export function resolveContractPerfTablePlants(
@@ -271,15 +337,28 @@ export function resolveContractPerfIncoterms(
 }
 
 export function resolveContractPerfTableProduct(
-  productTabQuery: string | undefined,
+  selectedProducts: readonly string[],
   drilldownProduct: string | null,
 ): string | undefined {
   if (isContractPerfDrilldownValueSet(drilldownProduct)) {
     if (drilldownProduct === 'Blank' || drilldownProduct === 'Uncategorized') return undefined
     return normalizePerfProductGroupKey(drilldownProduct)
   }
-  if (!productTabQuery) return undefined
-  return normalizePerfProductGroupKey(productTabQuery)
+  if (selectedProducts.length === 1) {
+    return normalizePerfProductGroupKey(contractPerfProductLabelToApiValue(selectedProducts[0]))
+  }
+  return undefined
+}
+
+export function resolveContractPerfTableProducts(
+  selectedProducts: readonly string[],
+  drilldownProduct: string | null,
+): string[] {
+  if (isContractPerfDrilldownValueSet(drilldownProduct)) {
+    const single = resolveContractPerfTableProduct(selectedProducts, drilldownProduct)
+    return single ? [single] : []
+  }
+  return contractPerfProductMultiApiValues(selectedProducts)
 }
 
 /** Build the unified scope object consumed by every section. */
@@ -288,10 +367,12 @@ export function resolveContractPerformanceScope(input: {
   drilldown: ContractPerfDrilldownFilters
 }): ContractPerformanceScope {
   const { global, drilldown } = input
+  const resolvedProducts = resolveContractPerfTableProducts(global.selectedProducts, drilldown.product)
   return {
     global,
     drilldown,
-    resolvedProduct: resolveContractPerfTableProduct(global.productTabQuery, drilldown.product),
+    resolvedProduct: resolveContractPerfTableProduct(global.selectedProducts, drilldown.product),
+    resolvedProducts,
     resolvedPlants: resolveContractPerfTablePlants(global.selectedGroupPlants, drilldown.plant),
     resolvedIncoterms: resolveContractPerfIncoterms(global.selectedIncoterms, drilldown.incoterm),
     resolvedSupplier: drilldown.supplier,
@@ -360,8 +441,7 @@ export function filterPerformanceHotspots(
       if (!scope.resolvedIncoterms.includes(inc)) return false
     }
     if (scope.resolvedPlants.length > 0) {
-      const plant = normalizePerfGroupKey(row.plant_site)
-      if (!scope.resolvedPlants.includes(plant)) return false
+      if (!valueInRegionSiteList(row.plant_site, scope.resolvedPlants)) return false
     }
     if (
       scope.resolvedProduct &&
@@ -388,16 +468,14 @@ export function contractMatchesLateOnTimeFilter(
   contractPerfOnTime?: boolean | null,
 ): boolean {
   if (lateOnTimeFilter === 'ALL') return true
-  // null trade_cycle_days means ETA is absent — the Open-status fallback could not resolve a
-  // due date. Treat as LATE so Section 3 stays consistent with Section 2's tree count, which
-  // includes these contracts in the late bucket rather than silently dropping them.
+  // null trade_cycle_days = no Completion Date (unscheduled). Never late/on-time.
   if (tradeCycleDays == null || Number.isNaN(tradeCycleDays)) {
-    return lateOnTimeFilter === 'LATE'
+    return false
   }
   if (typeof contractPerfOnTime === 'boolean') {
     return lateOnTimeFilter === 'ON_TIME' ? contractPerfOnTime : !contractPerfOnTime
   }
-  return lateOnTimeFilter === 'LATE' ? tradeCycleDays > 0 : tradeCycleDays <= 0
+  return lateOnTimeFilter === 'LATE' ? tradeCycleDays < 0 : tradeCycleDays >= 0
 }
 
 /**
@@ -407,7 +485,11 @@ export function isContractPerfUnscheduledRow(c: PerformanceTableContract): boole
   if (!String(c.delivery_end_date || '').trim()) return true
   const status = String(c.import_status || c.status || '').trim().toUpperCase()
   const isClosed = status === 'CLOSE' || status === 'CLOSED' || status === 'COMPLETED'
-  if (isClosed && (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))) {
+  const isOpen = status === 'OPEN' || status === 'ACTIVE'
+  if (
+    (isClosed || isOpen) &&
+    (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))
+  ) {
     return true
   }
   return false
@@ -426,21 +508,14 @@ export function contractMeetsPerformanceTreeInclusion(
   const isOpen = status === 'OPEN' || status === 'ACTIVE'
   if (!isClosed && !isOpen) return false
 
-  // Closed without completion / trade cycle → unscheduled in Section 2, exclude from table.
-  if (isClosed && (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days)))) {
+  // No Completion Date on payload → unscheduled for Section 3 client guard when backend
+  // has not computed trade_cycle_days. Open rows with due end get today fallback at compute time.
+  if (c.trade_cycle_days == null || Number.isNaN(Number(c.trade_cycle_days))) {
     return false
   }
 
-  let tradeCycle = c.trade_cycle_days
-  if (
-    isOpen &&
-    (tradeCycle == null || Number.isNaN(Number(tradeCycle)))
-  ) {
-    tradeCycle = -1
-  }
-
   return contractMatchesLateOnTimeFilter(
-    tradeCycle,
+    c.trade_cycle_days,
     lateOnTimeFilter,
     c.contract_perf_on_time,
   )
@@ -454,26 +529,25 @@ export function filterContractsForPerformanceTable(
 ): PerformanceTableContract[] {
   const { drilldown } = scope
   const applyTreeInclusionGuard = hasContractPerfDrilldownSelection(drilldown)
+  // All = On Time + Late + Unscheduled — never strip rows via late/on-time tree membership.
+  const includeUnscheduledInAll = lateOnTimeFilter === 'ALL'
 
   return contracts.filter((c) => {
     if (!contractMatchesSummaryCardStatus(c, scope.contractStatus)) {
       return false
     }
 
-    if (!matchesContractPerfSourceFilter(c.source_type, scope.global.sourceFilter)) {
+    if (!matchesContractPerfSourceMultiFilter(c.source_type, scope.global.selectedSources)) {
       return false
     }
 
     let backendTreeInclusionApplied = false
-    if (applyTreeInclusionGuard) {
+    if (applyTreeInclusionGuard && !includeUnscheduledInAll) {
       if (typeof c.contract_perf_in_tree === 'boolean') {
-        if (!c.contract_perf_in_tree) {
-          if (lateOnTimeFilter !== 'ALL' || !isContractPerfUnscheduledRow(c)) return false
-        } else {
-          backendTreeInclusionApplied = true
-        }
+        if (!c.contract_perf_in_tree) return false
+        backendTreeInclusionApplied = true
       } else if (!contractMeetsPerformanceTreeInclusion(c, lateOnTimeFilter)) {
-        if (lateOnTimeFilter !== 'ALL' || !isContractPerfUnscheduledRow(c)) return false
+        return false
       }
     }
 
@@ -487,25 +561,30 @@ export function filterContractsForPerformanceTable(
       if (!scope.resolvedIncoterms.includes(inc)) return false
     }
     if (scope.resolvedPlants.length > 0) {
-      const plant = normalizePerfGroupKey(c.plant_site)
-      if (!scope.resolvedPlants.includes(plant)) return false
+      if (!valueInRegionSiteList(c.plant_site, scope.resolvedPlants)) return false
+    }
+    if (
+      !isContractPerfDrilldownValueSet(drilldown.product) &&
+      scope.global.selectedProducts.length > 0 &&
+      !matchesContractPerfProductMultiFilter(c.product, scope.global.selectedProducts)
+    ) {
+      return false
     }
     if (
       scope.resolvedProduct &&
-      !isContractPerfDrilldownValueSet(drilldown.product) &&
+      isContractPerfDrilldownValueSet(drilldown.product) &&
       !matchesContractPerfProductTabFilter(c.product, scope.resolvedProduct)
     ) {
       return false
     }
 
-    // When backend set contract_perf_in_tree (excludeUnscheduled=true), late/on-time is already applied.
-    if (
-      !backendTreeInclusionApplied &&
-      isContractPerfUnscheduledRow(c) &&
-      lateOnTimeFilter === 'ALL'
-    ) {
+    // All segment: keep Unscheduled (and any other row matching dimensions). Backend already
+    // sent excludeUnscheduled=false; do not re-apply late/on-time membership here.
+    if (includeUnscheduledInAll) {
       return true
     }
+
+    // When backend set contract_perf_in_tree (excludeUnscheduled=true), late/on-time is already applied.
     if (
       !backendTreeInclusionApplied &&
       !contractMatchesLateOnTimeFilter(
@@ -695,6 +774,16 @@ export function buildContractPerfTableListParams(input: {
     input.perfDashMode,
   )
   params.append('excludeUnscheduled', effectiveLate === 'ALL' ? 'false' : 'true')
+  /*
+   * Contract Performance hides contracts with no Region/Site. Section 1 and the Section 2
+   * drilldown already drop them server-side, so the View table has to as well - otherwise the
+   * table lists rows the cards above it do not count.
+   *
+   * Sent explicitly rather than inferred from `scope` or `_ts`: neither is unique to this page,
+   * and the plain Contracts page must keep showing those contracts.
+   */
+  params.append('requireRegionSite', 'true')
+  params.append('compact', 'true')
   return params
 }
 
@@ -714,10 +803,12 @@ export function appendContractPerformanceApiParams(
   options: ContractPerformanceApiParamOptions,
 ): void {
   const drilldown = options.includeDrilldown ? scope.drilldown : EMPTY_CONTRACT_PERF_DRILLDOWN
-  const resolvedProduct = resolveContractPerfTableProduct(
-    scope.global.productTabQuery,
+  const resolvedProducts = resolveContractPerfTableProducts(
+    scope.global.selectedProducts,
     drilldown.product,
   )
+  const resolvedProduct =
+    resolvedProducts.length === 1 ? resolvedProducts[0] : scope.resolvedProduct
   const resolvedPlants = resolveContractPerfTablePlants(
     scope.global.selectedGroupPlants,
     drilldown.plant,
@@ -737,12 +828,14 @@ export function appendContractPerformanceApiParams(
   const useFilteredScope =
     hasToolbarDateScope ||
     (!omitContractStatus && scope.contractStatus !== 'All') ||
-    (scope.global.sourceFilter && scope.global.sourceFilter !== 'All') ||
+    scope.global.selectedSources.length > 0 ||
+    scope.global.selectedProducts.length > 0 ||
     resolvedIncoterms.length > 0 ||
     resolvedPlants.length > 0 ||
     searchTrim.length >= 2 ||
     isContractPerfDrilldownValueSet(supplier) ||
-    Boolean(resolvedProduct)
+    Boolean(resolvedProduct) ||
+    resolvedProducts.length > 1
 
   params.append('scope', useFilteredScope ? 'filtered' : 'ytd')
   params.append('_ts', String(Date.now()))
@@ -751,9 +844,13 @@ export function appendContractPerformanceApiParams(
   if (scope.global.perfTransportMode !== 'ALL') {
     params.append('transportMode', scope.global.perfTransportMode)
   }
-  if (resolvedProduct) params.append('product', resolvedProduct)
-  if (scope.global.sourceFilter && scope.global.sourceFilter !== 'All') {
-    params.append('sourceType', scope.global.sourceFilter)
+  if (resolvedProducts.length > 1) {
+    params.append('products', resolvedProducts.join(','))
+  } else if (resolvedProduct) {
+    params.append('product', resolvedProduct)
+  }
+  if (scope.global.selectedSources.length > 0) {
+    params.append('sourceTypes', scope.global.selectedSources.join(','))
   }
   if (scope.global.b2bFlagFilter !== 'ALL') params.append('b2bFlag', scope.global.b2bFlagFilter)
   if (!omitContractStatus && scope.contractStatus !== 'All') {
@@ -780,7 +877,7 @@ export function buildLatePerformanceApiParams(
 
 /**
  * Scope for Section 2 drilldown card totals — toolbar + Open/Close tab only.
- * Applied drilldown path (Product → Plant → Incoterm → Supplier) never narrows the tree API.
+ * Applied drilldown path (Product → Region/Plant → Incoterm → Supplier) never narrows the tree API.
  */
 export function resolveContractPerformanceTreeScope(
   global: ContractPerformanceGlobalFilters,
@@ -825,11 +922,11 @@ export function stableContractPerfApiParamsKey(params: URLSearchParams): string 
 export function buildContractPerfToolbarGlobal(input: {
   dateFrom: string
   dateTo: string
-  sourceFilter: ContractPerfSourceFilter
+  selectedSources: string[]
+  selectedProducts: string[]
   selectedIncoterms: string[]
   selectedSuppliers: string[]
   selectedGroupPlants: string[]
-  productTabQuery: string | undefined
   lateOnTimeFilter: ContractPerformanceGlobalFilters['lateOnTimeFilter']
   perfDashMode: ContractPerformanceGlobalFilters['perfDashMode']
   perfTransportMode: ContractPerformanceGlobalFilters['perfTransportMode']

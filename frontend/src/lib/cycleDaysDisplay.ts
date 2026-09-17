@@ -11,10 +11,16 @@ export function contextPerformanceClass(isLateContext: boolean): string {
   return isLateContext ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
 }
 
-/** Trade / cash cycle: > 0 = late, ≤ 0 = on time (same day = on time). */
+/**
+ * Trade / Cash / DP cycle: < 0 = Late, >= 0 = On Time (same day = on time).
+ *
+ * Every cycle is `anchor - completion date`, so a completion that ran past its anchor is NEGATIVE.
+ * The backend flipped to this convention on 2026-09-17; until the frontend followed, a contract
+ * whose ATC was four months past its due date rendered green as "220 days ahead".
+ */
 export function signedCycleDaysClass(days: number | null | undefined): string {
   if (days == null || !Number.isFinite(days)) return CYCLE_DAYS_NEUTRAL_CLASS
-  return days > 0 ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
+  return days < 0 ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
 }
 
 /** Log cycle duration: prefer trade-cycle sign; fallback to duration threshold. */
@@ -24,16 +30,20 @@ export function logCycleDaysClass(
 ): string {
   if (typeof tradeCycleDays === 'number' && Number.isFinite(tradeCycleDays)) {
     if (tradeCycleDays === 0) return CYCLE_DAYS_ON_TIME_CLASS
-    return tradeCycleDays > 0 ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
+    return tradeCycleDays < 0 ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
   }
   if (logDays == null || !Number.isFinite(logDays)) return CYCLE_DAYS_NEUTRAL_CLASS
-  return logDays >= LOG_CYCLE_LATE_THRESHOLD_DAYS ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
+  return Math.abs(logDays) >= LOG_CYCLE_LATE_THRESHOLD_DAYS
+    ? CYCLE_DAYS_LATE_CLASS
+    : CYCLE_DAYS_ON_TIME_CLASS
 }
 
 /** Unsigned duration metrics (e.g. weighted avg log cycle on dashboard). */
 export function durationCycleDaysClass(days: number | null | undefined): string {
   if (days == null || !Number.isFinite(days)) return CYCLE_DAYS_NEUTRAL_CLASS
-  return days >= LOG_CYCLE_LATE_THRESHOLD_DAYS ? CYCLE_DAYS_LATE_CLASS : CYCLE_DAYS_ON_TIME_CLASS
+  return Math.abs(days) >= LOG_CYCLE_LATE_THRESHOLD_DAYS
+    ? CYCLE_DAYS_LATE_CLASS
+    : CYCLE_DAYS_ON_TIME_CLASS
 }
 
 /** Magnitude for display — late/ahead is shown via color, not a "-" prefix. */
@@ -46,7 +56,7 @@ export function formatSignedCycleDays(days: number | null | undefined): string {
   if (days === 0) return '0 days'
   const abs = daysMagnitude(days)
   const unit = abs === 1 ? 'day' : 'days'
-  return days > 0 ? `${abs} ${unit} late` : `${abs} ${unit} ahead`
+  return days < 0 ? `${abs} ${unit} late` : `${abs} ${unit} ahead`
 }
 
 /** Contract Performance Section 3 — magnitude only; late/ahead shown via text color. */
@@ -58,13 +68,6 @@ export function formatSignedCycleDaysCompact(days: number | null | undefined): s
   return `${abs} ${unit}`
 }
 
-export function formatContractAgingDays(days: number): string {
-  if (days === 0) return 'Due today'
-  const abs = daysMagnitude(days)
-  const unit = abs === 1 ? 'day' : 'days'
-  return days > 0 ? `${abs} ${unit} late` : `${abs} ${unit} ahead`
-}
-
 export function formatLogCycleDays(
   days: number | null | undefined,
   tradeCycleDays?: number | null | undefined,
@@ -74,7 +77,7 @@ export function formatLogCycleDays(
   const unit = count === 1 ? 'day' : 'days'
   const late =
     typeof tradeCycleDays === 'number' && Number.isFinite(tradeCycleDays)
-      ? tradeCycleDays > 0
+      ? tradeCycleDays < 0
       : count >= LOG_CYCLE_LATE_THRESHOLD_DAYS
   return late ? `${count} ${unit} late` : `${count} ${unit} ahead`
 }

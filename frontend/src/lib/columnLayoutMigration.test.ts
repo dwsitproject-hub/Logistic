@@ -1,9 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { dedupeColumnIds, migrateSavedColumnLayout } from './columnLayoutMigration'
+import {
+  dedupeColumnIds,
+  mergePreservedColumnOrder,
+  migrateSavedColumnLayout,
+} from './columnLayoutMigration'
 
 describe('columnLayoutMigration', () => {
   it('dedupeColumnIds keeps first occurrence order', () => {
     expect(dedupeColumnIds(['a', 'b', 'a', 'c', 'b'])).toEqual(['a', 'b', 'c'])
+  })
+
+  it('mergePreservedColumnOrder keeps user order and appends missing', () => {
+    expect(
+      mergePreservedColumnOrder(
+        ['quantity_delivered', 'vessel_name', 'quantity_receive'],
+        ['late_indicator', 'vessel_name', 'quantity_delivered', 'quantity_receive', 'status'],
+        ['late_indicator', 'vessel_name', 'status', 'quantity_delivered', 'quantity_receive'],
+      ),
+    ).toEqual([
+      'quantity_delivered',
+      'vessel_name',
+      'quantity_receive',
+      'late_indicator',
+      'status',
+    ])
   })
 
   it('migrateSavedColumnLayout remaps obsolete ids and ensures defaults', () => {

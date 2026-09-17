@@ -3,8 +3,11 @@
  * Do not import from other pages or generic modals.
  */
 
+import { resolveShippingTcShortageMtForListRow } from './shipmentTcR4Shortage'
+import { TC_VESSEL_PERF_LABELS } from './shipmentTcPerformanceLabels'
 import { resolveShipmentDisplayStoNumber } from './shipmentStoDisplay'
 import type { ShippingPerformancePortSource } from './shippingPerformancePorts'
+import { formatQtyMtFromKg } from './utils'
 
 export type ShippingPerfVesselModalSourceRow = ShippingPerformancePortSource & {
   id: string
@@ -34,6 +37,13 @@ export type ShippingPerfVesselModalSourceRow = ShippingPerformancePortSource & {
   ata_discharge_delta_eta_etb_days?: number | null
   ata_discharge_delta_etb_etc_days?: number | null
   ata_total_delta_days?: number | null
+  // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+  fuel_consumption?: number | null
+  freight?: number | null
+  vessel_oa_budget?: number | null
+  pump_rate?: number | null
+  sailing_speed?: number | null
+  shortage?: number | null
 }
 
 export type ShippingPerfVesselModalAggregatedRow = {
@@ -62,15 +72,28 @@ export type ShippingPerfVesselModalAggregatedRow = {
   ata_discharge_delta_eta_etb_days: number | null
   ata_discharge_delta_etb_etc_days: number | null
   ata_total_delta_days: number | null
+  fuel_consumption: number | null
+  freight: number | null
+  vessel_oa_budget: number | null
+  pump_rate: number | null
+  sailing_speed: number | null
+  shortage: number | null
 }
 
 const PLANNED_STATUSES = new Set(['PLANNED'])
+/** Matches Shipments module ATA ladder + legacy aliases (shipmentStatus.ts). */
 const ON_GOING_ACTIVE_STATUSES = new Set([
   'IN_PROGRESS',
   'LOADING',
   'IN_TRANSIT',
   'ARRIVED',
   'UNLOADING',
+  'ARRIVED_LP',
+  'BERTHED_LP',
+  'COMPLETED_LOADING',
+  'SAILED',
+  'ARRIVED_DP',
+  'BERTHED_DP',
 ])
 const HISTORY_STATUSES = new Set(['COMPLETED', 'CANCELLED', 'CANCELED'])
 
@@ -162,13 +185,20 @@ function resolveAggregatedStoDisplay(rows: ShippingPerfVesselModalSourceRow[]): 
   return null
 }
 
+/** Postgres `numeric` columns (e.g. TC vessel metrics) arrive as strings — coerce, don't reject. */
+function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 function avgMetric(
   rows: ShippingPerfVesselModalSourceRow[],
   key: keyof ShippingPerfVesselModalSourceRow,
 ): number | null {
   const values = rows
-    .map((row) => row[key])
-    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    .map((row) => toFiniteNumber(row[key]))
+    .filter((value): value is number => value !== null)
   if (values.length === 0) return null
   const avg = values.reduce((sum, value) => sum + value, 0) / values.length
   return Math.round(avg * 10) / 10
@@ -211,6 +241,13 @@ export function aggregateShippingPerfVesselModalBySto(
     ata_discharge_delta_eta_etb_days: avgMetric(groupRows, 'ata_discharge_delta_eta_etb_days'),
     ata_discharge_delta_etb_etc_days: avgMetric(groupRows, 'ata_discharge_delta_etb_etc_days'),
     ata_total_delta_days: avgMetric(groupRows, 'ata_total_delta_days'),
+    // TC vessel metrics are per-shipment; average across the group's rows (usually identical).
+    fuel_consumption: avgMetric(groupRows, 'fuel_consumption'),
+    freight: avgMetric(groupRows, 'freight'),
+    vessel_oa_budget: avgMetric(groupRows, 'vessel_oa_budget'),
+    pump_rate: avgMetric(groupRows, 'pump_rate'),
+    sailing_speed: avgMetric(groupRows, 'sailing_speed'),
+    shortage: avgMetric(groupRows, 'shortage'),
   }))
 }
 
@@ -231,6 +268,12 @@ export type VesselModalOpenColumnKey =
   | 'loading_delta_etb_etc_days'
   | 'discharge_delta_eta_etb_days'
   | 'discharge_delta_etb_etc_days'
+  | 'fuel_consumption'
+  | 'freight'
+  | 'vessel_oa_budget'
+  | 'pump_rate'
+  | 'sailing_speed'
+  | 'shortage'
 
 export type VesselModalHistoryColumnKey =
   | 'sto'
@@ -249,6 +292,12 @@ export type VesselModalHistoryColumnKey =
   | 'ata_loading_delta_etb_etc_days'
   | 'ata_discharge_delta_eta_etb_days'
   | 'ata_discharge_delta_etb_etc_days'
+  | 'fuel_consumption'
+  | 'freight'
+  | 'vessel_oa_budget'
+  | 'pump_rate'
+  | 'sailing_speed'
+  | 'shortage'
 
 export const VESSEL_MODAL_OPEN_COLUMNS: ReadonlyArray<{
   key: VesselModalOpenColumnKey
@@ -271,6 +320,12 @@ export const VESSEL_MODAL_OPEN_COLUMNS: ReadonlyArray<{
   { key: 'loading_delta_etb_etc_days', label: 'Loading ETB - ETC', align: 'right' },
   { key: 'discharge_delta_eta_etb_days', label: 'Discharge ETA - ETB', align: 'right' },
   { key: 'discharge_delta_etb_etc_days', label: 'Discharge ETB - ETC', align: 'right' },
+  { key: 'fuel_consumption', label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl, align: 'right' },
+  { key: 'freight', label: TC_VESSEL_PERF_LABELS.freightActualIdrKg, align: 'right' },
+  { key: 'vessel_oa_budget', label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg, align: 'right' },
+  { key: 'pump_rate', label: TC_VESSEL_PERF_LABELS.pumpRateMtH, align: 'right' },
+  { key: 'sailing_speed', label: TC_VESSEL_PERF_LABELS.sailingSpeed, align: 'right' },
+  { key: 'shortage', label: TC_VESSEL_PERF_LABELS.shortageMt, align: 'right' },
 ]
 
 export const VESSEL_MODAL_HISTORY_COLUMNS: ReadonlyArray<{
@@ -294,6 +349,12 @@ export const VESSEL_MODAL_HISTORY_COLUMNS: ReadonlyArray<{
   { key: 'ata_loading_delta_etb_etc_days', label: 'Loading ATB - ATC', align: 'right' },
   { key: 'ata_discharge_delta_eta_etb_days', label: 'Discharge ATA - ATB', align: 'right' },
   { key: 'ata_discharge_delta_etb_etc_days', label: 'Discharge ATB - ATC', align: 'right' },
+  { key: 'fuel_consumption', label: TC_VESSEL_PERF_LABELS.fuelConsumptionKl, align: 'right' },
+  { key: 'freight', label: TC_VESSEL_PERF_LABELS.freightActualIdrKg, align: 'right' },
+  { key: 'vessel_oa_budget', label: TC_VESSEL_PERF_LABELS.freightBudgetIdrKg, align: 'right' },
+  { key: 'pump_rate', label: TC_VESSEL_PERF_LABELS.pumpRateMtH, align: 'right' },
+  { key: 'sailing_speed', label: TC_VESSEL_PERF_LABELS.sailingSpeed, align: 'right' },
+  { key: 'shortage', label: TC_VESSEL_PERF_LABELS.shortageMt, align: 'right' },
 ]
 
 export function formatShippingPerfVesselModalDate(value: string | null | undefined): string {
@@ -306,9 +367,7 @@ export function formatShippingPerfVesselModalDate(value: string | null | undefin
 }
 
 export function formatShippingPerfVesselModalQtyMt(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-'
-  const mt = Number(value) / 1000
-  return `${mt.toLocaleString('en-US', { maximumFractionDigits: 2 })} MT`
+  return formatQtyMtFromKg(value, { maxFractionDigits: 2 })
 }
 
 const OPEN_DELTA_COLUMN_KEYS = new Set<VesselModalOpenColumnKey>([
@@ -341,6 +400,21 @@ export function resolveVesselModalOpenDeltaDays(
 ): number | null {
   if (!isVesselModalOpenDeltaColumn(key)) return null
   const value = row[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+export function resolveVesselModalTcMetricDisplay(
+  row: ShippingPerfVesselModalAggregatedRow,
+  key: VesselModalOpenColumnKey | VesselModalHistoryColumnKey,
+): number | null {
+  if (key === 'shortage') {
+    return resolveShippingTcShortageMtForListRow({
+      shortage: row.shortage,
+      delivered_qty: row.delivered_qty,
+      received_qty: row.received_qty,
+    })
+  }
+  const value = row[key as keyof ShippingPerfVesselModalAggregatedRow]
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 

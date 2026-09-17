@@ -527,8 +527,7 @@ export default function ClaimMutuPage() {
               </Link>
               <Badge variant="outline">SAP Excel</Badge>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mt-2">Claim Mutu</h1>
-            <p className="text-sm text-gray-600 mt-1">
+            <p className="text-sm text-gray-600 mt-2">
               Upload the SAP OSCLAIM excel and view outstanding claim quality rows.
             </p>
           </div>

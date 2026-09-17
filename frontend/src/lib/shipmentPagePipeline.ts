@@ -5,6 +5,7 @@
 
 export type ShipmentPagePipelineStage =
   | 'UNPLANNED'
+  | 'PREPLANNED'
   | 'PLANNED'
   | 'AT_LOADING_PORT'
   | 'SAILED'
@@ -14,6 +15,7 @@ export type ShipmentPagePipelineStage =
 
 export type ShipmentPagePipelineStatusCounts = {
   unplanned: number
+  preplanned: number
   planned: number
   atLoadingPort: number
   sailed: number
@@ -36,15 +38,101 @@ export type DischargePortBreakdown = {
   unloading: number
 }
 
+/** Sorted distinct non-blank vessel names per pipeline stage (Section 1 cards). */
+export type ShipmentPagePipelineVesselNames = {
+  unplanned: string[]
+  preplanned: string[]
+  planned: string[]
+  atLoadingPort: string[]
+  sailed: string[]
+  atDischargePort: string[]
+  completed: string[]
+  cancelled: string[]
+}
+
 export type ShipmentPagePipelineSummary = {
   status: ShipmentPagePipelineStatusCounts
+  statusVesselNames?: ShipmentPagePipelineVesselNames
   loadingPortBreakdown?: LoadingPortBreakdown
   dischargePortBreakdown?: DischargePortBreakdown
+  statusContractQty?: ShipmentPagePipelineContractQtyKg
+  statusOutstandingQty?: ShipmentPagePipelineOutstandingQtyKg
   unplannedTable?: {
     contractRows: number
     shipmentRows: number
     totalTableRows: number
   }
+  outstandingQty?: {
+    totalKg: number
+    thirdParty: { fobKg: number; cifKg: number; cfrKg: number }
+    interco: { fobKg: number; cifKg: number; cfrKg: number }
+  }
+}
+
+export type ShipmentPagePipelineContractQtyKg = {
+  unplanned: number
+  preplanned: number
+  planned: number
+  completed: number
+  cancelled: number
+}
+
+export type ShipmentPagePipelineOutstandingQtyKg = {
+  unplanned: number
+  preplanned: number
+  planned: number
+  atLoadingPort: number
+  sailed: number
+  atDischargePort: number
+}
+
+export type ShipmentPipelineCardQtyDisplay = {
+  label: 'Contract Qty' | 'Outstanding Qty'
+  kg: number
+}
+
+const SHIPMENT_CONTRACT_QTY_STAGES = new Set<ShipmentPagePipelineStage>([
+  'COMPLETED',
+  'CANCELLED',
+])
+
+const SHIPMENT_OUTSTANDING_QTY_STAGES = new Set<ShipmentPagePipelineStage>([
+  'UNPLANNED',
+  'PREPLANNED',
+  'PLANNED',
+  'AT_LOADING_PORT',
+  'SAILED',
+  'AT_DISCHARGE_PORT',
+])
+
+export function pipelineCardQtyForStage(
+  stage: ShipmentPagePipelineStage,
+  contractQty?: Partial<ShipmentPagePipelineContractQtyKg> | null,
+  outstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg> | null,
+): ShipmentPipelineCardQtyDisplay | null {
+  if (SHIPMENT_CONTRACT_QTY_STAGES.has(stage)) {
+    const kg =
+      stage === 'COMPLETED'
+        ? Number(contractQty?.completed ?? 0)
+        : Number(contractQty?.cancelled ?? 0)
+    return { label: 'Contract Qty', kg }
+  }
+  if (SHIPMENT_OUTSTANDING_QTY_STAGES.has(stage)) {
+    const kg =
+      stage === 'UNPLANNED'
+        ? Number(outstandingQty?.unplanned ?? 0)
+        : stage === 'PREPLANNED'
+          ? Number(outstandingQty?.preplanned ?? 0)
+          : stage === 'PLANNED'
+            ? Number(outstandingQty?.planned ?? 0)
+            : stage === 'AT_LOADING_PORT'
+              ? Number(outstandingQty?.atLoadingPort ?? 0)
+              : stage === 'SAILED'
+                ? Number(outstandingQty?.sailed ?? 0)
+                : Number(outstandingQty?.atDischargePort ?? 0)
+    return { label: 'Outstanding Qty', kg }
+  }
+  return null
 }
 
 export interface ShipmentPipelineCardConfig {
@@ -65,7 +153,16 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     textColor: 'text-slate-800',
     badgeColor: 'bg-slate-600',
     tooltip:
-      'Rows in the Unplanned view table: open contracts without a shipment record, plus unplanned STO/shipment execution groups (no ETA and no port milestones yet). The badge count matches the table row total.',
+      'Open contracts (PO) without a shipment record yet. The badge count matches the Unplanned table row total (PO backlog only).',
+  },
+  {
+    status: 'PREPLANNED',
+    label: 'Preplanned',
+    color: 'bg-amber-100',
+    textColor: 'text-amber-800',
+    badgeColor: 'bg-amber-600',
+    tooltip:
+      'Unique accepted grouping suggestions that are not yet linked to a real shipment (no vessel/ETA entered). The badge counts groups, not individual contracts.',
   },
   {
     status: 'PLANNED',
@@ -73,7 +170,8 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     color: 'bg-blue-100',
     textColor: 'text-blue-800',
     badgeColor: 'bg-blue-600',
-    tooltip: 'Shipments (STO/Operation ID) with ETA entered and not yet Completed or Cancelled.',
+    tooltip:
+      'Shipments (STO/Operation ID) that are open and not yet at loading/sailed/discharge stages — including rows with or without ETA. Badge matches the Planned table.',
   },
   {
     status: 'AT_LOADING_PORT',
@@ -87,7 +185,7 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
   },
   {
     status: 'SAILED',
-    label: 'Sailed',
+    label: 'Sailed to Disc Port',
     color: 'bg-purple-100',
     textColor: 'text-purple-800',
     badgeColor: 'bg-purple-600',
@@ -109,7 +207,8 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
     color: 'bg-green-100',
     textColor: 'text-green-800',
     badgeColor: 'bg-green-600',
-    tooltip: 'Shipment complete — cargo received at destination or contract closed in SAP.',
+    tooltip:
+      'Shipment complete (cargo received at destination or SAP Close), or a PO with no shipment whose remaining outstanding qty is 1 MT or less.',
   },
   {
     status: 'CANCELLED',
@@ -121,6 +220,97 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
   },
 ] as const
 
+/** Immediate Section 1 card patch after Unplanned POs become ACCEPTED Preplanned groups. */
+export interface UnplannedToPreplannedCardMove {
+  groupCount: number
+  contractRows: number
+  outstandingQtyKg: number
+}
+
+export interface ShipmentSection1CardSummaryPatch {
+  status?: Partial<ShipmentPagePipelineStatusCounts>
+  statusOutstandingQty?: Partial<ShipmentPagePipelineOutstandingQtyKg>
+  unplannedTable?: {
+    contractRows?: number
+    shipmentRows?: number
+    totalTableRows?: number
+  }
+}
+
+export function patchSection1SummaryAfterUnplannedToPreplanned<T extends ShipmentSection1CardSummaryPatch>(
+  prev: T | null | undefined,
+  move: UnplannedToPreplannedCardMove,
+): T | null | undefined {
+  if (!prev) return prev
+  const groups = Math.max(0, Number(move.groupCount) || 0)
+  const contractRows = Math.max(0, Number(move.contractRows) || 0)
+  const osKg = Math.max(0, Number(move.outstandingQtyKg) || 0)
+  if (groups === 0 && contractRows === 0 && osKg === 0) return prev
+
+  const next: T = { ...prev }
+  if (prev.status) {
+    next.status = {
+      ...prev.status,
+      preplanned: Number(prev.status.preplanned ?? 0) + groups,
+      unplanned: Math.max(0, Number(prev.status.unplanned ?? 0) - contractRows),
+    }
+  }
+  if (prev.statusOutstandingQty) {
+    next.statusOutstandingQty = {
+      ...prev.statusOutstandingQty,
+      preplanned: Number(prev.statusOutstandingQty.preplanned ?? 0) + osKg,
+      unplanned: Math.max(0, Number(prev.statusOutstandingQty.unplanned ?? 0) - osKg),
+    }
+  }
+  if (prev.unplannedTable) {
+    const nextContractRows = Math.max(0, Number(prev.unplannedTable.contractRows ?? 0) - contractRows)
+    const nextTableRows = Math.max(0, Number(prev.unplannedTable.totalTableRows ?? 0) - contractRows)
+    next.unplannedTable = {
+      ...prev.unplannedTable,
+      contractRows: nextContractRows,
+      totalTableRows: nextTableRows,
+    }
+  }
+  return next
+}
+
+export function patchSection1SummaryAfterUnplannedToPlanned<T extends ShipmentSection1CardSummaryPatch>(
+  prev: T | null | undefined,
+  move: UnplannedToPreplannedCardMove,
+): T | null | undefined {
+  if (!prev) return prev
+  const groups = Math.max(0, Number(move.groupCount) || 0)
+  const contractRows = Math.max(0, Number(move.contractRows) || 0)
+  const osKg = Math.max(0, Number(move.outstandingQtyKg) || 0)
+  if (groups === 0 && contractRows === 0 && osKg === 0) return prev
+
+  const next: T = { ...prev }
+  if (prev.status) {
+    next.status = {
+      ...prev.status,
+      planned: Number(prev.status.planned ?? 0) + groups,
+      unplanned: Math.max(0, Number(prev.status.unplanned ?? 0) - contractRows),
+    }
+  }
+  if (prev.statusOutstandingQty) {
+    next.statusOutstandingQty = {
+      ...prev.statusOutstandingQty,
+      planned: Number(prev.statusOutstandingQty.planned ?? 0) + osKg,
+      unplanned: Math.max(0, Number(prev.statusOutstandingQty.unplanned ?? 0) - osKg),
+    }
+  }
+  if (prev.unplannedTable) {
+    const nextContractRows = Math.max(0, Number(prev.unplannedTable.contractRows ?? 0) - contractRows)
+    const nextTableRows = Math.max(0, Number(prev.unplannedTable.totalTableRows ?? 0) - contractRows)
+    next.unplannedTable = {
+      ...prev.unplannedTable,
+      contractRows: nextContractRows,
+      totalTableRows: nextTableRows,
+    }
+  }
+  return next
+}
+
 export function pipelineCountForStage(
   stage: ShipmentPagePipelineStage,
   counts: ShipmentPagePipelineStatusCounts,
@@ -128,6 +318,8 @@ export function pipelineCountForStage(
   switch (stage) {
     case 'UNPLANNED':
       return counts.unplanned
+    case 'PREPLANNED':
+      return counts.preplanned
     case 'PLANNED':
       return counts.planned
     case 'AT_LOADING_PORT':
@@ -142,6 +334,46 @@ export function pipelineCountForStage(
       return counts.cancelled
     default:
       return 0
+  }
+}
+
+export function pipelineVesselNamesForStage(
+  stage: ShipmentPagePipelineStage,
+  vessels: ShipmentPagePipelineVesselNames | undefined,
+): string[] | null {
+  if (!vessels) return null
+  switch (stage) {
+    case 'UNPLANNED':
+      return vessels.unplanned
+    case 'PREPLANNED':
+      return vessels.preplanned
+    case 'PLANNED':
+      return vessels.planned
+    case 'AT_LOADING_PORT':
+      return vessels.atLoadingPort
+    case 'SAILED':
+      return vessels.sailed
+    case 'AT_DISCHARGE_PORT':
+      return vessels.atDischargePort
+    case 'COMPLETED':
+      return vessels.completed
+    case 'CANCELLED':
+      return vessels.cancelled
+    default:
+      return null
+  }
+}
+
+/** How many vessel names are shown directly on a card before "+N more". */
+export const PIPELINE_CARD_VESSEL_PREVIEW_LIMIT = 3
+
+export function splitVesselNamesForCard(names: string[]): {
+  preview: string[]
+  moreCount: number
+} {
+  return {
+    preview: names.slice(0, PIPELINE_CARD_VESSEL_PREVIEW_LIMIT),
+    moreCount: Math.max(0, names.length - PIPELINE_CARD_VESSEL_PREVIEW_LIMIT),
   }
 }
 

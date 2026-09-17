@@ -30,9 +30,25 @@ function formatDdMmYyyyDraft(digits: string, trailingSlash = false): string {
   return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`
 }
 
+/** Global sanity bounds (N-14): typing an ID into a date field must not reach the API
+ *  as year 10610 — callers can narrow further via minIso/maxIso but never widen. */
+const DEFAULT_MIN_ISO = '2020-01-01'
+const DEFAULT_MAX_ISO = '2035-12-31'
+const RANGE_MESSAGE = 'Please enter a valid date (2020–2035)'
+
 /** Text input showing **DD/MM/YYYY**; stores **YYYY-MM-DD** via onChangeIso (same as native date value to API). */
 export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, minIso, maxIso, fastEntryGroup }: Props) {
   const [draft, setDraft] = useState('')
+  const [rangeRejected, setRangeRejected] = useState(false)
+
+  const effMinIso = minIso ?? DEFAULT_MIN_ISO
+  const effMaxIso = maxIso ?? DEFAULT_MAX_ISO
+  /** True when the date parsed but falls outside the allowed window — do not emit it. */
+  const rejectOutOfRange = (iso: string): boolean => {
+    const rejected = isIsoOutsideAllowedRange(iso, effMinIso, effMaxIso)
+    setRangeRejected(rejected)
+    return rejected
+  }
 
   const normalizedIso = useMemo(() => {
     const iso = String(valueIso ?? '').trim()
@@ -45,9 +61,9 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
     setDraft(isoDateStringToDdMmYyyy(valueIso))
   }, [valueIso])
 
-  const isOutOfRange = Boolean(
-    normalizedIso && (minIso || maxIso) && isIsoOutsideAllowedRange(normalizedIso, minIso, maxIso),
-  )
+  const isOutOfRange =
+    rangeRejected ||
+    Boolean(normalizedIso && isIsoOutsideAllowedRange(normalizedIso, effMinIso, effMaxIso))
 
   return (
     <div className="relative">
@@ -55,6 +71,8 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
         type="text"
         placeholder="DD/MM/YYYY"
         disabled={disabled}
+        title={isOutOfRange ? RANGE_MESSAGE : undefined}
+        aria-invalid={isOutOfRange || undefined}
         className={`${className ?? ''} pr-9 ${isOutOfRange ? 'border-red-500' : ''}`}
         value={draft}
         {...(fastEntryGroup
@@ -75,7 +93,7 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           setDraft(next)
           if (digits.length === 8) {
             const iso = parseDdMmYyyyToIso(next)
-            if (iso) onChangeIso(iso)
+            if (iso && !rejectOutOfRange(iso)) onChangeIso(iso)
           }
         }}
         onPaste={(e) => {
@@ -84,6 +102,7 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
           const iso = parseDdMmYyyyToIso(text)
           if (iso) {
             e.preventDefault()
+            if (rejectOutOfRange(iso)) return
             onChangeIso(iso)
             setDraft(isoDateStringToDdMmYyyy(iso))
           }
@@ -91,15 +110,18 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
         onBlur={() => {
           const t = draft.trim()
           if (!t) {
+            setRangeRejected(false)
             onChangeIso('')
             return
           }
           const iso = parseDdMmYyyyToIso(t)
-          if (iso) {
+          if (iso && !rejectOutOfRange(iso)) {
             onChangeIso(iso)
             setDraft(isoDateStringToDdMmYyyy(iso))
           } else {
+            // Unparseable or out of range: restore the last valid value.
             setDraft(isoDateStringToDdMmYyyy(valueIso))
+            if (!iso) setRangeRejected(false)
           }
         }}
       />
@@ -110,17 +132,19 @@ export function DateInputDdMmYyyy({ valueIso, onChangeIso, className, disabled, 
         <input
           type="date"
           disabled={disabled}
-          min={minIso}
-          max={maxIso}
+          min={effMinIso}
+          max={effMaxIso}
           value={normalizedIso}
           tabIndex={-1}
           onChange={(e) => {
             const v = e.target.value
             if (!v) {
+              setRangeRejected(false)
               onChangeIso('')
               setDraft('')
               return
             }
+            if (rejectOutOfRange(v)) return
             onChangeIso(v)
             setDraft(isoDateStringToDdMmYyyy(v))
           }}

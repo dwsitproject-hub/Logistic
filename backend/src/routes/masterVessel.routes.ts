@@ -1,25 +1,34 @@
 import express from 'express';
+import multer from 'multer';
 import { authenticateToken, authorize } from '../middleware/auth';
 import {
   listMasterVessels,
+  getMasterVesselFilterOptions,
   createMasterVessel,
   updateMasterVessel,
-  bulkUploadMasterVessels,
   deleteMasterVessel,
+  importJovinMasterVessels,
 } from '../controllers/masterVessel.controller';
 
 const router = express.Router();
+const jovinUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024 },
+});
 
 router.use(authenticateToken);
 
-// View list
 router.get('/', listMasterVessels);
+router.get('/filter-options', getMasterVesselFilterOptions);
 
-// Create / edit / bulk upload – restrict to ADMIN or roles with data.master_vessels permissions (enforced via role-permissions on frontend)
 router.post('/', authorize('ADMIN'), createMasterVessel);
 router.put('/:id', authorize('ADMIN'), updateMasterVessel);
 router.delete('/:id', authorize('ADMIN'), deleteMasterVessel);
-router.post('/upload', authorize('ADMIN'), bulkUploadMasterVessels);
+router.post(
+  '/import-jovin',
+  authorize('ADMIN'),
+  jovinUpload.single('file'),
+  importJovinMasterVessels,
+);
 
 export default router;
-

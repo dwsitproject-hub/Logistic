@@ -1,6 +1,11 @@
 # Backend server stack: PostgreSQL + Backend API
 # Run on backend server (e.g. 172.28.92.57): docker compose -f docker-compose.backend.yml up -d
 #
+# **SIT production:** DB is Aliyun RDS (see docker-compose.backend.remote-db.yml).
+# Use the remote-db overlay so the co-located postgres service is never started:
+#   docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
+# Set KLIP_FAIL_ON_LOCAL_DB=true in backend/.env to refuse start if DB_HOST=klip-postgres.
+#
 # --- Database credentials (IMPORTANT) ---
 # - Docker Compose substitutes ${DB_NAME} etc. from a ".env" file in THIS DIRECTORY (/opt/klip/.env),
 #   NOT from backend/.env alone. Copy or symlink:  cp backend/.env .env
@@ -11,6 +16,7 @@
 # - Publish Postgres to the host (optional, for psql / ts-node on the server): POSTGRES_PORT default 5433
 #
 # Optional in /opt/klip/.env: DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT, BACKEND_PORT, JWT_SECRET
+# Optional: KLIP_FAIL_ON_LOCAL_DB=true — refuse backend start when DB_HOST points at local postgres
 
 services:
   postgres:
@@ -51,15 +57,54 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5001
-      # Override host-oriented DB settings from env_file — required for in-stack networking
-      # Use container_name to avoid DNS edge cases on some hosts
-      DB_HOST: klip-postgres
-      DB_PORT: "5432"
+      # DB host: default in-stack postgres; SIT overlay sets Aliyun RDS via /opt/klip/.env
+      DB_HOST: ${DB_HOST:-klip-postgres}
+      DB_PORT: ${DB_PORT:-5432}
       # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
       JWT_EXPIRES_IN: 7d
       # Shared upload root inside container (see backend_uploads volume below; Synology optional override)
       UPLOAD_DIR: /app/uploads
       # GEMINI_API_KEY comes from env_file: ./backend/.env (do not override here or it will be empty)
+      # ANTHROPIC_API_KEY does too, and is REQUIRED — it powers KLIP Agent AI (chat) and the AI
+      # Shipment Planner. Without it the agent answers with a clear "not configured" error.
+      # Optional in the same file: ANTHROPIC_AGENT_MODEL (default claude-sonnet-5) and
+      # ANTHROPIC_AGENT_EFFORT (low|medium|high|xhigh|max, default medium).
+      # Add to /opt/klip/backend/.env on the backend host; do not set them here.
+      # OIDC SSO — values from /opt/klip/.env or backend/.env (must match Hub Admin registration).
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+      CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      SSO_LEGACY_BRIDGE: ${SSO_LEGACY_BRIDGE:-false}
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-true}
+      # Email / SMTP (Contract ETA reminder and future notifications) — set real values in
+      # /opt/klip/.env (symlinked to backend/.env), never commit real credentials.
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_REJECT_UNAUTHORIZED: ${SMTP_REJECT_UNAUTHORIZED:-true}
+      CONTRACT_ETA_REMINDER_ENABLED: ${CONTRACT_ETA_REMINDER_ENABLED:-true}
+      CONTRACT_ETA_REMINDER_CRON: ${CONTRACT_ETA_REMINDER_CRON:-0 7 * * *}
+      # SIT-only testing recipient(s) — added on top of the DB-driven Logistics distribution
+      # list. Comma/semicolon-separated. Intentionally NOT set on local (docker-compose.yml).
+      CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS: ${CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS:-ryan.pohan@energi-up.com}
+      # Synology drop-folder MASTER v2 (Klip/SAP Data/Original). Enable after the share is mounted.
+      SAP_AUTO_IMPORT_ENABLED: ${SAP_AUTO_IMPORT_ENABLED:-true}
+      SAP_AUTO_IMPORT_CRON: ${SAP_AUTO_IMPORT_CRON:-0 6 * * *}
+      SAP_AUTO_IMPORT_ROOT: "${SAP_AUTO_IMPORT_ROOT:-/app/uploads/SAP Data}"
+      # Result workbooks. Defaults to SAP_AUTO_IMPORT_ROOT; set it when the source share is
+      # read-only, or when two environments read the same folder and would overwrite each other.
+      SAP_AUTO_IMPORT_RESULTS_ROOT: "${SAP_AUTO_IMPORT_RESULTS_ROOT:-}"
+      SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

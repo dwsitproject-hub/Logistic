@@ -1,5 +1,7 @@
 # Optional env (create .env or export): DB_NAME, DB_USER, DB_PASSWORD, POSTGRES_PORT,
 # BACKEND_PORT, FRONTEND_PORT, JWT_SECRET, NEXT_PUBLIC_API_URL (URL the browser uses for API)
+# For same-origin OIDC/cookies on SIT: NEXT_PUBLIC_API_URL=/api + nginx (see docs/nginx/klip-single-origin.conf.example)
+# Local cookie SSO testing: NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://backend:5001
 version: '3.8'
 
 services:
@@ -39,8 +41,54 @@ services:
       DB_NAME: ${DB_NAME:-klip_db}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-postgres123}
+      DB_POOL_MAX: ${DB_POOL_MAX:-40}
+      DB_POOL_CONNECTION_TIMEOUT_MS: ${DB_POOL_CONNECTION_TIMEOUT_MS:-10000}
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
       JWT_EXPIRES_IN: 7d
+      SSO_TOKEN_SECRET: ${SSO_TOKEN_SECRET:-}
+      SSO_LEGACY_BRIDGE: ${SSO_LEGACY_BRIDGE:-false}
+      APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:-http://localhost:3001}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SESSION_COOKIE_SAMESITE: ${SESSION_COOKIE_SAMESITE:-Lax}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-openid email profile}
+      LOCAL_LOGIN_ENABLED: ${LOCAL_LOGIN_ENABLED:-true}
+      PRE_PLANNED_GROUPING_ENABLED: ${PRE_PLANNED_GROUPING_ENABLED:-true}
+      PRE_PLANNED_WINDOW_TOL_DAYS: ${PRE_PLANNED_WINDOW_TOL_DAYS:-3}
+      PRE_PLANNED_MIN_OS_MT: ${PRE_PLANNED_MIN_OS_MT:-100}
+      ATTENTION_INSIGHTS_ENABLED: ${ATTENTION_INSIGHTS_ENABLED:-false}
+      # Claude powers KLIP Agent AI (chat) and the AI Shipment Planner.
+      # Set ANTHROPIC_API_KEY in the root .env; backend/.env is excluded by .dockerignore.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Chat agent model/effort. Defaults: claude-sonnet-5 / medium.
+      ANTHROPIC_AGENT_MODEL: ${ANTHROPIC_AGENT_MODEL:-}
+      ANTHROPIC_AGENT_EFFORT: ${ANTHROPIC_AGENT_EFFORT:-}
+      # Shipment Planner model (defaults to claude-sonnet-4-6).
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      # Email / SMTP (Contract ETA reminder and future notifications) — set real values in root .env.
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_REJECT_UNAUTHORIZED: ${SMTP_REJECT_UNAUTHORIZED:-true}
+      CONTRACT_ETA_REMINDER_ENABLED: ${CONTRACT_ETA_REMINDER_ENABLED:-true}
+      CONTRACT_ETA_REMINDER_CRON: ${CONTRACT_ETA_REMINDER_CRON:-0 7 * * *}
+      CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS: ${CONTRACT_ETA_REMINDER_EXTRA_RECIPIENTS:-ryan.pohan@energi-up.com}
+      # Synology SAP Data folder scheduler (MASTER v2). Off by default locally.
+      SAP_AUTO_IMPORT_ENABLED: ${SAP_AUTO_IMPORT_ENABLED:-false}
+      SAP_AUTO_IMPORT_CRON: ${SAP_AUTO_IMPORT_CRON:-0 6 * * *}
+      SAP_AUTO_IMPORT_ROOT: "${SAP_AUTO_IMPORT_ROOT:-/app/uploads/SAP Data}"
+      # Result workbooks. Defaults to SAP_AUTO_IMPORT_ROOT; set it when the source share is
+      # read-only, or when two environments read the same folder and would overwrite each other.
+      SAP_AUTO_IMPORT_RESULTS_ROOT: "${SAP_AUTO_IMPORT_RESULTS_ROOT:-}"
+      SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:
@@ -66,9 +114,13 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}
+        BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
+        NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED: ${NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED:-false}
     container_name: klip-frontend
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}
+      BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
+      NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED: ${NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED:-false}
     ports:
       - "${FRONTEND_PORT:-3001}:3001"
     depends_on:

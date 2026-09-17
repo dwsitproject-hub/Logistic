@@ -3,6 +3,7 @@ import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  summarizeContractLogisticsStoQty,
 } from './contractLogisticsStoDisplay';
 
 describe('contractLogisticsStoDisplay', () => {
@@ -30,11 +31,73 @@ describe('contractLogisticsStoDisplay', () => {
     expect(resolveContractLogisticsOperationId(null, '1586004692')).toBeNull();
   });
 
+  it('summarizes real STO qtys without using contract/PO qty', () => {
+    const summary = summarizeContractLogisticsStoQty([
+      { sto_number: '1006018144', operation_id: 'OP-A', sto_quantity: 500_000 },
+      { sto_number: '1006018145', operation_id: 'OP-B', sto_quantity: 250_000 },
+      { sto_number: '1006018144', operation_id: 'OP-C', sto_quantity: 400_000 },
+    ]);
+    expect(summary.sto_count).toBe(2);
+    expect(summary.total_sto_quantity).toBe(750_000);
+  });
+
+  it('falls back to Operation ID count and deduped SAP STO qty by PO', () => {
+    const summary = summarizeContractLogisticsStoQty([
+      { sto_number: '-', operation_id: 'OP-LAND-1', sto_quantity: 150_000 },
+      { sto_number: '-', operation_id: 'OP-LAND-2', sto_quantity: 150_000 },
+    ]);
+    expect(summary.sto_count).toBe(2);
+    expect(summary.total_sto_quantity).toBe(150_000);
+  });
+
   it('shows COMPLETED when contract SAP Close without ATA milestones', () => {
     expect(
       resolveContractLogisticsStoStatus({
         contractImportStatus: 'Close',
         dbStatus: 'UNPLANNED',
+        logisticsType: 'shipment',
+      }),
+    ).toBe('COMPLETED');
+  });
+
+  it('shows CANCELLED when SAP import status is Cancelled (even without shipment row)', () => {
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Cancelled',
+        dbStatus: null,
+        logisticsType: 'shipment',
+        shipmentMilestones: {
+          eta_arrival_at_loading_port: '2026-01-15',
+        },
+      }),
+    ).toBe('CANCELLED');
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Cancelled',
+        dbStatus: 'CANCELLED',
+        logisticsType: 'shipment',
+      }),
+    ).toBe('CANCELLED');
+  });
+
+  it('ignores sticky DB CANCELLED when SAP import is still Open', () => {
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Open',
+        dbStatus: 'CANCELLED',
+        logisticsType: 'shipment',
+        shipmentMilestones: {
+          eta_arrival_at_loading_port: '2026-01-15',
+        },
+      }),
+    ).toBe('PLANNED');
+  });
+
+  it('maps sticky CANCELLED + GR Close to COMPLETED', () => {
+    expect(
+      resolveContractLogisticsStoStatus({
+        contractImportStatus: 'Close',
+        dbStatus: 'CANCELLED',
         logisticsType: 'shipment',
       }),
     ).toBe('COMPLETED');

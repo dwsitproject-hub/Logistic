@@ -1,5 +1,6 @@
-import { groupPlantExpr } from './groupPlantSql';
 import { documentTypesForCategory } from './commercialDocumentsConstants';
+import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
+import { appendRegionSiteFilter, sqlRegionSiteDisplayFromJsonAndB2b } from './regionSiteSql';
 
 /** Open contract status for summary card counts. */
 export const COMMERCIAL_DOCS_OPEN_STATUS_SQL = `(
@@ -19,7 +20,7 @@ export type CommercialDocumentsListParams = {
   incoterm?: string | null;
   product?: string | null;
   supplier?: string | null;
-  plant?: string | null;
+  plant?: string | string[] | null;
   page?: number;
   limit?: number;
 };
@@ -86,7 +87,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         c.status,
         c.transport_mode,
         COALESCE(NULLIF(TRIM(c.company_name), ''), latest_spd.data->'raw'->>'Buyer', latest_spd.data->>'Buyer') AS company_name,
-        ${groupPlantExpr('c.plant_code', 'c.company_name')} AS plant_site,
+        ${sqlRegionSiteDisplayFromJsonAndB2b('latest_spd.data')} AS plant_site,
         COALESCE(latest_spd.data->'contract'->>'contract_type', latest_spd.data->>'B2B Flag') AS b2b_flag,
         COALESCE(
           latest_spd.data->'contract'->>'contract_reference_po',
@@ -108,6 +109,7 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${COMMERCIAL_DOCS_OPEN_STATUS_SQL} AS is_open
       FROM contracts c
       LEFT JOIN latest_spd ON latest_spd.contract_number = c.contract_id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       LEFT JOIN mv_contract_payment_dates mv_pay ON mv_pay.contract_id = c.contract_id
       LEFT JOIN LATERAL (
         SELECT p.payment_due_date
@@ -124,6 +126,19 @@ export function buildCommercialDocumentsBaseCte(): string {
     ),
     doc_flags AS (
       SELECT
+        NULLIF(TRIM(po_number), '') AS po_number,
+        ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
+        ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
+        ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
+        COUNT(*)::int AS uploaded_count
+      FROM commercial_document_files
+      WHERE NULLIF(TRIM(po_number), '') IS NOT NULL
+      GROUP BY NULLIF(TRIM(po_number), '')
+    ),
+    legacy_doc_flags AS (
+      SELECT
         contract_ext_no,
         ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
@@ -132,19 +147,23 @@ export function buildCommercialDocumentsBaseCte(): string {
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
         COUNT(*)::int AS uploaded_count
       FROM commercial_document_files
+      WHERE NULLIF(TRIM(po_number), '') IS NULL
       GROUP BY contract_ext_no
     ),
     enriched AS (
       SELECT
         cr.*,
-        COALESCE(df.doc_contract, false) AS doc_contract,
-        COALESCE(df.doc_addendum_contract, false) AS doc_addendum_contract,
-        COALESCE(df.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
-        COALESCE(df.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
-        COALESCE(df.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
-        COALESCE(df.uploaded_count, 0) AS uploaded_count
+        COALESCE(df.doc_contract, ldf.doc_contract, false) AS doc_contract,
+        COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
+        COALESCE(df.doc_invoice_fp_dp, ldf.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
+        COALESCE(df.doc_invoice_fp_payoff, ldf.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
+        COALESCE(df.doc_invoice_fp_full, ldf.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
+        COALESCE(df.uploaded_count, ldf.uploaded_count, 0) AS uploaded_count
       FROM contract_rows cr
-      LEFT JOIN doc_flags df ON df.contract_ext_no = cr.contract_ext_no
+      LEFT JOIN doc_flags df ON df.po_number = NULLIF(TRIM(cr.po_number), '')
+      LEFT JOIN legacy_doc_flags ldf
+        ON ldf.contract_ext_no = cr.contract_ext_no
+       AND df.po_number IS NULL
     )
   `;
 }
@@ -203,9 +222,14 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     where.push(`TRIM(COALESCE(e.supplier, '')) = $${idx++}`);
     values.push(params.supplier.trim());
   }
-  if (params.plant?.trim()) {
-    where.push(`TRIM(COALESCE(e.plant_site, '')) = $${idx++}`);
-    values.push(params.plant.trim());
+  const plants = (Array.isArray(params.plant) ? params.plant : params.plant ? [params.plant] : [])
+    .map((p) => String(p).trim())
+    .filter(Boolean);
+  const regionSiteFilter = appendRegionSiteFilter(plants, idx, 'e.plant_site');
+  if (regionSiteFilter.sql) {
+    where.push(regionSiteFilter.sql.replace(/^ AND /, ''));
+    values.push(...regionSiteFilter.params);
+    idx = regionSiteFilter.nextIndex;
   }
   if (params.documentType && params.documentStatus) {
     where.push('e.is_open = true');

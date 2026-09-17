@@ -24,6 +24,19 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('contract_candidates');
   });
 
+  it('sqlContractGlobalOutstandingExpr zeros OS when contract is Cancelled (Delete PO/STO)', () => {
+    const sql = sqlContractGlobalOutstandingExpr({
+      contractQtyExpr: 'pl.contract_qty',
+      incotermExpr: 'pl.incoterm',
+      contractNumberExpr: 'pl.contract_number',
+    });
+    /* Reads migration 162's stored column now; the column <-> path mapping is asserted against
+       the migration itself in sapDerivedColumnSql.test.ts. */
+    expect(sql).toContain('raw_delete_po_status');
+    expect(sql).toContain('THEN 0::numeric');
+    expect(sql).toContain('CANCELLED');
+  });
+
   it('sqlContractGlobalOutstandingExpr uses qty_move receive/delivery per incoterm (Contracts list rules)', () => {
     const sql = sqlContractGlobalOutstandingExpr({
       contractQtyExpr: 'pl.contract_qty',
@@ -32,10 +45,12 @@ describe('contractGlobalOutstandingSql', () => {
     });
     expect(sql).toContain('qty_move');
     expect(sql).toContain('quantity_receive');
-    expect(sql).toContain('quantity_delivery');
+    expect(sql).toContain('quantity_delivery_trucking');
+    expect(sql).toContain('quantity_delivery_vessel');
     expect(sql).toContain("'FRC', 'CIF', 'CFR'");
     expect(sql).toContain("'LCO', 'FOB'");
     expect(sql).toContain('GREATEST');
+    expect(sql).not.toMatch(/SELECT qm\.quantity_delivery FROM qty_move/);
   });
 
   it('qty_move quantity_delivery ignores zero vessel so trucking qty is not masked', () => {
@@ -45,14 +60,54 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('quantity_delivery_trucking');
   });
 
-  it('buildQtyMoveCte overlays LAND FRC/LCO qty from trucking WB daily actuals', () => {
+  it('buildQtyMoveCte overlays FRC/LCO Open qty from trucking WB daily actuals (Trucking-aligned)', () => {
     const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
     expect(sql).toContain('trucking_wb_overlay');
     expect(sql).toContain('trucking_daily_actuals');
     expect(sql).toContain('qty_move_sap');
-    expect(sql).toContain('wb_resolved_qty_kg');
+    expect(sql).toContain('wb_delivery_qty_kg');
+    expect(sql).toContain('wb_receive_qty_kg');
+    expect(sql).toContain('quantity_delivery_kg');
+    expect(sql).toContain('quantity_receive_kg');
     expect(sql).toContain("IN ('FRC', 'LCO')");
-    expect(sql).toContain("LIKE 'LAND%'");
+    // Align with Trucking: effective incoterm (DB||SAP), no LAND% gate
+    expect(sql).toContain("spd.data->'raw'->>'Incoterm'");
+    expect(sql).not.toContain("LIKE 'LAND%'");
+    // Close → SAP (no WB overlay), same as Trucking list
+    expect(sql).toMatch(/trucking_wb_overlay[\s\S]*AND NOT \(/);
+    // Do not inflate Contracts qty with CANCELLED trucking ops' WB
+    expect(sql).toContain("NOT IN ('CANCELLED', 'CANCELED', 'CANCEL')");
+    expect(sql).toContain('w.wb_receive_qty_kg > 0');
+    expect(sql).toContain('w.wb_delivery_qty_kg > 0');
+  });
+
+  it('buildQtyMoveCte overlays SEA FOB/CIF/CFR qty from Open KLIP shipment actuals', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('shipment_klip_overlay');
+    expect(sql).toContain('klip_delivery_kg');
+    expect(sql).toContain('klip_receive_kg');
+    expect(sql).toContain("IN ('FOB', 'CIF', 'CFR')");
+    expect(sql).toContain('quantity_delivered_klip');
+    expect(sql).toContain('actual_vessel_qty_receive');
+    expect(sql).toContain("COALESCE(s.status, '') <> 'CANCELLED'");
+    expect(sql).toContain('sk.klip_delivery_kg');
+    expect(sql).toContain('sk.klip_receive_kg');
+  });
+
+  it('buildQtyMoveCte prefers KLIP delivery/receive over SAP when Open overlay present', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg');
+    expect(sql).toContain('WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg');
+    expect(sql).toMatch(/shipment_klip_overlay[\s\S]*AND NOT \(/);
+  });
+
+  it('buildQtyMoveCte shipment overlay remains in in_subquery (snapshot refresh path)', () => {
+    const sql = buildQtyMoveCte({
+      kind: 'in_subquery',
+      subquery: 'SELECT contract_id FROM contracts',
+    });
+    expect(sql).toContain('shipment_klip_overlay');
+    expect(sql).toContain('SELECT contract_id FROM contracts');
   });
 
   it('buildQtyMoveFromSnapshotCte reads contract_qty_move_snapshot scoped to list', () => {
@@ -67,5 +122,40 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('INSERT INTO contract_qty_move_snapshot');
     expect(sql).toContain('qty_move AS');
     expect(sql).toContain('trucking_wb_overlay');
+    expect(sql).toContain('shipment_klip_overlay');
+    expect(sql).toContain('b2b_child_qty_rollup');
+  });
+
+  it('buildQtyMoveCte rolls SUM child onto origin when parent qty is NULL or 0 (not parent+child)', () => {
+    // Example: parent 9231000077 + child 1001029278 — overlay in qty_move so snapshot/cards match the list.
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('qty_move_scope');
+    expect(sql).toContain('b2b_child_qty_rollup');
+    expect(sql).toContain('qty_move_resolved');
+    expect(sql).toContain('LEAST(');
+    expect(sql).toContain('roll.sum_delivery_trucking');
+    expect(sql).toContain('roll.sum_delivery_vessel');
+    expect(sql).toContain('roll.sum_receive');
+    expect(sql).toContain('quantity_ordered');
+    expect(sql).not.toContain('r.quantity_receive + roll.sum_receive');
+    expect(sql).toContain('Contract Reff PO Ini');
+  });
+
+  it('buildQtyMoveCte trucking WB overlay skips soft-deduped ops', () => {
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('trucking_wb_overlay');
+    expect(sql).toContain('t.deduped_at IS NULL');
+  });
+
+  it('the snapshot path takes the larger of WB and SAP, like the trucking resolvers do', () => {
+    // Two copies of one rule. Changing only sqlTruckingResolvedDeliveryQty moved the Trucking page
+    // and left Contract Performance - which reads contract_qty_move_snapshot - showing contract
+    // 1364002000 at 100 MT outstanding on 89.74 MT received. They have to move together.
+    const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
+    expect(sql).toContain('GREATEST(w.wb_delivery_qty_kg, COALESCE(s.quantity_delivery_trucking, 0))');
+    expect(sql).toContain('GREATEST(w.wb_receive_qty_kg, COALESCE(s.quantity_receive, 0))');
+    // The bare weighbridge preference must be gone from every branch.
+    expect(sql).not.toContain('THEN w.wb_delivery_qty_kg');
+    expect(sql).not.toContain('THEN w.wb_receive_qty_kg');
   });
 });

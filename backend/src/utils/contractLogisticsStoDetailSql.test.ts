@@ -1,42 +1,166 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CONTRACT_REAL_STO_KEYS_SQL,
   CONTRACT_SAP_ONLY_STOS_SQL,
-  SHIPMENT_SAP_STO_DETAIL_SQL,
-  TRUCKING_SAP_STO_DETAIL_SQL,
   sqlSapQtyDeliveredAnyFromSpd,
+  sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
+  sqlSapQtyReceiveForStoKeyExpr,
+  sqlSapStoKeyMatchExpr,
+  sqlSapStoQtyForContractPoExpr,
+  sqlStoLookupKeyMatchExpr,
+  sqlStoScopedDeliveredKgSql,
+  sqlStoScopedReceiveKgSql,
+  sqlContractStoListShipmentMatchPred,
+  sqlContractStoListShipmentMatchRank,
 } from './contractLogisticsStoDetailSql';
 
 describe('contractLogisticsStoDetailSql', () => {
   it('includes SAP trucking delivery field aliases', () => {
     const expr = sqlSapQtyDeliveredAnyFromSpd('spd');
-    expect(expr).toContain('Quantity Delivery Trucking');
-    expect(expr).toContain('Quantity Delivered Trucking');
-    expect(expr).toContain('quantity_delivery_trucking');
+    expect(expr).toContain('raw_quantity_delivery_trucking');
+    expect(expr).toContain('raw_quantity_delivered_trucking');
+    expect(expr).toContain('shipment_quantity_delivery_trucking');
   });
 
   it('includes SAP vessel delivery field aliases', () => {
     const expr = sqlSapQtyDeliveredAnyFromSpd('spd');
-    expect(expr).toContain('Quantity Delivery Vessel');
-    expect(expr).toContain('Quantity Delivered');
+    expect(expr).toContain('raw_quantity_delivery_vessel');
+    expect(expr).toContain('raw_quantity_delivered');
+  });
+
+  it('uses incoterm matrix so CIF prefers vessel over dirty trucking', () => {
+    const expr = sqlSapQtyDeliveredAnyFromSpd('spd', 'c.incoterm');
+    expect(expr).toContain("'CIF'");
+    expect(expr).toContain("'FOB'");
+    expect(expr).toContain("'FRC'");
+    expect(expr).toContain('c.incoterm');
+    // Must not prefer trucking via bare COALESCE(NULLIF(trucking), vessel)
+    expect(expr).not.toMatch(/COALESCE\(\s*NULLIF\(\s*\([^)]*Quantity Delivery Trucking/);
   });
 
   it('normalizes MT-scale SAP delivery to kg', () => {
-    const expr = sqlSapQtyDeliveredKgFromSpd('spd2', 'c.quantity_ordered');
+    const expr = sqlSapQtyDeliveredKgFromSpd('spd2', 'c.quantity_ordered', 'c.incoterm');
     expect(expr).toContain('* 1000');
     expect(expr).toContain('quantity_ordered');
+    expect(expr).toContain('c.incoterm');
   });
 
-  it('uses trucking+vessel delivery in shared STO SQL fragments', () => {
-    for (const sql of [
-      SHIPMENT_SAP_STO_DETAIL_SQL,
-      TRUCKING_SAP_STO_DETAIL_SQL,
-      CONTRACT_SAP_ONLY_STOS_SQL,
-    ]) {
-      expect(sql).toContain('Quantity Delivery Trucking');
-      expect(sql).not.toMatch(
-        /NULLIF\(TRIM\(spd2?\.data->'raw'->>'Quantity Delivered'\), ''\),\s*\n\s*NULLIF\(TRIM\(spd2?\.data->'raw'->>'Quantity Delivery'\)/,
-      );
-    }
+  it('builds SAP STO qty by PO without falling back to contract quantity_ordered', () => {
+    const expr = sqlSapStoQtyForContractPoExpr({
+      contractAlias: 'c',
+      stoKeyExpr: 'sk.sto_key',
+    });
+    expect(expr).toContain("->>'STO Quantity'");
+    expect(expr).toContain('po_number');
+    expect(expr).toContain('OP-|MNL-|MSEA-');
+    expect(expr).not.toContain('quantity_ordered');
+  });
+
+  it('matches Operation ID keys to SAP rows by PO when STO/Operation ID is null', () => {
+    const match = sqlSapStoKeyMatchExpr({
+      contractAlias: 'c',
+      stoKeyExpr: 'sk.sto_key',
+    });
+    expect(match).toContain('OP-|MNL-|MSEA-');
+    expect(match).toContain('po_number');
+    expect(match).toContain('Operation ID');
+    expect(match).toContain('IS NULL');
+  });
+
+  it('sqlStoLookupKeyMatchExpr does not blank-match OP keys without contract scope', () => {
+    const discover = sqlStoLookupKeyMatchExpr('$1::text', 'spd');
+    expect(discover).toContain('Operation ID');
+    expect(discover).toContain("~ '^(OP-|MNL-|MSEA-)'");
+    // Global discover must not treat every empty-STO SAP row as a hit.
+    expect(discover).not.toMatch(/OP-\|MNL-\|MSEA-'[\s\S]*IS NULL/);
+  });
+
+  it('sqlStoLookupKeyMatchExpr allows blank STO only when scoped to a contract', () => {
+    const scoped = sqlStoLookupKeyMatchExpr('$1::text', 'spd', {
+      contractNumberExpr: 'pl.contract_number',
+    });
+    expect(scoped).toContain('spd.contract_number = pl.contract_number');
+    expect(scoped).toContain('IS NULL');
+  });
+
+  it('builds SAP delivery/receive qty for Operation ID fallback by PO', () => {
+    const delivered = sqlSapQtyDeliveredForStoKeyExpr({
+      contractAlias: 'c',
+      stoKeyExpr: 'sk.sto_key',
+      contractQtyExpr: 'c.quantity_ordered',
+    });
+    const receive = sqlSapQtyReceiveForStoKeyExpr({
+      contractAlias: 'c',
+      stoKeyExpr: 'sk.sto_key',
+    });
+    expect(delivered).toContain('raw_quantity_delivery_trucking');
+    expect(delivered).toContain('OP-|MNL-|MSEA-');
+    expect(delivered).toContain('c.incoterm');
+    expect(delivered).toContain("'CIF'");
+    expect(receive).toContain('raw_quantity_receive');
+    expect(receive).toContain('po_number');
+  });
+
+  it('sqlStoScopedDeliveredKgSql filters by STO key, contract, and PO', () => {
+    const sql = sqlStoScopedDeliveredKgSql({
+      contractNumberExpr: 'asp.contract_id',
+      contractQtyExpr: 'asp.contract_qty',
+      stoKeyExpr: 'asp.sto_key',
+      poNumberExpr: 'asp.po_number',
+    });
+    expect(sql).toContain('asp.sto_key');
+    expect(sql).toContain('asp.contract_id');
+    expect(sql).toContain('asp.po_number');
+    expect(sql).toContain('raw_quantity_delivery_vessel');
+    expect(sql).toContain('LIMIT 1');
+    expect(sql).toContain('created_at DESC');
+    expect(sql).toContain("'CIF'");
+  });
+
+  it('CONTRACT_SAP_ONLY_STOS_SQL exposes SEA ATA loading for contract STO table', () => {
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('ATA Vessel Arrival at Loading Port');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('ata_arrival_loading');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('eta_discharge_complete');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('sap_trucking_start_receive_date');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('NULL::date AS daily_plan_start_date');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('gr_sto_status');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('GR STO Status');
+  });
+
+  it('CONTRACT_SAP_ONLY_STOS_SQL uses latest SAP import only (not full history)', () => {
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('latest_import');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('c_scope');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain(
+      'spd.import_id = (SELECT import_id FROM latest_import)',
+    );
+  });
+
+  it('CONTRACT_SAP_ONLY_STOS_SQL scopes qty by contract/PO helpers (not STO-wide SUM)', () => {
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('po_number');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('CROSS JOIN contracts c_po');
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).toContain('c_po.id = $1');
+    // Must not reintroduce unscoped SUM across all POs on the same STO.
+    expect(CONTRACT_SAP_ONLY_STOS_SQL).not.toMatch(
+      /FROM sap_processed_data spd2\s+WHERE NULLIF\(TRIM\(COALESCE\(spd2\.sto_number/,
+    );
+  });
+
+  it('CONTRACT_REAL_STO_KEYS_SQL uses latest SAP import STOs (not full history)', () => {
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('latest_import');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('sap_latest_keys');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('sap_processed_data');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('contract_stos');
+    expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('NOT EXISTS (SELECT 1 FROM sap_latest_keys)');
+  });
+
+  it('sqlContractStoListShipmentMatchPred links via shipment_id, operation_id, contract STO, and SPD', () => {
+    const pred = sqlContractStoListShipmentMatchPred('s', 'sk.sto_key', '$1');
+    expect(pred).toContain('shipment_id');
+    expect(pred).toContain('operation_id');
+    expect(pred).toContain('sto_number');
+    expect(pred).toContain('contract_stos');
+    expect(pred).toContain('sap_processed_data');
+    expect(sqlContractStoListShipmentMatchRank('s', 'sk.sto_key')).toContain('THEN 0');
   });
 });

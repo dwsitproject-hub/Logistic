@@ -1,6 +1,8 @@
 import { PoolClient } from 'pg';
 import { getClient, query } from '../database/connection';
 import logger from '../utils/logger';
+import { isGenericKlipPortPlaceholder } from '../utils/portPlaceholder';
+import { sapStoNumberKeyExpr } from '../utils/shipmentStoTypeSql';
 
 type SapPortRow = Record<string, unknown>;
 
@@ -24,6 +26,8 @@ export function extractLoadingPortNamesFromSapData(parsedData: Record<string, un
   const add = (value: unknown) => {
     const text = trimText(value);
     if (!text) return;
+    // Reject Vessel LOA / numeric junk that leaked into vessel_loading_port_* fields.
+    if (!isValidHumanPortName(text)) return;
     if (names.some((existing) => normalizePortToken(existing) === normalizePortToken(text))) return;
     names.push(text);
   };
@@ -42,11 +46,71 @@ export function extractLoadingPortNamesFromSapData(parsedData: Record<string, un
   return names;
 }
 
-function isValidHumanPortName(value: unknown): boolean {
+export function isValidHumanPortName(value: unknown): boolean {
   const text = trimText(value);
   if (!text) return false;
   if (/^\d+(\.\d+)?$/.test(text)) return false;
+  if (isGenericKlipPortPlaceholder(text)) return false;
   return true;
+}
+
+/** SAP loading port name for a fixed sequence (1–3); skips numeric SAP port codes. */
+export function resolveSapLoadingPortTextBySequence(
+  parsedData: Record<string, unknown>,
+  sequence: 1 | 2 | 3,
+): string | null {
+  const raw = (parsedData.raw ?? {}) as Record<string, unknown>;
+  const shipment = (parsedData.shipment ?? {}) as Record<string, unknown>;
+  const candidates: unknown[] =
+    sequence === 1
+      ? [
+          shipment.vessel_loading_port_1,
+          shipment.vessel_loading_port,
+          raw['Vessel Loading Port 1'],
+          raw['Vessel Loading Port'],
+          raw['Vessel Loading Port '],
+        ]
+      : sequence === 2
+        ? [shipment.vessel_loading_port_2, raw['Vessel Loading Port 2']]
+        : [shipment.vessel_loading_port_3, raw['Vessel Loading Port 3']];
+  for (const candidate of candidates) {
+    if (isValidHumanPortName(candidate)) return trimText(candidate);
+  }
+  return null;
+}
+
+export interface SapLoadingPortNameMap {
+  bySequence: Map<number, string>;
+  discharge: string | null;
+}
+
+/** Map a VLP port_sequence onto SAP Vessel Loading Port 1/2/3 (0 / NaN → 1). */
+export function sapLoadingPortSequenceKey(sequence: unknown): 1 | 2 | 3 {
+  const n = Number(sequence);
+  if (n === 2 || n === 3) return n;
+  return 1;
+}
+
+/** Resolve SAP loading/discharge port labels for a shipment group (all linked SAP rows). */
+export async function resolveSapLoadingPortNameMapForShipment(
+  shipmentUuid: string,
+  preferredSto?: string | null,
+): Promise<SapLoadingPortNameMap> {
+  const stoRows = await resolveAllSapParsedDataForSto(shipmentUuid, preferredSto);
+  const bySequence = new Map<number, string>();
+  let discharge: string | null = null;
+  for (const row of stoRows) {
+    for (const seq of [1, 2, 3] as const) {
+      if (!bySequence.has(seq)) {
+        const name = resolveSapLoadingPortTextBySequence(row.data, seq);
+        if (name) bySequence.set(seq, name);
+      }
+    }
+    if (!discharge) {
+      discharge = resolvePrimarySapDischargePortText(row.data);
+    }
+  }
+  return { bySequence, discharge };
 }
 
 /** Primary SAP loading port text for denormalizing onto shipments.port_of_loading. */
@@ -217,7 +281,8 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
     qualityLocation: string,
     eta: Record<string, unknown>,
   ) => {
-    const name = trimText(portName) ?? `Loading Port ${sequence}`;
+    const name = isValidHumanPortName(portName) ? trimText(portName) : null;
+    if (!name) return;
     const etaBerthed = parseDate(eta.berthed);
     loadingPorts.push({
       port_name: name,
@@ -253,6 +318,32 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
     const port1Name =
       trimText(shipmentData.vessel_loading_port_1) ??
       trimText((parsedData.raw as Record<string, unknown> | undefined)?.['Vessel Loading Port']);
+    /*
+     * What SAP actually exports for loading ports, verified across all 27,003 rows (2026-09-15).
+     *
+     * There are exactly five raw ATA columns and none of them names a port:
+     *   ATA Vessel Arrival at Loading Port / Berthed at Loading Port / Start Loading /
+     *   Completed Loading / Sailed from Loading Port
+     *
+     * So SAP reports ONE set of loading dates per shipment, not one per port. That has two
+     * consequences worth knowing before touching this block:
+     *
+     *  - The `..._at_loading_port_1` keys read first below for start, completed and sailed do not
+     *    exist on a single row. They are harmless - the global fallback carries the real value -
+     *    but their presence reads like evidence that per-port data exists. It does not.
+     *    (`ata_vessel_arrival_at_loading_port_1` and `..._berthed_at_loading_port_1` DO exist in
+     *    the normalised object; the normaliser adds the `_1` that the raw column lacks.)
+     *
+     *  - Loading ports 2 and 3 below read only `..._at_loading_port_2/3`, with no fallback, and
+     *    none of those keys exists either - not the dates, not the port name, not the quantity.
+     *    Those ports therefore receive nothing from SAP, and that is correct rather than a gap to
+     *    fill. Do NOT give them the global keys as a fallback: that would stamp port 1's dates
+     *    onto every other port, which is the same class of wrong-data spreading that migrations
+     *    169 and 170 had to clean up.
+     *
+     * The reads are kept rather than deleted so a future SAP export that does carry per-port
+     * columns is picked up without another change.
+     */
     pushLoadingPort(1, port1Name, 'quantity_at_loading_port_1_based_on_bast', 'Loading Port 1', {
       arrival:
         shipmentData.eta_vessel_arrival_loading_port_1 ??
@@ -315,13 +406,15 @@ export function buildVesselLoadingPortsFromSapParsedData(parsedData: Record<stri
   const dischargeQuality = mapQualityColumns(qualityByLocation, 'Discharge Port');
   const dischargePortName =
     trimText(shipmentData.vessel_discharge_port) ?? trimText(shipmentData.port_of_discharge);
-  if (dischargePortName || Object.keys(dischargeQuality).length > 0) {
+  const resolvedDischargeName =
+    dischargePortName && isValidHumanPortName(dischargePortName) ? dischargePortName : null;
+  if (resolvedDischargeName) {
     const etaArrival = parseDate(shipmentData.eta_arrival_at_discharge_port);
     const etaBerthed = parseDate(shipmentData.eta_vessel_berthed_at_discharge_port);
     const etaStart = parseDate(shipmentData.eta_discharging_start_at_discharge_port);
     const etaComplete = parseDate(shipmentData.eta_discharging_completed_at_discharge_port);
     loadingPorts.push({
-      port_name: dischargePortName ?? 'Discharge Port',
+      port_name: resolvedDischargeName,
       port_sequence: 999,
       quantity_at_loading_port: parseNumber(
         shipmentData.actual_vessel_qty_receive ?? shipmentData.quantity_delivered,
@@ -363,10 +456,20 @@ export function sapParsedDataHasMultipleLoadingPorts(parsedData: Record<string, 
 
 async function resolveAllSapParsedDataForSto(
   shipmentId: string,
+  preferredSto?: string | null,
 ): Promise<Array<{ data: Record<string, unknown> }>> {
+  const stoKey = sapStoNumberKeyExpr('spd');
+  const preferred = String(preferredSto ?? '').trim();
   const result = await query(
     `WITH ship AS (
-       SELECT s.id, s.shipment_id, s.operation_id, c.contract_id, c.sto_number
+       SELECT
+         s.id,
+         s.shipment_id,
+         s.operation_id,
+         c.contract_id,
+         c.sto_number,
+         -- Manual planning keys like OP-1004030966-10390582 embed the SAP STO after OP-
+         NULLIF((regexp_match(TRIM(COALESCE(s.operation_id::text, '')), '^OP-([0-9]+)'))[1], '') AS op_embedded_sto
        FROM shipments s
        LEFT JOIN contracts c ON c.id = s.contract_id
        WHERE s.id = $1::uuid
@@ -374,15 +477,19 @@ async function resolveAllSapParsedDataForSto(
      SELECT spd.data
      FROM sap_processed_data spd
      CROSS JOIN ship sh
-     WHERE (
-       NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL AND (
-         TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
-         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
-         OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
+     WHERE ${stoKey} IS NOT NULL
+       AND (
+         ${stoKey} = NULLIF(TRIM($2::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.sto_number::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.shipment_id::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.operation_id::text), '')
+         OR ${stoKey} = NULLIF(TRIM(sh.op_embedded_sto::text), '')
        )
-     )
-     ORDER BY spd.contract_number ASC NULLS LAST, spd.updated_at DESC NULLS LAST`,
-    [shipmentId],
+     ORDER BY
+       CASE WHEN ${stoKey} = NULLIF(TRIM($2::text), '') THEN 0 ELSE 1 END,
+       spd.contract_number ASC NULLS LAST,
+       spd.updated_at DESC NULLS LAST`,
+    [shipmentId, preferred || null],
   );
   return result.rows
     .map((row) => row.data)
@@ -511,7 +618,28 @@ async function resolveLatestSapParsedDataForShipment(
        LEFT JOIN contracts c ON c.id = s.contract_id
        WHERE s.id = $1::uuid
      )
-     SELECT spd.data
+     SELECT
+       spd.data,
+       /*
+        * Rank an exact STO match ahead of the contract-wide fallback.
+        *
+        * A contract can carry many STOs, each with its own SAP row. Ordering purely by
+        * created_at let a NEWER SIBLING STO of the same contract outrank the shipment's own
+        * STO, so the shipment inherited that sibling's vessel and quality values — e.g. STO
+        * 1016010973 showed FFA 0.000 because sibling 1016010976 was imported a day later,
+        * while SAP reported FFA 4.841 for 1016010973 itself.
+        *
+        * The fallback is kept for shipments that carry no usable STO reference at all; it is
+        * just no longer allowed to beat a direct hit.
+        */
+       CASE
+         WHEN NULLIF(TRIM(spd.sto_number::text), '') IS NOT NULL AND (
+           TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.sto_number::text), '')
+           OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.shipment_id::text), '')
+           OR TRIM(spd.sto_number::text) = NULLIF(TRIM(sh.operation_id::text), '')
+         ) THEN 0
+         ELSE 1
+       END AS sto_match_rank
      FROM sap_processed_data spd
      CROSS JOIN ship sh
      WHERE (
@@ -522,7 +650,7 @@ async function resolveLatestSapParsedDataForShipment(
        )
        OR (sh.contract_id IS NOT NULL AND spd.contract_number = sh.contract_id)
      )
-     ORDER BY spd.created_at DESC NULLS LAST, spd.updated_at DESC NULLS LAST
+     ORDER BY sto_match_rank ASC, spd.created_at DESC NULLS LAST, spd.updated_at DESC NULLS LAST
      LIMIT 1`,
     [shipmentId],
   );
@@ -547,37 +675,59 @@ async function upsertVesselLoadingPortRow(
     [shipmentId, port.port_sequence, port.is_discharge_port === true],
   );
 
-  const merge = (incoming: unknown, current: unknown) =>
-    incoming !== null && incoming !== undefined ? incoming : current ?? null;
-
   const current = existing.rows[0] as Record<string, unknown> | undefined;
+  const sapAtaArrival = mergeSapSnapshot(port.ata_vessel_arrival, current?.sap_ata_vessel_arrival);
+  const sapAtaBerthed = mergeSapSnapshot(port.ata_vessel_berthed, current?.sap_ata_vessel_berthed);
+  const sapAtaLoadingStart = mergeSapSnapshot(port.ata_loading_start, current?.sap_ata_loading_start);
+  const sapAtaLoadingCompleted = mergeSapSnapshot(
+    port.ata_loading_completed,
+    current?.sap_ata_loading_completed,
+  );
+  const sapAtaSailed = mergeSapSnapshot(port.ata_vessel_sailed, current?.sap_ata_vessel_sailed);
+  const sapQualityFfa = mergeSapQualitySnapshot(port.quality_ffa);
+  const sapQualityMi = mergeSapQualitySnapshot(port.quality_mi);
+  const sapQualityDobi = mergeSapQualitySnapshot(port.quality_dobi);
+  const sapQualityRed = mergeSapQualitySnapshot(port.quality_red);
+  const sapQualityDs = mergeSapQualitySnapshot(port.quality_ds);
+  const sapQualityStone = mergeSapQualitySnapshot(port.quality_stone);
   const values = [
     port.port_name,
     port.port_sequence,
-    merge(port.quantity_at_loading_port, current?.quantity_at_loading_port),
-    merge(port.eta_vessel_arrival, current?.eta_vessel_arrival),
-    merge(port.ata_vessel_arrival, current?.ata_vessel_arrival),
-    merge(port.eta_vessel_berthed, current?.eta_vessel_berthed),
-    merge(port.ata_vessel_berthed, current?.ata_vessel_berthed),
-    merge(port.eta_loading_start, current?.eta_loading_start),
-    merge(port.ata_loading_start, current?.ata_loading_start),
-    merge(port.eta_loading_completed, current?.eta_loading_completed),
-    merge(port.ata_loading_completed, current?.ata_loading_completed),
-    merge(port.eta_vessel_sailed, current?.eta_vessel_sailed),
-    merge(port.ata_vessel_sailed, current?.ata_vessel_sailed),
-    merge(port.loading_rate, current?.loading_rate),
-    merge(port.quality_ffa, current?.quality_ffa),
-    merge(port.quality_mi, current?.quality_mi),
-    merge(port.quality_dobi, current?.quality_dobi),
-    merge(port.quality_red, current?.quality_red),
-    merge(port.quality_ds, current?.quality_ds),
-    merge(port.quality_stone, current?.quality_stone),
+    mergeSapPortValue(port.quantity_at_loading_port, current?.quantity_at_loading_port),
+    mergeSapPortValue(port.eta_vessel_arrival, current?.eta_vessel_arrival),
+    mergeSapPortValue(port.ata_vessel_arrival, current?.ata_vessel_arrival),
+    mergeSapPortValue(port.eta_vessel_berthed, current?.eta_vessel_berthed),
+    mergeSapPortValue(port.ata_vessel_berthed, current?.ata_vessel_berthed),
+    mergeSapPortValue(port.eta_loading_start, current?.eta_loading_start),
+    mergeSapPortValue(port.ata_loading_start, current?.ata_loading_start),
+    mergeSapPortValue(port.eta_loading_completed, current?.eta_loading_completed),
+    mergeSapPortValue(port.ata_loading_completed, current?.ata_loading_completed),
+    mergeSapPortValue(port.eta_vessel_sailed, current?.eta_vessel_sailed),
+    mergeSapPortValue(port.ata_vessel_sailed, current?.ata_vessel_sailed),
+    mergeSapPortValue(port.loading_rate, current?.loading_rate),
+    mergeSapPortQuality(port.quality_ffa, current?.quality_ffa),
+    mergeSapPortQuality(port.quality_mi, current?.quality_mi),
+    mergeSapPortQuality(port.quality_dobi, current?.quality_dobi),
+    mergeSapPortQuality(port.quality_red, current?.quality_red),
+    mergeSapPortQuality(port.quality_ds, current?.quality_ds),
+    mergeSapPortQuality(port.quality_stone, current?.quality_stone),
     port.is_discharge_port === true,
-    merge(port.eta_vessel_berthed_at_loading_port, current?.eta_vessel_berthed_at_loading_port),
-    merge(port.eta_vessel_arrive_at_discharge_port, current?.eta_vessel_arrive_at_discharge_port),
-    merge(port.eta_vessel_berthed_at_discharge_port, current?.eta_vessel_berthed_at_discharge_port),
-    merge(port.eta_vessel_start_discharging, current?.eta_vessel_start_discharging),
-    merge(port.eta_vessel_complete_discharge, current?.eta_vessel_complete_discharge),
+    mergeSapPortValue(port.eta_vessel_berthed_at_loading_port, current?.eta_vessel_berthed_at_loading_port),
+    mergeSapPortValue(port.eta_vessel_arrive_at_discharge_port, current?.eta_vessel_arrive_at_discharge_port),
+    mergeSapPortValue(port.eta_vessel_berthed_at_discharge_port, current?.eta_vessel_berthed_at_discharge_port),
+    mergeSapPortValue(port.eta_vessel_start_discharging, current?.eta_vessel_start_discharging),
+    mergeSapPortValue(port.eta_vessel_complete_discharge, current?.eta_vessel_complete_discharge),
+    sapAtaArrival,
+    sapAtaBerthed,
+    sapAtaLoadingStart,
+    sapAtaLoadingCompleted,
+    sapAtaSailed,
+    sapQualityFfa,
+    sapQualityMi,
+    sapQualityDobi,
+    sapQualityRed,
+    sapQualityDs,
+    sapQualityStone,
   ];
 
   if (existing.rows.length > 0) {
@@ -609,6 +759,21 @@ async function upsertVesselLoadingPortRow(
          eta_vessel_berthed_at_discharge_port = $25::timestamp,
          eta_vessel_start_discharging = $26::timestamp,
          eta_vessel_complete_discharge = $27::timestamp,
+         sap_ata_vessel_arrival = $28::date,
+         sap_ata_vessel_berthed = $29::date,
+         sap_ata_loading_start = $30::date,
+         sap_ata_loading_completed = $31::date,
+         sap_ata_vessel_sailed = $32::date,
+         sap_quality_ffa = $33::numeric,
+         sap_quality_mi = $34::numeric,
+         sap_quality_dobi = $35::numeric,
+         sap_quality_red = $36::numeric,
+         sap_quality_ds = $37::numeric,
+         sap_quality_stone = $38::numeric,
+         is_cancelled = false,
+         cancel_remark = NULL,
+         cancelled_at = NULL,
+         cancelled_by_user_id = NULL,
          updated_at = CURRENT_TIMESTAMP
        WHERE id = $1`,
       [existing.rows[0].id, ...values],
@@ -625,7 +790,10 @@ async function upsertVesselLoadingPortRow(
        quality_ffa, quality_mi, quality_dobi, quality_red, quality_ds, quality_stone,
        is_discharge_port,
        eta_vessel_berthed_at_loading_port, eta_vessel_arrive_at_discharge_port,
-       eta_vessel_berthed_at_discharge_port, eta_vessel_start_discharging, eta_vessel_complete_discharge
+       eta_vessel_berthed_at_discharge_port, eta_vessel_start_discharging, eta_vessel_complete_discharge,
+       sap_ata_vessel_arrival, sap_ata_vessel_berthed, sap_ata_loading_start,
+       sap_ata_loading_completed, sap_ata_vessel_sailed,
+       sap_quality_ffa, sap_quality_mi, sap_quality_dobi, sap_quality_red, sap_quality_ds, sap_quality_stone
      ) VALUES (
        $1::uuid, $2, $3, $4::numeric,
        $5::timestamp, $6::timestamp, $7::timestamp, $8::timestamp,
@@ -633,7 +801,9 @@ async function upsertVesselLoadingPortRow(
        $13::timestamp, $14::timestamp, $15::numeric,
        $16::numeric, $17::numeric, $18::numeric, $19::numeric, $20::numeric, $21::numeric,
        $22::boolean,
-       $23::timestamp, $24::timestamp, $25::timestamp, $26::timestamp, $27::timestamp
+       $23::timestamp, $24::timestamp, $25::timestamp, $26::timestamp, $27::timestamp,
+       $28::date, $29::date, $30::date, $31::date, $32::date,
+       $33::numeric, $34::numeric, $35::numeric, $36::numeric, $37::numeric, $38::numeric
      )`,
     [shipmentId, ...values],
   );
@@ -666,15 +836,140 @@ async function upsertVesselLoadingPortsFromPlan(
   return upserted;
 }
 
+/** Soft-cancel loading ports that are numeric junk (Vessel LOA leak) or extras when SAP has one port. */
+async function cancelBogusExtraLoadingPorts(
+  shipmentId: string,
+  plannedLoading: SapPortRow[],
+  existingLoading: Array<{ port_sequence: unknown; port_name: unknown; is_discharge_port?: unknown }>,
+): Promise<number> {
+  const plannedTokens = new Set(
+    plannedLoading
+      .map((p) => normalizePortToken(String(p.port_name ?? '')))
+      .filter((t) => t.length > 0),
+  );
+  const sequencesToCancel = existingLoading
+    .filter((row) => {
+      const name = String(row.port_name ?? '');
+      // Always drop Vessel LOA / pure-numeric names.
+      if (!isValidHumanPortName(name)) return true;
+      // When SAP has exactly one loading port, cancel any extra non-matching rows.
+      if (plannedLoading.length !== 1 || existingLoading.length <= 1) return false;
+      return !plannedTokens.has(normalizePortToken(name));
+    })
+    .map((row) => Number(row.port_sequence))
+    .filter((seq) => Number.isFinite(seq));
+
+  if (sequencesToCancel.length === 0) return 0;
+
+  const result = await query(
+    `UPDATE vessel_loading_ports
+     SET is_cancelled = true,
+         cancel_remark = COALESCE(NULLIF(TRIM(cancel_remark), ''), $2),
+         cancelled_at = COALESCE(cancelled_at, NOW())
+     WHERE shipment_id = $1::uuid
+       AND COALESCE(is_discharge_port, false) = false
+       AND COALESCE(is_cancelled, false) = false
+       AND port_sequence = ANY($3::int[])`,
+    [
+      shipmentId,
+      'Auto-cancelled: invalid/numeric port name (e.g. Vessel LOA mis-map)',
+      sequencesToCancel,
+    ],
+  );
+  return result.rowCount ?? sequencesToCancel.length;
+}
+
+/**
+ * Fill gaps only: keep whatever is already stored and take the SAP value only where nothing
+ * meaningful is stored yet.
+ *
+ * Previously this preferred the incoming SAP value, so a sync could overwrite a figure a user
+ * had typed. Combined with the structural early-return in the caller, that also meant a value
+ * written once from the WRONG sibling STO could never be corrected. Filling gaps fixes the
+ * stale zeros without ever clobbering manual input.
+ */
+export function mergeSapPortValue(incoming: unknown, current: unknown): unknown {
+  const hasCurrent =
+    current !== null && current !== undefined && !(typeof current === 'string' && current.trim() === '');
+  if (hasCurrent) return current;
+  return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+}
+
+/**
+ * Quality-only variant that also treats a stored zero as a gap.
+ *
+ * SAP reports absent quality readings as 0.000, and that is how the wrong-STO zeros got in.
+ * A genuine zero FFA/M&I/DOBI does not occur in practice, so a stored 0 here means "never
+ * populated". Deliberately NOT used for quantities or rates, where 0 can be a real entry a
+ * user made and must not be overwritten.
+ */
+export function mergeSapPortQuality(incoming: unknown, current: unknown): unknown {
+  const isEmptyish =
+    current === null ||
+    current === undefined ||
+    (typeof current === 'string' && current.trim() === '') ||
+    Number(current) === 0;
+  if (!isEmptyish) return current;
+  return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+}
+
+/** Latest SAP import wins, including blank — snapshot must not keep a stale KLIP/previous value. */
+export function mergeSapSnapshot(incoming: unknown, _current: unknown): unknown {
+  const hasIncoming =
+    incoming !== null &&
+    incoming !== undefined &&
+    !(typeof incoming === 'string' && incoming.trim() === '');
+  if (!hasIncoming) return null;
+  return incoming;
+}
+
+/** Quality snapshot: SAP 0.000 means absent, so store null (SAP chip shows —). */
+export function mergeSapQualitySnapshot(incoming: unknown): unknown {
+  const snap = mergeSapSnapshot(incoming, null);
+  if (snap == null) return null;
+  const n = Number(snap);
+  if (Number.isFinite(n) && n === 0) return null;
+  return snap;
+}
+
+/**
+ * Fields the SAP sync may fill on an existing port row, and whether a stored 0 counts as a gap.
+ *
+ * zeroIsGap is true only for quality readings: SAP writes absent readings as 0.000 and a genuine
+ * zero FFA/M&I/DOBI does not occur, so a stored 0 there means "never populated". Quantities and
+ * rates keep zeroIsGap false, because 0 can be a deliberate entry that must not be overwritten.
+ */
+const SAP_FILLABLE_PORT_FIELDS: Array<{ column: string; zeroIsGap: boolean }> = [
+  { column: 'quality_ffa', zeroIsGap: true },
+  { column: 'quality_mi', zeroIsGap: true },
+  { column: 'quality_dobi', zeroIsGap: true },
+  { column: 'quality_red', zeroIsGap: true },
+  { column: 'quality_ds', zeroIsGap: true },
+  { column: 'quality_stone', zeroIsGap: true },
+  { column: 'quantity_at_loading_port', zeroIsGap: false },
+  { column: 'loading_rate', zeroIsGap: false },
+  { column: 'eta_vessel_arrival', zeroIsGap: false },
+  { column: 'ata_vessel_arrival', zeroIsGap: false },
+  { column: 'eta_vessel_berthed', zeroIsGap: false },
+  { column: 'ata_vessel_berthed', zeroIsGap: false },
+  { column: 'eta_loading_start', zeroIsGap: false },
+  { column: 'ata_loading_start', zeroIsGap: false },
+  { column: 'eta_loading_completed', zeroIsGap: false },
+  { column: 'ata_loading_completed', zeroIsGap: false },
+  { column: 'eta_vessel_sailed', zeroIsGap: false },
+  { column: 'ata_vessel_sailed', zeroIsGap: false },
+];
+
 /** Sync missing multi-port rows (and ETAs) from latest SAP processed data. */
 export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): Promise<boolean> {
   const plannedPorts = await buildVesselLoadingPortsPlanForShipment(shipmentId);
   if (plannedPorts.length === 0) return false;
 
   const existing = await query(
-    `SELECT port_sequence, port_name, is_discharge_port
+    `SELECT *
      FROM vessel_loading_ports
-     WHERE shipment_id = $1::uuid`,
+     WHERE shipment_id = $1::uuid
+       AND COALESCE(is_cancelled, false) = false`,
     [shipmentId],
   );
   const existingLoading = existing.rows
@@ -685,12 +980,69 @@ export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): P
     .filter((p) => p.is_discharge_port !== true)
     .slice()
     .sort((a, b) => Number(a.port_sequence ?? 0) - Number(b.port_sequence ?? 0));
-  const hasInvalidNames = existingLoading.some((row) => !trimText(row.port_name));
+
+  const cancelledCount = await cancelBogusExtraLoadingPorts(
+    shipmentId,
+    plannedLoading,
+    existingLoading,
+  );
+
+  const activeAfterCancel = existingLoading.filter((row) => {
+    const name = String(row.port_name ?? '');
+    if (!isValidHumanPortName(name)) return false;
+    const plannedTokens = new Set(
+      plannedLoading.map((p) => normalizePortToken(String(p.port_name ?? ''))).filter(Boolean),
+    );
+    if (
+      plannedLoading.length === 1 &&
+      existingLoading.length > 1 &&
+      plannedTokens.size > 0 &&
+      !plannedTokens.has(normalizePortToken(name))
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  const hasInvalidNames = activeAfterCancel.some((row) => !trimText(row.port_name));
   const plannedNames = plannedLoading.map((row) => normalizePortToken(String(row.port_name ?? '')));
-  const existingNames = existingLoading.map((row) => normalizePortToken(String(row.port_name ?? '')));
+  const existingNames = activeAfterCancel.map((row) => normalizePortToken(String(row.port_name ?? '')));
   const namesMismatch = plannedNames.some((name, index) => existingNames[index] !== name);
 
-  if (plannedLoading.length <= existingLoading.length && !hasInvalidNames && !namesMismatch) {
+  /*
+   * The checks above are all STRUCTURAL — port count, names, cancellations. On their own they let
+   * the sync return early whenever the shape already matches, which meant a value stored once from
+   * the wrong sibling STO was never corrected: SAP reported FFA 4.841 for an STO whose row sat at
+   * 0.00 forever. Also look for values SAP can fill, so a shape-identical row still gets repaired.
+   */
+  const hasFillableValueGap = plannedPorts.some((plannedPort) => {
+    const match = existing.rows.find(
+      (row: Record<string, unknown>) =>
+        Number(row.port_sequence ?? 0) === Number(plannedPort.port_sequence ?? 0) &&
+        Boolean(row.is_discharge_port) === (plannedPort.is_discharge_port === true),
+    );
+    if (!match) return false;
+    return SAP_FILLABLE_PORT_FIELDS.some(({ column, zeroIsGap }) => {
+      const incoming = plannedPort[column];
+      if (incoming === null || incoming === undefined) return false;
+      const current = match[column];
+      const empty =
+        current === null ||
+        current === undefined ||
+        (typeof current === 'string' && current.trim() === '') ||
+        (zeroIsGap && Number(current) === 0);
+      // Only a real incoming value can fill a gap; SAP's own 0.000 placeholder must not.
+      return empty && !(zeroIsGap && Number(incoming) === 0);
+    });
+  });
+
+  if (
+    cancelledCount === 0 &&
+    plannedLoading.length <= activeAfterCancel.length &&
+    !hasInvalidNames &&
+    !namesMismatch &&
+    !hasFillableValueGap
+  ) {
     return false;
   }
 
@@ -701,6 +1053,7 @@ export async function syncVesselLoadingPortsFromLatestSap(shipmentId: string): P
       shipmentId,
       sapLoading: plannedLoading.length,
       existingLoading: existingLoading.length,
+      cancelledBogus: cancelledCount,
       hasInvalidNames,
     });
     return true;

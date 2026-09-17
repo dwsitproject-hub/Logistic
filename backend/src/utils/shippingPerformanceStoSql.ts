@@ -15,6 +15,16 @@ export function shippingPerfHasKlipPlanningSql(shipmentAlias = 's'): string {
   )`;
 }
 
+/** GROUP BY fragment: any member shipment has KLIP planning (for shipment_base_core). */
+export function sqlShipmentBaseCoreHasKlipPlanningAggSelect(shipmentAlias = 's'): string {
+  return `BOOL_OR(${shippingPerfHasKlipPlanningSql(shipmentAlias)}) AS has_klip_planning`;
+}
+
+/** KLIP planning on grouped shipment_base row (has_klip_planning from shipment_base_core). */
+export function shippingPerfHasKlipPlanningOnGroupedBaseSql(alias = 'sb'): string {
+  return `COALESCE(${alias}.has_klip_planning, FALSE)`;
+}
+
 /**
  * Operational STO key for Shipping Performance.
  * Unplanned: SAP STO on contract / contract_stos — not shipment_id from SAP/KLIP insert when it

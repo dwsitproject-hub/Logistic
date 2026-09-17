@@ -3,26 +3,59 @@ import {
   hasCalendarDate,
   isLegacyTradeCycleOnTime,
   isOpenConditionBOnTime,
-  openDueDateTradeCycleDays,
+  toCalendarDateKey,
 } from '../utils/calendarDays';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
+import { parseOptionalStrictDateRange } from '../utils/strictDateInput';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import {
+  CONTRACT_PERFORMANCE_SNAPSHOT_TABLE,
+  isContractPerformanceSnapshotFresh,
+} from '../services/contractPerformanceSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
-import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
-import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
-import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
+import {
+  isContractLatestSpdSnapshotFresh,
+  resolveContractsLatestSpdCte,
+} from '../services/contractLatestSpdSnapshot.service';
+import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
+import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import {
   sqlContractImportStatusIsClosedExpr,
+  sqlContractEffectivelyDoneExpr,
+  resolveContractEffectiveStatusText,
   sqlContractImportStatusIsOpenExpr,
   sqlContractListImportStatusAggExpr,
 } from '../utils/contractDeliveryStatus';
 import {
   resolveContractActualQtySubtractedTs,
+  sqlContractOutstandingSignedExpr,
   sqlIncotermQuantityDeliveryCase,
+  sqlQtyMoveJoinIncotermDelivery,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
+import {
+  sqlSapTruckingLastReceiveDateByContractNumber,
+} from '../utils/truckingSapDates';
+import {
+  TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+} from '../utils/truckingQuantitySql';
+import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
+import {
+  buildLogisticsGrStatusPrecomputeCte,
+  sqlContractInActiveLogisticsOpenOsExpr,
+} from '../utils/contractLogisticsOpenOsSql';
+import { sqlActiveSeaStoSiblingContractIdsCte } from '../utils/seaStoSiblingSql';
+import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import {
+  B2B_ENDING_CHILD_SNAPSHOT_TABLE,
+  sqlB2bEndingCompanyAgg,
+  sqlB2bEndingPlantCodeAgg,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
+import { appendRegionSiteFilter, sqlRegionSiteRawFromJsonAndB2b } from '../utils/regionSiteSql';
+import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
 
 export type LatePerformancePart = 'summary' | 'tree' | 'all';
 
@@ -44,20 +77,58 @@ export interface LatePerformanceFilters {
   selectedIncoterms: string | undefined;
   b2bFlag: string | undefined;
   productFilter: string | undefined;
+  productFilters: string[];
   sourceTypeFilter: string | undefined;
+  sourceTypeFilters: string[];
+  /** Open/Close tab filter for tree aggregation (in-memory when part=all). */
   statusNorm: string;
+  /** Status filter pushed into SQL — empty for part=all/summary so one row load serves both cards + tree. */
+  sqlStatusNorm: string;
   plants: string[];
+}
+
+export function parseCommaSeparatedQuery(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => String(entry).split(','))
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
 }
 
 const ROW_CACHE = new Map<string, { rows: any[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Drop cached rows. Needed whenever the contract scope changes underneath us - notably when a
+ * SAP import withdraws or restores contracts, which changes who belongs in the denominator.
+ */
+export function invalidateLatePerformanceCache(): void {
+  ROW_CACHE.clear();
+}
+
+/**
+ * Contract Performance reads shipments and trucking, so an edit on either page changes what this
+ * cache holds. Before this registration the only caller was sapPresence.service, which meant a
+ * new/edit shipment or a trucking edit left Contract Performance serving pre-edit rows until the
+ * TTL (5 min) lapsed - the page had no way to know the data moved.
+ *
+ * Registering here (rather than importing this module from shipmentList/truckingList) is how the
+ * other cross-module caches do it; a direct import would create a cycle. It now clears on every
+ * shipment write, every trucking write, and on SAP import, which both call through the registry.
+ */
+registerListCacheInvalidator(invalidateLatePerformanceCache);
 
 function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
   const norm = {
     scope: f.scope,
     effectiveDateFrom: f.effectiveDateFrom ?? '',
     effectiveDateTo: f.effectiveDateTo ?? '',
-    statusNorm: f.statusNorm,
+    sqlStatusNorm: f.sqlStatusNorm,
     supplier: f.supplier ?? '',
     buyer: f.buyer ?? '',
     companyCode: f.companyCode ?? '',
@@ -67,7 +138,9 @@ function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
     selectedIncoterms: f.selectedIncoterms ?? '',
     b2bFlag: f.b2bFlag ?? '',
     productFilter: f.productFilter ?? '',
+    productFilters: [...f.productFilters].sort(),
     sourceTypeFilter: f.sourceTypeFilter ?? '',
+    sourceTypeFilters: [...f.sourceTypeFilters].sort(),
   };
   return JSON.stringify(norm);
 }
@@ -80,10 +153,12 @@ export function parseLatePerformanceFilters(
     status,
     supplier,
     buyer,
-    dateFrom,
-    dateTo,
     companyCode,
   } = req.query as any;
+  const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+    dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+    dateTo: (req.query as { dateTo?: unknown }).dateTo,
+  });
 
   const scope = String((req.query as any).scope ?? 'ytd').toLowerCase();
   const debug =
@@ -95,7 +170,21 @@ export function parseLatePerformanceFilters(
   const selectedIncoterms = (req.query as any).incoterms as string | undefined;
   const b2bFlag = (req.query as any).b2bFlag as string | undefined;
   const productFilter = (req.query as any).product as string | undefined;
+  const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
+  const productFilters =
+    productsQuery.length > 0
+      ? productsQuery
+      : productFilter?.trim()
+        ? [productFilter.trim()]
+        : [];
   const sourceTypeFilter = (req.query as any).sourceType as string | undefined;
+  const sourceTypesQuery = parseCommaSeparatedQuery((req.query as any).sourceTypes);
+  const sourceTypeFilters =
+    sourceTypesQuery.length > 0
+      ? sourceTypesQuery
+      : sourceTypeFilter?.trim()
+        ? [sourceTypeFilter.trim()]
+        : [];
 
   const now = new Date();
   const y = now.getFullYear();
@@ -105,8 +194,13 @@ export function parseLatePerformanceFilters(
   const effectiveDateTo = scope === 'filtered' ? dateTo : (dateTo || ytdTo);
 
   let statusNorm = scope === 'filtered' && typeof status === 'string' ? status.trim() : '';
+  let sqlStatusNorm = statusNorm;
   if (part === 'summary') {
     statusNorm = '';
+    sqlStatusNorm = '';
+  } else if (part === 'all') {
+    // Combined endpoint: load Open+Close rows once; apply statusNorm when building trees only.
+    sqlStatusNorm = '';
   }
   const plantArr = scope === 'filtered' ? (Array.isArray(plant) ? plant : plant ? [plant] : []) : [];
   const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
@@ -128,8 +222,11 @@ export function parseLatePerformanceFilters(
     selectedIncoterms,
     b2bFlag,
     productFilter,
+    productFilters,
     sourceTypeFilter,
+    sourceTypeFilters,
     statusNorm,
+    sqlStatusNorm,
     plants,
   };
 
@@ -137,6 +234,204 @@ export function parseLatePerformanceFilters(
     ...base,
     cacheKey: buildCacheKey(base),
   };
+}
+
+/** Mirrors SQL Open/Close status filter — used for in-memory tree scoping when part=all. */
+export function rowMatchesContractPerfStatusFilter(
+  row: { import_status?: unknown; status?: unknown },
+  statusNorm: string,
+): boolean {
+  if (!statusNorm || statusNorm === 'All Status' || statusNorm.toLowerCase() === 'all') {
+    return true;
+  }
+  const statusText = resolveContractEffectiveStatusText(row);
+  const isClosed = statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED';
+  const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
+  if (statusNorm === 'Open' || statusNorm === 'ACTIVE') return isOpen;
+  if (statusNorm === 'Close' || statusNorm === 'CLOSE') return isClosed;
+  return statusText === statusNorm.toUpperCase();
+}
+
+/**
+ * The Contract Performance row set: every CTE plus the `base` aggregate and the
+ * in_logistics_open_os projection, with no user filters and no exclusions applied.
+ *
+ * Single source of truth so the live query and the snapshot refresh cannot drift apart -
+ * the 30-column `base` aggregate is where every qty / status / date value on this page is
+ * decided, and maintaining two copies of it would be a correctness trap.
+ *
+ * `contractScopeWhere` narrows `contract_scope` (date range, presence, pushed-down filters).
+ * `extraBaseColumns` is injected at the top of the base SELECT list - the snapshot build uses
+ * it to also materialise contract_date, which the live query never needed because it filters
+ * on dates before this point rather than after.
+ */
+export function buildLatePerformanceRowSetSql(opts: {
+  contractScopeWhere: string;
+  contractsLatestSpdCte: string;
+  contractsQtyMoveCte: string;
+  contractsStoAggCte: string;
+  extraBaseColumns?: string;
+}): string {
+  const extraBaseColumns = opts.extraBaseColumns ?? '';
+  return `
+      WITH contract_scope AS (
+        SELECT DISTINCT c.contract_id
+        FROM contracts c
+        WHERE 1=1
+        ${opts.contractScopeWhere}
+      ),
+      -- One physical contracts row per contract_id (the newest one) - same row the old
+      -- (array_agg(c.id ORDER BY c.created_at DESC))[1] scalar picked, computed once here instead
+      -- of re-derived inside every aggregate expression below.
+      canonical_contract AS MATERIALIZED (
+        SELECT DISTINCT ON (c.contract_id) c.contract_id, c.id
+        FROM contracts c
+        INNER JOIN contract_scope cs ON cs.contract_id = c.contract_id
+        ORDER BY c.contract_id, c.created_at DESC
+      ),
+      ${opts.contractsLatestSpdCte},
+      ${opts.contractsQtyMoveCte},
+      ${opts.contractsStoAggCte},
+      ${sqlActiveSeaStoSiblingContractIdsCte('active_sea_sto_sibling_ids', 'contract_scope')},
+      base AS MATERIALIZED (
+        SELECT
+          c.contract_id,
+${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
+          MAX(c.product) AS product,
+          MAX(c.group_name) AS group_name,
+          MAX(c.supplier) AS supplier,
+          MAX(${contractEffectiveIncotermExpr('c')}) AS incoterm,
+          MAX(c.quantity_ordered) AS quantity_ordered,
+          MAX(c.transport_mode) AS transport_mode,
+          MAX(c.source_type) AS source_type,
+          MAX(c.status) AS status,
+          -- B2B pass-through contracts roll up under the *ending* leg's plant/company so the
+          -- drilldown card groups the same way the View table does (sqlB2bEndingPlantCodeAgg),
+          -- keeping the Contract Performance card's OS total in sync with the table's OS sum.
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
+          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
+          MAX(c.delivery_end_date) AS delivery_end_date,
+          MAX(c.cargo_readiness_date) AS cargo_readiness_date,
+          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
+          (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
+          (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
+          MAX(${sqlIncotermQuantityDeliveryCase(
+            contractEffectiveIncotermExpr('c'),
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+          )}) AS quantity_delivery,
+          (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
+          MAX(${sqlContractOutstandingSignedExpr({
+            contractQtyExpr: 'c.quantity_ordered',
+            incotermExpr: contractEffectiveIncotermExpr('c'),
+            receiveExpr: 'qm.quantity_receive',
+            deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
+              contractEffectiveIncotermExpr('c'),
+              'qm',
+              sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+            ),
+          })}) AS outstanding_quantity,
+          -- ETA Trucking Completion = last Daily Planning date
+          MAX(trucking_agg.last_trucking_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
+          MAX(trucking_agg.last_trucking_completion_date) AS last_trucking_completion_date,
+          MAX(trucking_agg.last_trucking_wb_actuals_date) AS last_trucking_wb_actuals_date,
+          MAX(shipment_agg.last_ata_vessel_complete_discharge) AS last_ata_vessel_complete_discharge,
+          MAX(shipment_agg.last_eta_vessel_complete_discharge) AS last_eta_vessel_complete_discharge,
+          MAX(trucking_agg.open_standard_eta_trucking) AS open_standard_eta_trucking,
+          MAX(shipment_agg.open_standard_eta_vessel_loading) AS open_standard_eta_vessel_loading
+        FROM contract_scope cs
+        INNER JOIN contracts c ON c.contract_id = cs.contract_id
+        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+        INNER JOIN canonical_contract cc ON cc.contract_id = c.contract_id
+        -- Trucking-side aggregates: one scan of trucking_operations per contract (was 4 separate
+        -- correlated subqueries, one of which re-ran a sap_processed_data JSONB/regex date lookup
+        -- once per trucking-op row instead of once per contract - see sqlTruckingSapDatesLateral's
+        -- doc comment in truckingSapDates.ts for the same anti-pattern measured elsewhere in this
+        -- codebase: "cost was repetition, not the plan").
+        LEFT JOIN LATERAL (
+          SELECT ${sqlSapTruckingLastReceiveDateByContractNumber('cc.contract_id')} AS val
+        ) sap_last_receive ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            MAX(t.last_daily_deliverable_date) AS last_trucking_daily_deliverable_date,
+            MAX(COALESCE(tr.realization_end_date, sap_last_receive.val)) AS last_trucking_completion_date,
+            MAX(da_agg.max_progress_date) AS last_trucking_wb_actuals_date,
+            MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date)) AS open_standard_eta_trucking
+          FROM trucking_operations t
+          LEFT JOIN trucking_realizations tr ON tr.trucking_operation_id = t.id
+          LEFT JOIN LATERAL (
+            SELECT MAX(da.progress_date) AS max_progress_date
+            FROM trucking_daily_actuals da
+            WHERE da.trucking_operation_id = t.id
+          ) da_agg ON TRUE
+          WHERE t.contract_id = cc.id
+        ) trucking_agg ON TRUE
+        -- Shipment-side aggregates: one scan of shipments per contract (was 3 separate correlated
+        -- subqueries, two of which ran a further per-shipment correlated subquery against
+        -- vessel_loading_ports) - now one LATERAL join, per-shipment vessel_loading_ports lookups
+        -- expressed as their own LATERAL joins (same cardinality, no per-row subplan re-execution).
+        LEFT JOIN LATERAL (
+          SELECT
+            /*
+             * The same ATC the Shipments page shows: KLIP override, then the shipment's own
+             * column, then the discharge leg. Contract Performance read only the middle one, so a
+             * contract whose ATC lived on the leg or in an override read "-" here while Shipments
+             * showed it finished - 8 contracts on the dev copy, one with a different date.
+             * Purely additive: nothing that had an ATC loses it.
+             */
+            MAX(COALESCE(
+              sao_atc.ata_discharge_complete::date,
+              s2.ata_discharge_complete::date,
+              vlp_discharge.ata_loading_completed::date
+            )) AS last_ata_vessel_complete_discharge,
+            MAX(COALESCE(s2.eta_discharge_complete::date, vlp_discharge.eta_vessel_complete_discharge::date)) AS last_eta_vessel_complete_discharge,
+            MAX(vlp_load.eta_vessel_arrival::date) AS open_standard_eta_vessel_loading
+          FROM shipments s2
+          LEFT JOIN LATERAL (
+            SELECT vlpd.eta_vessel_complete_discharge, vlpd.ata_loading_completed
+            FROM vessel_loading_ports vlpd
+            WHERE vlpd.shipment_id = s2.id
+              AND vlpd.is_discharge_port = true
+            ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
+            LIMIT 1
+          ) vlp_discharge ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT vlp.eta_vessel_arrival
+            FROM vessel_loading_ports vlp
+            WHERE vlp.shipment_id = s2.id
+              AND COALESCE(vlp.is_discharge_port, false) = false
+            ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+            LIMIT 1
+          ) vlp_load ON TRUE
+          LEFT JOIN shipment_ata_overrides sao_atc ON sao_atc.shipment_id = s2.id
+          WHERE s2.contract_id = cc.id
+        ) shipment_agg ON TRUE
+        WHERE 1=1
+        GROUP BY c.contract_id
+      ),
+      ${buildLogisticsGrStatusPrecomputeCte({ sourceCte: 'base', idColumn: 'id' })}
+      SELECT
+        base.*,
+        (${sqlContractInActiveLogisticsOpenOsExpr({
+          contractUuidExpr: 'base.id',
+          contractNumberExpr: 'base.contract_id',
+          incotermExpr: 'base.incoterm',
+          sharesActiveSeaStoExpr:
+            'EXISTS (SELECT 1 FROM active_sea_sto_sibling_ids sib WHERE sib.contract_id = base.id)',
+          grClosedPrecomputed: 'COALESCE(lgs.is_closed, false)',
+          cancelledPrecomputed: 'COALESCE(lgs.is_cancelled, false)',
+          closedForShipmentBacklogPrecomputed: 'COALESCE(lgs.is_closed_for_shipment_backlog, false)',
+        })}) AS in_logistics_open_os
+      FROM base
+      LEFT JOIN logistics_gr_status lgs ON lgs.id = base.id
+`;
 }
 
 export async function buildLatePerformanceQuery(filters: LatePerformanceFilters): Promise<{
@@ -147,7 +442,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     scope,
     effectiveDateFrom,
     effectiveDateTo,
-    statusNorm,
+    sqlStatusNorm,
     supplier,
     buyer,
     companyCode,
@@ -157,207 +452,223 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     selectedIncoterms,
     b2bFlag,
     productFilter,
+    productFilters,
     sourceTypeFilter,
+    sourceTypeFilters,
   } = filters;
 
   const queryParams: any[] = [];
   let paramIndex = 1;
   let contractScopeWhere = '';
+  /** Same date predicates against the snapshot table, which stores contract_date unprefixed. */
+  let snapshotDateWhere = '';
+
+  /*
+   * When the precomputed snapshot is fresh, `base` is read from it instead of being recomputed.
+   * Everything after that point - the B2B-child / PO-placeholder exclusions and every user
+   * filter - is left completely untouched and still runs against `base`, so the two paths differ
+   * only in where the row set comes from.
+   *
+   * Checked up front because it decides whether the scope pushdowns are worth building at all:
+   * they exist to shrink the expensive CTEs, and the snapshot path has no CTEs to shrink.
+   */
+  const performanceSnapshotFresh = await isContractPerformanceSnapshotFresh();
 
   if (effectiveDateFrom) {
     contractScopeWhere += ` AND c.contract_date >= $${paramIndex}`;
+    snapshotDateWhere += ` AND contract_date >= $${paramIndex}`;
     queryParams.push(effectiveDateFrom);
     paramIndex++;
   }
   if (effectiveDateTo) {
     contractScopeWhere += ` AND c.contract_date <= $${paramIndex}`;
+    snapshotDateWhere += ` AND contract_date <= $${paramIndex}`;
     queryParams.push(effectiveDateTo);
     paramIndex++;
   }
 
-  const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
-    resolveContractsQtyMoveCte('contract_scope'),
-    resolveContractsStoAggCte('contract_scope'),
-    resolveContractsLatestSpdCte('contract_scope'),
-  ]);
+  /*
+   * Withdrawn contracts are out of scope for late/on-time performance: keeping them would leave
+   * permanently-unfulfillable contracts in the denominator. Plain column predicate - no join.
+   *
+   * Applied on BOTH paths now. The snapshot used to be built with this exclusion baked in, so the
+   * read path could assume they were already absent - but that also made the snapshot unable to
+   * serve Section 3's view table, which lists withdrawn contracts on purpose. The snapshot now
+   * carries every contract plus a `sap_presence` column, so the filter belongs here.
+   *
+   * `<> 'WITHDRAWN'` rather than `= 'PRESENT'`, over COALESCE: a snapshot written by the previous
+   * version has NULL in that column until it is rebuilt, and `= 'PRESENT'` would drop every one
+   * of its rows - an empty page instead of a stale one.
+   */
+  contractScopeWhere += sqlExcludeWithdrawnContracts('c');
+  const snapshotPresenceWhere = ` AND COALESCE(sap_presence, 'PRESENT') <> 'WITHDRAWN'`;
 
-  let queryText = `
-      WITH contract_scope AS (
-        SELECT DISTINCT c.contract_id
-        FROM contracts c
+  /*
+   * Product pushdown. The authoritative product filter still runs on `base.product` further down
+   * (unchanged); this narrows `contract_scope` to the same contracts up front so the expensive
+   * CTEs hanging off that scope - qty_move, latest_spd, sto_agg, the sibling set, and
+   * logistics_gr_status via `base` - do proportionally less work instead of computing every
+   * contract in the date range and discarding most of it at the very end.
+   *
+   * Safe by construction: this is a *narrowing pre-filter*, never the deciding one. `base.product`
+   * is MAX(c.product) grouped by contract_id, and scope-to-contracts is 1:1 here (measured
+   * 2026-09-04: 18,489 rows for 18,489 distinct contract_ids), so the two predicates select the
+   * same contracts; should duplicate contract rows ever appear, "any row matches" is a superset of
+   * "MAX matches", and the untouched post-base filter still decides. Built from the same helpers
+   * as that filter so the matching semantics cannot drift.
+   *
+   * Worth it because the filter is selective for everything but the dominant product (measured in
+   * the YTD scope of 7,636: CPO 4,887 -> ~1.6x less work, SHELL PALM 1,001 -> 7.6x, PK 727 ->
+   * 10.5x, WASTE OIL (POME) 546 -> 14x, RBDPS 165 -> 46x), and product is one of the filters
+   * users change most often - each change is otherwise a full cold recompute.
+   */
+  const scopeMultiProduct = performanceSnapshotFresh
+    ? null
+    : appendContractPerfProductsMultiSql(
+        productFilters.length > 1 ? productFilters : undefined,
+        'c.product',
+        paramIndex,
+      );
+  if (scopeMultiProduct) {
+    contractScopeWhere += scopeMultiProduct.clause;
+    queryParams.push(...scopeMultiProduct.params);
+    paramIndex = scopeMultiProduct.nextParamIndex;
+  } else if (!performanceSnapshotFresh) {
+    const scopeSingleProduct =
+      productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+    const scopeProductClause = appendContractPerfProductSubstringSql(
+      scopeSingleProduct,
+      'c.product',
+      paramIndex,
+    );
+    if (scopeProductClause) {
+      contractScopeWhere += scopeProductClause.clause;
+      queryParams.push(scopeProductClause.param);
+      paramIndex = scopeProductClause.nextParamIndex;
+    }
+  }
+
+  const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, latestSpdSnapshotFresh] =
+    await Promise.all([
+      resolveContractsQtyMoveCte('contract_scope'),
+      resolveContractsStoAggCte('contract_scope'),
+      resolveContractsLatestSpdCte('contract_scope'),
+      isContractLatestSpdSnapshotFresh(),
+    ]);
+
+  /*
+   * Region/Site pushdown - same idea as the product pushdown above, but this value is derived
+   * rather than a column: `base.plant_site` is MAX(sqlRegionSiteRawFromJsonAndB2b('l.data')),
+   * i.e. the B2B ending leg's discharge_destination when set, else the discharge destination
+   * pulled out of the latest SPD JSON. So the pre-filter has to reach the same two sources, and
+   * it reads them from the snapshot tables directly (it cannot join the `latest_spd` CTE, which
+   * is itself scoped BY contract_scope - that would be circular).
+   *
+   * Gated on snapshot freshness: `resolveContractsLatestSpdCte` swaps in a fully live fallback
+   * when the snapshot is stale, and a pre-filter reading a stale snapshot could exclude a
+   * contract the authoritative post-base filter would have kept - i.e. silently drop rows. When
+   * stale we simply skip the pushdown and keep today's behaviour (slower, still correct).
+   *
+   * Superset-safe even when fresh: a contract with no snapshot row at all stays in scope rather
+   * than being judged on missing data. Its authoritative value is then COALESCE(b2b, NULL) which
+   * the region filter drops anyway, so keeping it costs nothing and guarantees this pre-filter
+   * can never remove a row the post-base filter would keep. Built from the same
+   * `appendRegionSiteFilter` / `sqlRegionSiteRawFromJsonAndB2b` helpers as that filter so the
+   * matching semantics (trim, upper, 'Blank' handling) cannot drift apart.
+   *
+   * Selectivity in the YTD scope of 7,636 contracts (measured 2026-09-04): KIJING 2,424 -> 3.2x
+   * less downstream work, BONTANG 1,558 -> 4.9x, LUBUK GAUNG 1,355 -> 5.6x, TANJUNG MORAWA 761
+   * -> 10x, KARAWANG 432 -> 17.7x, and 28x or better below that.
+   */
+  if (plants.length > 0 && latestSpdSnapshotFresh && !performanceSnapshotFresh) {
+    const scopeRegionSite = appendRegionSiteFilter(
+      plants,
+      paramIndex,
+      sqlRegionSiteRawFromJsonAndB2b('l_rs.data', 'b_rs'),
+    );
+    if (scopeRegionSite.sql) {
+      contractScopeWhere += ` AND (
+          EXISTS (
+            SELECT 1
+            FROM contract_latest_spd_snapshot l_rs
+            LEFT JOIN ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} b_rs
+              ON b_rs.origin_po = NULLIF(TRIM(c.po_number), '')
+            WHERE l_rs.contract_number = c.contract_id
+              ${scopeRegionSite.sql}
+          )
+          OR NOT EXISTS (
+            SELECT 1
+            FROM contract_latest_spd_snapshot l_rs_chk
+            WHERE l_rs_chk.contract_number = c.contract_id
+          )
+        )`;
+      queryParams.push(...scopeRegionSite.params);
+      paramIndex = scopeRegionSite.nextIndex;
+    }
+  }
+
+  /*
+   * Deliberately aliased `base` on both paths so everything below - the exclusions and every user
+   * filter, all of which reference base.<column> - is shared verbatim rather than duplicated per
+   * path. The snapshot already stores in_logistics_open_os as a column, so `base.*` yields the
+   * same shape the live path builds with its projection.
+   */
+  const snapshotBaseSql = `
+      WITH base AS (
+        /*
+         * sto_count comes from the STO aggregate rather than the snapshot, which does not store it.
+         * It decides whether an ATC may finish the PO: on a multi-STO PO the ATC is a MAX across
+         * STOs, so one discharged STO must not close a PO whose other STO is still Open.
+         * contract_sto_agg_snapshot is one small row per contract, so this is a cheap join and
+         * needs no snapshot rebuild.
+         */
+        SELECT cps.*, sa.sto_count
+        FROM ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} cps
+        LEFT JOIN contract_sto_agg_snapshot sa ON sa.contract_number = cps.contract_id
         WHERE 1=1
-        ${contractScopeWhere}
-      ),
-      ${contractsLatestSpdCte},
-      ${contractsQtyMoveCte},
-      ${contractsStoAggCte},
-      base AS (
-        SELECT
-          c.contract_id,
-          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
-          MAX(c.product) AS product,
-          MAX(c.group_name) AS group_name,
-          MAX(c.supplier) AS supplier,
-          MAX(c.incoterm) AS incoterm,
-          MAX(c.quantity_ordered) AS quantity_ordered,
-          MAX(c.transport_mode) AS transport_mode,
-          MAX(c.source_type) AS source_type,
-          MAX(c.status) AS status,
-          MAX(c.plant_code) AS plant_code,
-          MAX(c.company_name) AS company_name,
-          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
-          MAX(c.delivery_end_date) AS delivery_end_date,
-          MAX(c.cargo_readiness_date) AS cargo_readiness_date,
-          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
-          (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
-          MAX(${sqlIncotermQuantityDeliveryCase(
-            'c.incoterm',
-            'qm.quantity_delivery_trucking',
-            'qm.quantity_delivery_vessel',
-            sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
-          )}) AS quantity_delivery,
-          (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
-          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
-          -- For Trade Cycle (LAND open): latest date in daily_deliverables JSONB
-          (
-            SELECT MAX(t.last_daily_deliverable_date)
-            FROM trucking_operations t
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_trucking_daily_deliverable_date,
-          (
-            WITH trucking_contract AS (
-              SELECT (array_agg(c.contract_id ORDER BY c.created_at DESC))[1] AS contract_number
-            ),
-            latest_spd AS (
-              SELECT DISTINCT ON (spd.contract_number)
-                spd.contract_number,
-                COALESCE(spd.data->'raw'->>'Trucking Last Receive Date', spd.data->>'Trucking Last Receive Date') AS last_receive_raw
-              FROM sap_processed_data spd
-              JOIN trucking_contract tc ON tc.contract_number = spd.contract_number
-              ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
-            ),
-            latest_receive AS (
-              SELECT
-                contract_number,
-                CASE
-                  WHEN last_receive_raw IS NULL OR length(trim(last_receive_raw)) < 6 THEN NULL
-                  WHEN trim(last_receive_raw) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN trim(last_receive_raw)::date
-                  WHEN trim(last_receive_raw) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$' THEN to_date(trim(last_receive_raw), 'MM/DD/YY')
-                  ELSE NULL
-                END AS trucking_last_receive_date
-              FROM latest_spd
-            )
-            SELECT MAX(
-              COALESCE(
-                t.trucking_completion_date,
-                lr.trucking_last_receive_date,
-                t.eta_trucking_completion_date,
-                t.eta_delivery_end_date
-              )
-            )
-            FROM trucking_operations t
-            LEFT JOIN latest_receive lr ON lr.contract_number = (array_agg(c.contract_id ORDER BY c.created_at DESC))[1]
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_trucking_completion_date,
-          (
-            SELECT MAX(
-              COALESCE(
-                s2.ata_discharge_complete::date,
-                s2.arrival_date::date,
-                s2.eta_discharge_complete::date
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_ata_vessel_complete_discharge,
-          (
-            SELECT MAX(
-              COALESCE(
-                s2.eta_discharge_complete::date,
-                (
-                  SELECT vlpd.eta_vessel_complete_discharge::date
-                  FROM vessel_loading_ports vlpd
-                  WHERE vlpd.shipment_id = s2.id
-                    AND vlpd.is_discharge_port = true
-                  ORDER BY vlpd.updated_at DESC NULLS LAST, vlpd.created_at DESC NULLS LAST
-                  LIMIT 1
-                )
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_eta_vessel_complete_discharge,
-          (
-            SELECT MAX(COALESCE(t.eta_trucking_completion_date::date, t.eta_delivery_end_date::date))
-            FROM trucking_operations t
-            WHERE t.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS open_standard_eta_trucking,
-          (
-            SELECT MAX(
-              (
-                SELECT vlp.eta_vessel_arrival::date
-                FROM vessel_loading_ports vlp
-                WHERE vlp.shipment_id = s2.id
-                  AND COALESCE(vlp.is_discharge_port, false) = false
-                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
-                LIMIT 1
-              )
-            )
-            FROM shipments s2
-            WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS open_standard_eta_vessel_loading
-        FROM contract_scope cs
-        INNER JOIN contracts c ON c.contract_id = cs.contract_id
-        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
-        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
-        WHERE 1=1
-        GROUP BY c.contract_id
+        ${snapshotDateWhere}${snapshotPresenceWhere}
       )
-      SELECT
-        base.*,
-        COALESCE(
-          NULLIF(TRIM(pnc.group_plant), ''),
-          NULLIF(TRIM(pna.group_plant), ''),
-          'Blank'
-        ) AS plant_site
+      SELECT base.*
       FROM base
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-          AND NULLIF(TRIM(base.company_name), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(base.company_name, '')))
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pnc ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pna ON TRUE
-      WHERE 1=1
+`;
+
+  let queryText = `${performanceSnapshotFresh ? snapshotBaseSql : buildLatePerformanceRowSetSql({
+    contractScopeWhere,
+    contractsLatestSpdCte,
+    contractsQtyMoveCte,
+    contractsStoAggCte,
+  })}      WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
+      ${PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
-  if (statusNorm && statusNorm !== 'All Status' && statusNorm.toLowerCase() !== 'all') {
-    if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
+  if (sqlStatusNorm && sqlStatusNorm !== 'All Status' && sqlStatusNorm.toLowerCase() !== 'all') {
+    if (sqlStatusNorm === 'Open' || sqlStatusNorm === 'ACTIVE') {
       queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
         'base.import_status',
-        'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+        // Matches the JS-side fallback used to bucket rows into Open/Close below
+        // (row.import_status || row.status) — keeps this SQL-level filter (used by the
+        // non-combined 'open'/'close' parts) consistent with the View table's Open filter.
+        'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+        sqlContractEffectivelyDoneExpr({
+          outstandingKgExpr: 'base.outstanding_quantity',
+          atcExpr: 'base.last_ata_vessel_complete_discharge',
+          stoCountExpr: 'base.sto_count',
+        }),
       )}`;
-    } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
+    } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
       queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
         'base.import_status',
-        'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+        'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+        sqlContractEffectivelyDoneExpr({
+          outstandingKgExpr: 'base.outstanding_quantity',
+          atcExpr: 'base.last_ata_vessel_complete_discharge',
+          stoCountExpr: 'base.sto_count',
+        }),
       )}`;
     } else {
       queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
-      queryParams.push(statusNorm);
+      queryParams.push(sqlStatusNorm);
       paramIndex++;
     }
   }
@@ -394,27 +705,39 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
-  const productClause = appendContractPerfProductSubstringSql(productFilter, 'base.product', paramIndex);
-  if (productClause) {
-    queryText += productClause.clause;
-    queryParams.push(productClause.param);
-    paramIndex = productClause.nextParamIndex;
+  const multiProductClause = appendContractPerfProductsMultiSql(
+    productFilters.length > 1 ? productFilters : undefined,
+    'base.product',
+    paramIndex,
+  );
+  if (multiProductClause) {
+    queryText += multiProductClause.clause;
+    queryParams.push(...multiProductClause.params);
+    paramIndex = multiProductClause.nextParamIndex;
+  } else {
+    const singleProduct =
+      productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+    const productClause = appendContractPerfProductSubstringSql(singleProduct, 'base.product', paramIndex);
+    if (productClause) {
+      queryText += productClause.clause;
+      queryParams.push(productClause.param);
+      paramIndex = productClause.nextParamIndex;
+    }
   }
 
-  queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
+  if (sourceTypeFilters.length > 1) {
+    queryText += appendContractPerfSourceTypesFilter(sourceTypeFilters, 'base.source_type');
+  } else {
+    const singleSource =
+      sourceTypeFilter?.trim() || (sourceTypeFilters.length === 1 ? sourceTypeFilters[0] : undefined);
+    queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
+  }
 
   if (plants.length > 0) {
-    const blankIncluded = plants.some((p) => p === 'Blank');
-    const nonBlank = plants.filter((p) => p !== 'Blank');
-    const parts: string[] = [];
-    const groupPlantResolved = `COALESCE(NULLIF(TRIM(pnc.group_plant), ''), NULLIF(TRIM(pna.group_plant), ''), 'Blank')`;
-    if (blankIncluded) parts.push(`(${groupPlantResolved} = 'Blank')`);
-    if (nonBlank.length > 0) {
-      const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-      parts.push(`${groupPlantResolved} IN (${ph})`);
-      queryParams.push(...nonBlank);
-    }
-    queryText += ` AND (${parts.join(' OR ')})`;
+    const regionSiteFilter = appendRegionSiteFilter(plants, paramIndex, 'base.plant_site');
+    queryText += regionSiteFilter.sql;
+    queryParams.push(...regionSiteFilter.params);
+    paramIndex = regionSiteFilter.nextIndex;
   }
 
   if (scope === 'filtered' && selectedIncoterms) {
@@ -438,13 +761,37 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         base.contract_id ILIKE $${paramIndex}
         OR COALESCE(base.product, '') ILIKE $${paramIndex}
         OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
-        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ILIKE $${paramIndex}
+        OR COALESCE(base.plant_site, base.plant_code, '') ILIKE $${paramIndex}
       )`;
     queryParams.push(`%${globalSearch}%`);
     paramIndex++;
   }
 
   return { queryText, queryParams };
+}
+
+/** Concurrent identical requests (e.g. summary + tree fired together by the page)
+ *  share a single query execution instead of each running the full SQL. */
+const LOAD_IN_FLIGHT = new Map<string, Promise<any[]>>();
+
+/**
+ * Contract Performance excludes contracts with no Region/Site.
+ *
+ * `plant_site` is `COALESCE(MAX(sqlRegionSiteRawFromJsonAndB2b(...)), 'Blank')`, so a contract SAP
+ * gives no discharge destination for arrives here as the literal string "Blank" and rendered as an
+ * unlabelled drilldown card. On dev that bucket holds 59 contracts / 41,060 MT, and only 5 of the
+ * 59 actually have a Discharge Destination in SAP - the rest genuinely have no destination
+ * recorded, so this is filtered display rather than hidden data loss.
+ *
+ * Applied to the ROWS, not to the tree, and that is the point: aggregateLatePerformanceRows builds
+ * the Section 1 summary and the Section 2 drilldown from this one list. Dropping the card alone
+ * would have left Section 1 counting 41,060 MT the tree no longer showed, and the page displays
+ * that discrepancy to the user. Excluded on both sides, the reconciliation stays intact - which is
+ * what the user asked for when told the trade-off.
+ */
+function hasResolvedRegionSite(row: { plant_site?: unknown }): boolean {
+  const site = String(row?.plant_site ?? '').trim();
+  return site !== '' && site.toUpperCase() !== 'BLANK';
 }
 
 export async function loadLatePerformanceRows(filters: LatePerformanceFilters): Promise<any[]> {
@@ -456,11 +803,22 @@ export async function loadLatePerformanceRows(filters: LatePerformanceFilters): 
     ROW_CACHE.delete(filters.cacheKey);
   }
 
-  const { queryText, queryParams } = await buildLatePerformanceQuery(filters);
-  const result = await query(queryText, queryParams);
-  const rows = result.rows as any[];
-  ROW_CACHE.set(filters.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
-  return rows;
+  const inFlight = LOAD_IN_FLIGHT.get(filters.cacheKey);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const { queryText, queryParams } = await buildLatePerformanceQuery(filters);
+      const result = await query(queryText, queryParams);
+      const rows = (result.rows as any[]).filter(hasResolvedRegionSite);
+      ROW_CACHE.set(filters.cacheKey, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
+      return rows;
+    } finally {
+      LOAD_IN_FLIGHT.delete(filters.cacheKey);
+    }
+  })();
+  LOAD_IN_FLIGHT.set(filters.cacheKey, promise);
+  return promise;
 }
 
 const due = (v: unknown): Date | null => {
@@ -535,8 +893,6 @@ export function resolveEffectiveDeliveryEnd(row: {
   );
 }
 
-const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
-
 type AggNode = {
   key: string;
   count: number;
@@ -573,7 +929,12 @@ function addContractRowToPerfTree(
   const n3 = add(n2.children, prod);
   const n4 = add(n3.children, gn);
   const n5 = add(n4.children, sup);
-  const daysForAgg = tradeCycleDays <= 0 ? Math.max(0, -tradeCycleDays) : tradeCycleDays;
+  /*
+   * Magnitude: the tree shows "how far from the anchor", not which side of it. Written as an
+   * explicit abs because the previous branch-on-sign form read like it depended on the convention
+   * when it did not - and that convention has since flipped.
+   */
+  const daysForAgg = Math.abs(tradeCycleDays);
   for (const n of [n1, n2, n3, n4, n5]) {
     n.count += 1;
     n.totalDays += daysForAgg;
@@ -645,100 +1006,291 @@ export function resolveSapDpCalendarDate(row: any): Date | null {
 }
 
 /**
- * Open projected completion end for cycle math (ETA side only):
- * - Condition B: standard ETA empty → Today (substitute missing ETA only)
- * - Condition A: standard ETA present → require planning/discharge date (no Today substitute)
+ * Signed outstanding kg for LAND completion gating (qty_move / list field preferred).
+ * Falls back to contract qty − incoterm fulfilled (receive/delivery from qty_move).
  */
+export function resolveLandOutstandingKgForCycleCompletion(row: any): number | null {
+  if (row?.outstanding_quantity != null && row.outstanding_quantity !== '') {
+    const n = Number(row.outstanding_quantity);
+    if (Number.isFinite(n)) return n;
+  }
+  const ordered = Number(row?.quantity_ordered);
+  if (!Number.isFinite(ordered)) return null;
+  const subtracted = resolveContractActualQtySubtractedTs(
+    row?.incoterm,
+    row?.quantity_receive,
+    row?.quantity_delivery ?? row?.quantity_delivery_sap,
+  );
+  if (!Number.isFinite(subtracted)) return null;
+  return ordered - subtracted;
+}
+
+/**
+ * Open Contract Performance qty (Section 1 Open card + Section 2 drilldown).
+ * Same signed qty_move OS as Contract Performance / Contracts View table
+ * (over-delivery is negative and reduces Open totals, matching the table column).
+ */
+export function resolveOpenPerfOutstandingQtyKg(row: any): number {
+  const signed = resolveLandOutstandingKgForCycleCompletion(row);
+  if (signed == null || !Number.isFinite(signed)) return 0;
+  return signed;
+}
+
+/** SAP Open contract that still sits on Shipments or Trucking active OS strips. */
+export function isContractInLogisticsOpenOs(row: any): boolean {
+  const v = row?.in_logistics_open_os;
+  return v === true || v === 't' || v === 'true' || v === 1 || v === '1';
+}
+
+/**
+ * Shared completion date for Log / Trade / Cash / DP (Open and Close).
+ * LAND:
+ *   - OS ≤ 499 kg (≈ 0 MT / over-delivery): Last Receive → WB Actuals → Last Planning → ETA
+ *   - OS still open: skip Last Receive & WB → Last Planning Delivery Date → ETA trucking
+ * SEA: ATC at Discharge Port → ETA at LP → null (Open Trade Cycle uses today fallback separately).
+ */
+/**
+ * The completion date every cycle measures against: actual first, else the estimate, else nothing.
+ *
+ * One chain for Trade, Log, DP and Cash. Until 2026-09-17 only Trade had the estimate step, so the
+ * other three read "-" on any contract whose vessel had not finished discharging - 578 of 767 SEA
+ * contracts on the dev copy - while Trade showed a number for the same row.
+ *
+ *   SEA    actual = ATC (vessel completed discharge)   estimate = ETC
+ *   LAND   actual = last WB date                       estimate = last daily-planning date
+ *
+ * When only the estimate exists and it has already passed, the cycle measures against TODAY rather
+ * than a date the shipment demonstrably missed - otherwise a contract that is running late would
+ * stop getting later, freezing at a stale estimate.
+ *
+ * ETA at the loading port used to be the final fallback and is deliberately gone: it records the
+ * vessel ARRIVING to start loading, the beginning of the voyage, not its completion, so it made 50
+ * contracts look finished weeks before anything had been delivered. No estimate now means "-".
+ */
+export function resolveCycleCompletionDate(
+  row: any,
+  transport: string,
+  todayMid?: Date,
+): Date | null {
+  const t = String(transport || '').trim().toUpperCase();
+  const clampToToday = (value: unknown): Date | null => {
+    const key = toCalendarDateKey(value);
+    if (!key) return null;
+    const now = todayMid ?? new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    return due(key < todayKey ? todayKey : key);
+  };
+
+  if (t.startsWith('LAND')) {
+    /*
+     * The actual, with no outstanding-quantity gate.
+     *
+     * Until 2026-09-17 the WB and completion dates only counted once outstanding was within the
+     * zero band, so a contract that had received part of its quantity read "-" in all four cycles
+     * while the STO table beside it displayed that very date as its ATC - 1,549 of 6,386 LAND
+     * contracts on the dev copy. SEA has never gated its ATC on outstanding quantity, and the same
+     * question should not be answered differently by transport mode.
+     *
+     * Order matches what the STO list shows: SAP Trucking Last Receive once the operation is
+     * Completed, otherwise the last Weighbridge date.
+     */
+    if (hasCalendarDate(row.last_trucking_completion_date)) {
+      return due(row.last_trucking_completion_date);
+    }
+    if (hasCalendarDate(row.last_trucking_wb_actuals_date)) {
+      return due(row.last_trucking_wb_actuals_date);
+    }
+    /*
+     * LAND's estimate is the last daily-planning date, and it is clamped to today the same way
+     * SEA's ETC is - a plan that has already passed is not evidence the work finished.
+     *
+     * ETA trucking used to follow it and is gone for the same reason ETA at the loading port is:
+     * it is not an estimate of completion.
+     */
+    return clampToToday(row.last_trucking_daily_deliverable_date);
+  }
+
+  if (t.startsWith('SEA')) {
+    if (hasCalendarDate(row.last_ata_vessel_complete_discharge)) {
+      return due(row.last_ata_vessel_complete_discharge);
+    }
+    return clampToToday(row.last_eta_vessel_complete_discharge);
+  }
+
+  return null;
+}
+
+/** Tolerance used by LAND completion gating (exported for SQL helpers / tests). */
+export { TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG };
+
+/** @deprecated Use resolveCycleCompletionDate — alias kept for callers/tests. */
 export function resolveOpenEffectiveCompletionEnd(
   row: any,
   transport: string,
-  todayMid: Date = new Date(),
+  _todayMid: Date = new Date(),
 ): Date | null {
-  const t = String(transport || '').trim().toUpperCase();
-  const standardEta = resolveOpenStandardEta(row, t);
-
-  if (!hasCalendarDate(standardEta)) {
-    const today = new Date(todayMid);
-    today.setHours(0, 0, 0, 0);
-    return today;
-  }
-
-  const completion =
-    t.startsWith('LAND')
-      ? row.last_trucking_daily_deliverable_date
-      : t.startsWith('SEA')
-        ? row.last_eta_vessel_complete_discharge
-        : null;
-
-  if (!hasCalendarDate(completion)) return null;
-  return due(completion);
+  return resolveCycleCompletionDate(row, transport);
 }
 
-/** @deprecated Use resolveOpenEffectiveCompletionEnd — kept for tests/imports. */
+/** @deprecated Use resolveCycleCompletionDate — kept for tests/imports. */
 export function resolveOpenCycleCompletionEnd(
   row: any,
   transport: string,
-  todayMid: Date = new Date(),
+  _todayMid: Date = new Date(),
 ): Date | string | null {
-  return resolveOpenEffectiveCompletionEnd(row, transport, todayMid);
+  return resolveCycleCompletionDate(row, transport);
 }
 
-/** Open Log Cycle: Cargo Readiness → effective completion (Today only when standard ETA is empty). */
+/*
+ * There is deliberately no no-milestone fallback here.
+ *
+ * LAND's Trade Cycle used to fall back to `due end - today` when a contract had no WB and no daily
+ * planning, and on 2026-09-17 that fallback was briefly extended to Log, DP and Cash so the four
+ * columns would stop contradicting each other. Both were wrong: the specified rule is ATC, else
+ * ETC, else "-", and measuring against today on a contract where nothing has been planned reports
+ * "28 days ahead" for work that has not started - it reads as on track precisely when it is not.
+ *
+ * The columns agree again by all showing "-" together, which is the honest answer.
+ */
+
+/** Open Log Cycle: Cargo Readiness − Completion (Last Receive → WB → ETA / ATC → ETA at LP). */
 export function computeOpenLogCycleDays(
   row: any,
   transport: string,
-  todayMid: Date,
+  _todayMid: Date,
   cargoReady: unknown,
 ): number | null {
-  if (!hasCalendarDate(cargoReady)) return null;
-  const end = resolveOpenEffectiveCompletionEnd(row, transport, todayMid);
+  const ready = due(cargoReady);
+  if (!ready) return null;
+  const end = resolveCycleCompletionDate(row, transport, _todayMid);
   if (!end) return null;
-  return diffCalendarDays(cargoReady, end);
+  return diffCalendarDays(end, ready);
 }
 
-/** Open Cash Cycle: requires SAP Payoff Date; ETA may use Today only when standard ETA is empty. */
+/** Open Cash Cycle: requires SAP Payoff Date; completion via resolveCycleCompletionDate. */
 export function computeOpenCashCycleDays(
   row: any,
   transport: string,
-  todayMid: Date,
+  _todayMid: Date,
   payoffDate?: unknown,
 ): number | null {
   const payoff = hasCalendarDate(payoffDate) ? due(payoffDate) : resolveSapPayoffCalendarDate(row);
   if (!payoff) return null;
-  const end = resolveOpenEffectiveCompletionEnd(row, transport, todayMid);
+  const end = resolveCycleCompletionDate(row, transport, _todayMid);
   if (!end) return null;
-  return diffCalendarDays(payoff, end);
+  return diffCalendarDays(end, payoff);
 }
 
-/** Open DP Cycle: requires SAP DP Date; ETA may use Today only when standard ETA is empty. */
+/** Open DP Cycle: requires SAP DP Date; completion via resolveCycleCompletionDate. */
 export function computeOpenDpCycleDays(
   row: any,
   transport: string,
-  todayMid: Date,
+  _todayMid: Date,
   dpDate?: unknown,
 ): number | null {
   const dp = hasCalendarDate(dpDate) ? due(dpDate) : resolveSapDpCalendarDate(row);
   if (!dp) return null;
-  const end = resolveOpenEffectiveCompletionEnd(row, transport, todayMid);
+  const end = resolveCycleCompletionDate(row, transport, _todayMid);
   if (!end) return null;
-  return diffCalendarDays(dp, end);
+  return diffCalendarDays(end, dp);
+}
+
+/** Closed Log / Cash / DP / Trade — same completion chain as Open. */
+export function computeClosedLogCycleDays(
+  row: any,
+  transport: string,
+  cargoReady: unknown,
+): number | null {
+  const ready = due(cargoReady);
+  if (!ready) return null;
+  const end = resolveCycleCompletionDate(row, transport);
+  if (!end) return null;
+  return diffCalendarDays(end, ready);
+}
+
+export function computeClosedCashCycleDays(
+  row: any,
+  transport: string,
+  payoffDate: unknown,
+): number | null {
+  if (!hasCalendarDate(payoffDate)) return null;
+  const end = resolveCycleCompletionDate(row, transport);
+  if (!end) return null;
+  return diffCalendarDays(end, payoffDate);
+}
+
+export function computeClosedDpCycleDays(
+  row: any,
+  transport: string,
+  dpDate: unknown,
+): number | null {
+  if (!hasCalendarDate(dpDate)) return null;
+  const end = resolveCycleCompletionDate(row, transport);
+  if (!end) return null;
+  return diffCalendarDays(end, dpDate);
+}
+
+export function computeClosedTradeCycleDays(
+  row: any,
+  transport: string,
+  deliveryEnd: unknown,
+  todayMid: Date = new Date(),
+): number | null {
+  if (!hasCalendarDate(deliveryEnd)) return null;
+  const end = resolveCycleCompletionDate(row, transport, todayMid);
+  if (!end) return null;
+  return diffCalendarDays(end, deliveryEnd);
 }
 
 /** Mirrors aggregateLatePerformanceRows contractPerfOnTime (Section 2 tree vs Section 3 filter). */
 export function isContractPerfOnTimeTradeCycle(row: any, tradeCycle: number): boolean {
-  const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+  const statusText = resolveContractEffectiveStatusText(row);
   const transport = String(row.transport_mode || '').trim().toUpperCase();
   const isOpen = statusText === 'OPEN' || statusText === 'ACTIVE';
   if (!isOpen) return isLegacyTradeCycleOnTime(tradeCycle);
+  // SEA Open without ETA has null Trade Cycle (no Condition B). LAND may still use Condition B.
+  if (transport.startsWith('SEA') && !hasCalendarDate(resolveOpenStandardEta(row, transport))) {
+    return isLegacyTradeCycleOnTime(tradeCycle);
+  }
   const openUsesConditionB = !hasCalendarDate(resolveOpenStandardEta(row, transport));
   return openUsesConditionB ? isOpenConditionBOnTime(tradeCycle) : isLegacyTradeCycleOnTime(tradeCycle);
 }
 
 /**
- * Open contracts — Trade Cycle for drilldown.
- *   A) Standard ETA present → delivery_end vs planning/discharge (unchanged).
- *   B) Standard ETA empty → today vs due date delivery end (Late if today >= due end).
- * Condition B applies to every Open row. Section-1 "Open" card only gates extra UI copy, not this rule.
+ * SEA Trade Cycle completion date: ATC → ETC → ETA at LP.
+ * When no actual exists: if the estimate is before today → today; no estimate → null (UI "-").
+ * Uses local calendar for "today" so callers' local midnight Date matches ISO date strings.
+ *
+ * ETC sits between them because it estimates the SAME event ATC records - the vessel finishing
+ * discharge. ETA at Loading Port is the vessel ARRIVING to start loading, i.e. the beginning of
+ * the voyage, so using it as the stand-in for a completion date both left contracts blank that
+ * had an ETC (81 on dev) and gave the 23 that had an ETA at LP a date weeks too early.
+ *
+ * Reported against PO 1001031296 and 1001031455: ETC present, ATC still null, Trade Cycle "-".
+ *
+ * Neither estimate comes from SAP - checked across every row, the export carries no ETA column of
+ * any kind, so both are entered in KLIP. The reason to prefer ETC is therefore not availability
+ * but meaning; that it is also filled ~4x more often is a bonus, not the argument.
+ */
+export function resolveSeaTradeCycleCompletionDate(row: any, todayMid: Date): Date | null {
+  if (hasCalendarDate(row.last_ata_vessel_complete_discharge)) {
+    return due(row.last_ata_vessel_complete_discharge);
+  }
+  const etaKey =
+    toCalendarDateKey(row.last_eta_vessel_complete_discharge) ??
+    toCalendarDateKey(row.open_standard_eta_vessel_loading);
+  if (!etaKey) return null;
+  const todayKey = `${todayMid.getFullYear()}-${String(todayMid.getMonth() + 1).padStart(2, '0')}-${String(todayMid.getDate()).padStart(2, '0')}`;
+  if (etaKey < todayKey) {
+    return due(todayKey);
+  }
+  return due(etaKey);
+}
+
+/**
+ * Open Trade Cycle: Due Date Delivery End vs completion date.
+ * SEA: ATA → else ETA (or today when ETA &lt; today); ETA null → null (no Condition B).
+ * LAND: Last Receive → WB → planning → ETA; when none, Condition B (today vs due end).
  */
 function computeOpenTradeCycleDays(
   row: any,
@@ -746,17 +1298,10 @@ function computeOpenTradeCycleDays(
   todayMid: Date,
   deliveryEnd: Date,
 ): number | null {
-  if (hasCalendarDate(resolveOpenStandardEta(row, transport))) {
-    if (transport.startsWith('LAND')) {
-      return diffCalendarDays(deliveryEnd, row.last_trucking_daily_deliverable_date);
-    }
-    if (transport.startsWith('SEA')) {
-      return diffCalendarDays(deliveryEnd, row.last_eta_vessel_complete_discharge);
-    }
-    return null;
-  }
-
-  return openDueDateTradeCycleDays(deliveryEnd, todayMid);
+  const end = resolveCycleCompletionDate(row, transport, todayMid);
+  // No ATC and no ETC means "-", for LAND as well as SEA: see the note above resolveCycleCompletionDate.
+  if (!end) return null;
+  return diffCalendarDays(end, deliveryEnd);
 }
 
 /** SQL fragment — mirrors resolveEffectiveDeliveryEnd (DB or latest SAP fields). */
@@ -770,29 +1315,30 @@ export function sqlEffectiveDeliveryEndPresent(): string {
   )`;
 }
 
+/** ISO SAP/DB due-end date for SQL trade-cycle (mirrors resolveEffectiveDeliveryEnd for YYYY-MM-DD paths). */
+export function sqlEffectiveDeliveryEndDateExpr(): string {
+  return `COALESCE(
+    delivery_end_date::date,
+    CASE
+      WHEN NULLIF(TRIM(COALESCE(latest_spd_data->'contract'->>'due_date_delivery_end', '')), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+        THEN NULLIF(TRIM(latest_spd_data->'contract'->>'due_date_delivery_end'), '')::date
+      ELSE NULL
+    END
+  )`;
+}
+
 /** Trade cycle for performance tree / Section 3 schedulable checks (mirrors aggregateLatePerformanceRows). */
 export function computePerfTradeCycleDaysForRow(row: any, todayMid: Date = new Date()): number | null {
-  const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+  const statusText = resolveContractEffectiveStatusText(row);
   const transport = String(row.transport_mode || '').trim().toUpperCase();
   const deliveryEnd = resolveEffectiveDeliveryEnd(row);
   if (!deliveryEnd) return null;
 
-  const today = new Date(todayMid);
-  today.setHours(0, 0, 0, 0);
-
   if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-    if (transport.startsWith('LAND')) {
-      return diffCalendarDays(deliveryEnd, row.last_trucking_completion_date);
-    }
-    if (transport.startsWith('SEA')) {
-      return diffCalendarDays(deliveryEnd, row.last_ata_vessel_complete_discharge);
-    }
-    return null;
+    return computeClosedTradeCycleDays(row, transport, deliveryEnd, todayMid);
   }
   if (statusText === 'OPEN' || statusText === 'ACTIVE') {
-    const openCycle = computeOpenTradeCycleDays(row, transport, today, deliveryEnd);
-    // Open + due end present but Trade Cycle still null → On Time (aggregateLatePerformanceRows).
-    return openCycle == null ? -1 : openCycle;
+    return computeOpenTradeCycleDays(row, transport, todayMid, deliveryEnd);
   }
   return null;
 }
@@ -807,7 +1353,7 @@ export function isContractIncludedInPerfDrilldownTree(
 ): boolean {
   if (!resolveEffectiveDeliveryEnd(row)) return false;
 
-  const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+  const statusText = resolveContractEffectiveStatusText(row);
   if (!statusText) return false;
 
   const isClosed =
@@ -818,15 +1364,12 @@ export function isContractIncludedInPerfDrilldownTree(
   const todayMid = new Date();
   todayMid.setHours(0, 0, 0, 0);
 
-  let tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
-  if (tradeCycle == null) {
-    if (isOpen) tradeCycle = -1;
-    else return false;
-  }
+  const tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
+  // No completion milestone and not Open schedulable → unscheduled (Close without completion).
+  if (tradeCycle == null || Number.isNaN(tradeCycle)) return false;
 
   const filter = String(options.lateOnTimeFilter || 'ALL').toUpperCase();
   if (filter === 'LATE' || filter === 'ON_TIME') {
-    if (tradeCycle == null || Number.isNaN(tradeCycle)) return filter === 'LATE';
     const onTime = isContractPerfOnTimeTradeCycle(row, tradeCycle);
     return filter === 'ON_TIME' ? onTime : !onTime;
   }
@@ -843,7 +1386,7 @@ export function isContractIncludedInPerfDrilldownTreeWithComputed(
 ): boolean {
   if (!resolveEffectiveDeliveryEnd(row)) return false;
 
-  const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+  const statusText = resolveContractEffectiveStatusText(row);
   if (!statusText) return false;
 
   const isClosed =
@@ -856,31 +1399,18 @@ export function isContractIncludedInPerfDrilldownTreeWithComputed(
   let tradeCycle: number | null =
     tradeCycleRaw != null && !Number.isNaN(Number(tradeCycleRaw)) ? Number(tradeCycleRaw) : null;
 
-  if (tradeCycle == null) {
-    if (isOpen) {
-      // Mirrors aggregateLatePerformanceRows: Open + due end but no ETA → on-time bucket.
-      tradeCycle = -1;
-    } else if (isClosed) {
-      if (filter === 'LATE' || filter === 'ON_TIME') {
-        if (typeof row.contract_perf_on_time === 'boolean') {
-          return filter === 'ON_TIME' ? row.contract_perf_on_time : !row.contract_perf_on_time;
-        }
-        return filter === 'LATE';
-      }
-      return false;
-    }
-  }
+  // No completion → unscheduled (matches aggregateLatePerformanceRows). Do not coerce Open to -1.
+  if (tradeCycle == null) return false;
 
   if (filter === 'LATE' || filter === 'ON_TIME') {
     if (typeof row.contract_perf_on_time === 'boolean') {
       return filter === 'ON_TIME' ? row.contract_perf_on_time : !row.contract_perf_on_time;
     }
-    if (tradeCycle == null || Number.isNaN(tradeCycle)) return filter === 'LATE';
+    if (Number.isNaN(tradeCycle)) return false;
     const onTime = isContractPerfOnTimeTradeCycle(row, tradeCycle);
     return filter === 'ON_TIME' ? onTime : !onTime;
   }
 
-  if (isClosed && tradeCycle == null) return false;
   return true;
 }
 
@@ -891,6 +1421,10 @@ export function aggregateLatePerformanceRows(
 ) {
   const includeSummary = part === 'summary' || part === 'all';
   const includeTree = part === 'tree' || part === 'all';
+  const includeRowInTree = (row: any) => {
+    if (!includeTree || !rowMatchesContractPerfStatusFilter(row, filters.statusNorm)) return false;
+    return true;
+  };
   const todayMid = new Date();
   todayMid.setHours(0, 0, 0, 0);
 
@@ -1004,7 +1538,7 @@ export function aggregateLatePerformanceRows(
       else debugCounts.blankPlantSite += 1;
     }
 
-    const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+    const statusText = resolveContractEffectiveStatusText(row);
     const transport = String(row.transport_mode || '').trim().toUpperCase();
     const deliveryEnd = resolveEffectiveDeliveryEnd(row);
 
@@ -1032,18 +1566,14 @@ export function aggregateLatePerformanceRows(
         continue;
       }
       const _qtyOrderedNoDue = Number(row.quantity_ordered || 0);
-      const _subtractedNoDue = resolveContractActualQtySubtractedTs(
-        row.incoterm,
-        row.quantity_receive,
-        row.quantity_delivery_sap ?? row.quantity_delivery,
-      );
-      const _outstandingQtyNoDue = Math.max(0, _qtyOrderedNoDue - _subtractedNoDue);
+      const _outstandingQtyNoDue =
+        isOpenNoDue ? resolveOpenPerfOutstandingQtyKg(row) : 0;
       const _qtyForPerfNoDue = isClosedNoDue ? _qtyOrderedNoDue : _outstandingQtyNoDue;
       if (includeSummary) {
         if (isOpenNoDue) openStatusOutstandingQty += _outstandingQtyNoDue;
         else if (isClosedNoDue) closeStatusContractQty += _qtyOrderedNoDue;
       }
-      if (includeTree) {
+      if (includeRowInTree(row)) {
         addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerfNoDue);
       }
       if (filters.debug && debugNoScheduleRows.length < 500) {
@@ -1077,42 +1607,37 @@ export function aggregateLatePerformanceRows(
 
     let tradeCycle: number | null = null;
     if (isClosed) {
-      if (transport.startsWith('LAND')) {
-        if (includeSummary) {
+      if (includeSummary) {
+        if (transport.startsWith('LAND')) {
           debugCounts.branchClosedLand += 1;
-          if (row.last_trucking_completion_date) debugCounts.haveLastTruckCompletion += 1;
-          if (!row.last_trucking_completion_date) {
-            debugCounts.missingCompletionDate += 1;
-            pushSample('missingCompletionDate', String(row.contract_id || ''));
-          }
-        }
-        tradeCycle = diffCalendarDays(deliveryEnd, row.last_trucking_completion_date);
-      } else {
-        if (includeSummary) {
+        } else {
           debugCounts.branchClosedSea += 1;
-          if (row.last_ata_vessel_complete_discharge) debugCounts.haveLastAtaDischarge += 1;
-          if (!row.last_ata_vessel_complete_discharge) {
-            debugCounts.missingCompletionDate += 1;
-            pushSample('missingCompletionDate', String(row.contract_id || ''));
-          }
         }
-        tradeCycle = diffCalendarDays(deliveryEnd, row.last_ata_vessel_complete_discharge);
+        const completion = resolveCycleCompletionDate(row, transport);
+        if (completion) {
+          if (transport.startsWith('LAND')) debugCounts.haveLastTruckCompletion += 1;
+          else debugCounts.haveLastAtaDischarge += 1;
+        } else {
+          debugCounts.missingCompletionDate += 1;
+          pushSample('missingCompletionDate', String(row.contract_id || ''));
+        }
       }
+      tradeCycle = computeClosedTradeCycleDays(row, transport, deliveryEnd);
     } else if (isOpen) {
-      if (transport.startsWith('LAND')) {
-        if (includeSummary) {
+      if (includeSummary) {
+        if (transport.startsWith('LAND')) {
           debugCounts.branchOpenLand += 1;
-          if (row.last_trucking_daily_deliverable_date) debugCounts.haveLastTruckDeliverable += 1;
-          if (!row.last_trucking_daily_deliverable_date) {
+          if (resolveCycleCompletionDate(row, transport)) {
+            debugCounts.haveLastTruckDeliverable += 1;
+          } else {
             debugCounts.missingCompletionDate += 1;
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
-        }
-      } else {
-        if (includeSummary) {
+        } else {
           debugCounts.branchOpenSea += 1;
-          if (row.last_eta_vessel_complete_discharge) debugCounts.haveLastEtaDischarge += 1;
-          if (!row.last_eta_vessel_complete_discharge) {
+          if (resolveCycleCompletionDate(row, transport)) {
+            debugCounts.haveLastEtaDischarge += 1;
+          } else {
             debugCounts.missingCompletionDate += 1;
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
@@ -1125,13 +1650,9 @@ export function aggregateLatePerformanceRows(
       isOpen && !hasCalendarDate(resolveOpenStandardEta(row, transport));
 
     const _qtyOrdered = Number(row.quantity_ordered || 0);
-    const _subtracted = resolveContractActualQtySubtractedTs(
-      row.incoterm,
-      row.quantity_receive,
-      row.quantity_delivery_sap ?? row.quantity_delivery,
-    );
-    const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
-    /** Open Section 1/2: outstanding qty. Close Section 1/2: total contract qty (quantity_ordered). */
+    const _outstandingQty =
+      isOpen ? resolveOpenPerfOutstandingQtyKg(row) : 0;
+    /** Open Section 1/2: logistics-strip OS (qty_move, floor 0). Close: total contract qty. */
     const _qtyForPerf = isClosed ? _qtyOrdered : _outstandingQty;
 
     // Section 1 status cards — includes schedulable + unscheduled (no due end / no completion).
@@ -1144,9 +1665,7 @@ export function aggregateLatePerformanceRows(
     let logCycle: number | null = null;
     if (cargoReady) {
       if (isClosed) {
-        logCycle = transport.startsWith('LAND')
-          ? diffInDays(cargoReady, row.last_trucking_completion_date)
-          : diffInDays(cargoReady, row.last_ata_vessel_complete_discharge);
+        logCycle = computeClosedLogCycleDays(row, transport, cargoReady);
       } else if (isOpen) {
         logCycle = computeOpenLogCycleDays(row, transport, todayMid, cargoReady);
       }
@@ -1156,9 +1675,7 @@ export function aggregateLatePerformanceRows(
     let cashCycle: number | null = null;
     if (payoffDate) {
       if (isClosed) {
-        cashCycle = transport.startsWith('LAND')
-          ? diffInDays(row.last_trucking_completion_date, payoffDate)
-          : diffInDays(row.last_ata_vessel_complete_discharge, payoffDate);
+        cashCycle = computeClosedCashCycleDays(row, transport, payoffDate);
       } else if (isOpen) {
         cashCycle = computeOpenCashCycleDays(row, transport, todayMid, payoffDate);
       }
@@ -1168,38 +1685,31 @@ export function aggregateLatePerformanceRows(
     let dpCycle: number | null = null;
     if (dpDate) {
       if (isClosed) {
-        dpCycle = transport.startsWith('LAND')
-          ? diffInDays(row.last_trucking_completion_date, dpDate)
-          : diffInDays(row.last_ata_vessel_complete_discharge, dpDate);
+        dpCycle = computeClosedDpCycleDays(row, transport, dpDate);
       } else if (isOpen) {
         dpCycle = computeOpenDpCycleDays(row, transport, todayMid, dpDate);
       }
     }
 
     if (tradeCycle == null) {
-      if (isOpen) {
-        // Open + due end present but Trade Cycle still null (e.g. bad transport) → On Time so qty is not dropped.
-        tradeCycle = -1;
-      } else {
-        if (includeSummary) {
-          debugCounts.tradeCycleNull += 1;
-          pushSample('tradeCycleNull', String(row.contract_id || ''));
-          dist.noData.count += 1;
-          dist.noData.qty += _qtyForPerf;
-        }
-        if (includeTree) {
-          addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerf);
-        }
-        if (filters.debug && debugNoScheduleRows.length < 500) {
-          debugNoScheduleRows.push({
-            contract_id: String(row.contract_id || ''),
-            product: String(row.product || '').trim() || 'Blank',
-            outstanding_qty: _qtyForPerf,
-            transport_mode: transport,
-          });
-        }
-        continue;
+      if (includeSummary) {
+        debugCounts.tradeCycleNull += 1;
+        pushSample('tradeCycleNull', String(row.contract_id || ''));
+        dist.noData.count += 1;
+        dist.noData.qty += _qtyForPerf;
       }
+      if (includeRowInTree(row)) {
+        addContractRowToPerfTree(unscheduledRoot, row, 0, _qtyForPerf);
+      }
+      if (filters.debug && debugNoScheduleRows.length < 500) {
+        debugNoScheduleRows.push({
+          contract_id: String(row.contract_id || ''),
+          product: String(row.product || '').trim() || 'Blank',
+          outstanding_qty: _qtyForPerf,
+          transport_mode: transport,
+        });
+      }
+      continue;
     }
 
     const contractPerfOnTime = openUsesConditionB
@@ -1207,7 +1717,8 @@ export function aggregateLatePerformanceRows(
       : isLegacyTradeCycleOnTime(tradeCycle);
 
     if (includeSummary) {
-      const tradeMagnitude = tradeCycle <= 0 ? -tradeCycle : tradeCycle;
+      // Magnitude, written plainly - the branch-on-sign form read as convention-dependent.
+      const tradeMagnitude = Math.abs(tradeCycle);
       if (isOpen) {
         openStatusTradeCount += 1;
         if (contractPerfOnTime) openStatusOnTimeCount += 1;
@@ -1254,7 +1765,12 @@ export function aggregateLatePerformanceRows(
         dist.onTime.count += 1;
         dist.onTime.qty += _qtyForPerf;
 
-        const daysAhead = openUsesConditionB ? Math.max(0, -tradeCycle) : -tradeCycle;
+        /*
+         * Magnitude, not the signed cycle. Since 789c816 every cycle is `anchor - completion`, so
+         * an On Time contract is POSITIVE and a Late one negative; reading `-tradeCycle` here made
+         * "Avg Ahead" negative and "Max" zero.
+         */
+        const daysAhead = openUsesConditionB ? Math.max(0, tradeCycle) : tradeCycle;
         onTrackCount += 1;
         onTrackTotalDaysAhead += daysAhead;
         onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
@@ -1271,23 +1787,31 @@ export function aggregateLatePerformanceRows(
         else onTrackCloseOutstandingQty += _qtyOrdered;
       }
 
-      if (includeTree) {
+      if (includeRowInTree(row)) {
         addContractRowToPerfTree(onTrackRoot, row, tradeCycle, _qtyForPerf);
       }
       continue;
     }
 
+    /*
+     * How late, as a positive number of days. A Late contract's cycle is negative under the
+     * `anchor - completion` convention, so every bucket test and every total below has to read the
+     * magnitude: comparing the signed value put ALL late contracts in the 1-7 day bucket and left
+     * Avg Late negative with Max stuck at 0.
+     */
+    const lateDays = -tradeCycle;
+
     if (includeSummary) {
-      if (tradeCycle <= 7) {
+      if (lateDays <= 7) {
         dist.d1_7.count += 1;
         dist.d1_7.qty += _qtyForPerf;
-      } else if (tradeCycle <= 14) {
+      } else if (lateDays <= 14) {
         dist.d8_14.count += 1;
         dist.d8_14.qty += _qtyForPerf;
-      } else if (tradeCycle <= 30) {
+      } else if (lateDays <= 30) {
         dist.d15_30.count += 1;
         dist.d15_30.qty += _qtyForPerf;
-      } else if (tradeCycle <= 60) {
+      } else if (lateDays <= 60) {
         dist.d31_60.count += 1;
         dist.d31_60.qty += _qtyForPerf;
       } else {
@@ -1296,8 +1820,8 @@ export function aggregateLatePerformanceRows(
       }
 
       lateCount += 1;
-      lateTotalDays += tradeCycle;
-      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
+      lateTotalDays += lateDays;
+      lateMaxDays = Math.max(lateMaxDays, lateDays);
       lateTotalQtyDelivery += _qtyForPerf;
       if (logCycle != null) {
         lateTotalLogCycle += logCycle;
@@ -1313,7 +1837,7 @@ export function aggregateLatePerformanceRows(
       pushSample('includedLate', `${String(row.contract_id || '')}:${tradeCycle}`);
     }
 
-    if (includeTree) {
+    if (includeRowInTree(row)) {
       addContractRowToPerfTree(root, row, tradeCycle, _qtyForPerf);
     }
   }
@@ -1396,7 +1920,12 @@ export function aggregateLatePerformanceRows(
         openStatusDpCycleCount > 0 ? Math.round(openStatusDpCycleTotal / openStatusDpCycleCount) : null,
       openAvgCashCycle:
         openStatusCashCycleCount > 0 ? Math.round(openStatusCashCycleTotal / openStatusCashCycleCount) : null,
-      openIsLateContext: openStatusTradeCount > 0 ? openStatusTradeSignedSum / openStatusTradeCount > 0 : false,
+      /*
+       * Negative average = Late, since 789c816 made every cycle `anchor - completion`. This drives
+       * the card's colour and whether its label reads "Avg Late" or "Avg Ahead"; left at `> 0` it
+       * called every late scope on-time and vice versa.
+       */
+      openIsLateContext: openStatusTradeCount > 0 ? openStatusTradeSignedSum / openStatusTradeCount < 0 : false,
       closeAvgDays: closeStatusTradeCount > 0 ? closeStatusTradeMagnitudeSum / closeStatusTradeCount : 0,
       closeAvgLogCycle:
         closeStatusLogCycleCount > 0 ? Math.round(closeStatusLogCycleTotal / closeStatusLogCycleCount) : null,
@@ -1404,7 +1933,7 @@ export function aggregateLatePerformanceRows(
         closeStatusDpCycleCount > 0 ? Math.round(closeStatusDpCycleTotal / closeStatusDpCycleCount) : null,
       closeAvgCashCycle:
         closeStatusCashCycleCount > 0 ? Math.round(closeStatusCashCycleTotal / closeStatusCashCycleCount) : null,
-      closeIsLateContext: closeStatusTradeCount > 0 ? closeStatusTradeSignedSum / closeStatusTradeCount > 0 : false,
+      closeIsLateContext: closeStatusTradeCount > 0 ? closeStatusTradeSignedSum / closeStatusTradeCount < 0 : false,
     };
     out.distribution = dist;
     if (filters.debug) {

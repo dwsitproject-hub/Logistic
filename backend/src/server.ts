@@ -7,22 +7,34 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 import logger from './utils/logger';
+import { runWarmupJobsSequentially } from './utils/startupWarmupQueue';
+import {
+  startShipmentListShellCacheWarmer,
+  startShipmentRowSetScopeWarmer,
+  startShipmentOutstandingQtyCacheWarmer,
+  startShipmentScopedToolbarCacheWarmer,
+  startShipmentSummaryCacheWarmer,
+} from './services/shipmentSummaryWarmer.service';
 import { SchedulerService } from './services/scheduler.service';
 import { PipelineDailySummaryService, isPipelineDailySummaryFresh } from './services/pipelineDailySummary.service';
 import { ContractQtyMoveSnapshotService, isContractQtyMoveSnapshotFresh } from './services/contractQtyMoveSnapshot.service';
 import { ContractStoAggSnapshotService, isContractStoAggSnapshotFresh } from './services/contractStoAggSnapshot.service';
 import { ContractLatestSpdSnapshotService, isContractLatestSpdSnapshotFresh } from './services/contractLatestSpdSnapshot.service';
+import { B2bEndingChildSnapshotService, isB2bEndingChildSnapshotFresh } from './services/b2bEndingChildSnapshot.service';
 import { ensureUserStoContractAssignmentsTable } from './database/ensureUserStoContractAssignments';
 import {
   startShippingPerformanceCacheWarmer,
   stopShippingPerformanceCacheWarmer,
 } from './services/shippingPerformance.service';
+import { startOilLossCacheWarmer } from './services/oilLoss.service';
+import { startTruckingListCacheWarmer } from './services/truckingList.service';
 
 // Import routes
 import authRoutes from './routes/auth.routes';
@@ -49,11 +61,18 @@ import claimMutuRoutes from './routes/claimMutu.routes';
 import claimSusutRoutes from './routes/claimSusut.routes';
 import userPreferencesRoutes from './routes/userPreferences.routes';
 import activityRoutes from './routes/activity.routes';
+import alertRoutes from './routes/alert.routes';
 import agentAiRoutes from './routes/agentAi.routes';
 import oilLossRoutes from './routes/oilLoss.routes';
+import qualitySurveyRoutes from './routes/qualitySurvey.routes';
 import commercialDocumentsRoutes from './routes/commercialDocuments.routes';
 import aiKlipAgentActivityRoutes from './routes/aiKlipAgentActivity.routes';
 import userActivityLogRoutes from './routes/userActivityLog.routes';
+import prePlannedRoutes from './routes/prePlanned.routes';
+import { ssoHubHandler } from './controllers/sso.controller';
+import { oidcLoginHandler, oidcCallbackHandler, isOidcConfigured } from './controllers/oidc.controller';
+import { configureTrustProxy, createSessionMiddleware } from './middleware/session';
+import { frontendUrl } from './services/sessionAuth.service';
 
 dotenv.config();
 
@@ -61,11 +80,45 @@ const app: Application = express();
 const PORT = process.env.PORT || 5001;
 const JSON_BODY_LIMIT = process.env.JSON_BODY_LIMIT || '50mb';
 
-// Middleware
-app.use(helmet());
-app.use(cors());
+configureTrustProxy(app);
+
+// Middleware — disable COOP on HTTP (browser ignores it anyway; noisy on SSO redirects)
+app.use(
+  helmet({
+    crossOriginOpenerPolicy: process.env.SESSION_COOKIE_SECURE === 'true',
+  }),
+);
+const corsOrigin = frontendUrl();
+const extraCorsOrigins = String(process.env.CORS_EXTRA_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+      const normalized = origin.replace(/\/$/, '');
+      const allowed = new Set(
+        [
+          corsOrigin,
+          process.env.APP_PUBLIC_ORIGIN?.replace(/\/$/, ''),
+          'http://localhost:3001',
+          'http://127.0.0.1:3001',
+          ...extraCorsOrigins,
+        ].filter(Boolean) as string[],
+      );
+      callback(null, allowed.has(normalized));
+    },
+    credentials: true,
+  }),
+);
 app.use(compression());
 app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
+app.use(cookieParser());
+app.use(createSessionMiddleware());
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 const swaggerOptions = {
@@ -113,6 +166,24 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'OK', message: 'KLIP Backend is running' });
 });
 
+// Downstream Hub SSO — legacy HS256 bridge (opt-in via SSO_LEGACY_BRIDGE=true).
+if (process.env.SSO_LEGACY_BRIDGE === 'true') {
+  app.post('/auth/hub', ssoHubHandler);
+}
+
+// OIDC SSO (Authorization Code + PKCE) — primary integration path.
+if (isOidcConfigured()) {
+  app.get('/auth/oidc/login', oidcLoginHandler);
+  app.get('/auth/oidc/callback', oidcCallbackHandler);
+} else {
+  app.get('/auth/oidc/login', (_req, res) => {
+    res.status(503).json({ success: false, error: { message: 'OIDC SSO is not configured' } });
+  });
+  app.get('/auth/oidc/callback', (_req, res) => {
+    res.status(503).json({ success: false, error: { message: 'OIDC SSO is not configured' } });
+  });
+}
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/contracts', contractRoutes);
@@ -122,6 +193,7 @@ app.use('/api/finance', financeRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/activity', activityRoutes);
+app.use('/api/alerts', alertRoutes);
 app.use('/api/agent-ai', agentAiRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/roles', roleRoutes);
@@ -140,9 +212,11 @@ app.use('/api/claim-mutu', claimMutuRoutes);
 app.use('/api/claim-susut', claimSusutRoutes);
 app.use('/api/user-preferences', userPreferencesRoutes);
 app.use('/api/oil-loss', oilLossRoutes);
+app.use('/api/quality-surveys', qualitySurveyRoutes);
 app.use('/api/commercial-documents', commercialDocumentsRoutes);
 app.use('/api/ai-klip-agent-activity', aiKlipAgentActivityRoutes);
 app.use('/api/user-activity', userActivityLogRoutes);
+app.use('/api/pre-planned', prePlannedRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -166,6 +240,10 @@ if (process.env.NODE_ENV !== 'test') {
     } catch (error) {
       logger.error('Failed to initialize scheduler service:', error);
     }
+
+    void import('./services/prePlannedGroup.service')
+      .then(({ schedulePrePlannedRebuildIfEnabled }) => schedulePrePlannedRebuildIfEnabled('startup'))
+      .catch((error) => logger.warn('Pre-planned startup rebuild skipped', { error }));
 
     setImmediate(async () => {
       try {
@@ -193,19 +271,86 @@ if (process.env.NODE_ENV !== 'test') {
           logger.info('Contract latest_spd snapshot stale — refreshing in background');
           await ContractLatestSpdSnapshotService.refreshAll();
         }
+        if (!(await isB2bEndingChildSnapshotFresh())) {
+          logger.info('B2B ending-child snapshot stale — refreshing in background');
+          await B2bEndingChildSnapshotService.refreshAll();
+        }
       } catch (error) {
         logger.warn('Pipeline daily summary startup refresh skipped', { error });
       }
     });
 
-    // Warm the Shipping Performance row cache so the first visitor after a restart
-    // is served from memory instead of paying the full query cost.
-    try {
-      startShippingPerformanceCacheWarmer();
-      logger.info('🔥 Shipping Performance cache warmer started');
-    } catch (error) {
-      logger.warn('Failed to start Shipping Performance cache warmer', { error });
-    }
+    /*
+     * Warm the page caches ONE AT A TIME.
+     *
+     * These used to be scheduled at fixed 0s / 20s / 40s offsets, which guesses at how long each
+     * job takes. When the guess is wrong they overlap, and each one is a heavy
+     * sap_processed_data scan. On staging (2026-08-06) that produced load average 16.77 on
+     * 2 vCPUs with five concurrent queries of 87-130s, two deadlocked on LWLock, and an 80s cold
+     * Trucking page.
+     *
+     * The queue starts each job only after the previous finishes, so at most one heavy query is
+     * in flight however slow any single one turns out to be. Wall-clock warm-up is longer, which
+     * is the right trade: nothing waits on the warmers, but the requests they were competing
+     * with do have a user waiting.
+     *
+     * That only holds for a job that returns its promise. Shipping Performance, Trucking and Oil
+     * Loss used to return void, so the queue could only space them 5s apart and all three ran on
+     * into the jobs after them - on the dev host 2026-09-09 they were still running throughout
+     * the heaviest job in the queue. All eight now return a promise, so every job here is
+     * sequenced exactly and none overlap.
+     *
+     * Shipments (the most-opened page) is warmed first so a visitor after restart is
+     * not competing with Shipping Performance. Shell (created_at + vessel_name) runs
+     * before summary/OS. Shipping Performance follows the Shipments warmers.
+     *
+     * Ordering is by how likely a page is to be opened first, so the earliest visitor benefits
+     * most. Nothing about what any warmer computes or returns changes.
+     */
+    void runWarmupJobsSequentially(
+      [
+        { name: 'Shipments list shell', run: () => startShipmentListShellCacheWarmer() },
+        { name: 'Shipments summary', run: () => startShipmentSummaryCacheWarmer() },
+        { name: 'Shipments outstanding qty', run: () => startShipmentOutstandingQtyCacheWarmer() },
+        /**
+         * Fourth, not last.
+         *
+         * It loads the *unfiltered* Shipments row sets and costs more than any single page, so it
+         * used to sit at the end of the queue. Measured on the dev host 2026-09-09 that put it
+         * 135s after the first job, and the three warmers ahead of it were fire-and-forget, so it
+         * ran against all three at once: 25s for the shell scope, 206s for the hydrate scope.
+         *
+         * Moving it here starts it around 76s in and leaves it alone with the database. It stays
+         * *behind* the summary and outstanding-qty warmers deliberately - those feed Section 1,
+         * the first thing a visitor sees, whereas this one only decides whether a later
+         * status-card click is answered from memory (single-digit ms) or from SQL (about 12s).
+         * What moves back is the scoped toolbar warm (CPO / Bontang), which is a secondary
+         * convenience.
+         */
+        {
+          name: 'Shipments scope row sets',
+          run: () => startShipmentRowSetScopeWarmer(),
+          /**
+           * The two scope loads took 206s and 25s on an idle dev host, and about 19 minutes when
+           * the machine was also building. Anything short of that and the queue declares it
+           * wedged and starts the next job on top of the heaviest query in the system.
+           */
+          timeoutMs: 30 * 60_000,
+        },
+        {
+          name: 'Shipments scoped toolbar (plant×product)',
+          run: () => startShipmentScopedToolbarCacheWarmer(),
+        },
+        { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
+        { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
+        { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
+      ],
+      {
+        // Let the app finish booting and serve any waiting request before we add DB load.
+        initialDelayMs: 5_000,
+        gapMs: 5_000,
+      },
+    );
   });
 }
 

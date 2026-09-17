@@ -226,6 +226,34 @@
     max-width: 32rem;
   }
 
+  /* Supplier-style names: width from <colgroup>, wrap to max 2 lines */
+  .klip-compact-table--operational th.klip-op-col--two-line,
+  .klip-compact-table--operational td.klip-op-col--two-line {
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+    overflow: hidden;
+    vertical-align: middle;
+  }
+
+  .klip-compact-table--operational td.klip-op-col--two-line .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .klip-two-line-clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: break-word;
+  }
+
   /* Long text columns — cap width; cell content uses truncate + title tooltip */
   .klip-compact-table--operational th.klip-op-col--truncate,
   .klip-compact-table--operational td.klip-op-col--truncate {
@@ -267,8 +295,10 @@
   }
 
   /*
-   * Contract Performance + Shipping Performance Section 3 — narrower columns with
+   * Operational / performance view tables (Contracts, Contract Performance, Shipments,
+   * Trucking, Shipping Performance, Oil Loss, Commercial Docs) — narrower columns with
    * word-boundary header wrap and single-line truncated cells.
+   * Driven by per-column <colgroup> widths from compactTableUi resolvers.
    */
   .klip-compact-table--perf-narrow-cols {
     table-layout: fixed;
@@ -302,6 +332,20 @@
     overflow: hidden;
   }
 
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--two-line,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--two-line {
+    max-width: none;
+    overflow: hidden;
+    white-space: normal;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--two-line .klip-compact-table-cell-inner {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+  }
+
   .klip-compact-table--commercial-docs th.klip-op-col--actions,
   .klip-compact-table--commercial-docs td.klip-op-col--actions {
     width: 148px;
@@ -331,12 +375,15 @@
   .klip-compact-table--operational td.klip-op-col--actions {
     position: sticky;
     right: 0;
-    width: 80px;
-    min-width: 80px;
-    max-width: 80px;
+    /* Fits two size=icon buttons (View + Remarks) with gap + compact padding */
+    width: 112px;
+    min-width: 112px;
+    max-width: 112px;
     box-sizing: border-box;
     border-left: 1px solid rgb(229 231 235);
     box-shadow: -4px 0 8px -4px rgba(0, 0, 0, 0.08);
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
   }
 
   .klip-compact-table--operational thead th.klip-op-col--actions {

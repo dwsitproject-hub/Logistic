@@ -26,7 +26,10 @@ export function sqlShipmentListLoadingPortsKlipAgg(
       STRING_AGG(
         DISTINCT NULLIF(TRIM(${vlpLoadAlias}.port_name), ''),
         ', ' ORDER BY NULLIF(TRIM(${vlpLoadAlias}.port_name), '')
-      ) FILTER (WHERE NULLIF(TRIM(${vlpLoadAlias}.port_name), '') IS NOT NULL),
+      ) FILTER (
+        WHERE NULLIF(TRIM(${vlpLoadAlias}.port_name), '') IS NOT NULL
+          AND COALESCE(${vlpLoadAlias}.is_cancelled, false) = false
+      ),
       ''
     ),
     MAX(NULLIF(TRIM(${shipmentAlias}.port_of_loading), ''))
@@ -43,7 +46,10 @@ export function sqlShipmentListDischargePortsKlipAgg(
       STRING_AGG(
         DISTINCT NULLIF(TRIM(${vlpDiscAlias}.port_name), ''),
         ', ' ORDER BY NULLIF(TRIM(${vlpDiscAlias}.port_name), '')
-      ) FILTER (WHERE NULLIF(TRIM(${vlpDiscAlias}.port_name), '') IS NOT NULL),
+      ) FILTER (
+        WHERE NULLIF(TRIM(${vlpDiscAlias}.port_name), '') IS NOT NULL
+          AND COALESCE(${vlpDiscAlias}.is_cancelled, false) = false
+      ),
       ''
     ),
     MAX(NULLIF(TRIM(${shipmentAlias}.port_of_discharge), ''))

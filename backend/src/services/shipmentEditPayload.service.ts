@@ -3,8 +3,10 @@
  */
 
 import { query } from '../database/connection';
+import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import { ttlMemo } from '../utils/ttlMemo';
 import {
   SHIPMENT_ATA_OVERRIDES_JOIN,
   sqlEffectiveAtaArrivalDischarge,
@@ -29,6 +31,65 @@ import {
 import { groupPlantExpr } from '../utils/groupPlantSql';
 import { resolvedPlantCodeSql } from '../utils/portDisplaySql';
 import { resolveShipmentEditContext, type ShipmentEditContext } from './shipmentEditContext.service';
+import { resolveSapLoadingPortNameMapForShipment, sapLoadingPortSequenceKey } from './vesselLoadingPortsFromSap.service';
+import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
+import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
+import { mergeShipmentVesselFromSapRow } from './shipmentVesselFromSap.service';
+import { sqlMasterVesselLateralJoin } from '../utils/masterVesselDisplaySql';
+import { sqlSapVesselNameFromSpdJsonb } from '../utils/sapVesselFields';
+import { sqlIsContractSapClosedForStoExpr } from '../utils/contractDeliveryStatus';
+import { applyLiveSapAtaReferences } from '../utils/sapAtaReferenceFromProcessed';
+
+const SPD_EFFECTIVE_STO = `NULLIF(TRIM(COALESCE(
+      spd.sto_number::text,
+      spd.data->'raw'->>'STO No.',
+      spd.data->'raw'->>'STO Number',
+      spd.data->'shipment'->>'sto_no',
+      spd.data->'contract'->>'sto_no'
+    )), '')`;
+
+/**
+ * The STO this shipment actually belongs to.
+ *
+ * `c.sto_number` must NOT lead. Two shipments can hang off ONE contract row: PO 1001029907 has
+ * STOs 1006019385 and 1006019867 under a contract whose sto_number is 1006019385, so preferring
+ * the contract's value made opening 1006019867 look up the SIBLING's SAP row - and that sibling's
+ * ATA/ATC chips showed on a STO SAP leaves NULL. Reproduced on dev: with no ?sto= hint the lookup
+ * returned STO 1006019385 with ATC 8/13/26; with the hint, 1006019867 with ATC NULL.
+ *
+ * shipmentListStoKeyExpr already resolves this correctly for the list. This mirrors it: the
+ * shipment's own numeric STO wins, and the contract's value is only a fallback.
+ */
+export function sqlShipmentOwnStoKey(hintParam?: string): string {
+  const hint = hintParam ? `NULLIF(${hintParam}::text, ''),
+      ` : '';
+  return `TRIM(COALESCE(
+      ${hint}CASE
+        WHEN NULLIF(TRIM(s.shipment_id::text), '') ~ '^[0-9]+$'
+        THEN NULLIF(TRIM(s.shipment_id::text), '')
+        ELSE NULL
+      END,
+      c.sto_number::text,
+      s.operation_id,
+      s.shipment_id::text
+    ))`;
+}
+
+/**
+ * Which SAP rows may answer for this shipment.
+ *
+ * The old form ORed in `spd.contract_number = c.contract_id` unguarded, so when nothing matched
+ * the STO the ORDER BY simply handed back the newest row of the whole PO - a sibling STO's row,
+ * carrying that sibling's dates. A row belonging to a DIFFERENT STO must never be eligible.
+ *
+ * Header rows stay eligible: SAP often carries a PO-level row with no STO at all, and where SAP
+ * never itemised a STO that row is the only source. Those have a NULL effective STO, so they can
+ * never be mistaken for a sibling's.
+ */
+export function sqlSapRowScopeForShipment(stoKeyExpr: string): string {
+  return `${SPD_EFFECTIVE_STO} = ${stoKeyExpr}
+       OR (spd.contract_number = c.contract_id AND ${SPD_EFFECTIVE_STO} IS NULL)`;
+}
 
 const SHIPMENT_BY_ID_SQL = `
   SELECT
@@ -54,22 +115,58 @@ const SHIPMENT_BY_ID_SQL = `
         THEN NULLIF(TRIM(s.shipment_id::text), '')
         ELSE NULL
       END
-    ) AS sto_number
+    ) AS sto_number,
+    sap_sto.vessel_name_sap,
+    sap_sto.vessel_code_sap,
+    sap_sto.vessel_owner_sap,
+    mv.id AS master_vessel_resolved_id,
+    mv.vessel_name_master,
+    mv.vessel_code_master,
+    mv.vessel_owner_master,
+    mv.vessel_capacity_mt_master,
+    mv.vessel_type_master,
+    mv.vessel_terms_master,
+    ${sqlIsContractSapClosedForStoExpr(
+      'c',
+      `COALESCE(
+        NULLIF(TRIM(c.sto_number::text), ''),
+        sap_sto.effective_sto,
+        NULLIF(TRIM(s.operation_id::text), ''),
+        s.id::text
+      )`,
+    )} AS is_contract_sap_closed
   FROM shipments s
   LEFT JOIN contracts c ON s.contract_id = c.id
   LEFT JOIN LATERAL (
-    SELECT NULLIF(TRIM(COALESCE(
-      spd.sto_number::text,
-      spd.data->'raw'->>'STO No.',
-      spd.data->'raw'->>'STO Number',
-      spd.data->'shipment'->>'sto_no',
-      spd.data->'contract'->>'sto_no'
-    )), '') AS effective_sto
+    SELECT
+      ${SPD_EFFECTIVE_STO} AS effective_sto,
+      ${sqlSapVesselNameFromSpdJsonb('spd.data')} AS vessel_name_sap,
+      NULLIF(TRIM(COALESCE(
+        spd.data->'shipment'->>'vessel_code',
+        spd.data->'vessel'->>'vessel_code',
+        spd.data->'raw'->>'Vessel Code',
+        spd.data->'raw'->>'vessel code'
+      )), '') AS vessel_code_sap,
+      NULLIF(TRIM(COALESCE(
+        spd.data->'shipment'->>'vessel_owner',
+        spd.data->'vessel'->>'vessel_owner',
+        spd.data->'raw'->>'Vessel Owner',
+        spd.data->'raw'->>'Vessel Company',
+        spd.data->'raw'->>'vessel owner'
+      )), '') AS vessel_owner_sap
     FROM sap_processed_data spd
-    WHERE spd.contract_number = c.contract_id
-    ORDER BY spd.created_at DESC NULLS LAST
+    WHERE ${sqlSapRowScopeForShipment(sqlShipmentOwnStoKey())}
+    ORDER BY
+      CASE WHEN ${SPD_EFFECTIVE_STO} = ${sqlShipmentOwnStoKey()} THEN 0 ELSE 1 END,
+      spd.created_at DESC NULLS LAST
     LIMIT 1
   ) sap_sto ON TRUE
+  ${sqlMasterVesselLateralJoin(
+    's.vessel_code',
+    's.vessel_name',
+    'mv',
+    's.master_vessel_id',
+  )}
   WHERE s.id = $1::uuid
   LIMIT 1`;
 
@@ -105,12 +202,32 @@ const PORTS_SELECT = `
   vlp.quality_red,
   vlp.quality_ds,
   vlp.quality_stone,
+  vlp.sap_ata_vessel_arrival,
+  vlp.sap_ata_vessel_berthed,
+  vlp.sap_ata_loading_start,
+  vlp.sap_ata_loading_completed,
+  vlp.sap_ata_vessel_sailed,
+  vlp.sap_quality_ffa,
+  vlp.sap_quality_mi,
+  vlp.sap_quality_dobi,
+  vlp.sap_quality_red,
+  vlp.sap_quality_ds,
+  vlp.sap_quality_stone,
   vlp.is_discharge_port,
+  /*
+   * Which of this row's columns a KLIP user actually wrote (migration 167). The modal prefers this
+   * over comparing against the SAP snapshot: equality cannot tell a user who typed SAP's own
+   * number apart from SAP having written it, and migration 130's backfill made older rows agree
+   * with the snapshot by construction.
+   */
+  COALESCE(vlp.klip_edited_fields, '{}') AS klip_edited_fields,
   vlp.created_at,
   vlp.updated_at,
   c.contract_id AS contract_number`;
 
 export interface ShipmentEditPayload {
+  /** Latest KLIP edit per column, from audit_logs. Absent entries mean "not recorded". */
+  fieldHistory: Record<string, KlipFieldEdit>;
   shipment: Record<string, unknown>;
   editContext: ShipmentEditContext;
   ports: Record<string, unknown>[];
@@ -118,24 +235,55 @@ export interface ShipmentEditPayload {
   contractDetails: Record<string, unknown>[];
 }
 
-async function loadPortsAndInfo(shipmentUuid: string): Promise<{
+async function loadPortsAndInfo(
+  shipmentUuid: string,
+  preferredSto?: string | null,
+): Promise<{
   ports: Record<string, unknown>[];
   shipmentInfo: Record<string, unknown> | null;
 }> {
-  const portsResult = await query(
-    `SELECT ${PORTS_SELECT}
-     FROM vessel_loading_ports vlp
-     LEFT JOIN shipments s ON vlp.shipment_id = s.id
-     LEFT JOIN contracts c ON s.contract_id = c.id
-     WHERE vlp.shipment_id = $1::uuid
-     ${ACTIVE_PORT_FILTER}
-     ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-    [shipmentUuid],
+  // Multi-contract STO groups (e.g. manual OP-* operations) have one shipment row per
+  // contract, each with its own vessel_loading_ports rows. Expand to the whole group so
+  // the Edit Shipment modal shows the same port count as the Shipments list (which
+  // aggregates SAP/KLIP ports across all group members).
+  const groupShipmentIds = await resolveStoGroupShipmentIds(shipmentUuid);
+  const [portsResult, sapPortNames] = await Promise.all([
+    query(
+      `SELECT ${PORTS_SELECT}
+       FROM vessel_loading_ports vlp
+       LEFT JOIN shipments s ON vlp.shipment_id = s.id
+       LEFT JOIN contracts c ON s.contract_id = c.id
+       WHERE vlp.shipment_id = ANY($1::uuid[])
+       ${ACTIVE_PORT_FILTER}
+       ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+      [groupShipmentIds],
+    ),
+    resolveSapLoadingPortNameMapForShipment(shipmentUuid, preferredSto),
+  ]);
+
+  // Group expansion above returns the same physical port once per group member; collapse those
+  // before mapping, or sections 3/4/5 render a duplicate "Loading Port 1" (the empty one first).
+  const dedupedPortRows = dedupeStoGroupPorts(
+    portsResult.rows as Record<string, unknown>[],
+    shipmentUuid,
   );
+
+  const ports = dedupedPortRows.map((port) => {
+    const isDischarge = Boolean(port.is_discharge_port);
+    const sequence = sapLoadingPortSequenceKey(port.port_sequence);
+    const sapPortName = isDischarge
+      ? sapPortNames.discharge
+      : sapPortNames.bySequence.get(sequence) ?? null;
+    return {
+      ...port,
+      sap_port_name: sapPortName,
+    };
+  });
 
   const shipmentInfoResult = await query(
     `SELECT
       s.quantity_delivered,
+      s.quantity_delivered_klip,
       s.actual_vessel_qty_receive,
       s.sfal_qty,
       s.sfbd_qty,
@@ -203,7 +351,15 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
       vlpd.quality_dobi AS quality_at_discharge_loc_1_dobi,
       vlpd.quality_red AS quality_at_discharge_loc_1_red,
       vlpd.quality_ds AS quality_at_discharge_loc_1_ds,
-      vlpd.quality_stone AS quality_at_discharge_loc_1_stone
+      vlpd.quality_stone AS quality_at_discharge_loc_1_stone,
+      /*
+       * Provenance for the fields this payload flattens onto the shipment (migration 167). Three
+       * sources, because the modal's fields come from three rows: the shipment itself, the first
+       * loading port and the discharge port.
+       */
+      COALESCE(s.klip_edited_fields, '{}')    AS klip_edited_fields,
+      COALESCE(vlp1.klip_edited_fields, '{}') AS klip_edited_fields_loading,
+      COALESCE(vlpd.klip_edited_fields, '{}') AS klip_edited_fields_discharge
     FROM shipments s
     LEFT JOIN contracts c ON s.contract_id = c.id
     LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id
@@ -216,9 +372,36 @@ async function loadPortsAndInfo(shipmentUuid: string): Promise<{
     [shipmentUuid],
   );
 
+  const shipmentInfo = (shipmentInfoResult.rows[0] as Record<string, unknown>) ?? null;
+  if (shipmentInfo) {
+    shipmentInfo.sap_vessel_loading_port_1 = sapPortNames.bySequence.get(1) ?? null;
+    shipmentInfo.sap_vessel_loading_port_2 = sapPortNames.bySequence.get(2) ?? null;
+    shipmentInfo.sap_vessel_loading_port_3 = sapPortNames.bySequence.get(3) ?? null;
+    shipmentInfo.sap_vessel_discharge_port_1 = sapPortNames.discharge;
+  }
+
+  // SAP ATA chips: live from sap_processed_data (clears stale VLP sap_ata_* backfill).
+  const stoHint = String(preferredSto ?? '').trim();
+  const spdAta = await query(
+    `SELECT spd.data->'shipment' AS shipment
+     FROM sap_processed_data spd
+     INNER JOIN shipments s ON s.id = $1::uuid
+     LEFT JOIN contracts c ON c.id = s.contract_id
+     WHERE ${sqlSapRowScopeForShipment(sqlShipmentOwnStoKey('$2'))}
+     ORDER BY
+       CASE WHEN ${SPD_EFFECTIVE_STO} = ${sqlShipmentOwnStoKey('$2')} THEN 0 ELSE 1 END,
+       spd.created_at DESC NULLS LAST
+     LIMIT 1`,
+    [shipmentUuid, stoHint],
+  );
+  const sapShipmentRow = spdAta.rows[0] as { shipment?: Record<string, unknown> } | undefined;
+  if (sapShipmentRow) {
+    applyLiveSapAtaReferences(shipmentInfo, ports, sapShipmentRow.shipment ?? null);
+  }
+
   return {
-    ports: portsResult.rows as Record<string, unknown>[],
-    shipmentInfo: (shipmentInfoResult.rows[0] as Record<string, unknown>) ?? null,
+    ports,
+    shipmentInfo,
   };
 }
 
@@ -235,13 +418,43 @@ async function loadContractDetailsForEdit(
   return result.rows as Record<string, unknown>[];
 }
 
+/**
+ * Single-flight only - deliberately NOT cached.
+ *
+ * This payload feeds the Edit / View Shipment modal, so a cached copy could show a user
+ * values that another user has already changed. ttlMs = 0 gives pure in-flight sharing:
+ * concurrent opens of the same shipment run the query once and all receive that result,
+ * and nothing is retained afterwards. Every fresh open still hits the database.
+ *
+ * Worth doing because this is one of the heaviest reads in the app - it runs
+ * buildContractDetailsForStoSql(), the `contract_candidates` statement an external DB
+ * review caught running as four concurrent identical copies on a 2-vCPU host
+ * (2026-07-21). Collapsing duplicates removes that multiplier without touching results.
+ */
 export async function resolveShipmentEditPayload(
   shipmentUuid: string,
+  preferredSto?: string | null,
 ): Promise<ShipmentEditPayload | null> {
-  const [shipmentRes, editContext, portsBundle] = await Promise.all([
+  const stoKey = String(preferredSto ?? '').trim();
+  return ttlMemo(`shipmentEditPayload:${shipmentUuid}:${stoKey}`, 0, () =>
+    resolveShipmentEditPayloadUncached(shipmentUuid, stoKey || null),
+  );
+}
+
+async function resolveShipmentEditPayloadUncached(
+  shipmentUuid: string,
+  preferredSto?: string | null,
+): Promise<ShipmentEditPayload | null> {
+  const [shipmentRes, editContext, portsBundle, fieldHistory] = await Promise.all([
     query(SHIPMENT_BY_ID_SQL, [shipmentUuid]),
-    resolveShipmentEditContext(shipmentUuid),
-    loadPortsAndInfo(shipmentUuid),
+    resolveShipmentEditContext(shipmentUuid, preferredSto),
+    loadPortsAndInfo(shipmentUuid, preferredSto),
+    /*
+     * Who last wrote each field, for the KLIP badge's tooltip. Decoration on top of
+     * klip_edited_fields, which is what actually decides the badge - so this resolves to {} on
+     * failure rather than taking the modal down.
+     */
+    loadKlipFieldHistory(shipmentUuid),
   ]);
 
   if (shipmentRes.rows.length === 0 || !editContext) {
@@ -253,8 +466,15 @@ export async function resolveShipmentEditPayload(
     ? await loadContractDetailsForEdit(lookupKey, editContext.contract_numbers ?? '')
     : [];
 
+  const shipment = shipmentRes.rows[0] as Record<string, unknown>;
+  mergeShipmentVesselFromSapRow(shipment, {
+    overlayDisplayName: false,
+    hydrateFromMaster: true,
+  });
+
   return {
-    shipment: shipmentRes.rows[0] as Record<string, unknown>,
+    fieldHistory,
+    shipment,
     editContext,
     ports: portsBundle.ports,
     shipmentInfo: portsBundle.shipmentInfo,

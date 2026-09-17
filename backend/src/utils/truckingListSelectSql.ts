@@ -3,16 +3,45 @@ import {
   sqlRealizationEndDate,
   sqlRealizationStartDate,
   sqlShellRealizationEndDate,
+  sqlShellTruckingAtaEndDate,
   sqlShellRealizationStartDate,
 } from './truckingRealizationSql';
-import { SQL_CONTRACT_IMPORT_STATUS } from './contractDeliveryStatus';
-import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import {
-  sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingQuantityDeliveredCoalesce,
-  sqlTruckingQuantityReceiveCoalesce,
+  sqlContractSapImportStatusFromLateral,
+  sqlContractSapStatusLateral,
+} from './contractDeliveryStatus';
+import {
+  sqlTruckingPagePipelineStageExpr,
+  sqlTruckingIsCompletedLateral,
+  sqlTruckingIsCompletedFromLateral,
+} from './truckingPagePipelineSql';
+import { sqlTruckingSapDatesLateral } from './truckingSapDates';
+import {
+  sqlTruckingListBaseOutstandingQtyExpr,
+  sqlTruckingListResolvedDeliveryQtyExpr,
+  sqlTruckingListResolvedReceiveQtyExpr,
   sqlTruckingQuantitySentCoalesce,
+  sqlTruckingGrClosedLateral,
+  sqlTruckingGrCancelledFromLateral,
+  sqlTruckingGrClosedFromLateral,
 } from './truckingQuantitySql';
+import {
+  sqlB2bEndingBuyerExpr,
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from './b2bOriginEndingSql';
+import {
+  sapTruckingListDischargeLocationSql,
+  sapTruckingListLoadingLocationSql,
+} from './sapTruckingLoadingLocationSql';
+import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
+
+/**
+ * Alias of the SAP receive-date LATERAL on the hydrate list query. The select clause and the
+ * FROM clause must agree on it, so both read this constant rather than repeating the string.
+ */
+/** Exported so the Late Indicator filter can name the same SAP dates lateral the select uses. */
+export const TRUCKING_LIST_SAP_DATES_ALIAS = 'sapd';
 
 /** Contract numbers on grouped STO / operation (no SAP). */
 export const TRUCKING_LIST_CONTRACT_NUMBER_CASE = `
@@ -34,50 +63,31 @@ export const TRUCKING_LIST_CONTRACT_NUMBER_CASE = `
           ELSE c.contract_id
         END`;
 
-const TRUCKING_LIST_CONTRACT_EXT_NO_FULL = `
-        CASE
-          WHEN NULLIF(TRIM(c.sto_number::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc.contract_id
-                  FROM contracts cc
-                  WHERE UPPER(COALESCE(NULLIF(TRIM(cc.transport_mode), ''), 'LAND')) = 'LAND'
-                    AND NULLIF(TRIM(cc.sto_number::text), '') = NULLIF(TRIM(c.sto_number::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
+/** Contract Ext No: latest SAP by PO (primary identity); fallback contract_id. */
+export const TRUCKING_LIST_CONTRACT_EXT_NO_FULL = `
+        COALESCE(
+          (
+            SELECT COALESCE(
+              spd.data->'raw'->>'Contract Ext No',
+              spd.data->>'Contract Ext No'
             )
-          WHEN NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL THEN
-            (
-              SELECT STRING_AGG(DISTINCT NULLIF(TRIM(z.v), ''), ', ' ORDER BY NULLIF(TRIM(z.v), ''))
-              FROM (
-                SELECT COALESCE(spd.data->'raw'->>'Contract Ext No', spd.data->>'Contract Ext No') AS v
-                FROM sap_processed_data spd
-                WHERE spd.contract_number IN (
-                  SELECT cc2.contract_id
-                  FROM trucking_operations t2
-                  INNER JOIN contracts cc2 ON t2.contract_id = cc2.id
-                  WHERE NULLIF(TRIM(t2.operation_id::text), '') = NULLIF(TRIM(t.operation_id::text), '')
-                )
-              ) z
-              WHERE NULLIF(TRIM(z.v), '') IS NOT NULL
+            FROM sap_processed_data spd
+            WHERE NULLIF(TRIM(COALESCE(c.po_number::text, '')), '') IS NOT NULL
+              AND TRIM(COALESCE(spd.po_number::text, '')) = TRIM(c.po_number::text)
+            ORDER BY spd.updated_at DESC NULLS LAST, spd.created_at DESC NULLS LAST
+            LIMIT 1
+          ),
+          (
+            SELECT COALESCE(
+              spd.data->'raw'->>'Contract Ext No',
+              spd.data->>'Contract Ext No'
             )
-          ELSE
-            (
-              SELECT COALESCE(
-                spd.data->'raw'->>'Contract Ext No',
-                spd.data->>'Contract Ext No'
-              )
-              FROM sap_processed_data spd
-              WHERE spd.contract_number = c.contract_id
-              ORDER BY spd.created_at DESC NULLS LAST
-              LIMIT 1
-            )
-        END`;
+            FROM sap_processed_data spd
+            WHERE spd.contract_number = c.contract_id
+            ORDER BY spd.updated_at DESC NULLS LAST, spd.created_at DESC NULLS LAST
+            LIMIT 1
+          )
+        )`;
 
 export const TRUCKING_LIST_B2B_LATERAL = `
       LEFT JOIN LATERAL (
@@ -94,7 +104,9 @@ export const TRUCKING_LIST_B2B_LATERAL = `
             spd.data->>'Contract Reff PO Ini',
             spd.data->'raw'->>'Contract Reff PO Ini',
             spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw
+          ) AS contract_reference_po_raw,
+          ${sapTruckingListLoadingLocationSql} AS sap_loading_location,
+          ${sapTruckingListDischargeLocationSql} AS sap_discharge_location
         FROM sap_processed_data spd
         WHERE spd.contract_number = c.contract_id
         ORDER BY spd.created_at DESC NULLS LAST
@@ -118,13 +130,28 @@ export const TRUCKING_LIST_STO_LATERAL = `
         WHERE x.effective_sto IS NOT NULL AND x.effective_sto != ''
       ) sa ON true`;
 
-/** B2B child-contract exclusion — shell uses contract_type only (no SAP lateral). */
+const TRUCKING_LIST_B2B_REFERENCE_PO_SUBQUERY = `
+          SELECT COALESCE(
+            spd.data->'contract'->>'contract_reference_po',
+            spd.data->>'CONTRACT REFF PO',
+            spd.data->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'Contract Reff PO Ini',
+            spd.data->'raw'->>'CONTRACT REFF PO'
+          )
+          FROM sap_processed_data spd
+          WHERE spd.contract_number = c.contract_id
+          ORDER BY spd.created_at DESC NULLS LAST
+          LIMIT 1
+`;
+
+/** B2B child-contract exclusion — B2B origins without Contract Reff PO must remain visible. */
 export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
   if (skipSapJoin) {
     return `
         AND NOT (
           c.contract_id IS NOT NULL
           AND UPPER(NULLIF(TRIM(COALESCE(c.contract_type::text, '')), '')) = 'B2B'
+          AND NULLIF(TRIM(COALESCE((${TRUCKING_LIST_B2B_REFERENCE_PO_SUBQUERY}), '')), '') IS NOT NULL
         )`;
   }
   return `
@@ -135,15 +162,34 @@ export function truckingListB2bExcludeSql(skipSapJoin: boolean): string {
         )`;
 }
 
+/**
+ * The contract's SAP import status resolved once per row by sqlContractSapStatusLateral in
+ * the FROM. Everything status-derived below reads this column instead of re-expanding the
+ * 26KB expression: 529 sap_processed_data scan nodes in one plan, 58.2s of 99.9s.
+ */
+const IMPORT_STATUS_COL = sqlContractSapImportStatusFromLateral();
+/** The GR-close column resolved once per row by sqlTruckingGrClosedLateral in the FROM. */
+const GR_CLOSED_COL = sqlTruckingGrClosedFromLateral();
+/**
+ * Plant/Site on a trucking row is SAP's Discharge Destination, persisted by the import. Rows
+ * written before the Region/Site alias map still hold SAP's port name (5,761 said KIJING), so
+ * it is normalised on read as well as on write - a plain CASE on a text column, no jsonb.
+ */
+const TRUCKING_LOCATION_COL = sqlNormalizeDischargeDestination('t.location');
+/** The SAP-cancelled column from the same lateral as GR_CLOSED_COL. */
+const GR_CANCELLED_COL = sqlTruckingGrCancelledFromLateral();
+/** The completed test resolved once per row by sqlTruckingIsCompletedLateral. */
+const IS_COMPLETED_COL = sqlTruckingIsCompletedFromLateral();
+
 export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
   if (skipSapJoin) {
     return `
         t.id,
         t.operation_id,
         t.contract_id,
-        t.location,
+        ${TRUCKING_LOCATION_COL} AS location,
         t.loading_location,
-        t.unloading_location,
+        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
         t.daily_deliverables,
@@ -153,25 +199,43 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         ${sqlShellRealizationEndDate()} AS realization_end_date,
         ${sqlShellRealizationStartDate()} AS trucking_start_date,
         ${sqlShellRealizationEndDate()} AS trucking_completion_date,
+        /*
+         * The Late Indicator's ATA, kept apart from the displayed completion date above.
+         *
+         * That one falls back to the planning date when WB is empty, which is right for display
+         * and wrong for judging lateness - it makes a planned row look received. The rule reads
+         * ATA first, then planning_end_date as its ETA.
+         */
+        ${sqlShellTruckingAtaEndDate()} AS ata_end_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
         t.quantity_sent,
-        t.quantity_delivered,
-        t.quantity_delivered AS quantity_receive,
+        ${sqlTruckingListResolvedDeliveryQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_delivered,
+        ${sqlTruckingListResolvedReceiveQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
+        t.oa_budget_currency,
+        t.oa_actual_currency,
         t.status AS status_db,
         ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), '')), '')`,
+          undefined,
+          GR_CLOSED_COL,
+          undefined,
+          IS_COMPLETED_COL,
+          GR_CANCELLED_COL,
         )} AS status,
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
+        -- SAP presence of the owning contract. Carried on every row so summaries can
+        -- exclude cancelled POs from totals while the list still shows them.
+        COALESCE(c.sap_presence, 'PRESENT') AS sap_presence,
         c.po_number,
         COALESCE(NULLIF(TRIM(c.sto_number::text), ''), '') AS sto_number,
         NULL::text AS sto_numbers,
@@ -181,55 +245,65 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.delivery_start_date,
         c.delivery_end_date,
         c.supplier,
-        c.buyer,
+        ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
         c.product,
         c.incoterm,
         c.group_name,
         c.source_type,
-        ${sqlTruckingOutstandingQtyByIncoterm(
-          'COALESCE(t.quantity_delivered, 0)',
-          'COALESCE(t.quantity_delivered, 0)',
-        )} AS outstanding_quantity,
+        ${sqlTruckingListBaseOutstandingQtyExpr('c', GR_CLOSED_COL)} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
-        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
+        ${IMPORT_STATUS_COL} AS contract_import_status`;
   }
 
   return `
         t.id,
         t.operation_id,
         t.contract_id,
-        t.location,
-        t.loading_location,
-        t.unloading_location,
+        ${TRUCKING_LOCATION_COL} AS location,
+        COALESCE(NULLIF(TRIM(t.loading_location), ''), b2b.sap_loading_location) AS loading_location,
+        ${sqlB2bEndingUnloadExpr(`COALESCE(NULLIF(TRIM(t.unloading_location), ''), b2b.sap_discharge_location)`)} AS unloading_location,
         t.trucking_owner,
         t.cargo_readiness_date,
         t.daily_deliverables,
         t.trucking_start_date AS planning_start_date,
         t.trucking_completion_date AS planning_end_date,
-        ${sqlRealizationStartDate('c')} AS realization_start_date,
-        ${sqlRealizationEndDate('c')} AS realization_end_date,
-        ${sqlRealizationStartDate('c')} AS trucking_start_date,
-        ${sqlRealizationEndDate('c')} AS trucking_completion_date,
+        ${sqlRealizationStartDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS realization_start_date,
+        ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS realization_end_date,
+        ${sqlRealizationStartDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS trucking_start_date,
+        ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS trucking_completion_date,
+        /* ATA for the Late Indicator - the same value here, named separately so the rule cannot
+           pick up the planning fallback the shell variant applies to the column above. */
+        ${sqlRealizationEndDate('c', TRUCKING_LIST_SAP_DATES_ALIAS)} AS ata_end_date,
         t.eta_trucking_start_date,
         t.eta_trucking_completion_date,
         t.eta_delivery_start_date,
         t.eta_delivery_end_date,
         ${sqlTruckingQuantitySentCoalesce()} AS quantity_sent,
-        ${sqlTruckingQuantityDeliveredCoalesce()} AS quantity_delivered,
-        ${sqlTruckingQuantityReceiveCoalesce()} AS quantity_receive,
+        ${sqlTruckingListResolvedDeliveryQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_delivered,
+        ${sqlTruckingListResolvedReceiveQtyExpr('t.id', 'c', GR_CLOSED_COL)} AS quantity_receive,
         t.gain_loss_percentage,
         t.gain_loss_amount,
         t.oa_budget,
         t.oa_actual,
+        t.oa_budget_currency,
+        t.oa_actual_currency,
         t.status AS status_db,
         ${sqlTruckingPagePipelineStageExpr(
           'c',
           `NULLIF(TRIM(COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers)), '')`,
+          undefined,
+          GR_CLOSED_COL,
+          TRUCKING_LIST_SAP_DATES_ALIAS,
+          IS_COMPLETED_COL,
+          GR_CANCELLED_COL,
         )} AS status,
         t.created_at,
         t.updated_at,
         ${TRUCKING_LIST_CONTRACT_NUMBER_CASE} AS contract_number,
+        -- SAP presence of the owning contract. Carried on every row so summaries can
+        -- exclude cancelled POs from totals while the list still shows them.
+        COALESCE(c.sap_presence, 'PRESENT') AS sap_presence,
         c.po_number,
         COALESCE(NULLIF(TRIM(c.sto_number::text), ''), sa.sto_numbers) AS sto_number,
         sa.sto_numbers AS sto_numbers,
@@ -239,28 +313,34 @@ export function buildTruckingListSelectClause(skipSapJoin: boolean): string {
         c.delivery_start_date,
         c.delivery_end_date,
         c.supplier,
-        c.buyer,
+        ${sqlB2bEndingBuyerExpr('c.buyer')} AS buyer,
         c.product,
         c.incoterm,
         c.group_name,
         c.source_type,
-        ${sqlTruckingOutstandingQtyByIncoterm(
-          sqlTruckingQuantityDeliveredCoalesce(),
-          sqlTruckingQuantityReceiveCoalesce(),
-        )} AS outstanding_quantity,
+        ${sqlTruckingListBaseOutstandingQtyExpr('c', GR_CLOSED_COL)} AS outstanding_quantity,
         s.estimated_km,
         ${TRUCKING_LIST_CONTRACT_EXT_NO_FULL} AS contract_ext_no,
-        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status`;
+        ${IMPORT_STATUS_COL} AS contract_import_status`;
 }
 
 export function buildTruckingListFromClause(skipSapJoin: boolean): string {
   const stoJoin = skipSapJoin ? '' : TRUCKING_LIST_STO_LATERAL;
   const b2bJoin = skipSapJoin ? '' : TRUCKING_LIST_B2B_LATERAL;
+  // Resolves both SAP receive dates once per row for the select clause below, which otherwise
+  // repeats that identical lookup six times per row as correlated subqueries.
+  const sapDatesJoin = skipSapJoin ? '' : sqlTruckingSapDatesLateral('c', TRUCKING_LIST_SAP_DATES_ALIAS);
+  const b2bEndingJoin = sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' });
   return `
       FROM trucking_operations t
       LEFT JOIN contracts c ON t.contract_id = c.id
+      ${sqlContractSapStatusLateral('c')}
+      ${sqlTruckingGrClosedLateral('c', undefined, IMPORT_STATUS_COL)}
+      ${sqlTruckingIsCompletedLateral('c', undefined, GR_CLOSED_COL)}
       LEFT JOIN shipments s ON t.shipment_id = s.id
       ${TRUCKING_REALIZATIONS_JOIN}
       ${b2bJoin}
-      ${stoJoin}`;
+      ${b2bEndingJoin}
+      ${stoJoin}
+      ${sapDatesJoin}`;
 }

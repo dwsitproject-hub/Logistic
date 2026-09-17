@@ -285,6 +285,7 @@ Backend server is done. The frontend server will call `http://172.28.92.57:5001`
 
        add_header X-Frame-Options "SAMEORIGIN" always;
        add_header X-Content-Type-Options "nosniff" always;
+       # Prefer also setting Content-Security-Policy (see frontend/next.config.js and docs/VA-HIGH-MEDIUM-REMEDIATION.md).
 
        # Next.js can send large response headers; avoid "upstream sent too big header"
        proxy_buffer_size 128k;

@@ -7,12 +7,11 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { MasterLoadingPortCombobox } from '@/components/MasterLoadingPortCombobox'
+import { MasterVesselCombobox, type MasterVesselOption } from '@/components/MasterVesselCombobox'
 import {
   AlertCircle,
   AlertTriangle,
@@ -29,6 +28,13 @@ import {
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
+import {
+  areAllSelectionKeysCif,
+  blockSelectionKeysAllCif,
+  etaDetailHasAllRequiredDates as etaBlockHasAllRequiredDates,
+  etaDetailHasAnyDate as etaBlockHasAnyDate,
+  isEtaScheduleCompleteForCreate as isCreateEtaScheduleComplete,
+} from '@/lib/addNewShipmentEtaRules'
 import { formatDateDMY, toApiDateOnly, isIsoOutsideAllowedRange, OUTSIDE_ALLOWED_DATE_RANGE_MESSAGE } from '@/lib/dateFormat'
 import { FAST_ENTRY_ROOT_ATTR, SHIPMENT_ETA_FAST_ENTRY_GROUP } from '@/lib/fastEntryFocus'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
@@ -39,12 +45,16 @@ import {
 } from '@/components/PermissionsContext'
 import type {
   AddNewShipmentSubmitPayload,
+  PrefilledVesselSnapshot,
   ShipmentPoOption,
   StoSapPreview,
 } from '@/components/shared/addNewShipmentTypes'
 import {
   fetchStoLinkedPurchaseOrderOptions,
   fetchStoSapPreview,
+  formatPoPlantLabel,
+  resolvePlotStoLookupKey,
+  resolvePoPlantCode,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -58,6 +68,15 @@ import {
   suggestShipmentEta,
   suggestShipmentVessel,
 } from '@/lib/shipmentAiPlanner'
+import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
+import {
+  VESSEL_MODAL_BODY_CLASS,
+  VESSEL_MODAL_FOOTER_CARD_CLASS,
+  VESSEL_MODAL_HEADER_CLASS,
+  VESSEL_MODAL_PANEL_CLASS,
+  VESSEL_MODAL_STEP_STRIP_CLASS,
+} from '@/lib/vesselModalUi'
+import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -136,48 +155,44 @@ function etaDetailToApiPayload(d: EtaDetailFields) {
 const AUTOCOMPLETE_PANEL_CLASS =
   'absolute left-0 right-0 top-full z-[110] mt-1 max-h-52 overflow-y-auto rounded-md border border-gray-300 bg-white shadow-xl ring-1 ring-black/5'
 
-/** Plan qty vs vessel capacity — disabled while master vessel capacity is often missing. */
-const ENFORCE_PLAN_QTY_VESSEL_CAPACITY_LIMIT = false
-
 const ETA_FIELD_ROWS: {
   key: keyof EtaDetailFields
   label: string
   shortLabel: string
   errorSuffix: string
 }[] = [
-  { key: 'etaVesselArrivalAtLoadingPort', label: 'ETA Vessel Arrival at Loading Port', shortLabel: 'Arr. @ LP', errorSuffix: 'arrival' },
-  { key: 'etaVesselBerthedAtLoadingPort', label: 'ETA Vessel Berthed at Loading Port', shortLabel: 'Berthed LP', errorSuffix: 'berthed' },
-  { key: 'etaVesselStartLoading', label: 'ETA Vessel Start Loading', shortLabel: 'Start Load', errorSuffix: 'startLoading' },
-  { key: 'etaVesselCompletedLoading', label: 'ETA Vessel Completed Loading', shortLabel: 'Done Load', errorSuffix: 'completedLoading' },
-  { key: 'etaVesselSailedFromLoadingPort', label: 'ETA Vessel Sailed from Loading Port', shortLabel: 'Sail LP', errorSuffix: 'sailed' },
-  { key: 'etaVesselArriveAtDischargePort', label: 'ETA Vessel Arrive at Discharge Port', shortLabel: 'Arr. @ DP', errorSuffix: 'arriveDischarge' },
-  { key: 'etaVesselBerthedAtDischargePort', label: 'ETA Vessel Berthed at Discharge Port', shortLabel: 'Berthed DP', errorSuffix: 'berthedDischarge' },
-  { key: 'etaVesselStartDischarging', label: 'ETA Vessel Start Discharging', shortLabel: 'Start Disch', errorSuffix: 'startDischarging' },
-  { key: 'etaVesselCompleteDischarge', label: 'ETA Vessel Complete Discharge', shortLabel: 'Done Disch', errorSuffix: 'completeDischarge' },
+  { key: 'etaVesselArrivalAtLoadingPort', label: 'Estimation Vessel Arrival at Loading Port', shortLabel: 'Arr. @ LP', errorSuffix: 'arrival' },
+  { key: 'etaVesselBerthedAtLoadingPort', label: 'Estimation Vessel Berthed at Loading Port', shortLabel: 'Berthed LP', errorSuffix: 'berthed' },
+  { key: 'etaVesselStartLoading', label: 'Estimation Vessel Start Loading', shortLabel: 'Start Load', errorSuffix: 'startLoading' },
+  { key: 'etaVesselCompletedLoading', label: 'Estimation Vessel Completed Loading', shortLabel: 'Done Load', errorSuffix: 'completedLoading' },
+  { key: 'etaVesselSailedFromLoadingPort', label: 'Estimation Vessel Sailed from Loading Port', shortLabel: 'Sail LP', errorSuffix: 'sailed' },
+  { key: 'etaVesselArriveAtDischargePort', label: 'Estimation Vessel Arrive at Discharge Port', shortLabel: 'Arr. @ DP', errorSuffix: 'arriveDischarge' },
+  { key: 'etaVesselBerthedAtDischargePort', label: 'Estimation Vessel Berthed at Discharge Port', shortLabel: 'Berthed DP', errorSuffix: 'berthedDischarge' },
+  { key: 'etaVesselStartDischarging', label: 'Estimation Vessel Start Discharging', shortLabel: 'Start Disch', errorSuffix: 'startDischarging' },
+  { key: 'etaVesselCompleteDischarge', label: 'Estimation Vessel Complete Discharge', shortLabel: 'Done Disch', errorSuffix: 'completeDischarge' },
 ]
 
+const ETA_FIELD_KEYS = ETA_FIELD_ROWS.map(({ key }) => key)
+
 function etaDetailHasAnyDate(d: EtaDetailFields): boolean {
-  return ETA_FIELD_ROWS.some(({ key }) => Boolean(String(d[key] ?? '').trim()))
+  return etaBlockHasAnyDate(d, ETA_FIELD_KEYS)
 }
 
 function etaDetailHasAllRequiredDates(d: EtaDetailFields): boolean {
-  return ETA_FIELD_ROWS.every(({ key }) => Boolean(String(d[key] ?? '').trim()))
+  return etaBlockHasAllRequiredDates(d, ETA_FIELD_KEYS)
 }
 
 function isEtaScheduleCompleteForCreate(
   contractIds: string[],
   etaBlocks: ShipmentEtaDetail[],
+  getIncoterm: (selectionKey: string) => string,
 ): boolean {
-  if (contractIds.length === 0) return false
-  const covered = new Set<string>()
-  for (const block of etaBlocks) {
-    const selectedIds = block.contractIds.filter(Boolean)
-    if (selectedIds.length === 0) continue
-    if (!block.loadingPort.trim()) return false
-    if (!etaDetailHasAllRequiredDates(block)) return false
-    for (const cid of selectedIds) covered.add(cid)
-  }
-  return contractIds.every((cid) => covered.has(cid))
+  return isCreateEtaScheduleComplete({
+    contractIds,
+    etaBlocks,
+    etaFieldKeys: ETA_FIELD_KEYS,
+    getIncoterm,
+  })
 }
 
 const COMPACT_TH = 'h-8 px-2 py-1 text-[11px] font-semibold text-gray-600 whitespace-nowrap'
@@ -190,24 +205,9 @@ function sliceIsoDate(value: string | null | undefined): string {
   return String(value).slice(0, 10)
 }
 
-function resolveShipmentPlanQtyMaxMt(
-  contractData: Record<string, unknown> | null | undefined,
-  hasSap: boolean,
-): number {
-  if (!contractData) return 0
-  if (hasSap) {
-    const budgetKg = Number(
-      contractData.outstanding_quantity_planning_budget ??
-        contractData.outstanding_quantity_planning ??
-        0,
-    )
-    if (budgetKg > 0) return budgetKg / 1000
-  }
-  return (Number(contractData.outstanding_quantity) || 0) / 1000
-}
-
 const ETA_DELIVERY_START_BUFFER_DAYS = 60
-const ETA_DELIVERY_END_BUFFER_DAYS = 60
+/** Allowed ETA/ATA dates may run up to this many days after due delivery end. */
+const ETA_DELIVERY_END_BUFFER_DAYS = 180
 
 function shiftIsoDate(isoDate: string, days: number): string {
   const d = new Date(`${isoDate}T12:00:00`)
@@ -223,6 +223,7 @@ type VesselLoadingPortRow = {
   port_name?: string
   port_sequence?: number
   is_discharge_port?: boolean
+  contract_number?: string
   eta_vessel_arrival?: string | null
   eta_vessel_berthed_at_loading_port?: string | null
   eta_vessel_berthed?: string | null
@@ -233,6 +234,42 @@ type VesselLoadingPortRow = {
   eta_vessel_berthed_at_discharge_port?: string | null
   eta_vessel_start_discharging?: string | null
   eta_vessel_complete_discharge?: string | null
+}
+
+function buildEtaDetailsFromGroupLoadingPorts(
+  contractIds: string[],
+  shipment: Record<string, unknown>,
+  listRow: Record<string, unknown>,
+  ports: VesselLoadingPortRow[],
+): ShipmentEtaDetail[] {
+  const loadingPorts = ports.filter((p) => p.is_discharge_port !== true)
+  const portsByContract = new Map<string, VesselLoadingPortRow>()
+  for (const port of loadingPorts) {
+    const contractId = String(port.contract_number ?? '').trim()
+    if (contractId) portsByContract.set(contractId, port)
+  }
+
+  if (portsByContract.size > 1 && contractIds.length > 1) {
+    return contractIds.map((contractId) => {
+      const block = createShipmentEtaDetail([contractId])
+      applyShipmentEtaToBlock(
+        block,
+        shipment,
+        listRow,
+        portsByContract.get(contractId) ??
+          loadingPorts.find((p) => !p.contract_number) ??
+          loadingPorts[0] ??
+          null,
+      )
+      return block
+    })
+  }
+
+  const loadingPortRow =
+    loadingPorts.find((p) => p.port_sequence === 1) ?? loadingPorts[0] ?? null
+  const block = createShipmentEtaDetail([...contractIds])
+  applyShipmentEtaToBlock(block, shipment, listRow, loadingPortRow)
+  return [block]
 }
 
 function applyShipmentEtaToBlock(
@@ -288,6 +325,27 @@ const emptyShipment = () => ({
   portOfDischarge: '',
 })
 
+function applyPrefilledVesselToForm(
+  base: ReturnType<typeof emptyShipment>,
+  prefilled: PrefilledVesselSnapshot | null | undefined,
+): ReturnType<typeof emptyShipment> {
+  if (!prefilled) return base
+  const capacity =
+    prefilled.vesselCapacity != null && Number.isFinite(Number(prefilled.vesselCapacity))
+      ? String(prefilled.vesselCapacity)
+      : ''
+  return {
+    ...base,
+    vesselName: prefilled.vesselName?.trim() || base.vesselName,
+    vesselCode: prefilled.vesselCode?.trim() || base.vesselCode,
+    vesselOwner: prefilled.vesselOwner?.trim() || base.vesselOwner,
+    vesselCapacity: capacity || base.vesselCapacity,
+    charterType: prefilled.charterType?.trim() || base.charterType,
+    portOfLoading: prefilled.portOfLoading?.trim() || base.portOfLoading,
+    portOfDischarge: prefilled.portOfDischarge?.trim() || base.portOfDischarge,
+  }
+}
+
 function formatNumber(num: number | string) {
   if (num === null || num === undefined || num === '') return '-'
   const number = typeof num === 'string' ? parseFloat(num) : num
@@ -333,8 +391,14 @@ export type AddNewShipmentModalProps = {
   plotShipmentId?: string | null
   /** Read-only edit/view (Shipments table — Cancelled rows). */
   readOnly?: boolean
+  /** Raise z-index when opened above Contract Detail (z-50 / z-70). */
+  stacked?: boolean
   /** Refresh Shipments list after Edit modal attaches a PO (without closing modal). */
   onShipmentChanged?: () => void
+  /** When accepting a pre-planned group, link group on shipment create. */
+  prePlannedGroupId?: string | null
+  /** Vessel fields pre-filled when opening from Vessel Idle row action. */
+  prefilledVessel?: PrefilledVesselSnapshot | null
 }
 
 export function AddNewShipmentModal({
@@ -352,7 +416,10 @@ export function AddNewShipmentModal({
   mode = 'add',
   plotShipmentId = null,
   readOnly = false,
+  stacked = false,
   onShipmentChanged,
+  prePlannedGroupId = null,
+  prefilledVessel = null,
 }: AddNewShipmentModalProps) {
   const perms = usePermissions()
   const canAddShipment = canCreatePermission(perms, 'data.shipments')
@@ -390,14 +457,12 @@ export function AddNewShipmentModal({
   const [editShipmentId, setEditShipmentId] = useState<string | null>(null)
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [newShipment, setNewShipment] = useState(emptyShipment)
-  const [contractQtyAssigned, setContractQtyAssigned] = useState<Record<string, string>>({})
-  /** PO row keys whose STO Qty is still the untouched SAP default (skip OS max validation). */
-  const [stoQtyFromSapUntouched, setStoQtyFromSapUntouched] = useState<Record<string, boolean>>({})
   const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
   const poNumberInputRef = useRef<HTMLInputElement>(null)
   const contractNumbersRef = useRef<string[]>([])
+  const stoPrefillLoadedRef = useRef<string | null>(null)
   const initSessionRef = useRef<string | null>(null)
   const [contractValidations, setContractValidations] = useState<{
     [contractId: string]: {
@@ -457,18 +522,8 @@ export function AddNewShipmentModal({
     return availablePOs.filter((po) => !added.has(po.key))
   }, [isContractScoped, availablePOs, newShipment.contractNumbers])
 
-  const [vesselSuggestions, setVesselSuggestions] = useState<
-    Array<{
-      vessel_code: string
-      vessel_name: string
-      vessel_capacity_mt: number | null
-      vessel_owner: string | null
-      hull_type: string | null
-    }>
-  >([])
-  const [showVesselSuggestions, setShowVesselSuggestions] = useState(false)
+  const [vesselPickedFromMaster, setVesselPickedFromMaster] = useState(false)
   const [mappedPlantSiteName, setMappedPlantSiteName] = useState('')
-  const vesselSearchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatShortDate = (dateStr: string) => formatDateDMY(dateStr)
 
@@ -704,16 +759,6 @@ export function AddNewShipmentModal({
       contractNumbers: prev.contractNumbers.filter((id) => id !== contractId),
       operationId: prev.contractNumbers.filter((id) => id !== contractId).length > 0 ? prev.operationId : '',
     }))
-    setContractQtyAssigned((prev) => {
-      const next = { ...prev }
-      delete next[contractId]
-      return next
-    })
-    setStoQtyFromSapUntouched((prev) => {
-      const next = { ...prev }
-      delete next[contractId]
-      return next
-    })
     setContractValidations((prev) => {
       const next = { ...prev }
       delete next[contractId]
@@ -730,11 +775,15 @@ export function AddNewShipmentModal({
   const getPoLabel = useCallback(
     (selectionKey: string) => {
       const scoped = availablePoByKey.get(selectionKey)
-      if (scoped) return scoped.label
+      if (scoped) {
+        return formatPoPlantLabel(
+          String(scoped.poNumber || scoped.contractId || selectionKey),
+          scoped.plantCode,
+        )
+      }
       const data = contractValidations[selectionKey]?.contractData
-      const poNumber = (data?.po_number || selectionKey) as string
-      const plantCode = String(data?.plant_code ?? '').trim()
-      return plantCode ? `${poNumber} - ${plantCode}` : poNumber
+      const poNumber = String(data?.po_number || selectionKey)
+      return formatPoPlantLabel(poNumber, resolvePoPlantCode(data ?? {}))
     },
     [availablePoByKey, contractValidations],
   )
@@ -824,120 +873,43 @@ export function AddNewShipmentModal({
     setEtaDetails((prev) => prev.map((b) => (b.id === id ? { ...b, ...patch } : b)))
   }
 
-  const fetchVesselSuggestions = async (search: string) => {
-    if (!search || search.trim().length < 2) {
-      setVesselSuggestions([])
-      return
-    }
-    try {
-      const res = await api.get('/master-vessels', { params: { search: search.trim(), limit: 20 } })
-      const items = res.data?.data?.items ?? []
-      setVesselSuggestions(items)
-      setShowVesselSuggestions(true)
-    } catch {
-      setVesselSuggestions([])
-    }
-  }
-
-  const handleVesselNameChange = (value: string) => {
-    setNewShipment((prev) => ({ ...prev, vesselName: value }))
-    if (vesselSearchTimeoutRef.current) clearTimeout(vesselSearchTimeoutRef.current)
-    vesselSearchTimeoutRef.current = setTimeout(() => fetchVesselSuggestions(value), 300)
-  }
-
-  const handleSelectVessel = (v: {
-    vessel_code: string
-    vessel_name: string
-    vessel_capacity_mt: number | null
-    vessel_owner: string | null
-    hull_type: string | null
-  }) => {
+  const applyMasterVessel = useCallback((v: MasterVesselOption) => {
+    const charterFromTerms = charterTypeFromMasterTerms(v.terms)
     setNewShipment((prev) => ({
       ...prev,
       vesselName: v.vessel_name,
       vesselCode: v.vessel_code ?? '',
       vesselOwner: v.vessel_owner ?? '',
       vesselCapacity: v.vessel_capacity_mt != null ? String(v.vessel_capacity_mt) : '',
-      vesselHullType: v.hull_type ?? '',
+      vesselHullType: v.vessel_type ?? v.hull_type ?? '',
+      charterType: charterFromTerms,
     }))
-    setShowVesselSuggestions(false)
-    setVesselSuggestions([])
-  }
+    setVesselPickedFromMaster(true)
+    setFormErrors((prev) => {
+      const next = { ...prev }
+      delete next.vesselName
+      if (charterFromTerms) delete next.charterType
+      return next
+    })
+  }, [])
 
-  const vesselCapacityNum = newShipment.vesselCapacity ? parseFloat(String(newShipment.vesselCapacity)) : null
-  const contractQtyAssignedSum = useMemo(() => {
-    return Object.values(contractQtyAssigned).reduce((sum, v) => sum + (parseFloat(String(v)) || 0), 0)
-  }, [contractQtyAssigned])
-  const contractQtyAssignedExceedsCapacity =
-    ENFORCE_PLAN_QTY_VESSEL_CAPACITY_LIMIT &&
-    vesselCapacityNum != null &&
-    !Number.isNaN(vesselCapacityNum) &&
-    contractQtyAssignedSum > vesselCapacityNum
-
-  const isStoQtyOsValidationEnabled = useCallback(
-    (selectionKey: string) => {
-      if (!hasSapSto) return true
-      return !stoQtyFromSapUntouched[selectionKey]
-    },
-    [hasSapSto, stoQtyFromSapUntouched],
-  )
-
-  const contractQtyAssignedExceedsOutstanding = useMemo(() => {
-    const next: Record<string, { assignedMt: number; outstandingMt: number }> = {}
-    for (const contractId of newShipment.contractNumbers) {
-      if (!isStoQtyOsValidationEnabled(contractId)) continue
-      const assignedMt = parseFloat(String(contractQtyAssigned[contractId] ?? '')) || 0
-      const contractData = contractValidations[contractId]?.contractData
-      const maxPlanMt = resolveShipmentPlanQtyMaxMt(contractData, hasSapSto)
-      if (maxPlanMt > 0 && assignedMt > maxPlanMt) {
-        next[contractId] = { assignedMt, outstandingMt: maxPlanMt }
+  const trySelectMasterVesselByName = useCallback(
+    async (name: string): Promise<boolean> => {
+      const wanted = name.trim().toUpperCase()
+      if (wanted.length < 2) return false
+      try {
+        const res = await api.get('/master-vessels', { params: { search: name.trim(), limit: 20 } })
+        const items = (res.data?.data?.items ?? []) as MasterVesselOption[]
+        const match = items.find((item) => String(item.vessel_name ?? '').trim().toUpperCase() === wanted)
+        if (!match) return false
+        applyMasterVessel(match)
+        return true
+      } catch {
+        return false
       }
-    }
-    return next
-  }, [
-    contractQtyAssigned,
-    contractValidations,
-    hasSapSto,
-    isStoQtyOsValidationEnabled,
-    newShipment.contractNumbers,
-  ])
-
-  const fillAssignQtyFromOutstanding = useCallback(
-    (contractId: string) => {
-      const validation = contractValidations[contractId]
-      const data = validation?.contractData
-      if (!validation?.exists || !data) return
-      const outstandingMt = (Number(data.outstanding_quantity) || 0) / 1000
-      if (outstandingMt <= 0) return
-      setContractQtyAssigned((prev) => ({
-        ...prev,
-        [contractId]: String(outstandingMt),
-      }))
-      setStoQtyFromSapUntouched((prev) => {
-        const next = { ...prev }
-        delete next[contractId]
-        return next
-      })
-      setFormErrors((prev) => {
-        const next = { ...prev }
-        delete next.contractQty
-        return next
-      })
     },
-    [contractValidations]
+    [applyMasterVessel],
   )
-
-  const selectedTransportMode = useMemo(() => {
-    const modes = newShipment.contractNumbers
-      .map((id) => contractValidations[id]?.contractData?.transport_mode?.toLowerCase())
-      .filter(Boolean) as string[]
-    if (modes.length === 0) return null
-    const isLand = modes.every((m) => m.includes('land') || m.includes('truck'))
-    const isSea = modes.every((m) => m.includes('sea') || m.includes('vessel') || m.includes('ship'))
-    if (isLand) return 'land'
-    if (isSea) return 'sea'
-    return 'mixed'
-  }, [newShipment.contractNumbers, contractValidations])
 
   const resolveContractDataForSelectionKey = useCallback(
     (selectionKey: string) => {
@@ -960,6 +932,50 @@ export function AddNewShipmentModal({
     },
     [availablePoByKey, contractValidations],
   )
+
+  const firstSapPortFromKeys = useCallback(
+    (keys: string[], field: 'port_of_loading' | 'port_of_discharge'): string => {
+      for (const key of keys) {
+        const value = String(resolveContractDataForSelectionKey(key)?.[field] ?? '').trim()
+        if (value) return value
+      }
+      return ''
+    },
+    [resolveContractDataForSelectionKey],
+  )
+
+  const resolveSelectionIncoterm = useCallback(
+    (selectionKey: string) =>
+      String(resolveContractDataForSelectionKey(selectionKey)?.incoterm ?? '').trim().toUpperCase(),
+    [resolveContractDataForSelectionKey],
+  )
+
+  const allSelectedPoCif = useMemo(
+    () => areAllSelectionKeysCif(newShipment.contractNumbers, resolveSelectionIncoterm),
+    [newShipment.contractNumbers, resolveSelectionIncoterm],
+  )
+
+  /**
+   * SEA / MIX → show Estimation (ETA) fields.
+   * LAND → hide (trucking module).
+   * Missing transport_mode with PO(s) already selected → default SEA (same as shipment SQL COALESCE).
+   */
+  const selectedTransportMode = useMemo(() => {
+    const modes = newShipment.contractNumbers
+      .map((id) =>
+        classifyShipmentTransportMode(
+          resolveContractDataForSelectionKey(id)?.transport_mode as string | null | undefined,
+        ),
+      )
+      .filter((m): m is 'land' | 'sea' | 'mixed' => m != null)
+    if (modes.length === 0) {
+      // Backend shipment eligibility defaults blank transport_mode to SEA.
+      return newShipment.contractNumbers.length > 0 ? 'sea' : null
+    }
+    if (modes.every((m) => m === 'land')) return 'land'
+    if (modes.every((m) => m === 'sea')) return 'sea'
+    return 'mixed'
+  }, [newShipment.contractNumbers, resolveContractDataForSelectionKey])
 
   const getPoContractExtNo = useCallback(
     (selectionKey: string) => {
@@ -1153,24 +1169,21 @@ export function AddNewShipmentModal({
         incoterm,
       })
 
-      const loadingPort = (
-        vesselResult.suggested_loading_port?.trim() ||
-        String(contractData?.port_of_loading ?? '').trim() ||
-        newShipment.portOfLoading.trim()
-      )
-      const dischargePort = (
-        vesselResult.suggested_discharge_port?.trim() || newShipment.portOfDischarge.trim()
-      )
+      const loadingPort = String(contractData?.port_of_loading ?? '').trim() || newShipment.portOfLoading.trim()
+      const dischargePort =
+        String(contractData?.port_of_discharge ?? '').trim() || newShipment.portOfDischarge.trim()
       const vesselName = (vesselResult.suggested_vessel_name || '').trim()
-
       setNewShipment((prev) => ({
         ...prev,
-        vesselName: vesselName || prev.vesselName,
-        charterType: vesselResult.suggested_charter_type || prev.charterType,
         portOfDischarge: dischargePort || prev.portOfDischarge,
         portOfLoading: loadingPort || prev.portOfLoading,
       }))
-      clearFieldError('vesselName')
+      if (vesselName) {
+        const matched = await trySelectMasterVesselByName(vesselName)
+        if (!matched) {
+          setVesselPickedFromMaster(false)
+        }
+      }
       clearFieldError('charterType')
       clearFieldError('portOfDischarge')
 
@@ -1180,8 +1193,8 @@ export function AddNewShipmentModal({
       const vesselSourceLabel =
         vesselResult.source === 'SAP_HISTORICAL' ? 'SAP history' : 'Claude AI'
       const vesselCached = vesselResult.cached ? ' (cached)' : ''
-      const charterPart = vesselResult.suggested_charter_type
-        ? ` Charter type: ${vesselResult.suggested_charter_type}.`
+      const charterPart = newShipment.charterType
+        ? ` Charter type: ${newShipment.charterType}.`
         : ''
 
       const blocksToUpdate =
@@ -1201,7 +1214,7 @@ export function AddNewShipmentModal({
         showNotification(
           'success',
           'Partial AI suggestion applied',
-          `${vesselSourceLabel}${vesselCached}.${charterPart} Vessel and ports updated where available; complete missing ports to calculate ETA.`,
+          `${vesselSourceLabel}${vesselCached}.${charterPart} Vessel and ports updated where available; complete missing ports to calculate Estimation.`,
         )
         return
       }
@@ -1246,25 +1259,25 @@ export function AddNewShipmentModal({
           updateEtaDetailBlock(block.id, { loadingPort: finalLoadingPort })
           clearFieldError(`eta_${block.id}_loadingPort`)
           etaErrorMessage =
-            error instanceof Error ? error.message : 'AI ETA suggestion failed'
+            error instanceof Error ? error.message : 'AI Estimation suggestion failed'
         }
       }
 
       if (etaApplied > 0) {
         const etaPart =
           transitDays != null
-            ? ` ETA from ${etaSourceLabel} (~${transitDays} days transit) applied to ${etaApplied} schedule(s).`
-            : ` ETA applied to ${etaApplied} schedule(s).`
+            ? ` Estimation from ${etaSourceLabel} (~${transitDays} days transit) applied to ${etaApplied} schedule(s).`
+            : ` Estimation applied to ${etaApplied} schedule(s).`
         showNotification(
           'success',
           'AI shipment plan applied',
-          `Vessel from ${vesselSourceLabel}${vesselCached};${charterPart} loading & discharge ports set.${etaPart} All fields remain editable.`,
+          `Vessel from ${vesselSourceLabel}${vesselCached};${charterPart} loading & discharge ports from SAP.${etaPart}`,
         )
       } else if (etaErrorMessage) {
         showNotification(
           'warning',
-          'Vessel applied; ETA unavailable',
-          `${vesselSourceLabel}${vesselCached}. Loading port set but ETA could not be calculated: ${etaErrorMessage}`,
+          'Vessel applied; Estimation unavailable',
+          `${vesselSourceLabel}${vesselCached}. Loading port set but Estimation could not be calculated: ${etaErrorMessage}`,
         )
       }
     } catch (error) {
@@ -1282,6 +1295,7 @@ export function AddNewShipmentModal({
     resolveAiPlannerDimensions,
     resolvePrimaryContractData,
     showNotification,
+    trySelectMasterVesselByName,
     updateEtaDetailBlock,
   ])
 
@@ -1312,7 +1326,6 @@ export function AddNewShipmentModal({
       })
 
       clearFieldError('contractNumbers')
-      setContractQtyAssigned((prev) => ({ ...prev, [selectionKey]: prev[selectionKey] ?? '' }))
       clearPoNumberField()
       setShowContractSuggestions(false)
       return true
@@ -1352,15 +1365,12 @@ export function AddNewShipmentModal({
   const resetForm = useCallback(() => {
     setNewShipment(emptyShipment())
     contractNumbersRef.current = []
-    setContractQtyAssigned({})
-    setStoQtyFromSapUntouched({})
     setContractValidations({})
     setEtaDetails([])
     setContractSearchTerm('')
     setContractSuggestions([])
     setShowContractSuggestions(false)
-    setVesselSuggestions([])
-    setShowVesselSuggestions(false)
+    setVesselPickedFromMaster(false)
     setMappedPlantSiteName('')
     setAiAppliedPatternContext(null)
     setFormErrors({})
@@ -1382,27 +1392,34 @@ export function AddNewShipmentModal({
       const detailRes = await api.get(`/shipments/${shipmentId}`)
       const shipment = (detailRes.data?.data ?? row) as Record<string, unknown>
 
+      /*
+       * Edit Shipment is a STO-level view, not a contract-level one.
+       *
+       * The seed below is whatever the caller happened to have: opened from a list row it is that
+       * row's `contract_numbers` (the whole STO group), but opened by id it is the detail
+       * endpoint's `contract_number` - a SINGLE contract, because getShipmentById returns one.
+       * The form then listed the POs of that one contract while the view table listed the STO's,
+       * which is the mismatch users reported.
+       *
+       * So the STO decides. /shipments/contracts/details?sto= already answers exactly that
+       * question. Its contract numbers are merged into the list the form renders, so the same
+       * STO yields the same POs however the modal was opened. The seed is kept ahead of them
+       * so an explicitly passed group keeps its order.
+       */
       const contractNumbersRaw = String(
         row.contract_numbers ?? shipment.contract_number ?? contractIdFallback,
       )
-        const contractNumbers = contractNumbersRaw
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-      const uniqueContractIds = contractNumbers.length > 0 ? contractNumbers : [contractIdFallback]
-
-      for (const cid of uniqueContractIds) {
-        await validateContractNumber(cid)
-      }
-
-      const qtyAssigned: Record<string, string> = {}
-      for (const cid of uniqueContractIds) {
-        qtyAssigned[cid] = ''
-      }
+      const seededContractIds = contractNumbersRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
 
       const assignmentKey =
         String(shipment.sto_number ?? row.sto_number ?? '').trim() ||
         String(shipment.operation_id ?? row.operation_id ?? '').trim()
+
+      const stoContractIds: string[] = []
+
       if (assignmentKey) {
         try {
           const detailsRes = await api.get('/shipments/contracts/details', {
@@ -1414,38 +1431,28 @@ export function AddNewShipmentModal({
           if (detailsRes.data?.success && Array.isArray(detailsRes.data.data)) {
             for (const detail of detailsRes.data.data as Array<{
               contract_number?: string
-              po_number?: string
-              sto_qty_assigned?: number | string
-              sap_sto_qty?: number | string
-              shipment_plan_qty?: number | string
             }>) {
               const cn = String(detail.contract_number ?? '').trim()
-              const po = String(detail.po_number ?? '').trim()
-              const rowKey = po ? `${cn}::${po}` : cn
-              const planKg = parseFloat(String(detail.shipment_plan_qty ?? detail.sto_qty_assigned ?? ''))
-              const assignedKg = Number.isFinite(planKg) && planKg > 0 ? planKg : 0
-              const sapKg = parseFloat(String(detail.sap_sto_qty ?? ''))
-              const qtyKg = assignedKg > 0 ? assignedKg : Number.isFinite(sapKg) && sapKg > 0 ? sapKg : 0
-              if (cn && qtyKg > 0) {
-                const qtyMt = qtyKg / 1000
-                qtyAssigned[rowKey] = String(qtyMt)
-                qtyAssigned[cn] = String(qtyMt)
-              }
+              if (cn) stoContractIds.push(cn)
             }
           }
         } catch {
-          // Read-only display fallback: keep empty if assignment lookup fails
+          // Read-only display fallback: keep the seeded contracts if the STO lookup fails.
         }
       }
 
-      let loadingPortRow: VesselLoadingPortRow | null = null
+      const mergedContractIds = Array.from(new Set([...seededContractIds, ...stoContractIds]))
+      const uniqueContractIds =
+        mergedContractIds.length > 0 ? mergedContractIds : [contractIdFallback]
+
+      for (const cid of uniqueContractIds) {
+        await validateContractNumber(cid)
+      }
+
+      let loadingPorts: VesselLoadingPortRow[] = []
       try {
         const portsRes = await api.get(`/shipments/${shipmentId}/loading-ports`)
-        const ports: VesselLoadingPortRow[] = portsRes.data?.data?.ports ?? []
-        loadingPortRow =
-          ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-          ports.find((p) => !p.is_discharge_port) ||
-          null
+        loadingPorts = portsRes.data?.data?.ports ?? []
       } catch {
         // Shipment-level ETA fields are used when loading ports are unavailable
       }
@@ -1464,12 +1471,11 @@ export function AddNewShipmentModal({
         portOfLoading: String(shipment.port_of_loading ?? row.port_of_loading ?? ''),
         portOfDischarge: String(shipment.port_of_discharge ?? row.port_of_discharge ?? ''),
       })
-      setContractQtyAssigned(qtyAssigned)
 
-      const etaBlock = createShipmentEtaDetail([...uniqueContractIds])
-      applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
-      setEtaDetails([etaBlock])
-      return { qtyAssigned, assignmentKey }
+      setEtaDetails(
+        buildEtaDetailsFromGroupLoadingPorts(uniqueContractIds, shipment, row, loadingPorts),
+      )
+      return { assignmentKey }
     },
     [validateContractNumber],
   )
@@ -1478,10 +1484,7 @@ export function AddNewShipmentModal({
     (
       poSource: ShipmentPoOption[],
       opts?: {
-        existingQtyByKey?: Record<string, string>
         preserveOperationId?: boolean
-        /** Plot / SAP prefill — treat auto-filled qty as untouched (skip max plan validation). */
-        markSapPrefillUntouched?: boolean
       },
     ) => {
       const seenPoKeys = new Set<string>()
@@ -1495,9 +1498,6 @@ export function AddNewShipmentModal({
 
       const keys = uniquePrefilled.map((po) => po.key)
       const validations: typeof contractValidations = {}
-      const qtySeed: Record<string, string> = {}
-      const sapUntouchedSeed: Record<string, boolean> = {}
-      const existingQty = opts?.existingQtyByKey ?? {}
 
       for (const po of uniquePrefilled) {
         validations[po.key] = {
@@ -1510,30 +1510,9 @@ export function AddNewShipmentModal({
           },
           message: 'Contract found',
         }
-
-        const preservedRaw = existingQty[po.key] ?? existingQty[po.contractId] ?? ''
-        const preservedNum = preservedRaw ? parseFloat(preservedRaw) : NaN
-        if (Number.isFinite(preservedNum) && preservedNum > 0) {
-          qtySeed[po.key] = preservedRaw
-          if (opts?.markSapPrefillUntouched) {
-            sapUntouchedSeed[po.key] = true
-          }
-        } else {
-          const sapStoKg = Number(po.contractData?.sap_sto_qty ?? 0)
-          const planKg = Number(
-            po.contractData?.shipment_plan_qty ?? po.contractData?.sto_qty_assigned ?? 0,
-          )
-          const qtyKg = planKg > 0 ? planKg : sapStoKg
-          qtySeed[po.key] = qtyKg > 0 ? String(qtyKg / 1000) : ''
-          if (planKg <= 0 && sapStoKg > 0) {
-            sapUntouchedSeed[po.key] = true
-          }
-        }
       }
 
       setContractValidations(validations)
-      setContractQtyAssigned(qtySeed)
-      setStoQtyFromSapUntouched(sapUntouchedSeed)
       contractNumbersRef.current = keys
       setNewShipment((prev) => ({
         ...prev,
@@ -1542,7 +1521,6 @@ export function AddNewShipmentModal({
           ? prev.operationId
           : prev.operationId || generateOperationId(uniquePrefilled[0].contractId),
         stoNumber: String(prefilledStoNumber ?? prev.stoNumber ?? '').trim() || prev.stoNumber,
-        vesselName: prev.vesselName.trim() || sapStoPreview?.vessel_name || '',
         portOfDischarge: prev.portOfDischarge.trim() || sapStoPreview?.port_of_discharge || '',
       }))
       setEtaDetails([createShipmentEtaDetail([...keys])])
@@ -1603,7 +1581,9 @@ export function AddNewShipmentModal({
       setLoadingEdit(true)
       setEditShipmentId(null)
       try {
-        const stoHint = String(prefilledStoNumber ?? '').trim()
+        // Prefer STO from the Shipments list row (SAP group key). getShipmentById may return
+        // contracts.sto_number for a single child PO, which can differ from the list STO and
+        // would under-load sibling POs (e.g. 1 of 3).
         const [detailRes, portsRes] = await Promise.all([
           api.get(`/shipments/${shipmentId}`),
           api.get(`/shipments/${shipmentId}/loading-ports`).catch(() => null),
@@ -1614,46 +1594,34 @@ export function AddNewShipmentModal({
           return
         }
         const row = { ...shipment, id: shipmentId } as Record<string, unknown>
-        const sto =
-          String(shipment.sto_number ?? stoHint ?? '').trim() ||
-          String(shipment.operation_id ?? '').trim()
+        const sto = resolvePlotStoLookupKey({
+          listSto: prefilledStoNumber,
+          editStoNumber,
+          apiStoNumber: shipment.sto_number as string | null | undefined,
+          shipmentId: shipment.shipment_id as string | null | undefined,
+          operationId: shipment.operation_id as string | null | undefined,
+        })
+        const contractList = (prefilledContractNumbers ?? []).filter(Boolean)
 
         const [allPos, preview] = await Promise.all([
-          sto ? fetchStoLinkedPurchaseOrderOptions(sto, []) : Promise.resolve([]),
-          sto ? fetchStoSapPreview(sto) : Promise.resolve({ has_sap_sto: false, vessel_name: null, port_of_discharge: null }),
+          sto ? fetchStoLinkedPurchaseOrderOptions(sto, contractList) : Promise.resolve([]),
+          sto
+            ? fetchStoSapPreview(sto)
+            : Promise.resolve({ has_sap_sto: false, vessel_name: null, port_of_discharge: null }),
         ])
 
         if (preview.has_sap_sto) {
           setSapStoPreview(preview)
         }
 
-        const qtyAssigned: Record<string, string> = {}
-        for (const po of allPos) {
-          const cn = po.contractId
-          const planKg = Number(po.contractData?.shipment_plan_qty ?? po.contractData?.sto_qty_assigned ?? 0)
-          const sapKg = Number(po.contractData?.sap_sto_qty ?? 0)
-          const qtyKg = planKg > 0 ? planKg : sapKg > 0 ? sapKg : 0
-          if (qtyKg > 0) {
-            const qtyMt = String(qtyKg / 1000)
-            qtyAssigned[po.key] = qtyMt
-            qtyAssigned[cn] = qtyMt
-          }
-        }
-
-        let loadingPortRow: VesselLoadingPortRow | null = null
+        let loadingPorts: VesselLoadingPortRow[] = []
         if (portsRes?.data?.data?.ports) {
-          const ports: VesselLoadingPortRow[] = portsRes.data.data.ports ?? []
-          loadingPortRow =
-            ports.find((p) => !p.is_discharge_port && p.port_sequence === 1) ||
-            ports.find((p) => !p.is_discharge_port) ||
-            null
+          loadingPorts = portsRes.data.data.ports ?? []
         }
 
         if (allPos.length > 0) {
           applyStoLinkedPoOptionsToForm(allPos, {
-            existingQtyByKey: qtyAssigned,
             preserveOperationId: true,
-            markSapPrefillUntouched: true,
           })
         } else {
           const contractIdFallback =
@@ -1670,7 +1638,6 @@ export function AddNewShipmentModal({
           vesselName:
             String(shipment.vessel_name ?? row.vessel_name ?? '').trim() ||
             prev.vesselName.trim() ||
-            preview.vessel_name ||
             '',
           vesselCode: String(shipment.vessel_code ?? row.vessel_code ?? prev.vesselCode),
           vesselOwner: String(shipment.vessel_owner ?? row.vessel_owner ?? prev.vesselOwner),
@@ -1686,11 +1653,16 @@ export function AddNewShipmentModal({
             '',
         }))
 
-        const contractKeys = allPos.map((po) => po.key)
-        const etaBlock = createShipmentEtaDetail([...contractKeys])
-        applyShipmentEtaToBlock(etaBlock, shipment, row, loadingPortRow)
-        setEtaDetails([etaBlock])
+        const contractIds = allPos.map((po) => po.contractId)
+        setEtaDetails(
+          buildEtaDetailsFromGroupLoadingPorts(contractIds, shipment, row, loadingPorts),
+        )
         setEditShipmentId(null)
+        const plotVessel = String(shipment.vessel_name ?? row.vessel_name ?? '').trim()
+        if (plotVessel) {
+          const matched = await trySelectMasterVesselByName(plotVessel)
+          if (!matched) setVesselPickedFromMaster(false)
+        }
       } catch (error) {
         console.error('Failed to load shipment for plot:', error)
         showNotification('error', 'Failed to load shipment details')
@@ -1700,10 +1672,12 @@ export function AddNewShipmentModal({
     },
     [
       applyStoLinkedPoOptionsToForm,
+      editStoNumber,
       hydrateShipmentEditForm,
       prefilledContractNumbers,
       prefilledStoNumber,
       showNotification,
+      trySelectMasterVesselByName,
     ],
   )
 
@@ -1713,15 +1687,24 @@ export function AddNewShipmentModal({
 
   /** Load STO-linked PO lines + SAP vessel/discharge when parent opens modal (add mode only). */
   useEffect(() => {
-    if (!open || isEditMode || isPlotMode) return
+    if (!open) {
+      stoPrefillLoadedRef.current = null
+      return
+    }
+    if (isEditMode || isPlotMode) return
     const sto = String(prefilledStoNumber ?? '').trim()
     if (!sto) return
     if (prefilledPOs?.length) return
 
+    const stoLoadKey = `${sto}::${(prefilledContractNumbers ?? []).filter(Boolean).join(',')}`
+    if (stoPrefillLoadedRef.current === stoLoadKey) return
+
     let cancelled = false
     setLoadingInitialData(true)
-    setInternalPrefilledPOs(null)
-    setSapStoPreview(null)
+    if (stoPrefillLoadedRef.current !== null) {
+      setInternalPrefilledPOs(null)
+      setSapStoPreview(null)
+    }
 
     void (async () => {
       try {
@@ -1731,13 +1714,13 @@ export function AddNewShipmentModal({
           fetchStoSapPreview(sto),
         ])
         if (cancelled) return
+        stoPrefillLoadedRef.current = stoLoadKey
         setInternalPrefilledPOs(pos)
         setSapStoPreview(preview)
         if (preview.has_sap_sto) {
           setNewShipment((prev) => ({
             ...prev,
             stoNumber: sto,
-            vesselName: prev.vesselName.trim() || preview.vessel_name || '',
             portOfDischarge: prev.portOfDischarge.trim() || preview.port_of_discharge || '',
           }))
         }
@@ -1778,6 +1761,8 @@ export function AddNewShipmentModal({
       plotShipmentId ?? '',
       isPlotMode ? '' : (poSource?.map((p) => p.key).join('|') ?? ''),
       prefilledStoNumber ?? '',
+      prefilledVessel?.vesselCode ?? '',
+      prefilledVessel?.vesselName ?? '',
     ].join(':')
     if (initSessionRef.current === sessionKey) return
 
@@ -1805,6 +1790,11 @@ export function AddNewShipmentModal({
 
     if (isInitialShell) resetForm()
 
+    if (!isEditMode && !isPlotMode && prefilledVessel) {
+      if (!isInitialShell) resetForm()
+      setNewShipment(applyPrefilledVesselToForm(emptyShipment(), prefilledVessel))
+    }
+
     if (poSource?.length) {
       applyStoLinkedPoOptionsToForm(poSource)
     }
@@ -1817,6 +1807,7 @@ export function AddNewShipmentModal({
     isPlotMode,
     resolvedPrefilledPOs,
     prefilledStoNumber,
+    prefilledVessel,
     sapStoPreview?.port_of_discharge,
     sapStoPreview?.vessel_name,
     resetForm,
@@ -1854,30 +1845,37 @@ export function AddNewShipmentModal({
     })
   }, [open, isEditMode, loadingEdit, newShipment.contractNumbers, selectedTransportMode])
 
-  /** Pre-fill Section 3 loading port from contract/SAP port name when available. */
+  /** Loading / discharge ports are SAP-only on Add New (readonly). */
   useEffect(() => {
     if (!open || isEditMode || loadingEdit) return
-    let portOfLoading = newShipment.portOfLoading.trim()
-    if (!portOfLoading) {
-      for (const selectionKey of newShipment.contractNumbers) {
-        const data = resolveContractDataForSelectionKey(selectionKey)
-        portOfLoading = String(data?.port_of_loading ?? '').trim()
-        if (portOfLoading) break
-      }
-    }
-    if (!portOfLoading) return
+    const keys = newShipment.contractNumbers
+    const sapLoading = firstSapPortFromKeys(keys, 'port_of_loading')
+    const sapDischarge =
+      firstSapPortFromKeys(keys, 'port_of_discharge') || String(sapStoPreview?.port_of_discharge ?? '').trim()
+    setNewShipment((prev) => {
+      if (prev.portOfLoading === sapLoading && prev.portOfDischarge === sapDischarge) return prev
+      return { ...prev, portOfLoading: sapLoading, portOfDischarge: sapDischarge }
+    })
     setEtaDetails((prev) =>
-      prev.map((block) =>
-        block.loadingPort.trim() ? block : { ...block, loadingPort: portOfLoading },
-      ),
+      prev.map((block) => {
+        const fromBlock = firstSapPortFromKeys(block.contractIds, 'port_of_loading') || sapLoading
+        if (block.loadingPort === fromBlock) return block
+        return { ...block, loadingPort: fromBlock }
+      }),
     )
+    setFormErrors((prev) => {
+      if (!prev.portOfDischarge && !Object.keys(prev).some((k) => k.endsWith('_loadingPort'))) return prev
+      const next = { ...prev }
+      if (sapDischarge) delete next.portOfDischarge
+      return next
+    })
   }, [
     open,
     isEditMode,
     loadingEdit,
-    newShipment.portOfLoading,
     newShipment.contractNumbers,
-    resolveContractDataForSelectionKey,
+    sapStoPreview?.port_of_discharge,
+    firstSapPortFromKeys,
   ])
 
   const validateShipmentForm = (transportMode: string | null): boolean => {
@@ -1919,19 +1917,22 @@ export function AddNewShipmentModal({
     const invalidContracts = newShipment.contractNumbers.filter((id) => !contractValidations[id]?.exists)
     if (invalidContracts.length > 0)
       errors.contractNumbers = `Invalid contract(s): ${invalidContracts.join(', ')}`
-    const hasAnyQty = newShipment.contractNumbers.some((id) => parseFloat(contractQtyAssigned[id] ?? '') > 0)
-    if (newShipment.contractNumbers.length > 0 && !hasAnyQty)
-      errors.contractQty = hasSapSto
-        ? 'STO Qty must be filled for at least one PO'
-        : 'Contract Qty assign to STO must be filled for at least one contract'
     if (transportMode === 'sea' || transportMode === 'mixed') {
-      if (!newShipment.vesselName.trim()) errors.vesselName = 'Vessel Name is required for Sea contracts'
-      if (!newShipment.charterType) errors.charterType = 'Charter Type is required for Sea contracts'
-      if (!newShipment.portOfDischarge.trim()) errors.portOfDischarge = 'Discharge Port is required for Sea contracts'
+      if (!newShipment.vesselName.trim() || !vesselPickedFromMaster) {
+        errors.vesselName = 'Select a vessel from Master Vessel'
+      }
+      if (!newShipment.charterType) {
+        errors.charterType = 'Master Vessel has no Terms (V/C or T/C)'
+      }
+      if (!allSelectedPoCif && !newShipment.portOfDischarge.trim()) {
+        errors.portOfDischarge = 'SAP Vessel Discharge Port is empty for the selected PO'
+      }
     }
 
     const requiresCompleteEta =
-      (transportMode === 'sea' || transportMode === 'mixed') && newShipment.contractNumbers.length > 0
+      (transportMode === 'sea' || transportMode === 'mixed') &&
+      newShipment.contractNumbers.length > 0 &&
+      !allSelectedPoCif
 
     const usedContractIds = new Set<string>()
     const coveredContractIds = new Set<string>()
@@ -1939,14 +1940,15 @@ export function AddNewShipmentModal({
       const prefix = `eta_${block.id}`
       const hasDates = etaDetailHasAnyDate(block)
       const selectedIds = block.contractIds.filter(Boolean)
+      const blockAllCif = blockSelectionKeysAllCif(selectedIds, resolveSelectionIncoterm)
 
       if ((transportMode === 'sea' || transportMode === 'mixed') && newShipment.contractNumbers.length > 0) {
-        if (!block.loadingPort.trim()) {
-          errors[`${prefix}_loadingPort`] = 'Loading Port is required'
+        if (!blockAllCif && !block.loadingPort.trim()) {
+          errors[`${prefix}_loadingPort`] = 'SAP Vessel Loading Port is empty'
         }
       }
 
-      if (requiresCompleteEta && selectedIds.length > 0) {
+      if (requiresCompleteEta && selectedIds.length > 0 && !blockAllCif) {
         for (const { key, errorSuffix, shortLabel } of ETA_FIELD_ROWS) {
           if (!String(block[key] ?? '').trim()) {
             errors[`${prefix}_${errorSuffix}`] = `${shortLabel} is required`
@@ -2007,7 +2009,7 @@ export function AddNewShipmentModal({
           const contractErrorKey = firstBlock ? `eta_${firstBlock.id}_contract` : 'contractNumbers'
           if (!errors[contractErrorKey]) {
             errors[contractErrorKey] =
-              'Assign all POs and complete every ETA milestone in Section 3'
+              'Assign all POs and complete every Estimation milestone in Section 3'
           }
         }
       }
@@ -2044,7 +2046,7 @@ export function AddNewShipmentModal({
         setSaving(true)
         const primaryBlock = etaDetails[0]
         if (!primaryBlock) {
-          showNotification('error', 'No ETA details to save')
+          showNotification('error', 'No Estimation details to save')
           return
         }
         await onSubmit({
@@ -2073,27 +2075,6 @@ export function AddNewShipmentModal({
       return
     }
 
-    if (contractQtyAssignedExceedsCapacity) {
-      showNotification(
-        'warning',
-        'Quantity exceeds vessel capacity',
-        hasSapSto
-          ? 'Sum of STO Qty cannot exceed Vessel Capacity.'
-          : 'Sum of "Assign STO (MT)" cannot exceed Vessel Capacity.',
-      )
-      return
-    }
-    if (Object.keys(contractQtyAssignedExceedsOutstanding).length > 0) {
-      const first = Object.keys(contractQtyAssignedExceedsOutstanding)[0]
-      const { assignedMt, outstandingMt } = contractQtyAssignedExceedsOutstanding[first]
-      showNotification(
-        'warning',
-        `Assigned qty exceeds max plan qty for ${first}`,
-        `Assigned ${formatNumber(assignedMt)} MT, but max Shipment Plan Qty is ${formatNumber(outstandingMt)} MT.`,
-      )
-      return
-    }
-
     try {
       setSaving(true)
 
@@ -2101,7 +2082,9 @@ export function AddNewShipmentModal({
 
       const etaByContract: Record<string, ReturnType<typeof etaDetailToApiPayload>> = {}
       for (const block of etaDetails) {
-        if (block.contractIds.length === 0 || !etaDetailHasAllRequiredDates(block)) continue
+        if (block.contractIds.length === 0) continue
+        const blockAllCif = blockSelectionKeysAllCif(block.contractIds, resolveSelectionIncoterm)
+        if (!blockAllCif && !etaDetailHasAllRequiredDates(block)) continue
         const etaPayload = etaDetailToApiPayload(block)
         for (const selectionKey of block.contractIds) {
           etaByContract[resolveContractIdForKey(selectionKey)] = etaPayload
@@ -2111,27 +2094,11 @@ export function AddNewShipmentModal({
       const selectionKeys = newShipment.contractNumbers
       const contractNumbers = [...new Set(selectionKeys.map((k) => resolveContractIdForKey(k)))]
 
-      const poQtyAssigned: Record<string, string> = {}
-      const contractQtyAssignedPayload: Record<string, string> = {}
-      if (isContractScoped) {
-        for (const key of selectionKeys) {
-          const qty = contractQtyAssigned[key]
-          if (qty && parseFloat(String(qty)) > 0) poQtyAssigned[key] = String(qty)
-        }
-      } else {
-        for (const key of selectionKeys) {
-          const qty = contractQtyAssigned[key]
-          if (qty !== undefined && qty !== '') contractQtyAssignedPayload[key] = String(qty)
-        }
-      }
-
       await onSubmit({
         kind: 'create',
         operationId,
         stoNumber: newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim(),
         contractNumbers,
-        contractQtyAssigned: contractQtyAssignedPayload,
-        poQtyAssigned: Object.keys(poQtyAssigned).length > 0 ? poQtyAssigned : undefined,
         vesselName: newShipment.vesselName,
         vesselCode: newShipment.vesselCode,
         vesselOwner: newShipment.vesselOwner,
@@ -2142,6 +2109,7 @@ export function AddNewShipmentModal({
         portOfLoading: newShipment.portOfLoading,
         portOfDischarge: newShipment.portOfDischarge,
         etaByContract,
+        prePlannedGroupId: prePlannedGroupId ?? undefined,
       })
 
       showNotification(
@@ -2160,8 +2128,7 @@ export function AddNewShipmentModal({
     }
   }
 
-  const vesselDropdownOpen = showVesselSuggestions && vesselSuggestions.length > 0
-  const section2DropdownOpen = vesselDropdownOpen
+  const section2DropdownOpen = false
 
   const step1Done = newShipment.contractNumbers.length > 0 && newShipment.contractNumbers.every((id) => contractValidations[id]?.exists)
   const step2Done = Boolean(newShipment.vesselName.trim() || selectedTransportMode === 'land')
@@ -2169,7 +2136,7 @@ export function AddNewShipmentModal({
     (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
     newShipment.contractNumbers.length > 0
   const step3Done = step3RequiresEta
-    ? isEtaScheduleCompleteForCreate(newShipment.contractNumbers, etaDetails)
+    ? isEtaScheduleCompleteForCreate(newShipment.contractNumbers, etaDetails, resolveSelectionIncoterm)
     : true
 
   const contractDeliveryReferences = useMemo(
@@ -2220,10 +2187,13 @@ export function AddNewShipmentModal({
           resetForm()
           onClose()
         }}
+        stacked={stacked}
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
         editContractNumbers={editContractNumbers}
+        onSubmit={onSubmit}
+        onShipmentChanged={onShipmentChanged}
       />
     )
   }
@@ -2237,6 +2207,7 @@ export function AddNewShipmentModal({
           onClose()
         }}
         onSubmit={onSubmit}
+        stacked={stacked}
         editContractId={editContractId}
         editShipmentId={editShipmentIdProp}
         editStoNumber={editStoNumber}
@@ -2248,10 +2219,10 @@ export function AddNewShipmentModal({
 
   return (
     <>
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-6xl flex-col rounded-lg bg-white shadow-xl">
+    <div className={`fixed inset-0 ${stacked ? 'z-[80]' : 'z-[60]'} flex items-center justify-center bg-black/40 p-4`}>
+      <div className={VESSEL_MODAL_PANEL_CLASS}>
         {/* Header */}
-        <div className="sticky top-0 z-10 shrink-0 rounded-t-lg border-b border-gray-200 bg-white">
+        <div className={VESSEL_MODAL_HEADER_CLASS}>
           <div className="flex items-center justify-between px-6 py-4">
             <div className="flex items-center gap-3">
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-white">
@@ -2263,10 +2234,10 @@ export function AddNewShipmentModal({
                 </h3>
                 <p className="text-xs text-gray-500">
                   {isEditMode
-                    ? 'Only ETA schedule dates can be changed'
+                    ? 'Only Estimation schedule dates can be changed'
                     : isPlotMode
-                      ? 'Register vessel and ETA planning for this SAP STO'
-                      : 'Fill in contract, vessel, and ETA details'}
+                      ? 'Register vessel and Estimation planning for this SAP STO'
+                      : 'Fill in contract, vessel, and Estimation details'}
                 </p>
               </div>
             </div>
@@ -2284,11 +2255,11 @@ export function AddNewShipmentModal({
             </Button>
           </div>
           {/* Step progress */}
-          <div className="flex items-center gap-0 border-t border-gray-100 px-6 py-2 bg-gray-50/80">
+          <div className={VESSEL_MODAL_STEP_STRIP_CLASS}>
             {[
               { num: 1, label: 'Contract & PO', done: step1Done, icon: <FileText className="h-3.5 w-3.5" /> },
               { num: 2, label: 'Vessel Detail', done: step2Done, icon: <Anchor className="h-3.5 w-3.5" /> },
-              { num: 3, label: 'ETA Schedule + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
+              { num: 3, label: 'ETA / Estimation + Loading Port', done: step3Done, icon: <Clock className="h-3.5 w-3.5" /> },
             ].map((s, i) => (
               <div key={s.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
@@ -2311,9 +2282,9 @@ export function AddNewShipmentModal({
           </div>
         </div>
 
-        <div className="relative min-h-0 flex-1 overflow-y-auto px-6 py-4" {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
+        <div className={`relative ${VESSEL_MODAL_BODY_CLASS}`} {...{ [FAST_ENTRY_ROOT_ATTR]: 'true' }}>
         {((loadingInitialData && !isPlotMode) || (isPlotMode && loadingEdit)) && (
-          <div className="absolute inset-0 z-[70] flex items-center justify-center rounded-b-lg bg-white/75 backdrop-blur-[1px]">
+          <div className="absolute inset-0 z-[70] flex items-center justify-center rounded-b-xl bg-white/75 backdrop-blur-[1px]">
             <div className="flex flex-col items-center gap-2 rounded-lg border border-gray-200 bg-white px-6 py-4 shadow-sm">
               <Loader2 className="h-7 w-7 animate-spin text-blue-600" />
               <p className="text-sm font-medium text-gray-700">Loading shipment data…</p>
@@ -2377,12 +2348,12 @@ export function AddNewShipmentModal({
               <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-700">
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
                 <span>
-                  <strong>Required:</strong> at least one PO &nbsp;•&nbsp; <strong>Optional:</strong> port, plant/site, ETA &nbsp;•&nbsp;
+                  <strong>Required:</strong> at least one PO &nbsp;•&nbsp; <strong>Optional:</strong> plant/site, Estimation &nbsp;•&nbsp;
                   <strong>Note:</strong> Operation ID is auto-generated; STO will be filled from SAP when available
                   {hasSapSto ? (
                     <>
                       {' '}
-                      &nbsp;•&nbsp; <strong>SAP STO:</strong> STO Qty defaults from SAP (editable → saved as Shipment Plan Qty)
+                      &nbsp;•&nbsp; <strong>SAP STO:</strong> loading and discharge ports are filled from SAP (read-only)
                     </>
                   ) : null}
                 </span>
@@ -2540,16 +2511,10 @@ export function AddNewShipmentModal({
                           <TableRow className="bg-gray-50 hover:bg-gray-50">
                             <TableHead className={COMPACT_TH}>PO</TableHead>
                             <TableHead className={COMPACT_TH}>Supplier / Product</TableHead>
-                            <TableHead className={`${COMPACT_TH} text-right`}>Contract</TableHead>
-                            <TableHead className={`${COMPACT_TH} text-right`}>Outstanding</TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}>Contract Qty</TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}>OS Qty</TableHead>
                             <TableHead className={COMPACT_TH}>Del. Start</TableHead>
                             <TableHead className={COMPACT_TH}>Del. End</TableHead>
-                            <TableHead
-                              className={`${COMPACT_TH} text-right w-36`}
-                              title={hasSapSto ? 'SAP STO quantity (MT); edits save as Shipment Plan Qty' : undefined}
-                            >
-                              {hasSapSto ? 'STO Qty' : 'Assign STO (MT)'}
-                            </TableHead>
                             {!isEditMode && <TableHead className={`${COMPACT_TH} w-8`} />}
                           </TableRow>
                         </TableHeader>
@@ -2559,19 +2524,10 @@ export function AddNewShipmentModal({
                             const data = validation?.contractData
                             const label = getPoLabel(contractId)
                             const contractExtNo = getPoContractExtNo(contractId)
-                            const exceed = contractQtyAssignedExceedsOutstanding[contractId]
-                            const sapQtyUntouched = Boolean(stoQtyFromSapUntouched[contractId])
-                            const osValidationEnabled = isStoQtyOsValidationEnabled(contractId)
-                            const rowError =
-                              Boolean(exceed) || Boolean(formErrors.contractQty && validation?.exists)
                             const contractQtyMt = (Number(data?.quantity_ordered) || 0) / 1000
                             const outstandingQtyMt = (Number(data?.outstanding_quantity) || 0) / 1000
-                            const maxPlanQtyMt = resolveShipmentPlanQtyMaxMt(data, hasSapSto)
                             return (
-                              <TableRow
-                                key={contractId}
-                                className={rowError ? 'bg-red-50/60 hover:bg-red-50/60' : undefined}
-                              >
+                              <TableRow key={contractId}>
                                 <TableCell className={COMPACT_TD}>
                                   <div className="flex items-center gap-1 min-w-[5.5rem]">
                                     {validation?.exists ? (
@@ -2625,68 +2581,6 @@ export function AddNewShipmentModal({
                                 <TableCell className={COMPACT_TD}>
                                   {validation?.exists ? formatShortDate(data?.delivery_end_date || '') : '—'}
                                 </TableCell>
-                                <TableCell className={COMPACT_TD}>
-                                  {validation?.exists ? (
-                                    <div className="flex flex-col gap-1 min-w-[11rem]">
-                                      <div className="flex items-center gap-1.5">
-                                        <Input
-                                          type="number"
-                                          step="0.01"
-                                          value={contractQtyAssigned[contractId] ?? ''}
-                                          onChange={(e) => {
-                                            setContractQtyAssigned((prev) => ({
-                                              ...prev,
-                                              [contractId]: e.target.value,
-                                            }))
-                                            setStoQtyFromSapUntouched((prev) => {
-                                              if (!prev[contractId]) return prev
-                                              const next = { ...prev }
-                                              delete next[contractId]
-                                              return next
-                                            })
-                                          }}
-                                          readOnly={isEditMode}
-                                          disabled={isEditMode}
-                                          className={`h-8 text-xs w-24 text-right ${isEditMode ? READONLY_FIELD_CLASS : 'bg-white'} ${exceed ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
-                                          placeholder="0"
-                                        />
-                                        <button
-                                          type="button"
-                                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium whitespace-nowrap transition-colors shrink-0 ${
-                                            outstandingQtyMt <= 0 || isEditMode
-                                              ? 'cursor-not-allowed border-gray-200 bg-gray-50 text-gray-400'
-                                              : 'cursor-pointer border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:border-blue-300'
-                                          }`}
-                                          onClick={() => fillAssignQtyFromOutstanding(contractId)}
-                                          disabled={outstandingQtyMt <= 0 || isEditMode}
-                                          title={`Set to outstanding quantity: ${formatNumber(outstandingQtyMt)} MT`}
-                                        >
-                                          <Check className="h-2.5 w-2.5" />
-                                          Use outstanding
-                                        </button>
-                                      </div>
-                                      {exceed ? (
-                                        <span className="text-[10px] text-red-600 leading-tight flex items-center gap-0.5">
-                                          <AlertCircle className="h-2.5 w-2.5 shrink-0" />
-                                          Max {formatNumber(exceed.outstandingMt)} MT
-                                        </span>
-                                      ) : sapQtyUntouched ? (
-                                        <span className="text-[10px] text-cyan-700 leading-tight">
-                                          From SAP — no plan qty limit until edited
-                                        </span>
-                                      ) : (
-                                        osValidationEnabled &&
-                                        maxPlanQtyMt > 0 && (
-                                          <span className="text-[10px] text-gray-400 leading-tight">
-                                            Max {formatNumber(maxPlanQtyMt)} MT
-                                          </span>
-                                        )
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <span className="text-gray-400">?</span>
-                                  )}
-                                </TableCell>
                                 {!isEditMode && (
                                   <TableCell className={`${COMPACT_TD} text-center`}>
                                     <button
@@ -2703,56 +2597,8 @@ export function AddNewShipmentModal({
                             )
                           })}
                         </TableBody>
-                        <TableFooter>
-                          <TableRow
-                            className={
-                              contractQtyAssignedExceedsCapacity ||
-                              Object.keys(contractQtyAssignedExceedsOutstanding).length > 0
-                                ? 'bg-red-50 hover:bg-red-50'
-                                : 'bg-gray-50/80 hover:bg-gray-50'
-                            }
-                          >
-                            <TableCell colSpan={isEditMode ? 5 : 6} className={`${COMPACT_TD} font-medium text-gray-700`}>
-                              <div className="flex flex-col gap-1">
-                                <span>
-                                  Total assigned
-                                  {vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && (
-                                    <span className="font-normal text-gray-500 ml-1.5">
-                                      / {formatNumber(vesselCapacityNum)} MT capacity
-                                    </span>
-                                  )}
-                                </span>
-                                {vesselCapacityNum != null && !Number.isNaN(vesselCapacityNum) && vesselCapacityNum > 0 && (
-                                  <div className="flex items-center gap-2">
-                                    <div className="flex-1 h-1.5 rounded-full bg-gray-200 overflow-hidden max-w-[10rem]">
-                                      <div
-                                        className={`h-full rounded-full transition-all ${
-                                          contractQtyAssignedExceedsCapacity ? 'bg-red-500' : 'bg-blue-500'
-                                        }`}
-                                        style={{ width: `${Math.min(100, (contractQtyAssignedSum / vesselCapacityNum) * 100)}%` }}
-                                      />
-                                    </div>
-                                    <span className={`text-[10px] font-medium ${contractQtyAssignedExceedsCapacity ? 'text-red-600' : 'text-gray-500'}`}>
-                                      {Math.round((contractQtyAssignedSum / vesselCapacityNum) * 100)}%
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            </TableCell>
-                            <TableCell className={`${COMPACT_TD} text-right font-semibold tabular-nums ${contractQtyAssignedExceedsCapacity ? 'text-red-700' : 'text-gray-800'}`}>
-                              {formatNumber(contractQtyAssignedSum)} MT
-                            </TableCell>
-                            {!isEditMode && <TableCell />}
-                          </TableRow>
-                        </TableFooter>
                       </Table>
                     </div>
-                    {contractQtyAssignedExceedsCapacity && (
-                      <p className="text-[11px] text-red-700 mt-1">Total assigned cannot exceed Vessel Capacity (MT).</p>
-                    )}
-                    {formErrors.contractQty && (
-                      <p className="text-[11px] text-red-600 mt-1">{formErrors.contractQty}</p>
-                    )}
                   </div>
                 )}
               </div>
@@ -2776,7 +2622,8 @@ export function AddNewShipmentModal({
                 <div className="flex items-start gap-2 rounded-lg border border-cyan-100 bg-cyan-50 px-3 py-2.5 text-xs text-cyan-800">
                   <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-600" />
                   <span>
-                    Vessel name and discharge port are pre-filled from SAP for this STO. You can change them before saving.
+                    Vessel name is pre-filled from SAP when available. Charter type comes from Master Vessel Terms.
+                    Loading and discharge ports come from SAP and cannot be edited.
                   </span>
                 </div>
               )}
@@ -2788,7 +2635,7 @@ export function AddNewShipmentModal({
                     disabled={newShipment.contractNumbers.length === 0}
                     label="AI Klip Agent"
                     className="h-10 shrink-0 self-start"
-                    title="Suggest vessel, charter type, ports, loading port, and all ETA milestones"
+                    title="Suggest vessel from Master Vessel and Estimation milestones. Charter type, loading port, and discharge port stay from master vessel / SAP."
                   />
                   <div className="min-w-0 flex-1 space-y-1.5 text-xs leading-relaxed text-gray-600">
                     {aiAppliedPatternContext ? (
@@ -2797,8 +2644,8 @@ export function AddNewShipmentModal({
                         <p>
                           The values below were suggested because KLIP found similar past shipments
                           in the database for{' '}
-                          {renderAiPatternDimensionList(aiAppliedPatternContext)}. You can still edit
-                          any field manually.
+                          {renderAiPatternDimensionList(aiAppliedPatternContext)}. Charter type stays
+                          from Master Vessel; loading and discharge ports stay from SAP.
                         </p>
                       </>
                     ) : (
@@ -2809,9 +2656,9 @@ export function AddNewShipmentModal({
                           <span className="font-medium text-gray-800">
                             Supplier, Buyer, Product, and Incoterm
                           </span>{' '}
-                          from the PO(s) you selected in Section 1. It then fills in the vessel,
-                          charter type, discharge port, loading port, and full ETA schedule. All
-                          fields remain editable.
+                          from the PO(s) you selected in Section 1. It then fills in the vessel
+                          (Master Vessel) and Estimation schedule. Charter type comes from Master
+                          Vessel Terms; loading and discharge ports come from SAP.
                         </p>
                         {newShipment.contractNumbers.length === 0 ? (
                           <p className="text-[11px] font-medium text-amber-700">
@@ -2833,44 +2680,20 @@ export function AddNewShipmentModal({
                 </div>
               )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 overflow-visible">
-                <div
-                  className={`relative overflow-visible ${vesselDropdownOpen ? 'z-[100]' : 'z-0'}`}
-                >
+                <div className="relative z-0 overflow-visible">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Vessel Name
                     {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                       <span className="text-red-500"> *</span>
                     )}
                   </label>
-                  <Input
+                  <MasterVesselCombobox
                     value={newShipment.vesselName}
-                    onChange={(e) => { handleVesselNameChange(e.target.value); clearFieldError('vesselName') }}
-                    onFocus={() => !isEditMode && newShipment.vesselName.trim().length >= 2 && setShowVesselSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowVesselSuggestions(false), 200)}
-                    placeholder="Type to search vessel name (from Master Vessel)"
-                    readOnly={isEditMode}
+                    onSelect={applyMasterVessel}
+                    placeholder="Search and select from Master Vessel"
                     disabled={isEditMode}
                     className={`${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.vesselName ? 'border-red-500' : ''}`}
                   />
-                  {vesselDropdownOpen && (
-                    <div className={AUTOCOMPLETE_PANEL_CLASS}>
-                      {vesselSuggestions.map((v) => (
-                        <div
-                          key={v.vessel_code}
-                          className="px-3 py-2 hover:bg-blue-50 cursor-pointer border-b last:border-b-0 transition-colors"
-                          onMouseDown={() => handleSelectVessel(v)}
-                        >
-                          <div className="font-semibold text-sm text-gray-900">{v.vessel_name}</div>
-                          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
-                            <span className="font-mono">{v.vessel_code}</span>
-                            {v.vessel_owner && <><span className="text-gray-300">•</span><span>{v.vessel_owner}</span></>}
-                            {v.vessel_capacity_mt != null && <><span className="text-gray-300">•</span><span className="text-cyan-600 font-medium">{formatNumber(v.vessel_capacity_mt)} MT</span></>}
-                            {v.hull_type && <><span className="text-gray-300">•</span><span>{v.hull_type}</span></>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                   {formErrors.vesselName && (
                     <p className="text-xs mt-1 text-red-600">{formErrors.vesselName}</p>
                   )}
@@ -2896,18 +2719,15 @@ export function AddNewShipmentModal({
                     {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                       <span className="text-red-500"> *</span>
                     )}
+                    <span className="ml-1 text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
-                  <select
+                  <Input
                     value={newShipment.charterType}
-                    onChange={(e) => { setNewShipment((prev) => ({ ...prev, charterType: e.target.value })); clearFieldError('charterType') }}
-                    disabled={isEditMode}
-                    className={`w-full h-10 rounded-md border px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 ${isEditMode ? READONLY_FIELD_CLASS : 'bg-background'} ${formErrors.charterType ? 'border-red-500' : 'border-input'}`}
-                  >
-                    <option value="">Select charter type</option>
-                    <option value="CIF">CIF</option>
-                    <option value="V/C">V/C</option>
-                    <option value="T/C">T/C</option>
-                  </select>
+                    readOnly
+                    disabled
+                    placeholder="Filled from Master Vessel Terms"
+                    className={`bg-gray-100 cursor-not-allowed ${formErrors.charterType ? 'border-red-500' : ''}`}
+                  />
                   {formErrors.charterType && <p className="text-xs mt-1 text-red-600">{formErrors.charterType}</p>}
                 </div>
                 <div className="relative z-0">
@@ -2916,16 +2736,14 @@ export function AddNewShipmentModal({
                     {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                       <span className="text-red-500"> *</span>
                     )}
+                    <span className="ml-1 text-gray-500 text-xs">(from SAP)</span>
                   </label>
-                  <MasterLoadingPortCombobox
+                  <Input
                     value={newShipment.portOfDischarge}
-                    onChange={(val) => {
-                      setNewShipment((prev) => ({ ...prev, portOfDischarge: val }))
-                      clearFieldError('portOfDischarge')
-                    }}
-                    placeholder="Search port name..."
-                    disabled={isEditMode}
-                    className={`${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.portOfDischarge ? 'border-red-500' : ''}`}
+                    readOnly
+                    disabled
+                    placeholder="Filled from SAP when a PO is added"
+                    className={`bg-gray-100 cursor-not-allowed ${formErrors.portOfDischarge ? 'border-red-500' : ''}`}
                   />
                   {formErrors.portOfDischarge && (
                     <p className="text-xs mt-1 text-red-600">{formErrors.portOfDischarge}</p>
@@ -2954,7 +2772,7 @@ export function AddNewShipmentModal({
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100">
                 <Clock className="h-3.5 w-3.5 text-violet-600" />
               </div>
-              <h4 className="text-sm font-semibold text-gray-800">3. ETA Schedule + Loading Port</h4>
+              <h4 className="text-sm font-semibold text-gray-800">3. ETA / Estimation Schedule + Loading Port</h4>
               {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
             </div>
             <div className="p-4 space-y-3">
@@ -2964,7 +2782,7 @@ export function AddNewShipmentModal({
                   <div className="min-w-0 space-y-1.5">
                     <p className="font-medium text-blue-900">Official contract delivery timeframe (from SAP)</p>
                     <p className="text-blue-800/90">
-                      ETA from Arr. @ LP through Done Disch may be up to {ETA_DELIVERY_START_BUFFER_DAYS} days before
+                      Estimation from Arr. @ LP through Done Disch may be up to {ETA_DELIVERY_START_BUFFER_DAYS} days before
                       Due Date Delivery (Start) and up to {ETA_DELIVERY_END_BUFFER_DAYS} days after Due Date Delivery
                       (End).
                     </p>
@@ -2993,30 +2811,44 @@ export function AddNewShipmentModal({
 
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium text-gray-500">
-                  All ETA milestones are required <span className="text-red-500">*</span> to create a shipment
+                  {allSelectedPoCif ? (
+                    <>Estimation and Loading Port are optional for <span className="font-semibold">CIF</span> incoterm.</>
+                  ) : (
+                    <>
+                      All Estimation milestones are required <span className="text-red-500">*</span> to create a shipment
+                    </>
+                  )}
                 </p>
                 {!isEditMode &&
                   (selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') &&
                   newShipment.contractNumbers.length > 0 && (
                     <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={addEtaDetailBlock}>
                       <Plus className="h-3.5 w-3.5 mr-1" />
-                      Add ETA row
+                      Add Estimation row
                     </Button>
                   )}
               </div>
 
               {selectedTransportMode === null && (
-                <p className="text-xs text-gray-400 italic">Add a contract in Section 1 to see ETA fields.</p>
+                <p className="text-xs text-gray-400 italic">Add a contract in Section 1 to see ETA / Estimation fields.</p>
+              )}
+
+              {selectedTransportMode === 'land' && newShipment.contractNumbers.length > 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-md px-3 py-2">
+                  This PO is LAND transport — vessel ETA fields are not used here. Create planning in Trucking instead.
+                </p>
               )}
 
               {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
                 <>
                   {selectedTransportMode === 'mixed' && (
-                    <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Sea</p>
+                    <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
+                      Sea leg ETA (MIX contract)
+                    </p>
                   )}
 
                   {newShipment.contractNumbers.length === 0 && (
-                    <p className="text-xs text-gray-400 italic">Add PO in Section 1 before adding ETA.</p>
+                    <p className="text-xs text-gray-400 italic">Add PO in Section 1 before adding Estimation.</p>
                   )}
 
                   <div className="space-y-2">
@@ -3024,15 +2856,17 @@ export function AddNewShipmentModal({
                       const prefix = `eta_${block.id}`
                       const range =
                         block.contractIds.length > 0 ? getEtaDateRangeForContractIds(block.contractIds) : null
+                      const blockAllCif = blockSelectionKeysAllCif(block.contractIds, resolveSelectionIncoterm)
+                      const etaFieldsRequired = !blockAllCif && !allSelectedPoCif
                       return (
                         <div key={block.id} className="rounded-md border border-gray-200 overflow-hidden text-xs">
                           <div className="flex items-center justify-between bg-gray-50 px-2 py-1 border-b">
-                            <span className="font-semibold text-gray-600">ETA #{index + 1}</span>
+                            <span className="font-semibold text-gray-600">Estimation #{index + 1}</span>
                             {!isEditMode && (
                               <button
                                 type="button"
                                 className="text-gray-400 hover:text-gray-600 p-0.5"
-                                aria-label="Remove ETA row"
+                                aria-label="Remove Estimation row"
                                 onClick={() => removeEtaDetailBlock(block.id)}
                               >
                                 <X className="h-3.5 w-3.5" />
@@ -3043,17 +2877,20 @@ export function AddNewShipmentModal({
                           <div className="px-2 py-1.5 border-b bg-white space-y-2">
                             <div className="relative overflow-visible z-0">
                               <label className="block text-[11px] font-medium text-gray-600 mb-1">
-                                Loading Port <span className="text-red-500">*</span>
+                                Loading Port{etaFieldsRequired ? <span className="text-red-500"> *</span> : null}
+                                <span className="ml-1 font-normal text-gray-500">(from SAP)</span>
+                                {isEditMode && block.contractIds.length === 1 ? (
+                                  <span className="ml-1 font-normal text-gray-500">
+                                    (Contract {block.contractIds[0]})
+                                  </span>
+                                ) : null}
                               </label>
-                              <MasterLoadingPortCombobox
+                              <Input
                                 value={block.loadingPort}
-                                onChange={(val) => {
-                                  updateEtaDetailBlock(block.id, { loadingPort: val })
-                                  clearFieldError(`${prefix}_loadingPort`)
-                                }}
-                                placeholder="Search port name..."
-                                disabled={isEditMode}
-                                className={`h-8 text-xs w-full ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
+                                readOnly
+                                disabled
+                                placeholder="Filled from SAP"
+                                className={`h-8 text-xs w-full bg-gray-100 cursor-not-allowed ${formErrors[`${prefix}_loadingPort`] ? 'border-red-500' : ''}`}
                               />
                               {formErrors[`${prefix}_loadingPort`] && (
                                 <p className="text-[11px] mt-1 text-red-600">{formErrors[`${prefix}_loadingPort`]}</p>
@@ -3096,7 +2933,7 @@ export function AddNewShipmentModal({
                                     }`}
                                     title={
                                       isSelectedElsewhere
-                                        ? 'This PO is already assigned to another ETA block'
+                                        ? 'This PO is already assigned to another Estimation block'
                                         : undefined
                                     }
                                   >
@@ -3124,7 +2961,7 @@ export function AddNewShipmentModal({
                               </p>
                             ) : block.contractIds.length > 0 ? (
                               <p className="px-2 pt-2 text-[10px] text-amber-700">
-                                Select POs with valid due delivery start/end dates to enable ETA range limits.
+                                Select POs with valid due delivery start/end dates to enable Estimation range limits.
                               </p>
                             ) : null}
                             <table className="w-full text-xs border-collapse min-w-[52rem]">
@@ -3137,7 +2974,7 @@ export function AddNewShipmentModal({
                                       title={label}
                                     >
                                       {shortLabel}
-                                      <span className="text-red-500"> *</span>
+                                      {etaFieldsRequired ? <span className="text-red-500"> *</span> : null}
                                     </th>
                                   ))}
                                 </tr>
@@ -3190,7 +3027,7 @@ export function AddNewShipmentModal({
           </div>
 
           {/* Footer action bar */}
-          <div className="rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3">
+          <div className={VESSEL_MODAL_FOOTER_CARD_CLASS}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               {/* Summary */}
               <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
@@ -3204,11 +3041,6 @@ export function AddNewShipmentModal({
                   <span className="flex items-center gap-1 rounded-full bg-cyan-100 px-2.5 py-1 text-cyan-700 font-medium">
                     <Ship className="h-3 w-3" />
                     {newShipment.vesselName}
-                  </span>
-                )}
-                {contractQtyAssignedSum > 0 && (
-                  <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-green-700 font-medium">
-                    {formatNumber(contractQtyAssignedSum)} MT assigned
                   </span>
                 )}
                 {newShipment.contractNumbers.length === 0 && (
@@ -3233,8 +3065,7 @@ export function AddNewShipmentModal({
                     saving ||
                     loadingEdit ||
                     (!isEditMode &&
-                      (contractQtyAssignedExceedsCapacity ||
-                        newShipment.contractNumbers.some((id) => !contractValidations[id]?.exists) ||
+                      (newShipment.contractNumbers.some((id) => !contractValidations[id]?.exists) ||
                         !step3Done))
                   }
                   className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"

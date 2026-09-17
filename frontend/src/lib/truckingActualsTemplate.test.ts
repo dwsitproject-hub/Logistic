@@ -8,6 +8,7 @@ import {
   buildTruckingActualsTemplateXlsxBlob,
   compareTruckingActualsTemplateRows,
   formatTemplateOutstandingQtyMt,
+  formatTemplateOsQtyMtFromKg,
   formatTemplateQtyMtFromKg,
   isActualsTemplateDownloadEnabled,
   isActualsWideTemplateHeader,
@@ -18,10 +19,12 @@ import {
   parseTruckingWidePlanningTemplateCsv,
   parseTruckingWidePlanningTemplateMatrix,
   resolveUnplannedPlanningWindow,
+  resolveUnplannedPlanningEndIso,
   shiftIsoDate,
+  shiftIsoDateByMonths,
   todayIsoDate,
   truckingTemplateSourceSortRank,
-  UNPLANNED_PLANNING_FORWARD_DAYS,
+  UNPLANNED_PLANNING_FORWARD_MONTHS,
   UNPLANNED_TEMPLATE_METADATA_HEADERS,
   UNPLANNED_TEMPLATE_OS_QTY_HEADER,
 } from './truckingActualsTemplate'
@@ -34,9 +37,11 @@ describe('truckingActualsTemplate', () => {
     expect(isActualsTemplateDownloadEnabled('UNPLANNED')).toBe(true)
     expect(isActualsTemplateDownloadEnabled('PLANNED')).toBe(true)
     expect(isActualsTemplateDownloadEnabled('IN_PROGRESS')).toBe(true)
+    expect(isActualsTemplateDownloadEnabled('OPEN')).toBe(true)
     expect(isActualsTemplateDownloadEnabled('ALL')).toBe(false)
     expect(isActualsTemplateDownloadEnabled('COMPLETED')).toBe(false)
     expect(isActualsTemplateDownloadEnabled('CANCELLED')).toBe(false)
+    expect(isActualsTemplateDownloadEnabled('CLOSE')).toBe(false)
   })
 
   it('flags unplanned planning template mode', () => {
@@ -44,27 +49,28 @@ describe('truckingActualsTemplate', () => {
     expect(isUnplannedPlanningTemplateMode('PLANNED')).toBe(false)
   })
 
-  it('resolves unplanned planning window from today through +60 days', () => {
+  it('resolves unplanned planning window from today through +3 calendar months', () => {
     const window = resolveUnplannedPlanningWindow('', REF_TODAY)
     expect(window).toEqual({
       startIso: REF_TODAY,
-      endIso: shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS),
+      endIso: resolveUnplannedPlanningEndIso(REF_TODAY),
     })
     expect(isDateWithinUnplannedPlanningWindow(REF_TODAY, '', REF_TODAY)).toBe(true)
     expect(
       isDateWithinUnplannedPlanningWindow(
-        shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS),
+        resolveUnplannedPlanningEndIso(REF_TODAY),
         '',
         REF_TODAY,
       ),
     ).toBe(true)
     expect(
       isDateWithinUnplannedPlanningWindow(
-        shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS + 1),
+        shiftIsoDate(resolveUnplannedPlanningEndIso(REF_TODAY), 1),
         '',
         REF_TODAY,
       ),
     ).toBe(false)
+    expect(shiftIsoDateByMonths(REF_TODAY, UNPLANNED_PLANNING_FORWARD_MONTHS)).toBe('2026-09-10')
   })
 
   it('detects wide actuals template header with PO column', () => {
@@ -231,10 +237,10 @@ describe('truckingActualsTemplate', () => {
       REF_TODAY,
     )
 
-    const endIso = shiftIsoDate(REF_TODAY, UNPLANNED_PLANNING_FORWARD_DAYS)
+    const endIso = resolveUnplannedPlanningEndIso(REF_TODAY)
     expect(csv).toContain(UNPLANNED_TEMPLATE_OS_QTY_HEADER)
     expect(csv).toContain('Vendor G,Sup A,3rd Party')
-    expect(csv).toContain('EXT-U1,PO-U1,125')
+    expect(csv).toContain('EXT-U1,PO-U1,Unplanned,125')
     expect(csv).toContain(formatPlanningTemplateDateHeader(REF_TODAY))
     expect(csv).toContain(formatPlanningTemplateDateHeader(endIso))
   })
@@ -243,6 +249,16 @@ describe('truckingActualsTemplate', () => {
     expect(formatTemplateQtyMtFromKg(25000)).toBe('25')
     expect(formatTemplateQtyMtFromKg(0)).toBe('0')
     expect(formatTemplateQtyMtFromKg(null)).toBe('')
+  })
+
+  it('formats OS Qty (MT) as whole MT (rounded)', () => {
+    expect(formatTemplateOsQtyMtFromKg(500000)).toBe('500')
+    expect(formatTemplateOsQtyMtFromKg(2410)).toBe('2')
+    expect(formatTemplateOsQtyMtFromKg(205780)).toBe('206')
+    expect(formatTemplateOsQtyMtFromKg(24050)).toBe('24')
+    expect(formatTemplateOsQtyMtFromKg(24550)).toBe('25')
+    expect(formatTemplateOsQtyMtFromKg(0)).toBe('0')
+    expect(formatTemplateOsQtyMtFromKg(null)).toBe('')
   })
 
   it('spans date columns from earliest start to latest end across planned rows', () => {
@@ -344,8 +360,8 @@ describe('truckingActualsTemplate', () => {
     const buf = await blob.arrayBuffer()
     const wb = XLSX.read(buf, { type: 'array', cellFormula: true })
     const sheet = wb.Sheets[wb.SheetNames[0]!]
-    const planQtyCell = sheet.H2
-    expect(planQtyCell?.f).toMatch(/^SUM\(I2:/)
+    const planQtyCell = sheet.I2
+    expect(planQtyCell?.f).toMatch(/^SUM\(J2:/)
     expect(planQtyCell?.t).toBe('n')
     expect(planQtyCell?.v).toBe(0)
   })
@@ -373,16 +389,52 @@ describe('truckingActualsTemplate', () => {
     const buf = await blob.arrayBuffer()
     const wb = XLSX.read(buf, { type: 'array', cellFormula: true })
     const sheet = wb.Sheets[wb.SheetNames[0]!]
-    const planQtyCell = sheet.H2
-    expect(planQtyCell?.f).toMatch(/^SUM\(I2:/)
+    const planQtyCell = sheet.I2
+    expect(planQtyCell?.f).toMatch(/^SUM\(J2:/)
     expect(planQtyCell?.t).toBe('n')
     expect(planQtyCell?.v).toBe(40)
-    expect(sheet.I2?.t).toBe('n')
-    expect(sheet.I2?.v).toBe(25)
     expect(sheet.J2?.t).toBe('n')
-    expect(sheet.J2?.v).toBe(15)
-    expect(sheet.G2?.t).toBe('n')
-    expect(sheet.G2?.v).toBe(100)
+    expect(sheet.J2?.v).toBe(25)
+    expect(sheet.K2?.t).toBe('n')
+    expect(sheet.K2?.v).toBe(15)
+    expect(sheet.H2?.t).toBe('n')
+    expect(sheet.H2?.v).toBe(100)
+    expect(sheet.G2?.v).toBe('Planned')
+  })
+
+  it('includes Status before OS Qty and parses both Status-present and legacy templates', () => {
+    const matrix = buildActualsTemplateMatrix(
+      [
+        {
+          contract_ext_no: 'EXT-U',
+          po_number: 'PO-U',
+          supplier: 'Sup',
+          group_name: 'G',
+          source_type: '3rd Party',
+          contract_date: '2026-05-01',
+          outstanding_quantity: 50000,
+          templateKind: 'unplanned',
+        },
+        {
+          contract_ext_no: 'EXT-P',
+          po_number: 'PO-P',
+          supplier: 'Sup',
+          group_name: 'G',
+          source_type: '3rd Party',
+          contract_date: '2026-05-01',
+          outstanding_quantity: 80000,
+          templateKind: 'planned',
+          daily_deliverables: [{ date: REF_TODAY, quantity_delivered: 10000 }],
+        },
+      ],
+      REF_TODAY,
+    )
+    expect(matrix[0]?.[6]).toBe('Status')
+    expect(matrix[0]?.[7]).toBe(UNPLANNED_TEMPLATE_OS_QTY_HEADER)
+    expect(matrix[1]?.[6]).toBe('Planned')
+    expect(matrix[1]?.[7]).toBe('80')
+    expect(matrix[2]?.[6]).toBe('Unplanned')
+    expect(matrix[2]?.[7]).toBe('50')
   })
 
   it('builds failed upload re-template with Reason column at the end', async () => {

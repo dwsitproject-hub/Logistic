@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { authenticateToken, authorizeSapImportsUpload, authorizeSapImportsView } from '../middleware/auth';
+import { authenticateToken, authorize, authorizeSapImportsUpload, authorizeSapImportsView } from '../middleware/auth';
 import * as sapMasterV2Controller from '../controllers/sapMasterV2.controller';
 
 const router = Router();
@@ -57,10 +57,23 @@ router.post(
 );
 
 router.get(
+  '/imports/active',
+  authenticateToken,
+  sapMasterV2Controller.getActiveImport,
+);
+
+router.get(
   '/imports',
   authenticateToken,
   authorizeSapImportsView,
   sapMasterV2Controller.getAllImports
+);
+
+router.post(
+  '/imports/:importId/cancel',
+  authenticateToken,
+  authorizeSapImportsUpload,
+  catchAsync(sapMasterV2Controller.cancelMasterV2Import),
 );
 
 router.get(
@@ -74,6 +87,20 @@ router.get(
   '/pending-entries',
   authenticateToken,
   sapMasterV2Controller.getPendingEntries
+);
+
+router.post(
+  '/auto-import/run',
+  authenticateToken,
+  authorize('ADMIN'),
+  catchAsync(sapMasterV2Controller.runSapFolderAutoImport),
+);
+
+router.get(
+  '/auto-import/failed-file',
+  authenticateToken,
+  authorize('ADMIN'),
+  catchAsync(sapMasterV2Controller.downloadAutoImportFailedFile),
 );
 
 export default router;

@@ -4,26 +4,30 @@ import {
   matchesOilLossTruckSegment,
   matchesOilLossVesselSegment,
 } from '@/lib/oilLossEligibility'
+import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 
-export type OilLossGlobalPeriodKey = 'MTD' | 'YTD' | `month-${number}`
+export type OilLossGlobalPeriodKey = 'YTD' | 'MTD' | `month-${number}`
 
-export type OilLossGlobalTransportFilter = 'All' | 'Vessel' | 'Truck'
+/**
+ * No "All" option on purpose: Vessel (SEA) and Truck (LAND) group Section 1 (R1-R4),
+ * the view table, and the drilldown differently — SEA merges by STO/Operation ID
+ * (a voyage can span multiple POs), LAND stays per-PO. Mixing both under "All" would
+ * make those totals/groupings inconsistent and confusing, so the user must pick one.
+ */
+export type OilLossGlobalTransportFilter = 'Vessel' | 'Truck'
 
 export type OilLossGlobalProductFilter = 'All' | 'CPO' | 'PK' | 'POME' | 'SHELL PALM'
 
 export const OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS: readonly OilLossGlobalTransportFilter[] = [
-  'All',
   'Vessel',
   'Truck',
 ] as const
 
-export const OIL_LOSS_GLOBAL_PRODUCT_OPTIONS: readonly OilLossGlobalProductFilter[] = [
-  'All',
-  'CPO',
-  'PK',
-  'POME',
-  'SHELL PALM',
-] as const
+export const OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT: OilLossGlobalTransportFilter = 'Vessel'
+
+export const OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS = ['CPO', 'PK', 'POME', 'SHELL PALM'] as const
+
+export type OilLossGlobalProductMultiOption = (typeof OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS)[number]
 
 const MONTH_NAMES = [
   'January',
@@ -45,17 +49,25 @@ export type OilLossPeriodOption = {
   label: string
 }
 
+/**
+ * YTD + MTD + calendar months before the current month (descending),
+ * same order as Contract / Shipping Performance.
+ * Current month is covered by MTD — not listed separately.
+ */
 export function buildOilLossPeriodOptions(referenceDate = new Date()): OilLossPeriodOption[] {
-  const year = referenceDate.getFullYear()
   const currentMonthIndex = referenceDate.getMonth()
   const monthOptions: OilLossPeriodOption[] = []
-  for (let m = 0; m <= currentMonthIndex; m += 1) {
+  for (let m = currentMonthIndex - 1; m >= 0; m -= 1) {
     monthOptions.push({
       value: `month-${m}`,
       label: MONTH_NAMES[m],
     })
   }
-  return [{ value: 'MTD', label: 'MTD' }, { value: 'YTD', label: 'YTD' }, ...monthOptions]
+  return [
+    { value: 'YTD', label: 'YTD' },
+    { value: 'MTD', label: 'MTD' },
+    ...monthOptions,
+  ]
 }
 
 export function resolveOilLossPeriodDateRange(
@@ -105,12 +117,20 @@ export function matchesOilLossGlobalTransportFilter(
   row: OilLossSourceRow,
   filter: OilLossGlobalTransportFilter,
 ): boolean {
-  if (filter === 'All') return true
   if (filter === 'Vessel') return matchesOilLossVesselSegment(row)
-  if (filter === 'Truck') return matchesOilLossTruckSegment(row)
-  return true
+  return matchesOilLossTruckSegment(row)
 }
 
+export function matchesOilLossGlobalProductsMultiFilter(
+  row: OilLossSourceRow,
+  selectedProducts: readonly string[],
+): boolean {
+  if (selectedProducts.length === 0) return true
+  const rowProduct = String(row.product ?? '').trim()
+  return selectedProducts.some((product) => rowProduct === product)
+}
+
+/** @deprecated Single product tab — use matchesOilLossGlobalProductsMultiFilter */
 export function matchesOilLossGlobalProductFilter(
   row: OilLossSourceRow,
   filter: OilLossGlobalProductFilter,
@@ -123,38 +143,42 @@ export type ApplyOilLossGlobalFiltersInput = {
   rows: OilLossSourceRow[]
   period: OilLossGlobalPeriodKey
   transport: OilLossGlobalTransportFilter
-  product: OilLossGlobalProductFilter
-  selectedStaffProducts?: string[]
-  selectedStaffGroupPlants?: string[]
+  selectedProducts?: string[]
+  selectedGroupPlants?: string[]
   selectedModes?: string[]
   selectedIncoterms?: string[]
+  /** When set, overrides dates resolved from `period`. */
+  dateFrom?: string
+  dateTo?: string
   referenceDate?: Date
 }
 
-/** SSOT pipeline for Oil Loss Section 1 + Section 3 (global bar + staff scope + toolbar mode/incoterm). */
+/** SSOT pipeline for Oil Loss Section 1 + Section 3 (global bar + toolbar mode/incoterm). */
 export function applyOilLossGlobalFilters({
   rows,
   period,
   transport,
-  product,
-  selectedStaffProducts = [],
-  selectedStaffGroupPlants = [],
+  selectedProducts = [],
+  selectedGroupPlants = [],
   selectedModes = [],
   selectedIncoterms = [],
+  dateFrom: dateFromOverride,
+  dateTo: dateToOverride,
   referenceDate = new Date(),
 }: ApplyOilLossGlobalFiltersInput): OilLossSourceRow[] {
-  const { dateFrom, dateTo } = resolveOilLossPeriodDateRange(period, referenceDate)
+  const resolved = resolveOilLossPeriodDateRange(period, referenceDate)
+  const dateFrom = dateFromOverride || resolved.dateFrom
+  const dateTo = dateToOverride || resolved.dateTo
 
   return rows.filter((row) => {
     if (!matchesOilLossModeFilter(row.transport_mode, selectedModes)) return false
     const incoterm = String(row.incoterm || '').trim() || 'Blank'
     if (selectedIncoterms.length > 0 && !selectedIncoterms.includes(incoterm)) return false
-    const staffProduct = String(row.product || '').trim() || 'Blank'
-    if (selectedStaffProducts.length > 0 && !selectedStaffProducts.includes(staffProduct)) return false
-    const groupPlant = String(row.group_plant || '').trim() || 'Blank'
-    if (selectedStaffGroupPlants.length > 0 && !selectedStaffGroupPlants.includes(groupPlant)) return false
+    if (selectedGroupPlants.length > 0 && !valueInRegionSiteList(row.group_plant || row.plant_site, selectedGroupPlants)) {
+      return false
+    }
     if (!matchesOilLossGlobalTransportFilter(row, transport)) return false
-    if (!matchesOilLossGlobalProductFilter(row, product)) return false
+    if (!matchesOilLossGlobalProductsMultiFilter(row, selectedProducts)) return false
     const d = resolveRowDate(row)
     if (!d) return false
     if (d < dateFrom || d > dateTo) return false

@@ -1,12 +1,20 @@
 import { SPD_EFFECTIVE_STO_SQL } from './contractLogisticsStoDetailSql';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
-import { sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
+import { sqlTruckingPageIsCompletedExpr, sqlTruckingPagePipelineStageExpr } from './truckingPagePipelineSql';
 import { TRUCKING_REALIZATIONS_JOIN } from './truckingRealizationSql';
 import {
   sqlTruckingExpandedStoLineQtyKgExpr,
   sqlTruckingOutstandingQtyByIncoterm,
-  sqlTruckingPreferWbResolvedQty,
+  sqlTruckingResolvedDeliveryQty,
+  sqlTruckingResolvedReceiveQty,
 } from './truckingQuantitySql';
+import {
+  buildTruckingGrClosedCteOnly,
+  buildTruckingQtyResolutionCtes,
+  TRUCKING_GR_CLOSED_JOIN,
+  TRUCKING_QTY_RESOLUTION_JOIN,
+  TRUCKING_QTY_RESOLUTION_OVERRIDES,
+} from './truckingPoQtyResolutionCteSql';
 
 const SPD_EFFECTIVE_STO = SPD_EFFECTIVE_STO_SQL;
 
@@ -24,8 +32,72 @@ export interface TruckingListStoExpansionOptions {
   skipSapJoin?: boolean;
   /** Pre-page expansion keys before SAP qty joins (toolbar-only fast path). */
   expansionPaging?: TruckingListStoExpansionPaging;
+  /**
+   * Read each row's pipeline stage from trucking_list_stage_snapshot (populated by the
+   * same daily refresh that feeds the Summary Trucking Status circles) so status
+   * filters, totals and row badges agree with the circles regardless of skipSapJoin.
+   * Callers must gate this on the trucking daily summary being fresh, and it must stay
+   * OFF for the refresh source query itself (which defines the snapshot).
+   */
+  useStageSnapshot?: boolean;
+  /**
+   * Restrict the expansion to an already-resolved page of row keys (from the stage
+   * snapshot). Bypasses expansion_keys/ranked_expansion; the caller supplies totals.
+   * Grain is one key per operation (PO); stoLine is ignored when joining.
+   */
+  resolvedExpansionKeys?: Array<{ operationId: string; stoLine?: string }>;
 }
 
+/**
+ * @deprecated Correlated per-row subquery — re-scans contract_sto_lines once per output row
+ * (measured ~12s of ~42s on the default YTD scope). Use CONTRACT_STO_LINES_AGG_CTE +
+ * sqlTruckingAggregatedStoLinesFromAgg instead. Kept only for any external callers/tests.
+ */
+export function sqlTruckingAggregatedStoLinesExpr(
+  contractIdExpr = 'ts.contract_id',
+  fallbackStoExpr = 'ts.sto_number',
+): string {
+  return `COALESCE(
+    (
+      SELECT STRING_AGG(DISTINCT csl.sto_line, ', ' ORDER BY csl.sto_line)
+      FROM contract_sto_lines csl
+      WHERE csl.contract_uuid = ${contractIdExpr}
+    ),
+    NULLIF(TRIM(${fallbackStoExpr}::text), '')
+  )`;
+}
+
+/**
+ * Pre-aggregated STO-line display, one row per contract — computed once instead of via a
+ * correlated STRING_AGG subquery re-run for every output row (measured at ~12s of the ~42s
+ * Trucking Summary query for the default YTD scope: 5128 CTE Scan loops on contract_sto_lines).
+ * Callers LEFT JOIN this on contract_uuid instead of using sqlTruckingAggregatedStoLinesExpr.
+ */
+export const CONTRACT_STO_LINES_AGG_CTE = `
+      contract_sto_lines_agg AS MATERIALIZED (
+        SELECT contract_uuid, STRING_AGG(DISTINCT sto_line, ', ' ORDER BY sto_line) AS agg_sto_lines
+        FROM contract_sto_lines
+        GROUP BY contract_uuid
+      )`;
+
+/** Resolved STO display using the pre-aggregated contract_sto_lines_agg (JOIN alias `csla`). */
+export function sqlTruckingAggregatedStoLinesFromAgg(fallbackStoExpr = 'ts.sto_number'): string {
+  return `COALESCE(csla.agg_sto_lines, NULLIF(TRIM(${fallbackStoExpr}::text), ''))`;
+}
+
+/**
+ * STO lines per contract, from `contract_stos` plus SAP rows whose effective STO is not yet
+ * registered.
+ *
+ * Both UNION branches are scoped to `trucking_source`. Without that, they enumerated every
+ * contract in the database and only the outer `ON sto.contract_id = c.id` narrowed the result:
+ * a request filtered to one contract still made the planner walk 15,737 contracts and probe
+ * `sap_processed_data` once each - 99.6% of the query's loops on that table. The predicate is
+ * output-preserving by construction, since the outer join already discards any row whose
+ * contract is not in `trucking_source` (verified byte-for-byte across five filter shapes).
+ *
+ * `trucking_source` must stay defined before this CTE in the WITH list.
+ */
 export function buildContractStoLinesCte(skipSapJoin: boolean): string {
   const eligible = sqlTruckingEligibleStoLineWhere('c', 'TRIM(cs.sto_number::text)', skipSapJoin);
   if (skipSapJoin) {
@@ -50,6 +122,8 @@ export function buildContractStoLinesCte(skipSapJoin: boolean): string {
           FROM contract_stos cs
           INNER JOIN contracts c_cs ON c_cs.id = cs.contract_id
           WHERE cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
+            -- Page scope: rows outside trucking_source cannot survive the outer join below.
+            AND cs.contract_id IN (SELECT ts_scope.contract_id FROM trucking_source ts_scope)
             AND ${sqlTruckingEligibleStoLineWhere('c_cs', 'TRIM(cs.sto_number::text)', true)}
           UNION
           SELECT c2.id, TRIM(${SPD_EFFECTIVE_STO}) AS sto_number
@@ -57,6 +131,8 @@ export function buildContractStoLinesCte(skipSapJoin: boolean): string {
           INNER JOIN contracts c2 ON c2.contract_id = spd.contract_number
           WHERE spd.contract_number IS NOT NULL
             AND TRIM(spd.contract_number) != ''
+            -- Page scope: this branch used to join all of SAP to all of contracts.
+            AND c2.id IN (SELECT ts_scope.contract_id FROM trucking_source ts_scope)
             AND ${SPD_EFFECTIVE_STO} IS NOT NULL
             AND ${contractEffectiveIncotermExpr('c2')} IN ('FRC', 'LCO')
             AND ${sqlTruckingEligibleStoLineWhere('c2', `TRIM(${SPD_EFFECTIVE_STO})`, false)}
@@ -67,58 +143,57 @@ export function buildContractStoLinesCte(skipSapJoin: boolean): string {
 function buildQuantitySelects(skipSapJoin: boolean): {
   qtyDelivered: string;
   qtyReceive: string;
+  /** Display column — null in shell so first paint does not show misleading op-level qty. */
   outstanding: string;
+  /** Pipeline stage still needs op-level OS until SAP hydrate (snapshot usually wins). */
+  outstandingForStage: string;
   stoLineQty: string;
 } {
   if (skipSapJoin) {
     return {
-      qtyDelivered: 'e.quantity_delivered',
-      qtyReceive: 'e.quantity_receive',
-      outstanding: 'e.outstanding_quantity',
-      stoLineQty: 'e.contract_qty',
+      qtyDelivered: 'NULL::numeric',
+      qtyReceive: 'NULL::numeric',
+      outstanding: 'NULL::numeric',
+      outstandingForStage: 'e.outstanding_quantity',
+      stoLineQty: 'NULL::numeric',
     };
   }
 
-  const qtyDeliveredPerStoSap = `(
-    SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-      ''
-    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = e.contract_number
-      AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
-      AND NULLIF(TRIM(COALESCE(
-        spd.data->'raw'->>'Quantity Delivered',
-        spd.data->'raw'->>'Quantity Delivery'
-      )), '') IS NOT NULL
-  )`;
-
-  const qtyReceivePerStoSap = `(
-    SELECT SUM(NULLIF(regexp_replace(COALESCE(
-      NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-      NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-      ''
-    ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-    FROM sap_processed_data spd
-    WHERE spd.contract_number = e.contract_number
-      AND ${SPD_EFFECTIVE_STO} = TRIM(e.sto_line_resolved::text)
-      AND NULLIF(TRIM(COALESCE(
-        spd.data->'raw'->>'Quantity Receive',
-        spd.data->'raw'->>'Qty Receive'
-      )), '') IS NOT NULL
-  )`;
-
-  const qtyDelivered = sqlTruckingPreferWbResolvedQty(
-    'e.quantity_delivered',
-    qtyDeliveredPerStoSap,
+  // PO-grain SAP Delivery/Receive (dedup'd across STOs) — pre-aggregated once per
+  // contract via sap_delivery_dedup / sap_receive_dedup, then B2B origin overlay
+  // from qty_move snapshot when parent SAP is NULL or 0 (same formula as Contracts).
+  const qtyDelivered = sqlTruckingResolvedDeliveryQty(
+    'COALESCE(e.quantity_delivered, 0)',
+    TRUCKING_QTY_RESOLUTION_OVERRIDES.sapDeliveryExpr,
+    'e.id',
+    'c',
+    {
+      grClosedExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+      hasWbExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.hasWbExpr,
+      wbQtyExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.wbDeliveryExpr,
+    },
   );
-  const qtyReceive = sqlTruckingPreferWbResolvedQty('e.quantity_receive', qtyReceivePerStoSap);
-  const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr();
+  const qtyReceive = sqlTruckingResolvedReceiveQty(
+    'COALESCE(e.quantity_receive, e.quantity_delivered, 0)',
+    TRUCKING_QTY_RESOLUTION_OVERRIDES.sapReceiveExpr,
+    'e.id',
+    'c',
+    {
+      grClosedExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr,
+      hasWbExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.hasWbExpr,
+      wbQtyExpr: TRUCKING_QTY_RESOLUTION_OVERRIDES.wbReceiveExpr,
+    },
+  );
+  const stoLineQty = sqlTruckingExpandedStoLineQtyKgExpr(
+    'c.contract_id',
+    'e.po_number',
+    'e.contract_qty',
+  );
+  // OS = Contract Qty − Σ Delivery (LCO) / Σ Receive (FRC) across all STOs on the PO.
   const outstanding = sqlTruckingOutstandingQtyByIncoterm(
     qtyDelivered,
     qtyReceive,
-    stoLineQty,
+    'COALESCE(e.contract_qty, 0)',
     'e.incoterm',
   );
 
@@ -126,8 +201,75 @@ function buildQuantitySelects(skipSapJoin: boolean): {
     qtyDelivered,
     qtyReceive,
     outstanding,
+    outstandingForStage: outstanding,
     stoLineQty,
   };
+}
+
+/** paged_expansion from explicit keys (stage-snapshot fast path). Quotes are escaped. */
+/** Deduped uuid literals for the page's operations — snapshot may carry legacy sto_line rows. */
+function resolvedExpansionKeyLiterals(
+  keys: Array<{ operationId: string; stoLine?: string }>,
+): string[] {
+  const seen = new Set<string>();
+  const literals: string[] = [];
+  for (const k of keys) {
+    const op = String(k.operationId).replace(/'/g, "''");
+    if (seen.has(op)) continue;
+    seen.add(op);
+    literals.push(`'${op}'::uuid`);
+  }
+  return literals;
+}
+
+function buildResolvedExpansionKeysCte(literals: string[]): string {
+  if (literals.length === 0) {
+    return `
+      paged_expansion AS (
+        SELECT NULL::uuid AS operation_id WHERE FALSE
+      ),`;
+  }
+  return `
+      paged_expansion AS (
+        SELECT v.operation_id
+        FROM (VALUES ${literals.map((v) => `(${v})`).join(', ')}) v(operation_id)
+      ),`;
+}
+
+/**
+ * `trucking_source`, restricted to the page's operations when they are already known.
+ *
+ * Joining `paged_expansion` inside `expanded` is not enough, and measuring said so: with the
+ * page keys handed over for free from the snapshot (25 ms) the page still cost 19,353 ms.
+ * `trucking_source` is referenced more than once - `contract_sto_lines` reads it twice on its
+ * own - so Postgres materialises it, and materialising it means running the full list select
+ * with its per-row laterals over the whole scope before anything gets to filter it down to 20
+ * rows. The restriction has to be *inside* that CTE to be worth anything.
+ *
+ * It is a filter on the operation ids, so the row set is a subset of what the unrestricted CTE
+ * would produce and every downstream CTE derives from it - nothing computes an aggregate over
+ * the wider set that the page then reads.
+ */
+function buildTruckingSourceCte(innerSql: string, literals: string[] | null): string {
+  if (!literals) {
+    return `trucking_source AS (
+        ${innerSql}
+      )`;
+  }
+  if (literals.length === 0) {
+    return `trucking_source AS (
+        SELECT * FROM (
+          ${innerSql}
+        ) ts_all
+        WHERE FALSE
+      )`;
+  }
+  return `trucking_source AS (
+        SELECT * FROM (
+          ${innerSql}
+        ) ts_all
+        WHERE ts_all.id IN (${literals.join(', ')})
+      )`;
 }
 
 function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): string {
@@ -136,42 +278,36 @@ function buildExpansionPagingCtes(paging: TruckingListStoExpansionPaging): strin
   const upper = offset + limit;
   return `
       expansion_keys AS (
-        SELECT DISTINCT
-          ts.id AS operation_id,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line
+        SELECT DISTINCT ts.id AS operation_id
         FROM trucking_source ts
         INNER JOIN contracts c ON c.id = ts.contract_id
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-        WHERE COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) IS NOT NULL
       ),
       ranked_expansion AS (
         SELECT
           ek.operation_id,
-          ek.sto_line,
           ROW_NUMBER() OVER (ORDER BY ${paging.orderBySql}) AS rn
         FROM expansion_keys ek
         INNER JOIN trucking_source ts ON ts.id = ek.operation_id
         INNER JOIN contracts c ON c.id = ts.contract_id
-        LEFT JOIN contract_sto_lines csl
-          ON csl.contract_uuid = ts.contract_id
-          AND TRIM(csl.sto_line) = TRIM(ek.sto_line)
+        LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id
       ),
       paged_expansion AS (
-        SELECT operation_id, sto_line
+        SELECT operation_id
         FROM ranked_expansion
         WHERE rn > ${offset} AND rn <= ${upper}
       ),`;
 }
 
 function buildExpandedJoinSql(usePaging: boolean): string {
+  const stoAgg = sqlTruckingAggregatedStoLinesFromAgg('ts.sto_number');
   if (!usePaging) {
     return `
       expanded AS (
         SELECT
           ts.*,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line_resolved
+          ${stoAgg} AS sto_line_resolved
         FROM trucking_source ts
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
+        LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id
       )`;
   }
 
@@ -179,17 +315,16 @@ function buildExpandedJoinSql(usePaging: boolean): string {
       expanded AS (
         SELECT
           ts.*,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line_resolved
+          ${stoAgg} AS sto_line_resolved
         FROM trucking_source ts
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-        INNER JOIN paged_expansion pe
-          ON pe.operation_id = ts.id
-          AND TRIM(pe.sto_line) = TRIM(COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')))
+        INNER JOIN paged_expansion pe ON pe.operation_id = ts.id
+        LEFT JOIN contract_sto_lines_agg csla ON csla.contract_uuid = ts.contract_id
       )`;
 }
 
 /**
  * Count expansion keys only — no SAP qty joins (toolbar-only fast path total).
+ * Grain is one key per trucking operation (PO).
  */
 export function buildTruckingExpansionKeysCountSql(
   innerSql: string,
@@ -201,21 +336,17 @@ export function buildTruckingExpansionKeysCountSql(
       ),
       ${buildContractStoLinesCte(skipSapJoin)},
       expansion_keys AS (
-        SELECT DISTINCT
-          ts.id AS operation_id,
-          COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) AS sto_line
+        SELECT DISTINCT ts.id AS operation_id
         FROM trucking_source ts
         INNER JOIN contracts c ON c.id = ts.contract_id
-        LEFT JOIN contract_sto_lines csl ON csl.contract_uuid = ts.contract_id
-        WHERE COALESCE(csl.sto_line, NULLIF(TRIM(ts.sto_number::text), '')) IS NOT NULL
       )
       SELECT COUNT(*)::bigint AS c FROM expansion_keys`;
 }
 
 /**
- * Expand trucking list rows — one row per contract STO (contract_stos + SAP FRC/LCO).
- * Delivery/receive prefer WB daily actuals when uploaded; else SAP per-STO. Outstanding
- * follows the same resolved qty (contract − delivered/receive by incoterm).
+ * Trucking list rows — one row per operation / PO (multi-STO aggregated).
+ * Delivery/receive: GR Open + WB upload → op-level WB; GR Close → SAP sum (latest per STO on the PO).
+ * Outstanding = Contract Qty − Σ delivered/receive by incoterm (not per-STO).
  */
 export function buildTruckingListExpansionSql(
   innerSql: string,
@@ -223,19 +354,50 @@ export function buildTruckingListExpansionSql(
 ): string {
   const skipSapJoin = opts?.skipSapJoin === true;
   const selectOutstanding = opts?.selectOutstanding !== false;
-  const paging = opts?.expansionPaging;
+  const useStageSnapshot = opts?.useStageSnapshot === true;
+  const resolvedKeys = opts?.resolvedExpansionKeys;
+  const keyLiterals = resolvedKeys ? resolvedExpansionKeyLiterals(resolvedKeys) : null;
+  const paging = resolvedKeys ? undefined : opts?.expansionPaging;
   const qty = buildQuantitySelects(skipSapJoin);
-  const pagingBlock = paging ? buildExpansionPagingCtes(paging) : '';
+  const pagingBlock = keyLiterals
+    ? buildResolvedExpansionKeysCte(keyLiterals)
+    : paging
+      ? buildExpansionPagingCtes(paging)
+      : '';
   const filterTotalCol = paging
     ? ',\n        (SELECT COUNT(*)::bigint FROM expansion_keys) AS __filter_total'
     : '';
 
+  // Prefer aggregated sto_line_resolved; fall back to pre-joined sto_numbers.
+  const stoDisplay = `COALESCE(
+        NULLIF(TRIM(e.sto_line_resolved::text), ''),
+        NULLIF(TRIM(e.sto_numbers::text), '')
+      )`;
+
+  // Delivery/receive/GR-closed/WB-actuals computed once per distinct contract or
+  // operation (see truckingPoQtyResolutionCteSql.ts) instead of re-run as a
+  // correlated, text-duplicated subquery for every row below.
+  const qtyResolutionCte = skipSapJoin
+    ? `,${buildTruckingGrClosedCteOnly('expanded')}`
+    : `,${buildTruckingQtyResolutionCtes('expanded')}`;
+  /**
+   * The shell path skips the SAP *qty* dedup CTEs but still needs GR-close and SAP-cancelled -
+   * the stage expression is the same on both paths, and the shell is what the page's first
+   * paint requests, so dropping the flags here would show a different status than the hydrate.
+   * It used to inline them instead, which is how the shell statement reached 999KB and 529
+   * sap_processed_data scan nodes; gr_closed resolves them once per contract for both paths.
+   * (Referencing grc without emitting its CTE is a 42P01 that empties the whole page - that is
+   * why the join and the column always come from the same branch.)
+   */
+  const qtyResolutionJoin = skipSapJoin ? TRUCKING_GR_CLOSED_JOIN : TRUCKING_QTY_RESOLUTION_JOIN;
+  const grClosedExpr = TRUCKING_QTY_RESOLUTION_OVERRIDES.grClosedExpr;
+  const grCancelledExpr = TRUCKING_QTY_RESOLUTION_OVERRIDES.grCancelledExpr;
+
   return `
-      WITH trucking_source AS (
-        ${innerSql}
-      ),
-      ${buildContractStoLinesCte(skipSapJoin)},${pagingBlock}
-      ${buildExpandedJoinSql(Boolean(paging))}
+      WITH ${buildTruckingSourceCte(innerSql, keyLiterals)},
+      ${buildContractStoLinesCte(skipSapJoin)},
+      ${CONTRACT_STO_LINES_AGG_CTE},${pagingBlock}
+      ${buildExpandedJoinSql(Boolean(paging) || Boolean(resolvedKeys))}${qtyResolutionCte}
       SELECT
         e.id,
         e.operation_id,
@@ -252,6 +414,15 @@ export function buildTruckingListExpansionSql(
         e.realization_end_date,
         e.trucking_start_date,
         e.trucking_completion_date,
+        /*
+         * ATA for the Late Indicator, projected explicitly.
+         *
+         * This SELECT names every column it passes out, so adding one to the inner list is not
+         * enough - omitting it here is a 42703 that failed every snapshot rebuild silently in the
+         * background, leaving the snapshot stale. Stale now means the page falls to the live path,
+         * so a missing passthrough reads as the page being slow rather than as a broken query.
+         */
+        e.ata_end_date,
         e.eta_trucking_start_date,
         e.eta_trucking_completion_date,
         e.eta_delivery_start_date,
@@ -264,17 +435,47 @@ export function buildTruckingListExpansionSql(
         e.oa_budget,
         e.oa_actual,
         e.status_db,
-        ${sqlTruckingPagePipelineStageExpr(
-          'c',
-          `NULLIF(TRIM(e.sto_line_resolved::text), '')`,
-          qty.outstanding,
-        )} AS status,
+        ${
+          useStageSnapshot
+            ? `CASE
+          WHEN ${sqlTruckingPageIsCompletedExpr(
+            'c',
+            qty.outstandingForStage,
+            grClosedExpr,
+          )} THEN 'COMPLETED'
+          ELSE COALESCE(
+            NULLIF(sn.stage, 'COMPLETED'),
+            ${sqlTruckingPagePipelineStageExpr(
+              'c',
+              `NULLIF(TRIM((${stoDisplay})::text), '')`,
+              qty.outstandingForStage,
+              grClosedExpr,
+              undefined,
+              undefined,
+              grCancelledExpr,
+            )}
+          )
+        END`
+            : sqlTruckingPagePipelineStageExpr(
+                'c',
+                `NULLIF(TRIM((${stoDisplay})::text), '')`,
+                qty.outstandingForStage,
+                grClosedExpr,
+                undefined,
+                undefined,
+                grCancelledExpr,
+              )
+        } AS status,
         e.created_at,
         e.updated_at,
         e.contract_number,
+        -- Carried through the expansion so the summary can exclude SAP-withdrawn contracts from
+        -- the status circles. This select list is explicit, so an omission here silently drops
+        -- the column and the summary predicate would fail.
+        COALESCE(e.sap_presence, 'PRESENT') AS sap_presence,
         e.po_number,
-        e.sto_line_resolved AS sto_number,
-        e.sto_numbers,
+        ${stoDisplay} AS sto_number,
+        COALESCE(NULLIF(TRIM(e.sto_numbers::text), ''), ${stoDisplay}) AS sto_numbers,
         ${qty.stoLineQty} AS sto_quantity,
         e.contract_qty,
         e.contract_date,
@@ -289,10 +490,22 @@ export function buildTruckingListExpansionSql(
         ${selectOutstanding ? `${qty.outstanding} AS outstanding_quantity` : 'e.outstanding_quantity'},
         e.estimated_km,
         e.contract_ext_no,
-        e.contract_import_status${filterTotalCol}
+        e.contract_import_status,
+        ${/* Deliberately still FALSE on the shell path even though grc is now available
+            there: this column feeds summary exclusions, and the shell has always
+            reported FALSE for it (asserted by the shell-mode test above). Resolving it
+            here would change first-paint numbers, which is a separate decision. */
+          skipSapJoin ? 'FALSE' : grClosedExpr} AS is_contract_sap_closed${filterTotalCol}
       FROM expanded e
       INNER JOIN contracts c ON c.id = e.contract_id
-      INNER JOIN trucking_operations t ON t.id = e.id
+      INNER JOIN trucking_operations t ON t.id = e.id${
+        useStageSnapshot
+          ? `
+      LEFT JOIN trucking_list_stage_snapshot sn
+        ON sn.operation_id = e.id`
+          : ''
+      }
+      ${qtyResolutionJoin}
       ${TRUCKING_REALIZATIONS_JOIN}`;
 }
 

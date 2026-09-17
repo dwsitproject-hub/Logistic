@@ -5,10 +5,64 @@ import { AuthRequest } from '../middleware/auth'
 import logger from '../utils/logger'
 import {
   AI_KLIP_AGENT,
-  resolveGeminiApiKeyName,
+  resolveAnthropicAgentApiKeyName,
   truncateActivityText,
 } from '../constants/aiKlipAgent'
 import { logAiKlipAgentActivity } from '../services/aiKlipAgentActivityLog.service'
+import { sqlContractIsPresent } from '../utils/sapPresenceSql'
+import {
+  AgentLesson,
+  detectStatedPreferences,
+  distillLessonFromFeedback,
+  loadLessons,
+  markLessonsApplied,
+  recordLesson,
+  renderLessonsForPrompt,
+} from '../services/agentAiMemory.service'
+import { SQL_DELIVERED_BY_CONTRACT_CTE, SQL_DELIVERED_QTY } from '../services/agentGroupPlant.service'
+import {
+  breakdownDimensionLabel,
+  BreakdownDimension,
+  getContractAgingBuckets,
+  getFlexibleBreakdown,
+  listIncoterms,
+  matchIncotermInText,
+  getGroupPlantContractCounts,
+  getGroupPlantPerformance,
+  getGroupPlantProductBreakdown,
+  getProductGroupPlantBreakdown,
+  getProductPlantOutstandingMatrix,
+  listGroupPlants,
+  listProducts,
+  matchGroupPlantInText,
+  matchProductInText,
+} from '../services/agentGroupPlant.service'
+import {
+  askKlipAgentClaude,
+  describeAnthropicError,
+  isAnthropicConfigured,
+  isSupportedAgentImageMediaType,
+  KlipAgentImage,
+  MAX_IMAGE_BYTES,
+} from '../services/klipAgentAi.service'
+
+/**
+ * Structured Report payload. The Report section used to be plain pre-wrapped text, which is hard
+ * to scan for a breakdown; the frontend renders this as a real table plus a chart when one fits.
+ * `report` stays populated as a text fallback.
+ */
+export type AgentReportTable = {
+  title: string
+  columns: Array<{ key: string; label: string; align?: 'left' | 'right' }>
+  rows: Array<Record<string, string | number | null>>
+  totals?: Record<string, string | number | null>
+  chart?: {
+    type: 'bar' | 'pie'
+    labelKey: string
+    valueKey: string
+    valueLabel: string
+  }
+}
 
 type AgentAiResult = {
   answer: string
@@ -16,6 +70,7 @@ type AgentAiResult = {
   insights: string
   comparison: string
   clarification?: string
+  reportTable?: AgentReportTable | null
 }
 
 type DirectAnswer = {
@@ -99,12 +154,53 @@ const logChatAgentActivity = (
 ) => {
   void logAiKlipAgentActivity({
     agentName: AI_KLIP_AGENT.CHAT,
-    apiKeyName: resolveGeminiApiKeyName(),
+    apiKeyName: resolveAnthropicAgentApiKeyName(),
     userId: req.user?.id,
     status,
     activity: truncateActivityText(activity, 2000),
     metadata: metadata ?? null,
   })
+}
+
+/**
+ * Escape raw control characters that appear *inside* JSON string literals.
+ *
+ * Safety net for hand-written JSON: a model writing long multi-line prose can emit a
+ * literal newline inside a string, which makes JSON.parse fail ("Bad control character
+ * in string literal") and used to collapse report/insights into one raw-text blob.
+ * The primary defence is output_config.format in klipAgentAi.service.ts; this keeps a
+ * bypassed or non-supporting model from silently degrading the response.
+ */
+export const escapeControlCharsInJsonStrings = (json: string): string => {
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (const ch of json) {
+    if (escaped) {
+      out += ch
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      out += ch
+      escaped = inString
+      continue
+    }
+    if (ch === '"') {
+      inString = !inString
+      out += ch
+      continue
+    }
+    if (inString) {
+      if (ch === '\n') { out += '\\n'; continue }
+      if (ch === '\r') { out += '\\r'; continue }
+      if (ch === '\t') { out += '\\t'; continue }
+      const code = ch.charCodeAt(0)
+      if (code < 0x20) { out += `\\u${code.toString(16).padStart(4, '0')}`; continue }
+    }
+    out += ch
+  }
+  return out
 }
 
 const parseAgentAiResponse = (text: string): AgentAiResult => {
@@ -116,21 +212,34 @@ const parseAgentAiResponse = (text: string): AgentAiResult => {
   }
   const block = extractJsonBlock(text)
   if (!block) return fallback
-  try {
-    const obj = JSON.parse(block) as Partial<AgentAiResult>
-    return {
-      answer: typeof obj.answer === 'string' ? obj.answer : fallback.answer,
-      report: typeof obj.report === 'string' ? obj.report : '',
-      insights: typeof obj.insights === 'string' ? obj.insights : '',
-      comparison: typeof obj.comparison === 'string' ? obj.comparison : '',
+
+  const tryParse = (candidate: string): Partial<AgentAiResult> | null => {
+    try {
+      const parsed = JSON.parse(candidate) as unknown
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Partial<AgentAiResult>)
+        : null
+    } catch {
+      return null
     }
-  } catch {
-    return fallback
+  }
+
+  const obj = tryParse(block) ?? tryParse(escapeControlCharsInJsonStrings(block))
+  if (!obj) return fallback
+
+  return {
+    answer: typeof obj.answer === 'string' ? obj.answer : fallback.answer,
+    report: typeof obj.report === 'string' ? obj.report : '',
+    insights: typeof obj.insights === 'string' ? obj.insights : '',
+    comparison: typeof obj.comparison === 'string' ? obj.comparison : '',
   }
 }
 
 const getAppDataContext = async () => {
   const [contractsRes, shipmentsRes, truckingRes, financeRes, productRes] = await Promise.all([
+    // SAP-withdrawn contracts are excluded here for the same reason every page excludes them:
+    // otherwise the agent's company-wide totals disagree with the dashboards and with its own
+    // area/product breakdowns below.
     query(`
       SELECT
         COUNT(*)::int AS total_contracts,
@@ -138,7 +247,8 @@ const getAppDataContext = async () => {
         COUNT(*) FILTER (WHERE UPPER(COALESCE(status, '')) IN ('CLOSE','CLOSED','COMPLETED'))::int AS closed_contracts,
         COALESCE(SUM(quantity_ordered), 0)::numeric AS total_quantity,
         COALESCE(SUM(contract_value), 0)::numeric AS total_contract_value
-      FROM contracts
+      FROM contracts c
+      WHERE ${sqlContractIsPresent('c')}
     `),
     query(`
       SELECT
@@ -161,54 +271,41 @@ const getAppDataContext = async () => {
       FROM payments
     `),
     query(`
-      WITH delivered_by_contract AS (
-        SELECT
-          spd.contract_number AS contract_id,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive'), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Receive', spd.data->'raw'->>'Qty Receive')), '') IS NOT NULL
-          ), 0)::numeric AS quantity_receive,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery'), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Quantity Delivered', spd.data->'raw'->>'Quantity Delivery')), '') IS NOT NULL
-          ), 0)::numeric AS quantity_delivery,
-          COALESCE(SUM(
-            CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-          ) FILTER (
-            WHERE spd.data->'contract'->>'sto_quantity' IS NOT NULL AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
-          ), 0)::numeric AS total_sto_quantity
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        GROUP BY spd.contract_number
-      )
+      WITH${SQL_DELIVERED_BY_CONTRACT_CTE}
       SELECT
         c.product,
         COUNT(DISTINCT c.contract_id)::int AS contract_count,
         COALESCE(SUM(c.quantity_ordered), 0)::numeric AS total_quantity,
         COALESCE(SUM(
-          CASE
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
-            ELSE COALESCE(db.total_sto_quantity, 0)
-          END
+          (${SQL_DELIVERED_QTY})
         ), 0)::numeric AS delivered_quantity,
         COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(
-          CASE
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FRC', 'CIF', 'CFR') THEN COALESCE(db.quantity_receive, 0)
-            WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('LCO', 'FOB') THEN COALESCE(db.quantity_delivery, 0)
-            ELSE COALESCE(db.total_sto_quantity, 0)
-          END
+          (${SQL_DELIVERED_QTY})
         ), 0)::numeric AS outstanding_quantity
       FROM contracts c
       LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
       WHERE c.product IS NOT NULL AND TRIM(c.product) <> ''
+        AND ${sqlContractIsPresent('c')}
       GROUP BY c.product
       ORDER BY outstanding_quantity DESC NULLS LAST
       LIMIT 150
     `),
   ])
+
+  // Group Plant is how users name areas ("Bontang"). Without it in context the model reported
+  // "no location dimension exists" and fell back to company-wide totals.
+  let groupPlantSummary: Array<{ group_plant: string; contract_count: number; outstanding_quantity: number }> = []
+  let groupPlantNames: string[] = []
+  let productPlantMatrix: Array<{ product: string; group_plant: string; outstanding_quantity: number }> = []
+  try {
+    ;[groupPlantSummary, groupPlantNames, productPlantMatrix] = await Promise.all([
+      getGroupPlantContractCounts(),
+      listGroupPlants(),
+      getProductPlantOutstandingMatrix(6),
+    ])
+  } catch (err) {
+    logger.warn('Failed to load Group Plant context for Agent AI', err)
+  }
 
   return {
     contracts: contractsRes.rows[0] || {},
@@ -216,24 +313,24 @@ const getAppDataContext = async () => {
     trucking: truckingRes.rows[0] || {},
     finance: financeRes.rows[0] || {},
     product_summary: productRes.rows || [],
+    group_plant_dimension: {
+      note:
+        'Group Plant (master_plants.group_plant) is the area/site dimension used by Contracts, Shipments, ' +
+        'Trucking, Contract Performance, Shipping Performance and Oil Loss. When the user names an area ' +
+        '(e.g. "Bontang"), it means this Group Plant. Contracts resolve to it via (plant_code, company_name); ' +
+        'unmapped contracts appear as "Blank".',
+      available_group_plants: groupPlantNames,
+      summary_by_group_plant: groupPlantSummary,
+      outstanding_kg_by_product_and_group_plant: productPlantMatrix,
+      unit_note: 'All quantities are Kg. 1 MT = 1,000 Kg — convert when the user asks for MT.',
+    },
   }
 }
 
 const getProductMetrics = async (productHint: string, year?: number | null) => {
   const yearFilter = year ? ` AND EXTRACT(YEAR FROM c.contract_date) = $2 ` : ''
   const sql = `
-    WITH delivered_by_contract AS (
-      SELECT
-        spd.contract_number AS contract_id,
-        SUM(
-          CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-        ) AS delivered_quantity
-      FROM sap_processed_data spd
-      WHERE spd.sto_number IS NOT NULL
-        AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
-      GROUP BY spd.contract_number
-    ),
+    WITH${SQL_DELIVERED_BY_CONTRACT_CTE},
     payment_status_per_contract AS (
       SELECT
         p.contract_id,
@@ -245,13 +342,14 @@ const getProductMetrics = async (productHint: string, year?: number | null) => {
       c.product,
       COUNT(DISTINCT c.contract_id)::int AS contract_count,
       COALESCE(SUM(c.quantity_ordered), 0)::numeric AS total_quantity,
-      COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS delivered_quantity,
-      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity,
-      COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN (c.quantity_ordered - COALESCE(db.delivered_quantity, 0)) ELSE 0 END), 0)::numeric AS outstanding_payment_quantity
+      COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS delivered_quantity,
+      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS outstanding_quantity,
+      COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN (c.quantity_ordered - (${SQL_DELIVERED_QTY})) ELSE 0 END), 0)::numeric AS outstanding_payment_quantity
     FROM contracts c
     LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
     LEFT JOIN payment_status_per_contract ps ON ps.contract_id = c.id
-    WHERE c.product ILIKE $1
+    WHERE ${sqlContractIsPresent('c')}
+      AND c.product ILIKE $1
       ${yearFilter}
     GROUP BY c.product
     ORDER BY outstanding_quantity DESC NULLS LAST
@@ -263,28 +361,19 @@ const getProductMetrics = async (productHint: string, year?: number | null) => {
 }
 
 const getIncotermBreakdown = async (year?: number | null) => {
-  const yearFilter = year ? ` WHERE EXTRACT(YEAR FROM c.contract_date) = $1 ` : ''
+  // Presence is always filtered, so the year clause is an AND rather than the WHERE.
+  const yearFilter = year ? ` AND EXTRACT(YEAR FROM c.contract_date) = $1 ` : ''
   const res = await query(`
-    WITH delivered_by_contract AS (
-      SELECT
-        spd.contract_number AS contract_id,
-        SUM(
-          CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-        ) AS delivered_quantity
-      FROM sap_processed_data spd
-      WHERE spd.sto_number IS NOT NULL
-        AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
-      GROUP BY spd.contract_number
-    )
+    WITH${SQL_DELIVERED_BY_CONTRACT_CTE}
     SELECT
       COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank') AS incoterm,
       COUNT(DISTINCT c.contract_id)::int AS contract_count,
       COALESCE(SUM(c.quantity_ordered), 0)::numeric AS total_quantity,
-      COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS delivered_quantity,
-      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity
+      COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS delivered_quantity,
+      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS outstanding_quantity
     FROM contracts c
     LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
+    WHERE ${sqlContractIsPresent('c')}
     ${yearFilter}
     GROUP BY COALESCE(NULLIF(TRIM(c.incoterm), ''), 'Blank')
     ORDER BY total_quantity DESC NULLS LAST
@@ -311,22 +400,13 @@ const getVendorGroupBreakdown = async (opts?: {
     params.push(opts.incotermHint)
     where.push(`UPPER(COALESCE(NULLIF(TRIM(c.incoterm), ''), 'BLANK')) = UPPER($${params.length})`)
   }
+  // Always exclude SAP-withdrawn contracts, same as every page.
+  where.unshift(sqlContractIsPresent('c'))
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
 
   const res = await query(
     `
-    WITH delivered_by_contract AS (
-      SELECT
-        spd.contract_number AS contract_id,
-        SUM(
-          CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-        ) AS delivered_quantity
-      FROM sap_processed_data spd
-      WHERE spd.sto_number IS NOT NULL
-        AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
-      GROUP BY spd.contract_number
-    ),
+    WITH${SQL_DELIVERED_BY_CONTRACT_CTE},
     payment_status_per_contract AS (
       SELECT
         p.contract_id,
@@ -338,9 +418,9 @@ const getVendorGroupBreakdown = async (opts?: {
       COALESCE(NULLIF(TRIM(c.group_name), ''), 'Ungrouped') AS vendor_group,
       COUNT(DISTINCT c.contract_id)::int AS contract_count,
       COALESCE(SUM(c.quantity_ordered), 0)::numeric AS total_quantity,
-      COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS delivered_quantity,
-      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity,
-      COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN (c.quantity_ordered - COALESCE(db.delivered_quantity, 0)) ELSE 0 END), 0)::numeric AS outstanding_payment_quantity
+      COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS delivered_quantity,
+      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS outstanding_quantity,
+      COALESCE(SUM(CASE WHEN COALESCE(ps.has_blank_payoff, 0) = 1 THEN (c.quantity_ordered - (${SQL_DELIVERED_QTY})) ELSE 0 END), 0)::numeric AS outstanding_payment_quantity
     FROM contracts c
     LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
     LEFT JOIN payment_status_per_contract ps ON ps.contract_id = c.id
@@ -388,10 +468,10 @@ const tryDirectProductOutstandingAnswer = async (question: string, year?: number
     sourceLabel: 'deterministic.product_outstanding_quantity',
     result: {
       answer:
-        `Outstanding quantity for ${product}: ${outstandingQuantity.toLocaleString('en-US')} Kg ` +
-        `(Total: ${totalQuantity.toLocaleString('en-US')} Kg, Delivered: ${deliveredQuantity.toLocaleString('en-US')} Kg, Contracts: ${contractCount.toLocaleString('en-US')})` +
+        `Outstanding quantity for ${product}: ${fmtQty(outstandingQuantity, POLICY_QTY_UNIT)} ` +
+        `(Total: ${fmtQty(totalQuantity, POLICY_QTY_UNIT)}, Delivered: ${fmtQty(deliveredQuantity, POLICY_QTY_UNIT)}, Contracts: ${contractCount.toLocaleString('en-US')})` +
         `${year ? ` for ${year}.` : '.'}`,
-      report: `${product} quantity report\n- Total: ${totalQuantity.toLocaleString('en-US')} Kg\n- Delivered: ${deliveredQuantity.toLocaleString('en-US')} Kg\n- Outstanding: ${outstandingQuantity.toLocaleString('en-US')} Kg\n- Contracts: ${contractCount.toLocaleString('en-US')}`,
+      report: `${product} quantity report\n- Total: ${fmtQty(totalQuantity, POLICY_QTY_UNIT)}\n- Delivered: ${fmtQty(deliveredQuantity, POLICY_QTY_UNIT)}\n- Outstanding: ${fmtQty(outstandingQuantity, POLICY_QTY_UNIT)}\n- Contracts: ${contractCount.toLocaleString('en-US')}`,
       insights:
         outstandingQuantity > 0
           ? `${product} still has outstanding quantity, so delivery execution and follow-up should remain prioritized on open contracts.`
@@ -421,9 +501,9 @@ const tryDirectProductDeliveredAnswer = async (question: string, year?: number |
       `total_quantity=${totalQuantity.toLocaleString('en-US')}, outstanding_quantity=${outstandingQuantity.toLocaleString('en-US')}, contracts=${contractCount.toLocaleString('en-US')}.`,
     result: {
       answer:
-        `Delivered quantity for ${product}: ${deliveredQuantity.toLocaleString('en-US')} Kg ` +
-        `(Total: ${totalQuantity.toLocaleString('en-US')} Kg, Outstanding: ${outstandingQuantity.toLocaleString('en-US')} Kg, Contracts: ${contractCount.toLocaleString('en-US')}).`,
-      report: `${product} delivery report\n- Total: ${totalQuantity.toLocaleString('en-US')} Kg\n- Delivered: ${deliveredQuantity.toLocaleString('en-US')} Kg\n- Outstanding: ${outstandingQuantity.toLocaleString('en-US')} Kg\n- Contracts: ${contractCount.toLocaleString('en-US')}`,
+        `Delivered quantity for ${product}: ${fmtQty(deliveredQuantity, POLICY_QTY_UNIT)} ` +
+        `(Total: ${fmtQty(totalQuantity, POLICY_QTY_UNIT)}, Outstanding: ${fmtQty(outstandingQuantity, POLICY_QTY_UNIT)}, Contracts: ${contractCount.toLocaleString('en-US')}).`,
+      report: `${product} delivery report\n- Total: ${fmtQty(totalQuantity, POLICY_QTY_UNIT)}\n- Delivered: ${fmtQty(deliveredQuantity, POLICY_QTY_UNIT)}\n- Outstanding: ${fmtQty(outstandingQuantity, POLICY_QTY_UNIT)}\n- Contracts: ${contractCount.toLocaleString('en-US')}`,
       insights: deliveredQuantity > 0 ? `${product} already has delivered volume, but remaining outstanding quantity should be tracked for completion risk.` : `${product} has no delivered quantity recorded yet.`,
       comparison: '',
     },
@@ -444,8 +524,8 @@ const tryDirectOutstandingPaymentAnswer = async (question: string, year?: number
     sourceLabel: 'deterministic.product_outstanding_payment_quantity',
     factText: `Direct metric from app data: product=${product}, outstanding_payment_quantity=${opQty.toLocaleString('en-US')}.`,
     result: {
-      answer: `Outstanding payment quantity for ${product}: ${opQty.toLocaleString('en-US')} Kg.`,
-      report: `${product} payment-outstanding report\n- Outstanding payment quantity: ${opQty.toLocaleString('en-US')} Kg`,
+      answer: `Outstanding payment quantity for ${product}: ${fmtQty(opQty, POLICY_QTY_UNIT)}.`,
+      report: `${product} payment-outstanding report\n- Outstanding payment quantity: ${fmtQty(opQty, POLICY_QTY_UNIT)}`,
       insights: opQty > 0 ? `${product} has quantity already delivered but still pending payment closure.` : `${product} currently has no outstanding payment quantity.`,
       comparison: '',
     },
@@ -457,24 +537,14 @@ const tryDirectTopSuppliersOutstanding = async (question: string, year?: number 
   if (!(q.includes('top') && q.includes('supplier') && q.includes('outstanding'))) return { matched: false }
   const yearFilter = year ? ` AND EXTRACT(YEAR FROM c.contract_date) = $1 ` : ''
   const res = await query(`
-    WITH delivered_by_contract AS (
-      SELECT
-        spd.contract_number AS contract_id,
-        SUM(
-          CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-        ) AS delivered_quantity
-      FROM sap_processed_data spd
-      WHERE spd.sto_number IS NOT NULL
-        AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
-      GROUP BY spd.contract_number
-    )
+    WITH${SQL_DELIVERED_BY_CONTRACT_CTE}
     SELECT
       c.supplier,
-      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity
+      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS outstanding_quantity
     FROM contracts c
     LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
-    WHERE c.supplier IS NOT NULL AND TRIM(c.supplier) <> ''
+    WHERE ${sqlContractIsPresent('c')}
+      AND c.supplier IS NOT NULL AND TRIM(c.supplier) <> ''
       ${yearFilter}
     GROUP BY c.supplier
     ORDER BY outstanding_quantity DESC NULLS LAST
@@ -482,7 +552,7 @@ const tryDirectTopSuppliersOutstanding = async (question: string, year?: number 
   `, year ? [year] : [])
   const rows = res.rows || []
   if (rows.length === 0) return { matched: false }
-  const lines = rows.map((r: any, i: number) => `${i + 1}. ${r.supplier}: ${Number(r.outstanding_quantity || 0).toLocaleString('en-US')} Kg`)
+  const lines = rows.map((r: any, i: number) => `${i + 1}. ${r.supplier}: ${fmtQty(Number(r.outstanding_quantity || 0), POLICY_QTY_UNIT)}`)
   return {
     matched: true,
     sourceLabel: 'deterministic.top_suppliers_outstanding_quantity',
@@ -512,25 +582,17 @@ const tryDirectTopVendorsOutstanding = async (question: string, year?: number | 
   const yearFilter = year ? ` AND EXTRACT(YEAR FROM c.contract_date) = $1 ` : ''
   const res = await query(
     `
-    WITH delivered_by_contract AS (
-      SELECT
-        spd.contract_number AS contract_id,
-        SUM(
-          CAST(REPLACE(REPLACE(COALESCE(spd.data->'contract'->>'sto_quantity', ''), ',', ''), ' ', '') AS NUMERIC)
-        ) AS delivered_quantity
-      FROM sap_processed_data spd
-      WHERE spd.sto_number IS NOT NULL
-        AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
-        AND TRIM(spd.data->'contract'->>'sto_quantity') != ''
-      GROUP BY spd.contract_number
-    )
+    WITH${SQL_DELIVERED_BY_CONTRACT_CTE}
     SELECT
       COALESCE(NULLIF(TRIM(c.group_name), ''), NULLIF(TRIM(c.supplier), ''), 'Unknown') AS vendor,
-      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM(COALESCE(db.delivered_quantity, 0)), 0)::numeric AS outstanding_quantity
+      COALESCE(SUM(c.quantity_ordered), 0)::numeric - COALESCE(SUM((${SQL_DELIVERED_QTY})), 0)::numeric AS outstanding_quantity
     FROM contracts c
     LEFT JOIN delivered_by_contract db ON db.contract_id = c.contract_id
-    WHERE (c.group_name IS NOT NULL AND TRIM(c.group_name) <> '')
-       OR (c.supplier IS NOT NULL AND TRIM(c.supplier) <> '')
+    WHERE ${sqlContractIsPresent('c')}
+      AND (
+        (c.group_name IS NOT NULL AND TRIM(c.group_name) <> '')
+        OR (c.supplier IS NOT NULL AND TRIM(c.supplier) <> '')
+      )
       ${yearFilter}
     GROUP BY COALESCE(NULLIF(TRIM(c.group_name), ''), NULLIF(TRIM(c.supplier), ''), 'Unknown')
     ORDER BY outstanding_quantity DESC NULLS LAST
@@ -556,7 +618,7 @@ const tryDirectTopVendorsOutstanding = async (question: string, year?: number | 
   }
 
   const lines = rows.map(
-    (r: any, i: number) => `${i + 1}. ${r.vendor}: ${Number(r.outstanding_quantity || 0).toLocaleString('en-US')} Kg`
+    (r: any, i: number) => `${i + 1}. ${r.vendor}: ${fmtQty(Number(r.outstanding_quantity || 0), POLICY_QTY_UNIT)}`
   )
 
   return {
@@ -612,7 +674,10 @@ const tryDirectOverduePayments = async (question: string, year?: number | null):
   const res = await query(sql, year ? [year] : [])
   const rows = res.rows || []
   if (rows.length === 0) return { matched: false }
-  const lines = rows.map((r: any) => `${r.dim}: ${Number(r.total_payments || 0).toLocaleString('en-US')} payments, amount ${Number(r.total_amount || 0).toLocaleString('en-US')}`)
+  // fmt() rounds — money follows the same no-decimals rule as quantities.
+  const lines = rows.map(
+    (r: any) => `${r.dim}: ${fmt(Number(r.total_payments || 0))} payments, amount ${fmt(Number(r.total_amount || 0))}`,
+  )
   const dimLabel = byMonth ? 'month' : bySupplier ? 'supplier' : byGroup ? 'vendor group' : 'overall'
   return {
     matched: true,
@@ -646,7 +711,7 @@ const tryDirectIncotermBreakdown = async (question: string, year?: number | null
   const lines = rows.map((r: any) => {
     const qty = Number(r.total_quantity || 0)
     const pct = total > 0 ? (qty / total) * 100 : 0
-    return `${r.incoterm}: ${qty.toLocaleString('en-US')} Kg (${pct.toFixed(2)}%)`
+    return `${r.incoterm}: ${fmtQty(qty, POLICY_QTY_UNIT)} (${Math.round(pct)}%)`
   })
 
   return {
@@ -678,8 +743,8 @@ const tryDirectVendorGroupBreakdown = async (
   if (!rows.length) return { matched: false }
 
   const lines = rows.slice(0, 15).map((r: any, i: number) =>
-    `${i + 1}. ${r.vendor_group}: outstanding ${Number(r.outstanding_quantity || 0).toLocaleString('en-US')} Kg, ` +
-    `delivered ${Number(r.delivered_quantity || 0).toLocaleString('en-US')} Kg, total ${Number(r.total_quantity || 0).toLocaleString('en-US')} Kg`
+    `${i + 1}. ${r.vendor_group}: outstanding ${fmtQty(Number(r.outstanding_quantity || 0), POLICY_QTY_UNIT)}, ` +
+    `delivered ${fmtQty(Number(r.delivered_quantity || 0), POLICY_QTY_UNIT)}, total ${fmtQty(Number(r.total_quantity || 0), POLICY_QTY_UNIT)}`
   )
 
   return {
@@ -704,6 +769,540 @@ const tryDirectVendorGroupBreakdown = async (
   }
 }
 
+const fmt = (n: number): string => Math.round(n).toLocaleString('en-US')
+
+/**
+ * KLIP stores quantity in Kg, but MT is the working unit in downstream palm oil. Honour an
+ * explicit MT/tonne request and otherwise show Kg, with the other unit in brackets so a
+ * figure is never ambiguous and nobody has to redo the arithmetic.
+ */
+type QtyUnit = 'MT' | 'KG'
+
+/**
+ * Reporting unit for the older single-dimension answers.
+ *
+ * Those built their strings with a hardcoded " Kg" suffix, which contradicted the standing MT rule
+ * once it was introduced. They do not thread the question far enough to honour an explicit
+ * "in kg" request, so they follow the policy unit unconditionally. Used only inside request
+ * handlers, so the module-level order is not a problem.
+ */
+const POLICY_QTY_UNIT: QtyUnit = 'MT'
+
+/**
+ * MT is the reporting unit, always. KLIP stores Kg, but the business works in MT, so this is a
+ * standing rule rather than something the user has to ask for each time — which also means it
+ * cannot be switched off accidentally by a stray phrase in one question.
+ * An explicit request for Kg still wins, for that one answer only.
+ */
+const detectExplicitKgRequest = (...texts: Array<string | null | undefined>): boolean => {
+  const joined = texts.filter(Boolean).join(' ')
+  return /\b(in|into|as)\s+(kg|kgs|kilogram|kilograms)\b|\bkg\s+instead\b/i.test(joined)
+}
+
+const resolveQtyUnit = (...texts: Array<string | null | undefined>): QtyUnit =>
+  detectExplicitKgRequest(...texts) ? 'KG' : 'MT'
+
+const fmtQty = (kg: number, unit: QtyUnit): string => {
+  const mt = kg / 1000
+  // Whole numbers only - decimals are noise at MT scale.
+  return unit === 'MT' ? `${fmt(mt)} MT` : `${fmt(kg)} Kg`
+}
+
+/**
+ * Headline figures. Previously showed the other unit in brackets; dropped because MT is now the
+ * standing unit and the bracketed Kg was pure clutter on every line.
+ */
+const fmtQtyBoth = (kg: number, unit: QtyUnit): string => fmtQty(kg, unit)
+
+/**
+ * Area names like "Bontang" are Group Plant values from the Master Plant List, the same
+ * dimension Contracts / Shipments / Trucking / Contract Performance / Shipping Performance /
+ * Oil Loss filter on. Before this matcher the agent had no location dimension in its context
+ * and correctly-but-uselessly answered "unknown" while showing company-wide totals.
+ *
+ * Ordered ahead of the global product matchers so an area-scoped question can never be
+ * answered with company-wide numbers.
+ */
+const tryDirectGroupPlantContractPerformance = async (
+  question: string,
+  contextQuestion?: string,
+): Promise<DirectAnswer> => {
+  const q = question.trim().toLowerCase()
+  if (!q) return { matched: false }
+
+  const groupPlants = await listGroupPlants()
+  const area = matchGroupPlantInText(`${question} ${contextQuestion || ''}`, groupPlants)
+  if (!area) return { matched: false }
+
+  const asksContractScope =
+    q.includes('performance') ||
+    q.includes('product') ||
+    q.includes('contract') ||
+    q.includes('outstanding') ||
+    q.includes('delivered') ||
+    q.includes('quantity')
+  if (!asksContractScope) return { matched: false }
+
+  const unit = resolveQtyUnit(question, contextQuestion)
+  const rows = await getGroupPlantProductBreakdown(area)
+  const today = new Date().toISOString().slice(0, 10)
+
+  if (rows.length === 0) {
+    return {
+      matched: true,
+      sourceLabel: 'deterministic.group_plant_contract_performance',
+      factText: `Direct metric from app data: Group Plant ${area} has no contracts (SAP-present) as of ${today}.`,
+      result: {
+        answer: `${area} has no active contracts in KLIP as of ${today} (SAP-withdrawn contracts excluded). Group Plant "${area}" exists in the Master Plant List, so this is an empty result, not a missing filter.`,
+        report: '',
+        insights: `If you expected contracts here, check that those contracts carry a plant_code/company_name that maps to Group Plant "${area}" in Master Plant List — unmapped contracts fall into "Blank".`,
+        comparison: '',
+      },
+    }
+  }
+
+  const totals = rows.reduce(
+    (acc, r) => ({
+      contracts: acc.contracts + r.contract_count,
+      total: acc.total + r.total_quantity,
+      delivered: acc.delivered + r.delivered_quantity,
+      outstanding: acc.outstanding + r.outstanding_quantity,
+    }),
+    { contracts: 0, total: 0, delivered: 0, outstanding: 0 },
+  )
+  const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : 'n/a')
+
+  const lines = rows.map(
+    (r) =>
+      `${r.product}: ${fmt(r.contract_count)} contracts | total ${fmtQty(r.total_quantity, unit)} | delivered ${fmtQty(r.delivered_quantity, unit)} (${pct(r.delivered_quantity, r.total_quantity)}) | outstanding ${fmtQty(r.outstanding_quantity, unit)}`,
+  )
+
+  // Timeliness comes from the Contract Performance service itself so the figures agree with
+  // that page. Degrade gracefully: a breakdown without timeliness beats no answer.
+  let timeliness = ''
+  try {
+    const perf = await getGroupPlantPerformance(area)
+    const scored = perf.lateCount + perf.onTrackCount
+    timeliness = scored > 0
+      ? `Delivery timeliness (Contract Performance): ${fmt(perf.lateCount)} late (avg ${fmt(perf.lateAvgDays)} days), ${fmt(perf.onTrackCount)} on track — ${pct(perf.onTrackCount, scored)} on track.`
+      : 'Delivery timeliness: no contracts in this area currently have a schedule to score.'
+  } catch (err) {
+    logger.warn('Group Plant timeliness lookup failed; returning breakdown only', err)
+    timeliness = 'Delivery timeliness: unavailable (Contract Performance lookup failed) — quantities above are unaffected.'
+  }
+
+  const topProduct = rows[0]
+
+  return {
+    matched: true,
+    sourceLabel: 'deterministic.group_plant_contract_performance',
+    factText:
+      `Direct metric from app data: Group Plant=${area}, products=${rows.length}, contracts=${totals.contracts}, ` +
+      `total=${fmtQty(totals.total, unit)}, delivered=${fmtQty(totals.delivered, unit)}, outstanding=${fmtQty(totals.outstanding, unit)}.`,
+    result: {
+      answer:
+        `${area} — contract performance by product as of ${today}: ${fmt(totals.contracts)} contracts across ${rows.length} products, ` +
+        `${fmtQtyBoth(totals.total, unit)} contracted, ${fmtQty(totals.delivered, unit)} delivered (${pct(totals.delivered, totals.total)}), ` +
+        `${fmtQtyBoth(totals.outstanding, unit)} outstanding.\n` +
+        `Largest outstanding: ${topProduct.product} at ${fmtQty(topProduct.outstanding_quantity, unit)}.\n` +
+        `${timeliness}\n` +
+        `Scope: Group Plant "${area}" from Master Plant List, all contract dates, SAP-withdrawn contracts excluded.`,
+      report:
+        `Contract performance — ${area} by product (as of ${today})\n${lines.join('\n')}\n` +
+        `TOTAL: ${fmt(totals.contracts)} contracts | total ${fmtQty(totals.total, unit)} | delivered ${fmtQty(totals.delivered, unit)} | outstanding ${fmtQty(totals.outstanding, unit)}`,
+      insights:
+        `Focus on ${topProduct.product} — it carries the largest outstanding volume in ${area}. ` +
+        `Note the delivered figure follows incoterm (CIF/CFR/FRC use SAP Quantity Receive, FOB/LCO use Quantity Delivered, otherwise STO quantity), ` +
+        `so mixed-incoterm products are not directly comparable. Contracts whose plant_code/company_name do not map to a Group Plant fall into "Blank" and are not counted here.`,
+      comparison: '',
+    },
+  }
+}
+
+/**
+ * Multi-dimension breakdown: "outstanding CPO in Bontang by Incoterm and Group Supplier".
+ *
+ * Runs BEFORE the single-dimension matchers. Each of those handled exactly one dimension but still
+ * claimed multi-dimension questions, so the question above was answered with company-wide incoterm
+ * totals - wrong product, wrong area, and the second dimension silently dropped.
+ */
+const BREAKDOWN_DIMENSION_PATTERNS: Array<{ dim: BreakdownDimension; re: RegExp }> = [
+  // Group supplier before supplier so "group supplier" is not consumed as plain "supplier".
+  { dim: 'group_supplier', re: /\b(group supplier|supplier group|vendor group|group name|group vendor)\b/i },
+  { dim: 'incoterm', re: /\bincoterms?\b/i },
+  { dim: 'supplier', re: /\b(supplier|vendor)s?\b/i },
+  { dim: 'product', re: /\bproducts?\b/i },
+  { dim: 'group_plant', re: /\b(group plant|plant|area|site|location)s?\b/i },
+]
+
+const detectBreakdownDimensions = (text: string): BreakdownDimension[] => {
+  const out: BreakdownDimension[] = []
+  let remaining = String(text || '')
+  for (const { dim, re } of BREAKDOWN_DIMENSION_PATTERNS) {
+    if (re.test(remaining)) {
+      out.push(dim)
+      // Consume the match so "group supplier" does not also register as "supplier".
+      remaining = remaining.replace(new RegExp(re.source, 'gi'), ' ')
+    }
+  }
+  return out
+}
+
+const tryDirectFlexibleBreakdown = async (
+  question: string,
+  contextQuestion?: string,
+): Promise<DirectAnswer> => {
+  const q = question.trim()
+  if (!q) return { matched: false }
+
+  const asksBreakdown =
+    // Includes chart/pie/graph so those phrasings are handled here too, rather than falling
+    // through to the older single-dimension matchers that still report in Kg.
+    /\b(break ?down|breakdown|based on|group(ed)? by|by |per |split|distribution|share|chart|pie|graph)\b/i.test(q) ||
+    /\bwhich (supplier|vendor|incoterm|product|plant|area)\b/i.test(q)
+  if (!asksBreakdown) return { matched: false }
+
+  const dimensions = detectBreakdownDimensions(q)
+  if (dimensions.length === 0) return { matched: false }
+
+  /*
+   * Stand down for "contract performance for <area> by product". The Group Plant matcher answers
+   * that with delivery timeliness from the Contract Performance service (late / on-track counts),
+   * which this generic breakdown cannot produce - claiming it here would drop the very figures
+   * that make it an answer about performance.
+   */
+  const asksPerformance = /\bperformance\b/i.test(q)
+  if (asksPerformance && dimensions.length === 1 && dimensions[0] === 'product') {
+    return { matched: false }
+  }
+
+  const combined = `${question} ${contextQuestion || ''}`
+  const [products, groupPlants, incoterms] = await Promise.all([
+    listProducts(),
+    listGroupPlants(),
+    listIncoterms(),
+  ])
+  const product = matchProductInText(combined, products)
+  const area = matchGroupPlantInText(combined, groupPlants)
+  // Data-driven: the old hardcoded incoterm list omitted FRC and LCO, this deployment's two
+  // largest, so an incoterm filter named in the question was silently ignored.
+  const incoterm = matchIncotermInText(combined, incoterms)
+
+  // An incoterm named as a FILTER must not also be a grouping dimension ("for FRC, which supplier").
+  const dims = incoterm && dimensions.includes('incoterm') && !/\bby incoterm|per incoterm|incoterms\b/i.test(q)
+    ? dimensions.filter((d) => d !== 'incoterm')
+    : dimensions
+  if (dims.length === 0) return { matched: false }
+
+  const unit = resolveQtyUnit(question, contextQuestion)
+  const wantsDueDate = /\b(due|delivery end|deadline|expiry|overdue|aging|ageing|late)\b/i.test(q)
+
+  const rows = await getFlexibleBreakdown({
+    dimensions: dims,
+    product,
+    groupPlant: area,
+    incoterm,
+    limit: 40,
+  })
+
+  const scopeBits = [
+    product ? `product ${product}` : null,
+    area ? `Group Plant ${area}` : null,
+    incoterm ? `incoterm ${incoterm}` : null,
+  ].filter(Boolean)
+  const scopeLabel = scopeBits.length > 0 ? scopeBits.join(', ') : 'all products and areas'
+  const dimLabel = dims.map((d) => breakdownDimensionLabel(d)).join(' x ')
+  const today = new Date().toISOString().slice(0, 10)
+
+  if (rows.length === 0) {
+    return {
+      matched: true,
+      sourceLabel: 'deterministic.flexible_breakdown',
+      factText: `Direct metric from app data: no contracts for ${scopeLabel}.`,
+      result: {
+        answer: `No contracts found for ${scopeLabel} as of ${today}, so there is nothing to break down by ${dimLabel}.`,
+        report: '',
+        insights: '',
+        comparison: '',
+        reportTable: null,
+      },
+    }
+  }
+
+  const totals = rows.reduce(
+    (a, r) => ({
+      contracts: a.contracts + r.contract_count,
+      total: a.total + r.total_quantity,
+      delivered: a.delivered + r.delivered_quantity,
+      outstanding: a.outstanding + r.outstanding_quantity,
+      overdue: a.overdue + r.overdue_contracts,
+    }),
+    { contracts: 0, total: 0, delivered: 0, outstanding: 0, overdue: 0 },
+  )
+  const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : 'n/a')
+
+  const columns: AgentReportTable['columns'] = [
+    ...dims.map((d, i) => ({ key: `dim_${i}`, label: breakdownDimensionLabel(d), align: 'left' as const })),
+    { key: 'contracts', label: 'Contracts', align: 'right' as const },
+    { key: 'outstanding', label: `Outstanding (${unit})`, align: 'right' as const },
+    { key: 'share', label: 'Share', align: 'right' as const },
+    { key: 'delivered', label: `Delivered (${unit})`, align: 'right' as const },
+    { key: 'total', label: `Contracted (${unit})`, align: 'right' as const },
+  ]
+  if (wantsDueDate) {
+    columns.push(
+      { key: 'earliest_due', label: 'Earliest due', align: 'left' as const },
+      { key: 'overdue', label: 'Overdue', align: 'right' as const },
+    )
+  }
+
+  const asUnit = (kg: number) => (unit === 'MT' ? Math.round(kg / 1000) : Math.round(kg))
+  const tableRows = rows.map((r) => {
+    const row: Record<string, string | number | null> = {}
+    r.dims.forEach((v, i) => {
+      row[`dim_${i}`] = v
+    })
+    row.contracts = r.contract_count
+    row.outstanding = asUnit(r.outstanding_quantity)
+    row.share = pct(r.outstanding_quantity, totals.outstanding)
+    row.delivered = asUnit(r.delivered_quantity)
+    row.total = asUnit(r.total_quantity)
+    if (wantsDueDate) {
+      row.earliest_due = r.earliest_due_date ?? '-'
+      row.overdue = r.overdue_contracts
+    }
+    return row
+  })
+
+  const top = rows[0]
+  const topLabel = top.dims.join(' / ')
+  const lines = rows
+    .slice(0, 15)
+    .map(
+      (r) =>
+        `${r.dims.join(' / ')}: outstanding ${fmtQty(r.outstanding_quantity, unit)} (${pct(r.outstanding_quantity, totals.outstanding)}) | ${fmt(r.contract_count)} contracts` +
+        (wantsDueDate
+          ? ` | earliest due ${r.earliest_due_date ?? '-'} | ${fmt(r.overdue_contracts)} overdue`
+          : ''),
+    )
+
+  return {
+    matched: true,
+    sourceLabel: 'deterministic.flexible_breakdown',
+    factText:
+      `Direct metric from app data: breakdown by ${dimLabel} for ${scopeLabel} - ${rows.length} group(s), ` +
+      `outstanding ${fmtQty(totals.outstanding, unit)}.`,
+    result: {
+      answer:
+        `Outstanding by ${dimLabel} - ${scopeLabel}, as of ${today}: ${fmtQtyBoth(totals.outstanding, unit)} outstanding ` +
+        `across ${fmt(totals.contracts)} contracts in ${rows.length} group(s).\n` +
+        `Largest: ${topLabel} at ${fmtQty(top.outstanding_quantity, unit)} (${pct(top.outstanding_quantity, totals.outstanding)} of the total)` +
+        (wantsDueDate && top.earliest_due_date ? `, earliest delivery end ${top.earliest_due_date}` : '') +
+        `.\n` +
+        (wantsDueDate ? `${fmt(totals.overdue)} open contracts are already past their delivery end date.\n` : '') +
+        `Scope: SAP-withdrawn contracts excluded; see the Report table for the full split.`,
+      report: `Outstanding by ${dimLabel} - ${scopeLabel} (as of ${today})\n${lines.join('\n')}` +
+        (rows.length > 15 ? `\n... and ${rows.length - 15} more group(s)` : ''),
+      insights:
+        `Start with ${topLabel} — it carries ${pct(top.outstanding_quantity, totals.outstanding)} of the outstanding volume in this scope.` +
+        (wantsDueDate
+          ? ` Prioritise groups whose earliest delivery end has already passed; those are live exposure rather than future commitments.`
+          : '') +
+        ` Delivered follows incoterm (CIF/CFR/FRC use SAP Quantity Receive, FOB/LCO use Quantity Delivered, otherwise STO quantity), so groups on different incoterms are not directly comparable.`,
+      comparison: '',
+      reportTable: {
+        title: `Outstanding by ${dimLabel} — ${scopeLabel}`,
+        columns,
+        rows: tableRows,
+        totals: {
+          [`dim_0`]: 'TOTAL',
+          contracts: totals.contracts,
+          outstanding: asUnit(totals.outstanding),
+          share: '100%',
+          delivered: asUnit(totals.delivered),
+          total: asUnit(totals.total),
+          ...(wantsDueDate ? { earliest_due: '', overdue: totals.overdue } : {}),
+        },
+        chart: {
+          type: rows.length <= 8 ? 'pie' : 'bar',
+          labelKey: 'dim_0',
+          valueKey: 'outstanding',
+          valueLabel: `Outstanding (${unit})`,
+        },
+      },
+    },
+  }
+}
+
+/**
+ * Aging of open contracts, optionally scoped to a product and/or Group Plant.
+ *
+ * Previously the agent had no contract-date dimension, so a request for aging buckets came back
+ * as "please pull CPO open contracts with contract_date so I can bucket them" — handing the work
+ * back to the user. This answers it instead.
+ */
+const tryDirectContractAging = async (
+  question: string,
+  contextQuestion?: string,
+): Promise<DirectAnswer> => {
+  const q = question.trim().toLowerCase()
+  const asksAging =
+    q.includes('aging') || q.includes('ageing') || q.includes('age of') || q.includes('overdue contract') ||
+    (q.includes('bucket') && (q.includes('day') || q.includes('age')))
+  if (!asksAging) return { matched: false }
+
+  const combined = `${question} ${contextQuestion || ''}`
+  const [products, groupPlants] = await Promise.all([listProducts(), listGroupPlants()])
+  const product = matchProductInText(combined, products)
+  const area = matchGroupPlantInText(combined, groupPlants)
+  const unit = resolveQtyUnit(question, contextQuestion)
+
+  const rows = await getContractAgingBuckets({ product, groupPlant: area })
+  const scopeBits = [product ? `product ${product}` : null, area ? `Group Plant ${area}` : null]
+    .filter(Boolean)
+    .join(', ')
+  const scopeLabel = scopeBits || 'all products and areas'
+  const today = new Date().toISOString().slice(0, 10)
+
+  const totalContracts = rows.reduce((s, r) => s + r.contract_count, 0)
+  if (totalContracts === 0) {
+    return {
+      matched: true,
+      sourceLabel: 'deterministic.contract_aging',
+      factText: `Direct metric from app data: no open (ACTIVE) contracts for ${scopeLabel}.`,
+      result: {
+        answer: `No open (ACTIVE) contracts for ${scopeLabel} as of ${today}, so there is nothing to age.`,
+        report: '',
+        insights: '',
+        comparison: '',
+      },
+    }
+  }
+
+  const totalOutstanding = rows.reduce((s, r) => s + r.outstanding_quantity, 0)
+  const overdue = rows.filter((r) => r.sort_order >= 1 && r.sort_order <= 4)
+  const overdueContracts = overdue.reduce((s, r) => s + r.contract_count, 0)
+  const overdueQty = overdue.reduce((s, r) => s + r.outstanding_quantity, 0)
+  const worst = rows.find((r) => r.sort_order === 4)
+  const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : 'n/a')
+
+  const lines = rows.map(
+    (r) =>
+      `${r.bucket}: ${fmt(r.contract_count)} contracts | outstanding ${fmtQty(r.outstanding_quantity, unit)}` +
+      (r.oldest_delivery_end && r.sort_order >= 1 && r.sort_order <= 4
+        ? ` | oldest delivery end ${r.oldest_delivery_end}`
+        : ''),
+  )
+
+  return {
+    matched: true,
+    sourceLabel: 'deterministic.contract_aging',
+    factText:
+      `Direct metric from app data: aging of open contracts for ${scopeLabel} — ${totalContracts} open, ` +
+      `${overdueContracts} overdue, overdue outstanding ${fmtQty(overdueQty, unit)}.`,
+    result: {
+      answer:
+        `Aging of open contracts — ${scopeLabel}, as of ${today}: ${fmt(totalContracts)} open contracts carrying ` +
+        `${fmtQtyBoth(totalOutstanding, unit)} outstanding. ` +
+        `${fmt(overdueContracts)} of them (${pct(overdueContracts, totalContracts)}) are already past their delivery end date, ` +
+        `covering ${fmtQty(overdueQty, unit)}.\n` +
+        (worst && worst.contract_count > 0
+          ? `Worst bucket: over 90 days overdue — ${fmt(worst.contract_count)} contracts, ${fmtQty(worst.outstanding_quantity, unit)}${worst.oldest_delivery_end ? `, oldest delivery end ${worst.oldest_delivery_end}` : ''}.\n`
+          : '') +
+        `Aging is measured against delivery_end_date (the delivery window), not contract_date; open = status ACTIVE, SAP-withdrawn excluded.`,
+      report: `Open-contract aging — ${scopeLabel} (as of ${today})\n${lines.join('\n')}\nTOTAL: ${fmt(totalContracts)} open contracts | outstanding ${fmtQty(totalOutstanding, unit)}`,
+      insights:
+        (worst && worst.contract_count > 0
+          ? `The over-90-day bucket is the escalation list — ${fmt(worst.contract_count)} contracts past their delivery window by more than a quarter. `
+          : `Nothing has slipped past 90 days, so exposure is still recoverable. `) +
+        `A negative outstanding figure in any bucket means over-delivery against the contracted quantity and should be checked against contract amendments rather than netted off. ` +
+        `Contracts with no delivery end date cannot be aged and are listed separately.`,
+      comparison: '',
+    },
+  }
+}
+
+/**
+ * A single product broken down by Group Plant — answers "which site is driving CPO's outstanding".
+ */
+const tryDirectProductByGroupPlant = async (
+  question: string,
+  contextQuestion?: string,
+): Promise<DirectAnswer> => {
+  const q = question.trim().toLowerCase()
+  const combined = `${question} ${contextQuestion || ''}`
+
+  const products = await listProducts()
+  // Read the product from the previous turn too, so "now break it down by plant" after a CPO
+  // question keeps the CPO scope instead of silently widening to all products.
+  const product = matchProductInText(combined, products)
+  if (!product) return { matched: false }
+
+  const asksByPlant =
+    q.includes('group plant') || q.includes('by plant') || q.includes('per plant') ||
+    q.includes('by area') || q.includes('per area') || q.includes('by site') || q.includes('per site') ||
+    q.includes('which site') || q.includes('which plant') || q.includes('which area') ||
+    q.includes('by location') || q.includes('breakdown by')
+  if (!asksByPlant) return { matched: false }
+
+  const unit = resolveQtyUnit(question, contextQuestion)
+  const rows = await getProductGroupPlantBreakdown(product)
+  const today = new Date().toISOString().slice(0, 10)
+
+  if (rows.length === 0) {
+    return {
+      matched: true,
+      sourceLabel: 'deterministic.product_by_group_plant',
+      factText: `Direct metric from app data: no SAP-present contracts for product ${product}.`,
+      result: {
+        answer: `No active contracts found for product "${product}" as of ${today} (SAP-withdrawn excluded).`,
+        report: '',
+        insights: '',
+        comparison: '',
+      },
+    }
+  }
+
+  const totals = rows.reduce(
+    (acc, r) => ({
+      contracts: acc.contracts + r.contract_count,
+      total: acc.total + r.total_quantity,
+      delivered: acc.delivered + r.delivered_quantity,
+      outstanding: acc.outstanding + r.outstanding_quantity,
+    }),
+    { contracts: 0, total: 0, delivered: 0, outstanding: 0 },
+  )
+  const pct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : 'n/a')
+  const top = rows[0]
+
+  const lines = rows.map(
+    (r) =>
+      `${r.group_plant}: ${fmt(r.contract_count)} contracts | total ${fmtQty(r.total_quantity, unit)} | delivered ${fmtQty(r.delivered_quantity, unit)} (${pct(r.delivered_quantity, r.total_quantity)}) | outstanding ${fmtQty(r.outstanding_quantity, unit)}`,
+  )
+
+  return {
+    matched: true,
+    sourceLabel: 'deterministic.product_by_group_plant',
+    factText:
+      `Direct metric from app data: product=${product} across ${rows.length} Group Plants, ` +
+      `contracts=${totals.contracts}, outstanding=${fmtQty(totals.outstanding, unit)}.`,
+    result: {
+      answer:
+        `${product} by Group Plant as of ${today}: ${fmt(totals.contracts)} contracts across ${rows.length} areas, ` +
+        `${fmtQtyBoth(totals.total, unit)} contracted, ${fmtQty(totals.delivered, unit)} delivered (${pct(totals.delivered, totals.total)}), ` +
+        `${fmtQtyBoth(totals.outstanding, unit)} outstanding.\n` +
+        `${top.group_plant} carries the largest outstanding balance at ${fmtQty(top.outstanding_quantity, unit)} (${pct(top.outstanding_quantity, totals.outstanding)} of ${product} outstanding).\n` +
+        `Scope: Group Plant from Master Plant List, all contract dates, SAP-withdrawn excluded.`,
+      report: `${product} by Group Plant (as of ${today})\n${lines.join('\n')}\nTOTAL: ${fmt(totals.contracts)} contracts | total ${fmtQty(totals.total, unit)} | delivered ${fmtQty(totals.delivered, unit)} | outstanding ${fmtQty(totals.outstanding, unit)}`,
+      insights:
+        `${top.group_plant} is where ${product} follow-up pays off most. ` +
+        `Contracts whose plant_code/company_name do not map to Master Plant List land in "Blank" — if that row is large, fix the plant mapping before drawing site conclusions. ` +
+        `Delivered follows incoterm (CIF/CFR/FRC use SAP Quantity Receive, FOB/LCO use Quantity Delivered, otherwise STO quantity).`,
+      comparison: '',
+    },
+  }
+}
+
 const needsClarification = (question: string): { needed: boolean; text?: string } => {
   const q = question.trim().toLowerCase()
   const ambiguousMetricWords = ['score', 'index', 'health', 'efficiency', 'quality score', 'risk score', 'readiness score']
@@ -718,31 +1317,45 @@ const needsClarification = (question: string): { needed: boolean; text?: string 
   }
 }
 
+/**
+ * Episodic recall: which questions have been asked before, and how they were answered.
+ *
+ * Two deliberate constraints:
+ *  - Answers rated 1-2 are excluded. Previously every past answer was replayed as an example,
+ *    including ones a user had explicitly marked wrong, which taught the agent its own mistakes.
+ *  - Only a short gist of each past answer is passed, not the full text. Stored figures go stale
+ *    as soon as SAP posts a GR or a formula is corrected, and replaying them in full made the
+ *    agent spend its output arguing with itself about "discrepancies". Durable guidance belongs
+ *    in agent_ai_lessons instead.
+ */
+const MEMORY_GIST_CHARS = 400
+
 const loadSimilarMemories = async (question: string) => {
   const qTokens = tokenize(question)
   const result = await query(
     `
-    SELECT id, question, answer, report, insights, comparison, rating, created_at
+    SELECT id, question, answer, rating, created_at
     FROM agent_ai_memory
+    WHERE (rating IS NULL OR rating >= 3)
     ORDER BY created_at DESC
-    LIMIT 200
+    LIMIT 300
     `
   )
   const scored = (result.rows || [])
     .map((r: any) => {
-      const score = jaccard(qTokens, tokenize(String(r.question || '')))
-      return { ...r, score }
+      const base = jaccard(qTokens, tokenize(String(r.question || '')))
+      // A thumbs-up answer is a better template than an unrated one.
+      const ratingBoost = Number(r.rating) >= 4 ? 0.05 : 0
+      return { ...r, score: base + ratingBoost }
     })
     .filter((r: any) => r.score > 0.08)
     .sort((a: any, b: any) => b.score - a.score)
     .slice(0, 5)
     .map((r: any) => ({
       question: r.question,
-      answer: r.answer,
-      report: r.report,
-      insights: r.insights,
+      answer_gist: truncateText(String(r.answer || ''), MEMORY_GIST_CHARS),
       rating: r.rating,
-      created_at: r.created_at,
+      asked_at: r.created_at,
     }))
 
   return scored
@@ -774,7 +1387,7 @@ const saveMemory = async (args: {
 }
 
 const buildPrompt = (question: string, appData: unknown, uploadedText?: string) => `
-You are KLIP Agent AI for logistics + commercial analytics. You must be accurate, evidence-based, and operationally useful.
+Answer as the KLIP Agent AI persona defined in your system instruction. Be accurate, evidence-based, and operationally useful.
 
 User question:
 ${question}
@@ -798,14 +1411,14 @@ Hard rules (do not break these):
 - Keep it practical for operations, finance, and management stakeholders.
 
 Output format requirements (put these headings INSIDE the strings you return):
-- In "answer", include:
-  - Answer (1-3 sentences)
-  - Evidence (what in the provided context supports it)
-  - Assumptions (only if needed)
-- In "insights", include:
-  - Risks / exceptions to watch
-  - Recommendations (each with rationale, how to implement in KLIP, risks/trade-offs, success KPIs)
-  - Next checks (exact missing data or next query to confirm)
+- In "answer": the direct answer first (max 3 sentences, lead with the number if one was asked
+  for), then only the step-by-step steps that carry it, then evidence, assumptions if any, and
+  one concrete next step. Keep it tight.
+- In "insights": your double-check of the numbers, the failure modes that could realistically
+  change this answer, and recommendations only if the user asked what to do or the data shows a
+  clear problem. A few lines each — no generic risk lists.
+- Leave "report" or "comparison" as an empty string when not applicable. Do not explain the
+  absence, and do not repeat content across fields.
 
 Return strict JSON ONLY:
 {
@@ -818,11 +1431,10 @@ Return strict JSON ONLY:
 
 export const askAgentAi = async (req: AuthRequest, res: Response) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY
-    if (!apiKey) {
+    if (!isAnthropicConfigured()) {
       return res.status(500).json({
         success: false,
-        error: { message: 'GEMINI_API_KEY is not configured on the server' },
+        error: { message: 'ANTHROPIC_API_KEY is not configured on the server' },
       })
     }
 
@@ -868,6 +1480,19 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
       })
     }
 
+    // Memory: durable lessons shape this answer, and any preference stated in this question is
+    // captured now so it also applies to the next one. Lessons are team-wide - what one person
+    // teaches the agent applies to everyone, so nobody has to re-teach it.
+    let lessons: AgentLesson[] = []
+    try {
+      for (const pref of detectStatedPreferences(question)) {
+        await recordLesson({ userId: req.user?.id, kind: pref.kind, lesson: pref.lesson })
+      }
+      lessons = await loadLessons()
+    } catch (err) {
+      logger.warn('Agent AI lessons unavailable; answering without them', err)
+    }
+
     const requestedYear = extractYear(question) || extractYear(String(context.lastUserQuestion || '')) || null
     const isYearOnlyFollowup =
       !!requestedYear &&
@@ -880,6 +1505,14 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
         : question
 
     const directCandidates = await Promise.all([
+      // First: a scoped question (area, product x area, aging) must never fall through to
+      // company-wide numbers or to asking the user to run the query themselves.
+      // Multi-dimension questions first: a narrow single-dimension matcher must never claim
+      // "outstanding CPO in Bontang by Incoterm and Group Supplier" and drop half the question.
+      tryDirectFlexibleBreakdown(normalizedQuestion, String(context.lastUserQuestion || '')),
+      tryDirectContractAging(normalizedQuestion, String(context.lastUserQuestion || '')),
+      tryDirectProductByGroupPlant(normalizedQuestion, String(context.lastUserQuestion || '')),
+      tryDirectGroupPlantContractPerformance(normalizedQuestion, String(context.lastUserQuestion || '')),
       tryDirectProductOutstandingAnswer(normalizedQuestion, requestedYear),
       tryDirectProductDeliveredAnswer(normalizedQuestion, requestedYear),
       tryDirectOutstandingPaymentAnswer(normalizedQuestion, requestedYear),
@@ -895,19 +1528,22 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
 
     const file = (req as any).file as Express.Multer.File | undefined
     let uploadedText = ''
-    const parts: Array<Record<string, unknown>> = []
+    const images: KlipAgentImage[] = []
 
     if (file && file.buffer) {
       const mime = file.mimetype || 'application/octet-stream'
       const lowerName = String(file.originalname || '').toLowerCase()
 
       if (mime.startsWith('image/')) {
-        parts.push({
-          inline_data: {
-            mime_type: mime,
-            data: file.buffer.toString('base64'),
-          },
-        })
+        // Claude accepts jpeg/png/gif/webp only, and one oversized upload must not
+        // blow the request limit — anything else degrades to a text note.
+        if (!isSupportedAgentImageMediaType(mime)) {
+          uploadedText = `Uploaded image: ${file.originalname} (${mime}). Unsupported image format for vision analysis (use JPEG, PNG, GIF, or WebP); use for high-level comparison only.`
+        } else if (file.buffer.length > MAX_IMAGE_BYTES) {
+          uploadedText = `Uploaded image: ${file.originalname} (${mime}, ${(file.buffer.length / (1024 * 1024)).toFixed(1)} MB). Too large for vision analysis (limit ${MAX_IMAGE_BYTES / (1024 * 1024)} MB); use for high-level comparison only.`
+        } else {
+          images.push({ mediaType: mime, base64: file.buffer.toString('base64') })
+        }
       } else if (
         mime.includes('json') ||
         mime.includes('text') ||
@@ -975,27 +1611,22 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
       },
       uploadedText
     )
-    parts.unshift({ text: prompt })
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts }],
-        }),
-      }
-    )
-
-    if (!response.ok) {
-      const text = await response.text()
-      logger.error('Agent AI Gemini API error', { status: response.status, body: text })
+    let claude
+    try {
+      claude = await askKlipAgentClaude({
+        userPrompt: prompt,
+        images,
+        extraSystemInstructions: renderLessonsForPrompt(lessons),
+      })
+    } catch (err) {
+      const detail = describeAnthropicError(err)
+      logger.error('Agent AI Claude API error', { detail, error: err })
       logChatAgentActivity(
         req,
-        `Chat request failed (Gemini API ${response.status}): ${truncateActivityText(question, 200)}`,
+        `Chat request failed (${detail}): ${truncateActivityText(question, 200)}`,
         'error',
-        { question, status: response.status },
+        { question, detail },
       )
       return res.status(500).json({
         success: false,
@@ -1003,9 +1634,27 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
       })
     }
 
-    const data = await response.json() as any
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
-    const parsed = parseAgentAiResponse(text)
+    if (claude.refused || !claude.text) {
+      const detail = claude.refused
+        ? 'Claude declined to answer this request'
+        : 'Claude returned an empty response'
+      logger.error('Agent AI Claude produced no usable answer', {
+        detail,
+        stopReason: claude.stopReason,
+      })
+      logChatAgentActivity(
+        req,
+        `Chat request failed (${detail}): ${truncateActivityText(question, 200)}`,
+        'error',
+        { question, stopReason: claude.stopReason },
+      )
+      return res.status(500).json({
+        success: false,
+        error: { message: 'Failed to generate AI response' },
+      })
+    }
+
+    const parsed = parseAgentAiResponse(claude.text)
     const finalData = direct.matched && direct.result
       ? {
           // Keep deterministic values as source of truth for core KPI outputs.
@@ -1015,6 +1664,7 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
           // LLM can still help on file/image comparison narrative when upload exists.
           comparison: parsed.comparison || direct.result.comparison || '',
           clarification: direct.result.clarification,
+          reportTable: direct.result.reportTable ?? null,
         }
       : parsed
 
@@ -1024,6 +1674,7 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
       result: finalData,
       directUsed: !!direct.matched,
     })
+    void markLessonsApplied(lessons.map((l) => l.id))
     logChatAgentActivity(
       req,
       `Answered question: ${question}`,
@@ -1032,6 +1683,10 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
         mode: direct.matched ? 'deterministic' : 'llm_with_context',
         memoryId,
         hasUpload: !!file,
+        lessonsApplied: lessons.length,
+        model: claude.model,
+        inputTokens: claude.inputTokens,
+        outputTokens: claude.outputTokens,
       },
     )
 
@@ -1050,7 +1705,7 @@ export const askAgentAi = async (req: AuthRequest, res: Response) => {
             }
           : {
               mode: 'llm_with_context',
-              label: 'gemini-2.5-flash',
+              label: claude.model,
               detail: 'Generated from app data context, similar-memory retrieval, and optional uploaded file/image.',
             },
         memoryId,
@@ -1086,14 +1741,30 @@ export const rateAgentAiAnswer = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, error: { message: 'rating must be between 1 and 5' } })
     }
 
-    await query(
+    const updated = await query(
       `
       UPDATE agent_ai_memory
       SET rating = $2, feedback = $3, updated_at = CURRENT_TIMESTAMP
       WHERE id = $1
+      RETURNING question, answer
       `,
       [memoryId, rating, feedback || null]
     )
+
+    // Close the loop: a thumbs-down (or any written feedback) becomes a durable, number-free
+    // lesson replayed into future answers. Fire-and-forget — feedback is already saved, and the
+    // user must not wait on an LLM call to see their rating accepted.
+    const row = updated.rows?.[0]
+    if (row) {
+      void distillLessonFromFeedback({
+        userId: req.user?.id,
+        memoryId,
+        question: String(row.question || ''),
+        answer: String(row.answer || ''),
+        feedback,
+        rating,
+      })
+    }
 
     return res.json({ success: true })
   } catch (error) {

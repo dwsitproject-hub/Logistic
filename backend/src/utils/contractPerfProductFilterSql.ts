@@ -15,3 +15,26 @@ export function appendContractPerfProductSubstringSql(
     nextParamIndex: paramIndex + 1,
   }
 }
+
+/** OR-combine product substring filters (multi-select). */
+export function appendContractPerfProductsMultiSql(
+  products: string[] | undefined,
+  productColumnSql: string,
+  paramIndex: number,
+): { clause: string; params: string[]; nextParamIndex: number } | null {
+  const list = (products ?? []).map((p) => String(p).trim()).filter(Boolean)
+  if (list.length === 0) return null
+  const parts: string[] = []
+  const params: string[] = []
+  let idx = paramIndex
+  for (const product of list) {
+    parts.push(`COALESCE(${productColumnSql}, '') ILIKE $${idx}`)
+    params.push(`%${product}%`)
+    idx += 1
+  }
+  return {
+    clause: ` AND (${parts.join(' OR ')})`,
+    params,
+    nextParamIndex: idx,
+  }
+}

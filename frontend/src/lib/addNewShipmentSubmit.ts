@@ -1,7 +1,9 @@
 import api from '@/lib/api'
 import type { AddNewShipmentSubmitPayload } from '@/components/shared/addNewShipmentTypes'
 
-export async function submitAddNewShipmentPayload(payload: AddNewShipmentSubmitPayload): Promise<void> {
+export async function submitAddNewShipmentPayload(
+  payload: AddNewShipmentSubmitPayload,
+): Promise<{ shipmentIds?: string[] } | void> {
   if (payload.kind === 'update') {
     const body: Record<string, unknown> = {
       eta_arrival: payload.eta_arrival,
@@ -15,12 +17,23 @@ export async function submitAddNewShipmentPayload(payload: AddNewShipmentSubmitP
       eta_discharge_complete: payload.eta_discharge_complete,
     }
     if (payload.vessel_name !== undefined) body.vessel_name = payload.vessel_name
+    if (payload.vessel_code !== undefined) body.vessel_code = payload.vessel_code
+    if (payload.vessel_owner !== undefined) body.vessel_owner = payload.vessel_owner
+    if (payload.vessel_capacity !== undefined) body.vessel_capacity = payload.vessel_capacity
+    if (payload.vessel_hull_type !== undefined) body.vessel_hull_type = payload.vessel_hull_type
+    if (payload.charter_type !== undefined) body.charter_type = payload.charter_type
+    if (payload.master_vessel_id !== undefined) body.master_vessel_id = payload.master_vessel_id
     if (payload.quantity_delivered !== undefined) body.quantity_delivered = payload.quantity_delivered
     if (payload.actual_vessel_qty_receive !== undefined) {
       body.actual_vessel_qty_receive = payload.actual_vessel_qty_receive
     }
     if (payload.sfal_qty !== undefined) body.sfal_qty = payload.sfal_qty
     if (payload.sfbd_qty !== undefined) body.sfbd_qty = payload.sfbd_qty
+    if (payload.fuel_consumption !== undefined) body.fuel_consumption = payload.fuel_consumption
+    if (payload.freight !== undefined) body.freight = payload.freight
+    if (payload.pump_rate !== undefined) body.pump_rate = payload.pump_rate
+    if (payload.sailing_speed !== undefined) body.sailing_speed = payload.sailing_speed
+    if (payload.shortage !== undefined) body.shortage = payload.shortage
 
     const response = await api.put(`/shipments/${payload.shipmentId}`, body)
     if (!response.data?.success) {
@@ -33,4 +46,5 @@ export async function submitAddNewShipmentPayload(payload: AddNewShipmentSubmitP
   if (!response.data?.success) {
     throw new Error(response.data?.error?.message || 'Failed to create shipment')
   }
+  return { shipmentIds: response.data?.data?.shipmentIds as string[] | undefined }
 }

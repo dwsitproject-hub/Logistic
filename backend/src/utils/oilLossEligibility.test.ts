@@ -35,7 +35,9 @@ describe('oilLossEligibility transport segments', () => {
     expect(matchesOilLossTruckSegment({ incoterm: 'FRC', transport_mode: 'MIX' })).toBe(false);
     expect(matchesOilLossTruckSegment({ incoterm: 'FRC', transport_mode: 'LAND', sto_type: 'T' })).toBe(true);
     expect(isOilLossEligibleIncotermMode('CIF', 'MIX')).toBe(false);
-    expect(isOilLossEligibleIncotermMode('cif', 'SEA', 'T')).toBe(false);
+    // CIF + SEA is unconditionally vessel-eligible (sto_type only disambiguates MIX); STO
+    // Type is irrelevant once transport_mode is unambiguous.
+    expect(isOilLossEligibleIncotermMode('cif', 'SEA', 'T')).toBe(true);
     expect(isOilLossEligibleIncotermMode('FRC', 'SEA')).toBe(false);
   });
 

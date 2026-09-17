@@ -31,10 +31,18 @@ export function isPortCodeLike(value: unknown): boolean {
   return /^\d+(\.\d+)?$/.test(trimmed)
 }
 
+/** Legacy KLIP generic labels — not real master port names. */
+export function isGenericKlipPortPlaceholder(value: unknown): boolean {
+  const text = String(value ?? '').trim()
+  if (!text) return false
+  return /^Loading Port \d+$/i.test(text) || /^Discharge Port$/i.test(text)
+}
+
 function pickShippingPortName(...candidates: readonly (unknown)[]): string | null {
   for (const candidate of candidates) {
     if (isEmptyShippingPortValue(candidate)) continue
     if (isPortCodeLike(candidate)) continue
+    if (isGenericKlipPortPlaceholder(candidate)) continue
     return String(candidate).trim()
   }
   return null

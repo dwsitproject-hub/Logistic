@@ -50,6 +50,98 @@ export function ataSapReferenceFromShipmentInfo(info: Record<string, unknown>): 
   return out;
 }
 
+/** Per-port SAP ATA snapshot from vessel_loading_ports.sap_ata_* columns. */
+export function loadingAtaSapFromPortRow(
+  portRow: Record<string, unknown> | undefined,
+): Pick<
+  ShipmentAtaFields,
+  | 'ata_vessel_arrival_at_loading_port'
+  | 'ata_vessel_berthed_at_loading_port'
+  | 'ata_vessel_start_loading'
+  | 'ata_vessel_completed_loading'
+  | 'ata_vessel_sailed_from_loading_port'
+> {
+  return {
+    ata_vessel_arrival_at_loading_port: sliceIsoDate(portRow?.sap_ata_vessel_arrival),
+    ata_vessel_berthed_at_loading_port: sliceIsoDate(portRow?.sap_ata_vessel_berthed),
+    ata_vessel_start_loading: sliceIsoDate(portRow?.sap_ata_loading_start),
+    ata_vessel_completed_loading: sliceIsoDate(portRow?.sap_ata_loading_completed),
+    ata_vessel_sailed_from_loading_port: sliceIsoDate(portRow?.sap_ata_vessel_sailed),
+  };
+}
+
+/** Discharge-port SAP ATA snapshot (same sap_ata_* columns on the discharge VLP row). */
+export function dischargeAtaSapFromPortRow(
+  portRow: Record<string, unknown> | undefined,
+): Pick<
+  ShipmentAtaFields,
+  | 'ata_vessel_arrive_at_discharge_port'
+  | 'ata_vessel_berthed_at_discharge_port'
+  | 'ata_vessel_start_discharging'
+  | 'ata_vessel_complete_discharge'
+> {
+  return {
+    ata_vessel_arrive_at_discharge_port: sliceIsoDate(portRow?.sap_ata_vessel_arrival),
+    ata_vessel_berthed_at_discharge_port: sliceIsoDate(portRow?.sap_ata_vessel_berthed),
+    ata_vessel_start_discharging: sliceIsoDate(portRow?.sap_ata_loading_start),
+    ata_vessel_complete_discharge: sliceIsoDate(portRow?.sap_ata_loading_completed),
+  };
+}
+
+export function isDischargeAtaField(key: ShipmentAtaApiField): boolean {
+  return key.includes('discharg');
+}
+
+/**
+ * The `vessel_loading_ports` column behind each ATA field, for reading provenance
+ * (`klip_edited_fields`, migration 167).
+ *
+ * The API names and the column names differ, and the discharge keys reuse the SAME five columns on
+ * the discharge row - `ata_vessel_arrival` there means arrival at the discharge port. Mapping them
+ * by string manipulation would silently mis-resolve that; this table states it.
+ */
+const ATA_FIELD_TO_PORT_COLUMN: Record<ShipmentAtaApiField, string> = {
+  ata_vessel_arrival_at_loading_port: 'ata_vessel_arrival',
+  ata_vessel_berthed_at_loading_port: 'ata_vessel_berthed',
+  ata_vessel_start_loading: 'ata_loading_start',
+  ata_vessel_completed_loading: 'ata_loading_completed',
+  ata_vessel_sailed_from_loading_port: 'ata_vessel_sailed',
+  ata_vessel_arrive_at_discharge_port: 'ata_vessel_arrival',
+  ata_vessel_berthed_at_discharge_port: 'ata_vessel_berthed',
+  ata_vessel_start_discharging: 'ata_loading_start',
+  ata_vessel_complete_discharge: 'ata_loading_completed',
+};
+
+export function ataPortColumnForField(key: ShipmentAtaApiField): string {
+  return ATA_FIELD_TO_PORT_COLUMN[key];
+}
+
+/**
+ * SAP chip value for an ATA field.
+ * Discharge keys must use the discharge VLP row only — never the loading port's sap_ata_*.
+ */
+export function resolveAtaSapReferenceValue(
+  key: ShipmentAtaApiField,
+  opts: {
+    loadingPortRow?: Record<string, unknown> | null
+    dischargePortRow?: Record<string, unknown> | null
+    shipmentSapRef: ShipmentAtaFields
+  },
+): string {
+  if (isDischargeAtaField(key)) {
+    const fromDisc = dischargeAtaSapFromPortRow(
+      opts.dischargePortRow ?? undefined,
+    );
+    const fromPort = fromDisc[key as keyof typeof fromDisc];
+    if (fromPort) return fromPort;
+    return opts.shipmentSapRef[key] ?? '';
+  }
+  const fromLoading = loadingAtaSapFromPortRow(opts.loadingPortRow ?? undefined);
+  const fromPort = fromLoading[key as keyof typeof fromLoading];
+  if (fromPort) return fromPort;
+  return opts.shipmentSapRef[key] ?? '';
+}
+
 export function buildAtaOverridePayload(
   current: ShipmentAtaFields,
   baseline: ShipmentAtaFields,

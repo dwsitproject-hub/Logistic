@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { PlantSiteCombobox } from '@/components/PlantSiteCombobox'
@@ -17,18 +17,20 @@ import {
   History,
   Info,
   Loader2,
-  Plus,
   Truck,
   X,
 } from 'lucide-react'
 import api from '@/lib/api'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import { MODAL_READONLY_CONTROL_CLASS } from '@/components/shared/ModalReadonlyControl'
+import { FAST_ENTRY_ROOT_ATTR } from '@/lib/fastEntryFocus'
+import { formatDateTimeDMY } from '@/lib/dateFormat'
 import {
-  FAST_ENTRY_ROOT_ATTR,
-  TRUCKING_PLANNING_FAST_ENTRY_GROUP,
-  fastEntryFieldProps,
-} from '@/lib/fastEntryFocus'
-import { isIsoOutsideAllowedRange, outsideAllowedDateRangeMessage, formatDateTimeDMY } from '@/lib/dateFormat'
+  DECIMAL_DOT_HINT,
+  blockCommaDecimalKeyDown,
+  parseDecimalDotInput,
+  sanitizeDecimalDotInput,
+} from '@/lib/decimalDotInput'
 
 const fmtIsoDate = (iso: string) => {
   const d = (iso || '').slice(0, 10)
@@ -37,64 +39,32 @@ const fmtIsoDate = (iso: string) => {
   return `${dd}/${m}/${y}`
 }
 
-const fmtQty = (val: string | number) => {
-  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, '').trim())
-  if (!Number.isFinite(n)) return String(val)
-  return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2, useGrouping: true })
-}
-
-/** Daily planning quantities in MT — fixed 2 decimal display. */
-const fmtQtyMt = (val: string | number) => {
-  const n = typeof val === 'number' ? val : parseFloat(String(val).replace(/,/g, '').trim())
-  if (!Number.isFinite(n)) return '0.00'
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true })
-}
-
-/** Legacy per-day UI — restore when manual daily rows are needed again */
-const LEGACY_DAILY_DELIVERABLES_UI = false
-const READONLY_FIELD_CLASS = 'bg-gray-50 cursor-not-allowed text-gray-600'
+const READONLY_FIELD_CLASS = MODAL_READONLY_CONTROL_CLASS
 
 function sliceIsoDate(value: string | null | undefined): string {
   if (!value) return ''
   return String(value).slice(0, 10)
 }
 
-const TRUCKING_DELIVERY_START_BUFFER_DAYS = 60
-const TRUCKING_DELIVERY_END_BUFFER_DAYS = 60
-
-function shiftIsoDate(isoDate: string, days: number): string {
-  const d = new Date(`${isoDate}T12:00:00`)
-  d.setDate(d.getDate() + days)
-  return d.toISOString().slice(0, 10)
-}
-
-function formatPlanningAllowedRangeMessage(range: { minIso: string; maxIso: string }): string {
-  return `Date must be between ${fmtIsoDate(range.minIso)} (due delivery start − ${TRUCKING_DELIVERY_START_BUFFER_DAYS} days) and ${fmtIsoDate(range.maxIso)} (due delivery end + ${TRUCKING_DELIVERY_END_BUFFER_DAYS} days)`
-}
-
-function parseDailyDeliverables(
-  raw: unknown,
-): Array<{ date?: string; quantity_delivered?: number }> {
-  if (Array.isArray(raw)) return raw
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed : []
-    } catch {
-      return []
-    }
-  }
-  return []
-}
-
 import {
-  buildDailyDeliverablesFromPerDayPlanning,
-  derivePerDayMtFromDailyDeliverables,
-  enumerateInclusivePlanningDates,
-  getPlanningExceedsOutstandingError,
-  sumDailyDeliverablesKg,
-} from '@/lib/truckingPlanningDeliverables'
+  combineSapStoActuals,
+  formatQtyKgAsMt,
+  formatSapQtyMtOrDash,
+  filterActualRowsForSto,
+  normalizeDailyActualRows,
+  normalizePlanningDeliverableRows,
+  normalizeStoActuals,
+  resolveWbActualsDisplayMode,
+  sumActualDeliveryKg,
+  sumActualReceiveKg,
+  sumPlanningDeliveryKg,
+  type TruckingModalActualRow,
+  type TruckingModalPlanningRow,
+  type TruckingModalStoActual,
+} from '@/lib/truckingModalDailyTables'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
+import { FieldHelp } from '@/components/FieldHelp'
+import { FIELD_HELP } from '@/lib/fieldHelpText'
 import {
   ContractDetailModal,
   fetchContractForDetailModalByPo,
@@ -188,16 +158,26 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     daily_deliverables: [] as DailyDeliverableDraft[],
   })
 
-  const [planning, setPlanning] = useState({
-    start_date: '',
-    end_date: '',
-    quantity_per_day_mt: '',
+  const [planningRows, setPlanningRows] = useState<TruckingModalPlanningRow[]>([])
+  const [actualRows, setActualRows] = useState<TruckingModalActualRow[]>([])
+  const [stoActuals, setStoActuals] = useState<TruckingModalStoActual[]>([])
+  const [contractDueDates, setContractDueDates] = useState({
+    delivery_start_date: '',
+    delivery_end_date: '',
   })
 
   const [sapReceiveDates, setSapReceiveDates] = useState({
     start_receive_date: '',
     last_receive_date: '',
   })
+  const [sapQty, setSapQty] = useState<{
+    qty_delivery: number | null
+    qty_receive: number | null
+  }>({ qty_delivery: null, qty_receive: null })
+
+  /** KLIP SFAL/SFBD in Kg (displayed as MT). Null = missing → Oil Loss R1–R3 shows —. */
+  const [sfalQtyKg, setSfalQtyKg] = useState<number | null>(null)
+  const [sfbdQtyKg, setSfbdQtyKg] = useState<number | null>(null)
 
   const [contractValidation, setContractValidation] = useState<{
     checking: boolean
@@ -228,7 +208,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     const trimmed = term.trim()
     if (!trimmed) {
       setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
-      return
+      return null
     }
     setContractValidation((prev) => ({ ...prev, checking: true }))
     try {
@@ -249,21 +229,48 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           if (String(cd.po_number ?? '').trim()) {
             setPoNumber(String(cd.po_number).trim())
           }
-          const plantLabel = cd.plant_name || ''
+          setContractDueDates({
+            delivery_start_date: sliceIsoDate(cd.delivery_start_date),
+            delivery_end_date: sliceIsoDate(cd.delivery_end_date),
+          })
+          const plantLabel =
+            String(cd.sap_discharge_destination ?? '').trim() ||
+            String(cd.plant_name ?? '').trim()
           const sapLoading = String(cd.sap_loading_location ?? cd.supplier ?? '').trim()
           const supplierMills = String(cd.supplier_mills_suggestion ?? '').trim()
+          // B2B origin: prefer child-PO Buyer (Contract Reff PO); else origin buyer / group plant.
+          const b2bChildBuyer = String(cd.b2b_child_buyer ?? '').trim()
+          const unloadingSuggestion = String(cd.unloading_location_suggestion ?? '').trim()
           const buyerLabel = String(cd.buyer ?? '').trim()
           const groupPlant = String(cd.group_plant_suggestion ?? '').trim()
+          const unloadingDefault = b2bChildBuyer || unloadingSuggestion || buyerLabel || groupPlant || ''
           setNewOperation((prev) => ({
             ...prev,
             location: plantLabel || prev.location,
             loading_location: sapLoading || supplierMills || '',
-            unloading_location: buyerLabel || groupPlant || '',
+            unloading_location: unloadingDefault,
           }))
           const cargoReady = cd.cargo_readiness_date ? String(cd.cargo_readiness_date).slice(0, 10) : ''
           if (cargoReady) {
             setNewOperation((prev) => ({ ...prev, cargo_readiness_date: cargoReady }))
           }
+          const nextStoActuals = normalizeStoActuals(cd.sto_actuals)
+          setStoActuals(nextStoActuals)
+          if (nextStoActuals.length === 1) {
+            const only = nextStoActuals[0]
+            setSapReceiveDates({
+              start_receive_date: only.start_receive_date,
+              last_receive_date: only.last_receive_date,
+            })
+            setSapQty({
+              qty_delivery: only.qty_delivery,
+              qty_receive: only.qty_receive,
+            })
+          } else if (nextStoActuals.length === 0) {
+            setSapReceiveDates({ start_receive_date: '', last_receive_date: '' })
+            setSapQty({ qty_delivery: null, qty_receive: null })
+          }
+          return cd
         } else {
           setContractValidation({
             checking: false,
@@ -273,8 +280,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               response.data.message ||
               (mode === 'po' ? 'PO Number does not exist' : 'Contract does not exist'),
           })
+          return null
         }
       }
+      return null
     } catch (error) {
       console.error('Error validating contract lookup:', error)
       setContractValidation({
@@ -283,6 +292,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
         contractData: null,
         message: mode === 'po' ? 'Error validating PO Number' : 'Error validating contract',
       })
+      return null
     }
   }, [])
 
@@ -331,113 +341,11 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     }
   }
 
-  const truckingDateRange = useMemo(() => {
-    const deliveryStart = sliceIsoDate(contractValidation.contractData?.delivery_start_date)
-    const deliveryEnd = sliceIsoDate(contractValidation.contractData?.delivery_end_date)
-    if (!deliveryStart || !deliveryEnd) return null
-    const minIso = shiftIsoDate(deliveryStart, -TRUCKING_DELIVERY_START_BUFFER_DAYS)
-    const maxIso = shiftIsoDate(deliveryEnd, TRUCKING_DELIVERY_END_BUFFER_DAYS)
-    if (minIso > maxIso) return null
-    return { minIso, maxIso }
-  }, [
-    contractValidation.contractData?.delivery_start_date,
-    contractValidation.contractData?.delivery_end_date,
-  ])
-
-  const checkPlanningDateInRange = (
-    errors: Record<string, string>,
-    iso: string,
-    field: 'planning_start_date' | 'planning_end_date',
-  ) => {
-    if (!iso || !truckingDateRange) return
-    const { minIso, maxIso } = truckingDateRange
-    if (iso < minIso || iso > maxIso) {
-      errors[field] = formatPlanningAllowedRangeMessage(truckingDateRange)
-    }
-  }
-
-  const appendPlanningOutstandingError = (
-    errors: Record<string, string>,
-    perDayMt: number,
-    startIso: string,
-    endIso: string,
-  ) => {
-    const outstandingKg = Number(contractValidation.contractData?.outstanding_quantity)
-    const exceedMsg = getPlanningExceedsOutstandingError({
-      perDayMt,
-      startIso,
-      endIso,
-      outstandingKg,
-      formatMt: fmtQtyMt,
-    })
-    if (exceedMsg) {
-      errors.planning_quantity_per_day_mt = exceedMsg
-    }
-  }
-
-  const validatePlanningFields = (errors: Record<string, string>) => {
-    if (!planning.start_date) errors.planning_start_date = 'Start Date (Planning) is required'
-    if (!planning.end_date) errors.planning_end_date = 'End Date (Planning) is required'
-    if (planning.start_date && planning.end_date && planning.end_date < planning.start_date) {
-      errors.planning_end_date = 'End Date cannot be before Start Date'
-    }
-    checkPlanningDateInRange(errors, planning.start_date, 'planning_start_date')
-    checkPlanningDateInRange(errors, planning.end_date, 'planning_end_date')
-
-    const rawPerDay = String(planning.quantity_per_day_mt || '').replace(/,/g, '').trim()
-    if (!rawPerDay) {
-      errors.planning_quantity_per_day_mt = 'Quantity per day is required'
-    } else {
-      const perDayMt = parseFloat(rawPerDay)
-      if (!Number.isFinite(perDayMt) || perDayMt <= 0) {
-        errors.planning_quantity_per_day_mt = 'Quantity per day must be greater than 0'
-      } else if (planning.start_date && planning.end_date && planning.end_date >= planning.start_date) {
-        appendPlanningOutstandingError(errors, perDayMt, planning.start_date, planning.end_date)
-      }
-    }
-  }
-
   const validateForm = (): Record<string, string> => {
     const errors: Record<string, string> = {}
-
-    if (isEditMode) {
-      validatePlanningFields(errors)
-      setFormErrors(errors)
-      return errors
-    }
-
     if (!contractValidation.exists) errors.po_number = 'PO Number is required and must be valid'
-
-    if (truckingDateRange) {
-      const rangeMsg = formatPlanningAllowedRangeMessage(truckingDateRange)
-      if (newOperation.cargo_readiness_date) {
-        const { minIso, maxIso } = truckingDateRange
-        if (newOperation.cargo_readiness_date < minIso || newOperation.cargo_readiness_date > maxIso)
-          errors.cargo_readiness_date = rangeMsg
-      }
-    }
-
-    validatePlanningFields(errors)
-
     setFormErrors(errors)
     return errors
-  }
-
-  const revalidatePlanningOutstandingOnDates = (startIso: string, endIso: string) => {
-    const rawPerDay = String(planning.quantity_per_day_mt || '').replace(/,/g, '').trim()
-    const perDayMt = parseFloat(rawPerDay)
-    if (!rawPerDay || !Number.isFinite(perDayMt) || perDayMt <= 0) return
-    if (!startIso || !endIso || endIso < startIso) return
-    const exceedMsg = getPlanningExceedsOutstandingError({
-      perDayMt,
-      startIso,
-      endIso,
-      outstandingKg: Number(contractValidation.contractData?.outstanding_quantity),
-      formatMt: fmtQtyMt,
-    })
-    if (exceedMsg) {
-      setFormErrors((prev) => ({ ...prev, planning_quantity_per_day_mt: exceedMsg }))
-    }
   }
 
   const resetForm = () => {
@@ -457,8 +365,14 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       status: 'PLANNED',
       daily_deliverables: [],
     })
-    setPlanning({ start_date: '', end_date: '', quantity_per_day_mt: '' })
+    setPlanningRows([])
+    setActualRows([])
+    setStoActuals([])
+    setContractDueDates({ delivery_start_date: '', delivery_end_date: '' })
     setSapReceiveDates({ start_receive_date: '', last_receive_date: '' })
+    setSapQty({ qty_delivery: null, qty_receive: null })
+    setSfalQtyKg(null)
+    setSfbdQtyKg(null)
     setContractValidation({ checking: false, exists: false, contractData: null, message: '' })
     setPoNumber('')
     setPoSuggestions([])
@@ -499,8 +413,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       const po = String(op.po_number ?? listRow.po_number ?? initialPoNumber ?? '').trim()
       if (po) {
         setPoNumber(po)
-        await validateContractLookup(po, 'po')
-        return
+        return validateContractLookup(po, 'po')
       }
       const contractKey = String(
         op.contract_number
@@ -510,58 +423,92 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
           ?? '',
       ).trim()
       if (contractKey) {
-        await validateContractLookup(contractKey, 'contract')
+        return validateContractLookup(contractKey, 'contract')
       }
+      return null
     },
     [initialContractExtNo, initialContractId, initialPoNumber, validateContractLookup],
   )
 
   const hydrateTruckingEditForm = useCallback(
-    async (operationId: string, op: Record<string, unknown>, listRow: Record<string, unknown>, contractId: string) => {
+    async (operationId: string, op: Record<string, unknown>, listRow: Record<string, unknown>, _contractId: string) => {
       setEditOperationId(operationId)
 
-      await resolveEditContractLookup(op, listRow)
+      const validated = await resolveEditContractLookup(op, listRow)
+
+      const b2bChildBuyer = String(validated?.b2b_child_buyer ?? '').trim()
+      const unloadingSuggestion = String(
+        validated?.unloading_location_suggestion ?? validated?.buyer ?? '',
+      ).trim()
+      const storedUnloading = String(op.unloading_location ?? '').trim()
+      // Prefer live contract Buyer / B2B child buyer over stale stored plant labels
+      // (e.g. "PLANT EUP KUMAI" vs correct "EUP BIOMASS KUMAI").
+      const unloadingForEdit = b2bChildBuyer || unloadingSuggestion || storedUnloading
+
+      // Plant/Site = SAP Discharge Destination (e.g. BONTANG), not stored buyer/plant label.
+      const sapDischargeDestination = String(
+        validated?.sap_discharge_destination ?? validated?.plant_name ?? '',
+      ).trim()
+      const locationForEdit = sapDischargeDestination || String(op.location ?? '').trim()
 
       setNewOperation((prev) => ({
         ...prev,
         operation_id: String(op.operation_id ?? ''),
-        location: String(op.location ?? ''),
+        location: locationForEdit,
         loading_location: String(op.loading_location ?? ''),
-        unloading_location: String(op.unloading_location ?? ''),
+        unloading_location: unloadingForEdit,
         trucking_owner: String(op.trucking_owner ?? ''),
-        cargo_readiness_date: sliceIsoDate(op.cargo_readiness_date as string | undefined),
+        cargo_readiness_date:
+          sliceIsoDate(op.cargo_readiness_date as string | undefined) ||
+          sliceIsoDate(op.contract_cargo_readiness_date as string | undefined),
         quantity_sent: op.quantity_sent != null ? String(op.quantity_sent) : '',
         quantity_delivered: op.quantity_delivered != null ? String(op.quantity_delivered) : '',
         status: String(op.status ?? 'PLANNED'),
       }))
 
-      const dailyRows = parseDailyDeliverables(op.daily_deliverables)
-      const sortedDates = dailyRows
-        .map((r) => sliceIsoDate(r.date))
-        .filter(Boolean)
-        .sort()
-      const startDate =
-        sliceIsoDate(op.planning_start_date as string | undefined) ||
-        sliceIsoDate(op.trucking_start_date as string | undefined) ||
-        sortedDates[0] ||
-        ''
-      const endDate =
-        sliceIsoDate(op.planning_end_date as string | undefined) ||
-        sliceIsoDate(op.trucking_completion_date as string | undefined) ||
-        sortedDates[sortedDates.length - 1] ||
-        startDate
-      const perDayMt = derivePerDayMtFromDailyDeliverables(dailyRows, startDate, endDate)
-
-      setPlanning({
-        start_date: startDate,
-        end_date: endDate,
-        quantity_per_day_mt: perDayMt != null ? fmtQtyMt(perDayMt) : '',
+      setContractDueDates({
+        delivery_start_date:
+          sliceIsoDate(op.delivery_start_date as string | undefined) ||
+          sliceIsoDate(listRow.delivery_start_date as string | undefined),
+        delivery_end_date:
+          sliceIsoDate(op.delivery_end_date as string | undefined) ||
+          sliceIsoDate(listRow.delivery_end_date as string | undefined),
       })
+
+      setPlanningRows(normalizePlanningDeliverableRows(op.daily_deliverables))
+
+      const detailActuals = op.daily_actuals
+      if (Array.isArray(detailActuals) && detailActuals.length > 0) {
+        setActualRows(normalizeDailyActualRows(detailActuals))
+      } else {
+        try {
+          const realizationRes = await api.get(`/trucking/${operationId}/realization`)
+          setActualRows(normalizeDailyActualRows(realizationRes.data?.data?.daily_actuals))
+        } catch {
+          setActualRows([])
+        }
+      }
 
       setSapReceiveDates({
         start_receive_date: sliceIsoDate(op.sap_trucking_start_receive_date as string | undefined),
         last_receive_date: sliceIsoDate(op.sap_trucking_last_receive_date as string | undefined),
       })
+
+      const toNullableNumber = (v: unknown): number | null => {
+        if (v == null || v === '') return null
+        const n = Number(v)
+        return Number.isFinite(n) ? n : null
+      }
+      setSapQty({
+        qty_delivery: toNullableNumber(op.sap_qty_delivery),
+        qty_receive: toNullableNumber(op.sap_qty_receive),
+      })
+      setSfalQtyKg(toNullableNumber(op.sfal_qty))
+      setSfbdQtyKg(toNullableNumber(op.sfbd_qty))
+
+      const fromDetail = normalizeStoActuals(op.sto_actuals)
+      const fromValidated = normalizeStoActuals(validated?.sto_actuals)
+      setStoActuals(fromDetail.length > 0 ? fromDetail : fromValidated)
 
       if (isEditMode) {
         void loadActivityLog(operationId)
@@ -669,82 +616,16 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
   ])
 
   const handleCreateOperation = async () => {
-    if (isEditMode && !editOperationId) {
-      showNotification('error', 'Trucking operation not loaded')
+    if (isEditMode || isPlotMode) {
+      showNotification('error', 'Planning and actuals are managed via Daily Planning / WB upload.')
       return
     }
-    if (isEditMode && isContractRecordClosed(contractValidation.contractData)) {
-      showNotification('error', 'Cannot edit trucking: contract status is Close.')
-      return
-    }
-    if (isPlotMode && !plotOperationId?.trim()) {
-      showNotification('error', 'Trucking operation not loaded')
+    if (isContractRecordClosed(contractValidation.contractData)) {
+      showNotification('error', 'Cannot create trucking: contract status is Close.')
       return
     }
     const validationErrors = validateForm()
-    if (Object.keys(validationErrors).length > 0) {
-      const outstandingMsg = validationErrors.planning_quantity_per_day_mt
-      if (outstandingMsg?.includes('exceeds Outstanding Qty')) {
-        showNotification('error', outstandingMsg)
-      }
-      return
-    }
-
-    if (isEditMode || isPlotMode) {
-      const targetOperationId = isPlotMode ? plotOperationId!.trim() : editOperationId!
-      const perDayMt = parseFloat(String(planning.quantity_per_day_mt).replace(/,/g, '').trim())
-      const outstandingKg = Number(contractValidation.contractData?.outstanding_quantity)
-      const generatedDaily = buildDailyDeliverablesFromPerDayPlanning(
-        planning.start_date,
-        planning.end_date,
-        perDayMt,
-        outstandingKg,
-      )
-      if (generatedDaily.length === 0) {
-        showNotification('error', 'Invalid planning date range')
-        return
-      }
-
-      setCreating(true)
-      try {
-        const response = await api.put(`/trucking/${targetOperationId}`, {
-          daily_deliverables: generatedDaily,
-          trucking_start_date: planning.start_date || null,
-          trucking_completion_date: planning.end_date || null,
-        })
-        if (response.data.success) {
-          showNotification(
-            'success',
-            isPlotMode ? 'Trucking planning saved successfully!' : 'Trucking operation updated successfully!',
-          )
-          resetForm()
-          onClose()
-          onCreated()
-        }
-      } catch (error: any) {
-        console.error('Update trucking operation error:', error)
-        const errorMessage = error.response?.data?.error?.message || 'Failed to update trucking operation'
-        showNotification('error', errorMessage)
-      } finally {
-        setCreating(false)
-      }
-      return
-    }
-
-    const perDayMt = parseFloat(String(planning.quantity_per_day_mt).replace(/,/g, '').trim())
-    const outstandingKg = Number(contractValidation.contractData?.outstanding_quantity)
-    const generatedDaily = buildDailyDeliverablesFromPerDayPlanning(
-      planning.start_date,
-      planning.end_date,
-      perDayMt,
-      outstandingKg,
-    )
-    if (generatedDaily.length === 0) {
-      showNotification('error', 'Invalid planning date range')
-      return
-    }
-
-    const totalKg = sumDailyDeliverablesKg(generatedDaily)
+    if (Object.keys(validationErrors).length > 0) return
 
     const contractIdForSubmit = String(contractValidation.contractData?.contract_id ?? '').trim()
     if (!contractIdForSubmit) {
@@ -755,17 +636,17 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     setCreating(true)
     try {
       const payload = {
-        ...newOperation,
         contract_number: contractIdForSubmit,
-        trucking_start_date: planning.start_date || null,
-        trucking_completion_date: planning.end_date || null,
-        quantity_sent: newOperation.quantity_sent ? parseFloat(newOperation.quantity_sent) : null,
-        quantity_delivered: totalKg,
-        gain_loss_percentage: newOperation.gain_loss_percentage ? parseFloat(newOperation.gain_loss_percentage) : null,
-        gain_loss_amount: newOperation.gain_loss_amount ? parseFloat(newOperation.gain_loss_amount) : null,
-        oa_budget: newOperation.oa_budget ? parseFloat(newOperation.oa_budget) : null,
-        oa_actual: newOperation.oa_actual ? parseFloat(newOperation.oa_actual) : null,
-        daily_deliverables: generatedDaily,
+        operation_id: newOperation.operation_id || undefined,
+        location: newOperation.location || null,
+        loading_location: newOperation.loading_location || null,
+        unloading_location: newOperation.unloading_location || null,
+        trucking_owner: newOperation.trucking_owner || null,
+        cargo_readiness_date: newOperation.cargo_readiness_date || null,
+        status: newOperation.status || 'UNPLANNED',
+        daily_deliverables: [],
+        sfal_qty: sfalQtyKg,
+        sfbd_qty: sfbdQtyKg,
       }
 
       const response = await api.post('/trucking', payload)
@@ -784,51 +665,61 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
     }
   }
 
+  const handleSaveSfalSfbd = async () => {
+    if (!editOperationId) {
+      showNotification('error', 'No trucking operation loaded to save SFAL/SFBD.')
+      return
+    }
+    if (readOnly) return
+    setCreating(true)
+    try {
+      const response = await api.put(`/trucking/${editOperationId}`, {
+        sfal_qty: sfalQtyKg,
+        sfbd_qty: sfbdQtyKg,
+      })
+      if (response.data.success) {
+        showNotification('success', 'SFAL/SFBD saved. Oil Loss will refresh on next load.')
+        onCreated()
+      }
+    } catch (error: any) {
+      console.error('Save trucking SFAL/SFBD error:', error)
+      const errorMessage = error.response?.data?.error?.message || 'Failed to save SFAL/SFBD'
+      showNotification('error', errorMessage)
+    } finally {
+      setCreating(false)
+    }
+  }
+
   if (!open) return null
 
   const cd = contractValidation.contractData
   const isContractClosedEditLocked = isEditMode && isContractRecordClosed(cd)
   const isViewOnly = readOnly || isContractClosedEditLocked
-
-  const planningDayCount =
-    planning.start_date && planning.end_date && planning.end_date >= planning.start_date
-      ? enumerateInclusivePlanningDates(planning.start_date, planning.end_date).length
-      : 0
-
-  const outstandingKg = Number(cd?.outstanding_quantity)
-  const outstandingMt =
-    Number.isFinite(outstandingKg) && outstandingKg > 0 ? outstandingKg / 1000 : null
-
-  const planningPerDayMt = (() => {
-    const perDay = parseFloat(String(planning.quantity_per_day_mt || '').replace(/,/g, '').trim())
-    if (!Number.isFinite(perDay) || planningDayCount <= 0) return null
-    return perDay
-  })()
-
-  const planningPreview = (() => {
-    if (planningPerDayMt == null || planningDayCount <= 0) return null
-    if (!planning.start_date || !planning.end_date) return null
-    const uncappedTotalMt = planningPerDayMt * planningDayCount
-    const exceedsOutstanding =
-      outstandingMt != null && uncappedTotalMt > outstandingMt + 1e-9
-    return { exceedsOutstanding }
-  })()
-
-  const showPlanningPeriodHint = Boolean(
-    planning.end_date &&
-      planning.start_date &&
-      planning.end_date >= planning.start_date &&
-      planningDayCount > 0,
-  )
-
-  const suggestedQtyPerDayMt =
-    showPlanningPeriodHint && outstandingMt != null
-      ? Math.round((outstandingMt / planningDayCount) * 100) / 100
-      : null
+  /** Save create only in Add mode — planning/actuals come from uploads. */
+  const canSave = !isViewOnly && !isEditMode && !isPlotMode
+  /**
+   * SFAL/SFBD stay editable even when the contract's GR PO/STO is Close — these figures
+   * are often entered/corrected after closing. Only the explicit View modal (readOnly)
+   * is truly non-editable; the contract-closed lock does not apply to SFAL/SFBD.
+   */
+  const canSaveSfalSfbd = !readOnly && isEditMode && Boolean(editOperationId)
 
   const step1Done = contractValidation.exists
   const step2Done = Boolean(newOperation.location || newOperation.loading_location || newOperation.unloading_location)
-  const step3Done = Boolean(cd?.delivery_start_date)
+  const step3Done = Boolean(
+    contractDueDates.delivery_start_date ||
+      contractDueDates.delivery_end_date ||
+      planningRows.length > 0 ||
+      cd?.delivery_start_date,
+  )
+  const step4Done = Boolean(
+    stoActuals.length > 0 ||
+      sapReceiveDates.start_receive_date ||
+      sapReceiveDates.last_receive_date ||
+      actualRows.length > 0 ||
+      sapQty.qty_delivery != null ||
+      sapQty.qty_receive != null,
+  )
   const poDisplay = (cd?.po_number || initialPoNumber || '').trim() || '—'
   const poIsClickable = poDisplay !== '—' && Boolean(cd?.contract_id || cd?.po_number)
 
@@ -849,6 +740,220 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
       setContractDetailLoading(false)
     }
   }
+
+  const dueStartDisplay =
+    contractDueDates.delivery_start_date || sliceIsoDate(cd?.delivery_start_date) || ''
+  const dueEndDisplay =
+    contractDueDates.delivery_end_date || sliceIsoDate(cd?.delivery_end_date) || ''
+  const planningTotalKg = sumPlanningDeliveryKg(planningRows)
+  const wbDisplayMode = resolveWbActualsDisplayMode(actualRows, stoActuals)
+  const singleStoFallback =
+    stoActuals.length === 1
+      ? stoActuals[0]
+      : null
+
+  const renderDailyActualsTable = (
+    rows: TruckingModalActualRow[],
+    options?: { totalLabel?: string },
+  ) => {
+    const deliveryTotal = sumActualDeliveryKg(rows)
+    const receiveTotal = sumActualReceiveKg(rows)
+    const totalLabel = options?.totalLabel ?? 'Total'
+    return (
+      <div className="rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+          <p className="text-xs font-semibold text-gray-700">Daily Actuals (WB)</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            From Upload WB — Qty Delivery = Netto PKS, Qty Receive = Netto EUP
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-3 py-2 text-left font-semibold">Date</th>
+                <th className="px-3 py-2 text-right font-semibold">Qty Delivery (MT)</th>
+                <th className="px-3 py-2 text-right font-semibold">Qty Receive (MT)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="px-3 py-4 text-center text-gray-400 italic">
+                    No WB actuals uploaded yet.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => (
+                  <tr
+                    key={`${row.sto_number || '_'}::${row.date}`}
+                    className="border-t border-gray-100"
+                  >
+                    <td className="px-3 py-2 tabular-nums text-gray-800">{fmtIsoDate(row.date)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                      {formatQtyKgAsMt(row.quantity_delivery_kg)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                      {row.quantity_receive_kg == null
+                        ? '-'
+                        : formatQtyKgAsMt(row.quantity_receive_kg)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            {rows.length > 0 && (
+              <tfoot>
+                <tr className="border-t border-gray-200 bg-gray-50">
+                  <td className="px-3 py-2 text-xs font-semibold text-gray-700">{totalLabel}</td>
+                  <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
+                    {formatQtyKgAsMt(deliveryTotal)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
+                    {formatQtyKgAsMt(receiveTotal)}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      </div>
+    )
+  }
+
+  const formatSfalSfbdMtDisplay = (kg: number | null): string => {
+    if (kg == null) return '—'
+    return `${formatQtyKgAsMt(kg)} MT`
+  }
+
+  const canEditSfalSfbd = !readOnly
+
+  const renderSfalSfbdFields = () => (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div>
+        <label className="mb-1.5 block text-xs font-semibold text-gray-600">SFAL Qty (MT)</label>
+        {canEditSfalSfbd ? (
+          <>
+            <Input
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              value={sfalQtyKg == null ? '' : String(sfalQtyKg / 1000)}
+              onKeyDown={blockCommaDecimalKeyDown}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') {
+                  setSfalQtyKg(null)
+                  return
+                }
+                if (sanitizeDecimalDotInput(raw) === null) return
+                const mt = parseDecimalDotInput(raw)
+                setSfalQtyKg(mt === null ? null : mt * 1000)
+              }}
+              className="h-9 text-right"
+              placeholder="—"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+          </>
+        ) : (
+          <div className={`flex h-9 items-center rounded-md border border-gray-200 px-3 text-sm tabular-nums ${READONLY_FIELD_CLASS}`}>
+            {formatSfalSfbdMtDisplay(sfalQtyKg)}
+          </div>
+        )}
+      </div>
+      <div>
+        <label className="mb-1.5 block text-xs font-semibold text-gray-600">SFBD Qty (MT)</label>
+        {canEditSfalSfbd ? (
+          <>
+            <Input
+              type="text"
+              inputMode="decimal"
+              autoComplete="off"
+              value={sfbdQtyKg == null ? '' : String(sfbdQtyKg / 1000)}
+              onKeyDown={blockCommaDecimalKeyDown}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') {
+                  setSfbdQtyKg(null)
+                  return
+                }
+                if (sanitizeDecimalDotInput(raw) === null) return
+                const mt = parseDecimalDotInput(raw)
+                setSfbdQtyKg(mt === null ? null : mt * 1000)
+              }}
+              className="h-9 text-right"
+              placeholder="—"
+            />
+            <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
+          </>
+        ) : (
+          <div className={`flex h-9 items-center rounded-md border border-gray-200 px-3 text-sm tabular-nums ${READONLY_FIELD_CLASS}`}>
+            {formatSfalSfbdMtDisplay(sfbdQtyKg)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  const renderSapActualFields = (block: {
+    start_receive_date: string
+    last_receive_date: string
+    qty_delivery: number | null
+    qty_receive: number | null
+  }) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Trucking Start Receive Date (SAP)
+        </label>
+        <DateInputDdMmYyyy
+          valueIso={block.start_receive_date}
+          onChangeIso={() => {}}
+          disabled
+          className={MODAL_READONLY_CONTROL_CLASS}
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Trucking Last Receive Date (SAP)
+        </label>
+        <DateInputDdMmYyyy
+          valueIso={block.last_receive_date}
+          onChangeIso={() => {}}
+          disabled
+          className={MODAL_READONLY_CONTROL_CLASS}
+        />
+      </div>
+      <div>
+        <label className="flex items-center gap-1 text-xs font-semibold text-gray-600 mb-1.5">
+          Qty Delivery (SAP)
+          <FieldHelp text={FIELD_HELP.truckingDeliveryQty} />
+        </label>
+        <Input
+          value={formatSapQtyMtOrDash(
+            Number.isFinite(block.qty_delivery as number) ? block.qty_delivery : null,
+          )}
+          readOnly
+          disabled
+          className={`h-9 ${READONLY_FIELD_CLASS}`}
+        />
+      </div>
+      <div>
+        <label className="flex items-center gap-1 text-xs font-semibold text-gray-600 mb-1.5">
+          Qty Receive (SAP)
+          <FieldHelp text={FIELD_HELP.truckingReceivedQty} />
+        </label>
+        <Input
+          value={formatSapQtyMtOrDash(
+            Number.isFinite(block.qty_receive as number) ? block.qty_receive : null,
+          )}
+          readOnly
+          disabled
+          className={`h-9 ${READONLY_FIELD_CLASS}`}
+        />
+      </div>
+    </div>
+  )
 
   const cargoReadinessDisplay =
     newOperation.cargo_readiness_date ||
@@ -876,14 +981,14 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                 </h3>
                 <p className="text-xs text-gray-500">
                   {isContractClosedEditLocked
-                    ? 'Contract is Close — read-only view'
-                    : readOnly
-                      ? 'Read-only view'
-                      : isEditMode
-                    ? 'Only planning start and end dates can be changed'
-                    : isPlotMode
-                      ? 'Plot start/end dates and quantity per day for this STO'
-                      : 'Fill in contract, truck, and delivery details'}
+                    ? readOnly
+                      ? 'Contract is Close — read-only view'
+                      : 'Contract is Close — other fields locked (SFAL/SFBD still editable)'
+                    : readOnly || isEditMode
+                      ? 'Read-only planning & actuals (from Daily Planning / WB upload)'
+                      : isPlotMode
+                        ? 'Planning is managed via Daily Planning upload'
+                        : 'Fill in contract and truck details — planning via upload'}
                 </p>
               </div>
             </div>
@@ -902,16 +1007,17 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
             {[
               { num: 1, label: 'Contract', done: step1Done },
               { num: 2, label: 'Truck Detail', done: step2Done },
-              { num: 3, label: 'Shipment Detail', done: step3Done },
-            ].map((s, i) => (
-              <div key={s.num} className="flex items-center">
+              { num: 3, label: 'Truck Planning', done: step3Done },
+              { num: 4, label: 'Truck Actual', done: step4Done },
+            ].map((step, i, arr) => (
+              <div key={step.num} className="flex items-center">
                 <div className="flex items-center gap-1.5">
-                  <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${s.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
-                    {s.done ? <Check className="h-3.5 w-3.5" /> : s.num}
+                  <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold transition-colors ${step.done ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                    {step.done ? <Check className="h-3.5 w-3.5" /> : step.num}
                   </div>
-                  <span className={`text-xs font-medium ${s.done ? 'text-green-700' : 'text-gray-500'}`}>{s.label}</span>
+                  <span className={`text-xs font-medium ${step.done ? 'text-green-700' : 'text-gray-500'}`}>{step.label}</span>
                 </div>
-                {i < 2 && <ChevronRight className="mx-3 h-3.5 w-3.5 text-gray-300 shrink-0" />}
+                {i < arr.length - 1 && <ChevronRight className="mx-3 h-3.5 w-3.5 text-gray-300 shrink-0" />}
               </div>
             ))}
           </div>
@@ -1096,8 +1202,16 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       </div>
                     </div>
                     <div className="grid grid-cols-2 md:grid-cols-3 divide-x divide-green-100 px-0">
+                      <div className="px-3 py-2">
+                        <div className="text-[10px] font-medium uppercase tracking-wide text-green-600">STO Number</div>
+                        <div className="text-xs font-semibold text-gray-800 mt-0.5 whitespace-pre-line break-words">
+                          {(cd.sto_numbers || cd.sto_number || '—')
+                            .split(/,\s*/)
+                            .filter(Boolean)
+                            .join('\n') || '—'}
+                        </div>
+                      </div>
                       {[
-                        { label: 'STO Number', value: cd.sto_number || '—' },
                         { label: 'Supplier', value: cd.supplier || '—' },
                         { label: 'Buyer', value: cd.buyer || '—' },
                         { label: 'Product', value: cd.product || '—' },
@@ -1156,14 +1270,14 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                     <label className="block text-xs font-semibold text-gray-700 mb-1.5">Unloading Location</label>
                     <GroupPlantCombobox
                       value={newOperation.unloading_location}
-                      hint={cd?.buyer || cd?.plant_code}
+                      hint={cd?.b2b_child_buyer || cd?.buyer || cd?.plant_code}
                       onChange={(val) => {
                         setNewOperation((prev) => ({ ...prev, unloading_location: val }))
                         clearFieldError('unloading_location')
                       }}
                       disabled={isEditMode}
                       className={`h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.unloading_location ? 'border-red-500' : ''}`}
-                      placeholder="Buyer atau search group plant..."
+                      placeholder={cd?.is_b2b_origin ? 'B2B child buyer / group plant...' : 'Buyer atau search group plant...'}
                     />
                     {formErrors.unloading_location && <p className="text-xs mt-1 text-red-600">{formErrors.unloading_location}</p>}
                   </div>
@@ -1171,42 +1285,27 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
               </div>
             </div>
 
-            {/* Section 3 — Shipment Detail */}
+            {/* Section 3 — Truck Planning (read-only from daily planning upload) */}
             <div className="rounded-xl border border-gray-200 shadow-sm">
               <div className="flex items-center gap-2.5 border-b border-gray-200 bg-gradient-to-r from-violet-50 to-white px-4 py-2.5 rounded-t-xl">
                 <div className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-100 shrink-0">
                   <Clock className="h-3.5 w-3.5 text-violet-600" />
                 </div>
-                <h4 className="text-sm font-semibold text-gray-800">3. Trucking Detail</h4>
+                <h4 className="text-sm font-semibold text-gray-800">3. Truck Planning</h4>
                 {step3Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="p-4 space-y-4">
-                {cd?.delivery_start_date && cd?.delivery_end_date ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" />
-                    <p>
-                      Start Date (Planning) may be up to {TRUCKING_DELIVERY_START_BUFFER_DAYS} days before Due Date
-                      Delivery (Start). End Date (Planning) may be up to {TRUCKING_DELIVERY_END_BUFFER_DAYS} days after
-                      Due Date Delivery (End).
-                      {truckingDateRange ? (
-                        <span className="block mt-1 font-medium text-blue-900">
-                          Allowed: {fmtIsoDate(truckingDateRange.minIso)} – {fmtIsoDate(truckingDateRange.maxIso)}
-                        </span>
-                      ) : null}
-                    </p>
-                  </div>
-                ) : null}
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1.5">
                       Due Date Delivery Start
                       <span className="ml-1 font-normal text-gray-400">(from contract)</span>
                     </label>
                     <DateInputDdMmYyyy
-                      valueIso={cd?.delivery_start_date || ''}
+                      valueIso={dueStartDisplay}
                       onChangeIso={() => {}}
                       disabled
-                      className="bg-gray-100 cursor-not-allowed"
+                      className={MODAL_READONLY_CONTROL_CLASS}
                     />
                   </div>
                   <div>
@@ -1215,10 +1314,10 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       <span className="ml-1 font-normal text-gray-400">(from contract)</span>
                     </label>
                     <DateInputDdMmYyyy
-                      valueIso={cd?.delivery_end_date || ''}
+                      valueIso={dueEndDisplay}
                       onChangeIso={() => {}}
                       disabled
-                      className="bg-gray-100 cursor-not-allowed"
+                      className={MODAL_READONLY_CONTROL_CLASS}
                     />
                   </div>
                   <div>
@@ -1230,420 +1329,101 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       valueIso={cargoReadinessDisplay}
                       onChangeIso={() => {}}
                       disabled
-                      className={`bg-gray-100 cursor-not-allowed ${formErrors.cargo_readiness_date ? 'border-red-500' : ''}`}
+                      className={MODAL_READONLY_CONTROL_CLASS}
                     />
-                    {formErrors.cargo_readiness_date && (
-                      <p className="text-xs mt-1 text-red-600">{formErrors.cargo_readiness_date}</p>
-                    )}
                   </div>
                 </div>
 
-                {isEditMode && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                        SAP Trucking Start Receive Date
-                        <span className="ml-1 font-normal text-gray-400">(read-only)</span>
-                      </label>
-                      <DateInputDdMmYyyy
-                        valueIso={sapReceiveDates.start_receive_date}
-                        onChangeIso={() => {}}
-                        disabled
-                        className="bg-gray-100 cursor-not-allowed"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-                        SAP Trucking Last Receive Date
-                        <span className="ml-1 font-normal text-gray-400">(read-only)</span>
-                      </label>
-                      <DateInputDdMmYyyy
-                        valueIso={sapReceiveDates.last_receive_date}
-                        onChangeIso={() => {}}
-                        disabled
-                        className="bg-gray-100 cursor-not-allowed"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Simplified planning — auto-distributes to daily_deliverables on submit */}
                 <div className="rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-                    <div>
-                      <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5">
-                        <span className="text-red-500">*</span> Start Date, End Date, and Quantity per day are required.
-                      </p>
-                    </div>
+                  <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+                    <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">From Daily Planning upload — read only</p>
                   </div>
-                  <div className="p-4">
-                    {cd ? (
-                      <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                        <Info className="h-3.5 w-3.5 shrink-0 text-amber-600" />
-                        <span>
-                          <span className="font-medium">Outstanding Qty:</span>{' '}
-                          <span className="tabular-nums font-semibold">
-                            {outstandingMt != null ? `${fmtQtyMt(outstandingMt)} MT` : '—'}
-                          </span>
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="mb-3 flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                        <Info className="h-3.5 w-3.5 shrink-0 text-gray-400" />
-                        <span>Enter a valid PO Number to load Outstanding Qty.</span>
-                      </div>
-                    )}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
-                          Start Date (Planning) <span className="text-red-500 normal-case">*</span>
-                        </label>
-                        <DateInputDdMmYyyy
-                          valueIso={planning.start_date}
-                          minIso={truckingDateRange?.minIso}
-                          maxIso={truckingDateRange?.maxIso}
-                          fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
-                          disabled={isViewOnly}
-                          onChangeIso={(iso) => {
-                            setPlanning((prev) => ({ ...prev, start_date: iso }))
-                            if (
-                              truckingDateRange &&
-                              iso &&
-                              isIsoOutsideAllowedRange(
-                                iso,
-                                truckingDateRange.minIso,
-                                truckingDateRange.maxIso,
-                              )
-                            ) {
-                              setFormErrors((prev) => ({
-                                ...prev,
-                                planning_start_date: outsideAllowedDateRangeMessage(
-                                  truckingDateRange.minIso,
-                                  truckingDateRange.maxIso,
-                                ),
-                              }))
-                            } else {
-                              clearFieldError('planning_start_date')
-                              revalidatePlanningOutstandingOnDates(iso, planning.end_date)
-                            }
-                          }}
-                          className={`mt-1 ${formErrors.planning_start_date ? 'border-red-500' : ''} ${isViewOnly ? READONLY_FIELD_CLASS : ''}`}
-                        />
-                        {formErrors.planning_start_date && (
-                          <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_start_date}</p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
-                          End Date (Planning) <span className="text-red-500 normal-case">*</span>
-                        </label>
-                        <DateInputDdMmYyyy
-                          valueIso={planning.end_date}
-                          minIso={truckingDateRange?.minIso}
-                          maxIso={truckingDateRange?.maxIso}
-                          fastEntryGroup={TRUCKING_PLANNING_FAST_ENTRY_GROUP}
-                          disabled={isViewOnly}
-                          onChangeIso={(iso) => {
-                            setPlanning((prev) => ({ ...prev, end_date: iso }))
-                            if (
-                              truckingDateRange &&
-                              iso &&
-                              isIsoOutsideAllowedRange(
-                                iso,
-                                truckingDateRange.minIso,
-                                truckingDateRange.maxIso,
-                              )
-                            ) {
-                              setFormErrors((prev) => ({
-                                ...prev,
-                                planning_end_date: outsideAllowedDateRangeMessage(
-                                  truckingDateRange.minIso,
-                                  truckingDateRange.maxIso,
-                                ),
-                              }))
-                            } else {
-                              clearFieldError('planning_end_date')
-                              revalidatePlanningOutstandingOnDates(planning.start_date, iso)
-                            }
-                          }}
-                          className={`mt-1 ${formErrors.planning_end_date ? 'border-red-500' : ''} ${isViewOnly ? READONLY_FIELD_CLASS : ''}`}
-                        />
-                        {formErrors.planning_end_date && (
-                          <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_end_date}</p>
-                        )}
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">
-                          Quantity Delivered (MT) per day <span className="text-red-500 normal-case">*</span>
-                        </label>
-                        <Input
-                          inputMode="decimal"
-                          required
-                          value={planning.quantity_per_day_mt}
-                          {...fastEntryFieldProps(TRUCKING_PLANNING_FAST_ENTRY_GROUP)}
-                          onChange={(e) => {
-                            setPlanning((prev) => ({ ...prev, quantity_per_day_mt: e.target.value }))
-                            clearFieldError('planning_quantity_per_day_mt')
-                          }}
-                          onBlur={() => {
-                            const raw = String(planning.quantity_per_day_mt || '').replace(/,/g, '').trim()
-                            if (!raw) {
-                              setFormErrors((prev) => ({
-                                ...prev,
-                                planning_quantity_per_day_mt: 'Quantity per day is required',
-                              }))
-                              return
-                            }
-                            const n = parseFloat(raw)
-                            if (Number.isFinite(n)) {
-                              setPlanning((prev) => ({ ...prev, quantity_per_day_mt: fmtQtyMt(n) }))
-                              if (n <= 0) {
-                                setFormErrors((prev) => ({
-                                  ...prev,
-                                  planning_quantity_per_day_mt: 'Quantity per day must be greater than 0',
-                                }))
-                                return
-                              }
-                              if (
-                                planning.start_date &&
-                                planning.end_date &&
-                                planning.end_date >= planning.start_date
-                              ) {
-                                const exceedMsg = getPlanningExceedsOutstandingError({
-                                  perDayMt: n,
-                                  startIso: planning.start_date,
-                                  endIso: planning.end_date,
-                                  outstandingKg: Number(contractValidation.contractData?.outstanding_quantity),
-                                  formatMt: fmtQtyMt,
-                                })
-                                if (exceedMsg) {
-                                  setFormErrors((prev) => ({
-                                    ...prev,
-                                    planning_quantity_per_day_mt: exceedMsg,
-                                  }))
-                                }
-                              }
-                            }
-                          }}
-                          onFocus={() => {
-                            const raw = String(planning.quantity_per_day_mt || '').replace(/,/g, '').trim()
-                            setPlanning((prev) => ({ ...prev, quantity_per_day_mt: raw }))
-                          }}
-                          readOnly={isEditMode}
-                          disabled={isEditMode}
-                          placeholder="0.00"
-                          className={`mt-1 h-9 ${isEditMode ? READONLY_FIELD_CLASS : ''} ${formErrors.planning_quantity_per_day_mt ? 'border-red-500' : ''}`}
-                        />
-                        {formErrors.planning_quantity_per_day_mt && (
-                          <p className="text-xs mt-0.5 text-red-600">{formErrors.planning_quantity_per_day_mt}</p>
-                        )}
-                      </div>
-                    </div>
-                    {showPlanningPeriodHint && (
-                      <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-900">
-                        <p className="font-medium">
-                          Planning period:{' '}
-                          <span className="tabular-nums">{planningDayCount}</span>{' '}
-                          {planningDayCount === 1 ? 'day' : 'days'}{' '}
-                          <span className="font-normal text-blue-700">
-                            ({fmtIsoDate(planning.start_date)} – {fmtIsoDate(planning.end_date)})
-                          </span>
-                        </p>
-                        {suggestedQtyPerDayMt != null ? (
-                          <p className="mt-1 text-blue-800">
-                            Suggested qty per day:{' '}
-                            <span className="font-semibold tabular-nums">{fmtQtyMt(suggestedQtyPerDayMt)} MT/day</span>
-                            <span className="text-blue-600">
-                              {' '}
-                              (outstanding {fmtQtyMt(outstandingMt!)} MT ÷ {planningDayCount} days)
-                            </span>
-                            {!isEditMode && (
-                              <button
-                                type="button"
-                                className="ml-2 font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
-                                onClick={() => {
-                                  setPlanning((prev) => ({
-                                    ...prev,
-                                    quantity_per_day_mt: fmtQtyMt(suggestedQtyPerDayMt),
-                                  }))
-                                  clearFieldError('planning_quantity_per_day_mt')
-                                }}
-                              >
-                                Use suggestion
-                              </button>
-                            )}
-                          </p>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold">Date</th>
+                          <th className="px-3 py-2 text-right font-semibold">Qty Delivery (MT)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {planningRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={2} className="px-3 py-4 text-center text-gray-400 italic">
+                              No daily planning uploaded yet.
+                            </td>
+                          </tr>
                         ) : (
-                          <p className="mt-1 text-blue-700">
-                            Enter quantity per day to distribute delivery across this period.
-                          </p>
+                          planningRows.map((row) => (
+                            <tr key={row.date} className="border-t border-gray-100">
+                              <td className="px-3 py-2 tabular-nums text-gray-800">{fmtIsoDate(row.date)}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-800">
+                                {formatQtyKgAsMt(row.quantity_delivery_kg)}
+                              </td>
+                            </tr>
+                          ))
                         )}
-                      </div>
-                    )}
-                    {planningDayCount > 0 && planningPerDayMt != null && (
-                      <div
-                        className={`flex flex-wrap items-center justify-between gap-2 mt-3 px-3 py-2 rounded-lg border text-xs ${
-                          planningPreview?.exceedsOutstanding
-                            ? 'bg-red-50 border-red-200'
-                            : 'bg-gray-50 border-gray-200'
-                        }`}
-                      >
-                        <span className={planningPreview?.exceedsOutstanding ? 'text-red-700' : 'text-gray-500'}>
-                          {planningDayCount} days @{' '}
-                          <span className="font-medium tabular-nums">
-                            {fmtQtyMt(planningPerDayMt)} MT/day
-                          </span>
-                        </span>
-                        <span
-                          className={`font-semibold tabular-nums ${
-                            planningPreview?.exceedsOutstanding ? 'text-red-700' : 'text-gray-700'
-                          }`}
-                        >
-                          Planned total: {fmtQtyMt(planningPerDayMt * planningDayCount)} MT
-                          {outstandingMt != null ? (
-                            <span className="font-normal">
-                              {' '}
-                              / Outstanding {fmtQtyMt(outstandingMt)} MT
-                            </span>
-                          ) : null}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Legacy Daily Deliverables — restore with LEGACY_DAILY_DELIVERABLES_UI */}
-                {LEGACY_DAILY_DELIVERABLES_UI && (
-                <div className="rounded-lg border border-gray-200 overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-                    <div>
-                      <p className="text-xs font-semibold text-gray-700">Daily Planning Deliverables</p>
-                      <p className="text-[10px] text-gray-400 mt-0.5">Opsional — validasi terhadap total Qty Delivered</p>
-                      {cd && Number.isFinite(Number(cd.outstanding_quantity)) && (
-                        <p className="text-[10px] text-amber-600 font-medium mt-0.5">
-                          Outstanding Qty: {fmtQty(Number(cd.outstanding_quantity))} Kg
-                        </p>
+                      </tbody>
+                      {planningRows.length > 0 && (
+                        <tfoot>
+                          <tr className="border-t border-gray-200 bg-gray-50">
+                            <td className="px-3 py-2 text-xs font-semibold text-gray-700">Total</td>
+                            <td className="px-3 py-2 text-right text-xs font-semibold tabular-nums text-gray-800">
+                              {formatQtyKgAsMt(planningTotalKg)}
+                            </td>
+                          </tr>
+                        </tfoot>
                       )}
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="h-7 text-xs bg-violet-600 hover:bg-violet-700 text-white"
-                      onClick={() =>
-                        setNewOperation((prev) => ({
-                          ...prev,
-                          daily_deliverables: [...(prev.daily_deliverables || []), { date: '', quantity: '' }],
-                        }))
-                      }
-                    >
-                      <Plus className="h-3.5 w-3.5 mr-1" />
-                      Add Day
-                    </Button>
-                  </div>
-
-                  <div className="p-4">
-                    {(newOperation.daily_deliverables || []).length === 0 ? (
-                      <div className="text-center py-4 text-sm text-gray-400 italic">
-                        No daily deliverables yet. Click &ldquo;Add Day&rdquo; to add one.
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {(newOperation.daily_deliverables || []).map((row, idx) => (
-                          <div key={idx} className="flex items-start gap-2 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2.5">
-                            <div className="flex h-5 w-5 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-600 shrink-0 mt-1">
-                              {idx + 1}
-                            </div>
-                            <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3">
-                              <div>
-                                <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Date</label>
-                                <DateInputDdMmYyyy
-                                  valueIso={row.date}
-                                  onChangeIso={(iso) => {
-                                    setNewOperation((prev) => ({
-                                      ...prev,
-                                      daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                        i === idx ? { ...r, date: iso } : r,
-                                      ),
-                                    }))
-                                    clearFieldError(`dailyDate_${idx}`)
-                                  }}
-                                  className={`mt-1 ${formErrors[`dailyDate_${idx}`] ? 'border-red-500' : ''}`}
-                                />
-                                {formErrors[`dailyDate_${idx}`] && (
-                                  <p className="text-xs mt-0.5 text-red-600">{formErrors[`dailyDate_${idx}`]}</p>
-                                )}
-                              </div>
-                              <div>
-                                <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wide">Quantity Delivered (Kg)</label>
-                                <Input
-                                  inputMode="decimal"
-                                  value={row.quantity}
-                                  onChange={(e) =>
-                                    setNewOperation((prev) => ({
-                                      ...prev,
-                                      daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                        i === idx ? { ...r, quantity: e.target.value } : r,
-                                      ),
-                                    }))
-                                  }
-                                  onBlur={() => {
-                                    const raw = String(row.quantity || '').replace(/,/g, '').trim()
-                                    const n = parseFloat(raw)
-                                    if (Number.isFinite(n)) {
-                                      setNewOperation((prev) => ({
-                                        ...prev,
-                                        daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                          i === idx ? { ...r, quantity: fmtQty(n) } : r,
-                                        ),
-                                      }))
-                                    }
-                                  }}
-                                  onFocus={() => {
-                                    const raw = String(row.quantity || '').replace(/,/g, '').trim()
-                                    setNewOperation((prev) => ({
-                                      ...prev,
-                                      daily_deliverables: (prev.daily_deliverables || []).map((r, i) =>
-                                        i === idx ? { ...r, quantity: raw } : r,
-                                      ),
-                                    }))
-                                  }}
-                                  placeholder="0"
-                                  className="mt-1 h-9"
-                                />
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              className="mt-1 shrink-0 text-gray-300 hover:text-red-500 transition-colors p-1 rounded"
-                              onClick={() =>
-                                setNewOperation((prev) => ({
-                                  ...prev,
-                                  daily_deliverables: (prev.daily_deliverables || []).filter((_, i) => i !== idx),
-                                }))
-                              }
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ))}
-
-                        {/* Qty summary */}
-                        <div className="flex items-center justify-between mt-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200 text-xs">
-                          <span className="text-gray-500">Date is not restricted by Due Date range</span>
-                          <span className="font-semibold tabular-nums text-gray-700">
-                            Total: {fmtQty(
-                              (newOperation.daily_deliverables || []).reduce((s, r) => {
-                                const n = r.quantity ? parseFloat(String(r.quantity).replace(/,/g, '').trim()) : NaN
-                                return s + (Number.isFinite(n) ? n : 0)
-                              }, 0),
-                            )} Kg
-                          </span>
-                        </div>
-                      </div>
-                    )}
+                    </table>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* Section 4 — Truck Actual (SAP + WB upload) */}
+            <div className="rounded-xl border border-gray-200 shadow-sm">
+              <div className="flex items-center gap-2.5 border-b border-gray-200 bg-gradient-to-r from-emerald-50 to-white px-4 py-2.5 rounded-t-xl">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 shrink-0">
+                  <Truck className="h-3.5 w-3.5 text-emerald-600" />
+                </div>
+                <h4 className="text-sm font-semibold text-gray-800">4. Truck Actual</h4>
+                {step4Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
+              </div>
+              <div className="p-4 space-y-4">
+                {wbDisplayMode === 'poLevelMultiSto' ? (
+                  <>
+                    {renderSapActualFields(combineSapStoActuals(stoActuals))}
+                    <div className="space-y-2">
+                      <p className="text-[10px] text-gray-500 italic">
+                        Combined total across {stoActuals.length} STOs on this PO — WB is uploaded
+                        and matched at PO level, not split by STO.
+                      </p>
+                      {renderDailyActualsTable(actualRows)}
+                    </div>
+                    {renderSfalSfbdFields()}
+                  </>
+                ) : (
+                  <>
+                    {renderSapActualFields(
+                      singleStoFallback
+                        ? singleStoFallback
+                        : {
+                            start_receive_date: sapReceiveDates.start_receive_date,
+                            last_receive_date: sapReceiveDates.last_receive_date,
+                            qty_delivery: sapQty.qty_delivery,
+                            qty_receive: sapQty.qty_receive,
+                          },
+                    )}
+                    {renderDailyActualsTable(
+                      singleStoFallback
+                        ? filterActualRowsForSto(actualRows, singleStoFallback.sto_number, {
+                            includeLegacyEmpty: true,
+                          })
+                        : actualRows,
+                    )}
+                    {renderSfalSfbdFields()}
+                  </>
                 )}
               </div>
             </div>
@@ -1654,7 +1434,7 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 shrink-0">
                     <History className="h-3.5 w-3.5 text-slate-600" />
                   </div>
-                  <h4 className="text-sm font-semibold text-gray-800">Log Activity</h4>
+                  <h4 className="text-sm font-semibold text-gray-800">5. Log Activity</h4>
                 </div>
                 <div className="p-4">
                   {activityLoading ? (
@@ -1699,9 +1479,9 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                       {newOperation.location}
                     </span>
                   )}
-                  {planningDayCount > 0 && (
+                  {planningRows.length > 0 && (
                     <span className="flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-violet-700 font-medium">
-                      {planningDayCount} days planned
+                      {planningRows.length} planning day{planningRows.length === 1 ? '' : 's'}
                     </span>
                   )}
                   {!contractValidation.exists && (
@@ -1712,27 +1492,38 @@ export const CreateTruckingOperationModal = memo(function CreateTruckingOperatio
                   <Button variant="outline" className="h-9" onClick={() => { resetForm(); onClose() }} disabled={creating || loadingEdit}>
                     {isViewOnly ? 'Close' : 'Cancel'}
                   </Button>
-                  {!isViewOnly && (
+                  {canSave && (
                     <Button
                       onClick={handleCreateOperation}
-                      disabled={
-                        creating ||
-                        loadingEdit ||
-                        (isEditMode && !editOperationId) ||
-                        ((isPlotMode || !isEditMode) && !contractValidation.exists)
-                      }
+                      disabled={creating || loadingEdit || !contractValidation.exists}
                       className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
                     >
                       {creating ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          {isEditMode ? 'Saving...' : 'Creating...'}
+                          Creating...
                         </>
                       ) : (
                         <>
                           <Truck className="h-4 w-4 mr-2" />
-                          {isEditMode ? 'Save Changes' : 'Create Trucking'}
+                          Create Trucking
                         </>
+                      )}
+                    </Button>
+                  )}
+                  {canSaveSfalSfbd && (
+                    <Button
+                      onClick={handleSaveSfalSfbd}
+                      disabled={creating || loadingEdit}
+                      className="h-9 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                    >
+                      {creating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save SFAL/SFBD'
                       )}
                     </Button>
                   )}

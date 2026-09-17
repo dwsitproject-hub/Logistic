@@ -66,8 +66,8 @@ describe('sapDisplayValue', () => {
     expect(formatSapDisplayNumber(1234.5)).toBe('1,234.5')
   })
 
-  it('formats missing SAP qty as hyphen', () => {
-    expect(formatSapQtyMtDisplay(null)).toBe('-')
+  it('formats missing SAP qty as 0 MT', () => {
+    expect(formatSapQtyMtDisplay(null)).toBe('0 MT')
     expect(formatSapQtyMtDisplay(1000)).toBe('1 MT')
   })
 })

@@ -4,23 +4,32 @@ import jwt from 'jsonwebtoken';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { AuditService } from '../services/audit.service';
-import { fetchUserScopeAssociations } from '../services/userAssociations.service';
+import {
+  buildSessionUserPayload,
+  establishSession,
+  loadActiveUserById,
+  saveSession,
+} from '../services/sessionAuth.service';
 import { AuthRequest } from '../middleware/auth';
+import { getAuthLoginOptions, isLocalLoginEnabled } from '../config/authConfig';
+import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, email, password, full_name, role } = req.body;
+    const { email, password, full_name, role } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    const username = deriveUsernameFromEmail(normalizedEmail);
 
     // Check if user already exists
     const existingUser = await query(
-      'SELECT * FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) OR username = $2',
+      [normalizedEmail, username]
     );
 
     if (existingUser.rows.length > 0) {
       res.status(400).json({
         success: false,
-        error: { message: 'Username or email already exists' },
+        error: { message: 'Email already exists' },
       });
       return;
     }
@@ -33,7 +42,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       `INSERT INTO users (username, email, password_hash, full_name, role)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, username, email, full_name, role, is_active, created_at`,
-      [username, email, password_hash, full_name, role]
+      [username, normalizedEmail, password_hash, full_name, role]
     );
 
     const user = result.rows[0];
@@ -45,7 +54,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       { expiresIn: '7d' }
     ) as string;
 
-    logger.info(`User registered: ${username}`);
+    logger.info(`User registered: ${normalizedEmail}`);
 
     res.status(201).json({
       success: true,
@@ -63,14 +72,33 @@ export const register = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
+/** GET /api/auth/login-options — which login paths are available (public). */
+export const getLoginOptions = (_req: Request, res: Response): void => {
+  res.json({
+    success: true,
+    data: getAuthLoginOptions(),
+  });
+};
+
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, password } = req.body;
+    if (!isLocalLoginEnabled()) {
+      res.status(403).json({
+        success: false,
+        error: {
+          message: 'Local login is disabled on this server. Please use Sign in with DWS Hub.',
+        },
+      });
+      return;
+    }
+
+    const { email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
     // Find user
     const result = await query(
-      'SELECT * FROM users WHERE username = $1 AND is_active = true',
-      [username]
+      'SELECT * FROM users WHERE LOWER(email) = LOWER($1) AND is_active = true',
+      [normalizedEmail]
     );
 
     if (result.rows.length === 0) {
@@ -94,14 +122,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Generate JWT token
-    const token = jwt.sign(
-      { id: user.id, username: user.username, email: user.email, role: user.role },
-      process.env.JWT_SECRET as string,
-      { expiresIn: '7d' }
-    ) as string;
-
-    logger.info(`User logged in: ${username}`);
+    logger.info(`User logged in: ${user.email}`);
 
     // Log the login action
     await AuditService.log({
@@ -113,26 +134,20 @@ export const login = async (req: Request, res: Response): Promise<void> => {
       userAgent: req.get('user-agent')
     });
 
-    const scope = await fetchUserScopeAssociations(user.id, user.plant);
+    const sessionUser = await buildSessionUserPayload(user);
+    establishSession(req, String(user.id));
+    await saveSession(req);
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email, role: user.role },
+      process.env.JWT_SECRET as string,
+      { expiresIn: '7d' }
+    ) as string;
 
     res.json({
       success: true,
       data: {
-        user: {
-          id: user.id,
-          username: user.username,
-          email: user.email,
-          full_name: user.full_name,
-          role: user.role,
-          level: user.level || null,
-          transport_type: user.transport_type || null,
-          plant: user.plant || null,
-          plants: scope.plants,
-          group_plants: scope.group_plants,
-          products: scope.products,
-          is_active: user.is_active,
-          is_first_login: user.is_first_login || false,
-        },
+        user: sessionUser,
         token,
         requirePasswordChange: user.is_first_login || false,
       },
@@ -148,12 +163,8 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const getProfile = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const result = await query(
-      'SELECT id, username, email, full_name, role, level, transport_type, plant, is_active, created_at FROM users WHERE id = $1',
-      [req.user?.id]
-    );
-
-    if (result.rows.length === 0) {
+    const userRow = req.user?.id ? await loadActiveUserById(req.user.id) : null;
+    if (!userRow) {
       res.status(404).json({
         success: false,
         error: { message: 'User not found' },
@@ -161,17 +172,11 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    const row = result.rows[0];
-    const scope = await fetchUserScopeAssociations(row.id, row.plant);
+    const sessionUser = await buildSessionUserPayload(userRow);
 
     res.json({
       success: true,
-      data: {
-        ...row,
-        plants: scope.plants,
-        group_plants: scope.group_plants,
-        products: scope.products,
-      },
+      data: sessionUser,
     });
   } catch (error) {
     logger.error('Get profile error:', error);
@@ -180,6 +185,24 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
       error: { message: 'Failed to get profile' },
     });
   }
+};
+
+/** GET /api/auth/me — current session user (cookie or Bearer). */
+export const getMe = getProfile;
+
+export const logout = (req: Request, res: Response): void => {
+  req.session?.destroy((err) => {
+    if (err) {
+      logger.error('Session destroy failed on logout', { err });
+      res.status(500).json({
+        success: false,
+        error: { message: 'Failed to logout' },
+      });
+      return;
+    }
+    res.clearCookie('klip.sid');
+    res.json({ success: true, data: { message: 'Logged out' } });
+  });
 };
 
 export const updateProfile = async (req: AuthRequest, res: Response): Promise<void> => {

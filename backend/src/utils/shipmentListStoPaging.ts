@@ -1,4 +1,6 @@
 import type { ColumnFilterPayload } from './contractListFilters';
+import { isExactStoGlobalSearch } from './shipmentListFilters';
+import { sqlShipmentListB2bOriginContractJoins } from './shipmentB2bOriginSql';
 
 export const SHIPMENT_BASE_CORE_GROUP_BY_MARKER = '/* SHIPMENT_BASE_CORE_GROUP_BY */';
 
@@ -9,16 +11,61 @@ export type ShipmentStoPagingFilterInput = {
   etaLoading?: string | null;
   etaDischarge?: string | null;
   lateIndicator?: string;
+  charterType?: string;
+  sourceType?: string;
   globalSearch?: string;
   colFilters?: ColumnFilterPayload;
   viewOption?: string;
   viewQuery?: string;
   unplannedHybrid?: boolean;
+  allHybrid?: boolean;
+  /** List ORDER BY key — paging is only safe when ranked_sto can ORDER BY the same column. */
+  sortKey?: string;
+  /** Pending ATC (Overdue / Due ≤7d) list filter — not safe for pre-group STO paging. */
+  etcNoAtcDueWithin7d?: boolean | string;
 };
 
-function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
+/**
+ * Sort keys that ranked_sto can ORDER BY from shipments/contracts (before grouping).
+ * Qty/SAP sorts must not use this pager — they enrich the full filtered set first.
+ */
+export const SHIPMENT_STO_PAGING_SORT_EXPR: Record<string, string> = {
+  created_at: 'MAX(s.created_at)',
+  vessel_name: "LOWER(NULLIF(TRIM(MAX(s.vessel_name::text)), ''))",
+  vessel_code: "LOWER(NULLIF(TRIM(MAX(s.vessel_code::text)), ''))",
+  supplier: "LOWER(NULLIF(TRIM(MAX(c.supplier::text)), ''))",
+  product: "LOWER(NULLIF(TRIM(MAX(c.product::text)), ''))",
+  incoterm: "LOWER(NULLIF(TRIM(MAX(c.incoterm::text)), ''))",
+  sto_number: "LOWER(NULLIF(TRIM(MAX(COALESCE(s.shipment_id, c.sto_number)::text)), ''))",
+  shipment_id: "LOWER(NULLIF(TRIM(MAX(s.shipment_id::text)), ''))",
+  contract_date: 'MAX(c.contract_date)',
+};
+
+export function shipmentStoPagingSortKey(sortKey?: string): string {
+  const key = String(sortKey ?? 'created_at').trim() || 'created_at';
+  return SHIPMENT_STO_PAGING_SORT_EXPR[key] ? key : 'created_at';
+}
+
+export function canRankStoForListSort(sortKey?: string): boolean {
+  const key = String(sortKey ?? 'created_at').trim() || 'created_at';
+  return Object.prototype.hasOwnProperty.call(SHIPMENT_STO_PAGING_SORT_EXPR, key);
+}
+
+/**
+ * Toolbar multi-selects already pushed into the pre-group WHERE (shared with `ranked_sto`)
+ * via `appendContractScopeToolbarFilters` — safe to keep STO-key paging on for these.
+ * Only the `multi` filter type is whitelisted; any other filter type on these same
+ * columns (text/number/date/emptyOnly) is NOT reflected in that pre-group WHERE and
+ * must still fall back to the full-scan path.
+ */
+const PRE_GROUP_SAFE_COLUMN_FILTER_KEYS = new Set(['product', 'incoterm', 'supplier']);
+
+function hasBlockingColumnFilters(colFilters?: ColumnFilterPayload): boolean {
   if (!colFilters) return false;
-  return Object.keys(colFilters).length > 0;
+  return Object.entries(colFilters).some(([key, filter]) => {
+    if (!PRE_GROUP_SAFE_COLUMN_FILTER_KEYS.has(key)) return true;
+    return !filter || typeof filter !== 'object' || filter.type !== 'multi';
+  });
 }
 
 /**
@@ -26,10 +73,22 @@ function hasColumnFilters(colFilters?: ColumnFilterPayload): boolean {
  * before status derivation would skew rows and totals.
  */
 export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput): boolean {
-  if (input.summaryOnly || input.unplannedHybrid || input.stoIsSet) return false;
-  if (String(input.globalSearch ?? '').trim().length >= 2) return false;
-  if (hasColumnFilters(input.colFilters)) return false;
+  if (input.summaryOnly || input.unplannedHybrid || input.allHybrid || input.stoIsSet) return false;
+  if (!canRankStoForListSort(input.sortKey)) return false;
+  const globalSearchTrim = String(input.globalSearch ?? '').trim();
+  if (globalSearchTrim.length >= 2 && !isExactStoGlobalSearch(globalSearchTrim)) return false;
+  if (hasBlockingColumnFilters(input.colFilters)) return false;
   if (input.lateIndicator && String(input.lateIndicator).toUpperCase() !== 'ALL') return false;
+  if (input.charterType && String(input.charterType).toUpperCase() !== 'ALL') return false;
+  if (input.sourceType && String(input.sourceType).toUpperCase() !== 'ALL') return false;
+  if (
+    input.etcNoAtcDueWithin7d === true ||
+    String(input.etcNoAtcDueWithin7d ?? '')
+      .trim()
+      .toLowerCase() === 'true'
+  ) {
+    return false;
+  }
   const viewOpt = String(input.viewOption ?? 'all').toLowerCase();
   if (viewOpt !== 'all' && String(input.viewQuery ?? '').trim().length > 0) return false;
   const status = String(input.status ?? 'ALL').trim().toUpperCase();
@@ -39,33 +98,8 @@ export function canUseShipmentStoKeyPaging(input: ShipmentStoPagingFilterInput):
   return true;
 }
 
-export function buildRankedStoCtes(
-  stoKeyExpr: string,
-  coreWhereSql: string,
-  excludeStoTypeTCond: string,
-): string {
-  return `
-      ranked_sto AS (
-        SELECT ${stoKeyExpr} AS sto_key,
-          MAX(s.created_at) AS mx
-        FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        WHERE 1=1
-          AND (${coreWhereSql})
-          AND (${excludeStoTypeTCond})
-          AND NOT (
-            l.contract_number IS NOT NULL
-            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
-            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
-          )
-        GROUP BY 1
-      ),
-      paged_sto AS (
-        SELECT sto_key FROM ranked_sto
-        ORDER BY mx DESC
-        LIMIT __STO_PAGE_LIMIT__ OFFSET __STO_PAGE_OFFSET__
-      ),
+/** Pre-aggregated contract/PO/supplier links for the paged STO keys (shared by both pagers). */
+const STO_LINK_AGG_CTE_SQL = `
       sto_link_agg AS (
         SELECT
           m.sto_key,
@@ -90,6 +124,77 @@ export function buildRankedStoCtes(
         ) m
         GROUP BY m.sto_key
       ),`;
+
+export function buildRankedStoCtes(
+  stoKeyExpr: string,
+  coreWhereSql: string,
+  sortKey = 'created_at',
+  sortDir: 'ASC' | 'DESC' = 'DESC',
+): string {
+  const key = shipmentStoPagingSortKey(sortKey);
+  const orderExpr = SHIPMENT_STO_PAGING_SORT_EXPR[key] ?? 'MAX(s.created_at)';
+  const dir = sortDir === 'ASC' ? 'ASC' : 'DESC';
+  return `
+      ranked_sto AS (
+        SELECT ${stoKeyExpr} AS sto_key,
+          MAX(s.created_at) AS mx,
+          ${orderExpr} AS sort_val
+        FROM shipments s
+        ${sqlShipmentListB2bOriginContractJoins()}
+        WHERE 1=1
+          AND (${coreWhereSql})
+          AND NOT (
+            l.contract_number IS NOT NULL
+            AND UPPER(NULLIF(TRIM(COALESCE(l.b2b_flag_raw, c.contract_type::text, '')), '')) = 'B2B'
+            AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
+          )
+        GROUP BY 1
+      ),
+      paged_sto AS (
+        SELECT sto_key FROM ranked_sto
+        ORDER BY sort_val ${dir} NULLS LAST, mx DESC
+        LIMIT __STO_PAGE_LIMIT__ OFFSET __STO_PAGE_OFFSET__
+      ),${STO_LINK_AGG_CTE_SQL}`;
+}
+
+/**
+ * Paging CTEs for an already-resolved key page (e.g. from the stage snapshot).
+ * Preserves the given key order and satisfies the same CTE contract as
+ * buildRankedStoCtes (ranked_sto / paged_sto / sto_link_agg).
+ */
+export function buildResolvedStoKeyPageCtes(stoKeys: string[]): string {
+  const values =
+    stoKeys.length > 0
+      ? stoKeys
+          .map((key, i) => `('${String(key).replace(/'/g, "''")}', ${i})`)
+          .join(', ')
+      : null;
+  const rankedSto = values
+    ? `ranked_sto AS (
+        SELECT v.sto_key::text AS sto_key, v.ord
+        FROM (VALUES ${values}) v(sto_key, ord)
+      )`
+    : `ranked_sto AS (
+        SELECT NULL::text AS sto_key, 0 AS ord WHERE FALSE
+      )`;
+  return `
+      ${rankedSto},
+      paged_sto AS (
+        SELECT sto_key FROM ranked_sto ORDER BY ord
+      ),${STO_LINK_AGG_CTE_SQL}`;
+}
+
+/**
+ * Stage-snapshot paging applies to status-card list requests whose remaining filters
+ * are toolbar scope only (the same conditions as STO-key paging, except that a
+ * grouped pipeline status IS selected). Unplanned uses the hybrid path instead.
+ */
+export function canUseShipmentStageSnapshotPaging(input: ShipmentStoPagingFilterInput): boolean {
+  const status = String(input.status ?? 'ALL').trim().toUpperCase();
+  if (!status || status === 'ALL' || status === 'UNPLANNED' || status === 'COMPLETED') return false;
+  // Snapshot keys are stored in created_at order; vessel/supplier sorts would page the wrong 20 keys.
+  if (shipmentStoPagingSortKey(input.sortKey) !== 'created_at') return false;
+  return canUseShipmentStoKeyPaging({ ...input, status: 'ALL' });
 }
 
 export function injectShipmentStoKeyPaging(

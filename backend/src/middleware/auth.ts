@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
 import logger from '../utils/logger';
 import { query } from '../database/connection';
+import { resolveAuthenticatedUser } from './sessionAuth';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -12,33 +12,28 @@ export interface AuthRequest extends Request {
   };
 }
 
-export const authenticateToken = (
+export const authenticateToken = async (
   req: AuthRequest,
   res: Response,
-  next: NextFunction
-): void => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) {
-    res.status(401).json({
-      success: false,
-      error: { message: 'Access token required' },
-    });
-    return;
-  }
-
+  next: NextFunction,
+): Promise<void> => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    req.user = decoded;
+    const user = await resolveAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({
+        success: false,
+        error: { message: 'Access token required' },
+      });
+      return;
+    }
+    req.user = user;
     next();
   } catch (error) {
-    logger.error('Token verification failed:', error);
-    res.status(403).json({
+    logger.error('Authentication failed:', error);
+    res.status(401).json({
       success: false,
-      error: { message: 'Invalid or expired token' },
+      error: { message: 'Authentication failed' },
     });
-    return;
   }
 };
 
@@ -64,7 +59,21 @@ export const authorize = (...roles: string[]) => {
   };
 };
 
-/** SAP Import Management — ADMIN/MANAGEMENT, or LOGISTICS with level Admin only. */
+/**
+ * SAP Import Management — ADMIN/MANAGEMENT, or whoever the roles UI grants `page.sap` view to.
+ *
+ * This used to hardcode "LOGISTICS with level Admin", which made the roles editor a liar: an
+ * admin could grant SAP Data to Logistics / Section Head, watch the menu and page appear, and
+ * still get 403 on the two endpoints that fill them. The page swallowed that 403 and rendered
+ * "No import history available", so it looked like there were simply no imports.
+ *
+ * Worse, the sibling guard for uploading (`authorizeSapImportsUpload`) was already permission-
+ * driven - so a granted Section Head could start an import but never see its progress or its
+ * result. Migration 084's own note records that this divergence had been patched once before for
+ * the Admin level without unifying the two.
+ *
+ * Both guards now read the same source of truth: `role_permissions`, scoped by the user's level.
+ */
 export const authorizeSapImportsView = async (
   req: AuthRequest,
   res: Response,
@@ -78,22 +87,21 @@ export const authorizeSapImportsView = async (
     return;
   }
 
+  // Kept as a shortcut, not as the rule: these two roles administer the system and must not be
+  // lockable out of it by a permissions edit.
   if (['ADMIN', 'MANAGEMENT'].includes(req.user.role)) {
     next();
     return;
   }
 
-  if (req.user.role === 'LOGISTICS') {
-    try {
-      const result = await query('SELECT level FROM users WHERE id = $1', [req.user.id]);
-      const level = String(result.rows[0]?.level ?? '').trim().toUpperCase();
-      if (level === 'ADMIN') {
-        next();
-        return;
-      }
-    } catch (error) {
-      logger.error('authorizeSapImportsView level lookup failed:', error);
+  try {
+    const allowed = await userHasPermissionFlag(req.user.id, req.user.role, 'page.sap', 'can_view');
+    if (allowed) {
+      next();
+      return;
     }
+  } catch (error) {
+    logger.error('authorizeSapImportsView permission lookup failed:', error);
   }
 
   res.status(403).json({
@@ -183,3 +191,43 @@ export const authorizeSapImportsUpload = async (
   });
 };
 
+/** Role-permissions flag check (scoped by user level / transport_type). ADMIN always allowed. */
+export const authorizePermission = (
+  permissionKey: string,
+  flag: 'can_view' | 'can_create' | 'can_edit' | 'can_delete',
+) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        error: { message: 'Unauthorized' },
+      });
+      return;
+    }
+
+    if (req.user.role === 'ADMIN') {
+      next();
+      return;
+    }
+
+    try {
+      const allowed = await userHasPermissionFlag(
+        req.user.id,
+        req.user.role,
+        permissionKey,
+        flag,
+      );
+      if (allowed) {
+        next();
+        return;
+      }
+    } catch (error) {
+      logger.error('authorizePermission lookup failed:', error);
+    }
+
+    res.status(403).json({
+      success: false,
+      error: { message: 'Insufficient permissions' },
+    });
+  };
+};

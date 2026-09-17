@@ -1,15 +1,112 @@
 import { describe, expect, it } from 'vitest';
-import { isPipelineDailySummaryEligible } from './pipelineDailySummary.service';
+import {
+  isPipelineDailySummaryEligible,
+  isPipelineDailySummaryMetaFresh,
+  isPipelineDailySummaryMetaUsable,
+  SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION,
+} from './pipelineDailySummary.service';
 
 describe('isPipelineDailySummaryEligible', () => {
-  it('allows date range + plants only', () => {
+  it('allows a date range on its own', () => {
     expect(
       isPipelineDailySummaryEligible({
         dateFrom: '2026-01-01',
         dateTo: '2026-06-30',
-        plants: ['PRC Karawang'],
+        plants: [],
       }),
     ).toBe(true);
+  });
+
+  /**
+   * This assertion used to read `plants: ['PRC Karawang'] -> true`, and that assumption is what
+   * emptied the Trucking page for a Region/Plant filter.
+   *
+   * The toolbar's options are DISTINCT SAP Discharge Destination; the snapshot's `group_plant` is
+   * `groupPlantExpr('c.plant_code', 'c.company_name')` - the master_plants grouping. Two
+   * dimensions. On the dev database the dropdown offers 40 values, the snapshot holds 11, and
+   * only 4 overlap (BEKASI, BONTANG, KARAWANG, TANJUNG PURA) - and even those failed, because
+   * `appendGroupPlantFilter` compares case-sensitively: `BONTANG` matched 0 rows against the
+   * stored `Bontang` (2,237), `TANJUNG PURA` 0 against `Tanjung Pura` (4,866).
+   *
+   * Note the old fixture value: `PRC Karawang` is not a value either side ever produces, which is
+   * a fair sign the case was written from assumption rather than from the data.
+   */
+  it('rejects a Region/Plant filter - the snapshot stores a different dimension', () => {
+    expect(
+      isPipelineDailySummaryEligible({
+        dateFrom: '2026-01-01',
+        dateTo: '2026-06-30',
+        plants: ['BONTANG'],
+      }),
+    ).toBe(false);
+  });
+
+  it('rejects it whatever the spelling, since the fix is not about case', () => {
+    for (const plant of ['Bontang', 'BONTANG', 'TANJUNG PURA', 'PALEMBANG']) {
+      expect(
+        isPipelineDailySummaryEligible({ dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [plant] }),
+      ).toBe(false);
+    }
+  });
+
+  /**
+   * Migration 164 gives `trucking_list_stage_snapshot` a `region_site` column written from the
+   * live filter's own expression, so the loaders reading *that* table can serve a Region/Plant
+   * filter. Verified before the flag was wired: across all 39 region_site values plus the
+   * unfiltered case, snapshot and live execution counts agreed on 40 of 40, and Section 1's 22
+   * figures agreed exactly for no filter, BONTANG and TANJUNG PURA.
+   *
+   * The flag is a caller's declaration, not a bypass - each loader re-checks that the column is
+   * actually populated before trusting it.
+   */
+  it('allows a plant filter only for a caller that declares the region_site table', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: ['BONTANG'] };
+    expect(isPipelineDailySummaryEligible(filters, { allowPlantFilter: true })).toBe(true);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+  });
+
+  /**
+   * Source and Status, admitted for different reasons and verified the same way.
+   *
+   * Source needs a predicate: the stage snapshot carries `source_type` (migration 163) and the
+   * scope applies `appendContractPerfSourceTypeFilter` - the *same* function the live query
+   * uses, which takes a column expression. Status needs none at all: the summary is built with
+   * `omitStatusFilter: true`, so it already reports every status regardless of the card.
+   *
+   * Parity before wiring, Section 1's 22 figures, live against snapshot: 0 differing for no
+   * filter, Interco, 3rd Party and status COMPLETED. Live 9.3-49.4s, snapshot 20-66ms.
+   */
+  it('admits Source only when the caller says it applies the predicate', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [], sourceType: 'Interco' };
+    expect(isPipelineDailySummaryEligible(filters, { allowSourceTypeFilter: true })).toBe(true);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+  });
+
+  it('admits Status without a predicate, because the summary omits the status filter', () => {
+    const filters = { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [], status: 'COMPLETED' };
+    expect(isPipelineDailySummaryEligible(filters, { allowStatusFilter: true })).toBe(true);
+    expect(isPipelineDailySummaryEligible(filters)).toBe(false);
+  });
+
+  it('each flag admits only its own filter', () => {
+    const both = {
+      dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: [],
+      sourceType: 'Interco', status: 'COMPLETED',
+    };
+    expect(isPipelineDailySummaryEligible(both, { allowSourceTypeFilter: true })).toBe(false);
+    expect(isPipelineDailySummaryEligible(both, { allowStatusFilter: true })).toBe(false);
+    expect(
+      isPipelineDailySummaryEligible(both, { allowSourceTypeFilter: true, allowStatusFilter: true }),
+    ).toBe(true);
+  });
+
+  it('the flag does not loosen any other rule', () => {
+    expect(
+      isPipelineDailySummaryEligible(
+        { dateFrom: '2026-01-01', dateTo: '2026-06-30', plants: ['BONTANG'], globalSearch: 'abc' },
+        { allowPlantFilter: true },
+      ),
+    ).toBe(false);
   });
 
   it('rejects global search', () => {
@@ -64,5 +161,33 @@ describe('isPipelineDailySummaryEligible', () => {
         scopeStatus: 'AT_LOADING_PORT',
       }),
     ).toBe(false);
+  });
+});
+
+describe('isPipelineDailySummaryMetaUsable / Fresh', () => {
+  it('rejects missing meta', () => {
+    expect(isPipelineDailySummaryMetaUsable(null, 'shipment')).toBe(false);
+    expect(isPipelineDailySummaryMetaFresh(null, 'shipment')).toBe(false);
+  });
+
+  it('rejects outdated logic version even when not stale', () => {
+    expect(
+      isPipelineDailySummaryMetaUsable(
+        { is_stale: false, logic_version: SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION - 1 },
+        'shipment',
+      ),
+    ).toBe(false);
+  });
+
+  it('treats current-version stale snapshot as usable but not fresh', () => {
+    const stale = { is_stale: true, logic_version: SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION };
+    expect(isPipelineDailySummaryMetaUsable(stale, 'shipment')).toBe(true);
+    expect(isPipelineDailySummaryMetaFresh(stale, 'shipment')).toBe(false);
+  });
+
+  it('treats current-version non-stale snapshot as fresh', () => {
+    const fresh = { is_stale: false, logic_version: SHIPMENT_PIPELINE_SUMMARY_LOGIC_VERSION };
+    expect(isPipelineDailySummaryMetaUsable(fresh, 'shipment')).toBe(true);
+    expect(isPipelineDailySummaryMetaFresh(fresh, 'shipment')).toBe(true);
   });
 });

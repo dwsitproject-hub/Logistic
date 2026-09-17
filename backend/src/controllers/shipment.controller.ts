@@ -1,24 +1,113 @@
-import { performance } from 'node:perf_hooks';
+﻿import { performance } from 'node:perf_hooks';
+import { shipmentListContractOsWithinBandExpr } from '../utils/shipmentListFilters';
 import { Response } from 'express';
 import { query } from '../database/connection';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { AuthRequest } from '../middleware/auth';
+import { applyContractFilterAlias } from '../utils/contractFilterParam';
 import logger from '../utils/logger';
+import {
+  SHIPMENT_PROVENANCE_COLUMNS,
+  buildKlipEditedFieldsChangedSetSql,
+  buildKlipEditedFieldsSetSql,
+  klipEditedFieldsToRecord,
+} from '../utils/klipEditedFields';
+
+/*
+ * The per-port editor saves the whole form, so "the request supplied it" is not evidence a user
+ * authored it - the form round-trips values it merely displayed. Only the columns whose value
+ * actually changes are recorded, compared against the stored row inside the same UPDATE.
+ *
+ * Placeholders match the SET list below; keep them in step if that statement is renumbered.
+ */
+const VESSEL_LOADING_PORT_CHANGED_PROVENANCE_SQL = buildKlipEditedFieldsChangedSetSql([
+  { column: 'quantity_at_loading_port', placeholder: '$4' },
+  { column: 'quality_ffa', placeholder: '$5' },
+  { column: 'quality_mi', placeholder: '$6' },
+  { column: 'quality_dobi', placeholder: '$7' },
+  { column: 'quality_red', placeholder: '$8' },
+  { column: 'quality_ds', placeholder: '$9' },
+  { column: 'quality_stone', placeholder: '$10' },
+  { column: 'ata_vessel_arrival', placeholder: '$12' },
+  { column: 'ata_vessel_berthed', placeholder: '$14' },
+  { column: 'ata_loading_start', placeholder: '$16' },
+  { column: 'ata_loading_completed', placeholder: '$18' },
+  { column: 'ata_vessel_sailed', placeholder: '$20' },
+  { column: 'loading_rate', placeholder: '$26' },
+  // No eta_* here: SAP never sends ETA (0 occurrences across 27,003 SAP rows, against 1,800 for
+  // ATA), so it is KLIP input already and needs no marker. See klipEditedFields.ts.
+]);
+import {
+  InvalidDateInputError,
+  parseOptionalStrictDateRange,
+} from '../utils/strictDateInput';
+import { isAttentionInsightsEnabled } from '../config/attentionInsightsConfig';
 import { runShippingPerformance, invalidateShippingPerformanceRowCache } from '../services/shippingPerformance.service';
 import {
   buildShipmentListCacheKey,
   buildShipmentListFilterCacheKey,
+  buildShipmentPipelineDailyFilterInput,
   buildShipmentSummaryCacheKey,
   invalidateShipmentsListCache,
+  loadShipmentOutstandingQtyForRequest,
+  loadShipmentAttentionInsightsForRequest,
+  loadShipmentEtcNoAtcDueWithin7dForRequest,
+  loadShipmentStatusCardQtyForRequest,
   loadShipmentSummaryBundle,
+  mergeShipmentStatusCardQtyFromCombinedSummaryRow,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
+  buildShipmentListStatusFilteredCountQuery,
+  seedShipmentListFilteredTotal,
+  summaryRowHasCombinedStatusCardQty,
+  type ShipmentEtcNoAtcDueWithin7d,
+  type ShipmentOutstandingQtySummary,
+  type ShipmentStatusCardQtyBacklogParts,
+  type ShipmentStatusContractQtyKg,
+  type ShipmentStatusOutstandingQtyKg,
 } from '../services/shipmentList.service';
 import {
+  alignShipmentOutstandingQtyTotalToCardSum,
+  EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
+} from '../utils/shipmentOutstandingQtySummarySql';
+import {
+  applyShipmentStatusCardZeroGuards,
+  applyShipmentStatusVesselZeroGuards,
+  sumShipmentStatusOutstandingQtyKg,
+} from '../utils/shipmentStatusCardQtySql';
+import type { ShipmentAttentionInsightsRow } from '../utils/shipmentAttentionInsightsSql';
+import {
+  EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D,
+  appendShipmentEtcNoAtcDueWithin7dFilter,
+} from '../utils/shipmentEtcNoAtcDueSql';
+import {
+  isPipelineDailySummaryEligible,
+  loadShipmentStagePageFromSnapshot,
+  toPipelineDailySummaryScope,
+} from '../services/pipelineDailySummary.service';
+import {
+  buildShipmentAllHybridListContext,
+  buildShipmentCancelledHybridListContext,
+  buildShipmentCompletedHybridListContext,
   buildShipmentUnplannedHybridListContext,
+  countCancelledContractBacklog,
+  countCompletedContractBacklog,
+  countPreplannedContracts,
   countUnplannedHybridBreakdown,
+  isAllHybridListRequest,
+  isPreplannedListRequest,
   isUnplannedHybridListRequest,
+  shouldResolveAllHybridShipmentsList,
+  shouldResolveCancelledHybridShipmentsList,
+  shouldResolveCompletedHybridShipmentsList,
+  resolveAllHybridShipmentsList,
+  resolveCancelledHybridShipmentsList,
+  resolveCompletedHybridShipmentsList,
+  resolvePreplannedContractsList,
   resolveUnplannedHybridShipmentsList,
+  type CancelledContractBacklogBreakdown,
+  type CompletedContractBacklogBreakdown,
+  type PreplannedContractsBreakdown,
   type UnplannedHybridBreakdown,
 } from '../services/shipmentUnplannedHybridList.service';
 import { resolveShipmentEditContext } from '../services/shipmentEditContext.service';
@@ -28,10 +117,15 @@ import {
   cancelKlipShipmentGroup,
   KlipShipmentCancelError,
 } from '../services/cancelKlipShipment.service';
+import {
+  CreateShipmentClientError,
+  createShipmentsFromContracts,
+} from '../services/createShipment.service';
 import { syncVesselLoadingPortsFromLatestSap } from '../services/vesselLoadingPortsFromSap.service';
 import { loadVesselIdleList } from '../services/vesselIdle.service';
 import {
   attachPurchaseOrderToShipment,
+  batchSaveShipmentPoKlipQty,
   batchSaveShipmentPoPlanQty,
   listAvailablePurchaseOrdersForShipmentEdit,
 } from '../services/shipmentPoAssignment.service';
@@ -42,30 +136,44 @@ import {
   appendShipmentColumnFilters,
   appendShipmentEtaBucketFilters,
   appendShipmentGlobalSearch,
+  buildExactNumericGlobalSearchInnerSql,
+  isExactStoGlobalSearch,
   appendShipmentLateIndicatorFilter,
+  appendShipmentCharterTypeFilter,
+  appendShipmentSourceTypeFilter,
   appendShipmentViewOptionFilter,
   normalizeShipmentEtaBucketParam,
   parseColumnFiltersQuery,
+  sqlShipmentGroupStatusFloorAgg,
   shipmentEffectiveStatusExpr,
 } from '../utils/shipmentListFilters';
+import { parseShipmentListSort, shipmentListSortUsesEnrichedPath } from '../utils/shipmentListSortSql';
 import {
   SHIPMENT_BASE_CORE_GROUP_BY_MARKER,
   buildRankedStoCtes,
+  buildResolvedStoKeyPageCtes,
   buildShipmentShellEnrichWithStoLinkAgg,
+  canUseShipmentStageSnapshotPaging,
   canUseShipmentStoKeyPaging,
   injectShipmentStoKeyPaging,
 } from '../utils/shipmentListStoPaging';
 import {
   appendShipmentPipelineScopeStageFilter,
   appendShipmentPipelineStageFilter,
-  shipmentPagePipelineSummarySelectSql,
-  shipmentPagePipelineUnplannedRowPredicate,
+  normalizeShipmentPagePipelineStageParam,
 } from '../utils/shipmentPagePipelineSql';
 import {
   buildUnplannedContractBacklogTableCountCte,
   appendContractScopeToolbarFilters,
 } from '../utils/shipmentUnplannedHybridSql';
+import {
+  buildShipmentPipelineLiveStageCountsQuery,
+  buildShipmentSection1CombinedSummaryQuery,
+} from '../utils/shipmentSection1CombinedSummarySql';
+import { normalizePipelineVesselNameList } from '../utils/pipelineVesselNames';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
+import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
+import { SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
 import {
   sqlShipmentListDischargePortsKlipAgg,
   sqlShipmentListLoadingPortsKlipAgg,
@@ -73,26 +181,32 @@ import {
 import {
   shipmentListQtyMoveCteFromPage,
 } from '../utils/shipmentOutstandingQtySql';
-import { shipmentListPageQtySelectSql } from '../utils/shipmentListQtySql';
+import { shipmentListPageQtySelectSql, sqlGroupedMaybeCopiedQty } from '../utils/shipmentListQtySql';
 import { buildContractDetailsForStoSql } from '../utils/contractDetailsForStoSql';
+import { ttlMemo } from '../utils/ttlMemo';
+import { groupPlantExpr } from '../utils/groupPlantSql';
+import { appendRegionSiteFilter, sqlRegionSiteRawForContract } from '../utils/regionSiteSql';
 import {
-  allocateNextSyntheticSequenceDefault,
-  buildSyntheticOperationId,
-  formatDDMMYYYY,
-} from '../utils/operationId';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
+  sqlB2bEndingDischargeDestExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
 import {
   contractExtNoSubquery,
   resolvedDischargePortNameSql,
   resolvedLoadingPortNameSql,
   resolvedPlantCodeSql,
 } from '../utils/portDisplaySql';
-import { sqlUserStoQtyAssignedToKgSql, stoQtyAssignedMtToKg } from '../utils/userStoAssignmentQty';
+import { sqlUserStoQtyAssignedToKgSql } from '../utils/userStoAssignmentQty';
+import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import {
-  buildShipmentExcludeStoTypeTSql,
-  buildShipmentSeaMixTransportSql,
-  shipmentListStoKeyExpr,
-  shipmentListDisplayStoNumberExpr,
+  sqlRelevantContractNumbersWithB2bOrigins,
+  sqlShipmentListB2bOriginContractJoins,
+  sqlShipmentListExecutionCsStoJoin,
+} from '../utils/shipmentB2bOriginSql';
+import {
+  buildShipmentPageSeaRowScopeSql,
+  shipmentListSeaStoKeyExpr,
+  shipmentListSeaDisplayStoNumberExpr,
 } from '../utils/shipmentStoTypeSql';
 import {
   buildShipmentListAtaSelectSql,
@@ -117,8 +231,24 @@ import {
   sqlSapAtaStartLoading,
 } from '../utils/shipmentAtaOverrideSql';
 import { hydrateShipmentInfoAtaGaps } from '../utils/shipmentAtaHydration';
-import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
-import { SQL_CONTRACT_IMPORT_STATUS, getContractImportStatusForShipment, sqlIsContractSapClosedExpr } from '../utils/contractDeliveryStatus';
+import { sqlShipmentListPrimaryFieldAgg, sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
+import { dedupeStoGroupPorts } from '../utils/vesselLoadingPortDedupe';
+import { isValidHumanPortName } from '../services/vesselLoadingPortsFromSap.service';
+import {
+  resolveStoGroupShipmentIds,
+  sqlShipmentOrStoKeyMatchWhere,
+} from '../utils/shipmentStoGroupMembersSql';
+import { fanOutVesselLoadingPortAtaToStoGroup, fanOutShipmentEtaToStoGroup, fanOutShipmentLoadingEtaToStoGroup } from '../services/shipmentAtaStoFanOut.service';
+import { fanOutVesselIdentityToStoGroup, hasVesselIdentityUpdate } from '../services/shipmentVesselFromSap.service';
+import {
+  SQL_CONTRACT_IMPORT_STATUS,
+  getContractImportStatusForShipment,
+  sqlIsContractSapClosedForStoExpr,
+} from '../utils/contractDeliveryStatus';
+import { resolveContractLogisticsStoStatus } from '../utils/contractLogisticsStoDisplay';
+import { isContractLatestSpdSnapshotFresh } from '../services/contractLatestSpdSnapshot.service';
+import { latestSpdDerivedExprs } from '../utils/contractLatestSpdDerivedSql';
+import { deriveCompactShipmentPage } from '../services/shipmentListNodePage.service';
 import {
   buildStoLinkedContractCountSql,
   buildStoLinkedContractNumbersSql,
@@ -126,10 +256,6 @@ import {
   buildStoLinkedSuppliersSql,
   contractsOnStoSubquery,
 } from '../utils/stoLinkedContractSql';
-import {
-  isOfficialSapStoNumber,
-  officialSapStoHasRegisteredPlanning,
-} from '../utils/sapStoShipmentPlanning';
 
 /** Normalize date-like fields for shipments / loading ports (YYYY-MM-DD or null). */
 function toShipmentDateOrNull(v: unknown): string | null {
@@ -236,59 +362,90 @@ async function fetchPurchaseOrderLines(contractId: string) {
   return result.rows;
 }
 
-async function upsertPoQtyAssignment(
-  assignmentKey: string,
-  contractNumber: string,
-  poNumber: string | null,
-  qtyMt: number,
-) {
-  const poKey = poNumber ? String(poNumber).trim() : '';
-  await query(
-    `
-    DELETE FROM user_sto_contract_assignments
-    WHERE sto_number = $1
-      AND contract_number = $2
-      AND COALESCE(po_number, '') = $3
-    `,
-    [assignmentKey, contractNumber, poKey],
-  );
-  if (qtyMt > 0) {
-    await query(
-      `
-      INSERT INTO user_sto_contract_assignments (sto_number, contract_number, po_number, sto_qty_assigned)
-      VALUES ($1, $2, NULLIF($3, ''), $4::numeric)
-      `,
-      [assignmentKey, contractNumber, poKey || null, stoQtyAssignedMtToKg(qtyMt)],
-    );
-  }
+function normalizeVesselNameList(raw: unknown): string[] {
+  return normalizePipelineVesselNameList(raw);
 }
 
 function shipmentListSummaryPayload(
   totalCount: number,
   summaryRow: Record<string, unknown>,
   unplannedBreakdown?: UnplannedHybridBreakdown | null,
+  preplannedBreakdown?: PreplannedContractsBreakdown | null,
+  outstandingQty?: ShipmentOutstandingQtySummary | null,
+  attentionInsights?: ShipmentAttentionInsightsRow | null,
+  statusCardQty?: {
+    statusContractQty?: ShipmentStatusContractQtyKg | null;
+    statusOutstandingQty?: ShipmentStatusOutstandingQtyKg | null;
+  } | null,
+  completedBreakdown?: CompletedContractBacklogBreakdown | null,
+  cancelledBreakdown?: CancelledContractBacklogBreakdown | null,
+  etcNoAtcDueWithin7d?: ShipmentEtcNoAtcDueWithin7d | null,
 ) {
+  /** Unplanned card = PO backlog only (STO open rows are Planned). */
   const unplannedContractRows = unplannedBreakdown
     ? unplannedBreakdown.contractRows
     : Number(summaryRow.unplanned_contract_backlog_count || 0);
-  const unplannedShipmentRows = unplannedBreakdown
-    ? unplannedBreakdown.shipmentRows
-    : Number(summaryRow.unplanned_shipment_execution_count || 0);
-  const unplannedTableTotal = unplannedBreakdown
-    ? unplannedBreakdown.totalTableRows
-    : unplannedContractRows + unplannedShipmentRows;
+  const unplannedShipmentRows = 0;
+  const unplannedTableTotal = unplannedContractRows;
+  const preplannedGroupCount = preplannedBreakdown
+    ? preplannedBreakdown.groupCount
+    : Number(summaryRow.preplanned_count || 0);
+  const preplannedContractRows = preplannedBreakdown
+    ? preplannedBreakdown.contractRows
+    : Number(summaryRow.preplanned_contract_count || 0);
+
+  const statusCounts = {
+    unplanned: unplannedTableTotal,
+    preplanned: preplannedGroupCount,
+    planned: Number(summaryRow.planned_count || 0),
+    atLoadingPort: Number(summaryRow.at_loading_port_count || 0),
+    sailed: Number(summaryRow.sailed_count || 0),
+    atDischargePort: Number(summaryRow.at_discharge_port_count || 0),
+    completed:
+      Number(summaryRow.completed_count || 0) + (completedBreakdown?.contractRows ?? 0),
+    cancelled:
+      Number(summaryRow.cancelled_count || 0) + (cancelledBreakdown?.contractRows ?? 0),
+  };
+
+  const guardedQty = applyShipmentStatusCardZeroGuards({
+    counts: statusCounts,
+    statusContractQty: statusCardQty?.statusContractQty ?? null,
+    statusOutstandingQty: statusCardQty?.statusOutstandingQty ?? null,
+  });
+  const statusVesselNames = applyShipmentStatusVesselZeroGuards(statusCounts, {
+    unplanned: normalizeVesselNameList(summaryRow.unplanned_vessel_names),
+    preplanned: [] as string[],
+    planned: normalizeVesselNameList(summaryRow.planned_vessel_names),
+    atLoadingPort: normalizeVesselNameList(summaryRow.at_loading_port_vessel_names),
+    sailed: normalizeVesselNameList(summaryRow.sailed_vessel_names),
+    atDischargePort: normalizeVesselNameList(summaryRow.at_discharge_port_vessel_names),
+    completed: normalizeVesselNameList(summaryRow.completed_vessel_names),
+    cancelled: normalizeVesselNameList(summaryRow.cancelled_vessel_names),
+  });
+
+  let resolvedOutstandingQty =
+    outstandingQty === undefined
+      ? undefined
+      : outstandingQty ?? EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY;
+  if (resolvedOutstandingQty != null && guardedQty.statusOutstandingQty != null) {
+    resolvedOutstandingQty = alignShipmentOutstandingQtyTotalToCardSum(
+      resolvedOutstandingQty,
+      sumShipmentStatusOutstandingQtyKg(guardedQty.statusOutstandingQty),
+    );
+  } else if (resolvedOutstandingQty === undefined && guardedQty.statusOutstandingQty != null) {
+    // Progressive: expose card-aligned total immediately; buckets may arrive via outstandingQtyOnly.
+    // Other = full total until classified buckets load (helper explains; no Other column).
+    resolvedOutstandingQty = alignShipmentOutstandingQtyTotalToCardSum(
+      EMPTY_SHIPMENT_OUTSTANDING_QTY_SUMMARY,
+      sumShipmentStatusOutstandingQtyKg(guardedQty.statusOutstandingQty),
+    );
+  }
+
   return {
     total: totalCount,
-    status: {
-      /** Matches hybrid Unplanned table row total (backlog + STO execution groups). */
-      unplanned: unplannedTableTotal,
-      planned: Number(summaryRow.planned_count || 0),
-      atLoadingPort: Number(summaryRow.at_loading_port_count || 0),
-      sailed: Number(summaryRow.sailed_count || 0),
-      atDischargePort: Number(summaryRow.at_discharge_port_count || 0),
-      completed: Number(summaryRow.completed_count || 0),
-      cancelled: Number(summaryRow.cancelled_count || 0),
-    },
+    status: statusCounts,
+    /** Sorted distinct non-blank vessel names per pipeline card (Section 1 rectangles). */
+    statusVesselNames,
     loadingPortBreakdown: {
       arrived: Number(summaryRow.loading_port_arrived_count || 0),
       berthed: Number(summaryRow.loading_port_berthed_count || 0),
@@ -319,6 +476,27 @@ function shipmentListSummaryPayload(
       shipmentRows: unplannedShipmentRows,
       totalTableRows: unplannedTableTotal,
     },
+    preplannedTable: {
+      groupCount: preplannedGroupCount,
+      contractRows: preplannedContractRows,
+      totalTableRows: preplannedContractRows,
+    },
+    ...(resolvedOutstandingQty !== undefined
+      ? { outstandingQty: resolvedOutstandingQty }
+      : {}),
+    ...(attentionInsights !== undefined ? { attentionInsights: attentionInsights ?? null } : {}),
+    ...(etcNoAtcDueWithin7d !== undefined
+      ? {
+          etcNoAtcDueWithin7d:
+            etcNoAtcDueWithin7d ?? EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D,
+        }
+      : {}),
+    ...(guardedQty.statusContractQty != null
+      ? { statusContractQty: guardedQty.statusContractQty }
+      : {}),
+    ...(guardedQty.statusOutstandingQty != null
+      ? { statusOutstandingQty: guardedQty.statusOutstandingQty }
+      : {}),
   };
 }
 
@@ -331,6 +509,44 @@ function shipmentListLimitOffset(limit: unknown, page: unknown): { limit: number
   const safeLimit = Math.max(1, Math.min(500, Number(limit) || 20));
   const safePage = Math.max(1, Number(page) || 1);
   return { limit: safeLimit, offset: (safePage - 1) * safeLimit };
+}
+
+/**
+ * Capture a list response in-process, for the row-set scope load.
+ *
+ * The scope load re-enters getShipments with a synthetic query instead of duplicating the list
+ * SQL, so it cannot drift from the real path when that path changes. ROW_SET_LOAD_MARKER in that
+ * query stops the synthetic request taking the derive path itself.
+ */
+function captureShipmentListResponse(): {
+  res: Response;
+  rows: () => Record<string, unknown>[];
+} {
+  let body: unknown;
+  const captured = {
+    statusCode: 200,
+    status(code: number) {
+      captured.statusCode = code;
+      return captured;
+    },
+    json(payload: unknown) {
+      body = payload;
+      return captured;
+    },
+    setHeader() {
+      return captured;
+    },
+    send() {
+      return captured;
+    },
+  };
+  return {
+    res: captured as unknown as Response,
+    rows: () => {
+      const data = (body as { data?: { shipments?: unknown } } | undefined)?.data;
+      return Array.isArray(data?.shipments) ? (data.shipments as Record<string, unknown>[]) : [];
+    },
+  };
 }
 
 function emitShipmentListTimings(
@@ -361,15 +577,31 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
   const timingsMs: Record<string, number> = {};
   const tReq0 = performance.now();
   try {
-    const { status, vessel, port, dateFrom, dateTo, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
+    // `contractId` / `contract_id` are accepted as aliases for `contract`, and a uuid is
+    // resolved to the contract number the list actually filters on. Done before anything reads
+    // the query so filter builders and cache keys all see one canonical value.
+    await applyContractFilterAlias(req.query as Record<string, unknown>);
+    const { status, vessel, port, delayed, sto, contract, plant, page = 1, limit = 10 } = req.query;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
     const globalSearch =
       typeof (req.query as any).search === 'string' ? (req.query as any).search.trim() : '';
     const colFilters = parseColumnFiltersQuery((req.query as any).columnFilters);
     const lateIndicatorParam = (req.query as any).lateIndicator as string | undefined;
+    const charterTypeParam = (req.query as any).charterType as string | undefined;
+    const sourceTypeParam = (req.query as any).sourceType as string | undefined;
     const viewOptionParam = (req.query as any).viewOption as string | undefined;
     const viewQueryParam = (req.query as any).viewQuery as string | undefined;
+    const etcNoAtcDueWithin7dParam = (req.query as { etcNoAtcDueWithin7d?: string })
+      .etcNoAtcDueWithin7d;
     const etaLoadingBucket = normalizeShipmentEtaBucketParam((req.query as any).etaLoading);
     const etaDischargeBucket = normalizeShipmentEtaBucketParam((req.query as any).etaDischarge);
+    const { sortKey: listSortKey, sortDir: listSortDir } = parseShipmentListSort(
+      (req.query as { sortKey?: string }).sortKey,
+      (req.query as { sortDir?: string }).sortDir,
+    );
     const scopeStatusParam =
       typeof (req.query as any).scopeStatus === 'string'
         ? (req.query as any).scopeStatus
@@ -379,11 +611,16 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const includeSummary =
       String((req.query as any).includeSummary ?? 'true').toLowerCase() !== 'false';
     const summaryOnly = String((req.query as any).summaryOnly || '').toLowerCase() === 'true';
+    const outstandingQtyOnly =
+      String((req.query as any).outstandingQtyOnly || '').toLowerCase() === 'true';
     /** Skip heavy SAP table joins (compact list first paint; hydrate with a second request). */
-    const skipSapJoin =
+    const skipSapJoinRequested =
       compact &&
-      String((req.query as any).skipSapJoin || '').toLowerCase() === 'true' &&
-      !summaryOnly;
+      String((req.query as { skipSapJoin?: string }).skipSapJoin || '').toLowerCase() === 'true' &&
+      !summaryOnly &&
+      !outstandingQtyOnly;
+    /** Qty/port sorts must enrich before LIMIT or ORDER BY silently becomes created_at. */
+    const skipSapJoin = skipSapJoinRequested && !shipmentListSortUsesEnrichedPath(listSortKey);
 
     // Query shipments grouped by STO number or Operation ID:
     // - SAP shipments are grouped by contracts.sto_number
@@ -393,43 +630,60 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     // IMPORTANT: status derivation depends on ATA ladder. Even in compact view, we must
     // fallback to vessel_loading_ports so rows don't incorrectly stay PLANNED.
     // Pre-join first loading / discharge port rows (avoids ~10 correlated subqueries per shipment row).
-    const vlpCtes = `
-      vlp_load_first AS (
-        SELECT DISTINCT ON (shipment_id)
-          shipment_id,
-          ata_vessel_arrival::date AS vlp_load_ata_va,
-          ata_vessel_berthed::date AS vlp_load_ata_vb,
-          ata_loading_start::date AS vlp_load_ata_ls,
-          ata_loading_completed::date AS vlp_load_ata_lc,
-          ata_vessel_sailed::date AS vlp_load_ata_vs
-        FROM vessel_loading_ports
-        WHERE COALESCE(is_discharge_port, false) = false AND port_sequence = 1
-        ORDER BY shipment_id, id
-      ),
-      vlp_disc_first AS (
-        SELECT DISTINCT ON (shipment_id)
-          shipment_id,
-          ata_vessel_arrival::date AS vlp_disc_ata_va,
-          ata_vessel_berthed::date AS vlp_disc_ata_vb,
-          ata_loading_start::date AS vlp_disc_ata_ls,
-          ata_loading_completed::date AS vlp_disc_ata_lc
-        FROM vessel_loading_ports
-        WHERE COALESCE(is_discharge_port, false) = true
-        ORDER BY shipment_id, port_sequence NULLS LAST, id
-      ),`;
+    /**
+     * First loading port / first discharge port per shipment, as LATERALs rather than CTEs.
+     *
+     * These were `DISTINCT ON (shipment_id)` CTEs joined with `LEFT JOIN ... ON
+     * vlp_l.shipment_id = s.id`. A CTE scan cannot be indexed, and the planner underestimated
+     * the outer side (rows=17 against 864 actual), so it chose a nested loop and compared every
+     * outer row against every VLP row: EXPLAIN reported `Rows Removed by Join Filter: 1,151,237`
+     * and `1,150,232` for the two joins in the Shipments summary query.
+     *
+     * As LATERALs each lookup is one index descent, and the cost stays bounded however wrong the
+     * row estimate is. `idx_vlp_shipment_first_load` and `idx_vlp_shipment_discharge` are partial
+     * indexes whose predicates match these WHERE clauses exactly.
+     *
+     * Output-preserving: `DISTINCT ON (shipment_id) ... ORDER BY shipment_id, <rest>` keeps the
+     * first row per shipment under `<rest>`, which is what `ORDER BY <rest> LIMIT 1` returns for
+     * one shipment; `ON TRUE` with no matching row yields the same NULLs the LEFT JOIN did.
+     * Aliases and column names are unchanged - shipmentAtaOverrideSql reads `vlp_l.*` / `vlp_d.*`.
+     */
+    const vlpLateralJoins = `
+        LEFT JOIN LATERAL (
+          SELECT
+            vlp_lf.ata_vessel_arrival::date AS vlp_load_ata_va,
+            vlp_lf.ata_vessel_berthed::date AS vlp_load_ata_vb,
+            vlp_lf.ata_loading_start::date AS vlp_load_ata_ls,
+            vlp_lf.ata_loading_completed::date AS vlp_load_ata_lc,
+            vlp_lf.ata_vessel_sailed::date AS vlp_load_ata_vs
+          FROM vessel_loading_ports vlp_lf
+          WHERE vlp_lf.shipment_id = s.id
+            AND COALESCE(vlp_lf.is_discharge_port, false) = false
+            AND vlp_lf.port_sequence = 1
+          ORDER BY vlp_lf.id
+          LIMIT 1
+        ) vlp_l ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT
+            vlp_df.ata_vessel_arrival::date AS vlp_disc_ata_va,
+            vlp_df.ata_vessel_berthed::date AS vlp_disc_ata_vb,
+            vlp_df.ata_loading_start::date AS vlp_disc_ata_ls,
+            vlp_df.ata_loading_completed::date AS vlp_disc_ata_lc,
+            vlp_df.eta_vessel_complete_discharge::date AS vlp_disc_eta_edc
+          FROM vessel_loading_ports vlp_df
+          WHERE vlp_df.shipment_id = s.id
+            AND COALESCE(vlp_df.is_discharge_port, false) = true
+          ORDER BY vlp_df.port_sequence NULLS LAST, vlp_df.id
+          LIMIT 1
+        ) vlp_d ON TRUE`;
 
-    const ataSelect = buildShipmentListAtaSelectSql();
-
-    const etaExtraSelect = compact
-      ? `
-          -- ETA discharge complete (compact): shipment-level only
-          MAX(s.eta_discharge_complete) as eta_vessel_complete_discharge,`
-      : `
-          -- Get ETA dates from shipments or vessel_loading_ports
-          MAX(COALESCE(s.eta_discharge_complete, (SELECT vlpd.eta_vessel_complete_discharge::date FROM vessel_loading_ports vlpd WHERE vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true LIMIT 1))) as eta_vessel_complete_discharge,`;
-
-    const listStoKeySql = shipmentListStoKeyExpr('c', 'l', 's');
-    const listStoDisplaySql = shipmentListDisplayStoNumberExpr('c', 'l', 's');
+    const etaExtraSelect = `
+          -- ETA discharge complete (ETC): shipment-level or discharge VLP
+          MAX(COALESCE(s.eta_discharge_complete, vlp_d.vlp_disc_eta_edc)) as eta_vessel_complete_discharge,`;
+    const listStoKeySql = shipmentListSeaStoKeyExpr('c', 'l', 's');
+    // After listStoKeySql: the ATA select needs the group key to compute the own-STO discharge column.
+    const ataSelect = buildShipmentListAtaSelectSql(listStoKeySql);
+    const listStoDisplaySql = shipmentListSeaDisplayStoNumberExpr('c', 'l', 's');
 
     /** Grouped STO key on shipment_base rows (safe for scalar subqueries in the outer enrich CTE). */
     const groupedStoFromRow = `NULLIF(TRIM(g.sto_key::text), '')`;
@@ -464,7 +718,10 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
             FILTER (WHERE c.contract_id IS NOT NULL) AS contract_numbers_from_join,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number)
             FILTER (WHERE c.po_number IS NOT NULL AND TRIM(c.po_number) != '') AS po_numbers_from_join,
-          COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) AS contract_count_from_join`;
+          COUNT(DISTINCT c.contract_id) FILTER (WHERE c.contract_id IS NOT NULL) AS contract_count_from_join,
+          -- SAP presence of the STO's contracts. MIN keeps a grouped row WITHDRAWN only when
+          -- every contract behind it is withdrawn, so a mixed STO still counts in totals.
+          MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence`;
 
     const contractExtNoEnrichedSql = compact
       ? `CASE
@@ -503,7 +760,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    /** Fast path for compact shell rows — STO-linked contract/PO expansion without SAP agg CTEs. */
+    /** Fast path for compact shell rows â€” STO-linked contract/PO expansion without SAP agg CTEs. */
     const shipmentBaseShellEnrichCte = `,
       shipment_base AS (
         SELECT
@@ -516,60 +773,74 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
         FROM shipment_base_core g
       )`;
 
-    const seaMixTransportCond = buildShipmentSeaMixTransportSql('c');
-    const excludeStoTypeTCond = buildShipmentExcludeStoTypeTSql('c', 'l', 's');
+    /** Shipments page scope: CIF/FOB/CFR; FOB Type T (trucking) legs excluded. */
+    const seaIncotermScopeCond = buildShipmentPageSeaIncotermScopeSql('c');
     const stoIsSet = Boolean(sto && String(sto).trim() !== '');
-    /** STO filter may depend on SAP effective_sto — keep full latest_spd scan in that case. */
+    const exactStoKey = stoIsSet
+      ? String(sto).trim()
+      : isExactStoGlobalSearch(globalSearch)
+        ? globalSearch.trim()
+        : null;
+    /** STO filter may depend on SAP effective_sto â€” keep full latest_spd scan in that case. */
     const scopeLatestSpdToContracts = !stoIsSet;
 
-    const coreWhereParts: string[] = [seaMixTransportCond];
+    /** Pre-filter for relevant_contract_numbers â€” no `l` join yet (incoterm only). */
+    const relevantContractWhereParts: string[] = [seaIncotermScopeCond];
+    /** shipment_base_core / ranked_sto â€” `l` is joined; sea row scope appended after param index known. */
+    const shipmentBaseWhereParts: string[] = [];
     /** Contract-only scope (date/plant/contract) reused by Unplanned open-contract count. */
     const contractScopeParts: string[] = [];
     const coreParams: any[] = [];
     let cp = 1;
 
     if (vessel) {
-      coreWhereParts.push(`s.vessel_name ILIKE $${cp}`);
+      relevantContractWhereParts.push(`s.vessel_name ILIKE $${cp}`);
+      shipmentBaseWhereParts.push(`s.vessel_name ILIKE $${cp}`);
       coreParams.push(`%${vessel}%`);
       cp += 1;
     }
     if (port) {
-      coreWhereParts.push(`(s.port_of_loading ILIKE $${cp} OR s.port_of_discharge ILIKE $${cp + 1})`);
+      relevantContractWhereParts.push(`(s.port_of_loading ILIKE $${cp} OR s.port_of_discharge ILIKE $${cp + 1})`);
+      shipmentBaseWhereParts.push(`(s.port_of_loading ILIKE $${cp} OR s.port_of_discharge ILIKE $${cp + 1})`);
       coreParams.push(`%${port}%`, `%${port}%`);
       cp += 2;
     }
     if (dateFrom) {
-      coreWhereParts.push(`c.contract_date >= $${cp}`);
+      relevantContractWhereParts.push(`c.contract_date >= $${cp}`);
+      shipmentBaseWhereParts.push(`c.contract_date >= $${cp}`);
       contractScopeParts.push(`c.contract_date >= $${cp}`);
       coreParams.push(dateFrom);
       cp += 1;
     }
     if (dateTo) {
-      coreWhereParts.push(`c.contract_date <= $${cp}`);
+      relevantContractWhereParts.push(`c.contract_date <= $${cp}`);
+      shipmentBaseWhereParts.push(`c.contract_date <= $${cp}`);
       contractScopeParts.push(`c.contract_date <= $${cp}`);
       coreParams.push(dateTo);
       cp += 1;
     }
     if (delayed === 'true') {
-      coreWhereParts.push(`s.is_delayed = true`);
+      relevantContractWhereParts.push(`s.is_delayed = true`);
+      shipmentBaseWhereParts.push(`s.is_delayed = true`);
     }
     if (contract) {
-      coreWhereParts.push(`c.contract_id = $${cp}`);
+      relevantContractWhereParts.push(`c.contract_id = $${cp}`);
+      shipmentBaseWhereParts.push(`c.contract_id = $${cp}`);
       contractScopeParts.push(`c.contract_id = $${cp}`);
       coreParams.push(contract);
       cp += 1;
     }
     const plantListRaw = Array.isArray(plant) ? plant : plant ? [plant] : [];
     const plants = plantListRaw.map((v) => String(v).trim()).filter(Boolean);
-    const groupPlantFilter = appendGroupPlantFilter(
+    const groupPlantFilter = appendRegionSiteFilter(
       plants,
       cp,
-      groupPlantExpr('c.plant_code', 'c.company_name'),
-      'c.plant_code',
+      sqlRegionSiteRawForContract('c.contract_id', 'c.po_number'),
     );
     if (groupPlantFilter.sql) {
       const plantSql = groupPlantFilter.sql.replace(/^ AND /, '');
-      coreWhereParts.push(plantSql);
+      relevantContractWhereParts.push(plantSql);
+      shipmentBaseWhereParts.push(plantSql);
       contractScopeParts.push(plantSql);
       coreParams.push(...groupPlantFilter.params);
       cp = groupPlantFilter.nextIndex;
@@ -578,69 +849,113 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
     const contractToolbarFilter = appendContractScopeToolbarFilters(colFilters, cp);
     if (contractToolbarFilter.sql) {
       const toolbarSql = contractToolbarFilter.sql.replace(/^ AND /, '');
-      coreWhereParts.push(toolbarSql);
+      relevantContractWhereParts.push(toolbarSql);
+      shipmentBaseWhereParts.push(toolbarSql);
       contractScopeParts.push(toolbarSql);
       coreParams.push(...contractToolbarFilter.params);
       cp = contractToolbarFilter.nextIndex;
     }
 
-    const coreWhereSql = coreWhereParts.join(' AND ');
+    let exactStoParamIndex: number | null = null;
+    if (exactStoKey) {
+      exactStoParamIndex = cp;
+      coreParams.push(exactStoKey);
+      cp += 1;
+    }
+
+    const seaRowScopeCond = buildShipmentPageSeaRowScopeSql('c', 'l', 's', {
+      ...(exactStoParamIndex != null ? { selectedStoParamIndex: exactStoParamIndex } : {}),
+    });
+    shipmentBaseWhereParts.unshift(seaRowScopeCond);
+
+    if (exactStoKey && exactStoParamIndex != null) {
+      shipmentBaseWhereParts.push(buildExactNumericGlobalSearchInnerSql(listStoKeySql, exactStoParamIndex));
+    }
+
+    const relevantContractWhereSql = relevantContractWhereParts.join(' AND ');
+    const shipmentBaseWhereSql = shipmentBaseWhereParts.join(' AND ');
     const contractScopeSql =
       contractScopeParts.length > 0 ? `AND ${contractScopeParts.join(' AND ')}` : '';
+
+    /**
+     * `latest_spd_contract` picks the newest SAP row per contract. Reading it from
+     * `contract_latest_spd_snapshot` (one row per contract) instead of scanning
+     * `sap_processed_data` is what keeps the Shipments summary off a full SAP scan.
+     *
+     * Two things make the swap output-preserving, both verified against the real dev data
+     * (18,711 contracts):
+     *
+     * - the snapshot has no `sto_number` column, but that COALESCE arm adds nothing over the
+     *   JSON arms - column and JSON-only forms agreed on every contract, so NULL is safe here;
+     * - the snapshot is built with a `spd.id DESC` tiebreaker while this query had none. Without
+     *   it the two disagreed on `effective_sto` for 1,484 contracts (ties on `created_at` are
+     *   resolved arbitrarily); adding the same tiebreaker to the live form brought all five
+     *   projected columns to zero differences.
+     */
+    const latestSpdSnapshotFresh = await isContractLatestSpdSnapshotFresh();
+
+    /**
+     * Migration 161 stores these five on the snapshot, so a fresh snapshot needs no jsonb at all:
+     * the source exposes the columns and the projection just names them. Measured on the backlog
+     * counts that read the same six columns, this removed 26 `data->` accesses per row and took
+     * the preplanned count from 771,553 buffers to 7,138.
+     *
+     * The stale path computes them from contractLatestSpdDerivedSql, the same definition the
+     * refresh writes with - a stored column and its expression drifting apart would show wrong
+     * data with nothing failing.
+     *
+     * `source_type_raw` is stored too but deliberately not projected here: nothing on this page
+     * reads it, and adding a column to a CTE other queries build on is a change with no caller.
+     */
+    const SHIPMENT_LATEST_SPD_COLUMNS = [
+      'effective_sto',
+      'b2b_flag_raw',
+      'contract_reference_po_raw',
+      'contract_ext_no_raw',
+      'discharge_destination',
+    ] as const;
+
+    const latestSpdSourceSql = latestSpdSnapshotFresh
+      ? `(
+          SELECT lss.contract_number,
+                 ${SHIPMENT_LATEST_SPD_COLUMNS.map((c) => `lss.${c}`).join(', ')},
+                 lss.spd_created_at AS created_at
+          FROM contract_latest_spd_snapshot lss
+        ) spd`
+      : 'sap_processed_data spd';
+    /** The snapshot is already unique per contract, so it has no id to break ties with. */
+    const latestSpdOrderTailSql = latestSpdSnapshotFresh ? '' : ', spd.id DESC';
+
+    const latestSpdDerived = latestSpdDerivedExprs('spd.data', 'spd.sto_number');
+    const latestSpdProjection = latestSpdSnapshotFresh
+      ? SHIPMENT_LATEST_SPD_COLUMNS.map((c) => `spd.${c}`).join(',\n          ')
+      : SHIPMENT_LATEST_SPD_COLUMNS.map((c) => `${latestSpdDerived[c]} AS ${c}`).join(',\n          ');
 
     const latestSpdSelectList = `
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
-          NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') AS effective_sto,
-          COALESCE(
-            spd.data->'contract'->>'contract_type',
-            spd.data->>'B2B Flag',
-            spd.data->'raw'->>'B2B Flag',
-            spd.data->>'Contract Type'
-          ) AS b2b_flag_raw,
-          COALESCE(
-            spd.data->'contract'->>'contract_reference_po',
-            spd.data->>'CONTRACT REFF PO',
-            spd.data->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'Contract Reff PO Ini',
-            spd.data->'raw'->>'CONTRACT REFF PO'
-          ) AS contract_reference_po_raw,
-          COALESCE(
-            spd.data->'raw'->>'Contract Ext No',
-            spd.data->>'Contract Ext No'
-          ) AS contract_ext_no_raw,
+          ${latestSpdProjection},
           spd.created_at`;
 
     const prelude = scopeLatestSpdToContracts
-      ? `WITH ${vlpCtes}
-      relevant_contract_numbers AS (
-        SELECT DISTINCT c.contract_id
-        FROM shipments s
-        INNER JOIN contracts c ON s.contract_id = c.id
-        WHERE ${coreWhereSql}
-      ),
+      ? `WITH
+      ${sqlRelevantContractNumbersWithB2bOrigins(relevantContractWhereSql)},
       latest_spd_contract AS (
         ${latestSpdSelectList}
-        FROM sap_processed_data spd
+        FROM ${latestSpdSourceSql}
         INNER JOIN relevant_contract_numbers rc ON rc.contract_id = spd.contract_number
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${latestSpdOrderTailSql}
       ),
       shipment_base_core AS (
         SELECT 
 `
-      : `WITH ${vlpCtes}
+      : `WITH
       latest_spd_contract AS (
         ${latestSpdSelectList}
-        FROM sap_processed_data spd
+        FROM ${latestSpdSourceSql}
         WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST${latestSpdOrderTailSql}
       ),
       shipment_base_core AS (
         SELECT 
@@ -652,8 +967,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(${listStoDisplaySql}) as sto_number,
           MAX(s.shipment_id) as shipment_id,
           MAX(s.operation_id) as operation_id,
-          MAX(NULLIF(TRIM(s.vessel_name), '')) as vessel_name,
-          MAX(NULLIF(TRIM(s.vessel_code), '')) as vessel_code,
+          ${sqlShipmentListPrimaryFieldAgg('s.vessel_name', listStoKeySql, 'c', 'l', 's', 'cs_sto')} as vessel_name,
+          ${sqlShipmentListPrimaryFieldAgg('s.vessel_code', listStoKeySql, 'c', 'l', 's', 'cs_sto')} as vessel_code,
+          ${sqlShipmentListPrimaryFieldAgg('s.master_vessel_id::text', listStoKeySql, 'c', 'l', 's', 'cs_sto')}::uuid AS master_vessel_id,
           MAX(s.voyage_no) as voyage_no,
           MAX(s.vessel_owner) as vessel_owner,
           MAX(s.vessel_draft) as vessel_draft,
@@ -666,7 +982,7 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.arrival_date) as arrival_date,
           MAX(s.port_of_loading) as port_of_loading,
           MAX(s.port_of_discharge) as port_of_discharge,
-          MAX(${groupPlantExpr('c.plant_code', 'c.company_name')}) as plant_site,
+          COALESCE(MAX(${sqlB2bEndingDischargeDestExpr('l.discharge_destination')}), 'Blank') as plant_site,
           -- Basic ETA loading dates at shipment level (kept in sync with first loading port)
           MAX(s.eta_arrival) as eta_arrival,
           MAX(s.eta_berthed) as eta_berthed,
@@ -678,8 +994,9 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.eta_discharge_berthed) as eta_discharge_berthed,
           MAX(s.eta_discharge_start) as eta_discharge_start,
           MAX(s.eta_discharge_complete) as eta_discharge_complete,
-          COALESCE(SUM(s.quantity_shipped), 0) as quantity_shipped,
-          COALESCE(SUM(s.quantity_delivered), 0) as quantity_delivered,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_shipped')}, 0) as quantity_shipped,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered')}, 0) as quantity_delivered,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered_klip')}, 0) as quantity_delivered_klip,
           COALESCE(SUM(s.inbound_weight), 0) as inbound_weight,
           COALESCE(SUM(s.outbound_weight), 0) as outbound_weight,
           COALESCE(AVG(s.gain_loss_percentage), 0) as gain_loss_percentage,
@@ -689,12 +1006,19 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(s.vessel_oa_budget) as vessel_oa_budget,
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.bl_quantity) as bl_quantity,
-          MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
+          COALESCE(${sqlGroupedMaybeCopiedQty('s.actual_vessel_qty_receive')}, 0) as actual_vessel_qty_receive,
           MAX(s.sfal_qty) as sfal_qty,
           MAX(s.sfbd_qty) as sfbd_qty,
+          MAX(s.fuel_consumption) as fuel_consumption,
+          MAX(s.freight) as freight,
+          MAX(s.pump_rate) as pump_rate,
+          MAX(s.sailing_speed) as sailing_speed,
+          MAX(s.shortage) as shortage,
           MAX(s.difference_final_qty_vs_bl_qty) as difference_final_qty_vs_bl_qty,
           MAX(s.average_vessel_speed) as average_vessel_speed,
           MAX(s.status) as status,
+          -- Mixed persisted statuses on multi-contract STOs (diagnostic). Cards use MAX ATA.
+          ${sqlShipmentGroupStatusFloorAgg('s')},
           MAX(s.sla_days) as sla_days,
           BOOL_OR(s.is_delayed) as is_delayed,
           MAX(s.sap_delivery_id) as sap_delivery_id,
@@ -707,34 +1031,45 @@ export const getShipments = async (req: AuthRequest, res: Response) => {
           MAX(c.product) as product,
           STRING_AGG(DISTINCT c.product, ', ' ORDER BY c.product) FILTER (WHERE c.product IS NOT NULL) as products,
           MAX(c.incoterm) as incoterm,
+          MAX(c.source_type) as contract_source_type,
           MAX(c.group_name) as group_name,
           STRING_AGG(DISTINCT c.group_name, ', ' ORDER BY c.group_name) FILTER (WHERE c.group_name IS NOT NULL) as group_names,
           -- Get delivery dates from contracts
           MAX(c.contract_date) as contract_date,
           MAX(c.delivery_start_date) as delivery_start_date,
           MAX(c.delivery_end_date) as delivery_end_date,
-          BOOL_OR(${sqlIsContractSapClosedExpr('c')}) AS is_contract_sap_closed,
+          BOOL_AND(${sqlIsContractSapClosedForStoExpr('c', listStoKeySql)}) AS is_contract_sap_closed,
+          /*
+           * Outstanding within the zero band, per contract, collapsed over the STO group.
+           *
+           * BOOL_AND rather than a summed OS: one contract can belong to several STO groups, so
+           * summing would need the per-STO division the aggregates apply to avoid overstating.
+           * Testing each contract avoids that and matches is_contract_sap_closed directly above.
+           *
+           * Fed by a single primary-key join on contract_qty_move_snapshot - the same source the
+           * OS cards read through the qty_move CTE, so the column and the card cannot disagree.
+           * Measured on dev: the OS join over every sea contract is 33ms, and 220 contracts newly
+           * reach COMPLETED (of 1,591 inside the band, the rest already being Close or ATC'd).
+           */
+          BOOL_AND(${shipmentListContractOsWithinBandExpr()}) AS is_contract_os_within_band,
           ${sqlShipmentListLoadingPortsKlipAgg()},
           ${sqlShipmentListDischargePortsKlipAgg()},
 ${ataSelect}
 ${etaExtraSelect}
 ${contractMetaSelectCore}
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-        LEFT JOIN contract_stos cs_sto ON cs_sto.contract_id = c.id
-          AND NULLIF(TRIM(cs_sto.sto_number::text), '') IS NOT NULL
-          AND TRIM(cs_sto.sto_number::text) = TRIM((${listStoKeySql})::text)
-        LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
-        LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
+        ${sqlShipmentListB2bOriginContractJoins()}
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+        LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
+        ${sqlShipmentListExecutionCsStoJoin(listStoKeySql)}
+${vlpLateralJoins}
         LEFT JOIN vessel_loading_ports vlp_load ON vlp_load.shipment_id = s.id
           AND COALESCE(vlp_load.is_discharge_port, false) = false
         LEFT JOIN vessel_loading_ports vlp_disc ON vlp_disc.shipment_id = s.id
           AND COALESCE(vlp_disc.is_discharge_port, false) = true
         ${SHIPMENT_ATA_OVERRIDES_JOIN}
         WHERE 1=1
-          AND (${coreWhereSql})
-          AND (${excludeStoTypeTCond})
+          AND (${shipmentBaseWhereSql})
           -- Match dashboard baseline: exclude B2B "child" contracts
           -- (latest SAP row indicates B2B AND Contract Reference PO is not blank).
           AND NOT (
@@ -743,21 +1078,8 @@ ${contractMetaSelectCore}
             AND NULLIF(TRIM(COALESCE(l.contract_reference_po_raw, '')), '') IS NOT NULL
           )
     `;
-    const queryParams: any[] = [...coreParams];
-    let paramIndex = coreParams.length + 1;
-
-    if (stoIsSet) {
-      queryText += ` AND (
-        TRIM(${listStoKeySql}) = TRIM($${paramIndex}::text)
-        OR s.shipment_id = $${paramIndex}
-        OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM($${paramIndex}::text)
-      )`;
-      queryParams.push(sto);
-      paramIndex++;
-    }
-
-    const innerParams = [...queryParams];
-    const outerFilterStartIndex = paramIndex;
+    const innerParams = [...coreParams];
+    const outerFilterStartIndex = coreParams.length + 1;
 
     // NOTE: We intentionally avoid per-row correlated subqueries into sap_processed_data here.
     // Those are extremely slow when sap_processed_data is large, causing the shipments page to hang.
@@ -768,7 +1090,7 @@ ${contractMetaSelectCore}
 
     /** Full grouped dataset (expensive on large YTD). Used for summary aggregates. */
     const shipmentBaseCteSqlFull = queryText;
-    /** Summary uses shell enrich (join aggregates only) — not full STO subqueries, not bare core. */
+    /** Summary uses shell enrich (join aggregates only) â€” not full STO subqueries, not bare core. */
     const shipmentBaseCteSqlSummary = shipmentBaseCteSqlFull.replace(
       shipmentBaseEnrichCte,
       shipmentBaseShellEnrichCte,
@@ -785,6 +1107,10 @@ ${contractMetaSelectCore}
     fp = cCol.nextIndex;
     const li = appendShipmentLateIndicatorFilter(lateIndicatorParam, fp);
     fp = li.nextIndex;
+    const ct = appendShipmentCharterTypeFilter(charterTypeParam, fp);
+    fp = ct.nextIndex;
+    const st = appendShipmentSourceTypeFilter(sourceTypeParam, fp);
+    fp = st.nextIndex;
     const vo = appendShipmentViewOptionFilter(viewOptionParam, viewQueryParam, fp);
     fp = vo.nextIndex;
     const etaBuckets = appendShipmentEtaBucketFilters(etaLoadingBucket, etaDischargeBucket);
@@ -793,18 +1119,29 @@ ${contractMetaSelectCore}
       fp,
     );
     fp = statusFilter.nextIndex;
+    const etcNoAtcDueFilter = appendShipmentEtcNoAtcDueWithin7dFilter(etcNoAtcDueWithin7dParam);
 
-    const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${vo.sql}`;
-    const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}`;
+    const toolbarOuterSql = `${gSearch.sql}${cCol.sql}${li.sql}${ct.sql}${st.sql}${vo.sql}`;
+    /** List-only layers (status / ETA / Pending ATC) â€” excluded from summaryOnly toolbar scope. */
+    const cardOuterSql = `${etaBuckets.sql}${statusFilter.sql}${etcNoAtcDueFilter.sql}`;
     const outerSql = `${toolbarOuterSql}${cardOuterSql}`;
     const outerParams = [
       ...gSearch.params,
       ...cCol.params,
       ...li.params,
+      ...ct.params,
+      ...st.params,
       ...vo.params,
       ...statusFilter.params,
     ];
-    const toolbarOuterParams = [...gSearch.params, ...cCol.params, ...li.params, ...vo.params];
+    const toolbarOuterParams = [
+      ...gSearch.params,
+      ...cCol.params,
+      ...li.params,
+      ...ct.params,
+      ...st.params,
+      ...vo.params,
+    ];
     const toolbarCountParams = [...innerParams, ...toolbarOuterParams];
 
     const shipmentListFilterCacheKey = buildShipmentListFilterCacheKey({
@@ -819,14 +1156,18 @@ ${contractMetaSelectCore}
       globalSearch,
       colFilters,
       lateIndicator: lateIndicatorParam,
+      charterType: charterTypeParam,
+      sourceType: sourceTypeParam,
       viewOption: viewOptionParam,
       viewQuery: viewQueryParam,
       status: typeof status === 'string' ? status : 'ALL',
       etaLoading: etaLoadingBucket ?? 'ALL',
       etaDischarge: etaDischargeBucket ?? 'ALL',
+      etcNoAtcDueWithin7d: etcNoAtcDueWithin7dParam,
     });
 
     const isUnplannedHybridList = isUnplannedHybridListRequest(status);
+    const isAllHybridList = isAllHybridListRequest(status);
     const listUsesStoPaging =
       compact &&
       !summaryOnly &&
@@ -837,15 +1178,25 @@ ${contractMetaSelectCore}
         etaLoading: etaLoadingBucket,
         etaDischarge: etaDischargeBucket,
         lateIndicator: lateIndicatorParam,
+        charterType: charterTypeParam,
+        sourceType: sourceTypeParam,
         globalSearch,
         colFilters,
         viewOption: viewOptionParam,
         viewQuery: viewQueryParam,
         unplannedHybrid: isUnplannedHybridList,
+        allHybrid: isAllHybridList,
+        sortKey: listSortKey,
+        etcNoAtcDueWithin7d: etcNoAtcDueWithin7dParam,
       });
     const { limit: listLimit, offset: listOffset } = shipmentListLimitOffset(limit, page);
 
-    const rankedStoBlock = buildRankedStoCtes(listStoKeySql, coreWhereSql, excludeStoTypeTCond)
+    const rankedStoBlock = buildRankedStoCtes(
+      listStoKeySql,
+      shipmentBaseWhereSql,
+      listSortKey,
+      listSortDir,
+    )
       .replace('__STO_PAGE_LIMIT__', String(listLimit))
       .replace('__STO_PAGE_OFFSET__', String(listOffset));
 
@@ -865,10 +1216,100 @@ ${contractMetaSelectCore}
     }
 
     /** If string replace failed, fall back to full scan (correctness over fast path). */
-    const effectiveListStoPaging =
+    let effectiveListStoPaging =
       listUsesStoPaging && shipmentBaseCteSqlList.includes('ranked_sto AS');
     if (listUsesStoPaging && !effectiveListStoPaging) {
       shipmentBaseCteSqlList = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+    }
+    /** True only when list CTE was narrowed via stage snapshot STO keys (not live ranked_sto). */
+    let usedStageSnapshotPaging = false;
+
+    /**
+     * Status-card list requests: page STO keys from the stage snapshot (same refresh
+     * cycle as the status cards) so the expensive per-row derivation/enrichment runs
+     * only for the visible page. Falls back to the live full-scan path whenever the
+     * snapshot is stale or the request carries non-toolbar filters.
+     */
+    if (
+      compact &&
+      !summaryOnly &&
+      !isUnplannedHybridList &&
+      canUseShipmentStageSnapshotPaging({
+        summaryOnly,
+        stoIsSet,
+        status: typeof status === 'string' ? status : 'ALL',
+        etaLoading: etaLoadingBucket,
+        etaDischarge: etaDischargeBucket,
+        lateIndicator: lateIndicatorParam,
+        charterType: charterTypeParam,
+        sourceType: sourceTypeParam,
+        globalSearch,
+        colFilters,
+        viewOption: viewOptionParam,
+        viewQuery: viewQueryParam,
+        unplannedHybrid: isUnplannedHybridList,
+        sortKey: listSortKey,
+      })
+    ) {
+      const stageForSnapshot = normalizeShipmentPagePipelineStageParam(
+        typeof status === 'string' ? status : undefined,
+      );
+      const dailyFilters = { ...buildShipmentPipelineDailyFilterInput(req), status: 'ALL' };
+      if (stageForSnapshot && isPipelineDailySummaryEligible(dailyFilters)) {
+        const snapshotPage = await loadShipmentStagePageFromSnapshot(
+          toPipelineDailySummaryScope(dailyFilters),
+          stageForSnapshot,
+          listLimit,
+          listOffset,
+        );
+        if (snapshotPage) {
+          const countBase = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+          const liveCountRes = await query(
+            buildShipmentListStatusFilteredCountQuery({
+              shipmentBaseCteSql: countBase,
+              outerSql,
+              innerParams,
+              outerParams,
+              skipSapJoin,
+              cacheKey: '',
+              filterCacheKey: shipmentListFilterCacheKey,
+            }).text,
+            [...innerParams, ...outerParams],
+          );
+          const liveCount = parseInt(String(liveCountRes.rows[0]?.c ?? '0'), 10) || 0;
+          /** Inject only when live rows exist and snapshot total matches (stale keys â†’ empty table). */
+          const skipInject =
+            snapshotPage.stoKeys.length === 0 ||
+            liveCount === 0 ||
+            snapshotPage.total !== liveCount;
+
+          if (skipInject) {
+            logger.warn('Skipping shipment stage snapshot paging; using live list path', {
+              stage: stageForSnapshot,
+              snapshotTotal: snapshotPage.total,
+              stoKeyCount: snapshotPage.stoKeys.length,
+              liveCount,
+            });
+          } else {
+            const pagingBase = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+            const injected = injectShipmentStoKeyPaging(
+              pagingBase,
+              listStoKeySql,
+              buildResolvedStoKeyPageCtes(snapshotPage.stoKeys),
+            );
+            if (injected) {
+              shipmentBaseCteSqlList = injected.replace(
+                shipmentBaseShellEnrichCte,
+                shellEnrichWithStoLink,
+              );
+              effectiveListStoPaging = true;
+              usedStageSnapshotPaging = true;
+              // Reuse the gate COUNT for pagination â€” avoids a second filtered_shipments scan.
+              seedShipmentListFilteredTotal(shipmentListFilterCacheKey, liveCount);
+            }
+          }
+        }
+      }
     }
 
     const shipmentBaseCteForList = effectiveListStoPaging
@@ -878,6 +1319,17 @@ ${contractMetaSelectCore}
         : skipSapJoin
           ? shipmentBaseCteSqlShell
           : shipmentBaseCteSqlFull;
+
+    const listTableStatusFilter = typeof status === 'string' ? status : undefined;
+    const listCountBaseCteSql = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+    const listUseLiveStatusCount = Boolean(
+      listTableStatusFilter &&
+        listTableStatusFilter !== 'ALL' &&
+        !isUnplannedHybridListRequest(status) &&
+        !isPreplannedListRequest(status) &&
+        // Snapshot gate already seeded COUNT_CACHE with the live filtered total.
+        !usedStageSnapshotPaging,
+    );
 
     const summaryScopeFilter = appendShipmentPipelineScopeStageFilter(
       summaryOnly ? scopeStatusParam : undefined,
@@ -915,124 +1367,186 @@ ${contractMetaSelectCore}
     });
     const loadSection1UnplannedBreakdown = () =>
       countUnplannedHybridBreakdown(section1UnplannedHybridCtx);
+    const loadSection1PreplannedBreakdown = () =>
+      countPreplannedContracts({
+        contractScope: { dateFrom, dateTo, contract, plants },
+        globalSearch,
+        colFilters,
+        cacheKey: `${shipmentListFilterCacheKey}:preplanned-breakdown`,
+      });
+    const loadSection1CompletedBreakdown = () =>
+      countCompletedContractBacklog({
+        contractScope: { dateFrom, dateTo, contract, plants },
+        globalSearch,
+        colFilters,
+        cacheKey: `${shipmentListFilterCacheKey}:completed-backlog`,
+      });
+    const loadSection1CancelledBreakdown = () =>
+      countCancelledContractBacklog({
+        contractScope: { dateFrom, dateTo, contract, plants },
+        globalSearch,
+        colFilters,
+        cacheKey: `${shipmentListFilterCacheKey}:cancelled-backlog`,
+      });
 
-    const summaryCountQuery = `${shipmentBaseCteSqlSummary}
-      ${buildUnplannedContractBacklogTableCountCte(contractScopeSql)}
-      , filtered_shipments AS (
-        SELECT sb.*
-        FROM shipment_base sb
-        WHERE 1=1 ${section1SummaryFilterSql}
-      )${summaryScopeCte}
-      , enriched AS (
-        SELECT
-          f.*,
-          ${shipmentEffectiveStatusExpr('f')} AS effective_status,
-          (
-            f.eta_arrival IS NULL AND f.eta_berthed IS NULL AND f.eta_loading_start IS NULL AND f.eta_loading_complete IS NULL AND f.eta_sailed IS NULL
-          ) AS loading_no_eta,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) < 0) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) < 0) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) < 0) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) < 0) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) < 0)
-          ) AS loading_delay,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) = 0) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) = 0) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) = 0) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) = 0) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) = 0)
-          ) AS loading_d,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) BETWEEN 1 AND 2)
-          ) AS loading_d_minus_2,
-          (
-            (f.eta_arrival IS NOT NULL AND (f.eta_arrival::date - CURRENT_DATE) > 7) OR
-            (f.eta_berthed IS NOT NULL AND (f.eta_berthed::date - CURRENT_DATE) > 7) OR
-            (f.eta_loading_start IS NOT NULL AND (f.eta_loading_start::date - CURRENT_DATE) > 7) OR
-            (f.eta_loading_complete IS NOT NULL AND (f.eta_loading_complete::date - CURRENT_DATE) > 7) OR
-            (f.eta_sailed IS NOT NULL AND (f.eta_sailed::date - CURRENT_DATE) > 7)
-          ) AS loading_more_than_7d,
-          (
-            f.eta_discharge_arrival IS NULL AND f.eta_discharge_berthed IS NULL AND f.eta_discharge_start IS NULL AND f.eta_vessel_complete_discharge IS NULL
-          ) AS discharge_no_eta,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) < 0) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) < 0) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) < 0) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) < 0)
-          ) AS discharge_delay,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) = 0) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) = 0) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) = 0) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) = 0)
-          ) AS discharge_d,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) BETWEEN 1 AND 2) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) BETWEEN 1 AND 2)
-          ) AS discharge_d_minus_2,
-          (
-            (f.eta_discharge_arrival IS NOT NULL AND (f.eta_discharge_arrival::date - CURRENT_DATE) > 7) OR
-            (f.eta_discharge_berthed IS NOT NULL AND (f.eta_discharge_berthed::date - CURRENT_DATE) > 7) OR
-            (f.eta_discharge_start IS NOT NULL AND (f.eta_discharge_start::date - CURRENT_DATE) > 7) OR
-            (f.eta_vessel_complete_discharge IS NOT NULL AND (f.eta_vessel_complete_discharge::date - CURRENT_DATE) > 7)
-          ) AS discharge_more_than_7d
-        FROM ${summaryEnrichedFrom} f
-      )
-      SELECT
-        COUNT(*)::bigint AS total_count,
-        ${shipmentPagePipelineSummarySelectSql()},
-        (SELECT backlog_count FROM unplanned_contract_backlog_table)::bigint AS unplanned_contract_backlog_count,
-        COUNT(*) FILTER (WHERE ${shipmentPagePipelineUnplannedRowPredicate('e')})::bigint AS unplanned_shipment_execution_count,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND loading_no_eta)::bigint AS eta_loading_no_eta,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND loading_delay)::bigint AS eta_loading_delay,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND loading_d)::bigint AS eta_loading_d,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND loading_d_minus_2)::bigint AS eta_loading_d_minus_2,
-        COUNT(*) FILTER (WHERE effective_status IN ('UNPLANNED', 'PLANNED', 'ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') AND NOT loading_no_eta AND NOT loading_delay AND NOT loading_d AND NOT loading_d_minus_2 AND loading_more_than_7d)::bigint AS eta_loading_more_than_7d,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND discharge_no_eta)::bigint AS eta_discharge_no_eta,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND discharge_delay)::bigint AS eta_discharge_delay,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND discharge_d)::bigint AS eta_discharge_d,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND discharge_d_minus_2)::bigint AS eta_discharge_d_minus_2,
-        COUNT(*) FILTER (WHERE effective_status IN ('SAILED', 'ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') AND NOT discharge_no_eta AND NOT discharge_delay AND NOT discharge_d AND NOT discharge_d_minus_2 AND discharge_more_than_7d)::bigint AS eta_discharge_more_than_7d
-      FROM enriched e`;
+    const loadSection1OutstandingQty = () =>
+      loadShipmentOutstandingQtyForRequest(req, {
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      });
+
+    const loadSection1StatusCardQty = (backlogParts: ShipmentStatusCardQtyBacklogParts) =>
+      loadShipmentStatusCardQtyForRequest(
+        {
+          shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+          toolbarOuterSql: section1SummaryFilterSql,
+          innerParams,
+          toolbarOuterParams,
+          filterCacheKey: shipmentListFilterCacheKey,
+        },
+        backlogParts,
+      );
+
+    /** Decoupled OS strip â€” do not wait inside summaryOnly (status cards stay fast). */
+    if (compact && outstandingQtyOnly) {
+      const tOs0 = performance.now();
+      const outstandingQty = await loadSection1OutstandingQty();
+      timingsMs.dbOutstandingQtyOnly = performance.now() - tOs0;
+      timingsMs.total = performance.now() - tReq0;
+      emitShipmentListTimings(res, timingsMs, {
+        path: 'outstandingQtyOnly',
+        compact,
+        page: Number(page),
+        limit: Number(limit),
+      });
+      return res.json({
+        success: true,
+        data: { outstandingQty },
+      });
+    }
+
+    const summaryCountQuery = await buildShipmentSection1CombinedSummaryQuery({
+      shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+      unplannedBacklogCountCteSql: buildUnplannedContractBacklogTableCountCte(contractScopeSql),
+      toolbarOuterSql: section1SummaryFilterSql,
+      summaryScopeCte,
+      summaryEnrichedFrom,
+    });
+    /** Live stage counts + vessel names for daily overlay (same ATA ladder as list). */
+    const liveStageCountsQuery = buildShipmentPipelineLiveStageCountsQuery({
+      shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+      toolbarOuterSql: section1SummaryFilterSql,
+    });
+    const liveStageCountsParams = section1SummaryFilterParams;
 
     if (compact && summaryOnly) {
       const summaryCacheKey = buildShipmentSummaryCacheKey(
         shipmentListFilterCacheKey,
         scopeStatusParam,
       );
+      const attentionOpts = {
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      };
       const tSum0 = performance.now();
+      /**
+       * Progressive Section 1: return cards (+ card OS totals) without waiting for the slow
+       * FOB/CIF/CFR strip SQL. FE loads outstandingQtyOnly in parallel and fills buckets later.
+       */
       const summaryBundle = await loadShipmentSummaryBundle(req, {
         summaryCountQuery,
         params: [...section1SummaryFilterParams, ...summaryScopeParams],
         cacheKey: summaryCacheKey,
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+        loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+        loadCancelledBreakdown: loadSection1CancelledBreakdown,
+        liveStageCountsQuery,
+        liveStageCountsParams,
       });
-      const { summaryRow: sr, totalCount: tc, unplannedBreakdown: unplannedBreakdownForSummary, source: summarySource } =
-        summaryBundle;
-      timingsMs.dbSummaryOnly = performance.now() - tSum0;
+      const {
+        summaryRow: sr,
+        totalCount: tc,
+        unplannedBreakdown: unplannedBreakdownForSummary,
+        preplannedBreakdown: preplannedBreakdownForSummary,
+        completedBreakdown: completedBreakdownForSummary,
+        cancelledBreakdown: cancelledBreakdownForSummary,
+        source: summarySource,
+      } = summaryBundle;
+      const statusCardQtyBacklogParts: ShipmentStatusCardQtyBacklogParts = {
+        unplannedBacklogContractQtyKg: unplannedBreakdownForSummary.contractQtyKg,
+        preplannedContractQtyKg: preplannedBreakdownForSummary.contractQtyKg,
+        completedBacklogContractQtyKg: completedBreakdownForSummary.contractQtyKg,
+        cancelledBacklogContractQtyKg: cancelledBreakdownForSummary.contractQtyKg,
+        unplannedBacklogOutstandingQtyKg: unplannedBreakdownForSummary.outstandingQtyKg,
+        preplannedOutstandingQtyKg: preplannedBreakdownForSummary.outstandingQtyKg,
+      };
+      const statusCardQtyPromise = summaryRowHasCombinedStatusCardQty(sr)
+        ? mergeShipmentStatusCardQtyFromCombinedSummaryRow(sr, statusCardQtyBacklogParts)
+        : loadSection1StatusCardQty(statusCardQtyBacklogParts).catch((err) => {
+            logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
+            return null;
+          });
+      const attentionInsightsPromise = isAttentionInsightsEnabled()
+        ? loadShipmentAttentionInsightsForRequest(
+            req,
+            attentionOpts,
+            loadSection1OutstandingQty()
+              .then((os) => os.totalKg)
+              .catch(() => null),
+          ).catch((err) => {
+            logger.error('Shipment attention insights failed (summaryOnly-compact)', err);
+            return null;
+          })
+        : Promise.resolve(undefined);
+      const etcNoAtcDuePromise = loadShipmentEtcNoAtcDueWithin7dForRequest(attentionOpts).catch(
+        (err) => {
+          logger.error('Shipment etcNoAtcDueWithin7d failed (summaryOnly-compact)', err);
+          return EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D;
+        },
+      );
+      const [statusCardQty, attentionInsights, etcNoAtcDueWithin7d] = await Promise.all([
+        statusCardQtyPromise,
+        attentionInsightsPromise,
+        etcNoAtcDuePromise,
+      ]);
+      timingsMs.dbSummaryCombined = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: summarySource === 'daily' ? 'summaryOnly-compact-daily' : 'summaryOnly-compact-sql',
+        path:
+          summarySource === 'daily'
+            ? 'summaryOnly-compact-daily-combined'
+            : 'summaryOnly-compact-combined-sql',
         compact,
         page: Number(page),
         limit: Number(limit),
         summaryCacheKey,
         summarySource,
+        outstandingQtyDeferred: true,
       });
       return res.json({
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+          summary: shipmentListSummaryPayload(
+            tc,
+            sr,
+            unplannedBreakdownForSummary,
+            preplannedBreakdownForSummary,
+            undefined,
+            attentionInsights,
+            statusCardQty,
+            completedBreakdownForSummary,
+            cancelledBreakdownForSummary,
+            etcNoAtcDueWithin7d,
+          ),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1057,6 +1571,8 @@ ${contractMetaSelectCore}
         globalSearch,
         colFilters,
         lateIndicator: lateIndicatorParam,
+      charterType: charterTypeParam,
+        sourceType: sourceTypeParam,
         viewOption: viewOptionParam,
         viewQuery: viewQueryParam,
         skipSapJoin,
@@ -1065,7 +1581,119 @@ ${contractMetaSelectCore}
         status: typeof status === 'string' ? status : 'ALL',
         etaLoading: etaLoadingBucket ?? 'ALL',
         etaDischarge: etaDischargeBucket ?? 'ALL',
+        sortKey: listSortKey,
+        sortDir: listSortDir,
       });
+
+      /**
+       * Fast path: derive an Open/Close-filtered page from one cached row set.
+       *
+       * The caches below are keyed by (filters x status x sort x page), so clicking a status card
+       * or adding a product filter is always an uncached query - 12.4s and 11.4s when measured,
+       * against 80ms for a combination already visited. deriveCompactShipmentPage loads the scope
+       * once (this same request minus status, sort, page and the column filters it can mirror)
+       * and slices it. It refuses anything it cannot reproduce and we fall through unchanged.
+       */
+      const derived = await deriveCompactShipmentPage({
+        query: req.query as Record<string, unknown>,
+        sortKey: listSortKey,
+        sortDir: listSortDir,
+        page: Number(page),
+        limit: Number(limit),
+        loadScopePage: async (scopeQuery) => {
+          const scopeRes = captureShipmentListResponse();
+          await getShipments(
+            { ...req, query: scopeQuery } as unknown as AuthRequest,
+            scopeRes.res,
+          );
+          return { rows: scopeRes.rows() };
+        },
+      });
+      if (derived.ok) {
+        emitShipmentListTimings(res, { ...timingsMs, total: performance.now() - tReq0 }, {
+          route: 'compact-node-derived',
+          rowCount: derived.page.shipments.length,
+          total: derived.page.pagination.total,
+        });
+        return res.json({ success: true, data: derived.page });
+      }
+      logger.debug('Shipments page not derived from a row set', { reason: derived.reason });
+
+      // Keep ALL hybrid even for 10-digit PO/STO search â€” Unplanned backlog has no shipments row.
+      if (shouldResolveAllHybridShipmentsList(status, etcNoAtcDueWithin7dParam)) {
+        const hybrid = await resolveAllHybridShipmentsList(
+          req,
+          buildShipmentAllHybridListContext({
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            toolbarOuterSql,
+            innerParams,
+            toolbarOuterParams,
+            skipSapJoin,
+            filterCacheKey,
+            contractScope: {
+              dateFrom,
+              dateTo,
+              contract,
+              plants,
+            },
+            globalSearch,
+            colFilters,
+            sortKey: listSortKey,
+            sortDir: listSortDir,
+          }),
+        );
+        let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
+          });
+          hybridSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+            undefined,
+            undefined,
+            undefined,
+            summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-all-hybrid',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: hybrid.shipments.length,
+          contractRows: hybrid.unplannedBreakdown.contractRows,
+          shipmentRows: hybrid.unplannedBreakdown.shipmentRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: hybrid.shipments,
+            pagination: hybrid.pagination,
+            unplannedBreakdown: hybrid.unplannedBreakdown,
+            ...(hybridSummary ? { summary: hybridSummary } : {}),
+          },
+        });
+      }
 
       if (isUnplannedHybridListRequest(status)) {
         const hybrid = await resolveUnplannedHybridShipmentsList(req, {
@@ -1079,6 +1707,8 @@ ${contractMetaSelectCore}
             filterCacheKey,
             usesStoKeyPaging: effectiveListStoPaging,
             tableStatusFilter: typeof status === 'string' ? status : undefined,
+            sortKey: listSortKey,
+            sortDir: listSortDir,
           },
           contractScope: {
             dateFrom,
@@ -1100,16 +1730,239 @@ ${contractMetaSelectCore}
             params: [...section1SummaryFilterParams, ...summaryScopeParams],
             cacheKey: summaryCacheKey,
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
           });
+          // Section 1 cards must use toolbar-scope breakdowns (not list hybrid / page filters).
           hybridSummary = shipmentListSummaryPayload(
             summaryBundle.totalCount,
             summaryBundle.summaryRow,
-            hybrid.unplannedBreakdown,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+            undefined,
+            undefined,
+            undefined,
+            summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
           );
         }
         timingsMs.total = performance.now() - tReq0;
         emitShipmentListTimings(res, timingsMs, {
           path: 'list-unplanned-hybrid',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: hybrid.shipments.length,
+          contractRows: hybrid.unplannedBreakdown.contractRows,
+          shipmentRows: hybrid.unplannedBreakdown.shipmentRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: hybrid.shipments,
+            pagination: hybrid.pagination,
+            unplannedBreakdown: hybrid.unplannedBreakdown,
+            ...(hybridSummary ? { summary: hybridSummary } : {}),
+          },
+        });
+      }
+
+      if (isPreplannedListRequest(status)) {
+        const preplanned = await resolvePreplannedContractsList(req, {
+          contractScope: { dateFrom, dateTo, contract, plants },
+          globalSearch,
+          colFilters,
+          cacheKey: `${shipmentListFilterCacheKey}:preplanned-breakdown`,
+        });
+        let preplannedSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
+          });
+          preplannedSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+            undefined,
+            undefined,
+            undefined,
+            summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-preplanned',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: preplanned.shipments.length,
+          contractRows: preplanned.preplannedBreakdown.contractRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: preplanned.shipments,
+            pagination: preplanned.pagination,
+            preplannedBreakdown: preplanned.preplannedBreakdown,
+            ...(preplannedSummary ? { summary: preplannedSummary } : {}),
+          },
+        });
+      }
+
+      if (shouldResolveCompletedHybridShipmentsList(status)) {
+        const hybrid = await resolveCompletedHybridShipmentsList(
+          req,
+          buildShipmentCompletedHybridListContext({
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            toolbarOuterSql: outerSql,
+            innerParams,
+            toolbarOuterParams: outerParams,
+            skipSapJoin,
+            filterCacheKey,
+            contractScope: {
+              dateFrom,
+              dateTo,
+              contract,
+              plants,
+            },
+            globalSearch,
+            colFilters,
+            sortKey: listSortKey,
+            sortDir: listSortDir,
+            tableStatusFilter: typeof status === 'string' ? status : undefined,
+          }),
+        );
+        let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
+          });
+          hybridSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+            undefined,
+            undefined,
+            undefined,
+            summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-completed-hybrid',
+          compact,
+          skipSapJoin,
+          includeSummary,
+          page: Number(page),
+          limit: Number(limit),
+          rowCount: hybrid.shipments.length,
+          contractRows: hybrid.unplannedBreakdown.contractRows,
+          shipmentRows: hybrid.unplannedBreakdown.shipmentRows,
+        });
+        return res.json({
+          success: true,
+          data: {
+            shipments: hybrid.shipments,
+            pagination: hybrid.pagination,
+            unplannedBreakdown: hybrid.unplannedBreakdown,
+            ...(hybridSummary ? { summary: hybridSummary } : {}),
+          },
+        });
+      }
+
+      if (shouldResolveCancelledHybridShipmentsList(status)) {
+        const hybrid = await resolveCancelledHybridShipmentsList(
+          req,
+          buildShipmentCancelledHybridListContext({
+            shipmentBaseCteSql: shipmentBaseCteForList,
+            toolbarOuterSql: outerSql,
+            innerParams,
+            toolbarOuterParams: outerParams,
+            skipSapJoin,
+            filterCacheKey,
+            contractScope: {
+              dateFrom,
+              dateTo,
+              contract,
+              plants,
+            },
+            globalSearch,
+            colFilters,
+            sortKey: listSortKey,
+            sortDir: listSortDir,
+            tableStatusFilter: typeof status === 'string' ? status : undefined,
+          }),
+        );
+        let hybridSummary: ReturnType<typeof shipmentListSummaryPayload> | undefined;
+        if (includeSummary) {
+          const summaryCacheKey = buildShipmentSummaryCacheKey(
+            shipmentListFilterCacheKey,
+            scopeStatusParam,
+          );
+          const summaryBundle = await loadShipmentSummaryBundle(req, {
+            summaryCountQuery,
+            params: [...section1SummaryFilterParams, ...summaryScopeParams],
+            cacheKey: summaryCacheKey,
+            loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
+          });
+          hybridSummary = shipmentListSummaryPayload(
+            summaryBundle.totalCount,
+            summaryBundle.summaryRow,
+            summaryBundle.unplannedBreakdown,
+            summaryBundle.preplannedBreakdown,
+            undefined,
+            undefined,
+            undefined,
+            summaryBundle.completedBreakdown,
+            summaryBundle.cancelledBreakdown,
+          );
+        }
+        timingsMs.total = performance.now() - tReq0;
+        emitShipmentListTimings(res, timingsMs, {
+          path: 'list-cancelled-hybrid',
           compact,
           skipSapJoin,
           includeSummary,
@@ -1141,6 +1994,12 @@ ${contractMetaSelectCore}
             params: [...section1SummaryFilterParams, ...summaryScopeParams],
             cacheKey: summaryCacheKey,
             loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+            loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+            loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+            loadCancelledBreakdown: loadSection1CancelledBreakdown,
+            liveStageCountsQuery,
+            liveStageCountsParams,
           });
 
         const [data, summaryBundle] = await Promise.all([
@@ -1153,7 +2012,11 @@ ${contractMetaSelectCore}
             cacheKey,
             filterCacheKey,
             usesStoKeyPaging: effectiveListStoPaging,
-            tableStatusFilter: typeof status === 'string' ? status : undefined,
+            tableStatusFilter: listTableStatusFilter,
+            countShipmentBaseCteSql: listCountBaseCteSql,
+            useLiveStatusFilteredCount: listUseLiveStatusCount,
+            sortKey: listSortKey,
+            sortDir: listSortDir,
           }),
           loadSummaryBundle(),
         ]);
@@ -1161,6 +2024,9 @@ ${contractMetaSelectCore}
           summaryRow: sr,
           totalCount: tc,
           unplannedBreakdown: unplannedBreakdownForSummary,
+          preplannedBreakdown: preplannedBreakdownForSummary,
+          completedBreakdown: completedBreakdownForSummary,
+          cancelledBreakdown: cancelledBreakdownForSummary,
           source: summarySource,
         } = summaryBundle;
         timingsMs.total = performance.now() - tReq0;
@@ -1187,22 +2053,71 @@ ${contractMetaSelectCore}
           success: true,
           data: {
             ...data,
-            summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+            summary: shipmentListSummaryPayload(
+              tc,
+              sr,
+              unplannedBreakdownForSummary,
+              preplannedBreakdownForSummary,
+              undefined,
+              undefined,
+              undefined,
+              completedBreakdownForSummary,
+              cancelledBreakdownForSummary,
+            ),
           },
         });
       }
 
-      const data = await resolveShipmentsListForRequest(req, {
-        shipmentBaseCteSql: shipmentBaseCteForList,
+      let listResolveCte = shipmentBaseCteForList;
+      let listResolveStoPaging = effectiveListStoPaging;
+      let data = await resolveShipmentsListForRequest(req, {
+        shipmentBaseCteSql: listResolveCte,
         outerSql,
         innerParams,
         outerParams,
         skipSapJoin,
         cacheKey,
         filterCacheKey,
-        usesStoKeyPaging: effectiveListStoPaging,
-        tableStatusFilter: typeof status === 'string' ? status : undefined,
+        usesStoKeyPaging: listResolveStoPaging,
+        tableStatusFilter: listTableStatusFilter,
+        countShipmentBaseCteSql: listCountBaseCteSql,
+        useLiveStatusFilteredCount: listUseLiveStatusCount,
+        sortKey: listSortKey,
+        sortDir: listSortDir,
       });
+      /**
+       * Snapshot keys can match live total but still miss the page (wrong STO set) â†’
+       * pagination.total > 0 with zero rows. Retry once on the live list path.
+       */
+      if (
+        usedStageSnapshotPaging &&
+        data.shipments.length === 0 &&
+        (data.pagination?.total ?? 0) > 0
+      ) {
+        logger.warn('Stage snapshot page returned 0 rows; retrying live list path', {
+          status: listTableStatusFilter,
+          paginationTotal: data.pagination.total,
+        });
+        listResolveCte = skipSapJoin ? shipmentBaseCteSqlShell : shipmentBaseCteSqlFull;
+        listResolveStoPaging = false;
+        effectiveListStoPaging = false;
+        usedStageSnapshotPaging = false;
+        data = await resolveShipmentsListForRequest(req, {
+          shipmentBaseCteSql: listResolveCte,
+          outerSql,
+          innerParams,
+          outerParams,
+          skipSapJoin,
+          cacheKey: `${cacheKey}:live-fallback`,
+          filterCacheKey,
+          usesStoKeyPaging: false,
+          tableStatusFilter: listTableStatusFilter,
+          countShipmentBaseCteSql: listCountBaseCteSql,
+          useLiveStatusFilteredCount: listUseLiveStatusCount,
+          sortKey: listSortKey,
+          sortDir: listSortDir,
+        });
+      }
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
         path: skipSapJoin
@@ -1237,17 +2152,53 @@ ${contractMetaSelectCore}
         params: [...section1SummaryFilterParams, ...summaryScopeParams],
         cacheKey: summaryCacheKey,
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+        loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+        loadCancelledBreakdown: loadSection1CancelledBreakdown,
+        liveStageCountsQuery,
+        liveStageCountsParams,
       });
       const {
         summaryRow: sr,
         totalCount: tc,
         unplannedBreakdown: unplannedBreakdownForSummary,
+        preplannedBreakdown: preplannedBreakdownForSummary,
+        completedBreakdown: completedBreakdownForSummary,
+        cancelledBreakdown: cancelledBreakdownForSummary,
         source: summarySource,
       } = summaryBundle;
-      timingsMs.dbSummaryOnly = performance.now() - tSum0;
+      const statusCardQtyBacklogParts: ShipmentStatusCardQtyBacklogParts = {
+        unplannedBacklogContractQtyKg: unplannedBreakdownForSummary.contractQtyKg,
+        preplannedContractQtyKg: preplannedBreakdownForSummary.contractQtyKg,
+        completedBacklogContractQtyKg: completedBreakdownForSummary.contractQtyKg,
+        cancelledBacklogContractQtyKg: cancelledBreakdownForSummary.contractQtyKg,
+        unplannedBacklogOutstandingQtyKg: unplannedBreakdownForSummary.outstandingQtyKg,
+        preplannedOutstandingQtyKg: preplannedBreakdownForSummary.outstandingQtyKg,
+      };
+      const statusCardQty = summaryRowHasCombinedStatusCardQty(sr)
+        ? await mergeShipmentStatusCardQtyFromCombinedSummaryRow(sr, statusCardQtyBacklogParts).catch((err) => {
+            logger.error('Shipment status card qty failed (summaryOnly combined)', err);
+            return null;
+          })
+        : await loadSection1StatusCardQty(statusCardQtyBacklogParts).catch((err) => {
+            logger.error('Shipment status card qty failed (summaryOnly)', err);
+            return null;
+          });
+      const etcNoAtcDueWithin7d = await loadShipmentEtcNoAtcDueWithin7dForRequest({
+        shipmentBaseCteSql: shipmentBaseCteSqlSummary,
+        toolbarOuterSql: section1SummaryFilterSql,
+        innerParams,
+        toolbarOuterParams,
+        filterCacheKey: shipmentListFilterCacheKey,
+      }).catch((err) => {
+        logger.error('Shipment etcNoAtcDueWithin7d failed (summaryOnly)', err);
+        return EMPTY_SHIPMENT_ETC_NO_ATC_DUE_WITHIN_7D;
+      });
+      timingsMs.dbSummaryCombined = performance.now() - tSum0;
       timingsMs.total = performance.now() - tReq0;
       emitShipmentListTimings(res, timingsMs, {
-        path: summarySource === 'daily' ? 'summaryOnly-daily' : 'summaryOnly',
+        path: summarySource === 'daily' ? 'summaryOnly-daily-combined' : 'summaryOnly-combined',
         compact,
         skipSapJoin,
         effectiveListStoPaging,
@@ -1260,7 +2211,18 @@ ${contractMetaSelectCore}
         success: true,
         data: {
           shipments: [],
-          summary: shipmentListSummaryPayload(tc, sr, unplannedBreakdownForSummary),
+          summary: shipmentListSummaryPayload(
+            tc,
+            sr,
+            unplannedBreakdownForSummary,
+            preplannedBreakdownForSummary,
+            undefined,
+            undefined,
+            statusCardQty,
+            completedBreakdownForSummary,
+            cancelledBreakdownForSummary,
+            etcNoAtcDueWithin7d,
+          ),
           pagination: {
             total: tc,
             page: Number(page),
@@ -1295,21 +2257,42 @@ ${contractMetaSelectCore}
         SELECT sb.*
         FROM shipment_base sb
         WHERE 1=1 ${outerSql}
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       ),
       ${shipmentPageCte},
-      ${shipmentListQtyMoveCteFromPage()},
+      ${await shipmentListQtyMoveCteFromPage()},
       ${spdAggCtes}
       SELECT 
         sp.*,
         ${shipmentListPageQtySelectSql('sp')},
         COALESCE(
-          NULLIF(TRIM(slpa.sap_loading_ports), ''),
-          NULLIF(TRIM(sp.loading_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.loading_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(slpa.sap_loading_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_loading), '')
         ) AS loading_ports,
         COALESCE(
-          NULLIF(TRIM(sdpa.sap_discharge_ports), ''),
-          NULLIF(TRIM(sp.discharge_ports_klip), ''),
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+            ELSE
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+          END,
+          CASE
+            WHEN COALESCE(sp.is_contract_sap_closed, FALSE) IS TRUE THEN
+              NULLIF(TRIM(sp.discharge_ports_klip), '')
+            ELSE
+              NULLIF(TRIM(sdpa.sap_discharge_ports), '')
+          END,
           NULLIF(TRIM(sp.port_of_discharge), '')
         ) AS discharge_ports,
         slpa.sap_loading_ports,
@@ -1323,18 +2306,30 @@ ${contractMetaSelectCore}
         COALESCE(NULLIF(TRIM(pna.po_numbers), ''), sp.po_numbers) AS po_numbers_merged,
         sl.vessel_name_sap,
         sl.vessel_code_sap,
-        sl.vessel_owner_sap
-      FROM shipment_page sp
-      LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_agg sa ON TRIM(sa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_latest sl ON TRIM(sl.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_loading_ports_agg slpa ON TRIM(slpa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN sap_discharge_ports_agg sdpa ON TRIM(sdpa.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN contract_ext_agg cex ON TRIM(cex.sto_key::text) = TRIM(sp.sto_key::text)
-      LEFT JOIN po_numbers_agg pna ON TRIM(pna.sto_key::text) = TRIM(sp.sto_key::text)`;
+        sl.vessel_owner_sap,
+        mv.vessel_name_master,
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+      ${SHIPMENT_LIST_STO_JOIN_SQL}
+      ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
     debugSql = { text: queryText, params: mainParams };
+    /*
+     * Diagnostic: dump the generated list SQL on request (?debugSql=1).
+     * The list query is assembled from many fragments, so when a row is unexpectedly missing the
+     * only practical way to find the responsible predicate is to read the real SQL and bisect it.
+     * Off unless explicitly asked for, so normal requests pay nothing.
+     */
+    if (String((req.query as any).debugSql ?? '') === '1') {
+      try {
+        const fs = require('fs') as typeof import('fs');
+        fs.writeFileSync('/app/logs/shipment_list_debug.sql', queryText);
+        fs.writeFileSync('/app/logs/shipment_list_debug.params.json', JSON.stringify(mainParams, null, 2));
+        logger.info('Dumped shipment list SQL for debugging', { chars: queryText.length });
+      } catch (err) {
+        logger.warn('Failed to dump shipment list SQL', err);
+      }
+    }
     const tMain0 = performance.now();
     const result = await query(queryText, mainParams);
     timingsMs.dbMainList = performance.now() - tMain0;
@@ -1354,7 +2349,9 @@ ${contractMetaSelectCore}
       } else {
         emptyCountSql = `${shipmentBaseCteSqlList},
       filtered_shipments AS (
-        SELECT sb.* FROM shipment_base sb WHERE 1=1 ${outerSql}
+        SELECT sb.* FROM shipment_base sb
+        WHERE 1=1 ${outerSql}
+          AND COALESCE(sb.sap_presence, 'PRESENT') = 'PRESENT'
       )
       SELECT COUNT(*)::bigint AS c FROM filtered_shipments`;
         emptyParams = [...innerParams, ...outerParams];
@@ -1371,6 +2368,9 @@ ${contractMetaSelectCore}
 
     let summaryRow: Record<string, unknown> = {};
     let unplannedBreakdownForSummary: UnplannedHybridBreakdown | null = null;
+    let preplannedBreakdownForSummary: PreplannedContractsBreakdown | null = null;
+    let completedBreakdownForSummary: CompletedContractBacklogBreakdown | null = null;
+    let cancelledBreakdownForSummary: CancelledContractBacklogBreakdown | null = null;
     let summarySource: string | undefined;
     if (includeSummary) {
       const tSa0 = performance.now();
@@ -1383,9 +2383,18 @@ ${contractMetaSelectCore}
         params: [...section1SummaryFilterParams, ...summaryScopeParams],
         cacheKey: summaryCacheKey,
         loadUnplannedBreakdown: loadSection1UnplannedBreakdown,
+        loadPreplannedBreakdown: loadSection1PreplannedBreakdown,
+        loadCompletedBreakdown: loadSection1CompletedBreakdown,
+
+        loadCancelledBreakdown: loadSection1CancelledBreakdown,
+        liveStageCountsQuery,
+        liveStageCountsParams,
       });
       summaryRow = summaryBundle.summaryRow;
       unplannedBreakdownForSummary = summaryBundle.unplannedBreakdown;
+      preplannedBreakdownForSummary = summaryBundle.preplannedBreakdown;
+      completedBreakdownForSummary = summaryBundle.completedBreakdown;
+      cancelledBreakdownForSummary = summaryBundle.cancelledBreakdown;
       summarySource = summaryBundle.source;
       timingsMs.dbSummaryAgg = performance.now() - tSa0;
     }
@@ -1407,7 +2416,17 @@ ${contractMetaSelectCore}
       success: true,
       data: {
         shipments: result.rows,
-        summary: shipmentListSummaryPayload(totalCount, summaryRow, unplannedBreakdownForSummary),
+        summary: shipmentListSummaryPayload(
+          totalCount,
+          summaryRow,
+          unplannedBreakdownForSummary,
+          preplannedBreakdownForSummary,
+          undefined,
+          undefined,
+          undefined,
+          completedBreakdownForSummary,
+          cancelledBreakdownForSummary,
+        ),
         pagination: {
           total: totalCount,
           page: Number(page),
@@ -1417,6 +2436,9 @@ ${contractMetaSelectCore}
       },
     });
   } catch (error: any) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get shipments error:', error);
     const errorMessage = error.message || 'Failed to fetch shipments';
     const errorDetail = error.detail || error.toString();
@@ -1523,6 +2545,7 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
         c.group_name,
         c.quantity_ordered,
         c.unit,
+        ${SQL_CONTRACT_IMPORT_STATUS} AS contract_import_status,
         COALESCE(
           NULLIF(TRIM(c.sto_number::text), ''),
           sap_sto.effective_sto,
@@ -1558,9 +2581,26 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    const row = result.rows[0] as Record<string, unknown>;
+    // Sticky CANCELLED without SAP Cancelled â†’ show derived Open/Planned status (matches Contract Detail List STO).
+    row.status = resolveContractLogisticsStoStatus({
+      contractImportStatus: row.contract_import_status,
+      dbStatus: row.status,
+      logisticsType: 'shipment',
+      shipmentMilestones: {
+        eta_arrival_at_loading_port: row.eta_arrival,
+        eta_complete_discharge: row.eta_discharge_complete,
+        ata_complete_discharge: row.ata_discharge_complete,
+        ata_arrival_at_loading_port: row.ata_arrival,
+        quantity_delivered: row.quantity_delivered,
+        quantity_delivered_klip: row.quantity_delivered_klip,
+      },
+    });
+    delete row.contract_import_status;
+
     return res.json({
       success: true,
-      data: result.rows[0],
+      data: row,
     });
   } catch (error) {
     logger.error('Get shipment by ID error:', error);
@@ -1571,7 +2611,7 @@ export const getShipmentById = async (req: AuthRequest, res: Response) => {
   }
 };
 
-/** PO lines eligible to add on Edit Shipment (global, no SAP STO, global outstanding > 0). */
+/** PO lines eligible to add on Edit Shipment (global, no SAP STO, OS Actual > 0). */
 export const getShipmentAvailablePurchaseOrders = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -1721,7 +2761,14 @@ export const getShipmentEditContext = async (req: AuthRequest, res: Response) =>
       });
     }
 
-    const context = await resolveShipmentEditContext(id);
+    const rawEditSto = req.query.sto;
+    const preferredSto =
+      typeof rawEditSto === 'string'
+        ? rawEditSto
+        : Array.isArray(rawEditSto) && typeof rawEditSto[0] === 'string'
+          ? rawEditSto[0]
+          : undefined;
+    const context = await resolveShipmentEditContext(id, preferredSto);
     if (!context) {
       return res.status(404).json({
         success: false,
@@ -1739,7 +2786,65 @@ export const getShipmentEditContext = async (req: AuthRequest, res: Response) =>
   }
 };
 
-/** Combined modal payload — shipment + ports + contract details in one request (fast open). */
+/** Batch save Delivered/Received Qty (KLIP) per PO on Edit Shipment modal. */
+export const batchSaveShipmentPoKlipQtyHandler = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    if (!isUUID) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Shipment UUID is required' },
+      });
+    }
+
+    const rawRows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+    const rows = rawRows.map((row: Record<string, unknown>) => {
+      const deliveredRaw = row.quantityDeliveredKlipKg ?? row.quantity_delivered_klip_kg ?? row.quantity_delivered;
+      const receiveRaw = row.quantityReceiveKlipKg ?? row.quantity_receive_klip_kg ?? row.quantity_receive;
+      return {
+        contractNumber: String(row.contractNumber ?? row.contract_number ?? '').trim(),
+        poNumber: row.poNumber ?? row.po_number ?? null,
+        quantityDeliveredKlipKg:
+          deliveredRaw === null || deliveredRaw === undefined || deliveredRaw === ''
+            ? null
+            : Number(deliveredRaw),
+        quantityReceiveKlipKg:
+          receiveRaw === null || receiveRaw === undefined || receiveRaw === ''
+            ? null
+            : Number(receiveRaw),
+      };
+    });
+
+    const result = await batchSaveShipmentPoKlipQty({
+      anchorShipmentUuid: id,
+      rows,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status).json({
+        success: false,
+        error: { message: result.message },
+      });
+    }
+
+    invalidateShipmentsListCache();
+    invalidateShippingPerformanceRowCache();
+
+    return res.json({
+      success: true,
+      message: 'Delivered / Received Qty (KLIP) saved successfully',
+    });
+  } catch (error) {
+    logger.error('Batch save shipment PO KLIP qty error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to save Delivered / Received Qty (KLIP)' },
+    });
+  }
+};
+
+/** Combined modal payload â€” shipment + ports + contract details in one request (fast open). */
 export const getShipmentEditPayload = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
@@ -1751,7 +2856,14 @@ export const getShipmentEditPayload = async (req: AuthRequest, res: Response) =>
       });
     }
 
-    const payload = await resolveShipmentEditPayload(id);
+    const rawEditSto = req.query.sto;
+    const preferredSto =
+      typeof rawEditSto === 'string'
+        ? rawEditSto
+        : Array.isArray(rawEditSto) && typeof rawEditSto[0] === 'string'
+          ? rawEditSto[0]
+          : undefined;
+    const payload = await resolveShipmentEditPayload(id, preferredSto);
     if (!payload) {
       return res.status(404).json({
         success: false,
@@ -1848,6 +2960,12 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    if (updateData.master_vessel_id) {
+      updateFields.push(`master_vessel_id = $${paramIndex}::uuid`);
+      updateValues.push(updateData.master_vessel_id);
+      paramIndex++;
+    }
+
     if (updateData.voyage_no) {
       updateFields.push(`voyage_no = $${paramIndex}`);
       updateValues.push(updateData.voyage_no);
@@ -1918,6 +3036,10 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       updateFields.push(`quantity_delivered = $${paramIndex}::numeric`);
       updateValues.push(updateData.quantity_delivered);
       paramIndex++;
+      // Keep explicit KLIP delivery source in sync with manual KLIP edits.
+      updateFields.push(`quantity_delivered_klip = $${paramIndex}::numeric`);
+      updateValues.push(updateData.quantity_delivered);
+      paramIndex++;
     }
 
     if (updateData.bl_quantity !== undefined && updateData.bl_quantity !== null) {
@@ -1941,6 +3063,37 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     if (updateData.sfbd_qty !== undefined) {
       updateFields.push(`sfbd_qty = $${paramIndex}::numeric`);
       updateValues.push(updateData.sfbd_qty);
+      paramIndex++;
+    }
+
+    // TC (Time Charter) vessel performance metrics - manually entered, SAP does not feed these.
+    if (updateData.fuel_consumption !== undefined) {
+      updateFields.push(`fuel_consumption = $${paramIndex}::numeric`);
+      updateValues.push(updateData.fuel_consumption);
+      paramIndex++;
+    }
+
+    if (updateData.freight !== undefined) {
+      updateFields.push(`freight = $${paramIndex}::numeric`);
+      updateValues.push(updateData.freight);
+      paramIndex++;
+    }
+
+    if (updateData.pump_rate !== undefined) {
+      updateFields.push(`pump_rate = $${paramIndex}::numeric`);
+      updateValues.push(updateData.pump_rate);
+      paramIndex++;
+    }
+
+    if (updateData.sailing_speed !== undefined) {
+      updateFields.push(`sailing_speed = $${paramIndex}::numeric`);
+      updateValues.push(updateData.sailing_speed);
+      paramIndex++;
+    }
+
+    if (updateData.shortage !== undefined) {
+      updateFields.push(`shortage = $${paramIndex}::numeric`);
+      updateValues.push(updateData.shortage);
       paramIndex++;
     }
 
@@ -2038,6 +3191,26 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    /*
+     * Record which of these columns a user actually wrote (migration 167).
+     *
+     * The column names are read back out of the SET clauses already assembled above rather than
+     * collected in each branch - there are two dozen of them, and a branch that forgot to opt in
+     * would produce a marker that is quietly incomplete, which is worse than none at all.
+     *
+     * Only the columns the SAP import also writes are worth recording; a KLIP-only column proves
+     * itself.
+     */
+    const writtenColumns = updateFields
+      .map((clause) => clause.split('=')[0]?.trim() ?? '')
+      .filter(Boolean);
+    const provenanceColumns = klipEditedFieldsToRecord(writtenColumns, SHIPMENT_PROVENANCE_COLUMNS);
+    if (provenanceColumns.length > 0) {
+      updateFields.push(buildKlipEditedFieldsSetSql(`$${paramIndex}`));
+      updateValues.push(provenanceColumns);
+      paramIndex++;
+    }
+
     // Add updated_at timestamp
     updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
     updateValues.push(shipmentId);
@@ -2102,45 +3275,45 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     }
 
     if (etaFieldsUpdated) {
-      await query(
-        `UPDATE vessel_loading_ports SET
-          eta_vessel_arrival = $2,
-          eta_vessel_berthed_at_loading_port = $3,
-          eta_loading_start = $4,
-          eta_loading_completed = $5,
-          eta_vessel_sailed = $6,
-          updated_at = CURRENT_TIMESTAMP
-         WHERE shipment_id = $1 AND port_sequence = 1 AND COALESCE(is_discharge_port, false) = false`,
-        [
-          shipmentId,
-          updated.eta_arrival,
-          updated.eta_berthed,
-          updated.eta_loading_start,
-          updated.eta_loading_complete,
-          updated.eta_sailed,
-        ],
-      );
-      await query(
-        `UPDATE vessel_loading_ports SET
-          eta_vessel_arrive_at_discharge_port = $2,
-          eta_vessel_berthed_at_discharge_port = $3,
-          eta_vessel_start_discharging = $4,
-          eta_vessel_complete_discharge = $5,
-          updated_at = CURRENT_TIMESTAMP
-         WHERE shipment_id = $1 AND COALESCE(is_discharge_port, false) = true`,
-        [
-          shipmentId,
-          updated.eta_discharge_arrival,
-          updated.eta_discharge_berthed,
-          updated.eta_discharge_start,
-          updated.eta_discharge_complete,
-        ],
-      );
+      await fanOutShipmentEtaToStoGroup(shipmentId, {
+        eta_arrival: updated.eta_arrival ?? null,
+        eta_berthed: updated.eta_berthed ?? null,
+        eta_loading_start: updated.eta_loading_start ?? null,
+        eta_loading_complete: updated.eta_loading_complete ?? null,
+        eta_sailed: updated.eta_sailed ?? null,
+        eta_discharge_arrival: updated.eta_discharge_arrival ?? null,
+        eta_discharge_berthed: updated.eta_discharge_berthed ?? null,
+        eta_discharge_start: updated.eta_discharge_start ?? null,
+        eta_discharge_complete: updated.eta_discharge_complete ?? null,
+      });
     }
 
     logger.info('Shipment updated:', { id, updatedFields: updateFields.length, autoStatus });
 
+    if (hasVesselIdentityUpdate(updateData)) {
+      await fanOutVesselIdentityToStoGroup(shipmentId, {
+        vessel_name: updated.vessel_name ?? null,
+        vessel_code: updated.vessel_code ?? null,
+        vessel_owner: updated.vessel_owner ?? null,
+        vessel_capacity: updated.vessel_capacity ?? null,
+        vessel_hull_type: updated.vessel_hull_type ?? null,
+        charter_type: updated.charter_type ?? null,
+        master_vessel_id: updated.master_vessel_id ?? null,
+      });
+    }
+
     invalidateShipmentsListCache();
+    invalidateShippingPerformanceRowCache();
+    try {
+      const { ContractQtyMoveSnapshotService } = await import('../services/contractQtyMoveSnapshot.service');
+      await ContractQtyMoveSnapshotService.refreshForShipmentIds([shipmentId]);
+      const { scheduleContractPerformanceRefreshForShipments } = await import(
+        '../services/contractPerformanceSnapshot.service'
+      );
+      scheduleContractPerformanceRefreshForShipments([shipmentId]);
+    } catch (err) {
+      logger.warn('Contract qty_move snapshot refresh after shipment update failed', { err, shipmentId });
+    }
 
     return res.json({
       success: true,
@@ -2182,7 +3355,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
     let shipmentInfoResult;
     
     if (isUUID) {
-      // Get loading ports for a specific shipment
+      const groupShipmentIds = await resolveStoGroupShipmentIds(shipmentId);
+      // Loading ports for the STO group (all sibling shipments sharing sto_key / operation_id)
       portsResult = await query(
         `SELECT 
           vlp.id,
@@ -2212,6 +3386,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlp.quality_red,
           vlp.quality_ds,
           vlp.quality_stone,
+          vlp.sap_ata_vessel_arrival,
+          vlp.sap_ata_vessel_berthed,
+          vlp.sap_ata_loading_start,
+          vlp.sap_ata_loading_completed,
+          vlp.sap_ata_vessel_sailed,
+          vlp.sap_quality_ffa,
+          vlp.sap_quality_mi,
+          vlp.sap_quality_dobi,
+          vlp.sap_quality_red,
+          vlp.sap_quality_ds,
+          vlp.sap_quality_stone,
           vlp.is_discharge_port,
           vlp.created_at,
           vlp.updated_at,
@@ -2219,10 +3404,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          FROM vessel_loading_ports vlp
          LEFT JOIN shipments s ON vlp.shipment_id = s.id
          LEFT JOIN contracts c ON s.contract_id = c.id
-         WHERE vlp.shipment_id = $1
+         WHERE vlp.shipment_id = ANY($1::uuid[])
          ${activePortFilter}
-         ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-        [shipmentId]
+         ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+        [groupShipmentIds]
       );
       if (hasCancelColumn) {
         cancelledPortsResult = await query(
@@ -2241,15 +3426,18 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
            LEFT JOIN shipments s ON vlp.shipment_id = s.id
            LEFT JOIN contracts c ON s.contract_id = c.id
            ${cancelledByJoin}
-           WHERE vlp.shipment_id = $1
+           WHERE vlp.shipment_id = ANY($1::uuid[])
              AND COALESCE(vlp.is_cancelled, false) = true
            ORDER BY vlp.cancelled_at DESC NULLS LAST, vlp.updated_at DESC NULLS LAST`,
-          [shipmentId]
+          [groupShipmentIds]
         );
       }
 
-      // Backfill: if shipment has port names but no vessel_loading_ports rows, create one loading + one discharge row from shipments
-      if (portsResult.rows.length === 0) {
+      // Backfill: if primary shipment has port names but no vessel_loading_ports rows, create one loading + one discharge row from shipments
+      const primaryPortsCount = portsResult.rows.filter(
+        (row) => String(row.shipment_id) === shipmentId,
+      ).length;
+      if (primaryPortsCount === 0) {
         const shipRow = await query(
           `SELECT id, port_of_loading, port_of_discharge, actual_vessel_qty_receive
            FROM shipments WHERE id = $1`,
@@ -2257,8 +3445,25 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
         );
         if (shipRow.rows.length > 0) {
           const s = shipRow.rows[0];
-          const pol = (s.port_of_loading && String(s.port_of_loading).trim()) || null;
-          const pod = (s.port_of_discharge && String(s.port_of_discharge).trim()) || null;
+          const polRaw = (s.port_of_loading && String(s.port_of_loading).trim()) || null;
+          const podRaw = (s.port_of_discharge && String(s.port_of_discharge).trim()) || null;
+          // shipments.port_of_loading can itself hold a numeric ("0.00"), and copying it verbatim
+          // is how numeric port names got into vessel_loading_ports. Fall back to the same generic
+          // label the SAP sync uses rather than persisting a junk name.
+          if (polRaw && !isValidHumanPortName(polRaw)) {
+            logger.warn('Backfill: non-port loading name on shipment; using generic label', {
+              shipmentId,
+              portOfLoading: polRaw,
+            });
+          }
+          if (podRaw && !isValidHumanPortName(podRaw)) {
+            logger.warn('Backfill: non-port discharge name on shipment; using generic label', {
+              shipmentId,
+              portOfDischarge: podRaw,
+            });
+          }
+          const pol = polRaw ? (isValidHumanPortName(polRaw) ? polRaw : 'Loading Port 1') : null;
+          const pod = podRaw ? (isValidHumanPortName(podRaw) ? podRaw : 'Discharge Port') : null;
           if (pol) {
             await query(
               `INSERT INTO vessel_loading_ports (shipment_id, port_name, port_sequence, quantity_at_loading_port, is_discharge_port)
@@ -2282,15 +3487,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
                 vlp.eta_vessel_berthed_at_loading_port, vlp.eta_vessel_arrive_at_discharge_port,
                 vlp.eta_vessel_berthed_at_discharge_port, vlp.eta_vessel_start_discharging, vlp.eta_vessel_complete_discharge,
                 vlp.loading_rate, vlp.quality_ffa, vlp.quality_mi, vlp.quality_dobi, vlp.quality_red, vlp.quality_ds, vlp.quality_stone,
+                vlp.sap_ata_vessel_arrival, vlp.sap_ata_vessel_berthed, vlp.sap_ata_loading_start, vlp.sap_ata_loading_completed, vlp.sap_ata_vessel_sailed,
+                vlp.sap_quality_ffa, vlp.sap_quality_mi, vlp.sap_quality_dobi, vlp.sap_quality_red, vlp.sap_quality_ds, vlp.sap_quality_stone,
                 vlp.is_discharge_port, vlp.created_at, vlp.updated_at,
                 c.contract_id as contract_number
                FROM vessel_loading_ports vlp
                LEFT JOIN shipments sh ON vlp.shipment_id = sh.id
                LEFT JOIN contracts c ON sh.contract_id = c.id
-               WHERE vlp.shipment_id = $1
+               WHERE vlp.shipment_id = ANY($1::uuid[])
               ${activePortFilter}
-               ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-              [shipmentId]
+               ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+              [groupShipmentIds]
             );
           }
         }
@@ -2298,8 +3505,12 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
 
       try {
         if (syncSap) {
-          const synced = await syncVesselLoadingPortsFromLatestSap(shipmentId);
-          if (synced) {
+          let syncedAny = false;
+          for (const memberId of groupShipmentIds) {
+            const synced = await syncVesselLoadingPortsFromLatestSap(memberId);
+            if (synced) syncedAny = true;
+          }
+          if (syncedAny) {
           portsResult = await query(
             `SELECT 
               vlp.id,
@@ -2329,6 +3540,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
               vlp.quality_red,
               vlp.quality_ds,
               vlp.quality_stone,
+              vlp.sap_ata_vessel_arrival,
+              vlp.sap_ata_vessel_berthed,
+              vlp.sap_ata_loading_start,
+              vlp.sap_ata_loading_completed,
+              vlp.sap_ata_vessel_sailed,
+              vlp.sap_quality_ffa,
+              vlp.sap_quality_mi,
+              vlp.sap_quality_dobi,
+              vlp.sap_quality_red,
+              vlp.sap_quality_ds,
+              vlp.sap_quality_stone,
               vlp.is_discharge_port,
               vlp.created_at,
               vlp.updated_at,
@@ -2336,10 +3558,10 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
              FROM vessel_loading_ports vlp
              LEFT JOIN shipments s ON vlp.shipment_id = s.id
              LEFT JOIN contracts c ON s.contract_id = c.id
-             WHERE vlp.shipment_id = $1
+             WHERE vlp.shipment_id = ANY($1::uuid[])
              ${activePortFilter}
-             ORDER BY vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
-            [shipmentId],
+             ORDER BY c.contract_id ASC NULLS LAST, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
+            [groupShipmentIds],
           );
           }
         }
@@ -2356,6 +3578,11 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           s.actual_vessel_qty_receive,
           s.sfal_qty,
           s.sfbd_qty,
+          s.fuel_consumption,
+          s.freight,
+          s.pump_rate,
+          s.sailing_speed,
+          s.shortage,
           s.vessel_oa_actual,
           s.vessel_oa_budget,
           s.bl_quantity,
@@ -2399,7 +3626,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           COALESCE(vlpd.eta_vessel_berthed_at_discharge_port::date, s.eta_discharge_berthed) as eta_vessel_berthed_at_discharge_port,
           COALESCE(vlpd.eta_vessel_start_discharging::date, s.eta_discharge_start) as eta_vessel_start_discharging,
           COALESCE(vlpd.eta_vessel_complete_discharge::date, s.eta_discharge_complete) as eta_vessel_complete_discharge,
-          -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading − ATA Start Loading) in days
+          -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading âˆ’ ATA Start Loading) in days
           CASE 
             WHEN s.actual_vessel_qty_receive > 0 
               AND ${sqlEffectiveAtaCompletedLoading()} IS NOT NULL
@@ -2464,6 +3691,17 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           vlp.quality_red,
           vlp.quality_ds,
           vlp.quality_stone,
+          vlp.sap_ata_vessel_arrival,
+          vlp.sap_ata_vessel_berthed,
+          vlp.sap_ata_loading_start,
+          vlp.sap_ata_loading_completed,
+          vlp.sap_ata_vessel_sailed,
+          vlp.sap_quality_ffa,
+          vlp.sap_quality_mi,
+          vlp.sap_quality_dobi,
+          vlp.sap_quality_red,
+          vlp.sap_quality_ds,
+          vlp.sap_quality_stone,
           vlp.is_discharge_port,
           vlp.created_at,
           vlp.updated_at,
@@ -2471,7 +3709,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          FROM vessel_loading_ports vlp
          LEFT JOIN shipments s ON vlp.shipment_id = s.id
          LEFT JOIN contracts c ON s.contract_id = c.id
-         WHERE (c.sto_number = $1 OR s.shipment_id = $1)
+         WHERE ${sqlShipmentOrStoKeyMatchWhere('$1', 'c', 's')}
          ${activePortFilter}
          ORDER BY c.contract_id, vlp.port_sequence ASC, vlp.is_discharge_port ASC`,
         [shipmentId]
@@ -2493,7 +3731,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
            LEFT JOIN shipments s ON vlp.shipment_id = s.id
            LEFT JOIN contracts c ON s.contract_id = c.id
            ${cancelledByJoin}
-           WHERE (c.sto_number = $1 OR s.shipment_id = $1)
+           WHERE ${sqlShipmentOrStoKeyMatchWhere('$1', 'c', 's')}
              AND COALESCE(vlp.is_cancelled, false) = true
            ORDER BY vlp.cancelled_at DESC NULLS LAST, vlp.updated_at DESC NULLS LAST`,
           [shipmentId]
@@ -2509,6 +3747,11 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(s.actual_vessel_qty_receive) as actual_vessel_qty_receive,
           MAX(s.sfal_qty) as sfal_qty,
           MAX(s.sfbd_qty) as sfbd_qty,
+          MAX(s.fuel_consumption) as fuel_consumption,
+          MAX(s.freight) as freight,
+          MAX(s.pump_rate) as pump_rate,
+          MAX(s.sailing_speed) as sailing_speed,
+          MAX(s.shortage) as shortage,
           MAX(s.vessel_oa_actual) as vessel_oa_actual,
           MAX(s.vessel_oa_budget) as vessel_oa_budget,
           MAX(s.bl_quantity) as bl_quantity,
@@ -2534,7 +3777,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
           MAX(vlpd.eta_vessel_berthed_at_discharge_port::date) as eta_vessel_berthed_at_discharge_port,
           MAX(vlpd.eta_vessel_start_discharging::date) as eta_vessel_start_discharging,
           MAX(vlpd.eta_vessel_complete_discharge::date) as eta_vessel_complete_discharge,
-          -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading − ATA Start Loading) in days
+          -- Loading rate (kg/day): Quantity Receive / (ATA Completed Loading âˆ’ ATA Start Loading) in days
           CASE 
             WHEN MAX(s.actual_vessel_qty_receive) > 0 
               AND MAX(COALESCE(s.ata_loading_complete, vlp1.ata_loading_completed)) IS NOT NULL
@@ -2564,8 +3807,8 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
          LEFT JOIN vessel_loading_ports vlp1 ON vlp1.shipment_id = s.id AND vlp1.port_sequence = 1 AND vlp1.is_discharge_port = false${activeLoadingJoinFilter}
          LEFT JOIN vessel_loading_ports vlpd ON vlpd.shipment_id = s.id AND vlpd.is_discharge_port = true${activeDischargeJoinFilter}
          ${SHIPMENT_ATA_OVERRIDES_JOIN}
-         WHERE c.sto_number = $1 OR s.shipment_id = $1
-         GROUP BY COALESCE(c.sto_number, s.shipment_id)`,
+         WHERE ${sqlShipmentOrStoKeyMatchWhere('$1', 'c', 's')}
+         GROUP BY COALESCE(c.sto_number, s.shipment_id, s.operation_id)`,
         [shipmentId]
       );
     }
@@ -2587,7 +3830,7 @@ export const getVesselLoadingPorts = async (req: AuthRequest, res: Response) => 
     return res.json({
       success: true,
       data: {
-        ports: portsResult.rows,
+        ports: dedupeStoGroupPorts(portsResult.rows as Record<string, unknown>[], isUUID ? shipmentId : null),
         cancelledPorts: cancelledPortsResult.rows,
         shipmentInfo: shipmentInfo,
       },
@@ -2699,6 +3942,31 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     const eta_vessel_start_discharging_n = toDateOrNull(eta_vessel_start_discharging);
     const eta_vessel_complete_discharge_n = toDateOrNull(eta_vessel_complete_discharge);
 
+    /*
+     * A port name is never a bare number, and a screen label is never a port name.
+     *
+     * This used to fall back to `Loading Port N` / `Discharge Port` - the very text the modal
+     * prints beside the field - because the column was NOT NULL and the save needed something.
+     * That label then sat in the database as if it were the port's name, and travelled: the
+     * wave-2 ETA migration found PO 1581000913 whose stored name was `Loading Port 1`.
+     *
+     * NULL instead (migration 168). The display already treats a blank name as absent and renders
+     * its own badge, so nothing is lost on screen and the data stops asserting a name nobody gave.
+     * Junk like "0.00" is still rejected rather than saved, and the user's other edits still go
+     * through.
+     */
+    const safePortName = (() => {
+      const raw = port_name == null ? '' : String(port_name).trim();
+      if (isValidHumanPortName(raw)) return raw;
+      if (raw) {
+        logger.warn('Rejected non-port name on loading port save; storing no name', {
+          shipmentId: req.params.shipmentId ?? null,
+          submitted: raw,
+        });
+      }
+      return null;
+    })();
+
     const toNumberOrNull = (v: unknown): number | null => {
       if (v == null || v === '') return null;
       const n = typeof v === 'number' ? v : parseFloat(String(v));
@@ -2714,7 +3982,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
     // Prefer explicit id from body, then fallback to route param (for PUT /:shipmentId/loading-ports/:portId)
     const id = bodyId || portId;
 
-    // Loading rate (kg/day): quantity_at_loading_port / (ATA completed − ATA start) in days
+    // Loading rate (kg/day): quantity_at_loading_port / (ATA completed âˆ’ ATA start) in days
     let loading_rate = null;
     if (ata_loading_completed_n && ata_loading_start_n && quantity_at_loading_port) {
       const startTime = new Date(ata_loading_start_n);
@@ -2755,11 +4023,12 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
            eta_vessel_start_discharging = $24,
            eta_vessel_complete_discharge = $25,
            loading_rate = $26,
+           ${VESSEL_LOADING_PORT_CHANGED_PROVENANCE_SQL},
            updated_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND shipment_id = $27
          RETURNING *`,
         [
-          id, port_name, port_sequence, quantity_at_loading_port,
+          id, safePortName, port_sequence, quantity_at_loading_port,
           quality_ffa_n,
           quality_mi_n,
           quality_dobi_n,
@@ -2795,14 +4064,29 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
 
       const updated = result.rows[0];
       if (updated.port_sequence === 1 && !updated.is_discharge_port) {
-        await query(
-          `UPDATE shipments SET
-            eta_arrival = $2, eta_berthed = $3, eta_loading_start = $4, eta_loading_complete = $5, eta_sailed = $6,
-            updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
-        );
+        await fanOutShipmentLoadingEtaToStoGroup(actualShipmentId, {
+          eta_arrival: eta_vessel_arrival_n,
+          eta_berthed: eta_vessel_berthed_at_loading_port_n,
+          eta_loading_start: eta_loading_start_n,
+          eta_loading_complete: eta_loading_completed_n,
+          eta_sailed: eta_vessel_sailed_n,
+        });
       }
+
+      await fanOutVesselLoadingPortAtaToStoGroup({
+        anchorShipmentId: actualShipmentId,
+        sourcePortId: String(updated.id),
+        portSequence: Number(updated.port_sequence ?? port_sequence ?? 1),
+        isDischargePort: Boolean(updated.is_discharge_port) || Number(updated.port_sequence) === 999,
+        portName: String(updated.port_name ?? safePortName),
+        ata: {
+          ata_vessel_arrival: ata_vessel_arrival_n,
+          ata_vessel_berthed: ata_vessel_berthed_n,
+          ata_loading_start: ata_loading_start_n,
+          ata_loading_completed: ata_loading_completed_n,
+          ata_vessel_sailed: ata_vessel_sailed_n,
+        },
+      });
 
       invalidateShipmentsListCache();
 
@@ -2829,7 +4113,7 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
          RETURNING *`,
         [
-          actualShipmentId, port_name, port_sequence, quantity_at_loading_port,
+          actualShipmentId, safePortName, port_sequence, quantity_at_loading_port,
           quality_ffa_n,
           quality_mi_n,
           quality_dobi_n,
@@ -2857,14 +4141,29 @@ export const upsertVesselLoadingPort = async (req: AuthRequest, res: Response) =
 
       const inserted = result.rows[0];
       if (inserted.port_sequence === 1 && !inserted.is_discharge_port) {
-        await query(
-          `UPDATE shipments SET
-            eta_arrival = $2, eta_berthed = $3, eta_loading_start = $4, eta_loading_complete = $5, eta_sailed = $6,
-            updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1`,
-          [actualShipmentId, eta_vessel_arrival_n, eta_vessel_berthed_at_loading_port_n, eta_loading_start_n, eta_loading_completed_n, eta_vessel_sailed_n]
-        );
+        await fanOutShipmentLoadingEtaToStoGroup(actualShipmentId, {
+          eta_arrival: eta_vessel_arrival_n,
+          eta_berthed: eta_vessel_berthed_at_loading_port_n,
+          eta_loading_start: eta_loading_start_n,
+          eta_loading_complete: eta_loading_completed_n,
+          eta_sailed: eta_vessel_sailed_n,
+        });
       }
+
+      await fanOutVesselLoadingPortAtaToStoGroup({
+        anchorShipmentId: actualShipmentId,
+        sourcePortId: String(inserted.id),
+        portSequence: Number(inserted.port_sequence ?? port_sequence ?? 1),
+        isDischargePort: Boolean(inserted.is_discharge_port) || Number(inserted.port_sequence) === 999,
+        portName: String(inserted.port_name ?? safePortName),
+        ata: {
+          ata_vessel_arrival: ata_vessel_arrival_n,
+          ata_vessel_berthed: ata_vessel_berthed_n,
+          ata_loading_start: ata_loading_start_n,
+          ata_loading_completed: ata_loading_completed_n,
+          ata_vessel_sailed: ata_vessel_sailed_n,
+        },
+      });
 
       invalidateShipmentsListCache();
 
@@ -3061,7 +4360,7 @@ export const getShipmentDailyDeliverablesCalendar = async (req: AuthRequest, res
       LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
       LEFT JOIN vlp_disc_first vd ON vd.shipment_id = s.id
       WHERE
-        UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIX')
+        ${buildShipmentPageSeaRowScopeSql('c', 'l', 's')}
         AND COALESCE(c.delivery_start_date, s.shipment_date, c.delivery_end_date, s.arrival_date) <= $2::date
         AND COALESCE(c.delivery_end_date, s.arrival_date, c.delivery_start_date, s.shipment_date) >= $1::date
       ORDER BY COALESCE(s.ata_discharge_complete::date, vd.ata_vessel_complete_discharge) ASC NULLS LAST, COALESCE(c.delivery_start_date, s.shipment_date) ASC NULLS LAST, s.shipment_id ASC
@@ -3115,6 +4414,9 @@ export const updateShipmentDailyDeliverables = async (req: AuthRequest, res: Res
       [id, JSON.stringify(dd.rows)],
     );
 
+    // Writes shipments.daily_deliverables, which the list and Section 1 read - without this the
+    // caches keep serving pre-edit rows until their TTL expires.
+    invalidateShipmentsListCache();
     return res.json({ success: true, data: upd.rows[0], message: 'Shipment daily planning deliverables updated successfully' });
   } catch (error) {
     logger.error('Update shipment daily deliverables error:', error);
@@ -3255,7 +4557,7 @@ export const bulkUploadShipmentDailyDeliverables = async (req: AuthRequest, res:
                 rowParseFailures.push({
                   rowNumber: r.lineNumber,
                   contract_ext_no: ext,
-                  reason: `date ${r.date} is outside Due Start (${startS}) … Due End (${endS}) and was skipped`,
+                  reason: `date ${r.date} is outside Due Start (${startS}) â€¦ Due End (${endS}) and was skipped`,
                 });
               }
               return ok;
@@ -3268,7 +4570,7 @@ export const bulkUploadShipmentDailyDeliverables = async (req: AuthRequest, res:
           rowNumbers,
           reason:
             startS && endS
-              ? `All rows are outside Due Start (${startS}) … Due End (${endS}); nothing to upload`
+              ? `All rows are outside Due Start (${startS}) â€¦ Due End (${endS}); nothing to upload`
               : 'Due Start/Due End are required when daily deliverables are provided',
         });
         continue;
@@ -3294,6 +4596,8 @@ export const bulkUploadShipmentDailyDeliverables = async (req: AuthRequest, res:
       succeededRows += inWindow.length;
     }
 
+    // Same reason as updateShipmentDailyDeliverables: this bulk path updates shipments rows.
+    invalidateShipmentsListCache();
     return res.json({
       success: true,
       data: {
@@ -3380,7 +4684,7 @@ export const bulkUpdateShipments = async (req: AuthRequest, res: Response) => {
         continue;
       }
       if (shipRes.rows.length > 1) {
-        failures.push({ poNumber, reason: 'Multiple shipments found for this PO Number — cannot update automatically' });
+        failures.push({ poNumber, reason: 'Multiple shipments found for this PO Number â€” cannot update automatically' });
         continue;
       }
       const shipUuid = shipRes.rows[0].id;
@@ -3789,12 +5093,23 @@ export const getContractDetailsForSto = async (req: AuthRequest, res: Response) 
 
     await ensureUserStoContractAssignmentsTable();
 
-    const queryText = buildContractDetailsForStoSql();
-    const result = await query(queryText, [stoTrim, contractList]);
+    // Single-flight (ttl 0 = no result caching, no staleness): expanding several rows
+    // fires this per STO, and the staging DB CPU findings caught the identical
+    // contract_candidates query running 4x concurrently. Identical concurrent
+    // requests now share one execution; results are always freshly computed.
+    const rows = await ttlMemo(
+      `contract-details-for-sto:${stoTrim}|${contractList.join(',')}`,
+      0,
+      async () => {
+        const queryText = buildContractDetailsForStoSql();
+        const result = await query(queryText, [stoTrim, contractList]);
+        return result.rows;
+      },
+    );
 
     return res.json({
       success: true,
-      data: result.rows,
+      data: rows,
     });
   } catch (error) {
     logger.error('Get contract details for STO error:', error);
@@ -3892,362 +5207,66 @@ export const createShipment = async (req: AuthRequest, res: Response) => {
       eta_discharge_start,
       eta_discharge_complete,
       etaByContract,
+      prePlannedGroupId,
     } = req.body;
 
-    // Validate required fields - Contract Numbers are required, STO Number is optional
-    if (!contractNumbers || !Array.isArray(contractNumbers) || contractNumbers.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: { message: 'At least one Contract Number is required' },
-      });
-    }
-
-    // For manual shipments, STO Number should be empty (will be filled from SAP Data later)
-    // Only check STO if it's explicitly provided and not empty
-    const hasStoNumber = stoNumber && stoNumber.trim() !== ''
-    if (hasStoNumber) {
-      const stoTrim = String(stoNumber).trim();
-      if (isOfficialSapStoNumber(stoTrim)) {
-        if (await officialSapStoHasRegisteredPlanning(stoTrim)) {
-          return res.status(400).json({
-            success: false,
-            error: {
-              message: `STO Number ${stoTrim} already has shipment planning. Please update the existing shipment instead of creating a new one.`,
-            },
-          });
-        }
-      } else {
-        const stoCheck = await query(`
-          SELECT sto_number FROM contracts WHERE sto_number = $1 LIMIT 1
-        `, [stoTrim]);
-
-        if (stoCheck.rows.length > 0) {
-          return res.status(400).json({
-            success: false,
-            error: { message: `STO Number ${stoTrim} already exists. Please update the existing shipment instead of creating a new one.` },
-          });
-        }
-      }
-    }
-
-    // Validate that all contract numbers exist
-    const contractCheck = await query(`
-      SELECT contract_id, id FROM contracts 
-      WHERE contract_id = ANY($1)
-    `, [contractNumbers]);
-
-    if (contractCheck.rows.length !== contractNumbers.length) {
-      const foundContracts = contractCheck.rows.map(row => row.contract_id);
-      const missingContracts = contractNumbers.filter(id => !foundContracts.includes(id));
-      return res.status(400).json({
-        success: false,
-        error: { message: `The following contract numbers do not exist: ${missingContracts.join(', ')}` },
-      });
-    }
-
-    // Create shipment for each contract
-    // All shipments will share the same operation_id (one transaction)
-    // If STO is not provided (manual shipment), operation_id is used as the grouping key in list queries.
-    const shipmentIds = [];
-    const timestamp = Date.now().toString()
-    
-    // Vessel capacity vs plan qty validation temporarily disabled (incomplete master vessel data).
-    let resolvedOperationId: string | null =
-      operationId != null && String(operationId).trim() !== ''
-        ? String(operationId).trim()
-        : null;
-    if (!resolvedOperationId && !hasStoNumber) {
-      const dmy = formatDDMMYYYY(new Date());
-      const seq = await allocateNextSyntheticSequenceDefault('shipments', 'SEA', dmy);
-      resolvedOperationId = buildSyntheticOperationId('SEA', dmy, seq);
-    }
-
-    type PerContractEtaPayload = {
-      port_of_loading?: string | null;
-      eta_arrival?: string | null;
-      eta_berthed?: string | null;
-      eta_loading_start?: string | null;
-      eta_loading_complete?: string | null;
-      eta_sailed?: string | null;
-      eta_discharge_arrival?: string | null;
-      eta_discharge_berthed?: string | null;
-      eta_discharge_start?: string | null;
-      eta_discharge_complete?: string | null;
-    };
-
-    const legacyEta: PerContractEtaPayload = {
-      port_of_loading: portOfLoading || null,
-      eta_arrival: eta_arrival || null,
-      eta_berthed: eta_berthed || null,
-      eta_loading_start: eta_loading_start || null,
-      eta_loading_complete: eta_loading_complete || null,
-      eta_sailed: eta_sailed || null,
-      eta_discharge_arrival: eta_discharge_arrival || null,
-      eta_discharge_berthed: eta_discharge_berthed || null,
-      eta_discharge_start: eta_discharge_start || null,
-      eta_discharge_complete: eta_discharge_complete || null,
-    };
-
-    const etaByContractMap =
-      etaByContract && typeof etaByContract === 'object' && !Array.isArray(etaByContract)
-        ? (etaByContract as Record<string, PerContractEtaPayload>)
-        : {};
-
-    for (const contract of contractCheck.rows) {
-      const contractIdKey = String(contract.contract_id).trim();
-      const perContractEta =
-        etaByContractMap[contractIdKey] && typeof etaByContractMap[contractIdKey] === 'object'
-          ? etaByContractMap[contractIdKey]
-          : legacyEta;
-
-      // Generate shipment_id:
-      // - If STO is provided, use "<STO>-<CONTRACT_ID>" so all contracts under an STO can be grouped
-      // - If STO is NOT provided (manual shipment), generate an internal unique id (do NOT mirror operation_id),
-      //   and keep STO empty until it is updated from SAP.
-      const shipmentId = hasStoNumber
-        ? `${stoNumber}-${contract.contract_id}`
-        : `MNL-${timestamp.slice(-8)}-${contract.contract_id}`;
-      
-      const derivedStatus = deriveShipmentStatus({
-        eta_arrival_at_loading_port: perContractEta.eta_arrival,
-        eta_berthed_at_loading_port: perContractEta.eta_berthed,
-        eta_start_loading: perContractEta.eta_loading_start,
-        eta_completed_loading: perContractEta.eta_loading_complete,
-        eta_sailed_from_loading_port: perContractEta.eta_sailed,
-        eta_arrive_at_discharge_port: perContractEta.eta_discharge_arrival,
-        eta_berthed_at_discharge_port: perContractEta.eta_discharge_berthed,
-        eta_start_discharging: perContractEta.eta_discharge_start,
-        eta_complete_discharge: perContractEta.eta_discharge_complete,
-      });
-
-      // Guard: avoid creating a duplicate shipment for the same contract.
-      // Check 1: same operation_id + contract (re-submit of same planned operation).
-      // Check 2: same vessel name (case-insensitive) + contract (vessel already assigned here).
-      let existingShipmentId: string | null = null;
-      if (resolvedOperationId) {
-        const byOp = await query(
-          `SELECT id FROM shipments WHERE contract_id = $1::uuid AND operation_id = $2 LIMIT 1`,
-          [contract.id, resolvedOperationId]
-        );
-        if (byOp.rows.length > 0) existingShipmentId = byOp.rows[0].id;
-      }
-      if (!existingShipmentId && vesselName) {
-        const byVessel = await query(
-          `SELECT id FROM shipments WHERE contract_id = $1::uuid AND LOWER(TRIM(vessel_name)) = LOWER(TRIM($2)) LIMIT 1`,
-          [contract.id, vesselName]
-        );
-        if (byVessel.rows.length > 0) existingShipmentId = byVessel.rows[0].id;
-      }
-      if (!existingShipmentId) {
-        const byActiveContract = await query(
-          `SELECT id FROM shipments
-           WHERE contract_id = $1::uuid
-             AND COALESCE(status, '') <> 'CANCELLED'
-           ORDER BY created_at DESC
-           LIMIT 1`,
-          [contract.id],
-        );
-        if (byActiveContract.rows.length > 0) {
-          existingShipmentId = byActiveContract.rows[0].id;
-        }
-      }
-
-      let resultId: string;
-      if (existingShipmentId) {
-        // Update existing instead of inserting a duplicate
-        await query(`
-          UPDATE shipments SET
-            operation_id  = COALESCE($1, operation_id),
-            vessel_name   = COALESCE($2, vessel_name),
-            vessel_code   = COALESCE($3, vessel_code),
-            voyage_no     = COALESCE($4, voyage_no),
-            vessel_owner  = COALESCE($5, vessel_owner),
-            vessel_draft  = COALESCE($6::numeric, vessel_draft),
-            vessel_capacity = COALESCE($7::numeric, vessel_capacity),
-            vessel_hull_type = COALESCE($8, vessel_hull_type),
-            charter_type  = COALESCE($9, charter_type),
-            port_of_loading = COALESCE($10, port_of_loading),
-            port_of_discharge = COALESCE($11, port_of_discharge),
-            quantity_shipped = COALESCE($12::numeric, quantity_shipped),
-            quantity_delivered = COALESCE($13::numeric, quantity_delivered),
-            eta_arrival   = COALESCE($14::date, eta_arrival),
-            eta_berthed   = COALESCE($15::date, eta_berthed),
-            eta_loading_start = COALESCE($16::date, eta_loading_start),
-            eta_loading_complete = COALESCE($17::date, eta_loading_complete),
-            eta_sailed    = COALESCE($18::date, eta_sailed),
-            eta_discharge_arrival = COALESCE($19::date, eta_discharge_arrival),
-            eta_discharge_berthed = COALESCE($20::date, eta_discharge_berthed),
-            eta_discharge_start = COALESCE($21::date, eta_discharge_start),
-            eta_discharge_complete = COALESCE($22::date, eta_discharge_complete),
-            status        = $23,
-            updated_at    = CURRENT_TIMESTAMP
-          WHERE id = $24
-        `, [
-          resolvedOperationId,
-          vesselName || null,
-          vesselCode || null,
-          voyageNo || null,
-          vesselOwner || null,
-          vesselDraft ? parseFloat(String(vesselDraft)) : null,
-          vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
-          vesselHullType || null,
-          charterType || null,
-          perContractEta.port_of_loading || portOfLoading || null,
-          portOfDischarge || null,
-          quantityShipped ? parseFloat(String(quantityShipped)) : null,
-          quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
-          perContractEta.eta_arrival || null,
-          perContractEta.eta_berthed || null,
-          perContractEta.eta_loading_start || null,
-          perContractEta.eta_loading_complete || null,
-          perContractEta.eta_sailed || null,
-          perContractEta.eta_discharge_arrival || null,
-          perContractEta.eta_discharge_berthed || null,
-          perContractEta.eta_discharge_start || null,
-          perContractEta.eta_discharge_complete || null,
-          derivedStatus,
-          existingShipmentId,
-        ]);
-        resultId = existingShipmentId;
-      } else {
-        const result = await query(`
-          INSERT INTO shipments (
-            shipment_id, operation_id, contract_id, vessel_name, vessel_code, voyage_no, vessel_owner,
-            vessel_draft, vessel_capacity, vessel_hull_type, charter_type,
-            port_of_loading, port_of_discharge, quantity_shipped, quantity_delivered,
-            eta_arrival, eta_berthed, eta_loading_start, eta_loading_complete, eta_sailed,
-            eta_discharge_arrival, eta_discharge_berthed, eta_discharge_start, eta_discharge_complete,
-            status
-          ) VALUES (
-            $1, $2, $3::uuid, $4, $5, $6, $7, $8::numeric, $9::numeric, $10, $11,
-            $12, $13, $14::numeric, $25::numeric,
-            $15::date, $16::date, $17::date, $18::date, $19::date,
-            $20::date, $21::date, $22::date, $23::date,
-            $24
-          ) RETURNING id
-        `, [
-          shipmentId,
-          resolvedOperationId,
-          contract.id,
-          vesselName || null,
-          vesselCode || null,
-          voyageNo || null,
-          vesselOwner || null,
-          vesselDraft ? parseFloat(String(vesselDraft)) : null,
-          vesselCapacity ? parseFloat(String(vesselCapacity)) : null,
-          vesselHullType || null,
-          charterType || null,
-          perContractEta.port_of_loading || portOfLoading || null,
-          portOfDischarge || null,
-          quantityShipped ? parseFloat(String(quantityShipped)) : null,
-          perContractEta.eta_arrival || null,
-          perContractEta.eta_berthed || null,
-          perContractEta.eta_loading_start || null,
-          perContractEta.eta_loading_complete || null,
-          perContractEta.eta_sailed || null,
-          perContractEta.eta_discharge_arrival || null,
-          perContractEta.eta_discharge_berthed || null,
-          perContractEta.eta_discharge_start || null,
-          perContractEta.eta_discharge_complete || null,
-          derivedStatus,
-          quantityDelivered ? parseFloat(String(quantityDelivered)) : null,
-        ]);
-        resultId = result.rows[0].id;
-      }
-
-      shipmentIds.push(resultId);
-    }
-
-    // Persist user contract qty assignment (keyed by STO if exists; else operationId; else shipment_id)
-    const assignmentKey = (hasStoNumber && stoNumber && String(stoNumber).trim())
-      ? String(stoNumber).trim()
-      : (resolvedOperationId && String(resolvedOperationId).trim())
-        ? String(resolvedOperationId).trim()
-        : `MNL-${timestamp.slice(-8)}`;
-
-    const hasPoAssignments =
-      poQtyAssigned && typeof poQtyAssigned === 'object' && Object.keys(poQtyAssigned as object).length > 0;
-    const hasContractAssignments =
-      contractQtyAssigned && typeof contractQtyAssigned === 'object' && Object.keys(contractQtyAssigned as object).length > 0;
-
-    if (hasPoAssignments || hasContractAssignments) {
-      await ensureUserStoContractAssignmentsTable();
-
-      if (hasPoAssignments) {
-        const rowIds = Object.keys(poQtyAssigned as Record<string, any>).filter(Boolean);
-        const rowsResult = await query(
-          `SELECT id, contract_id, po_number FROM contracts WHERE id = ANY($1::uuid[])`,
-          [rowIds],
-        );
-        const rowById = new Map(
-          rowsResult.rows.map((r: { id: string; contract_id: string; po_number: string | null }) => [String(r.id), r]),
-        );
-
-        for (const [rowId, qty] of Object.entries(poQtyAssigned as Record<string, any>)) {
-          const row = rowById.get(String(rowId));
-          if (!row) continue;
-          const n = parseFloat(String(qty));
-          if (Number.isNaN(n) || n <= 0) continue;
-          await upsertPoQtyAssignment(
-            assignmentKey,
-            String(row.contract_id).trim(),
-            row.po_number ? String(row.po_number).trim() : null,
-            n,
-          );
-        }
-      } else if (hasContractAssignments) {
-        for (const [rawKey, qty] of Object.entries(contractQtyAssigned as Record<string, any>)) {
-          if (!rawKey) continue;
-          const n = parseFloat(String(qty));
-          if (Number.isNaN(n) || n <= 0) continue;
-          const key = String(rawKey).trim();
-          let contractNumber = key;
-          let poNumber: string | null = null;
-          if (key.includes('::')) {
-            const [cn, po] = key.split('::');
-            contractNumber = String(cn ?? '').trim();
-            poNumber = String(po ?? '').trim() || null;
-          }
-          if (!contractNumber) continue;
-          await upsertPoQtyAssignment(assignmentKey, contractNumber, poNumber, n);
-        }
-      }
-    }
-
-    // Update contracts with STO number (only if STO is explicitly provided)
-    // For manual shipments, STO remains empty and will be filled from SAP Data later
-    if (hasStoNumber) {
-      await query(`
-        UPDATE contracts 
-        SET sto_number = $1, updated_at = CURRENT_TIMESTAMP
-        WHERE contract_id = ANY($2)
-      `, [stoNumber, contractNumbers]);
-    }
-
-    invalidateShipmentsListCache();
+    const data = await createShipmentsFromContracts({
+      operationId,
+      stoNumber,
+      contractNumbers,
+      contractQtyAssigned,
+      poQtyAssigned,
+      vesselName,
+      vesselCode,
+      voyageNo,
+      vesselOwner,
+      vesselDraft,
+      vesselCapacity,
+      vesselHullType,
+      charterType,
+      portOfLoading,
+      portOfDischarge,
+      quantityShipped,
+      quantityDelivered,
+      eta_arrival,
+      eta_berthed,
+      eta_loading_start,
+      eta_loading_complete,
+      eta_sailed,
+      eta_discharge_arrival,
+      eta_discharge_berthed,
+      eta_discharge_start,
+      eta_discharge_complete,
+      etaByContract,
+      prePlannedGroupId,
+      userId: req.user?.id,
+    });
 
     return res.json({
       success: true,
-      message: stoNumber 
-        ? `Shipment created successfully for STO ${stoNumber}`
-        : `Shipment created successfully for contracts: ${contractNumbers.join(', ')}`,
-      data: {
-        stoNumber: stoNumber || null,
-        contractNumbers,
-        shipmentIds
-      }
+      message: data.stoNumber
+        ? `Shipment created successfully for STO ${data.stoNumber}`
+        : `Shipment created successfully for contracts: ${data.contractNumbers.join(', ')}`,
+      data,
     });
   } catch (error: any) {
+    if (error instanceof CreateShipmentClientError) {
+      return res.status(400).json({
+        success: false,
+        error: { message: error.message },
+      });
+    }
     logger.error('Create shipment error:', error);
     return res.status(500).json({
       success: false,
-      error: { 
+      error: {
         message: error.message || 'Failed to create shipment',
-        details: error.detail || error.toString()
+        details: error.detail || error.toString(),
       },
     });
   }
 };
+
 
 /** Activity / audit trail for a single shipment (modal history section). */
 export const getShipmentActivityLog = async (req: AuthRequest, res: Response) => {

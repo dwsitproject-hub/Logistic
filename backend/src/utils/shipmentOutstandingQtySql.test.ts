@@ -7,7 +7,7 @@ import {
 } from './shipmentOutstandingQtySql';
 
 describe('shipmentOutstandingQtySql', () => {
-  it('applies incoterm branches for CIF and FOB', () => {
+  it('applies incoterm branches for CIF and FOB', async () => {
     const sql = shipmentOutstandingQtyExpr({
       stoQtyExpr: 'sto',
       receiveExpr: 'recv',
@@ -19,25 +19,28 @@ describe('shipmentOutstandingQtySql', () => {
     expect(sql).toContain('GREATEST');
   });
 
-  it('builds list projection with SAP and shipment manual resolve', () => {
+  it('builds list projection with Contract Qty base and Open/Close SAP/KLIP resolve', async () => {
     const sql = shipmentListOutstandingQtySql();
-    expect(sql).toContain('sa.sto_quantity');
+    expect(sql).toContain('sa.contract_qty');
+    expect(sql).toContain('sp.contract_qty');
+    expect(sql).not.toContain('sa.sto_quantity');
     expect(sql).toContain('sa.quantity_receive');
     expect(sql).toContain('sa.quantity_delivered_sap');
     expect(sql).toContain('sp.actual_vessel_qty_receive');
-    expect(sql).toContain('sp.quantity_delivered');
-    expect(sql).toContain('ABS');
+    expect(sql).toContain('sp.quantity_delivered_klip');
+    expect(sql).toContain('sp.is_contract_sap_closed');
+    expect(sql).not.toContain('ABS');
     expect(sql).toContain('sl.incoterm');
   });
 
-  it('builds page-scoped qty_move CTE from shipment_page contracts', () => {
-    const sql = shipmentListQtyMoveCteFromPage();
+  it('builds page-scoped qty_move CTE from shipment_page contracts', async () => {
+    const sql = await shipmentListQtyMoveCteFromPage();
     expect(sql).toContain('qty_move AS');
     expect(sql).toContain('FROM shipment_page sp');
     expect(sql).toContain('contract_numbers');
   });
 
-  it('sums contract-global outstanding per list row', () => {
+  it('sums contract-global outstanding per list row', async () => {
     const sql = shipmentListRowGlobalOutstandingSql('sp');
     expect(sql).toContain('FROM contracts c');
     expect(sql).toContain('qty_move qm');

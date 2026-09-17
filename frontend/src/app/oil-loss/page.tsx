@@ -2,46 +2,44 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Layout from '@/components/Layout'
+import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, GripVertical, Loader2, Search, SlidersHorizontal, X } from 'lucide-react'
-import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { Droplets, Eye, GripVertical, Loader2, SlidersHorizontal, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
-import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
+import { formatOilLossMtFromKg, formatOilLossTotalMt } from '@/lib/oilLossFormat'
 import {
-  formatOilLossMtFromKg,
-  formatOilLossPct,
-  formatOilLossTotalMt,
-  formatOilLossTotalPct,
-} from '@/lib/oilLossFormat'
-import {
-  filterOilLossEligibleRows,
-  OIL_LOSS_MODE_FILTER_OPTIONS,
-} from '@/lib/oilLossEligibility'
+  ContractDetailModal,
+  fetchContractForDetailModal,
+  type ContractDetailModalContract,
+} from '@/components/contracts/ContractDetailModal'
+import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
+import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
   buildOilLossSummaryForDateRange,
   type ROilLossKey,
 } from '@/lib/oilLossSummary'
+import { StyledNativeSelect } from '@/components/shared/StyledNativeSelect'
+import {
+  formatContractDateScopeLabel,
+  PerformanceContractDateControl,
+} from '@/components/performance/PerformanceContractDateControl'
 import {
   applyOilLossGlobalFilters,
   buildOilLossPeriodOptions,
-  OIL_LOSS_GLOBAL_PRODUCT_OPTIONS,
-  OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE,
-  OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS,
+  OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
+  OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT,
   OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
-  oilLossGlobalToggleButtonClass,
   resolveOilLossPeriodDateRange,
   type OilLossGlobalPeriodKey,
-  type OilLossGlobalProductFilter,
   type OilLossGlobalTransportFilter,
 } from '@/lib/oilLossGlobalFilters'
 import OilLossDrilldownSection from '@/components/oil-loss/OilLossDrilldownSection'
@@ -52,6 +50,10 @@ import {
   hasOilLossDrilldownSelection,
   type OilLossDrilldownFilters,
 } from '@/lib/oilLossDrilldown'
+import {
+  OIL_LOSS_COLUMN_PREFS_USER_KEY,
+  parseOilLossColumnPrefsFromApiValue,
+} from '@/lib/oilLossColumnPrefs'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
@@ -66,6 +68,10 @@ import {
   COMPACT_OPERATIONAL_TABLE_CLASS,
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  COMPACT_TABLE_ACTIONS_CELL_CLASS,
+  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
+  COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import {
   OperationalNowrapCell,
@@ -74,6 +80,12 @@ import {
   getOperationalColumnLayout,
   operationalTableColumnClass,
 } from '@/lib/operationalTableLayout'
+import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
+import {
+  OIL_LOSS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+  operationalRowFieldTooltipText,
+  shouldApplyOperationalTruncateTooltip,
+} from '@/lib/operationalTableTruncateUi'
 import {
   OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION,
   OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY,
@@ -83,6 +95,7 @@ import {
   mergeOilLossAllContractColumnOrder,
   oilLossAllContractCompactColumnFallbackOrder,
   oilLossAllContractDefaultVisibleColumnIds,
+  oilLossAllContractTableColumnWidthPx,
   type OilLossAllContractRow,
   type OilLossSourceRow,
 } from '@/lib/oilLossAllContractColumns'
@@ -95,6 +108,7 @@ import {
   mergeOilLossByTransporterColumnOrder,
   oilLossByTransporterCompactColumnFallbackOrder,
   oilLossByTransporterDefaultVisibleColumnIds,
+  oilLossByTransporterTableColumnWidthPx,
   type OilLossByTransporterRow,
 } from '@/lib/oilLossByTransporterColumns'
 import {
@@ -106,6 +120,7 @@ import {
   mergeOilLossBySupplierColumnOrder,
   oilLossBySupplierCompactColumnFallbackOrder,
   oilLossBySupplierDefaultVisibleColumnIds,
+  oilLossBySupplierTableColumnWidthPx,
   type OilLossBySupplierRow,
 } from '@/lib/oilLossBySupplierColumns'
 import TransporterHistoryModal, {
@@ -146,6 +161,80 @@ const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string
   { key: 'r3', label: 'R3', formula: 'Quantity Receive - Quantity SFBD' },
   { key: 'r4', label: 'R4', formula: 'Quantity Receive - Quantity Delivery' },
 ]
+
+function parseOilLossRowQty(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/** Per-row R1–R4 oil loss in kg (same formulas as Section 1 cards). */
+function computeRowROilLossKg(row: OilLossTableRow, kind: ROilLossKey): number | null {
+  const delivery = parseOilLossRowQty(
+    'quantity_delivery' in row ? (row as { quantity_delivery?: number | null }).quantity_delivery : null,
+  )
+  const receive = parseOilLossRowQty(row.quantity_received)
+  const sfal = parseOilLossRowQty(
+    'quantity_sfal' in row ? (row as { quantity_sfal?: number | null }).quantity_sfal : null,
+  )
+  const sfbd = parseOilLossRowQty(
+    'quantity_sfbd' in row ? (row as { quantity_sfbd?: number | null }).quantity_sfbd : null,
+  )
+
+  if (kind === 'r1') {
+    if (sfal == null || delivery == null) return null
+    return sfal - delivery
+  }
+  if (kind === 'r2') {
+    if (sfbd == null || sfal == null) return null
+    return sfbd - sfal
+  }
+  if (kind === 'r3') {
+    if (receive == null || sfbd == null) return null
+    return receive - sfbd
+  }
+  if (kind === 'r4') {
+    if (receive == null || delivery == null) return null
+    return receive - delivery
+  }
+  return null
+}
+
+function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
+  if (kg == null || !Number.isFinite(Number(kg))) {
+    return <span className="text-sm text-gray-400">—</span>
+  }
+  return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
+}
+
+function renderROilLossCell(kg: number | null): ReactNode {
+  if (kg == null) return <span className="text-sm text-gray-400">—</span>
+  const tone = kg < 0 ? 'text-red-600' : kg > 0 ? 'text-green-600' : 'text-gray-900'
+  return (
+    <span className={`text-sm tabular-nums ${tone}`}>{`${formatOilLossMtFromKg(kg)} MT`}</span>
+  )
+}
+
+/** Prefer contract_number; fall back to contract_ext_no; use first token if multi-value. */
+function resolveOilLossRowContractNumber(row: OilLossTableRow): string {
+  const raw = String(
+    ('contract_number' in row && row.contract_number) || row.contract_ext_no || '',
+  ).trim()
+  if (!raw) return ''
+  return raw.split(',')[0]?.trim() || ''
+}
+
+function buildROilLossCompactColumns(): CompactColumn[] {
+  return R_OIL_LOSS_CARDS.map((card) => ({
+    id: card.key,
+    label: card.label,
+    formulaHelp: `Formula: ${card.formula}`,
+    defaultVisible: true,
+    sortable: true,
+    getSortValue: (r) => computeRowROilLossKg(r, card.key) ?? Number.NEGATIVE_INFINITY,
+    render: (r) => renderROilLossCell(computeRowROilLossKg(r, card.key)),
+  }))
+}
 
 function oilLossValueTone(value: number | null, emphasis: 'primary' | 'secondary'): string {
   if (value == null) return emphasis === 'primary' ? 'text-gray-400' : 'text-gray-300'
@@ -261,34 +350,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
         <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
       ),
     },
-    {
-      id: 'gain_loss_amount',
-      label: 'Oil Loss (MT)',
-      formulaHelp: FIELD_HELP.oilLossAmount,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_amount || 0,
-      render: (r) => {
-        const kg = r.gain_loss_amount
-        const tone =
-          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
-      },
-    },
-    {
-      id: 'gain_loss_percentage',
-      label: 'Oil Loss %',
-      formulaHelp: FIELD_HELP.oilLossPct,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_percentage || 0,
-      render: (r) => {
-        const pct = r.gain_loss_percentage
-        const tone =
-          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
-      },
-    },
+    ...buildROilLossCompactColumns(),
     {
       id: 'status',
       label: 'Status',
@@ -341,7 +403,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant/Site',
+      label: 'Region/Plant',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
@@ -372,20 +434,16 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       label: 'Qty SFAL',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => r.quantity_sfal || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_sfal)}</span>
-      ),
+      getSortValue: (r) => r.quantity_sfal ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell(r.quantity_sfal),
     },
     {
       id: 'quantity_sfbd',
       label: 'Qty SFBD',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => r.quantity_sfbd || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_sfbd)}</span>
-      ),
+      getSortValue: (r) => r.quantity_sfbd ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell(r.quantity_sfbd),
     },
   ]
 }
@@ -440,34 +498,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
         <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
       ),
     },
-    {
-      id: 'gain_loss_amount',
-      label: 'Oil Loss (MT)',
-      formulaHelp: FIELD_HELP.oilLossAmount,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_amount || 0,
-      render: (r) => {
-        const kg = r.gain_loss_amount
-        const tone =
-          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
-      },
-    },
-    {
-      id: 'gain_loss_percentage',
-      label: 'Oil Loss %',
-      formulaHelp: FIELD_HELP.oilLossPct,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_percentage || 0,
-      render: (r) => {
-        const pct = r.gain_loss_percentage
-        const tone =
-          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
-      },
-    },
+    ...buildROilLossCompactColumns(),
     {
       id: 'loading_location',
       label: 'Loading Location',
@@ -620,7 +651,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant/Site',
+      label: 'Region/Plant',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
@@ -657,24 +688,18 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       label: 'Qty SFAL',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfal' in r ? r.quantity_sfal : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfal' in r ? r.quantity_sfal : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfal' in r ? r.quantity_sfal : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfal' in r ? r.quantity_sfal : null),
     },
     {
       id: 'quantity_sfbd',
       label: 'Qty SFBD',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfbd' in r ? r.quantity_sfbd : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfbd' in r ? r.quantity_sfbd : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfbd' in r ? r.quantity_sfbd : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfbd' in r ? r.quantity_sfbd : null),
     },
   ]
 }
@@ -729,34 +754,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
         <span className="text-sm tabular-nums">{formatQtyMtFromKg(r.quantity_received)}</span>
       ),
     },
-    {
-      id: 'gain_loss_amount',
-      label: 'Oil Loss (MT)',
-      formulaHelp: FIELD_HELP.oilLossAmount,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_amount || 0,
-      render: (r) => {
-        const kg = r.gain_loss_amount
-        const tone =
-          kg != null && kg < 0 ? 'text-red-600' : kg != null && kg > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
-      },
-    },
-    {
-      id: 'gain_loss_percentage',
-      label: 'Oil Loss %',
-      formulaHelp: FIELD_HELP.oilLossPct,
-      defaultVisible: true,
-      sortable: true,
-      getSortValue: (r) => r.gain_loss_percentage || 0,
-      render: (r) => {
-        const pct = r.gain_loss_percentage
-        const tone =
-          pct != null && pct < 0 ? 'text-red-600' : pct != null && pct > 0 ? 'text-green-600' : 'text-gray-900'
-        return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
-      },
-    },
+    ...buildROilLossCompactColumns(),
     {
       id: 'loading_location',
       label: 'Loading Location',
@@ -915,7 +913,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
     },
     {
       id: 'plant_site',
-      label: 'Plant/Site',
+      label: 'Region/Plant',
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
@@ -952,24 +950,18 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       label: 'Qty SFAL',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfal' in r ? r.quantity_sfal : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfal' in r ? r.quantity_sfal : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfal' in r ? r.quantity_sfal : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfal' in r ? r.quantity_sfal : null),
     },
     {
       id: 'quantity_sfbd',
       label: 'Qty SFBD',
       defaultVisible: false,
       sortable: true,
-      getSortValue: (r) => ('quantity_sfbd' in r ? r.quantity_sfbd : 0) || 0,
-      render: (r) => (
-        <span className="text-sm tabular-nums">
-          {formatQtyMtFromKg('quantity_sfbd' in r ? r.quantity_sfbd : null)}
-        </span>
-      ),
+      getSortValue: (r) =>
+        ('quantity_sfbd' in r ? r.quantity_sfbd : null) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => formatOilLossSfalSfbdCell('quantity_sfbd' in r ? r.quantity_sfbd : null),
     },
   ]
 }
@@ -996,138 +988,85 @@ function toGroupHistoryContractRow(row: OilLossSourceRow): OilLossGroupHistoryCo
   }
 }
 
-function loadAllContractColumnPrefs(allIds: string[]): ViewColumnPrefs {
-  if (typeof window === 'undefined') {
-    return {
-      visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
-    }
-  }
-  const version = window.localStorage.getItem(OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY)
-  if (version !== OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION) {
-    return {
-      visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
-    }
-  }
+function readSavedOilLossColumns(
+  visibleKey: string,
+  orderKey: string,
+  allIds: string[],
+  defaultVisible: string[],
+  mergeOrder: (saved: string[], allIds: string[]) => string[],
+): { visibleIds: Set<string>; orderIds: string[] } {
   try {
-    const savedVisible = JSON.parse(window.localStorage.getItem('oil-loss.all-contract.visibleColumns') || '[]') as string[]
-    const savedOrder = JSON.parse(window.localStorage.getItem('oil-loss.all-contract.columnOrder') || '[]') as string[]
-    const visibleIds = new Set(
-      savedVisible.filter((id) => allIds.includes(id)).length > 0
-        ? savedVisible.filter((id) => allIds.includes(id))
-        : oilLossAllContractDefaultVisibleColumnIds(allIds),
-    )
+    const savedVisible = JSON.parse(window.localStorage.getItem(visibleKey) || '[]') as string[]
+    const savedOrder = JSON.parse(window.localStorage.getItem(orderKey) || '[]') as string[]
+    const filteredVisible = savedVisible.filter((id) => allIds.includes(id))
+    const visibleIds = new Set(filteredVisible.length > 0 ? filteredVisible : defaultVisible)
     return {
       visibleIds,
-      orderIds: mergeOilLossAllContractColumnOrder(savedOrder, allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
+      orderIds: mergeOrder(savedOrder, allIds),
     }
   } catch {
     return {
-      visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
-      sortKey: 'contract_date',
-      sortDir: 'desc',
+      visibleIds: new Set(defaultVisible),
+      orderIds: mergeOrder([], allIds),
     }
   }
+}
+
+function loadAllContractColumnPrefs(allIds: string[]): ViewColumnPrefs {
+  const defaults: ViewColumnPrefs = {
+    visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
+    orderIds: oilLossAllContractCompactColumnFallbackOrder(allIds),
+    sortKey: 'contract_date',
+    sortDir: 'desc',
+  }
+  if (typeof window === 'undefined') return defaults
+  const loaded = readSavedOilLossColumns(
+    'oil-loss.all-contract.visibleColumns',
+    'oil-loss.all-contract.columnOrder',
+    allIds,
+    oilLossAllContractDefaultVisibleColumnIds(allIds),
+    mergeOilLossAllContractColumnOrder,
+  )
+  if (loaded.visibleIds.size === 0) return defaults
+  return { ...defaults, ...loaded }
 }
 
 function loadByTransporterColumnPrefs(allIds: string[]): ViewColumnPrefs {
-  if (typeof window === 'undefined') {
-    return {
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
+  const defaults: ViewColumnPrefs = {
+    visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
+    orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
+    sortKey: 'transporter',
+    sortDir: 'asc',
   }
-  const version = window.localStorage.getItem(OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY)
-  if (version !== OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION) {
-    return {
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
-  }
-  try {
-    const savedVisible = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-transporter.visibleColumns') || '[]',
-    ) as string[]
-    const savedOrder = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-transporter.columnOrder') || '[]',
-    ) as string[]
-    const visibleIds = new Set(
-      savedVisible.filter((id) => allIds.includes(id)).length > 0
-        ? savedVisible.filter((id) => allIds.includes(id))
-        : oilLossByTransporterDefaultVisibleColumnIds(allIds),
-    )
-    return {
-      visibleIds,
-      orderIds: mergeOilLossByTransporterColumnOrder(savedOrder, allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
-  } catch {
-    return {
-      visibleIds: new Set(oilLossByTransporterDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossByTransporterCompactColumnFallbackOrder(allIds),
-      sortKey: 'transporter',
-      sortDir: 'asc',
-    }
-  }
+  if (typeof window === 'undefined') return defaults
+  const loaded = readSavedOilLossColumns(
+    'oil-loss.by-transporter.visibleColumns',
+    'oil-loss.by-transporter.columnOrder',
+    allIds,
+    oilLossByTransporterDefaultVisibleColumnIds(allIds),
+    mergeOilLossByTransporterColumnOrder,
+  )
+  if (loaded.visibleIds.size === 0) return defaults
+  return { ...defaults, ...loaded }
 }
 
 function loadBySupplierColumnPrefs(allIds: string[]): ViewColumnPrefs {
-  if (typeof window === 'undefined') {
-    return {
-      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
+  const defaults: ViewColumnPrefs = {
+    visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
+    orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
+    sortKey: 'supplier',
+    sortDir: 'asc',
   }
-  const version = window.localStorage.getItem(OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY)
-  if (version !== OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION) {
-    return {
-      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
-  }
-  try {
-    const savedVisible = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-supplier.visibleColumns') || '[]',
-    ) as string[]
-    const savedOrder = JSON.parse(
-      window.localStorage.getItem('oil-loss.by-supplier.columnOrder') || '[]',
-    ) as string[]
-    const visibleIds = new Set(
-      savedVisible.filter((id) => allIds.includes(id)).length > 0
-        ? savedVisible.filter((id) => allIds.includes(id))
-        : oilLossBySupplierDefaultVisibleColumnIds(allIds),
-    )
-    return {
-      visibleIds,
-      orderIds: mergeOilLossBySupplierColumnOrder(savedOrder, allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
-  } catch {
-    return {
-      visibleIds: new Set(oilLossBySupplierDefaultVisibleColumnIds(allIds)),
-      orderIds: oilLossBySupplierCompactColumnFallbackOrder(allIds),
-      sortKey: 'supplier',
-      sortDir: 'asc',
-    }
-  }
+  if (typeof window === 'undefined') return defaults
+  const loaded = readSavedOilLossColumns(
+    'oil-loss.by-supplier.visibleColumns',
+    'oil-loss.by-supplier.columnOrder',
+    allIds,
+    oilLossBySupplierDefaultVisibleColumnIds(allIds),
+    mergeOilLossBySupplierColumnOrder,
+  )
+  if (loaded.visibleIds.size === 0) return defaults
+  return { ...defaults, ...loaded }
 }
 
 export default function OilLossPage() {
@@ -1151,8 +1090,8 @@ export default function OilLossPage() {
   const [loading, setLoading] = useState(true)
   /** Background refresh while cached rows stay visible. */
   const [dataFetching, setDataFetching] = useState(false)
+  usePageHeaderBusy(dataFetching && rows.length > 0)
   const [viewTransitionLoading, setViewTransitionLoading] = useState(false)
-  const [search, setSearch] = useState('')
   const [showColumnsMenu, setShowColumnsMenu] = useState(false)
   const [columnPrefsByView, setColumnPrefsByView] = useState<Record<OilLossTableViewMode, ViewColumnPrefs>>({
     all_contract: initialAllContractPrefs,
@@ -1164,6 +1103,8 @@ export default function OilLossPage() {
   const [viewMode, setViewMode] = useState<OilLossTableViewMode>('all_contract')
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [selectedGroupData, setSelectedGroupData] = useState<OilLossGroupHistoryModalSelection | null>(null)
+  const [selectedContract, setSelectedContract] = useState<ContractDetailModalContract | null>(null)
+  const [openingContractKey, setOpeningContractKey] = useState<string | null>(null)
   const pageSize = 20
 
   const activePrefs = columnPrefsByView[viewMode]
@@ -1191,9 +1132,6 @@ export default function OilLossPage() {
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
-  const [selectedModes, setSelectedModes] = useState<string[]>([])
-  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
-  const [availableIncoterms, setAvailableIncoterms] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [availableProducts, setAvailableProducts] = useState<string[]>([])
   const {
@@ -1202,28 +1140,40 @@ export default function OilLossPage() {
     handleProductsChange,
     handleGroupPlantsChange,
     resetUserScopeFilters,
+    alignGroupPlantsToOptions,
     userScopeReady,
   } = useUserScopeFilterDefaults('oil-loss')
+  /**
+   * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
+   * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
+   * options do once they load, or the box shows "1 selected (OR)" with nothing ticked.
+   */
+  useEffect(() => {
+    alignGroupPlantsToOptions(availableGroupPlants)
+  }, [availableGroupPlants, alignGroupPlantsToOptions])
   const showBlockingLoad = (loading && rows.length === 0) || !userScopeReady
-  const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('MTD')
-  const [globalTransport, setGlobalTransport] = useState<OilLossGlobalTransportFilter>('All')
-  const [globalProduct, setGlobalProduct] = useState<OilLossGlobalProductFilter>('All')
+  const [globalPeriod, setGlobalPeriod] = useState<OilLossGlobalPeriodKey>('YTD')
+  const [globalTransport, setGlobalTransport] =
+    useState<OilLossGlobalTransportFilter>(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT)
   const [drilldownFilters, setDrilldownFilters] = useState<OilLossDrilldownFilters>(
     EMPTY_OIL_LOSS_DRILLDOWN_FILTERS,
   )
   const globalPeriodOptions = useMemo(() => buildOilLossPeriodOptions(), [])
+
+  const globalTransportOptions = useMemo(
+    () =>
+      OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({
+        value,
+        label: value,
+      })),
+    [],
+  )
   const globalPeriodMeta = useMemo(
     () => resolveOilLossPeriodDateRange(globalPeriod),
     [globalPeriod],
   )
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-01-01`
-  })
-  const [dateTo, setDateTo] = useState(() => {
-    const d = new Date()
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  })
+  const [dateFrom, setDateFrom] = useState(() => resolveOilLossPeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolveOilLossPeriodDateRange('YTD').dateTo)
 
   useEffect(() => {
     setDateFrom(globalPeriodMeta.dateFrom)
@@ -1248,8 +1198,9 @@ export default function OilLossPage() {
       try {
         if (!cached) setLoading(true)
         setDataFetching(true)
-        const { data, revalidating } = await cachedGet(cacheKey, () =>
-          api.get('/oil-loss').then((r) => r.data),
+        const { data, revalidating } = await cachedGet(
+          cacheKey,
+          (signal) => api.get('/oil-loss', { signal }).then((r) => r.data),
           {
             onRevalidate: (fresh) => {
               applyOilLossEnvelope(fresh)
@@ -1276,28 +1227,24 @@ export default function OilLossPage() {
     let cancelled = false
     Promise.all([
       api.get('/contracts/filter-options/group-plants'),
-      api.get('/contracts/filter-options/incoterms'),
       api.get('/dashboard/filter-options/products'),
     ])
-      .then(([plantRes, incRes, productRes]) => {
+      .then(([plantRes, productRes]) => {
         if (cancelled) return
         const plants = (plantRes.data?.data?.groupPlants || []) as string[]
-        const incs = (incRes.data?.data?.incoterms || []) as string[]
         const productPayload = productRes.data?.data
         const products = (Array.isArray(productPayload)
           ? productPayload
           : productPayload && typeof productPayload === 'object' && 'products' in productPayload
             ? (productPayload as { products?: string[] }).products
             : []) as string[]
-        setAvailableGroupPlants(Array.isArray(plants) ? plants : [])
-        setAvailableIncoterms(Array.isArray(incs) ? incs : [])
+        setAvailableGroupPlants(filterRegionSiteOptions(Array.isArray(plants) ? plants : []))
         setAvailableProducts(Array.isArray(products) ? products : [])
       })
       .catch((e) => {
         if (cancelled) return
         console.error('Failed to fetch oil loss filter options:', e)
         setAvailableGroupPlants([])
-        setAvailableIncoterms([])
         setAvailableProducts([])
       })
     return () => {
@@ -1429,94 +1376,172 @@ export default function OilLossPage() {
     )
   }, [columnPrefsByView, viewMode])
 
-  const hasActiveOilLossFilters =
-    globalPeriod !== 'MTD' ||
-    globalTransport !== 'All' ||
-    globalProduct !== 'All' ||
-    selectedModes.length > 0 ||
-    selectedIncoterms.length > 0 ||
-    selectedProducts.length > 0 ||
-    selectedGroupPlants.length > 0
+  // Load per-user column prefs when localStorage has no saved layout for a view.
+  useEffect(() => {
+    let cancelled = false
+    const hadLocal = (visibleKey: string) => {
+      try {
+        const raw = localStorage.getItem(visibleKey)
+        if (!raw) return false
+        const parsed = JSON.parse(raw) as unknown
+        return Array.isArray(parsed) && parsed.length > 0
+      } catch {
+        return Boolean(localStorage.getItem(visibleKey))
+      }
+    }
+    ;(async () => {
+      try {
+        const res = await api.get(
+          `/user-preferences/me?key=${encodeURIComponent(OIL_LOSS_COLUMN_PREFS_USER_KEY)}`,
+        )
+        const parsed = parseOilLossColumnPrefsFromApiValue(res.data?.data?.value)
+        if (cancelled || !parsed) return
+        setColumnPrefsByView((prev) => {
+          const next = { ...prev }
+          if (parsed.all_contract && !hadLocal('oil-loss.all-contract.visibleColumns')) {
+            next.all_contract = {
+              ...prev.all_contract,
+              visibleIds: new Set(
+                parsed.all_contract.visibleColumnIds.length > 0
+                  ? parsed.all_contract.visibleColumnIds
+                  : [...prev.all_contract.visibleIds],
+              ),
+              orderIds: mergeOilLossAllContractColumnOrder(
+                parsed.all_contract.columnOrderIds,
+                allContractColumnIds,
+              ),
+            }
+          }
+          if (parsed.by_transporter && !hadLocal('oil-loss.by-transporter.visibleColumns')) {
+            next.by_transporter = {
+              ...prev.by_transporter,
+              visibleIds: new Set(
+                parsed.by_transporter.visibleColumnIds.length > 0
+                  ? parsed.by_transporter.visibleColumnIds
+                  : [...prev.by_transporter.visibleIds],
+              ),
+              orderIds: mergeOilLossByTransporterColumnOrder(
+                parsed.by_transporter.columnOrderIds,
+                transporterColumnIds,
+              ),
+            }
+          }
+          if (parsed.by_supplier && !hadLocal('oil-loss.by-supplier.visibleColumns')) {
+            next.by_supplier = {
+              ...prev.by_supplier,
+              visibleIds: new Set(
+                parsed.by_supplier.visibleColumnIds.length > 0
+                  ? parsed.by_supplier.visibleColumnIds
+                  : [...prev.by_supplier.visibleIds],
+              ),
+              orderIds: mergeOilLossBySupplierColumnOrder(
+                parsed.by_supplier.columnOrderIds,
+                supplierColumnIds,
+              ),
+            }
+          }
+          return next
+        })
+      } catch {
+        // keep localStorage bootstrap
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const saveOilLossViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (saveOilLossViewTimerRef.current) clearTimeout(saveOilLossViewTimerRef.current)
+    saveOilLossViewTimerRef.current = setTimeout(() => {
+      void api
+        .post('/user-preferences/me', {
+          key: OIL_LOSS_COLUMN_PREFS_USER_KEY,
+          value: {
+            all_contract: {
+              visibleColumnIds: [...columnPrefsByView.all_contract.visibleIds],
+              columnOrderIds: columnPrefsByView.all_contract.orderIds,
+            },
+            by_transporter: {
+              visibleColumnIds: [...columnPrefsByView.by_transporter.visibleIds],
+              columnOrderIds: columnPrefsByView.by_transporter.orderIds,
+            },
+            by_supplier: {
+              visibleColumnIds: [...columnPrefsByView.by_supplier.visibleIds],
+              columnOrderIds: columnPrefsByView.by_supplier.orderIds,
+            },
+          },
+        })
+        .catch(() => {
+          /* localStorage fallback */
+        })
+    }, 600)
+    return () => {
+      if (saveOilLossViewTimerRef.current) clearTimeout(saveOilLossViewTimerRef.current)
+    }
+  }, [columnPrefsByView])
 
   const resetGlobalBarFilters = useCallback(() => {
-    setGlobalPeriod('MTD')
-    setGlobalTransport('All')
-    setGlobalProduct('All')
+    const ytd = resolveOilLossPeriodDateRange('YTD')
+    setGlobalPeriod('YTD')
+    setDateFrom(ytd.dateFrom)
+    setDateTo(ytd.dateTo)
+    setGlobalTransport(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT)
+    handleProductsChange([])
+    handleGroupPlantsChange([])
+    resetUserScopeFilters()
     setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
     setCurrentPage(1)
-  }, [])
-
-  const resetOilLossDrilldown = useCallback(() => {
-    setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
-    setCurrentPage(1)
-  }, [])
+  }, [handleGroupPlantsChange, handleProductsChange, resetUserScopeFilters])
 
   const applyOilLossDrilldownChange = useCallback((next: OilLossDrilldownFilters) => {
     setDrilldownFilters(next)
     setCurrentPage(1)
   }, [])
 
-  const clearOilLossFilters = useCallback(() => {
-    setSelectedModes([])
-    setSelectedIncoterms([])
-    resetUserScopeFilters()
-    resetGlobalBarFilters()
-    resetOilLossDrilldown()
-    const d = new Date()
-    setDateFrom(`${d.getFullYear()}-01-01`)
-    setDateTo(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-    )
-    setCurrentPage(1)
-  }, [resetUserScopeFilters, resetGlobalBarFilters, resetOilLossDrilldown])
-
   useEffect(() => {
     setDrilldownFilters(EMPTY_OIL_LOSS_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [
     globalPeriod,
+    dateFrom,
+    dateTo,
     globalTransport,
-    globalProduct,
-    selectedModes,
-    selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
   ])
 
   useEffect(() => {
     setCurrentPage(1)
-  }, [globalPeriod, globalTransport, globalProduct])
+  }, [globalPeriod, dateFrom, dateTo, globalTransport, selectedProducts])
 
   const globallyFilteredRows = useMemo(() => {
     return applyOilLossGlobalFilters({
       rows,
       period: globalPeriod,
       transport: globalTransport,
-      product: globalProduct,
-      selectedStaffProducts: selectedProducts,
-      selectedStaffGroupPlants: selectedGroupPlants,
-      selectedModes,
-      selectedIncoterms,
+      selectedProducts,
+      selectedGroupPlants,
+      dateFrom,
+      dateTo,
     })
   }, [
     rows,
     globalPeriod,
     globalTransport,
-    globalProduct,
     selectedProducts,
     selectedGroupPlants,
-    selectedModes,
-    selectedIncoterms,
+    dateFrom,
+    dateTo,
   ])
 
   const periodSummary = useMemo(() => {
     if (!userScopeReady) return null
-    return buildOilLossSummaryForDateRange(
-      globallyFilteredRows,
-      globalPeriodMeta.dateFrom,
-      globalPeriodMeta.dateTo,
-    )
-  }, [userScopeReady, globallyFilteredRows, globalPeriodMeta.dateFrom, globalPeriodMeta.dateTo])
+    return buildOilLossSummaryForDateRange(globallyFilteredRows, dateFrom, dateTo)
+  }, [userScopeReady, globallyFilteredRows, dateFrom, dateTo])
 
   const drilldownFilteredRows = useMemo(
     () => applyOilLossDrilldownFilters(globallyFilteredRows, drilldownFilters),
@@ -1569,6 +1594,29 @@ export default function OilLossPage() {
     setGroupModalOpen(true)
   }, [])
 
+  const openContractDetailFromRow = useCallback(async (row: OilLossTableRow) => {
+    const contractNumber = resolveOilLossRowContractNumber(row)
+    if (!contractNumber) {
+      alert('Contract number is required to open Contract Details.')
+      return
+    }
+    const requestKey = `${row.id}:${contractNumber}`
+    setOpeningContractKey(requestKey)
+    try {
+      const detail = await fetchContractForDetailModal(contractNumber)
+      if (!detail) {
+        alert(`Contract ${contractNumber} was not found.`)
+        return
+      }
+      setSelectedContract(detail)
+    } catch (err) {
+      console.error('openContractDetailFromRow:', err)
+      alert('Failed to open Contract Details.')
+    } finally {
+      setOpeningContractKey((current) => (current === requestKey ? null : current))
+    }
+  }, [])
+
   const aggregatedRows = useMemo(() => {
     if (viewMode === 'all_contract') return aggregatedContractRows
     if (viewMode === 'by_transporter') return aggregatedTransporterRows
@@ -1598,34 +1646,10 @@ export default function OilLossPage() {
   }, [viewMode, visibleColumnIds, columnOrderIds])
 
   const filteredRows = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    const searched = !q
-      ? aggregatedRows
-      : aggregatedRows.filter((row) => {
-          if (viewMode === 'all_contract') {
-            const contractRow = row as OilLossAllContractRow
-            return [
-              contractRow.contract_ext_no,
-              contractRow.contract_number,
-              contractRow.po_number,
-              contractRow.sto_number,
-              contractRow.product,
-              contractRow.supplier,
-              contractRow.incoterm,
-            ].some((v) => String(v || '').toLowerCase().includes(q))
-          }
-          if (viewMode === 'by_transporter') {
-            const transporterRow = row as OilLossByTransporterRow
-            return [transporterRow.transporter].some((v) => String(v || '').toLowerCase().includes(q))
-          }
-          const supplierRow = row as OilLossBySupplierRow
-          return [supplierRow.supplier].some((v) => String(v || '').toLowerCase().includes(q))
-        })
-
     const sortCol = activeCompactColumns.find((c) => c.id === sortKey)
-    if (!sortCol) return searched
+    if (!sortCol) return aggregatedRows
 
-    return [...searched].sort((a, b) => {
+    return [...aggregatedRows].sort((a, b) => {
       const aVal = sortCol.getSortValue(a)
       const bVal = sortCol.getSortValue(b)
       if (typeof aVal === 'number' && typeof bVal === 'number') {
@@ -1635,7 +1659,7 @@ export default function OilLossPage() {
       const bS = String(bVal).toLowerCase()
       return sortDir === 'asc' ? aS.localeCompare(bS) : bS.localeCompare(aS)
     })
-  }, [aggregatedRows, search, sortKey, sortDir, viewMode, activeCompactColumns])
+  }, [aggregatedRows, sortKey, sortDir, activeCompactColumns])
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize))
   const paginatedRows = useMemo(
@@ -1650,9 +1674,6 @@ export default function OilLossPage() {
     setCurrentPage(1)
   }, [
     filteredRows.length,
-    search,
-    selectedModes,
-    selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
     dateFrom,
@@ -1751,68 +1772,54 @@ export default function OilLossPage() {
     <Layout>
       <div className="space-y-6">
         <div className="space-y-3">
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2">
-            <span>Oil Loss</span>
-            {dataFetching && rows.length > 0 ? (
-              <Loader2 className="h-5 w-5 shrink-0 animate-spin text-gray-400" aria-hidden />
-            ) : null}
-          </h1>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <div className="flex items-center gap-6 flex-wrap">
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Period:</span>
-                <select
-                  value={globalPeriod}
-                  onChange={(e) => setGlobalPeriod(e.target.value as OilLossGlobalPeriodKey)}
-                  className="px-4 py-2 border rounded-lg text-sm text-gray-900 bg-white min-w-[140px]"
-                >
-                  {globalPeriodOptions.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Transport:</span>
-                <div className={OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS}>
-                  {OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={() => setGlobalTransport(opt)}
-                      className={`${OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE} ${oilLossGlobalToggleButtonClass(globalTransport === opt)}`}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 shrink-0">Product:</span>
-                <div className={OIL_LOSS_GLOBAL_TOGGLE_GROUP_CLASS}>
-                  {OIL_LOSS_GLOBAL_PRODUCT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      onClick={() => setGlobalProduct(opt)}
-                      className={`${OIL_LOSS_GLOBAL_TOGGLE_BUTTON_BASE} ${oilLossGlobalToggleButtonClass(globalProduct === opt)}`}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          <div className="flex items-end gap-6 flex-wrap">
+            <PerformanceContractDateControl
+              period={globalPeriod}
+              options={globalPeriodOptions}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onPeriodChange={setGlobalPeriod}
+              onDateFromChange={setDateFrom}
+              onDateToChange={setDateTo}
+              resolvePeriodRange={resolveOilLossPeriodDateRange}
+            />
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Region/Plant"
+                options={availableGroupPlants}
+                selected={selectedGroupPlants}
+                onChange={handleGroupPlantsChange}
+                placeholder="All region/plants"
+                emptyMessage="No region/plant values"
+                uppercaseOptionLabels
+              />
             </div>
-
+            <div className="w-48">
+              <StyledNativeSelect
+                label="Transport"
+                inlineLabel={false}
+                value={globalTransport}
+                onChange={setGlobalTransport}
+                options={globalTransportOptions}
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Product"
+                options={[...OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS]}
+                selected={selectedProducts}
+                onChange={handleProductsChange}
+                placeholder="All products"
+                emptyMessage="No products"
+                uppercaseOptionLabels
+              />
+            </div>
             <button
               type="button"
               onClick={resetGlobalBarFilters}
-              className="text-sm text-blue-700 hover:underline shrink-0"
+              className="text-sm text-blue-700 hover:underline shrink-0 pb-2.5"
             >
-              Reset selection
+              Reset
             </button>
           </div>
 
@@ -1829,7 +1836,6 @@ export default function OilLossPage() {
               totalPct: null,
             }
             const totalMt = showBlockingLoad ? null : summary.totalMt
-            const totalPct = showBlockingLoad ? null : summary.totalPct
 
             return (
               <div
@@ -1843,30 +1849,16 @@ export default function OilLossPage() {
                   <FieldHelp text={`Formula: ${card.formula}`} />
                 </div>
 
-                <div className="grid flex-1 grid-cols-2 gap-x-3 gap-y-1">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
-                      Total (MT)
-                    </div>
-                    <div
-                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
-                      }`}
-                    >
-                      {showBlockingLoad ? '…' : formatOilLossTotalMt(totalMt)}
-                    </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
+                    Total
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
-                      Total (%)
-                    </div>
-                    <div
-                      className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
-                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalPct, 'primary')
-                      }`}
-                    >
-                      {showBlockingLoad ? '…' : formatOilLossTotalPct(totalPct)}
-                    </div>
+                  <div
+                    className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
+                      showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
+                    }`}
+                  >
+                    {showBlockingLoad ? '…' : `${formatOilLossTotalMt(totalMt)} MT`}
                   </div>
                 </div>
               </div>
@@ -1879,92 +1871,17 @@ export default function OilLossPage() {
           rows={globallyFilteredRows}
           filters={drilldownFilters}
           onFiltersChange={applyOilLossDrilldownChange}
-          onReset={resetOilLossDrilldown}
-          drilldownScopedRowCount={drilldownFilteredRows.length}
+          scopeSegments={[
+            formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) =>
+              resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
+            ),
+            globalTransport,
+            ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
+            ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
+          ]}
           loading={showBlockingLoad}
           dataFetching={dataFetching}
         />
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-end gap-4">
-                <div className="flex-1 min-w-[200px]">
-                  <label className="text-sm font-medium text-gray-700 mb-1 block">Search</label>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder={
-                        viewMode === 'all_contract'
-                          ? 'Search contract, PO, STO, product, supplier...'
-                          : viewMode === 'by_transporter'
-                            ? 'Search transporter...'
-                            : 'Search supplier...'
-                      }
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      className="pl-10 h-10"
-                    />
-                  </div>
-                </div>
-                <div className="w-52 min-w-[180px]">
-                  <SearchableMultiSelect
-                    label="Mode"
-                    options={[...OIL_LOSS_MODE_FILTER_OPTIONS]}
-                    selected={selectedModes}
-                    onChange={setSelectedModes}
-                    placeholder="All modes"
-                    emptyMessage="SEA, LAND, MIX"
-                  />
-                </div>
-              </div>
-
-              <PerformanceScopeFilters
-                hideGroupPlantFilter={false}
-                incotermOptions={availableIncoterms}
-                selectedIncoterms={selectedIncoterms}
-                onIncotermsChange={setSelectedIncoterms}
-                showProductFilter
-                productOptions={availableProducts}
-                selectedProducts={selectedProducts}
-                onProductsChange={handleProductsChange}
-                groupPlantOptions={availableGroupPlants}
-                selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={handleGroupPlantsChange}
-                dateFrom={dateFrom}
-                dateTo={dateTo}
-                onDateFromChange={setDateFrom}
-                onDateToChange={setDateTo}
-                showDateRange={false}
-                incotermEmptyMessage="Loading incoterms..."
-                productEmptyMessage="Loading products..."
-                groupPlantPlaceholder="Select group plant(s)"
-                groupPlantEmptyMessage="No group plants"
-              />
-
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
-                  <span className="font-medium text-gray-700">Period range:</span>
-                  <span className="tabular-nums">
-                    {formatShortDate(globalPeriodMeta.dateFrom)} — {formatShortDate(globalPeriodMeta.dateTo)}
-                  </span>
-                  {hasActiveOilLossFilters ? (
-                    <Button
-                      type="button"
-                      onClick={clearOilLossFilters}
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-500"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
         <Card>
           <CardHeader className="space-y-3">
@@ -2211,10 +2128,32 @@ export default function OilLossPage() {
                       className={cn(
                         COMPACT_OPERATIONAL_TABLE_CLASS,
                         COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
-                        (viewMode === 'by_transporter' || viewMode === 'by_supplier') &&
-                          'klip-compact-table--intrinsic-token-cols',
+                        'klip-compact-table--perf-narrow-cols',
                       )}
                     >
+                      <colgroup>
+                        {visibleColumns.map((col) => {
+                          const widthPx =
+                            viewMode === 'by_transporter'
+                              ? oilLossByTransporterTableColumnWidthPx(col.id, col.label, {
+                                  hasFormulaHelp: Boolean(col.formulaHelp),
+                                })
+                              : viewMode === 'by_supplier'
+                                ? oilLossBySupplierTableColumnWidthPx(col.id, col.label, {
+                                    hasFormulaHelp: Boolean(col.formulaHelp),
+                                  })
+                                : oilLossAllContractTableColumnWidthPx(col.id, col.label, {
+                                    hasFormulaHelp: Boolean(col.formulaHelp),
+                                  })
+                          return (
+                            <col
+                              key={col.id}
+                              style={{ width: compactTableColWidthCss(widthPx) }}
+                            />
+                          )
+                        })}
+                        <col style={{ width: compactTableColWidthCss(COMPACT_TABLE_ACTIONS_COL_WIDTH_PX) }} />
+                      </colgroup>
                       <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
                           {visibleColumns.map((col) => {
@@ -2256,6 +2195,16 @@ export default function OilLossPage() {
                               </th>
                             )
                           })}
+                          <th
+                            scope="col"
+                            className={cn(
+                              COMPACT_TABLE_ACTIONS_HEADER_CLASS,
+                              'sticky top-0 z-20 bg-gray-50',
+                              CONTRACT_PERF_TABLE_CELL_PAD,
+                            )}
+                          >
+                            Actions
+                          </th>
                         </tr>
                       </thead>
                       <tbody
@@ -2265,20 +2214,18 @@ export default function OilLossPage() {
                       >
                         {(loading || dataFetching) && rows.length === 0 ? (
                           <TableInitialLoadPlaceholder
-                            colSpan={visibleColumns.length || 1}
+                            colSpan={visibleColumns.length + 1 || 1}
                             icon={Droplets}
                           />
                         ) : !dataFetching && !viewTransitionLoading && filteredRows.length === 0 ? (
                           <tr className="bg-white">
                             <td
-                              colSpan={visibleColumns.length || 1}
+                              colSpan={visibleColumns.length + 1 || 1}
                               className="px-4 py-10 text-center text-gray-500"
                             >
                               <Droplets className="h-16 w-16 text-gray-400 mx-auto mb-4" />
                               <p className="font-medium text-gray-700">No Data Available</p>
-                              {search && (
-                                <p className="text-sm mt-2">Try adjusting your search or filter criteria</p>
-                              )}
+                              <p className="text-sm mt-2">Try adjusting your filter criteria</p>
                             </td>
                           </tr>
                         ) : (
@@ -2287,25 +2234,34 @@ export default function OilLossPage() {
                             return (
                               <tr key={row.id} className={stripeClass}>
                                 {visibleColumns.map((col) => {
-                                  const opColClass = operationalTableColumnClass(
-                                    getOperationalColumnLayout(operationalTableType, col.id),
-                                  )
-                                  return (
-                                    <td
-                                      key={col.id}
-                                      className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
-                                    >
-                                      <div
-                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}
-                                      >
-                                        {col.id === 'transporter' && viewMode === 'by_transporter' ? (
+                                  const layout = getOperationalColumnLayout(operationalTableType, col.id)
+                                  const opColClass = operationalTableColumnClass(layout)
+                                  const isLinkCell =
+                                    (col.id === 'transporter' && viewMode === 'by_transporter') ||
+                                    (col.id === 'supplier' && viewMode === 'by_supplier')
+                                  const useTruncateTooltip =
+                                    !isLinkCell &&
+                                    shouldApplyOperationalTruncateTooltip(
+                                      col.id,
+                                      layout,
+                                      OIL_LOSS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                    )
+                                  const truncateTooltip = useTruncateTooltip
+                                    ? operationalRowFieldTooltipText(
+                                        col.id,
+                                        row as unknown as Record<string, unknown>,
+                                      )
+                                    : null
+                                  const cellContent =
+                                    col.id === 'transporter' && viewMode === 'by_transporter' ? (
                                           (() => {
                                             const transporterRow = row as OilLossByTransporterRow
                                             const name = formatOperationalTableTextDisplay(transporterRow.transporter)
                                             return (
                                               <button
                                                 type="button"
-                                                className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                                className="block w-full min-w-0 truncate text-left text-sm text-blue-700 hover:text-blue-900 hover:underline"
+                                                title={name === '-' ? undefined : name}
                                                 onClick={(e) => {
                                                   e.stopPropagation()
                                                   openTransporterModal(transporterRow)
@@ -2322,7 +2278,8 @@ export default function OilLossPage() {
                                             return (
                                               <button
                                                 type="button"
-                                                className="block w-max max-w-none whitespace-nowrap text-left text-sm font-medium text-blue-700 hover:text-blue-900 hover:underline"
+                                                className="block w-full min-w-0 truncate text-left text-sm text-blue-700 hover:text-blue-900 hover:underline"
+                                                title={name === '-' ? undefined : name}
                                                 onClick={(e) => {
                                                   e.stopPropagation()
                                                   openSupplierModal(supplierRow)
@@ -2334,11 +2291,55 @@ export default function OilLossPage() {
                                           })()
                                         ) : (
                                           col.render(row)
+                                        )
+                                  return (
+                                    <td
+                                      key={col.id}
+                                      className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${opColClass} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass}`}
+                                    >
+                                      <div
+                                        className={`${COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS} ${CONTRACT_PERF_TABLE_ROW_MIN_H}`}
+                                      >
+                                        {useTruncateTooltip ? (
+                                          <ContractPerfTruncatedCell tooltip={truncateTooltip} className="w-full">
+                                            {cellContent}
+                                          </ContractPerfTruncatedCell>
+                                        ) : (
+                                          cellContent
                                         )}
                                       </div>
                                     </td>
                                   )
                                 })}
+                                <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    {(() => {
+                                      const contractNumber = resolveOilLossRowContractNumber(row)
+                                      const requestKey = `${row.id}:${contractNumber}`
+                                      const isOpening = openingContractKey === requestKey
+                                      return (
+                                        <Button
+                                          variant="outline"
+                                          size="icon"
+                                          disabled={!contractNumber || isOpening}
+                                          onClick={() => void openContractDetailFromRow(row)}
+                                          title={
+                                            contractNumber
+                                              ? 'View Contract'
+                                              : 'Contract number unavailable'
+                                          }
+                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                        >
+                                          {isOpening ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                          ) : (
+                                            <Eye className="h-4 w-4" />
+                                          )}
+                                        </Button>
+                                      )
+                                    })()}
+                                  </div>
+                                </td>
                               </tr>
                             )
                           })
@@ -2396,10 +2397,10 @@ export default function OilLossPage() {
 
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
-                    ? 'Aggregated by contract. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
+                    ? 'Aggregated by contract. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
                     : viewMode === 'by_transporter'
-                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
-                      : 'Aggregated by supplier. Qty Delivery & Qty Receive from SAP Data; SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
+                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
+                      : 'Aggregated by supplier. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
                 </p>
               </div>
           </CardContent>
@@ -2413,6 +2414,11 @@ export default function OilLossPage() {
           }}
           selection={selectedGroupData}
           sourceRows={groupHistorySourceRows}
+        />
+
+        <ContractDetailModal
+          contract={selectedContract}
+          onClose={() => setSelectedContract(null)}
         />
       </div>
     </Layout>

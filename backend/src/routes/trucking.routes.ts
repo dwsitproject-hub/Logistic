@@ -2,6 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import { authenticateToken } from '../middleware/auth';
 import { auditLog } from '../middleware/audit';
+import { blockWhenWithdrawn } from '../middleware/sapPresenceGuard';
+import { sapImportInFlightGuard } from '../middleware/sapImportInFlightGuard';
 import {
   getTruckingRealization,
   updateTruckingRealization,
@@ -15,6 +17,7 @@ import {
   getTruckingOperations,
   getTruckingOperationById,
   createTruckingOperation,
+  ensureUnplannedTruckingOps,
   validateContractNumber,
   updateTruckingOperation,
   getLandOpenContractSuggestions,
@@ -26,6 +29,7 @@ import {
   bulkCreateTruckingOperations,
   bulkUploadUnplannedPlanning,
   bulkUploadPlannedPlanning,
+  bulkUploadCombinedDailyPlanning,
   downloadCargoReadinessTemplate,
   bulkUpdateCargoReadiness,
   getTruckingActivityLog,
@@ -67,19 +71,28 @@ router.get('/validate/contract', validateContractNumber);
 // Create trucking operation
 router.post('/', auditLog('CREATE', 'TRUCKING_OPERATION'), createTruckingOperation);
 
+// Materialize UNPLANNED ops for open-PO backlog (Download Template prep)
+router.post(
+  '/ensure-unplanned-ops',
+  auditLog('CREATE', 'TRUCKING_OPERATION'),
+  ensureUnplannedTruckingOps,
+);
+
 // Bulk create trucking operations from CSV
 router.get('/bulk-create/template', downloadBulkCreateTruckingTemplate);
 router.post(
   '/bulk-create',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('CREATE', 'TRUCKING_OPERATION'),
   bulkCreateTruckingOperations,
 );
 
-// Unplanned view-table XLSX — upsert daily qty; create Operation ID only when PO has none yet
+// Unplanned / Planned view-table XLSX — Status informational; route by PO state
 router.post(
   '/unplanned-planning/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadUnplannedPlanning,
 );
@@ -87,8 +100,17 @@ router.post(
 router.post(
   '/planned-planning/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadPlannedPlanning,
+);
+
+router.post(
+  '/daily-planning/bulk-upload',
+  planningUpload.single('file'),
+  sapImportInFlightGuard,
+  auditLog('UPDATE', 'TRUCKING_OPERATION'),
+  bulkUploadCombinedDailyPlanning,
 );
 
 // Bulk update cargo readiness date
@@ -105,6 +127,7 @@ router.get('/daily-planning-deliverables/template', downloadDailyPlanningDeliver
 router.post(
   '/daily-planning-deliverables/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadDailyPlanningDeliverables,
 );
@@ -115,6 +138,7 @@ router.get('/daily-actuals/template', downloadDailyActualsTemplate);
 router.post(
   '/daily-actuals/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadDailyActuals,
 );
@@ -122,6 +146,7 @@ router.post(
 router.post(
   '/wb-rekap/bulk-upload',
   planningUpload.single('file'),
+  sapImportInFlightGuard,
   auditLog('UPDATE', 'TRUCKING_OPERATION'),
   bulkUploadWbRekap,
 );
@@ -131,8 +156,8 @@ router.get('/daily-actuals/calendar', getTruckingDailyActualsCalendar);
 // Activity log (before generic :id route)
 router.get('/:truckingId/activity-log', getTruckingActivityLog);
 
-router.put('/:id/daily-planning-deliverables', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
-router.put('/:id/daily-actuals', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyActuals);
+router.put('/:id/daily-planning-deliverables', blockWhenWithdrawn('trucking'), auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyDeliverables);
+router.put('/:id/daily-actuals', blockWhenWithdrawn('trucking'), auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingDailyActuals);
 router.get('/:id/realization', getTruckingRealization);
 router.put('/:id/realization', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingRealization);
 
@@ -140,6 +165,6 @@ router.put('/:id/realization', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateT
 router.get('/:id', getTruckingOperationById);
 
 // Update trucking operation
-router.put('/:id', auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingOperation);
+router.put('/:id', blockWhenWithdrawn('trucking'), auditLog('UPDATE', 'TRUCKING_OPERATION'), updateTruckingOperation);
 
 export default router;

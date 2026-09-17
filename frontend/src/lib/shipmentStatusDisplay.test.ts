@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
 import {
   formatShipmentStatusLabel,
+  shipmentStatusBadgeClass,
+  shipmentStatusLabelLines,
   SHIPMENT_STATUS_DISPLAY_LABELS,
 } from './shipmentStatusDisplay'
 
@@ -26,5 +27,29 @@ describe('formatShipmentStatusLabel', () => {
     for (const [key, label] of Object.entries(SHIPMENT_STATUS_DISPLAY_LABELS)) {
       expect(formatShipmentStatusLabel(key)).toBe(label)
     }
+  })
+})
+
+describe('shipmentStatusBadgeClass', () => {
+  it('uses purple for SAILED and legacy IN_TRANSIT (Sailed label)', () => {
+    expect(shipmentStatusBadgeClass('SAILED')).toContain('purple')
+    expect(shipmentStatusBadgeClass('IN_TRANSIT')).toContain('purple')
+    expect(shipmentStatusBadgeClass('IN_TRANSIT')).toBe(shipmentStatusBadgeClass('SAILED'))
+  })
+
+  it('maps other legacy keys to the same chips as their modern equivalents', () => {
+    expect(shipmentStatusBadgeClass('IN_PROGRESS')).toBe(shipmentStatusBadgeClass('ARRIVED_LP'))
+    expect(shipmentStatusBadgeClass('ARRIVED')).toBe(shipmentStatusBadgeClass('ARRIVED_DP'))
+  })
+})
+
+describe('shipmentStatusLabelLines', () => {
+  it('splits Completed Loading into two lines for narrow columns', () => {
+    expect(shipmentStatusLabelLines('COMPLETED_LOADING')).toEqual(['Completed', 'Loading'])
+  })
+
+  it('keeps other statuses as a single line', () => {
+    expect(shipmentStatusLabelLines('LOADING')).toEqual(['Loading'])
+    expect(shipmentStatusLabelLines('ARRIVED_LP')).toEqual(['Arrived LP'])
   })
 })

@@ -1,7 +1,6 @@
 import { Response } from 'express';
 import { query } from '../database/connection';
 import {
-  diffCalendarDays,
   computeLateIndicatorText,
 } from '../utils/calendarDays';
 import { AuthRequest } from '../middleware/auth';
@@ -11,60 +10,147 @@ import {
   appendGlobalSearchBase,
   parseColumnFiltersQuery,
 } from '../utils/contractListFilters';
+import {
+  InvalidDateInputError,
+  likeContainsPattern,
+  parseOptionalStrictDateRange,
+  sqlIlikeParam,
+} from '../utils/strictDateInput';
 import { buildContractsListOuterSql } from './contractsListOuterSql';
-import { buildContractsListBaseCycleFieldSelectSql } from '../utils/contractsListCycleSql';
-import { buildQtyMoveCte, sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import {
+  buildContractsListBaseCycleFieldSelectSql,
+  sqlHasCycleCompletionDate,
+} from '../utils/contractsListCycleSql';
+import {
+  compareContractsListSortRows,
+  resolveContractsListSort,
+} from '../utils/contractsListSort';
+import { sqlContractGlobalOutstandingExpr } from './contractsQtyMoveSql';
+import { parsePresenceFilter, sqlPresenceListFilter } from '../utils/sapPresenceSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
-import { resolveContractsLatestSpdCte } from '../services/contractLatestSpdSnapshot.service';
 import {
-  resolveContractActualQtySubtractedTs,
+  isContractLatestSpdSnapshotFresh,
+  resolveContractsLatestSpdCte,
+} from '../services/contractLatestSpdSnapshot.service';
+import {
+  CONTRACT_PERFORMANCE_SNAPSHOT_TABLE,
+  isContractPerformanceSnapshotFresh,
+} from '../services/contractPerformanceSnapshot.service';
+import {
   sqlContractOutstandingSignedExpr,
   sqlIncotermQuantityDeliveryCase,
+  sqlQtyMoveJoinIncotermDelivery,
   sqlTransportModeFromContractAndJson,
 } from '../utils/sapIncotermMetrics';
-import { appendContractPerfSourceTypeFilter, B2B_CHILD_EXCLUSION_SQL } from './contractSqlFragments';
-import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
-import { isTruckingPageIncoterm, contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import { sqlLastAtaVesselCompleteDischargeForContract } from '../utils/contractsListCycleSql';
+import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from './contractSqlFragments';
+import { filterContractUpdatesForRole } from '../utils/contractUpdateFields';
 import {
+  applyCargoReadinessKlipEditFlag,
+  classifyCargoReadinessExcelContract,
+  CARGO_READINESS_KLIP_SKIP_REASON,
+} from '../utils/cargoReadinessKlipProtect';
+import { ttlMemo } from '../utils/ttlMemo';
+import { registerListCacheInvalidator } from '../utils/listCacheRegistry';
+import { parsePlanningSheetToMatrix, toIsoDate10FromCell } from '../utils/planningSheetDate';
+import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
+import { resolveContractStoInformationLogisticsIncludes } from '../utils/contractStoInformationLogisticsScope';
+import { sqlContractDetailsTruckingOpVisible } from '../utils/truckingOperationUniqueness';
+import {
+  TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG,
+  sqlTruckingResolvedDeliveryQty,
+  sqlTruckingResolvedReceiveQty,
+  truckingRowOutstandingQtyKg,
+} from '../utils/truckingQuantitySql';
+import {
+  sqlShipmentResolvedDeliveryKg,
+  sqlShipmentResolvedReceiveKg,
+} from '../utils/shipmentManualQtyResolveSql';
+import {
+  computeClosedCashCycleDays,
+  computeClosedDpCycleDays,
+  computeClosedLogCycleDays,
+  computeClosedTradeCycleDays,
   computeOpenCashCycleDays,
   computeOpenDpCycleDays,
   computeOpenLogCycleDays,
+  resolveCycleCompletionDate,
   resolveSapDpCalendarDate,
   resolveSapPayoffCalendarDate,
   computePerfTradeCycleDaysForRow,
   isContractIncludedInPerfDrilldownTreeWithComputed,
   isContractPerfOnTimeTradeCycle,
   runLatePerformance,
+  resolveOpenPerfOutstandingQtyKg,
   sqlEffectiveDeliveryEndPresent,
+  sqlEffectiveDeliveryEndDateExpr,
+  parseCommaSeparatedQuery,
 } from '../services/latePerformance.service';
-import { appendGroupPlantFilter, groupPlantExpr } from '../utils/groupPlantSql';
-import { appendContractPerfProductSubstringSql } from '../utils/contractPerfProductFilterSql';
+import {
+  appendRegionSiteFilter,
+  filterRegionSiteOptionValues,
+  REGION_SITE_FILTER_OPTIONS_SQL,
+  sqlRegionSiteRawFromJsonAndB2b,
+} from '../utils/regionSiteSql';
+import {
+  sqlB2bEndingBuyerAgg,
+  sqlB2bEndingCompanyAgg,
+  sqlB2bEndingPlantCodeAgg,
+  sqlB2bEndingUnloadExpr,
+  sqlB2bOriginEndingChildLateralJoin,
+} from '../utils/b2bOriginEndingSql';
+import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
 import { toSapDisplayNumber } from '../utils/sapDisplayNumber';
 import {
+  CONTRACT_REAL_STO_KEYS_SQL,
   CONTRACT_SAP_ONLY_STOS_SQL,
   SHIPMENT_SAP_STO_DETAIL_SQL,
   SPD_EFFECTIVE_STO_SQL,
   TRUCKING_SAP_STO_DETAIL_SQL,
+  sqlContractStoListShipmentMatchPred,
+  sqlContractStoListShipmentMatchRank,
+  sqlSapQtyDeliveredForStoKeyExpr,
   sqlSapQtyDeliveredKgFromSpd,
+  sqlSapQtyReceiveForStoKeyExpr,
+  sqlSapStoQtyForContractPoExpr,
 } from '../utils/contractLogisticsStoDetailSql';
 import {
   resolveContractLogisticsOperationId,
   resolveContractLogisticsStoNumber,
   resolveContractLogisticsStoStatus,
+  summarizeContractLogisticsStoQty,
 } from '../utils/contractLogisticsStoDisplay';
-import { sqlContractImportStatusExpr, sqlContractImportStatusIsClosedExpr, sqlContractImportStatusIsOpenExpr, sqlContractListImportStatusAggExpr, normalizeContractDeliveryStatusForDisplay } from '../utils/contractDeliveryStatus';
 import {
-  sqlMaxTruckingRealizationEndForContract,
-  sqlSapTruckingLastReceiveDateForLookupKeys,
-  sqlSapTruckingLastReceiveDateForStoKey,
+  sqlContractImportStatusExpr,
+  sqlContractImportStatusForStoExpr,
+  sqlContractImportStatusIsClosedExpr,
+  sqlContractEffectivelyDoneExpr,
+  resolveContractEffectiveStatusText,
+  sqlContractImportStatusIsOpenExpr,
+  sqlContractListImportStatusAggExpr,
+  sqlContractListGrStoStatusAggExpr,
+  sqlContractPoGrStoStatusExpr,
+  normalizeContractDeliveryStatusForDisplay,
+  sqlIsContractSapClosedExpr,
+  sqlIsContractSapClosedForStoExpr,
+} from '../utils/contractDeliveryStatus';
+import {
+  sqlMaxTruckingLastReceiveDateForContract,
+  sqlMaxTruckingWbActualsDateForContract,
   sqlSapTruckingStartReceiveDateForStoKey,
   sqlSapTruckingStartReceiveDateForLookupKeys,
+  sqlSapTruckingLastReceiveDateForStoKey,
+  sqlStoTruckingLastReceiveDate,
+  sqlStoTruckingLastReceiveDateForLookupKeys,
 } from '../utils/truckingSapDates';
 import { TRUCKING_REALIZATIONS_JOIN } from '../utils/truckingRealizationSql';
+import { SQL_B2B_PARTIES_FOR_ORIGIN_PO } from '../utils/b2bPartiesForContractSql';
+import { resolveStoListMilestoneDates } from '../utils/contractStoListMilestoneDates';
+import { incotermsForScope, parseFilterOptionScope } from '../utils/filterOptionScopes';
 
-export { B2B_CHILD_EXCLUSION_SQL };
+export { B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL };
 
 function expandLogisticsLookupKeys(...values: (string | null | undefined)[]): string[] {
   return [
@@ -76,18 +162,142 @@ function expandLogisticsLookupKeys(...values: (string | null | undefined)[]): st
   ];
 }
 
+/*
+ * Contracts list response cache.
+ *
+ * getContracts had no caching of any kind: measured on a restore of staging, two identical
+ * back-to-back requests both cost ~5.9s, so every user paid full price on every page load
+ * forever. On a 2-vCPU host that is ~0.33 requests/second of headroom - 50 concurrent users
+ * opening Contracts once is enough on its own to saturate the box.
+ *
+ * The payload is NOT user-scoped (no req.user reference anywhere in the handler), so one cache
+ * entry per query-parameter combination is safe to share across users.
+ *
+ * TTL is deliberately short (60s, not the 5 minutes used by the shipment/trucking lists):
+ * contract write paths in this controller have not been audited for cache invalidation, so a
+ * long TTL could show a user their own edit missing. 60s still collapses a burst of concurrent
+ * readers - which is the load problem - while bounding staleness to something a user would read
+ * as "the page hadn't refreshed yet". Register with listCacheRegistry so a shipment/trucking
+ * edit clears it too.
+ *
+ * Only successful 200 responses are cached; errors must never be served from memory.
+ */
+const CONTRACTS_LIST_CACHE = new Map<string, { payload: unknown; expiresAt: number }>();
+const CONTRACTS_LIST_IN_FLIGHT = new Map<string, Promise<{ status: number; payload: unknown }>>();
+const CONTRACTS_LIST_TTL_MS = 60 * 1000;
+const CONTRACTS_LIST_MAX_ENTRIES = 60;
+
+export function invalidateContractsListCache(): void {
+  CONTRACTS_LIST_CACHE.clear();
+}
+
+registerListCacheInvalidator(invalidateContractsListCache);
+
+// Cache-buster-only params: safe to strip before building the cache key. `_ts` is appended by
+// appendContractPerformanceApiParams (frontend/src/lib/contractPerformanceFilters.ts) on every
+// Section 3 table request on the Contract Performance page specifically, to force a fresh network
+// call for React Query. Left in, every call got a unique key and the 60s CONTRACTS_LIST_CACHE /
+// CONTRACTS_LIST_IN_FLIGHT dedup below never hit for that page (the plain Contracts page's params
+// builder never adds it, so it was never affected). Stripping it here is response-preserving: the
+// underlying SQL/filters are unchanged, only which requests get treated as "the same request".
+const CACHE_BUSTER_PARAM_KEYS = new Set(['_ts']);
+
+function contractsListCacheKey(query: Record<string, unknown>): string {
+  const keys = Object.keys(query)
+    .filter((k) => !CACHE_BUSTER_PARAM_KEYS.has(k))
+    .sort();
+  const norm: Record<string, unknown> = {};
+  for (const k of keys) norm[k] = query[k];
+  return JSON.stringify(norm);
+}
+
 export const getContracts = async (req: AuthRequest, res: Response) => {
+  const cacheKey = contractsListCacheKey((req.query ?? {}) as Record<string, unknown>);
+
+  const cached = CONTRACTS_LIST_CACHE.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    res.json(cached.payload);
+    return;
+  }
+  if (cached) CONTRACTS_LIST_CACHE.delete(cacheKey);
+
+  let run = CONTRACTS_LIST_IN_FLIGHT.get(cacheKey);
+  if (!run) {
+    run = (async () => {
+      // Capture what the original handler would have sent, without changing it.
+      let status = 200;
+      let payload: unknown;
+      const capture = {
+        status(code: number) { status = code; return capture; },
+        json(body: unknown) { payload = body; return capture; },
+        send(body: unknown) { payload = body; return capture; },
+        set() { return capture; },
+        setHeader() { return capture; },
+        headersSent: false,
+      } as unknown as Response;
+      await getContractsUncached(req, capture);
+      return { status, payload };
+    })().finally(() => {
+      CONTRACTS_LIST_IN_FLIGHT.delete(cacheKey);
+    });
+    CONTRACTS_LIST_IN_FLIGHT.set(cacheKey, run);
+  }
+
+  const { status, payload } = await run;
+  if (status === 200 && payload && (payload as { success?: boolean }).success === true) {
+    CONTRACTS_LIST_CACHE.set(cacheKey, { payload, expiresAt: Date.now() + CONTRACTS_LIST_TTL_MS });
+    if (CONTRACTS_LIST_CACHE.size > CONTRACTS_LIST_MAX_ENTRIES) {
+      const oldest = [...CONTRACTS_LIST_CACHE.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0];
+      if (oldest) CONTRACTS_LIST_CACHE.delete(oldest[0]);
+    }
+  }
+  res.status(status).json(payload);
+};
+
+const getContractsUncached = async (req: AuthRequest, res: Response) => {
   try {
+    /*
+     * Validate the request before touching the database at all.
+     *
+     * ensureUserStoContractAssignmentsTable runs CREATE TABLE / ALTER TABLE / DROP CONSTRAINT /
+     * CREATE UNIQUE INDEX. In a running server that is a no-op - server.ts already ensures it at
+     * startup and an `ensured` flag short-circuits every later call - but `app.listen` is skipped
+     * when NODE_ENV=test, so each vitest process pays the whole DDL chain on its first
+     * /api/contracts request. A request carrying a malformed date paid for it and only then got
+     * its 400, which is why security.pentest's "rejects contracts dateTo with wildcard suffix"
+     * timed out at 5s under full-suite load while passing on its own.
+     *
+     * Rejecting first is right either way: a request we are going to refuse should not wait on
+     * schema work, and parseOptionalStrictDateRange needs nothing from the database.
+     */
+    const { status, supplier, buyer, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
     await ensureUserStoContractAssignmentsTable();
-    const { status, supplier, buyer, dateFrom, dateTo, outstanding, companyCode, b2bFlag, page = 1, limit = 10 } = req.query;
     const productFilter = (req.query as any).product as string | undefined;
+    const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
+    const productFilters =
+      productsQuery.length > 0
+        ? productsQuery
+        : productFilter?.trim()
+          ? [productFilter.trim()]
+          : [];
     const sourceTypeFilter = (req.query as any).sourceType as string | undefined;
-    const transportMode = (req.query as any).transportMode as string | undefined;
-    const unassigned = (req.query as any).unassigned as string | undefined; // 'sea' | 'land' | 'mix'
+    const sourceTypesQuery = parseCommaSeparatedQuery((req.query as any).sourceTypes);
+    const sourceTypeFilters =
+      sourceTypesQuery.length > 0
+        ? sourceTypesQuery
+        : sourceTypeFilter?.trim()
+          ? [sourceTypeFilter.trim()]
+          : [];
     const plant = (req.query as any).plant as string | string[] | undefined;
     const sortKeyRaw = String((req.query as any).sortKey || 'contract_date');
     const sortDirRaw = String((req.query as any).sortDir || 'desc').toLowerCase();
     const sortDir = sortDirRaw === 'asc' ? 'ASC' : 'DESC';
+    const listSort = resolveContractsListSort(sortKeyRaw);
+    const wantNodeSort = listSort.mode === 'node';
     // Allow filtering by a specific contract id (used by shipment details fallback)
     const contractIdFilter = (req.query as any).contract_id || (req.query as any).contractId || null;
     const isSingleContractLookup = Boolean(
@@ -95,17 +305,25 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     );
     const offset = (Number(page) - 1) * Number(limit);
 
-    const cycleSortKeys = new Set(['log_cycle_days', 'trade_cycle_days', 'cash_cycle_days']);
-    const wantCycleSort = cycleSortKeys.has(sortKeyRaw);
     const lateOnTimeFilterRaw = String((req.query as any).lateOnTimeFilter || 'ALL').toUpperCase();
     const wantLateFilter = lateOnTimeFilterRaw === 'LATE' || lateOnTimeFilterRaw === 'ON_TIME';
     const wantExcludeUnscheduled = String((req.query as any).excludeUnscheduled || 'false') === 'true';
-    const deferCycleFieldsToPage = !wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled;
+    const listCompact =
+      String((req.query as any).compact || '').toLowerCase() === 'true';
+    const useSqlLateFilter = wantLateFilter && !wantNodeSort;
+    const deferCycleFieldsToPage =
+      !wantNodeSort && !wantLateFilter && !wantExcludeUnscheduled && !listSort.needsCycleFields;
     const baseCycleFieldsSql = deferCycleFieldsToPage ? '' : `,${buildContractsListBaseCycleFieldSelectSql()}`;
 
     const queryParams: any[] = [];
     let paramIndex = 1;
     let contractScopeWhere = '';
+    // Withdrawn contracts (PO cancelled/deleted in SAP) stay listed by default so their
+    // history remains reachable; ?presence=present|withdrawn narrows to one or the other.
+    contractScopeWhere += sqlPresenceListFilter(
+      parsePresenceFilter((req.query as any).presence),
+      'c',
+    );
     if (contractIdFilter) {
       contractScopeWhere += ` AND c.contract_id = $${paramIndex}`;
       queryParams.push(contractIdFilter);
@@ -122,11 +340,57 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte] = await Promise.all([
-      resolveContractsQtyMoveCte('contract_scope'),
-      resolveContractsStoAggCte('contract_scope'),
-      resolveContractsLatestSpdCte('contract_scope'),
-    ]);
+    const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, cpSnapshotFresh] =
+      await Promise.all([
+        resolveContractsQtyMoveCte('contract_scope'),
+        resolveContractsStoAggCte('contract_scope'),
+        resolveContractsLatestSpdCte('contract_scope'),
+        isContractPerformanceSnapshotFresh(),
+      ]);
+
+    /*
+     * import_status and gr_sto_status_agg are the two expensive columns in `base`: 25.8KB of SQL
+     * carrying 13 correlated sap_processed_data subqueries, and 7.4KB carrying 4, both evaluated
+     * for every contract row inside the GROUP BY. Measured 2026-09-08: that is why this table's
+     * LIST and COUNT queries cost ~65s each to return 20 rows.
+     *
+     * Both answers are per contract and change only on SAP import, which is exactly when the
+     * Contract Performance snapshot is rebuilt - so read them from it. Verified rather than
+     * assumed: computing import_status both ways over the 7,898 YTD contracts gave the same value
+     * for every one of them (identical content hash), at 110ms against 14,164ms.
+     *
+     * MAX over a 1:1 join is just "that contract's value" - the snapshot holds one row per
+     * contract_id and `base` groups by contract_id.
+     *
+     * A contract absent from the snapshot yields NULL, which the status filter already treats as
+     * "SAP status unresolved" and falls back to contracts.status for. The snapshot covers every
+     * contract, so that can only be one created since the last refresh - and contracts are
+     * created by the SAP import that refreshes it.
+     */
+    const cpSnapshotJoinSql = cpSnapshotFresh
+      ? `
+        LEFT JOIN ${CONTRACT_PERFORMANCE_SNAPSHOT_TABLE} cps ON cps.contract_id = c.contract_id`
+      : '';
+    const importStatusAggSql = cpSnapshotFresh
+      ? 'MAX(cps.import_status)'
+      : sqlContractListImportStatusAggExpr('c');
+    const grStoStatusAggSql = cpSnapshotFresh
+      ? 'MAX(cps.gr_sto_status_agg)'
+      : sqlContractListGrStoStatusAggExpr('c');
+    /*
+     * plant_site (Region/Site) comes from the snapshot for the same reason, and it got materially
+     * more expensive to compute live once the Discharge Destination alias map was added: the alias
+     * CASE references the COALESCE-over-jsonb twice, so every row went from 3 jsonb reads to 6,
+     * and this is a MAX() over every contract in scope. Measured 2026-09-08 - the view table went
+     * 1,360ms -> 3,342ms on the live expression, and back under a second reading the column.
+     *
+     * The snapshot stores the value the same expression produces (its build calls the same
+     * helper), and `base.plant_site` is what the Region/Site filter matches on, so the filter
+     * follows automatically.
+     */
+    const plantSiteSql = cpSnapshotFresh
+      ? 'MAX(cps.plant_site)'
+      : `MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')})`;
 
     // contract_scope narrows contracts + sap_processed_data work when date / contract_id filters are present (default YTD on UI).
     let queryText = `
@@ -143,11 +407,15 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         SELECT
           c.contract_id,
           (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
-          MAX(c.buyer) AS buyer,
+          -- WITHDRAWN when every row of this contract's PO is gone from SAP. Surfaced so the
+          -- UI can badge the row; MIN keeps a group withdrawn only if all members are.
+          MIN(c.sap_presence) AS sap_presence,
+          MAX(c.sap_withdrawn_reason) AS sap_withdrawn_reason,
+          ${sqlB2bEndingBuyerAgg()} AS buyer,
           MAX(c.supplier) AS supplier,
           MAX(c.group_name) AS group_name,
           MAX(c.product) AS product,
-          MAX(c.company_name) AS company_name,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.unit) AS unit,
           MAX(c.contract_date) AS contract_date,
@@ -163,7 +431,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           MAX(c.contract_type) AS contract_type,
           MAX(c.logistics_classification) AS logistics_classification,
           MAX(c.po_classification) AS po_classification,
-          MAX(c.plant_code) AS plant_code,
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(${plantSiteSql}, 'Blank') AS plant_site,
           MAX(c.cargo_readiness_date) AS cargo_readiness_date,
           MAX(c.created_at) AS created_at,
           STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
@@ -172,7 +441,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           (array_agg(s.sto_numbers ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS sto_numbers_agg,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
-          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
+          ${importStatusAggSql} AS import_status,
+          ${grStoStatusAggSql} AS gr_sto_status_agg,
+          MAX(b2b_end.child_gr_sto_status) AS b2b_child_gr_sto_status,
           MAX(${sqlIncotermQuantityDeliveryCase(
             'c.incoterm',
             'qm.quantity_delivery_trucking',
@@ -185,8 +456,9 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
-        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
+        LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id${cpSnapshotJoinSql}
         WHERE 1=1
         GROUP BY c.contract_id
       ),
@@ -194,6 +466,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         SELECT * FROM base
         WHERE 1=1
         ${isSingleContractLookup ? '' : B2B_CHILD_EXCLUSION_SQL}
+        ${isSingleContractLookup ? '' : PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
     const statusNorm = typeof status === 'string' ? status.trim() : '';
@@ -201,12 +474,16 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          // Same fallback the display layer already applies (row.import_status || row.status):
+          // only kicks in when the SAP-derived status itself is unresolved (e.g. LCO/FOB contract
+          // with no STO in SAP yet), not tied to whether any SAP row exists at all. Keeps the
+          // Contract Performance drilldown card total aligned with this View table's OS sum.
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
@@ -216,20 +493,34 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     }
 
     if (supplier) {
-      queryText += ` AND base.supplier ILIKE $${paramIndex}`;
-      queryParams.push(`%${supplier}%`);
+      queryText += ` AND base.supplier ${sqlIlikeParam(paramIndex)}`;
+      queryParams.push(likeContainsPattern(String(supplier)));
       paramIndex++;
     }
 
     if (buyer) {
-      queryText += ` AND base.buyer ILIKE $${paramIndex}`;
-      queryParams.push(`%${buyer}%`);
+      queryText += ` AND base.buyer ${sqlIlikeParam(paramIndex)}`;
+      queryParams.push(likeContainsPattern(String(buyer)));
       paramIndex++;
     }
 
-    if (transportMode) {
-      queryText += ` AND UPPER(base.transport_mode) = $${paramIndex}`;
-      queryParams.push(String(transportMode).toUpperCase());
+    // Incoterm filter, pushed into the query rather than applied after the fetch.
+    //
+    // The aggregate endpoints under /late-performance already accepted `incoterms`
+    // (comma-separated) but this paginated list did not, so a caller narrowing by incoterm here
+    // got an unchanged `pagination.total` and silently filtered a partial page client-side. The
+    // singular `incoterm` is accepted too, because that is the spelling callers reach for first.
+    //
+    // Matched on `base.incoterm`, which is the same value this endpoint returns in each row, so
+    // the filter agrees with what the caller sees rather than with a differently-derived one.
+    const incotermsFilter = parseCommaSeparatedQuery(
+      (req.query as any).incoterms ?? (req.query as any).incoterm,
+    )
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+    if (incotermsFilter.length > 0) {
+      queryText += ` AND UPPER(TRIM(COALESCE(base.incoterm, ''))) = ANY($${paramIndex}::text[])`;
+      queryParams.push(incotermsFilter);
       paramIndex++;
     }
 
@@ -249,20 +540,40 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
-    if (productFilter && productFilter.trim().length > 0) {
-      queryText += ` AND COALESCE(base.product, '') ILIKE $${paramIndex}`;
-      queryParams.push(`%${productFilter.trim()}%`);
-      paramIndex++;
+    const multiProductClause = appendContractPerfProductsMultiSql(
+      productFilters.length > 1 ? productFilters : undefined,
+      'base.product',
+      paramIndex,
+    );
+    if (multiProductClause) {
+      queryText += multiProductClause.clause;
+      queryParams.push(...multiProductClause.params);
+      paramIndex = multiProductClause.nextParamIndex;
+    } else {
+      const singleProduct =
+        productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+      const productClause = appendContractPerfProductSubstringSql(singleProduct, 'base.product', paramIndex);
+      if (productClause) {
+        queryText += productClause.clause;
+        queryParams.push(productClause.param);
+        paramIndex = productClause.nextParamIndex;
+      }
     }
 
-    queryText += appendContractPerfSourceTypeFilter(sourceTypeFilter, 'base.source_type');
+    if (sourceTypeFilters.length > 1) {
+      queryText += appendContractPerfSourceTypesFilter(sourceTypeFilters, 'base.source_type');
+    } else {
+      const singleSource =
+        sourceTypeFilter?.trim() || (sourceTypeFilters.length === 1 ? sourceTypeFilters[0] : undefined);
+      queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
+    }
 
     if (outstanding === 'true') {
       queryText += ` AND (${sqlContractOutstandingSignedExpr({
         contractQtyExpr: 'base.quantity_ordered',
         incotermExpr: 'base.incoterm',
         receiveExpr: 'base.quantity_receive',
-        deliveryExpr: 'base.quantity_delivery_sap',
+        deliveryExpr: 'base.quantity_delivery',
       })}) > 0`;
     }
 
@@ -271,26 +582,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       queryText += ` AND COALESCE(base.total_sto_quantity, 0) > 0`;
     }
 
-    const effectiveTransportExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(base.transport_mode), ''), base.latest_spd_data->'contract'->>'transport_mode', base.latest_spd_data->'contract'->>'sea_land', base.latest_spd_data->'raw'->>'Sea / Land', base.latest_spd_data->'raw'->>'Sea_Land', '')))`;
-    if (unassigned === 'sea') {
-      queryText += ` AND ${effectiveTransportExpr} LIKE 'SEA%' AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)`;
-    } else if (unassigned === 'land') {
-      queryText += ` AND ${effectiveTransportExpr} LIKE 'LAND%' AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)`;
-    } else if (unassigned === 'mix') {
-      queryText += ` AND ${effectiveTransportExpr} LIKE 'MIX%' AND (
-        NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = base.id)
-        OR NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = base.id)
-      )`;
-    }
-
-    // Group Plant filter via master_plants (matches contract performance / filter-options).
+    // Region/Site filter via SAP Discharge Destination (query param plant= unchanged).
     const plantArr = Array.isArray(plant) ? plant : (plant ? [plant] : []);
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    const groupPlantFilter = appendGroupPlantFilter(
-      plants,
-      paramIndex,
-      groupPlantExpr('base.plant_code', 'base.company_name'),
-    );
+    const groupPlantFilter = appendRegionSiteFilter(plants, paramIndex, 'base.plant_site');
     queryText += groupPlantFilter.sql;
     queryParams.push(...groupPlantFilter.params);
     paramIndex = groupPlantFilter.nextIndex;
@@ -312,152 +607,188 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
     const limitParam = paramIndex;
     const offsetParam = paramIndex + 1;
 
-    const outstandingQtyExpr = sqlContractOutstandingSignedExpr({
-      contractQtyExpr: 'quantity_ordered',
-      incotermExpr: 'incoterm',
-      receiveExpr: 'quantity_receive',
-      deliveryExpr: 'quantity_delivery_sap',
-    });
-    const allowedSort: Record<string, string> = {
-      contract_date: 'contract_date::date',
-      contract_id: 'contract_id',
-      status: 'status',
-      supplier: 'supplier',
-      supplier_name: 'supplier',
-      buyer: 'buyer',
-      product: 'product',
-      group_name: 'group_name',
-      company_name: 'company_name',
-      incoterm: 'incoterm',
-      transport_mode: 'transport_mode',
-      delivery_start: 'delivery_start_date::date',
-      delivery_end: 'delivery_end_date::date',
-      delivery_start_date: 'delivery_start_date::date',
-      delivery_end_date: 'delivery_end_date::date',
-      sto_count: 'sto_count',
-      total_sto_quantity: 'total_sto_quantity',
-      outstanding_qty: outstandingQtyExpr,
-      outstanding_qty_mt: outstandingQtyExpr,
-      contract_qty: 'quantity_ordered',
-      created_at: 'created_at',
-      // computed (JS): log_cycle_days, trade_cycle_days, cash_cycle_days, dp_cycle_days
-    };
-    const sortKey = allowedSort[sortKeyRaw] ? sortKeyRaw : 'contract_date';
-    const orderExpr = allowedSort[sortKey] || 'contract_date::date';
+    const sortKey = listSort.sortKey;
+    const orderExpr = listSort.orderExpr;
 
-    // Detect cycle sort / late filter (flags computed above before base CTE).
+    // Late filter / node sort flags were computed above before the base CTE.
     // Use incoterm-aware import_status (UAT) — same as Open/Close filters and tree aggregation.
     const _statusExpr = `UPPER(TRIM(COALESCE(NULLIF(TRIM(import_status), ''), NULLIF(TRIM(status), ''), '')))`;
     const _transportExpr = `UPPER(TRIM(COALESCE(transport_mode, '')))`;
-    // A contract is "schedulable" (counted in late/ontrack tree) when:
-    //   - delivery_end_date exists, AND
-    //   - status is known, AND
-    //   - if Closed: has a completion date (LAND→last_trucking_completion_date, SEA→last_ata_vessel_complete_discharge)
-    //   - if Open/Active: always schedulable (service applies today-vs-deliveryEnd fallback)
+    // Signed outstanding kg over filtered/base columns — the same expression the outer
+    // projection later exposes AS outstanding_quantity. These conditions run against the
+    // `filtered` CTE, where that column does not exist yet (referencing it bare made
+    // every excludeUnscheduled / drilldown-Late request fail with 42703).
+    const filteredOutstandingSql = `(${sqlContractOutstandingSignedExpr({
+      contractQtyExpr: 'quantity_ordered',
+      incotermExpr: 'incoterm',
+      receiveExpr: 'quantity_receive',
+      deliveryExpr: 'quantity_delivery',
+    })})`;
+
+    // Schedulable = due-end present + known status + (Open OR completion milestone).
+    // Open LAND with no ETA uses today vs due end (Condition B); SEA Open needs ATA or ETA.
+    // Close still needs completion.
     const schedulableCondition = `
       ${sqlEffectiveDeliveryEndPresent()}
       AND ${_statusExpr} IN ('OPEN','ACTIVE','CLOSE','CLOSED','COMPLETED')
       AND (
         ${_statusExpr} IN ('OPEN','ACTIVE')
-        OR (
-          ${_statusExpr} IN ('CLOSE','CLOSED','COMPLETED') AND (
-            (${_transportExpr} LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL)
-            OR (${_transportExpr} NOT LIKE 'LAND%' AND last_ata_vessel_complete_discharge IS NOT NULL)
-          )
-        )
+        OR ${sqlHasCycleCompletionDate('transport_mode', filteredOutstandingSql)}
       )`;
 
-    // Push Late/On-Track filter into SQL when cycle sort is NOT also requested.
-    // This avoids fetching up to 10 000 rows just to filter them in Node.js.
-    // Keep late/on-time filtering in Node so it mirrors late-performance service logic
-    // (effective due-date fallback + Open Condition B when standard ETA is empty).
-    const useSqlLateFilter = false;
-
-    // SQL expression that mirrors the JS trade_cycle_days computation:
-    //   positive  = delivered / projected AFTER delivery_end_date  → LATE
-    //   negative  = on / ahead of schedule                         → ON TRACK
+    // Open Condition A/B (LAND only Condition B) share on-time threshold (trade_cycle >= 0).
+    // SEA: ATA → else ETA, or today when ETA < today; ETA null → null (no Condition B).
+    const effectiveDeliveryEndDateSql = sqlEffectiveDeliveryEndDateExpr();
+    const landOsFulfilled = `(${filteredOutstandingSql} IS NOT NULL AND ${filteredOutstandingSql}::numeric <= ${TRUCKING_OUTSTANDING_QTY_TOLERANCE_KG})`;
     const tradeCycleSqlExpr = `
       CASE
-        WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED')
-             AND delivery_end_date IS NOT NULL
+        WHEN ${_statusExpr} IN ('CLOSE', 'CLOSED', 'COMPLETED', 'OPEN', 'ACTIVE')
+             AND ${sqlEffectiveDeliveryEndPresent()}
           THEN CASE
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'LAND%' AND last_trucking_completion_date IS NOT NULL
-              THEN (last_trucking_completion_date::date - delivery_end_date::date)
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
-              THEN (last_ata_vessel_complete_discharge::date - delivery_end_date::date)
-            ELSE NULL END
-        WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
-             AND delivery_end_date IS NOT NULL
-          THEN CASE
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
-              THEN (last_trucking_daily_deliverable_date::date - delivery_end_date::date)
-            WHEN UPPER(TRIM(COALESCE(transport_mode, ''))) LIKE 'SEA%' AND last_eta_vessel_complete_discharge IS NOT NULL
-              THEN (last_eta_vessel_complete_discharge::date - delivery_end_date::date)
-            ELSE -1 END
+            WHEN ${_transportExpr} LIKE 'LAND%' AND ${landOsFulfilled} AND last_trucking_completion_date IS NOT NULL
+              THEN (last_trucking_completion_date::date - ${effectiveDeliveryEndDateSql})
+            WHEN ${_transportExpr} LIKE 'LAND%' AND ${landOsFulfilled} AND last_trucking_wb_actuals_date IS NOT NULL
+              THEN (last_trucking_wb_actuals_date::date - ${effectiveDeliveryEndDateSql})
+            WHEN ${_transportExpr} LIKE 'LAND%' AND last_trucking_daily_deliverable_date IS NOT NULL
+              THEN (last_trucking_daily_deliverable_date::date - ${effectiveDeliveryEndDateSql})
+            WHEN ${_transportExpr} LIKE 'LAND%' AND open_standard_eta_trucking IS NOT NULL
+              THEN (open_standard_eta_trucking::date - ${effectiveDeliveryEndDateSql})
+            WHEN ${_transportExpr} LIKE 'SEA%' AND last_ata_vessel_complete_discharge IS NOT NULL
+              THEN (${effectiveDeliveryEndDateSql} - last_ata_vessel_complete_discharge::date)
+            /*
+             * ETC is the only estimate: it estimates the same event ATC records. ETA at the
+             * loading port was dropped on 2026-09-17 - it is the vessel arriving to START
+             * loading. Must stay in step with resolveCycleCompletionDate: this expression drives
+             * the Late / On Time filter and sort, so a difference here shows as rows filtered by
+             * one rule and displayed with another.
+             */
+            WHEN ${_transportExpr} LIKE 'SEA%' AND last_eta_vessel_complete_discharge IS NOT NULL
+              THEN (
+                CASE
+                  WHEN last_eta_vessel_complete_discharge::date < CURRENT_DATE
+                    THEN (${effectiveDeliveryEndDateSql} - CURRENT_DATE)
+                  ELSE (${effectiveDeliveryEndDateSql} - last_eta_vessel_complete_discharge::date)
+                END
+              )
+            ELSE CASE
+              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE') AND ${_transportExpr} LIKE 'LAND%'
+                THEN (${effectiveDeliveryEndDateSql} - CURRENT_DATE)
+              ELSE NULL
+            END END
         ELSE NULL
       END`;
 
+    // Negative = Late: the completion date ran past the due date delivery end.
     const lateConditionSql = lateOnTimeFilterRaw === 'LATE'
-      ? 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql > 0'
-      : 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql <= 0';
+      ? 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql < 0'
+      : 'tc.trade_cycle_days_sql IS NOT NULL AND tc.trade_cycle_days_sql >= 0';
 
-    // When using SQL late filter: inject two extra CTEs between filtered and page.
+    /*
+     * Contract Performance hides contracts with no Region/Site, and the View table has to hide the
+     * same ones or the page contradicts itself: Section 1 and the Section 2 drilldown already drop
+     * them (loadLatePerformanceRows), so a table still listing them would show rows the cards do
+     * not count.
+     *
+     * Filtered in SQL rather than on the returned rows, because the page total and the LIMIT come
+     * from this chain - dropping rows afterwards would leave a total that disagrees with what the
+     * page shows.
+     *
+     * Its own CTE rather than a clause folded into `filtered`, so it composes with the
+     * excludeUnscheduled and late-filter stages that may or may not follow, and so a request that
+     * does not ask for it produces exactly the SQL it produced before.
+     *
+     * Uses the same expression the tree does - base.plant_site is
+     * COALESCE(MAX(sqlRegionSiteRawFromJsonAndB2b('l.data')), 'Blank') in both - so the two cannot
+     * disagree about which contracts are excluded.
+     */
+    const wantRequireRegionSite = String((req.query as any).requireRegionSite || 'false') === 'true';
+    const sqlRequireRegionSiteInject = wantRequireRegionSite
+      ? `, filtered_region AS (
+           SELECT * FROM filtered
+           WHERE NULLIF(TRIM(COALESCE(plant_site, '')), '') IS NOT NULL
+             AND UPPER(TRIM(plant_site)) <> 'BLANK'
+         )`
+      : '';
+    const regionScopedSource = wantRequireRegionSite ? 'filtered_region' : 'filtered';
+
+    const schedulableSource = wantExcludeUnscheduled ? 'filtered_perf' : regionScopedSource;
+    const sqlExcludeUnscheduledInject = wantExcludeUnscheduled
+      ? `, filtered_perf AS (SELECT * FROM ${regionScopedSource} WHERE ${schedulableCondition})`
+      : '';
     const sqlLateInject = useSqlLateFilter
-      ? `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM filtered)
+      ? `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM ${schedulableSource})
          , filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql})`
       : '';
 
-    // Method 1 (Apply mode): inject CTE that mirrors the performance tree's inclusion rules.
-    // Contracts without delivery_end or Closed without completion date are excluded so that
-    // Section 3 row count equals Section 2 drilldown node count exactly.
-    const sqlExcludeUnscheduledInject = wantExcludeUnscheduled
-      ? `, filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition})`
-      : '';
+    const pageSource = useSqlLateFilter ? 'filtered_late' : schedulableSource;
 
-    const pageSource = wantExcludeUnscheduled
-      ? 'filtered_perf'
-      : useSqlLateFilter
-        ? 'filtered_late'
-        : 'filtered';
+    /** Node-side sort / late filter needs the whole filtered set, and its count up front. */
+    const needNodePostProcess = wantNodeSort || (wantLateFilter && !useSqlLateFilter);
 
+    /*
+     * Pagination total, taken in the same pass as the rows.
+     *
+     * The total used to come from a second query that rebuilt the whole CTE chain - `base`
+     * included - just to return one number. Both ran under Promise.all, so the naive reading is
+     * that the second one is free; measured 2026-09-08 it is not. Alternating, best of two:
+     * LIST alone 31,371ms against LIST+COUNT 44,425ms, and the same ~13s gap in both rounds.
+     * They contend for the same 128MB of shared_buffers while sap_processed_data alone is 160MB,
+     * so each build evicts the other's pages.
+     *
+     * A window function is evaluated before LIMIT, so this counts the whole filtered set, not the
+     * page - the same number the separate COUNT(*) produced, off the same row set.
+     *
+     * Only for the SQL-paged path. The node-post-process path needs the count *before* the list
+     * query to size its 10k cap, so it keeps the separate count.
+     */
+    const listTotalCol = needNodePostProcess ? '' : ', COUNT(*) OVER ()::int AS __list_total';
     const filteredClosedAndPage = `
       )
-      ${sqlLateInject}
+      ${sqlRequireRegionSiteInject}
       ${sqlExcludeUnscheduledInject}
+      ${sqlLateInject}
       , page AS (
-        SELECT * FROM ${pageSource}
+        SELECT *${listTotalCol} FROM ${pageSource}
         ORDER BY ${orderExpr} ${sortDir} NULLS LAST, contract_date DESC NULLS LAST, contract_id DESC
         LIMIT $${limitParam} OFFSET $${offsetParam}
       )
 `;
-    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage);
+    const listQuery = queryText + filteredClosedAndPage + buildContractsListOuterSql(deferCycleFieldsToPage, {
+      compact: listCompact,
+      includeListTotal: !needNodePostProcess,
+    });
     const listParams = [...queryParams, Number(limit), offset];
 
-    const countQuery = wantExcludeUnscheduled
-      ? `${queryText}), filtered_perf AS (SELECT * FROM filtered WHERE ${schedulableCondition}) SELECT COUNT(*)::int AS count FROM filtered_perf`
-      : useSqlLateFilter
-        ? `${queryText}), tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM filtered), filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql}) SELECT COUNT(*)::int AS count FROM filtered_late`
-        : `${queryText}) SELECT COUNT(*)::int AS count FROM filtered`;
+    let countQuery = `${queryText})`;
+    countQuery += sqlRequireRegionSiteInject;
+    if (wantExcludeUnscheduled) {
+      countQuery += `, filtered_perf AS (SELECT * FROM ${regionScopedSource} WHERE ${schedulableCondition})`;
+    }
+    const countSource = wantExcludeUnscheduled ? 'filtered_perf' : regionScopedSource;
+    if (useSqlLateFilter) {
+      countQuery += `, tc AS (SELECT *, ${tradeCycleSqlExpr} AS trade_cycle_days_sql FROM ${countSource})`;
+      countQuery += `, filtered_late AS (SELECT * FROM tc WHERE ${lateConditionSql})`;
+      countQuery += ` SELECT COUNT(*)::int AS count FROM filtered_late`;
+    } else {
+      countQuery += ` SELECT COUNT(*)::int AS count FROM ${countSource}`;
+    }
     const countParams = [...queryParams];
 
     let totalCount = 0;
     let result: any;
-    if (!wantCycleSort && !wantLateFilter && !wantExcludeUnscheduled) {
-      const [countResult, listResult] = await Promise.all([
-        query(countQuery, countParams),
-        query(listQuery, listParams),
-      ]);
-      totalCount = Number(countResult.rows[0]?.count ?? 0);
-      result = listResult;
+    if (!needNodePostProcess) {
+      /*
+       * One query, not two: the total rides along as __list_total (see listTotalCol). An empty
+       * page carries no row to read it from, and an empty filtered set is a total of 0 either way.
+       */
+      result = await query(listQuery, listParams);
+      totalCount = Number((result.rows[0] as { __list_total?: unknown } | undefined)?.__list_total ?? 0);
+      for (const row of result.rows as Record<string, unknown>[]) delete row.__list_total;
     } else {
       const countResult = await query(countQuery, countParams);
       totalCount = Number(countResult.rows[0]?.count ?? 0);
-      if (useSqlLateFilter) {
-        result = await query(listQuery, listParams);
-      } else {
-        const cap = Math.min(totalCount, 10000);
-        result = await query(listQuery, [...queryParams, cap, 0]);
-      }
+      const cap = Math.min(totalCount, 10000);
+      result = await query(listQuery, [...queryParams, cap, 0]);
     }
 
     const due = (d: unknown): Date | null => {
@@ -500,7 +831,6 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
       return null;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
 
     // Apply B2B origin company name override (in-memory) so UI sees correct company_name even before backfill runs.
     const b2bOriginPoNumbers: string[] = [];
@@ -520,13 +850,36 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
     let b2bOriginCompany: Record<string, string> = {};
     if (b2bOriginPoNumbers.length > 0) {
-      const q = `
+      /*
+       * B2B origin company override for the rows on this page.
+       *
+       * Two things used to make this the most expensive part of the request once the base was
+       * fixed - 2,114ms of a 3,589ms load, measured 2026-09-08:
+       *
+       * 1. `latest_spd` was built live: DISTINCT ON over all ~32k sap_processed_data rows,
+       *    carrying their jsonb, to get one row per contract. contract_latest_spd_snapshot holds
+       *    exactly that, one row per contract_number (18,711 rows, verified 1:1), so it is read
+       *    instead whenever it is fresh - and rebuilt live when it is not.
+       * 2. `JOIN contracts c2 ON 1=1` cross-joined every contract against every origin PO and
+       *    only then filtered on the joined latest_spd row. The filter only ever selects
+       *    contracts whose own latest_spd carries that reference PO, so joining that way round -
+       *    match latest_spd first, then its contract - picks the identical rows without the
+       *    cross product.
+       */
+      const latestSpdCte = (await isContractLatestSpdSnapshotFresh())
+        ? `
+        WITH latest_spd AS (
+          SELECT contract_number, data, spd_created_at AS created_at
+          FROM contract_latest_spd_snapshot
+        ),`
+        : `
         WITH latest_spd AS (
           SELECT DISTINCT ON (contract_number) contract_number, data, created_at
           FROM sap_processed_data
           WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
           ORDER BY contract_number, created_at DESC NULLS LAST
-        ),
+        ),`;
+      const q = `${latestSpdCte}
         origin AS (
           SELECT unnest($1::text[]) AS origin_po_number
         ),
@@ -534,18 +887,32 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
           SELECT
             o.origin_po_number,
             c2.contract_date,
+            c2.created_at,
+            c2.contract_id,
             COALESCE(NULLIF(TRIM(c2.company_name), ''), l2.data->'raw'->>'Buyer', l2.data->>'Buyer', '') AS company_name
           FROM origin o
-          JOIN contracts c2 ON 1=1
-          LEFT JOIN latest_spd l2 ON l2.contract_number = c2.contract_id
-          WHERE NULLIF(TRIM(COALESCE(l2.data->'contract'->>'contract_reference_po', l2.data->>'CONTRACT REFF PO')), '') = o.origin_po_number
+          JOIN latest_spd l2
+            ON NULLIF(TRIM(COALESCE(
+                 l2.data->'contract'->>'contract_reference_po',
+                 l2.data->>'CONTRACT REFF PO'
+               )), '') = o.origin_po_number
+          JOIN contracts c2 ON c2.contract_id = l2.contract_number
         )
         SELECT DISTINCT ON (origin_po_number)
           origin_po_number,
           company_name
         FROM children
         WHERE company_name != ''
-        ORDER BY origin_po_number, contract_date DESC NULLS LAST
+        /*
+         * created_at / contract_id break the tie deterministically. Without them this DISTINCT ON
+         * had no tiebreaker, so when two children of the same origin PO share a contract_date the
+         * winner was whichever row the plan happened to emit first - and the two children can
+         * carry different company names. Found on 3 of 574 origin POs (9251000591, 9251000602,
+         * 9251000604); the displayed name there could change on its own after a re-plan or a
+         * VACUUM. Verified: with this tiebreaker applied to both the old and the rewritten query,
+         * all 573 results match exactly.
+         */
+        ORDER BY origin_po_number, contract_date DESC NULLS LAST, created_at DESC NULLS LAST, contract_id DESC
       `;
       const r = await query(q, [b2bOriginPoNumbers]);
       b2bOriginCompany = (r.rows || []).reduce((acc: Record<string, string>, row: any) => {
@@ -558,6 +925,8 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       row.due_date_payment = due(row.due_date_payment_raw) ?? due(row.due_date_payment_fb) ?? row.due_date_payment;
       row.import_status = normalizeContractDeliveryStatusForDisplay(row.import_status || row.status) || row.import_status;
       row.status = normalizeContractDeliveryStatusForDisplay(row.status) || row.status;
+      row.gr_po_status = normalizeContractDeliveryStatusForDisplay(row.gr_po_status) || null;
+      row.gr_sto_status = normalizeContractDeliveryStatusForDisplay(row.gr_sto_status) || null;
       // DP / Payoff display: SAP raw only (payment JSON + raw columns) — no payments-table or deviation synthesis
       row.dp_date = due(row.dp_date_raw);
       row.payoff_date = due(row.payoff_date_raw);
@@ -565,7 +934,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       row.payoff_date_deviation_days = parseDeviation(row.payoff_date_deviation_raw) ?? row.payoff_date_deviation_fb ?? row.payoff_date_deviation_days;
 
       // Compute Over/Under Delivery Status for UI
-      const statusText = String(row.import_status || row.status || '').toUpperCase();
+      const statusText = resolveContractEffectiveStatusText(row);
       const outQty = typeof row.outstanding_quantity === 'number' ? row.outstanding_quantity : Number(row.outstanding_quantity) || 0;
       let overUnder: string = '-';
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
@@ -581,24 +950,16 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       }
       (row as any).over_under_delivery_status = overUnder;
 
-      // Compute Log Cycle (days) based on transport mode and status
+      // Compute Log / Trade / Cash / DP — shared completion (LAND OS≈0 gate for Last Receive/WB)
       const transport = String(row.transport_mode || '').toUpperCase();
       let logCycle: number | null = null;
       const today = new Date();
       const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-      const lastTruck = row.last_trucking_completion_date;
-      const lastAtaDischarge = row.last_ata_vessel_complete_discharge;
       const cargoReady = row.cargo_readiness_date;
 
       if (statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') {
-        if (transport.startsWith('LAND')) {
-          const d = diffInDays(cargoReady, lastTruck);
-          if (d != null) logCycle = d;
-        } else if (transport.startsWith('SEA')) {
-          const d = diffInDays(cargoReady, lastAtaDischarge);
-          if (d != null) logCycle = d;
-        }
+        logCycle = computeClosedLogCycleDays(row, transport, cargoReady);
       } else if (statusText === 'OPEN' || statusText === 'ACTIVE') {
         logCycle = computeOpenLogCycleDays(row, transport, todayMid, cargoReady);
       }
@@ -609,14 +970,7 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       const dpDate = resolveSapDpCalendarDate(row);
 
       // Trade Cycle — same rules as late-performance tree (Section 2).
-      let tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
-      if (
-        tradeCycle == null &&
-        (statusText === 'OPEN' || statusText === 'ACTIVE')
-      ) {
-        // Open + due end present but trade cycle still null → On Time (mirrors aggregateLatePerformanceRows).
-        tradeCycle = -1;
-      }
+      const tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
       (row as any).trade_cycle_days = tradeCycle;
       if (typeof tradeCycle === 'number' && !Number.isNaN(tradeCycle)) {
         (row as any).contract_perf_on_time = isContractPerfOnTimeTradeCycle(row, tradeCycle);
@@ -627,35 +981,17 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         lateOnTimeFilter: perfLateFilter,
       });
 
-      // Compute Cash Cycle (days)
-      // - Closed: keep legacy behavior (as-is)
-      // - Open: per request
-      //   LAND -> latest date from daily_deliverables - Payoff Date
-      //   SEA  -> ETA Vessel Complete Discharge - Payoff Date
       let cashCycle: number | null = null;
       if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && payoffDate) {
-        if (transport.startsWith('LAND')) {
-          const d = diffInDays(lastTruck, payoffDate);
-          if (d != null) cashCycle = d;
-        } else if (transport.startsWith('SEA')) {
-          const d = diffInDays(lastAtaDischarge, payoffDate);
-          if (d != null) cashCycle = d;
-        }
+        cashCycle = computeClosedCashCycleDays(row, transport, payoffDate);
       } else if ((statusText === 'OPEN' || statusText === 'ACTIVE') && payoffDate) {
         cashCycle = computeOpenCashCycleDays(row, transport, todayMid, payoffDate);
       }
       (row as any).cash_cycle_days = cashCycle;
 
-      // Compute DP Cycle (days) — same structure as Cash Cycle, using DP Date instead of Payoff Date
       let dpCycle: number | null = null;
       if ((statusText === 'CLOSE' || statusText === 'CLOSED' || statusText === 'COMPLETED') && dpDate) {
-        if (transport.startsWith('LAND')) {
-          const d = diffInDays(lastTruck, dpDate);
-          if (d != null) dpCycle = d;
-        } else if (transport.startsWith('SEA')) {
-          const d = diffInDays(lastAtaDischarge, dpDate);
-          if (d != null) dpCycle = d;
-        }
+        dpCycle = computeClosedDpCycleDays(row, transport, dpDate);
       } else if ((statusText === 'OPEN' || statusText === 'ACTIVE') && dpDate) {
         dpCycle = computeOpenDpCycleDays(row, transport, todayMid, dpDate);
       }
@@ -695,14 +1031,13 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
 
     let responseTotal = totalCount;
 
-    // Node-side late filter / cycle sort (10k fetch when either is active).
-    // useSqlLateFilter is already handled in SQL — skip JS late filter for that case.
+    // Node-side late filter / computed-column sort (10k fetch when either is active).
     const needNodeLateFilter = wantLateFilter && !useSqlLateFilter;
-    const needNodeSort = wantCycleSort;
-    if (needNodeLateFilter || needNodeSort || wantExcludeUnscheduled) {
+    const needNodeExcludeFilter = wantExcludeUnscheduled && !useSqlLateFilter;
+    if (needNodeLateFilter || needNodeExcludeFilter || wantNodeSort) {
       let rows = result.rows as any[];
 
-      if (needNodeLateFilter || wantExcludeUnscheduled) {
+      if (needNodeLateFilter || needNodeExcludeFilter) {
         rows = rows.filter((r: any) =>
           isContractIncludedInPerfDrilldownTreeWithComputed(r, {
             lateOnTimeFilter: wantLateFilter ? lateOnTimeFilterRaw : 'ALL',
@@ -711,25 +1046,25 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
         responseTotal = rows.length;
       }
 
-      if (needNodeSort) {
+      if (wantNodeSort) {
         const dirMul = sortDir === 'ASC' ? 1 : -1;
-        const getNum = (r: any) => (typeof r?.[sortKeyRaw] === 'number' ? r[sortKeyRaw] : null);
-        rows = [...rows].sort((a, b) => {
-          const av = getNum(a);
-          const bv = getNum(b);
-          if (av == null && bv == null) return 0;
-          if (av == null) return 1;
-          if (bv == null) return -1;
-          return (av - bv) * dirMul;
-        });
+        const today = new Date();
+        const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        rows = [...rows].sort((a, b) =>
+          compareContractsListSortRows(a, b, sortKey, dirMul, todayMid),
+        );
       }
 
       result.rows = rows.slice(offset, offset + Number(limit));
     }
 
     for (const row of result.rows) {
+      // Expose for Contract Performance / Contracts table (last date from trucking daily planning).
+      ;(row as any).last_planning_delivery_date =
+        (row as any).last_trucking_daily_deliverable_date ?? null
       delete (row as any).first_trucking_start_date;
       delete (row as any).last_trucking_completion_date;
+      delete (row as any).last_trucking_wb_actuals_date;
       delete (row as any).last_trucking_daily_deliverable_date;
       delete (row as any).first_ata_vessel_completed_loading;
       delete (row as any).last_ata_vessel_complete_discharge;
@@ -753,6 +1088,10 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error: unknown) {
+    if (error instanceof InvalidDateInputError) {
+      res.status(400).json({ success: false, error: { message: error.message } });
+      return;
+    }
     const pgCode = (error as { code?: string })?.code;
     const pgDetail = (error as { detail?: string })?.detail;
     const pgMessage = error instanceof Error ? error.message : String(error);
@@ -767,14 +1106,35 @@ export const getContracts = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const getContractFilterIncoterms = async (_req: AuthRequest, res: Response) => {
+/**
+ * Incoterm filter options, optionally narrowed to one page's domain via `?scope=`.
+ *
+ * Without a scope this is the whole `contracts` table, which is what every page used to get - so
+ * Trucking offered sea incoterms and Shipments offered land ones, selectable values that return
+ * nothing. With a scope the list is the page's domain set intersected with what the table actually
+ * holds, so an incoterm nobody has does not appear either.
+ *
+ * Blank is dropped rather than offered as a value: it was already stripped on the frontend by
+ * filterIncotermOptions, so sending it only to have it removed was noise.
+ */
+export const getContractFilterIncoterms = async (req: AuthRequest, res: Response) => {
   try {
+    const scope = parseFilterOptionScope(req.query?.scope);
+    const allowed = incotermsForScope(scope);
+    const params: unknown[] = [];
+    let scopeSql = '';
+    if (allowed) {
+      params.push(allowed as unknown as string[]);
+      scopeSql = ` AND UPPER(TRIM(incoterm)) = ANY($${params.length}::text[])`;
+    }
     const r = await query(
       `
-      SELECT DISTINCT COALESCE(NULLIF(TRIM(incoterm), ''), 'Blank') AS incoterm
+      SELECT DISTINCT UPPER(TRIM(incoterm)) AS incoterm
       FROM contracts
+      WHERE NULLIF(TRIM(incoterm), '') IS NOT NULL${scopeSql}
       ORDER BY incoterm
       `,
+      params as never[],
     );
     return res.json({ success: true, data: { incoterms: r.rows.map((x: any) => String(x.incoterm)) } });
   } catch (error) {
@@ -783,42 +1143,70 @@ export const getContractFilterIncoterms = async (_req: AuthRequest, res: Respons
   }
 };
 
-/** Contract Performance — Group Plant options from master_plants (same source as plant_site filter logic). */
+/** Operational Region/Site options = DISTINCT SAP Discharge Destination (no Blank). */
 export const getContractFilterGroupPlants = async (_req: AuthRequest, res: Response) => {
+  try {
+    const groupPlants = await ttlMemo('filter-options:region-sites', 5 * 60 * 1000, async () => {
+      const r = await query(REGION_SITE_FILTER_OPTIONS_SQL);
+      return filterRegionSiteOptionValues(
+        r.rows.map((x: { group_plant: string }) => String(x.group_plant)),
+      );
+    });
+    return res.json({
+      success: true,
+      data: { groupPlants },
+    });
+  } catch (error) {
+    logger.error('Get contract region/plant filter options error:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to fetch region/plant filter options' } });
+  }
+};
+
+/** Master Plant List group_plant values — kept for callers that still need the master dimension. Users assignment uses Region/Plant (`/filter-options/group-plants`). */
+export const getContractFilterMasterGroupPlants = async (_req: AuthRequest, res: Response) => {
   try {
     const r = await query(
       `
-      SELECT DISTINCT COALESCE(NULLIF(TRIM(group_plant), ''), 'Blank') AS group_plant
+      SELECT DISTINCT NULLIF(TRIM(group_plant), '') AS group_plant
       FROM master_plants
-      WHERE group_plant IS NOT NULL
+      WHERE NULLIF(TRIM(group_plant), '') IS NOT NULL
       ORDER BY group_plant
       `,
     );
     return res.json({
       success: true,
-      data: { groupPlants: r.rows.map((x: { group_plant: string }) => String(x.group_plant)) },
+      data: {
+        groupPlants: r.rows
+          .map((x: { group_plant: string }) => String(x.group_plant))
+          .filter((name) => name.trim() !== '' && name.toLowerCase() !== 'blank'),
+      },
     });
   } catch (error) {
-    logger.error('Get contract group plant filter options error:', error);
+    logger.error('Get master group plant filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch group plant filter options' } });
   }
 };
 
 export const getContractFilterB2bFlags = async (_req: AuthRequest, res: Response) => {
   try {
-    const r = await query(
-      `SELECT DISTINCT COALESCE(
-         NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
-         NULLIF(TRIM(spd.data->>'B2B Flag'), '')
-       ) AS b2b_flag
-       FROM sap_processed_data spd
-       WHERE COALESCE(
-         NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
-         NULLIF(TRIM(spd.data->>'B2B Flag'), '')
-       ) IS NOT NULL
-       ORDER BY b2b_flag`,
-    );
-    return res.json({ success: true, data: { b2bFlags: r.rows.map((x: any) => String(x.b2b_flag)) } });
+    // Full sap_processed_data JSONB scan for a rarely-changing dropdown list —
+    // memoized for 5 minutes (identical query, just not re-run per page load).
+    const b2bFlags = await ttlMemo('filter-options:b2b-flags', 5 * 60 * 1000, async () => {
+      const r = await query(
+        `SELECT DISTINCT COALESCE(
+           NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
+           NULLIF(TRIM(spd.data->>'B2B Flag'), '')
+         ) AS b2b_flag
+         FROM sap_processed_data spd
+         WHERE COALESCE(
+           NULLIF(TRIM(spd.data->'contract'->>'contract_type'), ''),
+           NULLIF(TRIM(spd.data->>'B2B Flag'), '')
+         ) IS NOT NULL
+         ORDER BY b2b_flag`,
+      );
+      return r.rows.map((x: any) => String(x.b2b_flag));
+    });
+    return res.json({ success: true, data: { b2bFlags } });
   } catch (error) {
     logger.error('Get contract b2b flag filter options error:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to fetch b2b flag filter options' } });
@@ -827,7 +1215,7 @@ export const getContractFilterB2bFlags = async (_req: AuthRequest, res: Response
 
 /**
  * Contract Performance: Late Performance dashboard aggregation.
- * Includes only contracts where computed trade_cycle_days > 0 (Late).
+ * Includes only contracts where computed trade_cycle_days < 0 (Late).
  * Drilldown levels: Incoterm -> Plant/Site -> Product -> Group Name.
  *
  * IMPORTANT: This endpoint aggregates across the full filtered dataset (no pagination),
@@ -843,10 +1231,12 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       status,
       supplier,
       buyer,
-      dateFrom,
-      dateTo,
       companyCode,
     } = req.query as any;
+    const { dateFrom, dateTo } = parseOptionalStrictDateRange({
+      dateFrom: (req.query as { dateFrom?: unknown }).dateFrom,
+      dateTo: (req.query as { dateTo?: unknown }).dateTo,
+    });
 
     const scope = String((req.query as any).scope ?? 'ytd').toLowerCase(); // 'ytd' | 'filtered'
     const debug = String((req.query as any).debug ?? '').toLowerCase() === '1' || String((req.query as any).debug ?? '').toLowerCase() === 'true';
@@ -856,6 +1246,21 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     const selectedIncoterms = (req.query as any).incoterms as string | undefined; // comma-separated
     const b2bFlag = (req.query as any).b2bFlag as string | undefined;
     const productFilter = (req.query as any).product as string | undefined;
+    const productsQuery = parseCommaSeparatedQuery((req.query as any).products);
+    const productFilters =
+      productsQuery.length > 0
+        ? productsQuery
+        : productFilter?.trim()
+          ? [productFilter.trim()]
+          : [];
+    const sourceTypeFilter = (req.query as any).sourceType as string | undefined;
+    const sourceTypesQuery = parseCommaSeparatedQuery((req.query as any).sourceTypes);
+    const sourceTypeFilters =
+      sourceTypesQuery.length > 0
+        ? sourceTypesQuery
+        : sourceTypeFilter?.trim()
+          ? [sourceTypeFilter.trim()]
+          : [];
 
     const now = new Date();
     const y = now.getFullYear();
@@ -907,8 +1312,9 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
           MAX(c.quantity_ordered) AS quantity_ordered,
           MAX(c.transport_mode) AS transport_mode,
           MAX(c.status) AS status,
-          MAX(c.plant_code) AS plant_code,
-          MAX(c.company_name) AS company_name,
+          ${sqlB2bEndingPlantCodeAgg()} AS plant_code,
+          COALESCE(MAX(${sqlRegionSiteRawFromJsonAndB2b('l.data')}), 'Blank') AS plant_site,
+          ${sqlB2bEndingCompanyAgg()} AS company_name,
           -- Align with GET /contracts: incoterm-aware SAP import status (GR PO vs GR STO).
           ${sqlContractListImportStatusAggExpr('c')} AS import_status,
           MAX(c.delivery_end_date) AS delivery_end_date,
@@ -922,32 +1328,57 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
             sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
           )}) AS quantity_delivery,
           (array_agg(qm.quantity_receive ORDER BY qm.quantity_receive DESC NULLS LAST))[1] AS quantity_receive,
-          -- For Trade Cycle (LAND open): latest date in daily_deliverables JSONB
-          (
-            SELECT MAX((dd->>'date')::date)
-            FROM trucking_operations tdd
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd
-            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-              AND (dd->>'date') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
-          ) AS last_trucking_daily_deliverable_date,
-          -- For Log/Trade Cycle calculation (LAND): latest trucking realization (SAP AW — not planning columns)
-          ${sqlMaxTruckingRealizationEndForContract(
-            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
-            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
-          )} AS last_trucking_completion_date,
-          -- For Trade Cycle (SEA closed): latest ATA discharge complete
+          (array_agg(qm.quantity_delivery ORDER BY qm.quantity_delivery DESC NULLS LAST))[1] AS quantity_delivery_sap,
+          MAX(${sqlContractOutstandingSignedExpr({
+            contractQtyExpr: 'c.quantity_ordered',
+            incotermExpr: 'c.incoterm',
+            receiveExpr: 'qm.quantity_receive',
+            deliveryExpr: sqlQtyMoveJoinIncotermDelivery(
+              'c.incoterm',
+              'qm',
+              sqlTransportModeFromContractAndJson('c.transport_mode', 'l.data'),
+            ),
+          })}) AS outstanding_quantity,
+          -- ETA Trucking Completion = last Daily Planning date
           (
             SELECT MAX(
               COALESCE(
-                s2.ata_discharge_complete::date,
-                s2.arrival_date::date,
-                s2.eta_discharge_complete::date
+                tdd.last_daily_deliverable_date::date,
+                (
+                  SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+                  FROM jsonb_array_elements(COALESCE(tdd.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+                  WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+                )
+              )
+            )
+            FROM trucking_operations tdd
+            WHERE tdd.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
+          ) AS last_trucking_daily_deliverable_date,
+          ${sqlMaxTruckingLastReceiveDateForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+            '(array_agg(c.contract_id ORDER BY c.created_at DESC))[1]',
+          )} AS last_trucking_completion_date,
+          ${sqlMaxTruckingWbActualsDateForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+          )} AS last_trucking_wb_actuals_date,
+          ${sqlLastAtaVesselCompleteDischargeForContract(
+            '(array_agg(c.id ORDER BY c.created_at DESC))[1]',
+          )} AS last_ata_vessel_complete_discharge,
+          (
+            SELECT MAX(
+              (
+                SELECT vlp.eta_vessel_arrival::date
+                FROM vessel_loading_ports vlp
+                WHERE vlp.shipment_id = s2.id
+                  AND COALESCE(vlp.is_discharge_port, false) = false
+                ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.updated_at DESC NULLS LAST, vlp.created_at DESC NULLS LAST
+                LIMIT 1
               )
             )
             FROM shipments s2
             WHERE s2.contract_id = (array_agg(c.id ORDER BY c.created_at DESC))[1]
-          ) AS last_ata_vessel_complete_discharge,
-          -- For Trade Cycle (SEA open): latest ETA vessel complete discharge
+          ) AS open_standard_eta_vessel_loading,
+          -- For Trade Cycle (SEA open legacy): latest ETA vessel complete discharge
           (
             SELECT MAX(
               COALESCE(
@@ -968,39 +1399,18 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         FROM contract_scope cs
         INNER JOIN contracts c ON c.contract_id = cs.contract_id
         LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
+        ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
         LEFT JOIN sto_agg s ON s.contract_number = c.contract_id
         LEFT JOIN qty_move qm ON qm.contract_number = c.contract_id
         WHERE 1=1
         GROUP BY c.contract_id
       )
       SELECT
-        base.*,
-        COALESCE(
-          NULLIF(TRIM(pnc.group_plant), ''),
-          NULLIF(TRIM(pna.group_plant), ''),
-          'Blank'
-        ) AS plant_site
+        base.*
       FROM base
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-          AND NULLIF(TRIM(base.company_name), '') IS NOT NULL
-          AND TRIM(UPPER(COALESCE(mp.company_name, ''))) = TRIM(UPPER(COALESCE(base.company_name, '')))
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pnc ON TRUE
-      LEFT JOIN LATERAL (
-        SELECT mp.group_plant, mp.plant_name
-        FROM master_plants mp
-        WHERE TRIM(UPPER(COALESCE(mp.plant_code, ''))) = TRIM(UPPER(COALESCE(base.plant_code, '')))
-          AND NULLIF(TRIM(mp.plant_name), '') IS NOT NULL
-        ORDER BY mp.updated_at DESC NULLS LAST
-        LIMIT 1
-      ) pna ON TRUE
       WHERE 1=1
       ${B2B_CHILD_EXCLUSION_SQL}
+      ${PO_PLACEHOLDER_EXCLUSION_SQL}
     `;
 
     const statusNorm = scope === 'filtered' && typeof status === 'string' ? status.trim() : '';
@@ -1008,12 +1418,22 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       if (statusNorm === 'Open' || statusNorm === 'ACTIVE') {
         queryText += ` AND ${sqlContractImportStatusIsOpenExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'OPEN\', \'ACTIVE\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+            stoCountExpr: 'base.sto_count',
+          }),
         )}`;
       } else if (statusNorm === 'Close' || statusNorm === 'CLOSE') {
         queryText += ` AND ${sqlContractImportStatusIsClosedExpr(
           'base.import_status',
-          'base.latest_spd_data IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          'base.import_status IS NULL AND UPPER(base.status) IN (\'CLOSE\', \'COMPLETED\', \'CLOSED\')',
+          sqlContractEffectivelyDoneExpr({
+            outstandingKgExpr: 'base.outstanding_quantity',
+            atcExpr: 'base.last_ata_vessel_complete_discharge',
+            stoCountExpr: 'base.sto_count',
+          }),
         )}`;
       } else {
         queryText += ` AND (base.status = $${paramIndex} OR base.import_status = $${paramIndex})`;
@@ -1023,13 +1443,13 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
     }
 
     if (scope === 'filtered' && supplier) {
-      queryText += ` AND (base.latest_spd_data->'raw'->>'Supplier' ILIKE $${paramIndex} OR base.latest_spd_data->>'Supplier' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
-      queryParams.push(`%${supplier}%`);
+      queryText += ` AND (base.latest_spd_data->'raw'->>'Supplier' ${sqlIlikeParam(paramIndex)} OR base.latest_spd_data->>'Supplier' ${sqlIlikeParam(paramIndex)} OR $${paramIndex}::text IS NULL)`;
+      queryParams.push(likeContainsPattern(String(supplier)));
       paramIndex++;
     }
     if (scope === 'filtered' && buyer) {
-      queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ILIKE $${paramIndex} OR base.latest_spd_data->>'Buyer' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
-      queryParams.push(`%${buyer}%`);
+      queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ${sqlIlikeParam(paramIndex)} OR base.latest_spd_data->>'Buyer' ${sqlIlikeParam(paramIndex)} OR $${paramIndex}::text IS NULL)`;
+      queryParams.push(likeContainsPattern(String(buyer)));
       paramIndex++;
     }
     if (scope === 'filtered' && companyCode) {
@@ -1054,30 +1474,40 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const productClause = appendContractPerfProductSubstringSql(productFilter, 'base.product', paramIndex);
-    if (productClause) {
-      queryText += productClause.clause;
-      queryParams.push(productClause.param);
-      paramIndex = productClause.nextParamIndex;
+    const multiProductClauseLegacy = appendContractPerfProductsMultiSql(
+      productFilters.length > 1 ? productFilters : undefined,
+      'base.product',
+      paramIndex,
+    );
+    if (multiProductClauseLegacy) {
+      queryText += multiProductClauseLegacy.clause;
+      queryParams.push(...multiProductClauseLegacy.params);
+      paramIndex = multiProductClauseLegacy.nextParamIndex;
+    } else {
+      const singleProduct =
+        productFilter?.trim() || (productFilters.length === 1 ? productFilters[0] : undefined);
+      const productClause = appendContractPerfProductSubstringSql(singleProduct, 'base.product', paramIndex);
+      if (productClause) {
+        queryText += productClause.clause;
+        queryParams.push(productClause.param);
+        paramIndex = productClause.nextParamIndex;
+      }
     }
 
-    // Plant filter is same as GET /contracts: exists in SEA discharge port or LAND location.
+    if (sourceTypeFilters.length > 1) {
+      queryText += appendContractPerfSourceTypesFilter(sourceTypeFilters, 'base.source_type');
+    } else {
+      const singleSource =
+        sourceTypeFilter?.trim() || (sourceTypeFilters.length === 1 ? sourceTypeFilters[0] : undefined);
+      queryText += appendContractPerfSourceTypeFilter(singleSource, 'base.source_type');
+    }
+
     const plantArr = scope === 'filtered' ? (Array.isArray(plant) ? plant : (plant ? [plant] : [])) : [];
     const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    if (plants.length > 0) {
-      const blankIncluded = plants.some((p) => p === 'Blank');
-      const nonBlank = plants.filter((p) => p !== 'Blank');
-      const parts: string[] = [];
-      if (blankIncluded) parts.push(`(base.plant_code IS NULL OR TRIM(base.plant_code) = '')`);
-      if (nonBlank.length > 0) {
-        const ph = nonBlank.map(() => `$${paramIndex++}`).join(', ');
-        parts.push(
-          `COALESCE(NULLIF(TRIM(pnc.group_plant), ''), NULLIF(TRIM(pna.group_plant), ''), 'Blank') IN (${ph})`
-        );
-        queryParams.push(...nonBlank);
-      }
-      queryText += ` AND (${parts.join(' OR ')})`;
-    }
+    const regionSiteFilter = appendRegionSiteFilter(plants, paramIndex, 'base.plant_site');
+    queryText += regionSiteFilter.sql;
+    queryParams.push(...regionSiteFilter.params);
+    paramIndex = regionSiteFilter.nextIndex;
 
     if (scope === 'filtered' && selectedIncoterms) {
       const incs = selectedIncoterms.split(',').map((s) => s.trim()).filter(Boolean);
@@ -1097,18 +1527,18 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 
     if (scope === 'filtered' && globalSearch.length >= 2) {
       queryText += ` AND (
-        base.contract_id ILIKE $${paramIndex}
-        OR COALESCE(base.product, '') ILIKE $${paramIndex}
-        OR COALESCE(base.group_name, '') ILIKE $${paramIndex}
-        OR COALESCE(NULLIF(TRIM(pnc.plant_name), ''), NULLIF(TRIM(pna.plant_name), ''), base.plant_code, '') ILIKE $${paramIndex}
+        base.contract_id ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(base.product, '') ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(base.group_name, '') ${sqlIlikeParam(paramIndex)}
+        OR COALESCE(base.plant_site, base.plant_code, '') ${sqlIlikeParam(paramIndex)}
       )`;
-      queryParams.push(`%${globalSearch}%`);
+      queryParams.push(likeContainsPattern(globalSearch));
       paramIndex++;
     }
 
     const result = await query(queryText, queryParams);
 
-    // Use the same due()/diffInDays() helpers as GET /contracts.
+    // Use the same due() helpers as GET /contracts.
     // Important: SAP-derived strings can be DD/MM/YYYY, MM/DD/YY, etc.
     const due = (v: unknown): Date | null => {
       if (v == null) return null;
@@ -1158,7 +1588,6 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       const dt = new Date(s);
       return Number.isNaN(dt.getTime()) ? null : dt;
     };
-    const diffInDays = (start: unknown, end: unknown): number | null => diffCalendarDays(start, end);
     const todayMid = new Date();
     todayMid.setHours(0, 0, 0, 0);
 
@@ -1247,7 +1676,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       if (plantSiteText) debugCounts.nonBlankPlantSite += 1;
       else debugCounts.blankPlantSite += 1;
       // Match GET /contracts SQL late/on-time filter: SAP import status first, then contracts.status.
-      const statusText = String(row.import_status || row.status || '').trim().toUpperCase();
+      const statusText = resolveContractEffectiveStatusText(row);
       const transport = String(row.transport_mode || '').trim().toUpperCase();
       const deliveryEnd = due(row.delivery_end_date);
       if (!deliveryEnd) {
@@ -1272,60 +1701,45 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
 
       let tradeCycle: number | null = null;
       if (isClosed) {
-        if (transport.startsWith('LAND')) {
-          debugCounts.branchClosedLand += 1;
-          if (row.last_trucking_completion_date) debugCounts.haveLastTruckCompletion += 1;
-          if (!row.last_trucking_completion_date) {
-            debugCounts.missingCompletionDate += 1;
-            pushSample('missingCompletionDate', String(row.contract_id || ''));
-          }
-          // positive = delivered AFTER due date (LATE), negative = on / ahead of schedule
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_completion_date);
+        if (transport.startsWith('LAND')) debugCounts.branchClosedLand += 1;
+        else debugCounts.branchClosedSea += 1;
+        if (resolveCycleCompletionDate(row, transport)) {
+          if (transport.startsWith('LAND')) debugCounts.haveLastTruckCompletion += 1;
+          else debugCounts.haveLastAtaDischarge += 1;
         } else {
-          debugCounts.branchClosedSea += 1;
-          if (row.last_ata_vessel_complete_discharge) debugCounts.haveLastAtaDischarge += 1;
-          if (!row.last_ata_vessel_complete_discharge) {
-            debugCounts.missingCompletionDate += 1;
-            pushSample('missingCompletionDate', String(row.contract_id || ''));
-          }
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_ata_vessel_complete_discharge);
+          debugCounts.missingCompletionDate += 1;
+          pushSample('missingCompletionDate', String(row.contract_id || ''));
         }
+        tradeCycle = computeClosedTradeCycleDays(row, transport, row.delivery_end_date);
       } else if (isOpen) {
         if (transport.startsWith('LAND')) {
           debugCounts.branchOpenLand += 1;
-          if (row.last_trucking_daily_deliverable_date) debugCounts.haveLastTruckDeliverable += 1;
-          if (!row.last_trucking_daily_deliverable_date) {
+          if (resolveCycleCompletionDate(row, transport)) debugCounts.haveLastTruckDeliverable += 1;
+          else {
             debugCounts.missingCompletionDate += 1;
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_trucking_daily_deliverable_date);
         } else {
           debugCounts.branchOpenSea += 1;
-          if (row.last_eta_vessel_complete_discharge) debugCounts.haveLastEtaDischarge += 1;
-          if (!row.last_eta_vessel_complete_discharge) {
+          if (resolveCycleCompletionDate(row, transport)) debugCounts.haveLastEtaDischarge += 1;
+          else {
             debugCounts.missingCompletionDate += 1;
             pushSample('missingCompletionDate', String(row.contract_id || ''));
           }
-          tradeCycle = diffCalendarDays(row.delivery_end_date, row.last_eta_vessel_complete_discharge);
         }
+        tradeCycle = computePerfTradeCycleDaysForRow(row, todayMid);
       }
 
       const _qtyOrdered = Number(row.quantity_ordered || 0);
-      const _subtracted = resolveContractActualQtySubtractedTs(
-        row.incoterm,
-        row.quantity_receive,
-        row.quantity_delivery,
-      );
-      const _outstandingQty = Math.max(0, _qtyOrdered - _subtracted);
+      const _outstandingQty = isOpen
+        ? resolveOpenPerfOutstandingQtyKg(row)
+        : _qtyOrdered;
 
-      // Log Cycle: Cargo Readiness → completion (closed) or open A/B end (today when ETA empty)
       const cargoReady = row.cargo_readiness_date;
       let logCycle: number | null = null;
       if (cargoReady) {
         if (isClosed) {
-          logCycle = transport.startsWith('LAND')
-            ? diffInDays(cargoReady, row.last_trucking_completion_date)
-            : diffInDays(cargoReady, row.last_ata_vessel_complete_discharge);
+          logCycle = computeClosedLogCycleDays(row, transport, cargoReady);
         } else if (isOpen) {
           logCycle = computeOpenLogCycleDays(row, transport, todayMid, cargoReady);
         }
@@ -1335,9 +1749,7 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       let cashCycle: number | null = null;
       if (payoffDate) {
         if (isClosed) {
-          cashCycle = transport.startsWith('LAND')
-            ? diffInDays(row.last_trucking_completion_date, payoffDate)
-            : diffInDays(row.last_ata_vessel_complete_discharge, payoffDate);
+          cashCycle = computeClosedCashCycleDays(row, transport, payoffDate);
         } else if (isOpen) {
           cashCycle = computeOpenCashCycleDays(row, transport, todayMid);
         }
@@ -1350,13 +1762,19 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         dist.noData.qty += _outstandingQty;
         continue;
       }
-      if (tradeCycle <= 0) {
+      /*
+       * Since 789c816 every cycle is `anchor - completion`: On Time is >= 0, Late is negative.
+       * This handler is the legacy /late-performance route - the page calls /summary, /tree and
+       * /data, which run through the service - but it is still routed, and left unflipped it would
+       * answer with on-time and late swapped and every late contract in the 1-7 day bucket.
+       */
+      if (tradeCycle >= 0) {
         debugCounts.tradeCycleNonPositive += 1;
         pushSample('tradeCycleNonPositive', `${String(row.contract_id || '')}:${tradeCycle}`);
         dist.onTime.count += 1;
         dist.onTime.qty += _outstandingQty;
 
-        const daysAhead = -tradeCycle; // 0 = exactly on time, positive = days ahead of deadline
+        const daysAhead = tradeCycle; // 0 = exactly on time, positive = days ahead of deadline
         onTrackCount += 1;
         onTrackTotalDaysAhead += daysAhead;
         onTrackMaxDaysAhead = Math.max(onTrackMaxDaysAhead, daysAhead);
@@ -1385,15 +1803,18 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
         continue;
       }
 
-      if (tradeCycle <= 7)       { dist.d1_7.count    += 1; dist.d1_7.qty    += _outstandingQty; }
-      else if (tradeCycle <= 14) { dist.d8_14.count   += 1; dist.d8_14.qty   += _outstandingQty; }
-      else if (tradeCycle <= 30) { dist.d15_30.count  += 1; dist.d15_30.qty  += _outstandingQty; }
-      else if (tradeCycle <= 60) { dist.d31_60.count  += 1; dist.d31_60.qty  += _outstandingQty; }
-      else                       { dist.d61plus.count += 1; dist.d61plus.qty += _outstandingQty; }
+      /** How late, as a positive number of days. */
+      const lateDays = -tradeCycle;
+
+      if (lateDays <= 7)       { dist.d1_7.count    += 1; dist.d1_7.qty    += _outstandingQty; }
+      else if (lateDays <= 14) { dist.d8_14.count   += 1; dist.d8_14.qty   += _outstandingQty; }
+      else if (lateDays <= 30) { dist.d15_30.count  += 1; dist.d15_30.qty  += _outstandingQty; }
+      else if (lateDays <= 60) { dist.d31_60.count  += 1; dist.d31_60.qty  += _outstandingQty; }
+      else                     { dist.d61plus.count += 1; dist.d61plus.qty += _outstandingQty; }
 
       lateCount += 1;
-      lateTotalDays += tradeCycle;
-      lateMaxDays = Math.max(lateMaxDays, tradeCycle);
+      lateTotalDays += lateDays;
+      lateMaxDays = Math.max(lateMaxDays, lateDays);
       lateTotalQtyDelivery += _outstandingQty;
       if (logCycle != null) { lateTotalLogCycle += logCycle; lateLogCycleCount++; }
       if (cashCycle != null) { lateTotalCashCycle += cashCycle; lateCashCycleCount++; }
@@ -1415,8 +1836,8 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       const n5 = add(n4.children, sup);
       for (const n of [n1, n2, n3, n4, n5]) {
         n.count += 1;
-        n.totalDays += tradeCycle;
-        n.maxDays = Math.max(n.maxDays, tradeCycle);
+        n.totalDays += lateDays;
+        n.maxDays = Math.max(n.maxDays, lateDays);
         n.totalQtyDelivery += _outstandingQty;
       }
     }
@@ -1476,11 +1897,14 @@ export const getLatePerformance = async (req: AuthRequest, res: Response) => {
       },
     });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     // Helpful SQL context for debugging (kept small to avoid huge logs).
     try {
       const anyErr = error as any;
       const pos = typeof anyErr?.position === 'string' || typeof anyErr?.position === 'number' ? Number(anyErr.position) : null;
-      if (pos && typeof queryText === 'string') {
+      if (pos && typeof queryText === 'string' && queryText) {
         const start = Math.max(0, pos - 200);
         const end = Math.min(queryText.length, pos + 200);
         logger.error('Get late performance SQL near position', {
@@ -1506,6 +1930,9 @@ export const getLatePerformanceSummary = async (req: AuthRequest, res: Response)
     const data = await runLatePerformance(req, 'summary');
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get late performance summary error:', error);
     return res.status(500).json({
       success: false,
@@ -1521,6 +1948,9 @@ export const getLatePerformanceTree = async (req: AuthRequest, res: Response) =>
     const data = await runLatePerformance(req, 'tree');
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get late performance tree error:', error);
     return res.status(500).json({
       success: false,
@@ -1539,188 +1969,13 @@ export const getLatePerformanceData = async (req: AuthRequest, res: Response) =>
     const data = await runLatePerformance(req, 'all');
     return res.json({ success: true, data });
   } catch (error) {
+    if (error instanceof InvalidDateInputError) {
+      return res.status(400).json({ success: false, error: { message: error.message } });
+    }
     logger.error('Get late performance data error:', error);
     return res.status(500).json({
       success: false,
       error: { message: 'Failed to fetch late performance data' },
-    });
-  }
-};
-
-/** Get counts of SEA/LAND/MIX contracts missing required logistics (for dashboard cards) */
-export const getUnassignedCounts = async (req: AuthRequest, res: Response) => {
-  try {
-    const { search, b2bFlag, dateFrom, dateTo, product, transportMode, plant, columnFilters } =
-      req.query as Record<string, string | string[]>;
-
-    const params: any[] = [];
-    let paramIndex = 1;
-
-    // Row-level conditions (applied before GROUP BY — work on individual contract rows)
-    const rowConditions: string[] = [];
-
-    // Post-aggregate conditions (mirror getContracts filter logic on `base` alias)
-    const aggConditions: string[] = [];
-
-    if (dateFrom) {
-      params.push(dateFrom);
-      rowConditions.push(`c.contract_date >= $${paramIndex++}`);
-    }
-
-    if (dateTo) {
-      params.push(dateTo);
-      rowConditions.push(`c.contract_date <= $${paramIndex++}`);
-    }
-
-    // Section 1 alert cards always count Open contracts only (toolbar status does not apply).
-    aggConditions.push(`(
-      UPPER(TRIM(COALESCE(base.import_status, ''))) IN ('OPEN', 'ACTIVE')
-      OR (base.latest_spd_data IS NULL AND UPPER(base.raw_status) IN ('OPEN', 'ACTIVE'))
-    )`);
-
-    // B2B flag — use JSONB contract_type (same as getContracts)
-    if (b2bFlag && b2bFlag !== 'ALL') {
-      params.push(b2bFlag);
-      aggConditions.push(
-        `COALESCE(base.latest_spd_data->'contract'->>'contract_type', base.latest_spd_data->>'B2B Flag', '') = $${paramIndex++}`,
-      );
-    }
-
-    // Legacy single-product query param (Contract Performance toolbar)
-    if (product && product !== 'ALL' && String(product).trim().length > 0) {
-      params.push(`%${String(product).trim()}%`);
-      aggConditions.push(`COALESCE(base.product, '') ILIKE $${paramIndex++}`);
-    }
-
-    // Transport mode — mirror getContracts list filter (contracts.transport_mode column).
-    if (transportMode && String(transportMode).toUpperCase() !== 'ALL') {
-      params.push(String(transportMode).toUpperCase());
-      aggConditions.push(`UPPER(base.transport_mode) = $${paramIndex++}`);
-    }
-
-    const plantArr = Array.isArray(plant) ? plant : plant ? [plant] : [];
-    const plants = plantArr.map((p) => String(p)).filter((p) => p.trim() !== '');
-    const groupPlantFilter = appendGroupPlantFilter(
-      plants,
-      paramIndex,
-      groupPlantExpr('base.plant_code', 'base.company_name'),
-    );
-    if (groupPlantFilter.sql) {
-      aggConditions.push(groupPlantFilter.sql.replace(/^\s*AND\s*/, ''));
-      params.push(...groupPlantFilter.params);
-      paramIndex = groupPlantFilter.nextIndex;
-    }
-
-    const globalSearch = typeof search === 'string' ? search.trim() : '';
-    const searchFrag = appendGlobalSearchBase(globalSearch, paramIndex);
-    if (searchFrag.sql) {
-      aggConditions.push(searchFrag.sql.replace(/^\s*AND\s*/, ''));
-      params.push(...searchFrag.params);
-      paramIndex = searchFrag.nextIndex;
-    }
-
-    const colFilters = parseColumnFiltersQuery(columnFilters);
-    const colFrag = appendColumnFiltersBase(colFilters, paramIndex);
-    if (colFrag.sql) {
-      aggConditions.push(colFrag.sql.replace(/^\s*AND\s*/, ''));
-      params.push(...colFrag.params);
-      paramIndex = colFrag.nextIndex;
-    }
-
-    const rowWhereSql = rowConditions.length > 0 ? `WHERE ${rowConditions.join(' AND ')}` : '';
-    const aggWhereSql = aggConditions.length > 0 ? `AND ${aggConditions.join(' AND ')}` : '';
-
-    const q = `
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (contract_number) contract_number, data, created_at
-        FROM sap_processed_data
-        ORDER BY contract_number, created_at DESC NULLS LAST
-      ),
-      base AS (
-        SELECT
-          c.contract_id,
-          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS id,
-          MAX(c.status) AS raw_status,
-          MAX(c.status) AS status,
-          ${sqlContractListImportStatusAggExpr('c')} AS import_status,
-          MAX(c.product) AS product,
-          MAX(c.incoterm) AS incoterm,
-          MAX(c.supplier) AS supplier,
-          MAX(c.buyer) AS buyer,
-          MAX(c.group_name) AS group_name,
-          MAX(c.plant_code) AS plant_code,
-          MAX(c.company_name) AS company_name,
-          MAX(c.transport_mode) AS transport_mode,
-          MAX(c.contract_date) AS contract_date,
-          STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
-          MAX(c.sto_number) AS sto_number,
-          NULL::text AS sto_numbers_agg,
-          (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
-          COALESCE(NULLIF(TRIM(MAX(c.transport_mode)), ''), (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'transport_mode', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'contract'->>'sea_land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea / Land', (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1]->'raw'->>'Sea_Land', '') AS effective_transport_mode
-        FROM contracts c
-        LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-        ${rowWhereSql}
-        GROUP BY c.contract_id
-      ),
-      filtered AS (
-        SELECT * FROM base
-        WHERE 1=1 ${aggWhereSql}
-        AND NOT (
-          UPPER(TRIM(COALESCE(
-            base.latest_spd_data->'contract'->>'contract_type',
-            base.latest_spd_data->>'B2B Flag',
-            ''
-          ))) = 'B2B'
-          AND NULLIF(TRIM(COALESCE(
-            base.latest_spd_data->'contract'->>'contract_reference_po',
-            base.latest_spd_data->>'CONTRACT REFF PO',
-            base.latest_spd_data->>'Contract Reff PO Ini',
-            base.latest_spd_data->'raw'->>'Contract Reff PO Ini',
-            base.latest_spd_data->'raw'->>'CONTRACT REFF PO'
-          )), '') IS NOT NULL
-        )
-      ),
-      sea_no_ship AS (
-        SELECT 1
-        FROM filtered f
-        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'SEA%'
-          AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = f.id)
-      ),
-      land_no_truck AS (
-        SELECT 1
-        FROM filtered f
-        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'LAND%'
-          AND NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
-      ),
-      mix_incomplete AS (
-        SELECT 1
-        FROM filtered f
-        WHERE UPPER(TRIM(f.effective_transport_mode)) LIKE 'MIX%'
-          AND (
-            NOT EXISTS (SELECT 1 FROM shipments s WHERE s.contract_id = f.id)
-            OR NOT EXISTS (SELECT 1 FROM trucking_operations t WHERE t.contract_id = f.id)
-          )
-      )
-      SELECT
-        (SELECT COUNT(*) FROM sea_no_ship) AS sea_without_shipments,
-        (SELECT COUNT(*) FROM land_no_truck) AS land_without_trucking,
-        (SELECT COUNT(*) FROM mix_incomplete) AS mix_without_logistics
-    `;
-    const result = await query(q, params);
-    const row = result.rows[0] || { sea_without_shipments: 0, land_without_trucking: 0, mix_without_logistics: 0 };
-    res.json({
-      success: true,
-      data: {
-        seaWithoutShipments: parseInt(String(row.sea_without_shipments), 10) || 0,
-        landWithoutTrucking: parseInt(String(row.land_without_trucking), 10) || 0,
-        mixWithoutLogistics: parseInt(String(row.mix_without_logistics), 10) || 0,
-      },
-    });
-  } catch (error) {
-    logger.error('Get unassigned counts error:', error);
-    res.status(500).json({
-      success: false,
-      error: { message: 'Failed to fetch unassigned counts' },
     });
   }
 };
@@ -1735,8 +1990,8 @@ export const getDistinctBuyers = async (req: AuthRequest, res: Response) => {
     const params: unknown[] = [];
     let where = `WHERE buyer IS NOT NULL AND TRIM(buyer) <> ''`;
     if (search) {
-      params.push(`%${search}%`);
-      where += ` AND TRIM(buyer) ILIKE $${params.length}`;
+      params.push(likeContainsPattern(search));
+      where += ` AND TRIM(buyer) ${sqlIlikeParam(params.length)}`;
     }
     params.push(limit);
 
@@ -1765,11 +2020,44 @@ export const getDistinctBuyers = async (req: AuthRequest, res: Response) => {
   }
 };
 
+const CONTRACT_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Accepts a contract UUID, a contract number, or a PO number.
+ *
+ * `contracts.id` is a uuid column, so passing a PO number straight into `WHERE id = $1` made
+ * Postgres raise "invalid input syntax for type uuid"; the catch below turned that into a 500.
+ * Business users hold PO numbers rather than UUIDs, so the identifier they actually have was the
+ * one path that failed - and it failed as a server fault rather than a 404.
+ *
+ * The uuid path is byte-for-byte what it was. Only non-uuid input takes the new branch, which
+ * previously could not succeed at all.
+ *
+ * A PO number can legitimately span several contracts (multi-STO). Rather than guess silently,
+ * this returns one deterministically - exact contract number first, then newest, with `id` as a
+ * final unique key so the choice cannot shift between query plans - and reports `match_count` so
+ * a caller can tell a unique hit from a collapsed set. Those two fields are additive; existing
+ * consumers of `contract` / `shipments` / `payments` are unaffected.
+ */
 export const getContract = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const rawId = String(id ?? '').trim();
+    const isUuid = CONTRACT_ID_UUID_RE.test(rawId);
 
-    const result = await query('SELECT * FROM contracts WHERE id = $1', [id]);
+    const result = isUuid
+      ? await query('SELECT * FROM contracts WHERE id = $1', [id])
+      : await query(
+          `SELECT * FROM contracts
+             WHERE TRIM(COALESCE(contract_id::text, '')) = $1
+                OR TRIM(COALESCE(po_number::text, '')) = $1
+             ORDER BY
+               CASE WHEN TRIM(COALESCE(contract_id::text, '')) = $1 THEN 0 ELSE 1 END,
+               created_at DESC NULLS LAST,
+               id ASC
+             LIMIT 1`,
+          [rawId]
+        );
 
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -1778,16 +2066,30 @@ export const getContract = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    let matchCount = result.rows.length;
+    if (!isUuid) {
+      const countResult = await query(
+        `SELECT COUNT(*)::int AS n FROM contracts
+          WHERE TRIM(COALESCE(contract_id::text, '')) = $1
+             OR TRIM(COALESCE(po_number::text, '')) = $1`,
+        [rawId]
+      );
+      matchCount = Number(countResult.rows[0]?.n ?? 1);
+    }
+
+    // Related records key off the contract's uuid, which is not necessarily what the caller sent.
+    const contractUuid = result.rows[0].id;
+
     // Get related shipments
     const shipmentsResult = await query(
       'SELECT * FROM shipments WHERE contract_id = $1 ORDER BY created_at DESC',
-      [id]
+      [contractUuid]
     );
 
     // Get related payments
     const paymentsResult = await query(
       'SELECT * FROM payments WHERE contract_id = $1 ORDER BY created_at DESC',
-      [id]
+      [contractUuid]
     );
 
     return res.json({
@@ -1796,6 +2098,8 @@ export const getContract = async (req: AuthRequest, res: Response) => {
         contract: result.rows[0],
         shipments: shipmentsResult.rows,
         payments: paymentsResult.rows,
+        matched_by: isUuid ? 'uuid' : 'contract_or_po_number',
+        match_count: matchCount,
       },
     });
   } catch (error) {
@@ -1825,166 +2129,200 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
     const deliveryEnd = contract.delivery_end_date ?? null;
     const transportMode = String(contract.transport_mode ?? '').trim().toUpperCase();
     const contractIncoterm = String(contract.incoterm ?? '').trim();
-    const includeShipments =
-      transportMode === '' || transportMode === 'SEA' || transportMode === 'MIX';
-    const includeTrucking =
-      transportMode === '' || transportMode === 'LAND' || transportMode === 'MIX'
-      || isTruckingPageIncoterm(contractIncoterm);
+    const { includeShipments, includeTrucking } = resolveContractStoInformationLogisticsIncludes({
+      incoterm: contractIncoterm,
+      transportMode,
+    });
 
-    // Shipment STOs: group by effective STO (prefer contracts.sto_number, then latest SAP STO, then operation/shipment ids)
+    // Shipment STOs: enumerate contract_stos ∪ SAP (like trucking), then attach matching shipment rows.
+    // Do not group only by contracts.sto_number — that collapses multi-STO POs into one row.
     const shipmentStosQuery = `
-      WITH latest_spd_contract AS (
-        SELECT DISTINCT ON (spd.contract_number)
-          spd.contract_number,
-          NULLIF(TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )), '') AS effective_sto,
-          spd.created_at
-        FROM sap_processed_data spd
-        WHERE spd.contract_number IS NOT NULL AND TRIM(spd.contract_number) != ''
-        ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST
+      WITH real_sto_keys AS (
+        ${CONTRACT_REAL_STO_KEYS_SQL}
       ),
-      shipment_base AS (
-        SELECT
-          COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id) AS sto_key,
-          MAX(COALESCE(c.sto_number::text, l.effective_sto)) AS sto_number,
-          MAX(s.operation_id) AS operation_id,
-          MAX(s.status) AS status,
-          COALESCE(SUM(s.quantity_delivered), 0) AS quantity_delivered_db,
-          MAX(s.vessel_name) AS vessel_name,
-          MAX(s.ata_discharge_complete) AS ata_discharge_complete,
-          MAX(s.eta_discharge_complete) AS eta_discharge_complete,
-          MAX((SELECT vlp.eta_vessel_arrival::date FROM vessel_loading_ports vlp WHERE vlp.shipment_id = s.id AND vlp.is_discharge_port = false ORDER BY vlp.port_sequence ASC LIMIT 1)) AS eta_loading_port
+      op_fallback_keys AS (
+        SELECT DISTINCT TRIM(s.operation_id::text) AS sto_key
         FROM shipments s
-        LEFT JOIN contracts c ON s.contract_id = c.id
-        LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
         WHERE s.contract_id = $1
-        GROUP BY COALESCE(c.sto_number::text, l.effective_sto, s.operation_id, s.shipment_id)
+          AND NULLIF(TRIM(s.operation_id::text), '') IS NOT NULL
+          AND COALESCE(s.status, '') <> 'CANCELLED'
+          AND NOT EXISTS (SELECT 1 FROM real_sto_keys)
+      ),
+      sto_keys AS (
+        SELECT sto_key FROM real_sto_keys
+        UNION
+        SELECT sto_key FROM op_fallback_keys
       )
       SELECT
-        sb.sto_key,
-        sb.sto_number,
-        sb.operation_id,
-        sb.status,
-        -- Prefer STO quantity from SAP (by STO), else from latest contract row quantity_ordered via contract UUID.
-        COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
-            NULLIF(TRIM(spd.data->'shipment'->>'sto_quantity'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'STO Quantity'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'sto quantity'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-          FROM sap_processed_data spd
-          WHERE NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '') = TRIM(sb.sto_key::text)
-        ), 0) AS sto_quantity,
-        -- Quantities: if shipment row is synthetic (OP-SEA-*), pull from SAP by contract_number; otherwise from SAP by STO.
-        COALESCE((
-          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', '(SELECT quantity_ordered FROM contracts WHERE id = $1)')})
-          FROM sap_processed_data spd
-          WHERE (
-            (TRIM(sb.sto_key::text) ~ '^OP-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
-            OR (NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '') = TRIM(sb.sto_key::text))
-          )
-        ), sb.quantity_delivered_db, 0) AS quantity_delivered,
-        COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-          FROM sap_processed_data spd
-          WHERE (
-            (TRIM(sb.sto_key::text) ~ '^OP-' AND spd.contract_number = (SELECT contract_id FROM contracts WHERE id = $1))
-            OR (NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '') = TRIM(sb.sto_key::text))
-          )
-        ), 0) AS quantity_receive,
-        sb.vessel_name,
-        sb.eta_loading_port AS eta_vessel_arrival_loading_port,
-        sb.ata_discharge_complete,
-        sb.eta_discharge_complete
-      FROM shipment_base sb
-      ORDER BY sb.sto_key
+        sk.sto_key,
+        sk.sto_key AS sto_number,
+        sp.id,
+        sp.operation_id,
+        sp.status,
+        COALESCE(NULLIF(${sqlSapStoQtyForContractPoExpr({
+          contractAlias: 'c_po',
+          stoKeyExpr: 'sk.sto_key',
+        })}, 0), 0) AS sto_quantity,
+        COALESCE(
+          ${sqlShipmentResolvedDeliveryKg(
+            sqlIsContractSapClosedForStoExpr('c_po', 'sk.sto_key'),
+            'COALESCE(NULLIF(sp.quantity_delivered_klip, 0), sp.quantity_delivered_db)',
+            `(${sqlSapQtyDeliveredForStoKeyExpr({
+              contractAlias: 'c_po',
+              stoKeyExpr: 'sk.sto_key',
+              contractQtyExpr: 'c_po.quantity_ordered',
+            })})`,
+            'sp.quantity_delivered_db',
+          )},
+          0
+        ) AS quantity_delivered,
+        COALESCE(
+          ${sqlShipmentResolvedReceiveKg(
+            sqlIsContractSapClosedForStoExpr('c_po', 'sk.sto_key'),
+            'sp.actual_vessel_qty_receive',
+            `(${sqlSapQtyReceiveForStoKeyExpr({
+              contractAlias: 'c_po',
+              stoKeyExpr: 'sk.sto_key',
+            })})`,
+          )},
+          0
+        ) AS quantity_receive,
+        sp.vessel_name,
+        sp.eta_loading_port AS eta_vessel_arrival_loading_port,
+        sp.ata_arrival_loading,
+        sp.ata_discharge_complete,
+        sp.eta_discharge_complete,
+        (${sqlContractImportStatusForStoExpr('c_po', 'sk.sto_key')}) AS sto_import_status,
+        (${sqlContractPoGrStoStatusExpr('c_po', 'c_po.po_number', 'sk.sto_key')}) AS gr_sto_status
+      FROM sto_keys sk
+      CROSS JOIN contracts c_po
+      LEFT JOIN LATERAL (
+        SELECT
+          s.id,
+          s.operation_id,
+          s.status,
+          COALESCE(s.quantity_delivered, 0) AS quantity_delivered_db,
+          s.quantity_delivered_klip,
+          s.actual_vessel_qty_receive,
+          s.vessel_name,
+          COALESCE(
+            s.ata_discharge_complete,
+            (
+              SELECT vlp.ata_loading_completed::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = true
+              ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.id
+              LIMIT 1
+            )
+          ) AS ata_discharge_complete,
+          COALESCE(
+            s.eta_discharge_complete,
+            (
+              SELECT vlp.eta_vessel_complete_discharge::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = true
+              ORDER BY vlp.port_sequence ASC NULLS LAST, vlp.id
+              LIMIT 1
+            )
+          ) AS eta_discharge_complete,
+          COALESCE(
+            s.eta_arrival,
+            (
+              SELECT vlp.eta_vessel_arrival::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = false
+              ORDER BY vlp.port_sequence ASC
+              LIMIT 1
+            )
+          ) AS eta_loading_port,
+          COALESCE(
+            s.ata_arrival,
+            (
+              SELECT vlp.ata_vessel_arrival::date
+              FROM vessel_loading_ports vlp
+              WHERE vlp.shipment_id = s.id AND COALESCE(vlp.is_discharge_port, false) = false
+              ORDER BY vlp.port_sequence ASC
+              LIMIT 1
+            )
+          ) AS ata_arrival_loading
+        FROM shipments s
+        WHERE s.contract_id = $1
+          AND ${sqlContractStoListShipmentMatchPred('s', 'sk.sto_key', '$1')}
+        ORDER BY
+          ${sqlContractStoListShipmentMatchRank('s', 'sk.sto_key')},
+          -- Prefer non-cancelled when both exist; still attach Cancelled for Delete STO rows
+          CASE WHEN UPPER(TRIM(COALESCE(s.status, ''))) IN ('CANCELLED', 'CANCELED') THEN 1 ELSE 0 END,
+          s.updated_at DESC NULLS LAST,
+          s.created_at DESC NULLS LAST
+        LIMIT 1
+      ) sp ON TRUE
+      WHERE c_po.id = $1
+      ORDER BY sk.sto_key
     `;
     const shipmentRows = includeShipments
       ? await query(shipmentStosQuery, [id])
       : { rows: [] };
 
-    // Trucking STOs: one row per STO (contract_stos + SAP FRC/LCO), shared contract qty + global SAP movement
+    // Trucking STOs: SAP/contract STOs first; if none, fall back to Operation ID rows.
+    // STO Qty always from SAP STO Quantity (by STO or by PO) — never Contract/PO Qty.
     const truckingStosQuery = `
-      WITH sto_keys AS (
-        SELECT DISTINCT TRIM(sto.sto_number) AS sto_key
-        FROM (
-          SELECT TRIM(cs.sto_number::text) AS sto_number
-          FROM contract_stos cs
-          WHERE cs.contract_id = $1
-            AND cs.sto_number IS NOT NULL AND TRIM(cs.sto_number::text) != ''
-          UNION
-          SELECT TRIM(COALESCE(
-            spd.sto_number::text,
-            spd.data->'raw'->>'STO No.',
-            spd.data->'raw'->>'STO Number',
-            spd.data->'shipment'->>'sto_no',
-            spd.data->'contract'->>'sto_no'
-          )) AS sto_number
-          FROM sap_processed_data spd
-          INNER JOIN contracts c2 ON c2.contract_id = spd.contract_number
-          WHERE c2.id = $1
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no',
-              spd.data->'contract'->>'sto_no'
-            )) != ''
-        ) sto
-        WHERE sto.sto_number IS NOT NULL AND TRIM(sto.sto_number) != ''
+      WITH real_sto_keys AS (
+        ${CONTRACT_REAL_STO_KEYS_SQL}
       ),
-      trucking_pick AS (
-        SELECT t.*
+      op_fallback_keys AS (
+        SELECT DISTINCT TRIM(t.operation_id::text) AS sto_key
         FROM trucking_operations t
+        INNER JOIN contracts c ON c.id = t.contract_id
         WHERE t.contract_id = $1
-        ORDER BY t.created_at DESC NULLS LAST
-        LIMIT 1
+          AND NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
+          AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
+          AND NOT EXISTS (SELECT 1 FROM real_sto_keys)
+      ),
+      sto_keys AS (
+        SELECT sto_key FROM real_sto_keys
+        UNION
+        SELECT sto_key FROM op_fallback_keys
       )
       SELECT
         sk.sto_key AS sto_number,
         sk.sto_key AS sto_key,
+        tp.id,
         tp.operation_id,
         tp.status,
-        c.quantity_ordered AS sto_quantity,
-        COALESCE(tp.quantity_delivered, 0) AS quantity_receive_db,
-        COALESCE(tp.quantity_delivered, 0) AS quantity_delivered_db,
-        COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no'
-            )) = sk.sto_key
-        ), 0) AS quantity_receive_sap,
-        COALESCE((
-          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered')})
-          FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND TRIM(COALESCE(
-              spd.sto_number::text,
-              spd.data->'raw'->>'STO No.',
-              spd.data->'raw'->>'STO Number',
-              spd.data->'shipment'->>'sto_no'
-            )) = sk.sto_key
-        ), 0) AS quantity_delivered_sap,
+        COALESCE(
+          NULLIF((
+            SELECT NULLIF(cs.sto_quantity, 0)::numeric
+            FROM contract_stos cs
+            WHERE cs.contract_id = c.id
+              AND TRIM(cs.sto_number::text) = sk.sto_key
+            LIMIT 1
+          ), 0),
+          NULLIF(${sqlSapStoQtyForContractPoExpr({
+            contractAlias: 'c',
+            stoKeyExpr: 'sk.sto_key',
+          })}, 0),
+          0
+        ) AS sto_quantity,
+        -- Open+WB>0 → WB; Close → SAP (same as Trucking list)
+        ${sqlTruckingResolvedDeliveryQty(
+          'COALESCE(tp.quantity_delivered, 0)',
+          `(${sqlSapQtyDeliveredForStoKeyExpr({
+            contractAlias: 'c',
+            stoKeyExpr: 'sk.sto_key',
+            contractQtyExpr: 'c.quantity_ordered',
+          })})`,
+          'tp.id',
+          'c',
+        )} AS quantity_delivered,
+        ${sqlTruckingResolvedReceiveQty(
+          'COALESCE(tp.quantity_delivered, 0)',
+          `(${sqlSapQtyReceiveForStoKeyExpr({
+            contractAlias: 'c',
+            stoKeyExpr: 'sk.sto_key',
+          })})`,
+          'tp.id',
+          'c',
+        )} AS quantity_receive,
         COALESCE((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'contract'->>'sto_quantity'), ''),
@@ -2001,18 +2339,71 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             AND spd.data->'contract'->>'sto_quantity' IS NOT NULL
         ), 0) AS sto_qty_assigned,
         tp.trucking_owner,
-        tp.eta_trucking_completion_date,
+        (
+          SELECT MIN((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+          FROM jsonb_array_elements(COALESCE(tp.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+          WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        ) AS daily_plan_start_date,
+        -- End Daily Plan (ETC); also used for late-indicator planned date
         COALESCE(
-          (SELECT tr.realization_end_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
-          ${sqlSapTruckingLastReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
-        ) AS trucking_completion_date,
+          tp.last_daily_deliverable_date,
+          (
+            SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+            FROM jsonb_array_elements(COALESCE(tp.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+            WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          )
+        ) AS daily_plan_end_date,
+        COALESCE(
+          tp.last_daily_deliverable_date,
+          (
+            SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+            FROM jsonb_array_elements(COALESCE(tp.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+            WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          )
+        ) AS eta_trucking_completion_date,
+        (
+          SELECT MIN(da.progress_date)
+          FROM trucking_daily_actuals da
+          WHERE da.trucking_operation_id = tp.id
+            AND (
+              NULLIF(TRIM(COALESCE(da.sto_number::text, '')), '') IS NULL
+              OR TRIM(da.sto_number::text) = TRIM(sk.sto_key::text)
+            )
+        ) AS wb_start_date,
+        (
+          SELECT MAX(da.progress_date)
+          FROM trucking_daily_actuals da
+          WHERE da.trucking_operation_id = tp.id
+            AND (
+              NULLIF(TRIM(COALESCE(da.sto_number::text, '')), '') IS NULL
+              OR TRIM(da.sto_number::text) = TRIM(sk.sto_key::text)
+            )
+        ) AS wb_end_date,
+        ${sqlSapTruckingStartReceiveDateForStoKey('c.contract_id', 'sk.sto_key')} AS sap_trucking_start_receive_date,
+        ${sqlSapTruckingLastReceiveDateForStoKey('c.contract_id', 'sk.sto_key')} AS sap_trucking_last_receive_date,
+        -- Trucking Last Receive (late indicator / status): realization_end → SAP AW → WB Actuals
+        ${sqlStoTruckingLastReceiveDate('c.contract_id', 'sk.sto_key', 'tp.id')} AS trucking_completion_date,
         COALESCE(
           (SELECT tr.realization_start_date FROM trucking_realizations tr WHERE tr.trucking_operation_id = tp.id LIMIT 1),
           ${sqlSapTruckingStartReceiveDateForStoKey('c.contract_id', 'sk.sto_key')}
-        ) AS trucking_start_date
+        ) AS trucking_start_date,
+        (${sqlContractPoGrStoStatusExpr('c', 'c.po_number', 'sk.sto_key')}) AS gr_sto_status
       FROM sto_keys sk
       CROSS JOIN contracts c
-      LEFT JOIN trucking_pick tp ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT t.*
+        FROM trucking_operations t
+        WHERE t.contract_id = $1
+          AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
+          AND (
+            (sk.sto_key ~ '^(OP-|MNL-|MSEA-)' AND TRIM(t.operation_id::text) = sk.sto_key)
+            OR (sk.sto_key !~ '^(OP-|MNL-|MSEA-)')
+          )
+        ORDER BY
+          CASE WHEN TRIM(COALESCE(t.operation_id::text, '')) = sk.sto_key THEN 0 ELSE 1 END,
+          t.created_at DESC NULLS LAST
+        LIMIT 1
+      ) tp ON TRUE
       WHERE c.id = $1
       ORDER BY sk.sto_key
     `;
@@ -2026,27 +2417,40 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         r.ata_discharge_complete,
         r.eta_vessel_arrival_loading_port,
       );
+      const status = resolveContractLogisticsStoStatus({
+        contractImportStatus: r.sto_import_status ?? contractImportStatus,
+        dbStatus: r.status,
+        logisticsType: 'shipment',
+        shipmentMilestones: {
+          eta_arrival_at_loading_port: r.eta_vessel_arrival_loading_port,
+          eta_complete_discharge: r.eta_discharge_complete,
+          ata_complete_discharge: r.ata_discharge_complete,
+        },
+      });
       return {
         type: 'shipment' as const,
+        id: r.id ?? null,
         sto_number: resolveContractLogisticsStoNumber(r.sto_number),
         operation_id: resolveContractLogisticsOperationId(r.operation_id, r.sto_key),
         late_indicator: lateIndicator,
-        status: resolveContractLogisticsStoStatus({
-          contractImportStatus,
-          dbStatus: r.status,
-          logisticsType: 'shipment',
-          shipmentMilestones: {
-            eta_arrival_at_loading_port: r.eta_vessel_arrival_loading_port,
-            eta_complete_discharge: r.eta_discharge_complete,
-            ata_complete_discharge: r.ata_discharge_complete,
-          },
-        }),
+        status,
+        gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
         sto_quantity: toSapDisplayNumber(r.sto_quantity),
         quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
         quantity_receive: toSapDisplayNumber(r.quantity_receive),
         vessel_name: r.vessel_name || null,
         eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port || null,
+        eta_discharge_complete: r.eta_discharge_complete || null,
+        ata_arrival_loading: r.ata_arrival_loading || null,
         ata_discharge_complete: r.ata_discharge_complete || null,
+        ...resolveStoListMilestoneDates({
+          type: 'shipment',
+          status,
+          eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port,
+          eta_discharge_complete: r.eta_discharge_complete,
+          ata_arrival_loading: r.ata_arrival_loading,
+          ata_discharge_complete: r.ata_discharge_complete,
+        }),
       };
     });
 
@@ -2056,27 +2460,48 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         r.trucking_completion_date,
         r.eta_trucking_completion_date,
       );
+      const status = resolveContractLogisticsStoStatus({
+        contractImportStatus,
+        dbStatus: r.status,
+        logisticsType: 'trucking',
+        truckingOptions: {
+          realizationEndDate: r.trucking_completion_date,
+          realizationStartDate: r.trucking_start_date,
+          stoNumber: r.sto_number,
+          // Judged on this row's own quantities, which are the ones printed beside the status.
+          outstandingQtyKg: truckingRowOutstandingQtyKg({
+            incoterm: contract.incoterm,
+            rowQtyKg: r.sto_quantity,
+            deliveredKg: r.quantity_delivered,
+            receivedKg: r.quantity_receive,
+          }),
+        },
+      });
       return {
         type: 'trucking' as const,
+        id: r.id ?? null,
         sto_number: resolveContractLogisticsStoNumber(r.sto_number),
         operation_id: resolveContractLogisticsOperationId(r.operation_id),
         late_indicator: lateIndicator,
-        status: resolveContractLogisticsStoStatus({
-          contractImportStatus,
-          dbStatus: r.status,
-          logisticsType: 'trucking',
-          truckingOptions: {
-            realizationEndDate: r.trucking_completion_date,
-            realizationStartDate: r.trucking_start_date,
-            stoNumber: r.sto_number,
-          },
-        }),
+        status,
+        gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
         sto_quantity: toSapDisplayNumber(r.sto_quantity),
-        quantity_receive: toSapDisplayNumber(r.quantity_receive_sap ?? r.quantity_receive_db),
-        quantity_delivered: toSapDisplayNumber(r.quantity_delivered_sap ?? r.quantity_delivered_db),
+        quantity_receive: toSapDisplayNumber(r.quantity_receive),
+        quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
         trucking_owner: r.trucking_owner || null,
         eta_trucking_completion_date: r.eta_trucking_completion_date || null,
+        trucking_start_date: r.trucking_start_date || null,
         trucking_completion_date: r.trucking_completion_date || null,
+        ...resolveStoListMilestoneDates({
+          type: 'trucking',
+          status,
+          daily_plan_start_date: r.daily_plan_start_date,
+          daily_plan_end_date: r.daily_plan_end_date,
+          wb_start_date: r.wb_start_date,
+          wb_end_date: r.wb_end_date,
+          sap_trucking_start_receive_date: r.sap_trucking_start_receive_date,
+          sap_trucking_last_receive_date: r.sap_trucking_last_receive_date,
+        }),
       };
     });
 
@@ -2106,54 +2531,88 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
           isShipment ? r.eta_vessel_arrival_loading_port : r.eta_trucking_completion_date,
         );
         if (isShipment) {
+          const status = resolveContractLogisticsStoStatus({
+            contractImportStatus,
+            dbStatus: r.status,
+            logisticsType: 'shipment',
+            shipmentMilestones: {
+              eta_arrival_at_loading_port: r.eta_vessel_arrival_loading_port,
+              eta_complete_discharge: r.eta_discharge_complete,
+              ata_complete_discharge: r.ata_discharge_complete,
+            },
+          });
           return {
             type: 'shipment' as const,
+            id: null,
             sto_number: resolveContractLogisticsStoNumber(r.sto_number),
             operation_id: resolveContractLogisticsOperationId(r.operation_id),
             late_indicator: lateIndicator,
-            status: resolveContractLogisticsStoStatus({
-              contractImportStatus,
-              dbStatus: r.status,
-              logisticsType: 'shipment',
-              shipmentMilestones: {
-                eta_arrival_at_loading_port: r.eta_vessel_arrival_loading_port,
-                eta_complete_discharge: r.eta_discharge_complete,
-                ata_complete_discharge: r.ata_discharge_complete,
-              },
-            }),
+            status,
+            gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
             sto_quantity: toSapDisplayNumber(r.sto_quantity),
             quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
             quantity_receive: toSapDisplayNumber(r.quantity_receive),
             vessel_name: r.vessel_name || null,
             eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port || null,
+            eta_discharge_complete: r.eta_discharge_complete || null,
+            ata_arrival_loading: r.ata_arrival_loading || null,
             ata_discharge_complete: r.ata_discharge_complete || null,
+            ...resolveStoListMilestoneDates({
+              type: 'shipment',
+              status,
+              eta_vessel_arrival_loading_port: r.eta_vessel_arrival_loading_port,
+              eta_discharge_complete: r.eta_discharge_complete,
+              ata_arrival_loading: r.ata_arrival_loading,
+              ata_discharge_complete: r.ata_discharge_complete,
+            }),
           };
         }
+        const status = resolveContractLogisticsStoStatus({
+          contractImportStatus,
+          dbStatus: r.status,
+          logisticsType: 'trucking',
+          truckingOptions: {
+            realizationEndDate: r.trucking_completion_date,
+            stoNumber: r.sto_number,
+            outstandingQtyKg: truckingRowOutstandingQtyKg({
+              incoterm: contract.incoterm,
+              rowQtyKg: r.sto_quantity,
+              deliveredKg: r.quantity_delivered,
+              receivedKg: r.quantity_receive,
+            }),
+          },
+        });
         return {
           type: 'trucking' as const,
+          id: null,
           sto_number: resolveContractLogisticsStoNumber(r.sto_number),
           operation_id: resolveContractLogisticsOperationId(r.operation_id),
           late_indicator: lateIndicator,
-          status: resolveContractLogisticsStoStatus({
-            contractImportStatus,
-            dbStatus: r.status,
-            logisticsType: 'trucking',
-            truckingOptions: {
-              realizationEndDate: r.trucking_completion_date,
-              stoNumber: r.sto_number,
-            },
-          }),
+          status,
+          gr_sto_status: normalizeContractDeliveryStatusForDisplay(r.gr_sto_status) || null,
           sto_quantity: toSapDisplayNumber(r.sto_quantity),
           quantity_receive: toSapDisplayNumber(r.quantity_receive),
           quantity_delivered: toSapDisplayNumber(r.quantity_delivered),
           trucking_owner: r.trucking_owner || null,
           eta_trucking_completion_date: r.eta_trucking_completion_date || null,
+          trucking_start_date: r.trucking_start_date || null,
           trucking_completion_date: r.trucking_completion_date || null,
+          ...resolveStoListMilestoneDates({
+            type: 'trucking',
+            status,
+            daily_plan_start_date: r.daily_plan_start_date,
+            daily_plan_end_date: r.daily_plan_end_date,
+            wb_start_date: r.wb_start_date,
+            wb_end_date: r.wb_end_date,
+            sap_trucking_start_receive_date: r.sap_trucking_start_receive_date,
+            sap_trucking_last_receive_date: r.sap_trucking_last_receive_date,
+          }),
         };
       });
 
     const stos = [...shipmentStos, ...truckingStos, ...sapOnlyStos];
-    return res.json({ success: true, data: { stos } });
+    const summary = summarizeContractLogisticsStoQty(stos);
+    return res.json({ success: true, data: { stos, summary } });
   } catch (error) {
     logger.error('Get contract STO information error:', error);
     return res.status(500).json({
@@ -2190,6 +2649,19 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
     }
 
     const contractImportStatus = contractResult.rows[0].import_status ?? null;
+    const stoKeyForImport = sto || operationId;
+    let shipmentStoImportStatus = contractImportStatus;
+    if (type === 'shipment' && stoKeyForImport) {
+      const stoImport = await query(
+        `SELECT ${sqlContractImportStatusForStoExpr('c', 'q.sto_key')} AS import_status
+         FROM contracts c
+         CROSS JOIN (SELECT $2::text AS sto_key) q
+         WHERE c.id = $1::uuid
+         LIMIT 1`,
+        [id, stoKeyForImport],
+      );
+      shipmentStoImportStatus = stoImport.rows[0]?.import_status ?? contractImportStatus;
+    }
 
     if (type === 'shipment') {
       const shipmentResult = await query(
@@ -2203,20 +2675,29 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           s.port_of_loading,
           s.port_of_discharge,
           s.quantity_shipped AS sto_quantity,
-          s.quantity_delivered,
-          (
-            SELECT SUM(NULLIF(regexp_replace(COALESCE(
-              NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
-              NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
-              ''
-            ), '[^0-9\\.-]', '', 'g'), '')::numeric)
-            FROM sap_processed_data spd
-            WHERE spd.contract_number = c.contract_id
-              AND (
-                NULLIF(TRIM(COALESCE(spd.sto_number::text, spd.data->'raw'->>'STO No.', spd.data->'raw'->>'STO Number')), '')
-                  = ANY($2::text[])
-                OR NULLIF(TRIM(COALESCE(spd.data->'raw'->>'Operation ID', '')), '') = ANY($2::text[])
-              )
+          COALESCE(
+            ${sqlShipmentResolvedDeliveryKg(
+              sqlIsContractSapClosedExpr('c'),
+              'COALESCE(NULLIF(s.quantity_delivered_klip, 0), s.quantity_delivered)',
+              `(${sqlSapQtyDeliveredForStoKeyExpr({
+                contractAlias: 'c',
+                stoKeyExpr: `(SELECT TRIM(k) FROM unnest($2::text[]) AS t(k) WHERE TRIM(k) <> '' LIMIT 1)`,
+                contractQtyExpr: 'c.quantity_ordered',
+              })})`,
+              's.quantity_delivered',
+            )},
+            0
+          ) AS quantity_delivered,
+          COALESCE(
+            ${sqlShipmentResolvedReceiveKg(
+              sqlIsContractSapClosedExpr('c'),
+              's.actual_vessel_qty_receive',
+              `(${sqlSapQtyReceiveForStoKeyExpr({
+                contractAlias: 'c',
+                stoKeyExpr: `(SELECT TRIM(k) FROM unnest($2::text[]) AS t(k) WHERE TRIM(k) <> '' LIMIT 1)`,
+              })})`,
+            )},
+            0
           ) AS quantity_receive,
           c.delivery_start_date,
           c.delivery_end_date,
@@ -2276,7 +2757,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         if (sapShipmentResult.rows.length > 0) {
           const row = sapShipmentResult.rows[0] as Record<string, unknown>;
           row.status = resolveContractLogisticsStoStatus({
-            contractImportStatus,
+            contractImportStatus: shipmentStoImportStatus,
             dbStatus: row.status,
             logisticsType: 'shipment',
             shipmentMilestones: {
@@ -2311,7 +2792,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
 
       const shipmentRow = shipmentResult.rows[0] as Record<string, unknown>;
       shipmentRow.status = resolveContractLogisticsStoStatus({
-        contractImportStatus,
+        contractImportStatus: shipmentStoImportStatus,
         dbStatus: shipmentRow.status,
         logisticsType: 'shipment',
         shipmentMilestones: {
@@ -2330,7 +2811,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         FROM contracts c
         WHERE c.id = $1
       ),
-      ${buildQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
+      ${await resolveContractsQtyMoveCte({ kind: 'in_subquery', subquery: 'SELECT contract_number FROM contract_candidates' })}
       SELECT
         t.id,
         COALESCE(
@@ -2360,28 +2841,78 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
         t.trucking_owner,
         c.contract_id AS contract_number,
         t.loading_location,
-        t.unloading_location,
+        ${sqlB2bEndingUnloadExpr('t.unloading_location')} AS unloading_location,
         c.quantity_ordered AS contract_qty,
-        COALESCE((
-          SELECT SUM(NULLIF(regexp_replace(COALESCE(
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivered'), ''),
-            NULLIF(TRIM(spd.data->'raw'->>'Quantity Delivery'), ''),
-            ''
-          ), '[^0-9\\.-]', '', 'g'), '')::numeric)
+        ${sqlTruckingResolvedDeliveryQty(
+          'COALESCE(t.quantity_delivered, 0)',
+          `COALESCE(NULLIF((
+          SELECT SUM(${sqlSapQtyDeliveredKgFromSpd('spd', 'c.quantity_ordered', 'c.incoterm')})
           FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
-        ), t.quantity_delivered) AS quantity_delivered,
-        COALESCE((
+          WHERE (
+            spd.contract_number = c.contract_id
+            OR (
+              NULLIF(TRIM(c.po_number::text), '') IS NOT NULL
+              AND TRIM(COALESCE(spd.po_number::text, spd.data->'raw'->>'PO No', spd.data->'raw'->>'PO No.', '')) = TRIM(c.po_number::text)
+            )
+          )
+            AND (
+              ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
+              OR (
+                EXISTS (
+                  SELECT 1 FROM unnest($2::text[]) AS k(key)
+                  WHERE TRIM(k.key) ~ '^(OP-|MNL-|MSEA-)'
+                )
+                AND (
+                  NULLIF(TRIM(COALESCE(
+                    spd.data->'raw'->>'Operation ID',
+                    spd.data->'trucking'->0->'data'->>'operation_id',
+                    ''
+                  )), '') = ANY($2::text[])
+                  OR ${SPD_EFFECTIVE_STO_SQL} IS NULL
+                )
+              )
+            )
+        ), 0), 0)`,
+          't.id',
+          'c',
+        )} AS quantity_delivered,
+        ${sqlTruckingResolvedReceiveQty(
+          'COALESCE(t.quantity_delivered, 0)',
+          `COALESCE(NULLIF((
           SELECT SUM(NULLIF(regexp_replace(COALESCE(
             NULLIF(TRIM(spd.data->'raw'->>'Quantity Receive'), ''),
             NULLIF(TRIM(spd.data->'raw'->>'Qty Receive'), ''),
             ''
           ), '[^0-9\\.-]', '', 'g'), '')::numeric)
           FROM sap_processed_data spd
-          WHERE spd.contract_number = c.contract_id
-            AND ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
-        ), t.quantity_delivered) AS quantity_receive,
+          WHERE (
+            spd.contract_number = c.contract_id
+            OR (
+              NULLIF(TRIM(c.po_number::text), '') IS NOT NULL
+              AND TRIM(COALESCE(spd.po_number::text, spd.data->'raw'->>'PO No', spd.data->'raw'->>'PO No.', '')) = TRIM(c.po_number::text)
+            )
+          )
+            AND (
+              ${SPD_EFFECTIVE_STO_SQL} = ANY($2::text[])
+              OR (
+                EXISTS (
+                  SELECT 1 FROM unnest($2::text[]) AS k(key)
+                  WHERE TRIM(k.key) ~ '^(OP-|MNL-|MSEA-)'
+                )
+                AND (
+                  NULLIF(TRIM(COALESCE(
+                    spd.data->'raw'->>'Operation ID',
+                    spd.data->'trucking'->0->'data'->>'operation_id',
+                    ''
+                  )), '') = ANY($2::text[])
+                  OR ${SPD_EFFECTIVE_STO_SQL} IS NULL
+                )
+              )
+            )
+        ), 0), 0)`,
+          't.id',
+          'c',
+        )} AS quantity_receive,
         ${sqlContractGlobalOutstandingExpr({
           contractQtyExpr: 'c.quantity_ordered',
           incotermExpr: contractEffectiveIncotermExpr('c'),
@@ -2394,16 +2925,28 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
           tr.realization_start_date,
           ${sqlSapTruckingStartReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
         ) AS trucking_start_date,
-        COALESCE(
-          tr.realization_end_date,
-          ${sqlSapTruckingLastReceiveDateForLookupKeys('c.contract_id', '$2::text[]')}
-        ) AS trucking_completion_date,
+        -- Trucking Last Receive: realization_end → SAP AW → WB Actuals
+        ${sqlStoTruckingLastReceiveDateForLookupKeys(
+          'c.contract_id',
+          '$2::text[]',
+          't.id',
+        )} AS trucking_completion_date,
         t.eta_trucking_start_date,
-        t.eta_trucking_completion_date
+        -- ETA Trucking Completion = last date on Daily Planning Deliverables (upload)
+        COALESCE(
+          t.last_daily_deliverable_date,
+          (
+            SELECT MAX((NULLIF(TRIM(dd.elem->>'date'), ''))::date)
+            FROM jsonb_array_elements(COALESCE(t.daily_deliverables, '[]'::jsonb)) AS dd(elem)
+            WHERE NULLIF(TRIM(dd.elem->>'date'), '') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          )
+        ) AS eta_trucking_completion_date
       FROM trucking_operations t
       INNER JOIN contracts c ON t.contract_id = c.id
+      ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       ${TRUCKING_REALIZATIONS_JOIN}
       WHERE c.id = $1
+        AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
         AND (
           TRIM(COALESCE(t.operation_id::text, '')) = ANY($2::text[])
           OR EXISTS (
@@ -2442,7 +2985,7 @@ export const getContractLogisticsStoDetail = async (req: AuthRequest, res: Respo
       if (sapShipmentCrossResult.rows.length > 0) {
         const row = sapShipmentCrossResult.rows[0] as Record<string, unknown>;
         row.status = resolveContractLogisticsStoStatus({
-          contractImportStatus,
+          contractImportStatus: shipmentStoImportStatus,
           dbStatus: row.status,
           logisticsType: 'shipment',
           shipmentMilestones: {
@@ -2575,40 +3118,7 @@ export const getB2bPartiesForContract = async (req: AuthRequest, res: Response) 
       return res.json({ success: true, data: [] });
     }
 
-    const q = `
-      WITH latest_spd AS (
-        SELECT DISTINCT ON (contract_number) contract_number, data, created_at
-        FROM sap_processed_data
-        WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
-        ORDER BY contract_number, created_at DESC NULLS LAST
-      )
-      SELECT
-        c.contract_id,
-        MAX(c.contract_date) AS contract_date,
-        STRING_AGG(DISTINCT c.po_number, ', ' ORDER BY c.po_number) FILTER (WHERE c.po_number IS NOT NULL AND c.po_number != '') AS po_numbers,
-        MAX(COALESCE(l.data->'raw'->>'Contract Ext No', l.data->>'Contract Ext No')) AS contract_ext_no,
-        MAX(COALESCE(NULLIF(TRIM(c.company_name), ''), l.data->'raw'->>'Buyer', l.data->>'Buyer')) AS company_name,
-        MAX(c.supplier) AS supplier,
-        MAX(COALESCE(NULLIF(TRIM(c.incoterm), ''), l.data->'contract'->>'incoterm', l.data->>'Incoterm')) AS incoterm,
-        MAX(COALESCE(
-          l.data->'raw'->>'Certification',
-          l.data->'raw'->>'certification',
-          l.data->>'Certification',
-          l.data->>'certification'
-        )) AS certification
-      FROM contracts c
-      LEFT JOIN latest_spd l ON l.contract_number = c.contract_id
-      WHERE NULLIF(TRIM(COALESCE(
-        l.data->'contract'->>'contract_reference_po',
-        l.data->>'CONTRACT REFF PO',
-        l.data->>'Contract Reff PO Ini',
-        l.data->'raw'->>'Contract Reff PO Ini'
-      )), '') = $1
-      GROUP BY c.contract_id
-      ORDER BY MAX(c.contract_date) DESC NULLS LAST
-      LIMIT 200
-    `;
-    const result = await query(q, [originPoNumber]);
+    const result = await query(SQL_B2B_PARTIES_FOR_ORIGIN_PO, [originPoNumber]);
 
     return res.json({ success: true, data: result.rows });
   } catch (error) {
@@ -2666,6 +3176,10 @@ export const createContract = async (req: AuthRequest, res: Response) => {
 
     logger.info(`Contract created: ${contract_id} by ${req.user?.username}`);
 
+    void import('../services/prePlannedGroup.service').then(({ schedulePrePlannedRebuildIfEnabled }) =>
+      schedulePrePlannedRebuildIfEnabled('contract-create'),
+    );
+
     res.status(201).json({
       success: true,
       data: result.rows[0],
@@ -2682,7 +3196,21 @@ export const createContract = async (req: AuthRequest, res: Response) => {
 export const updateContract = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const filtered = filterContractUpdatesForRole(req.user?.role, req.body ?? {});
+    if (!filtered.ok) {
+      return res.status(403).json({
+        success: false,
+        error: { message: filtered.message },
+      });
+    }
+    const updates = applyCargoReadinessKlipEditFlag(filtered.updates);
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'No valid fields to update' },
+      });
+    }
 
     const setClause = Object.keys(updates)
       .map((key, index) => `${key} = $${index + 2}`)
@@ -2700,6 +3228,20 @@ export const updateContract = async (req: AuthRequest, res: Response) => {
         success: false,
         error: { message: 'Contract not found' },
       });
+    }
+
+    const triggerFields = [
+      'delivery_start_date',
+      'delivery_end_date',
+      'quantity_ordered',
+      'plant_code',
+      'transport_mode',
+      'company_name',
+    ];
+    if (Object.keys(updates).some((k) => triggerFields.includes(k))) {
+      void import('../services/prePlannedGroup.service').then(({ schedulePrePlannedRebuildIfEnabled }) =>
+        schedulePrePlannedRebuildIfEnabled('contract-update'),
+      );
     }
 
     return res.json({
@@ -2755,8 +3297,10 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
   }
 
   let updated = 0;
+  let skipped = 0;
   let notFound = 0;
   const errors: { po_number: string; reason: string }[] = [];
+  const skippedRows: { po_number: string; reason: string }[] = [];
 
   for (let i = 1; i < matrix.length; i++) {
     const row = matrix[i];
@@ -2769,6 +3313,22 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
       : null;
 
     try {
+      const existing = await query(
+        `SELECT id, cargo_readiness_klip_edited FROM contracts WHERE po_number = $1`,
+        [po]
+      );
+      const outcome = classifyCargoReadinessExcelContract(existing.rows[0]);
+      if (outcome === 'not_found') {
+        notFound++;
+        errors.push({ po_number: po, reason: 'Not found' });
+        continue;
+      }
+      if (outcome === 'skipped') {
+        skipped++;
+        skippedRows.push({ po_number: po, reason: CARGO_READINESS_KLIP_SKIP_REASON });
+        continue;
+      }
+
       const result = await query(
         `UPDATE contracts SET cargo_readiness_date = $1, updated_at = CURRENT_TIMESTAMP WHERE po_number = $2 RETURNING id`,
         [cargoDate, po]
@@ -2791,6 +3351,6 @@ export const bulkUpdateCargoReadiness = async (req: AuthRequest & { file?: Expre
     }
   }
 
-  return res.json({ success: true, data: { updated, notFound, errors } });
+  return res.json({ success: true, data: { updated, skipped, notFound, errors, skippedRows } });
 };
 

@@ -9,9 +9,16 @@ export type ROilLossSummary = {
 };
 
 export type OilLossSummaryRow = {
+  id?: string | null;
+  /** SEA rows merge onto their shared STO/voyage Operation ID; LAND stays per-contract. */
+  transport_mode?: string | null;
+  operation_id?: string | null;
+  contract_number?: string | null;
+  contract_ext_no?: string | null;
   contract_date?: string | null;
   operation_date?: string | null;
   quantity_sent?: number | string | null;
+  quantity_delivery?: number | string | null;
   quantity_received?: number | string | null;
   quantity_sfal?: number | string | null;
   quantity_sfbd?: number | string | null;
@@ -56,7 +63,7 @@ export function filterYtdOilLossRows(
   });
 }
 
-function contractGroupKey(row: OilLossSummaryRow & { id?: string; contract_number?: string | null; contract_ext_no?: string | null }): string {
+function contractGroupKey(row: OilLossSummaryRow): string {
   const cn = String(row.contract_number ?? '').trim();
   if (cn) return `cn:${cn}`;
   const ext = String(row.contract_ext_no ?? '').trim();
@@ -64,7 +71,25 @@ function contractGroupKey(row: OilLossSummaryRow & { id?: string; contract_numbe
   return `row:${row.id ?? resolveContractDate(row)}`;
 }
 
-type ContractQuantityAgg = {
+function isSeaTransportMode(transportMode: string | null | undefined): boolean {
+  return String(transportMode ?? '').trim().toUpperCase() === 'SEA';
+}
+
+/**
+ * Outer grouping key for a per-contract subtotal.
+ * SEA: multiple POs sharing one STO/voyage Operation ID merge into one group (summed).
+ * LAND: stays per-contract — a LAND Operation ID is already 1:1 with its PO, so this key
+ * collapses to the same contract group as today (no behavior change).
+ */
+function oilLossOuterGroupKey(agg: Pick<ContractQuantityAgg, 'contract_key' | 'transport_mode' | 'operation_id'>): string {
+  if (isSeaTransportMode(agg.transport_mode)) {
+    const opId = String(agg.operation_id ?? '').trim();
+    if (opId) return `op:${opId}`;
+  }
+  return agg.contract_key;
+}
+
+type OilLossQuantityAgg = {
   quantity_sent: number;
   quantity_received: number;
   quantity_sfal: number;
@@ -75,6 +100,25 @@ type ContractQuantityAgg = {
   has_sfbd: boolean;
 };
 
+type ContractQuantityAgg = OilLossQuantityAgg & {
+  contract_key: string;
+  transport_mode: string | null;
+  operation_id: string | null;
+};
+
+function emptyQuantityAgg(): OilLossQuantityAgg {
+  return {
+    quantity_sent: 0,
+    quantity_received: 0,
+    quantity_sfal: 0,
+    quantity_sfbd: 0,
+    has_sent: false,
+    has_received: false,
+    has_sfal: false,
+    has_sfbd: false,
+  };
+}
+
 function aggregateOilLossQuantitiesByContract(rows: OilLossSummaryRow[]): Map<string, ContractQuantityAgg> {
   const map = new Map<string, ContractQuantityAgg>();
 
@@ -83,27 +127,24 @@ function aggregateOilLossQuantitiesByContract(rows: OilLossSummaryRow[]): Map<st
     let agg = map.get(key);
     if (!agg) {
       agg = {
-        quantity_sent: 0,
-        quantity_received: 0,
-        quantity_sfal: 0,
-        quantity_sfbd: 0,
-        has_sent: false,
-        has_received: false,
-        has_sfal: false,
-        has_sfbd: false,
+        ...emptyQuantityAgg(),
+        contract_key: key,
+        transport_mode: row.transport_mode ?? null,
+        operation_id: row.operation_id ?? null,
       };
       map.set(key, agg);
     }
-    const delivery = parseQty(row.quantity_sent);
+    const delivery = parseQty(row.quantity_sent ?? row.quantity_delivery);
     const receive = parseQty(row.quantity_received);
     const sfal = parseQty(row.quantity_sfal);
     const sfbd = parseQty(row.quantity_sfbd);
-    if (delivery != null) {
-      agg.quantity_sent += delivery;
+    // Contracts-level delivery/receive — take once per contract (do not sum SPD rows).
+    if (delivery != null && !agg.has_sent) {
+      agg.quantity_sent = delivery;
       agg.has_sent = true;
     }
-    if (receive != null) {
-      agg.quantity_received += receive;
+    if (receive != null && !agg.has_received) {
+      agg.quantity_received = receive;
       agg.has_received = true;
     }
     if (sfal != null) {
@@ -119,8 +160,46 @@ function aggregateOilLossQuantitiesByContract(rows: OilLossSummaryRow[]): Map<st
   return map;
 }
 
+/**
+ * Level 2 — combine per-contract subtotals onto their outer group (SEA voyage or LAND contract).
+ * Summing (rather than "take first") is correct here because each input is already one
+ * deduped subtotal per distinct contract, so merging distinct contracts never double-counts.
+ */
+function aggregateContractsByOuterGroup(
+  byContract: Map<string, ContractQuantityAgg>,
+): Map<string, OilLossQuantityAgg> {
+  const outer = new Map<string, OilLossQuantityAgg>();
+
+  for (const agg of byContract.values()) {
+    const key = oilLossOuterGroupKey(agg);
+    let out = outer.get(key);
+    if (!out) {
+      out = emptyQuantityAgg();
+      outer.set(key, out);
+    }
+    if (agg.has_sent) {
+      out.quantity_sent += agg.quantity_sent;
+      out.has_sent = true;
+    }
+    if (agg.has_received) {
+      out.quantity_received += agg.quantity_received;
+      out.has_received = true;
+    }
+    if (agg.has_sfal) {
+      out.quantity_sfal += agg.quantity_sfal;
+      out.has_sfal = true;
+    }
+    if (agg.has_sfbd) {
+      out.quantity_sfbd += agg.quantity_sfbd;
+      out.has_sfbd = true;
+    }
+  }
+
+  return outer;
+}
+
 function sampleFromContractAgg(
-  agg: ContractQuantityAgg,
+  agg: OilLossQuantityAgg,
   kind: ROilLossKey,
 ): { lossKg: number; baseKg: number; pct: number; deliveryKg: number } | null {
   const delivery = agg.quantity_sent;
@@ -156,9 +235,12 @@ function sampleFromContractAgg(
 
 export function computeROilLossSummary(rows: OilLossSummaryRow[], kind: ROilLossKey): ROilLossSummary {
   const byContract = aggregateOilLossQuantitiesByContract(rows);
+  // Note: for SEA, sampleCount below now counts voyages (Operation ID groups) instead of
+  // contracts/POs — an intended, visible change when a voyage spans multiple contracts.
+  const byGroup = aggregateContractsByOuterGroup(byContract);
   const samples: { lossKg: number; baseKg: number; pct: number; deliveryKg: number }[] = [];
 
-  for (const agg of byContract.values()) {
+  for (const agg of byGroup.values()) {
     const sample = sampleFromContractAgg(agg, kind);
     if (sample) samples.push(sample);
   }

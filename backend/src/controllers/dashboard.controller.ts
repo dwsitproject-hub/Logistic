@@ -5,8 +5,16 @@ import logger from '../utils/logger';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { resolveContractsStoAggCte } from '../services/contractStoAggSnapshot.service';
 import { diffCalendarDays } from '../utils/calendarDays';
+import { ttlMemo } from '../utils/ttlMemo';
 import { shipmentIsLateSql } from '../utils/shipmentListFilters';
 import { sqlShipmentListPrimaryIdAgg } from '../utils/shipmentListPrimaryShipmentSql';
+import { sqlExcludeWithdrawnContracts } from '../utils/sapPresenceSql';
+import { sqlB2bOriginEndingUnloadSubquery } from '../utils/b2bOriginEndingSql';
+import { sqlLastAtaVesselCompleteDischargeForContract } from '../utils/contractsListCycleSql';
+import {
+  sqlIncotermQuantityDeliveryCase,
+  sqlTransportModeFromContractAndJson,
+} from '../utils/sapIncotermMetrics';
 
 // Normalize query param to string[] (Express sends array for ?key=a&key=b)
 const toFilterArray = (v: unknown): string[] => {
@@ -56,8 +64,15 @@ const shouldPerfLog = () => {
 };
 
 /**
- * Exclude B2B "child" contracts from dashboard aggregates:
- * latest SAP row has B2B flag = B2B AND Contract Reff PO Ini (or mapped keys) is not blank.
+ * Exclude from dashboard aggregates (Dashboard and Management Dashboard, which share this
+ * controller):
+ *   1. B2B "child" contracts - latest SAP row has B2B flag = B2B AND Contract Reff PO Ini
+ *      (or mapped keys) is not blank.
+ *   2. SAP-withdrawn contracts - the PO was cancelled/deleted upstream, so it must not count
+ *      towards any total. Still visible in lists behind the presence filter.
+ *
+ * Both live in one constant so every aggregate site picks them up together; several queries
+ * interpolate this directly rather than going through buildDashboardFilters.
  * Requires alias `c` for `contracts` (e.g. `FROM contracts c`). No bind parameters.
  */
 const DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL = `
@@ -83,7 +98,8 @@ const DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL = `
     WHERE x.contract_number = c.contract_id
     ORDER BY x.created_at DESC NULLS LAST
     LIMIT 1
-  ), true)`;
+  ), true)
+  ${sqlExcludeWithdrawnContracts('c')}`;
 
 const perf = (req: AuthRequest, name: string) => {
   const start = Date.now();
@@ -226,6 +242,7 @@ const buildFilterConditions = (req: AuthRequest): { contractFilter: string; ship
     )`;
   }
 
+  // Carries the SAP-withdrawn exclusion too - see the constant's definition.
   contractFilter += DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL;
 
   return { contractFilter, shipmentFilter, truckingFilter, params };
@@ -318,12 +335,22 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
           MAX(c.quantity_ordered) AS contract_quantity,
           MAX(COALESCE(c.contract_value, 0)) AS contract_value,
           MAX(COALESCE(c.incoterm, '')) AS incoterm,
-          COALESCE(MAX(qm.quantity_delivery), 0) AS quantity_delivery,
+          COALESCE(MAX(${sqlIncotermQuantityDeliveryCase(
+            'c.incoterm',
+            'qm.quantity_delivery_trucking',
+            'qm.quantity_delivery_vessel',
+            sqlTransportModeFromContractAndJson('c.transport_mode', 'NULL::jsonb'),
+          )}), 0) AS quantity_delivery,
           COALESCE(MAX(qm.quantity_receive), 0) AS quantity_receive,
           COALESCE(
             CASE
               WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('FRC', 'CIF', 'CFR') THEN MAX(qm.quantity_receive)
-              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN MAX(qm.quantity_delivery)
+              WHEN UPPER(TRIM(COALESCE(MAX(c.incoterm), ''))) IN ('LCO', 'FOB') THEN MAX(${sqlIncotermQuantityDeliveryCase(
+                'c.incoterm',
+                'qm.quantity_delivery_trucking',
+                'qm.quantity_delivery_vessel',
+                sqlTransportModeFromContractAndJson('c.transport_mode', 'NULL::jsonb'),
+              )})
               ELSE MAX(sa.total_sto_quantity)
             END,
             0
@@ -1185,7 +1212,7 @@ export const getDashboardOverview = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -1528,7 +1555,7 @@ export const getDashboardOverview = async (req: AuthRequest, res: Response) => {
                 SELECT COALESCE(
                   CASE
                     WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                      SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                      SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                       FROM trucking_operations t
                       WHERE t.contract_id = c.id
                       ORDER BY t.created_at DESC NULLS LAST
@@ -1838,7 +1865,7 @@ export const getShipmentsByStatus = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2066,7 +2093,7 @@ export const getTruckingOperationsByStatus = async (req: AuthRequest, res: Respo
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2202,7 +2229,7 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                   AND COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), '')) IS NOT NULL
@@ -2224,7 +2251,7 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
               ELSE NULL
             END,
             (
-              SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+              SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
               FROM trucking_operations t
               WHERE t.contract_id = c.id
                 AND COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), '')) IS NOT NULL
@@ -2318,7 +2345,7 @@ export const getPaymentsByStatus = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2652,7 +2679,7 @@ export const getContractQuantityByProductIncotermPlantSource = async (req: AuthR
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -2877,7 +2904,7 @@ export const getContractQuantityByPlant = async (req: AuthRequest, res: Response
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -3049,7 +3076,7 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -3479,17 +3506,22 @@ export const getFilterPlants = async (_req: AuthRequest, res: Response) => {
 // Get filter options for suppliers
 export const getFilterSuppliers = async (_req: AuthRequest, res: Response) => {
   try {
-    const result = await query(`
+    // Rarely-changing dropdown list whose B2B-child exclusion scans SPD JSONB —
+    // memoized for 5 minutes (identical query, just not re-run per page load).
+    const data = await ttlMemo('filter-options:dashboard-suppliers', 5 * 60 * 1000, async () => {
+      const result = await query(`
       SELECT DISTINCT supplier
       FROM contracts c
       WHERE supplier IS NOT NULL AND supplier != ''
       ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY supplier
     `);
+      return result.rows.map(row => row.supplier);
+    });
 
     return res.json({
       success: true,
-      data: result.rows.map(row => row.supplier),
+      data,
     });
   } catch (error) {
     logger.error('Get filter suppliers error:', error);
@@ -3503,17 +3535,20 @@ export const getFilterSuppliers = async (_req: AuthRequest, res: Response) => {
 // Get filter options for products
 export const getFilterProducts = async (_req: AuthRequest, res: Response) => {
   try {
-    const result = await query(`
+    const data = await ttlMemo('filter-options:dashboard-products', 5 * 60 * 1000, async () => {
+      const result = await query(`
       SELECT DISTINCT product
       FROM contracts c
       WHERE product IS NOT NULL AND product != ''
       ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY product
     `);
+      return result.rows.map(row => row.product);
+    });
 
     return res.json({
       success: true,
-      data: result.rows.map(row => row.product),
+      data,
     });
   } catch (error) {
     logger.error('Get filter products error:', error);
@@ -3527,17 +3562,20 @@ export const getFilterProducts = async (_req: AuthRequest, res: Response) => {
 // Get filter options for group names
 export const getFilterGroups = async (_req: AuthRequest, res: Response) => {
   try {
-    const result = await query(`
+    const data = await ttlMemo('filter-options:dashboard-groups', 5 * 60 * 1000, async () => {
+      const result = await query(`
       SELECT DISTINCT group_name
       FROM contracts c
       WHERE group_name IS NOT NULL AND group_name != ''
       ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
       ORDER BY group_name
     `);
+      return result.rows.map(row => row.group_name);
+    });
 
     return res.json({
       success: true,
-      data: result.rows.map(row => row.group_name),
+      data,
     });
   } catch (error) {
     logger.error('Get filter groups error:', error);
@@ -3855,7 +3893,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
           SELECT COALESCE(
             CASE
               WHEN tx.tm_upper LIKE 'LAND%' THEN (
-                SELECT COALESCE(NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
+                SELECT COALESCE(${sqlB2bOriginEndingUnloadSubquery('c.po_number')}, NULLIF(TRIM(t.unloading_location), ''), NULLIF(TRIM(t.location), ''))
                 FROM trucking_operations t
                 WHERE t.contract_id = c.id
                 ORDER BY t.created_at DESC NULLS LAST
@@ -3902,7 +3940,7 @@ export const getFilteredContracts = async (req: AuthRequest, res: Response) => {
              ORDER BY p3.created_at DESC NULLS LAST
              LIMIT 1) AS payoff_date_deviation_days,
             (SELECT MAX(t.trucking_completion_date) FROM trucking_operations t WHERE t.contract_id = c.id) AS last_trucking_completion_date,
-            (SELECT MAX(s.ata_discharge_complete::date) FROM shipments s WHERE s.contract_id = c.id AND s.ata_discharge_complete IS NOT NULL) AS last_ata_vessel_complete_discharge
+            ${sqlLastAtaVesselCompleteDischargeForContract('c.id')} AS last_ata_vessel_complete_discharge
           FROM payments p
           WHERE p.contract_id = c.id
         ) pinfo ON true

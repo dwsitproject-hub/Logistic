@@ -1,0 +1,31 @@
+# Mount IT's SAP import share into the backend, read-only.
+#
+#   cd /opt/klip
+#   docker compose -f docker-compose.backend.yml \
+#                  -f docker-compose.backend.remote-db.yml \
+#                  -f docker-compose.backend.sap-share.yml up -d --build backend
+#
+# Requires in /opt/klip/.env:
+#   KLIP_SAP_IMPORT_MOUNT=/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT
+#   SAP_AUTO_IMPORT_ROOT=/mnt/sap-import
+#   SAP_AUTO_IMPORT_RESULTS_ROOT=/app/uploads/SAP Data
+#
+# Read-only on purpose, and not only because the host mount is. The folder is IT's: KLIP reads
+# the exports and must never be able to modify or delete them. Result workbooks go to
+# SAP_AUTO_IMPORT_RESULTS_ROOT instead, which is this environment's own volume - SIT and
+# production read the SAME source folder, so writing results back to it would have them
+# overwriting each other's reports.
+#
+# Separate from /app/uploads deliberately: that volume holds KLIP's own documents and must stay
+# writable. This is a second, unrelated mount.
+#
+# Permissions to check before expecting this to work - the share's folders are mode 0550 owned by
+# uid/gid 1001, so the container's user has to BE 1001 or be in group 1001, or every read is
+# denied and the scan reports an empty folder:
+#   docker exec klip-backend id
+#   docker exec klip-backend ls /mnt/sap-import
+
+services:
+  backend:
+    volumes:
+      - "${KLIP_SAP_IMPORT_MOUNT:-/mnt/synology-apps/dev/KLIP/IMPORT DATA/LOGISTICS REPORT}:/mnt/sap-import:ro"
