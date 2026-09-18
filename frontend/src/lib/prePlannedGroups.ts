@@ -70,7 +70,7 @@ export async function rebuildPrePlannedGroups(): Promise<void> {
 
 /**
  * Manually create a Preplanned group from user-selected Unplanned contracts
- * (Shipments View Table "Select" column). Requires at least 2 contract ids;
+ * (Shipments View Table "Select" column). One contract is enough;
  * the group is created directly with status ACCEPTED (Preplanned), no
  * intermediate SUGGESTED step.
  */

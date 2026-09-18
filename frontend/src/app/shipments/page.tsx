@@ -2558,7 +2558,7 @@ function ShipmentsPageContent() {
 
   const handleCreateManualPrePlannedGroup = useCallback(async () => {
     const contractIds = [...selectedManualGroupContractIds]
-    if (contractIds.length < 2 || creatingManualPrePlannedGroup) return
+    if (contractIds.length < 1 || creatingManualPrePlannedGroup) return
     setCreatingManualPrePlannedGroup(true)
     try {
       const created = await createManualPrePlannedGroup(contractIds)
@@ -7055,30 +7055,21 @@ function ShipmentsPageContent() {
                     <span className="text-xs font-medium text-blue-800 whitespace-nowrap">
                       {selectedManualGroupContractIds.size} selected
                     </span>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span>
-                          <Button
-                            size="sm"
-                            className="h-7 bg-blue-600 hover:bg-blue-700 text-white text-xs"
-                            onClick={() => void handleCreateManualPrePlannedGroup()}
-                            disabled={selectedManualGroupContractIds.size < 2 || creatingManualPrePlannedGroup}
-                          >
-                            {creatingManualPrePlannedGroup ? (
-                              <>
-                                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                                Creating…
-                              </>
-                            ) : (
-                              'Accept as Preplanned Group'
-                            )}
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      {selectedManualGroupContractIds.size < 2 ? (
-                        <TooltipContent side="top">Select at least 2 contracts</TooltipContent>
-                      ) : null}
-                    </Tooltip>
+                    <Button
+                      size="sm"
+                      className="h-7 bg-blue-600 hover:bg-blue-700 text-white text-xs"
+                      onClick={() => void handleCreateManualPrePlannedGroup()}
+                      disabled={selectedManualGroupContractIds.size < 1 || creatingManualPrePlannedGroup}
+                    >
+                      {creatingManualPrePlannedGroup ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                          Creating…
+                        </>
+                      ) : (
+                        'Accept as Preplanned Group'
+                      )}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

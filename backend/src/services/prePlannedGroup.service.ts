@@ -396,13 +396,8 @@ export async function createManualPrePlannedGroup(
   options?: { excelGroupLabel?: string | null },
 ): Promise<PrePlannedGroupDto> {
   const dedupedIds = [...new Set(contractIds.map((id) => id.trim()).filter(Boolean))];
-  const minContracts = options?.excelGroupLabel != null ? 1 : 2;
-  if (dedupedIds.length < minContracts) {
-    throw new Error(
-      minContracts === 1
-        ? 'Select at least 1 contract to create a Preplanned group'
-        : 'Select at least 2 contracts to create a manual Preplanned group',
-    );
+  if (dedupedIds.length < 1) {
+    throw new Error('Select at least 1 contract to create a Preplanned group');
   }
 
   const { sql, params } = await buildManualPrePlannedEligibleContractsByIdsQuery(dedupedIds);

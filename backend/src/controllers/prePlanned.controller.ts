@@ -119,10 +119,10 @@ export const postPrePlannedManualCreate = async (req: AuthRequest, res: Response
     }
     const rawIds = Array.isArray(req.body?.contractIds) ? req.body.contractIds : [];
     const contractIds = rawIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0);
-    if (contractIds.length < 2) {
+    if (contractIds.length < 1) {
       res.status(400).json({
         success: false,
-        error: { message: 'Select at least 2 contracts to create a manual Preplanned group' },
+        error: { message: 'Select at least 1 contract to create a manual Preplanned group' },
       });
       return;
     }
