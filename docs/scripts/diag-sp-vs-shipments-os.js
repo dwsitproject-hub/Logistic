@@ -247,6 +247,66 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   }
 
 
+  // G. Shipping Performance's WHERE ends with:
+  //
+  //      AND NOT (l.contract_number IS NOT NULL
+  //               AND COALESCE(l.b2b_flag, '') = 'B2B'
+  //               AND l.contract_reference_po IS NOT NULL)
+  //
+  //    - it drops B2B CHILD contracts, presumably so their quantity is not counted twice beside
+  //    the origin's. That would explain both shapes at once: an STO whose only contracts are
+  //    children disappears entirely, and an STO with a mixture keeps the row but names only the
+  //    non-children.
+  //
+  //    Whether that loses anything depends on one further fact: is the ORIGIN in Shipping
+  //    Performance, carrying the quantity? If it is, nothing is lost and only attribution is off.
+  //    If it is not, the quantity is genuinely gone from the page.
+  if (outside) {
+    const absentIds = [...new Set(outside
+      .filter((r) => Number(r.os_mt) > 0 && Number(r.shipment_rows) > 0)
+      .map((r) => r.contract_id))];
+    if (absentIds.length) {
+      try {
+        const info = (await connection.query(`
+          SELECT c.contract_id,
+                 snap.b2b_flag_raw AS b2b_flag,
+                 snap.contract_reference_po_raw AS reff_po,
+                 (SELECT o.contract_id FROM contracts o
+                   WHERE NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(snap.contract_reference_po_raw), '')
+                   LIMIT 1) AS origin_contract
+          FROM contracts c
+          LEFT JOIN contract_latest_spd_snapshot snap ON snap.contract_number = c.contract_id
+          WHERE c.contract_id = ANY($1::text[])
+          ORDER BY c.contract_id`, [absentIds])).rows;
+        const spNames = new Set();
+        for (const r of all) {
+          for (const cn of String(r.contract_number ?? '').split(/,/)) {
+            const k = cn.trim();
+            if (k) spNames.add(k);
+          }
+        }
+        let children = 0;
+        let originMissing = 0;
+        console.log(`\nG. are they B2B children, and is the origin on the page?`);
+        console.log('   contract      b2b    reff PO        origin        origin in SP?');
+        for (const r of info) {
+          const isChild = String(r.b2b_flag || '').trim().toUpperCase() === 'B2B' && r.reff_po;
+          if (isChild) children += 1;
+          const originIn = r.origin_contract ? spNames.has(String(r.origin_contract).trim()) : false;
+          if (isChild && !originIn) originMissing += 1;
+          console.log('      ' + String(r.contract_id).padEnd(14) + String(r.b2b_flag || '-').padEnd(7) +
+            String(r.reff_po || '-').padEnd(15) + String(r.origin_contract || '-').padEnd(14) +
+            (r.origin_contract ? (originIn ? 'yes' : 'NO') : 'n/a'));
+        }
+        console.log(`   B2B children: ${children} of ${info.length}`);
+        console.log(`   children whose ORIGIN is also absent: ${originMissing}  <- quantity genuinely lost`);
+      } catch (err) {
+        console.log(`\nG. could not be measured: ${String(err.message).slice(0, 200)}`);
+      }
+    }
+  }
+
+
   console.log('\nRead B first. A contract with no shipment at all cannot appear on a page built');
   console.log('from shipments, so that line is a definition difference rather than a fault. The');
   console.log('line below it - contracts that DO have a shipment yet are missing from Shipping');
