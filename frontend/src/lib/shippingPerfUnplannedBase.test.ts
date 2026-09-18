@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import {
+  shippingPerfRowIsUnplannedBacklog,
+  shippingPerfRowMatchesCard,
+} from './shippingPerformanceCardFilter'
 
 /**
  * The page's base filter drops UNPLANNED rows. The backlog arm the backend added emits exactly
@@ -18,8 +22,10 @@ type Row = { status?: string | null; is_unplanned_backlog?: boolean | null }
 
 const isUnplannedStatus = (s: string | null | undefined) =>
   String(s ?? '').trim().toUpperCase() === 'UNPLANNED'
-const isBacklog = (row: Row) => row.is_unplanned_backlog === true
-const keep = (rows: Row[]) => rows.filter((r) => isBacklog(r) || !isUnplannedStatus(r.status))
+// The backlog half IS imported - it is the one piece both the base filter, the cards and the
+// table's Open toggle share, so a change to it must break a test rather than three surfaces.
+const keep = (rows: Row[]) =>
+  rows.filter((r) => shippingPerfRowIsUnplannedBacklog(r) || !isUnplannedStatus(r.status))
 
 describe('Shipping Performance base filter vs the backlog arm', () => {
   it('keeps a backlog row even though its status is UNPLANNED', () => {
@@ -39,5 +45,26 @@ describe('Shipping Performance base filter vs the backlog arm', () => {
   it('leaves every other status untouched', () => {
     const rows: Row[] = [{ status: 'COMPLETED' }, { status: 'IN_TRANSIT' }, { status: null }]
     expect(keep(rows)).toHaveLength(3)
+  })
+})
+
+/**
+ * Decided by Ryan, 2026-09-18: a contract with outstanding and no shipment is OPEN work. The card
+ * and the table toggle were widened together on purpose - widening one alone would let the table
+ * and the card counting the same rows disagree.
+ */
+describe('backlog counts as Open', () => {
+  const backlog = { status: 'UNPLANNED', is_unplanned_backlog: true }
+
+  it('puts a backlog row on the On Going card', () => {
+    expect(shippingPerfRowMatchesCard(backlog, 'ongoing')).toBe(true)
+  })
+
+  it('never puts it on Close - it has no shipment to have completed', () => {
+    expect(shippingPerfRowMatchesCard(backlog, 'close')).toBe(false)
+  })
+
+  it('still keeps it out of On Going when the backend did not mark it', () => {
+    expect(shippingPerfRowMatchesCard({ status: 'UNPLANNED' }, 'ongoing')).toBe(false)
   })
 })

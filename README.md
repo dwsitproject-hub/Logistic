@@ -1915,11 +1915,24 @@ a voyage. `buildPerVesselSummary` also stopped returning `EMPTY_SUMMARY` when `r
 a site where nothing has been planned yet has a real backlog, and reporting it as zero is the same
 class of error in miniature.
 
-**Where these rows do and do not appear, deliberately:** the All card and the All status filter. The
-On Going / Close cards are shipment execution stages (`shippingPerfRowIsOngoingStatus` excludes
-UNPLANNED) and the table's Open / Closed toggle is the same idea, so a contract with no shipment is
-in neither. Widening the toggle without widening the cards would make the table and the cards
-disagree, which is worse than the gap it would close.
+**Backlog counts as Open (Ryan, 2026-09-18).** A contract with outstanding and no shipment is open
+work, so it sits on the **On Going** card and passes the table's **Open** toggle - never on Close,
+which would claim a shipment finished when there is no shipment at all.
+
+The two were widened **together**, and that is the constraint to preserve: `shippingPerfRowMatchesCard`
+and `matchesTableStatusFilter` decide the same question on two surfaces, so widening one alone would
+let a card and the table beneath it report different memberships for the same rows.
+`matchesTableStatusFilter` therefore takes the **row**, not the status string - `OPEN_TABLE_STATUSES`
+lists shipment execution stages and `UNPLANNED` is legitimately not one of them, so Open is decided
+by the flag first and the stage list second.
+
+`shippingPerfRowIsUnplannedBacklog` in `shippingPerformanceCardFilter.ts` is the single definition
+all three surfaces import - the base filter, the cards and the toggle. An earlier pass had a second
+copy inside `page.tsx`; two spellings of one rule is how the three cache-invalidation paths drifted.
+
+The averages are still safe: `buildCardSummary` excludes backlog from `voyageRows`, so the On Going
+card's delay figures and vessel count span only rows with a voyage even though its outstanding and
+contract count span the backlog too.
 
 `c.source_type` is projected on the backlog rows for the same reason - the Source toggle (Interco /
 3rd Party) filters on it, and a missing column would have silently dropped every backlog row again,

@@ -133,6 +133,7 @@ import {
   addDistinctShippingPerfStoKey,
   applyShippingPerfCardFilter,
   countUniqueShippingPerfStoKeys,
+  shippingPerfRowIsUnplannedBacklog,
 } from '@/lib/shippingPerformanceCardFilter'
 
 interface ShippingPerformanceRow {
@@ -297,15 +298,6 @@ function isUnplannedShippingStatus(status: string | null | undefined): boolean {
 }
 
 /**
- * The backlog arm: contracts with outstanding and no shipment at all, added by the backend so this
- * page's outstanding means the same thing as the identically labelled figure on Shipments. The
- * backend marks them; they are never inferred from the status here.
- */
-function isUnplannedBacklogRow(row: ShippingPerformanceRow): boolean {
-  return row.is_unplanned_backlog === true
-}
-
-/**
  * Shipping Performance page only — excludes UNPLANNED from all sections, EXCEPT the backlog arm.
  *
  * The two look identical by status and are not the same thing. An UNPLANNED *shipment* is a
@@ -315,7 +307,7 @@ function isUnplannedBacklogRow(row: ShippingPerformanceRow): boolean {
  * 80,939 for CPO/Bontang after the backend arm shipped.
  */
 function excludeUnplannedShippingRows(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
-  return rows.filter((row) => isUnplannedBacklogRow(row) || !isUnplannedShippingStatus(row.status))
+  return rows.filter((row) => shippingPerfRowIsUnplannedBacklog(row) || !isUnplannedShippingStatus(row.status))
 }
 
 /**
@@ -751,7 +743,7 @@ function applyGlobalFiltersToRows(
     if (!rowMatchesToolbarMultiFilters(row, filters)) return false
     const vessel = normalizeVesselKey(row.vessel_name)
     if (filters.selectedVessels.length > 0 && !filters.selectedVessels.includes(vessel)) return false
-    if (!matchesTableStatusFilter(String(row.status || ''), filters.statusFilter)) return false
+    if (!matchesTableStatusFilter(row, filters.statusFilter)) return false
     if (!rowMatchesPerformancePeriodAnyDate(String(row.contract_date ?? ''), filters.dateFrom, filters.dateTo)) {
       return false
     }
@@ -803,12 +795,12 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
    * enlarge the denominator without touching the numerator and shrink every delay figure simply
    * because something has not been planned yet.
    */
-  const voyageRows = rows.filter((row) => !isUnplannedBacklogRow(row))
+  const voyageRows = rows.filter((row) => !shippingPerfRowIsUnplannedBacklog(row))
 
   for (const row of rows) {
     addDistinctContractIds(contracts, row.contract_number)
     totalQty += shippingPerfOutstandingQtyKgForAggregate(row)
-    if (isUnplannedBacklogRow(row)) continue
+    if (shippingPerfRowIsUnplannedBacklog(row)) continue
     addDistinctShippingPerfStoKey(stoKeys, row)
   }
 
@@ -903,11 +895,19 @@ function buildPerfTree(rows: ShippingPerformanceRow[]): LatePerfNode[] {
   }))
 }
 
-function matchesTableStatusFilter(status: string, filter: TableStatusFilter): boolean {
-  const normalized = String(status || '').trim().toUpperCase()
+/**
+ * Takes the row, not the status. A backlog row's status is UNPLANNED, which is not one of the
+ * execution stages in OPEN_TABLE_STATUSES, yet it is open work - so Open is decided by the flag
+ * first. This must stay in step with shippingPerfRowMatchesCard('ongoing') above it, or the table
+ * and the card counting the same rows would disagree.
+ */
+function matchesTableStatusFilter(row: ShippingPerformanceRow, filter: TableStatusFilter): boolean {
   if (filter === 'All') return true
+  const normalized = String(row.status || '').trim().toUpperCase()
   if (filter === 'Closed') return normalized === 'COMPLETED'
-  if (filter === 'Open') return OPEN_TABLE_STATUSES.has(normalized)
+  if (filter === 'Open') {
+    return shippingPerfRowIsUnplannedBacklog(row) || OPEN_TABLE_STATUSES.has(normalized)
+  }
   return true
 }
 

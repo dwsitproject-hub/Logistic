@@ -1,7 +1,8 @@
 /**
  * Shipping Performance Section 1 — card membership (On Going / Close).
  * Close = shipment status COMPLETED.
- * On Going = planned through pre-completed (ETA presence is not split).
+ * On Going = planned through pre-completed (ETA presence is not split), plus the unplanned
+ * backlog: a contract with outstanding and no shipment is open work, not finished work.
  */
 
 import type { ShippingPerfCardFilter } from '@/lib/shippingPerformanceLabels'
@@ -9,6 +10,8 @@ import type { ShippingPerfCardFilter } from '@/lib/shippingPerformanceLabels'
 export type ShippingPerfCardRow = {
   id?: string
   status?: string | null
+  /** Backend flag: contract with outstanding and no shipment. See shippingPerfRowIsUnplannedBacklog. */
+  is_unplanned_backlog?: boolean | null
   import_status?: string | null
   sto_key?: string | null
   sto_number?: string | null
@@ -74,8 +77,18 @@ export function shippingPerfRowIsCompletedStatus(status: string | null | undefin
 }
 
 /**
+ * The backlog arm: a contract with outstanding and NO shipment. The backend marks these; the flag
+ * is its statement, and the row's `UNPLANNED` status is a coincidence of spelling shared with a
+ * genuinely unplanned *shipment*, which this page still excludes. Never infer one from the other.
+ */
+export function shippingPerfRowIsUnplannedBacklog(row: ShippingPerfCardRow): boolean {
+  return row.is_unplanned_backlog === true
+}
+
+/**
  * On Going — from PLANNED through statuses before COMPLETED.
- * UNPLANNED is excluded at page base filter; CANCELLED/COMPLETED excluded here.
+ * Status only. A backlog row has status UNPLANNED and still belongs to On Going, which is why
+ * membership is decided by shippingPerfRowMatchesCard from the row rather than here.
  */
 export function shippingPerfRowIsOngoingStatus(status: string | null | undefined): boolean {
   if (isCancelledShipmentStatus(status)) return false
@@ -102,6 +115,10 @@ export function shippingPerfRowMatchesCard(
   }
 
   if (card === 'ongoing') {
+    // Outstanding with no shipment yet is open work. Decided per Ryan, 2026-09-18: backlog counts
+    // as Open, on the cards and on the table's Open/Closed toggle together - splitting them would
+    // let the table and the card above it disagree about the same rows.
+    if (shippingPerfRowIsUnplannedBacklog(row)) return true
     return shippingPerfRowIsOngoingStatus(row.status)
   }
 
