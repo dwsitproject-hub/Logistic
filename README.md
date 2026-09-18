@@ -1837,7 +1837,7 @@ delegation is safe, not an optimisation.
 
 ## Shipping Performance
 
-### Shipping Performance counts the unplanned contracts too
+### Agreed, not yet built: Shipping Performance counts the unplanned contracts too
 
 Outstanding Qty means two different things on two pages. The Shipments OS is two disjoint arms -
 execution (a contract with a live shipment) and backlog (a contract without one). Shipping
@@ -1866,15 +1866,7 @@ with status **UNPLANNED**, so the figure can be traced rather than only reconcil
   outstanding total must span all rows; the averages and Total Vessels must span only rows with a
   voyage.
 
-**Verification:** the outstanding rises by exactly the backlog figure, every average delay is unchanged to the decimal, and Total Vessels is unchanged.
-
-**Built as a second query, not a UNION.** The main query takes ~52s cold and has OOMed the
-database before now, and this arm needs none of its vessel machinery. Joining the two rowsets in
-memory also keeps the backlog out of the STO grouping - those contracts have no STO, so grouping
-them by STO key would collapse every one of them into a single row.
-
-`latest_spd_contract` moved to module scope so both queries share one definition rather than
-carrying a copy each.
+**Verification, to be run before and after:** the outstanding rises by exactly the backlog figure,
 every average delay is unchanged to the decimal, and Total Vessels is unchanged.
 
 

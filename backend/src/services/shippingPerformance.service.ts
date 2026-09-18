@@ -1,8 +1,4 @@
 import { query } from '../database/connection';
-import {
-  contractBacklogCoreWhereSql,
-  sqlBacklogRemainingOsJoinExpr,
-} from '../utils/shipmentUnplannedHybridSql';
 import { AuthRequest } from '../middleware/auth';
 import { toIsoDate10FromCell } from '../utils/planningSheetDate';
 import {
@@ -409,15 +405,7 @@ const SHIPPING_PERF_SEA_ROW_SCOPE = buildShipmentPageSeaRowScopeSql('c', 'l', 's
 
 const SHIPPING_PERF_VIEW_TABLE_QTY = buildShippingPerfViewTableQtySelectSql();
 
-/**
- * The latest SAP row per contract, shared by every query in this file.
- *
- * It used to live inside buildShippingPerformanceSql. It is module level now because the
- * unplanned-backlog query needs the same CTE and the same `l` alias - contractBacklogCoreWhereSql
- * reads both - and a second copy of this definition is the kind of duplication that has drifted
- * elsewhere in this codebase more than once.
- */
-async function buildLatestSpdContractCte(): Promise<string> {
+export async function buildShippingPerformanceSql(): Promise<string> {
   /**
    * `latest_spd_contract` is the latest SAP row per contract - which is exactly what
    * contract_latest_spd_snapshot stores, one row per contract_number (18,711 = 18,711 distinct,
@@ -482,73 +470,6 @@ async function buildLatestSpdContractCte(): Promise<string> {
          */
         ORDER BY spd.contract_number, spd.created_at DESC NULLS LAST, spd.id DESC
       )`;
-  return latestSpdContractCte;
-}
-
-/**
- * The unplanned contracts, as rows.
- *
- * Outstanding Qty meant two different things on two pages. The Shipments OS is two disjoint arms -
- * execution (a contract with a live shipment) and backlog (a contract without one) - and this page,
- * built from shipments, only ever had the first. CPO / Bontang read 49,107 MT here against 80,939
- * MT there, and almost all of it was backlog.
- *
- * Membership comes from contractBacklogCoreWhereSql, the SAME function the Shipments page uses, not
- * a copy of its criteria. Its comments establish that the arm is disjoint from execution - a
- * contract with any live shipment is counted there and excluded here - which is what makes adding
- * it safe rather than double counting. A rewritten copy would agree today and drift later.
- *
- * A separate query rather than a UNION into the main one, deliberately: that query takes ~52s cold
- * and has OOMed the database before now, and this arm needs none of its vessel machinery. Joined in
- * memory afterwards, it also cannot disturb the STO grouping - these rows have no STO, so grouping
- * them by STO key would collapse every one of them into a single row.
- *
- * outstanding_qty_aggregate is set equal to the row's own outstanding on purpose: the aggregate
- * helper prefers it and divides nothing, which is correct here because a contract without a
- * shipment has no sibling STOs to share with.
- */
-export async function buildShippingPerformanceBacklogSql(): Promise<string> {
-  const latestSpdContractCte = await buildLatestSpdContractCte();
-  const os = sqlBacklogRemainingOsJoinExpr();
-  return `
-    WITH ${latestSpdContractCte}
-    SELECT
-      c.contract_id::text                       AS contract_number,
-      l.contract_ext_no,
-      c.po_number,
-      NULL::text                                AS sto_number,
-      NULL::text                                AS sto_key,
-      NULL::text                                AS operation_id,
-      NULL::uuid                                AS id,
-      c.product,
-      COALESCE(NULLIF(TRIM(l.discharge_destination), ''), 'Blank') AS plant_site,
-      c.incoterm,
-      c.supplier,
-      c.contract_date,
-      NULL::text                                AS vessel_name,
-      NULL::text                                AS group_name,
-      'UNPLANNED'::text                         AS status,
-      'PRESENT'::text                           AS sap_presence,
-      c.quantity_ordered::numeric               AS contract_qty,
-      NULL::numeric                             AS sto_qty,
-      COALESCE(qm.quantity_receive, 0)::numeric AS received_qty,
-      COALESCE(qm.quantity_delivery, 0)::numeric AS delivered_qty,
-      (${os})::numeric                          AS outstanding_qty_actual,
-      (${os})::numeric                          AS outstanding_qty,
-      (${os})::numeric                          AS outstanding_qty_aggregate,
-      0::numeric                                AS outstanding_qty_planning,
-      1::int                                    AS po_sto_count,
-      0::int                                    AS shipment_count,
-      TRUE                                      AS is_unplanned_backlog
-    FROM contracts c
-    LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
-    LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
-    WHERE ${contractBacklogCoreWhereSql('c', 'l')}
-      AND (${os}) > 0`;
-}
-
-export async function buildShippingPerformanceSql(): Promise<string> {
-  const latestSpdContractCte = await buildLatestSpdContractCte();
 
   return `
       WITH ${latestSpdContractCte},
@@ -891,11 +812,6 @@ function deltaField(mode: SummaryMode, etaField: string): string {
   return mode === 'ata' ? `ata_${etaField}` : etaField;
 }
 
-/** True for a row added by the unplanned-contract backlog arm (no shipment, no vessel, no dates). */
-export function isUnplannedBacklogRow(row: Record<string, unknown>): boolean {
-  return row.is_unplanned_backlog === true || row.is_unplanned_backlog === 'true';
-}
-
 function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMode): PerVesselPerfSummary {
   let rowCount = 0;
   let totalQty = 0;
@@ -909,27 +825,11 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
   const stoKeys = new Set<string>();
 
   for (const row of rows) {
-    const contractNumber = String(row.contract_number || '').trim();
-    if (contractNumber) contracts.add(contractNumber);
-    // Outstanding spans every contract in scope, planned or not - that is the whole point of
-    // adding the backlog arm, and it is what makes this figure mean the same as the identically
-    // labelled one on Shipments.
-    totalQty += shippingPerfOutstandingQtyKgForAggregate(row);
-
-    /*
-     * Everything below spans only rows with a voyage.
-     *
-     * The averages are sum / rowCount. A backlog contract has no vessel and no dates, so its
-     * deltas are all zero - counting it would enlarge the denominator without touching the
-     * numerator and shrink every delay figure simply because something has not been planned yet.
-     * That would quietly degrade the metric this page exists for, in exchange for a total that is
-     * already correct without it. Total Vessels is excluded for the plainer reason that there is
-     * no vessel here.
-     */
-    if (isUnplannedBacklogRow(row)) continue;
-
     rowCount += 1;
     stoKeys.add(shippingPerfStoGroupKey(row));
+    const contractNumber = String(row.contract_number || '').trim();
+    if (contractNumber) contracts.add(contractNumber);
+    totalQty += shippingPerfOutstandingQtyKgForAggregate(row);
     sumLoadingEtaEtr += Number(row[deltaField(mode, 'loading_delta_eta_etr_days')] ?? 0);
     sumLoadingEtaEtb += Number(row[deltaField(mode, 'loading_delta_eta_etb_days')] ?? 0);
     sumLoadingEtbEtc += Number(row[deltaField(mode, 'loading_delta_etb_etc_days')] ?? 0);
@@ -1036,12 +936,7 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
   refreshInFlight = (async () => {
     try {
       const result = await query(await buildShippingPerformanceSql());
-      // Group the shipment rows by STO FIRST, then append the backlog. Backlog contracts have no
-      // STO, so putting them through the grouping would collapse every one of them into a single
-      // row - they are appended afterwards for that reason, not merely for convenience.
-      const shipmentRows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
-      const backlog = await query(await buildShippingPerformanceBacklogSql());
-      const rows = [...shipmentRows, ...(backlog.rows as Record<string, unknown>[])];
+      const rows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
       ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       return rows;
     } finally {
