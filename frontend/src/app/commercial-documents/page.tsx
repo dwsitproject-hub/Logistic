@@ -79,7 +79,7 @@ import {
   type CommercialDocumentType,
 } from '@/lib/commercialDocumentsTypes'
 
-const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v2'
+const VISIBLE_COLUMNS_KEY = 'commercial-documents.visibleColumns.v3'
 const PAGE_SIZE = 50
 
 type DocumentStatusFilter = '' | 'checked' | 'unchecked'

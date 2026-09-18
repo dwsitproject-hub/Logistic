@@ -28,4 +28,15 @@ describe('commercialDocumentsQuerySql Region/Site', () => {
     const { sql } = buildCommercialDocumentsListQuery({ page: 1, limit: 50 });
     expect(sql).not.toContain('UPPER(NULLIF(TRIM(e.plant_site)');
   });
+
+  it('selects payoff_date from SAP / MV / payments and new doc flags', () => {
+    const cte = buildCommercialDocumentsBaseCte();
+    expect(cte).toContain("->>'payoff_date'");
+    expect(cte).toContain("'Payoff Date'");
+    expect(cte).toContain('pay.payoff_date');
+    expect(cte).toContain('AS payoff_date');
+    expect(cte).toContain('AS doc_draft_contract');
+    expect(cte).toContain('AS doc_bea_cukai');
+    expect(cte).toContain('AS doc_delivery_order');
+  });
 });

@@ -30,10 +30,18 @@ When Synology is reachable, **persistent** KLIP uploads on SIT/staging should us
 ```
 APPs/
   dev/
-    klip/                          ← KLIP upload root (bind mount)
-      commercial-documents/
+    KLIP/                          ← production commercial-docs root (`KLIP_UPLOAD_MOUNT`)
+      COMMERCIAL DOCS/
+        {YYYY}/                    ← tahun berjalan (Asia/Jakarta), e.g. 2026 then 2027
+          {MM}/                    ← 01–12
+            {PO}/
+              EOP_Dctr_{PO}.pdf
+    klip/                          ← KLIP upload root (bind mount, SIT default)
+      commercial-documents/        ← legacy path (old uploads still readable)
         YYYY-MM/
           EU-CTR-{PO}.pdf
+      COMMERCIAL DOCS/             ← new uploads when this folder is the upload root
+        {YYYY}/{MM}/{PO}/
       claim-mutu/
       claim-susut/
       suppliers/
@@ -49,7 +57,7 @@ APPs/
 
 | Module | Path under `dev/klip/` |
 |--------|-------------------------|
-| Commercial Documents (PDF) | `commercial-documents/YYYY-MM/` |
+| Commercial Documents (PDF) | `COMMERCIAL DOCS/{YYYY}/{MM}/{PO}/` (legacy: `commercial-documents/YYYY-MM/`) |
 | Documents (contract/shipment/trucking) | root of upload folder |
 | Claim Mutu import | `claim-mutu/` |
 | Claim Susut import | `claim-susut/` |
@@ -172,8 +180,10 @@ ls -la /mnt/synology-apps/dev/klip
 # Writable from container (runs as uid 1001)
 docker compose -f docker-compose.backend.yml exec backend sh -c 'touch /app/uploads/.write-test && rm /app/uploads/.write-test && echo OK'
 
-# After uploading a commercial PDF in UI
-ls -la /mnt/synology-apps/dev/klip/commercial-documents/
+# After uploading a commercial PDF in UI (tahun/bulan/PO dinamis)
+ls -la "/mnt/synology/dev/KLIP/COMMERCIAL DOCS/$(date +%Y)/$(date +%m)/"
+# SIT overlay (if upload root is still dev/klip):
+ls -la "/mnt/synology-apps/dev/klip/COMMERCIAL DOCS/"
 
 # SAP drop folders (scheduler reads Original/)
 ls -la /mnt/synology-apps/dev/klip/SAP\ Data/Original /mnt/synology-apps/dev/klip/SAP\ Data/Success /mnt/synology-apps/dev/klip/SAP\ Data/Failed

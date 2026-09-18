@@ -56,6 +56,12 @@ export function buildCommercialDocumentsBaseCte(): string {
     `NULLIF(trim(latest_spd.data->>'dp date'), '')`,
     `NULLIF(trim(latest_spd.data->>'DP Date'), '')`,
   ]);
+  const payoffRaw = sapPaymentRawExpr([
+    `NULLIF(trim(latest_spd.data->'payment'->>'payoff_date'), '')`,
+    `NULLIF(trim(latest_spd.data->'raw'->>'Payoff Date'), '')`,
+    `NULLIF(trim(latest_spd.data->>'payoff date'), '')`,
+    `NULLIF(trim(latest_spd.data->>'Payoff Date'), '')`,
+  ]);
 
   return `
     WITH latest_spd AS (
@@ -105,6 +111,11 @@ export function buildCommercialDocumentsBaseCte(): string {
           ${parseSapPaymentDateFromTrimmedExpr(dpDueRaw)},
           mv_pay.dp_date
         ) AS dp_due_date,
+        COALESCE(
+          ${parseSapPaymentDateFromTrimmedExpr(payoffRaw)},
+          mv_pay.payoff_date,
+          pay.payoff_date
+        ) AS payoff_date,
         latest_spd.data AS latest_spd_data,
         ${COMMERCIAL_DOCS_OPEN_STATUS_SQL} AS is_open
       FROM contracts c
@@ -112,7 +123,7 @@ export function buildCommercialDocumentsBaseCte(): string {
       ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       LEFT JOIN mv_contract_payment_dates mv_pay ON mv_pay.contract_id = c.contract_id
       LEFT JOIN LATERAL (
-        SELECT p.payment_due_date
+        SELECT p.payment_due_date, p.payoff_date
         FROM payments p
         WHERE p.contract_id = c.id
         ORDER BY p.created_at DESC NULLS LAST
@@ -127,8 +138,11 @@ export function buildCommercialDocumentsBaseCte(): string {
     doc_flags AS (
       SELECT
         NULLIF(TRIM(po_number), '') AS po_number,
+        ${sqlDocFlag(documentTypesForCategory('draft_contract'))} AS doc_draft_contract,
         ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('bea_cukai'))} AS doc_bea_cukai,
+        ${sqlDocFlag(documentTypesForCategory('delivery_order'))} AS doc_delivery_order,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
@@ -140,8 +154,11 @@ export function buildCommercialDocumentsBaseCte(): string {
     legacy_doc_flags AS (
       SELECT
         contract_ext_no,
+        ${sqlDocFlag(documentTypesForCategory('draft_contract'))} AS doc_draft_contract,
         ${sqlDocFlag(documentTypesForCategory('contract'))} AS doc_contract,
         ${sqlDocFlag(documentTypesForCategory('addendum_contract'))} AS doc_addendum_contract,
+        ${sqlDocFlag(documentTypesForCategory('bea_cukai'))} AS doc_bea_cukai,
+        ${sqlDocFlag(documentTypesForCategory('delivery_order'))} AS doc_delivery_order,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_dp'))} AS doc_invoice_fp_dp,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_payoff'))} AS doc_invoice_fp_payoff,
         ${sqlDocFlag(documentTypesForCategory('invoice_fp_full'))} AS doc_invoice_fp_full,
@@ -153,8 +170,11 @@ export function buildCommercialDocumentsBaseCte(): string {
     enriched AS (
       SELECT
         cr.*,
+        COALESCE(df.doc_draft_contract, ldf.doc_draft_contract, false) AS doc_draft_contract,
         COALESCE(df.doc_contract, ldf.doc_contract, false) AS doc_contract,
         COALESCE(df.doc_addendum_contract, ldf.doc_addendum_contract, false) AS doc_addendum_contract,
+        COALESCE(df.doc_bea_cukai, ldf.doc_bea_cukai, false) AS doc_bea_cukai,
+        COALESCE(df.doc_delivery_order, ldf.doc_delivery_order, false) AS doc_delivery_order,
         COALESCE(df.doc_invoice_fp_dp, ldf.doc_invoice_fp_dp, false) AS doc_invoice_fp_dp,
         COALESCE(df.doc_invoice_fp_payoff, ldf.doc_invoice_fp_payoff, false) AS doc_invoice_fp_payoff,
         COALESCE(df.doc_invoice_fp_full, ldf.doc_invoice_fp_full, false) AS doc_invoice_fp_full,
@@ -170,8 +190,11 @@ export function buildCommercialDocumentsBaseCte(): string {
 
 function docTypeCheckedColumn(documentType: string): string | null {
   const map: Record<string, string> = {
+    draft_contract: 'doc_draft_contract',
     contract: 'doc_contract',
     addendum_contract: 'doc_addendum_contract',
+    bea_cukai: 'doc_bea_cukai',
+    delivery_order: 'doc_delivery_order',
     invoice_fp_dp: 'doc_invoice_fp_dp',
     invoice_fp_payoff: 'doc_invoice_fp_payoff',
     invoice_fp_full: 'doc_invoice_fp_full',
@@ -279,8 +302,11 @@ export function buildCommercialDocumentsSummaryQuery(params: {
     ${buildCommercialDocumentsBaseCte()}
     SELECT
       COUNT(*) FILTER (WHERE e.is_open)::int AS open_contract_count,
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_draft_contract)::int AS checked_draft_contract,
       COUNT(*) FILTER (WHERE e.is_open AND e.doc_contract)::int AS checked_contract,
       COUNT(*) FILTER (WHERE e.is_open AND e.doc_addendum_contract)::int AS checked_addendum_contract,
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_bea_cukai)::int AS checked_bea_cukai,
+      COUNT(*) FILTER (WHERE e.is_open AND e.doc_delivery_order)::int AS checked_delivery_order,
       COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_dp)::int AS checked_invoice_fp_dp,
       COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_payoff)::int AS checked_invoice_fp_payoff,
       COUNT(*) FILTER (WHERE e.is_open AND e.doc_invoice_fp_full)::int AS checked_invoice_fp_full

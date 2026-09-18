@@ -7,8 +7,8 @@ import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import {
   buildCommercialDocumentStoredName,
-  commercialDocumentMonthFolder,
   commercialDocumentTypeLabel,
+  commercialDocumentUploadRelativeDir,
   documentTypesForCategory,
   isCommercialDocumentType,
 } from '../utils/commercialDocumentsConstants';
@@ -59,6 +59,7 @@ function mapRow(row: Record<string, unknown>) {
     contract_date: row.contract_date,
     payment_due_date: row.payment_due_date,
     dp_due_date: row.dp_due_date,
+    payoff_date: row.payoff_date,
     quantity_ordered: qty,
     unit_price: unitPrice,
     total_price: qty * unitPrice,
@@ -72,8 +73,11 @@ function mapRow(row: Record<string, unknown>) {
     status: row.status,
     is_open: row.is_open,
     uploaded_count: row.uploaded_count,
+    doc_draft_contract: row.doc_draft_contract,
     doc_contract: row.doc_contract,
     doc_addendum_contract: row.doc_addendum_contract,
+    doc_bea_cukai: row.doc_bea_cukai,
+    doc_delivery_order: row.doc_delivery_order,
     doc_invoice_fp_dp: row.doc_invoice_fp_dp,
     doc_invoice_fp_payoff: row.doc_invoice_fp_payoff,
     doc_invoice_fp_full: row.doc_invoice_fp_full,
@@ -151,8 +155,11 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
         ...(includeSummary
           ? {
               summary: {
+                draft_contract: buildCard('checked_draft_contract'),
                 contract: buildCard('checked_contract'),
                 addendum_contract: buildCard('checked_addendum_contract'),
+                bea_cukai: buildCard('checked_bea_cukai'),
+                delivery_order: buildCard('checked_delivery_order'),
                 invoice_fp_dp: buildCard('checked_invoice_fp_dp'),
                 invoice_fp_payoff: buildCard('checked_invoice_fp_payoff'),
                 invoice_fp_full: buildCard('checked_invoice_fp_full'),
@@ -235,9 +242,11 @@ export const getCommercialDocumentFiles = async (req: AuthRequest, res: Response
 
 const storage = multer.diskStorage({
   destination: (req, _file, cb) => {
-    const contractDate = (req.body?.contract_date as string) || null;
-    const monthFolder = commercialDocumentMonthFolder(contractDate);
-    const dir = ensureUploadDir(path.join('commercial-documents', monthFolder));
+    const poNumber = resolveCommercialDocumentPoKey(
+      (req as AuthRequest).body?.po_number,
+      (req as AuthRequest).body?.contract_id,
+    );
+    const dir = ensureUploadDir(commercialDocumentUploadRelativeDir(poNumber));
     cb(null, dir);
   },
   filename: (_req, file, cb) => {
@@ -266,16 +275,45 @@ export const commercialDocumentUpload = multer({
   },
 });
 
-async function loadExistingFileNames(poNumber: string, documentType: string): Promise<string[]> {
+async function loadExistingFileRows(
+  poNumber: string,
+  documentType: string,
+): Promise<Array<{ id: string; file_name: string; file_path: string }>> {
   const types = isCommercialDocumentType(documentType)
     ? documentTypesForCategory(documentType)
     : [documentType];
   const result = await query(
-    `SELECT file_name FROM commercial_document_files
+    `SELECT id, file_name, file_path FROM commercial_document_files
      WHERE NULLIF(TRIM(po_number), '') = $1 AND document_type = ANY($2::text[])`,
     [poNumber, types],
   );
-  return result.rows.map((r) => String(r.file_name || ''));
+  return result.rows.map((r) => ({
+    id: String(r.id),
+    file_name: String(r.file_name || ''),
+    file_path: String(r.file_path || ''),
+  }));
+}
+
+function unlinkStoredUpload(filePath: string): void {
+  if (!filePath) return;
+  try {
+    const abs = resolveUploadAbsolutePath(filePath);
+    if (fs.existsSync(abs)) fs.unlinkSync(abs);
+  } catch {
+    /* ignore missing files */
+  }
+}
+
+async function replacePreviousContractFiles(poNumber: string): Promise<number> {
+  const previous = await loadExistingFileRows(poNumber, 'contract');
+  if (previous.length === 0) return 0;
+  for (const row of previous) {
+    unlinkStoredUpload(row.file_path);
+  }
+  await query(`DELETE FROM commercial_document_files WHERE id = ANY($1::uuid[])`, [
+    previous.map((row) => row.id),
+  ]);
+  return previous.length;
 }
 
 export const uploadCommercialDocument = async (req: AuthRequest, res: Response) => {
@@ -335,13 +373,20 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
       return res.status(503).json({ success: false, error: { message: 'Virus scanner unavailable' } });
     }
 
-    const existingFileNames = await loadExistingFileNames(poNumber, documentType);
+    let existingFileCount = 0;
+    let replacedContractCount = 0;
+    if (documentType === 'contract') {
+      replacedContractCount = await replacePreviousContractFiles(poNumber);
+    } else {
+      existingFileCount = (await loadExistingFileRows(poNumber, documentType)).length;
+    }
+
     const storedName = buildCommercialDocumentStoredName({
       buyerName,
       documentType,
       referenceNumber: poNumber || 'UNKNOWN',
       originalName: file.originalname,
-      existingFileCount: existingFileNames.length,
+      existingFileCount,
     });
 
     const uploadDir = path.dirname(file.path);
@@ -361,7 +406,9 @@ export const uploadCommercialDocument = async (req: AuthRequest, res: Response) 
     const relativePath = toRelativeUploadPath(finalAbsPath);
     const userId = req.user?.id ?? null;
     const userName = req.user?.username || req.user?.email || 'Unknown';
-    const actionType = existingFileNames.length > 0 ? 'EDIT' : 'ADD';
+    const actionType = documentType === 'contract'
+      ? replacedContractCount > 0 ? 'EDIT' : 'ADD'
+      : existingFileCount > 0 ? 'EDIT' : 'ADD';
 
     const insertResult = await query(
       `INSERT INTO commercial_document_files

@@ -51,7 +51,7 @@ fi
 mkdir -p "${MOUNT_KLIP}"
 chown 1001:1001 "${MOUNT_KLIP}" 2>/dev/null || true
 
-for sub in commercial-documents claim-mutu claim-susut suppliers \
+for sub in commercial-documents "COMMERCIAL DOCS" claim-mutu claim-susut suppliers \
   "SAP Data" "SAP Data/Original" "SAP Data/Success" "SAP Data/Failed"; do
   mkdir -p "${MOUNT_KLIP}/${sub}"
   chown 1001:1001 "${MOUNT_KLIP}/${sub}" 2>/dev/null || true

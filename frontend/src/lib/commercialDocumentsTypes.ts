@@ -1,13 +1,19 @@
 export type CommercialDocumentType =
+  | 'draft_contract'
   | 'contract'
   | 'addendum_contract'
+  | 'bea_cukai'
+  | 'delivery_order'
   | 'invoice_fp_dp'
   | 'invoice_fp_payoff'
   | 'invoice_fp_full'
 
 export const COMMERCIAL_DOCUMENT_TYPES: CommercialDocumentType[] = [
+  'draft_contract',
   'contract',
   'addendum_contract',
+  'bea_cukai',
+  'delivery_order',
   'invoice_fp_dp',
   'invoice_fp_payoff',
   'invoice_fp_full',
@@ -20,8 +26,11 @@ export const COMMERCIAL_DOCUMENTS_DATA_PERMISSION = 'data.commercial_documents'
 export const COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION = false
 
 export const COMMERCIAL_DOCUMENT_LABELS: Record<CommercialDocumentType, string> = {
+  draft_contract: 'Draft Contract',
   contract: 'Contract',
   addendum_contract: 'Addendum Contract',
+  bea_cukai: 'Bea Cukai',
+  delivery_order: 'DO',
   invoice_fp_dp: 'Invoice + FP Down Payment (DP)',
   invoice_fp_payoff: 'Invoice + FP Payoff (PO)',
   invoice_fp_full: 'Invoice + FP (Full Receive)',
@@ -76,6 +85,7 @@ export type CommercialDocumentRow = {
   contract_date: string | null
   payment_due_date: string | null
   dp_due_date: string | null
+  payoff_date: string | null
   quantity_ordered: number
   unit_price: number
   total_price: number
@@ -89,8 +99,11 @@ export type CommercialDocumentRow = {
   status: string | null
   is_open: boolean
   uploaded_count: number
+  doc_draft_contract: boolean
   doc_contract: boolean
   doc_addendum_contract: boolean
+  doc_bea_cukai: boolean
+  doc_delivery_order: boolean
   doc_invoice_fp_dp: boolean
   doc_invoice_fp_payoff: boolean
   doc_invoice_fp_full: boolean
@@ -132,8 +145,11 @@ export type CommercialDocumentFileRecord = {
 
 export function docCheckedField(type: CommercialDocumentType): keyof CommercialDocumentRow {
   const map: Record<CommercialDocumentType, keyof CommercialDocumentRow> = {
+    draft_contract: 'doc_draft_contract',
     contract: 'doc_contract',
     addendum_contract: 'doc_addendum_contract',
+    bea_cukai: 'doc_bea_cukai',
+    delivery_order: 'doc_delivery_order',
     invoice_fp_dp: 'doc_invoice_fp_dp',
     invoice_fp_payoff: 'doc_invoice_fp_payoff',
     invoice_fp_full: 'doc_invoice_fp_full',

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import {
   COMMERCIAL_DOCUMENT_LABELS,
+  COMMERCIAL_DOCUMENT_TYPES,
   type CommercialDocumentRow,
   type CommercialDocumentType,
 } from '@/lib/commercialDocumentsTypes'
@@ -15,8 +16,11 @@ import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { Check } from 'lucide-react'
 
 const DOC_STATUS_COLUMN_IDS = new Set<CommercialDocsColumnId>([
+  'doc_draft_contract',
   'doc_contract',
   'doc_addendum_contract',
+  'doc_bea_cukai',
+  'doc_delivery_order',
   'doc_invoice_fp_dp',
   'doc_invoice_fp_payoff',
   'doc_invoice_fp_full',
@@ -31,11 +35,15 @@ export const COMMERCIAL_DOCS_DEFAULT_VISIBLE_COLUMNS = [
   'product',
   'payment_due_date',
   'dp_due_date',
+  'payoff_date',
   'contract_qty',
   'unit_price',
   'total_price',
+  'doc_draft_contract',
   'doc_contract',
   'doc_addendum_contract',
+  'doc_bea_cukai',
+  'doc_delivery_order',
   'doc_invoice_fp_dp',
   'doc_invoice_fp_payoff',
   'doc_invoice_fp_full',
@@ -78,8 +86,11 @@ const DOC_COL_MAP: Record<
   CommercialDocumentType,
   { id: CommercialDocsColumnId; field: keyof CommercialDocumentRow }
 > = {
+  draft_contract: { id: 'doc_draft_contract', field: 'doc_draft_contract' },
   contract: { id: 'doc_contract', field: 'doc_contract' },
   addendum_contract: { id: 'doc_addendum_contract', field: 'doc_addendum_contract' },
+  bea_cukai: { id: 'doc_bea_cukai', field: 'doc_bea_cukai' },
+  delivery_order: { id: 'doc_delivery_order', field: 'doc_delivery_order' },
   invoice_fp_dp: { id: 'doc_invoice_fp_dp', field: 'doc_invoice_fp_dp' },
   invoice_fp_payoff: { id: 'doc_invoice_fp_payoff', field: 'doc_invoice_fp_payoff' },
   invoice_fp_full: { id: 'doc_invoice_fp_full', field: 'doc_invoice_fp_full' },
@@ -145,11 +156,19 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
     },
     {
       id: 'dp_due_date',
-      label: 'DP Due Date',
+      label: 'DP Date',
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.dp_due_date || '',
       render: (r) => <span className="text-sm whitespace-nowrap">{formatCommercialDate(r.dp_due_date)}</span>,
+    },
+    {
+      id: 'payoff_date',
+      label: 'Payoff Date',
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => r.payoff_date || '',
+      render: (r) => <span className="text-sm whitespace-nowrap">{formatCommercialDate(r.payoff_date)}</span>,
     },
     {
       id: 'contract_qty',
@@ -212,7 +231,7 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
     },
   ]
 
-  const docCols: CommercialDocsColumnMeta[] = (Object.keys(DOC_COL_MAP) as CommercialDocumentType[]).map(
+  const docCols: CommercialDocsColumnMeta[] = COMMERCIAL_DOCUMENT_TYPES.map(
     (type) => {
       const { id, field } = DOC_COL_MAP[type]
       return {
@@ -245,11 +264,15 @@ export const COMMERCIAL_DOCS_COLUMN_WIDTH_PX: Readonly<Record<string, number>> =
   product: 96,
   payment_due_date: 108,
   dp_due_date: 96,
+  payoff_date: 96,
   contract_qty: 96,
   unit_price: 96,
   total_price: 104,
+  doc_draft_contract: 96,
   doc_contract: 88,
   doc_addendum_contract: 104,
+  doc_bea_cukai: 88,
+  doc_delivery_order: 64,
   doc_invoice_fp_dp: 104,
   doc_invoice_fp_payoff: 112,
   doc_invoice_fp_full: 104,

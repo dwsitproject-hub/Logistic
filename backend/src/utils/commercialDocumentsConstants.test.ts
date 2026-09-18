@@ -3,6 +3,7 @@ import {
   buildCommercialDocumentStoredName,
   buyerFilenamePrefix,
   canonicalCommercialDocumentType,
+  commercialDocumentUploadRelativeDir,
   documentTypesForCategory,
   supplierFilenamePrefix,
 } from './commercialDocumentsConstants';
@@ -77,5 +78,48 @@ describe('commercialDocumentsConstants', () => {
   it('documentTypesForCategory includes legacy DB values', () => {
     expect(documentTypesForCategory('invoice_fp_dp')).toContain('dp');
     expect(documentTypesForCategory('invoice_fp_payoff')).toContain('ep_pelunasan');
+  });
+
+  it('buildCommercialDocumentStoredName uses Dctr Bc Do codes', () => {
+    expect(
+      buildCommercialDocumentStoredName({
+        buyerName: 'EOP Trading',
+        documentType: 'draft_contract',
+        referenceNumber: '1381002868',
+        originalName: 'draft.pdf',
+      }),
+    ).toBe('EOP_Dctr_1381002868.pdf');
+    expect(
+      buildCommercialDocumentStoredName({
+        buyerName: 'EOP Trading',
+        documentType: 'bea_cukai',
+        referenceNumber: '1381002868',
+        originalName: 'bc.pdf',
+      }),
+    ).toBe('EOP_Bc_1381002868.pdf');
+    expect(
+      buildCommercialDocumentStoredName({
+        buyerName: 'EOP Trading',
+        documentType: 'delivery_order',
+        referenceNumber: '1381002868',
+        originalName: 'do.pdf',
+      }),
+    ).toBe('EOP_Do_1381002868.pdf');
+  });
+
+  it('commercialDocumentUploadRelativeDir uses year month PO under COMMERCIAL DOCS', () => {
+    const dir = commercialDocumentUploadRelativeDir(
+      '1381002868',
+      new Date('2026-09-18T03:00:00.000Z'),
+    );
+    expect(dir).toBe('COMMERCIAL DOCS/2026/09/1381002868');
+  });
+
+  it('commercialDocumentUploadRelativeDir rolls to the next Jakarta year', () => {
+    const dir = commercialDocumentUploadRelativeDir(
+      '1381002868',
+      new Date('2026-12-31T17:30:00.000Z'),
+    );
+    expect(dir).toBe('COMMERCIAL DOCS/2027/01/1381002868');
   });
 });

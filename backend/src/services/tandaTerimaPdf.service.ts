@@ -40,6 +40,27 @@ export function buildTandaTerimaSuppliersLabel(lines: TandaTerimaContractLine[])
   return parts.length > 0 ? parts.join(', ') : '-';
 }
 
+/** Group contracts by supplier (first-seen order; case-insensitive). */
+export function groupTandaTerimaLinesBySupplier(
+  lines: TandaTerimaContractLine[],
+): Array<{ supplierLabel: string; lines: TandaTerimaContractLine[] }> {
+  const groups: Array<{ key: string; supplierLabel: string; lines: TandaTerimaContractLine[] }> = [];
+  const indexByKey = new Map<string, number>();
+  for (const line of lines) {
+    const raw = String(line.supplier ?? '').trim();
+    const supplierLabel = raw || '-';
+    const key = raw ? raw.toUpperCase() : '-';
+    const existing = indexByKey.get(key);
+    if (existing != null) {
+      groups[existing]!.lines.push(line);
+      continue;
+    }
+    indexByKey.set(key, groups.length);
+    groups.push({ key, supplierLabel, lines: [line] });
+  }
+  return groups.map(({ supplierLabel, lines: groupLines }) => ({ supplierLabel, lines: groupLines }));
+}
+
 function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const words = String(text).split(/\s+/).filter(Boolean);
   if (words.length === 0) return [''];
@@ -156,17 +177,18 @@ function drawTable(
   return y - 16;
 }
 
-export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<Uint8Array> {
-  const pdf = await PDFDocument.create();
-  const page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
-
-  const suppliersLabel = buildTandaTerimaSuppliersLabel(input.lines);
-  const sendDateLabel = formatTandaTerimaSendDate(input.sendDateIso);
-  const senderName = String(input.senderFullName || input.senderEmail || 'User').trim();
-  const senderParen = `(${senderName.toUpperCase()})`;
-
+function drawTandaTerimaPage(
+  page: PDFPage,
+  font: PDFFont,
+  fontBold: PDFFont,
+  opts: {
+    lines: TandaTerimaContractLine[];
+    supplierLabel: string;
+    sendDateLabel: string;
+    senderEmail: string;
+    senderParen: string;
+  },
+): void {
   let y = PAGE_HEIGHT - 60;
 
   const title = 'TANDA TERIMA';
@@ -181,16 +203,16 @@ export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<U
   y -= 36;
 
   page.drawText('Kepada :', { x: MARGIN_X, y, size: 11, font: fontBold });
-  y = drawWrapped(page, font, suppliersLabel, MARGIN_X + 62, y, 11, CONTENT_WIDTH - 62, 14);
+  y = drawWrapped(page, font, opts.supplierLabel, MARGIN_X + 62, y, 11, CONTENT_WIDTH - 62, 14);
   y -= 6;
 
   page.drawText('UP :', { x: MARGIN_X, y, size: 11, font: fontBold });
   page.drawText('-', { x: MARGIN_X + 62, y, size: 11, font });
   y -= 24;
 
-  y = drawTable(page, font, fontBold, y, input.lines);
+  y = drawTable(page, font, fontBold, y, opts.lines);
 
-  const returnNote = `Mohon untuk Tanda Terima di paraf dan dikembalikan atau diemail kembali ke: ${input.senderEmail || '-'}`;
+  const returnNote = `Mohon untuk Tanda Terima di paraf dan dikembalikan atau diemail kembali ke: ${opts.senderEmail || '-'}`;
   y = drawWrapped(page, font, returnNote, MARGIN_X, y, 10, CONTENT_WIDTH, 13);
   y -= 14;
 
@@ -206,7 +228,7 @@ export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<U
   );
   y -= 20;
 
-  page.drawText(`Jakarta, ${sendDateLabel}`, { x: MARGIN_X, y, size: 10, font });
+  page.drawText(`Jakarta, ${opts.sendDateLabel}`, { x: MARGIN_X, y, size: 10, font });
   y -= 40;
 
   const sigColWidth = CONTENT_WIDTH / 2;
@@ -214,7 +236,34 @@ export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<U
   page.drawText('Penerima,', { x: MARGIN_X + sigColWidth, y, size: 10, font });
   y -= 50;
 
-  page.drawText(senderParen, { x: MARGIN_X, y, size: 10, font: fontBold });
+  page.drawText(opts.senderParen, { x: MARGIN_X, y, size: 10, font: fontBold });
+  const penerimaParen = opts.supplierLabel !== '-' ? `(${opts.supplierLabel.toUpperCase()})` : '';
+  if (penerimaParen) {
+    page.drawText(penerimaParen, { x: MARGIN_X + sigColWidth, y, size: 10, font: fontBold });
+  }
+}
+
+export async function buildTandaTerimaPdf(input: TandaTerimaPdfInput): Promise<Uint8Array> {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  const sendDateLabel = formatTandaTerimaSendDate(input.sendDateIso);
+  const senderName = String(input.senderFullName || input.senderEmail || 'User').trim();
+  const senderParen = `(${senderName.toUpperCase()})`;
+  const groups = groupTandaTerimaLinesBySupplier(input.lines);
+  const pages = groups.length > 0 ? groups : [{ supplierLabel: '-', lines: [] as TandaTerimaContractLine[] }];
+
+  for (const group of pages) {
+    const page = pdf.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    drawTandaTerimaPage(page, font, fontBold, {
+      lines: group.lines,
+      supplierLabel: group.supplierLabel,
+      sendDateLabel,
+      senderEmail: input.senderEmail,
+      senderParen,
+    });
+  }
 
   return pdf.save();
 }

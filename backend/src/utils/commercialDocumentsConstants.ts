@@ -1,6 +1,9 @@
 export const COMMERCIAL_DOCUMENT_TYPES = [
+  'draft_contract',
   'contract',
   'addendum_contract',
+  'bea_cukai',
+  'delivery_order',
   'invoice_fp_dp',
   'invoice_fp_payoff',
   'invoice_fp_full',
@@ -22,8 +25,11 @@ export type LegacyCommercialDocumentType = (typeof LEGACY_COMMERCIAL_DOCUMENT_TY
 export type AnyCommercialDocumentType = CommercialDocumentType | LegacyCommercialDocumentType;
 
 export const COMMERCIAL_DOCUMENT_TYPE_LABELS: Record<CommercialDocumentType, string> = {
+  draft_contract: 'Draft Contract',
   contract: 'Contract',
   addendum_contract: 'Addendum Contract',
+  bea_cukai: 'Bea Cukai',
+  delivery_order: 'DO',
   invoice_fp_dp: 'Invoice + FP Down Payment (DP)',
   invoice_fp_payoff: 'Invoice + FP Payoff (PO)',
   invoice_fp_full: 'Invoice + FP (Full Receive)',
@@ -38,8 +44,11 @@ export const LEGACY_COMMERCIAL_DOCUMENT_TYPE_LABELS: Record<LegacyCommercialDocu
 };
 
 export const COMMERCIAL_DOCUMENT_FILENAME_CODES: Record<CommercialDocumentType, string> = {
+  draft_contract: 'Dctr',
   contract: 'Ctr',
   addendum_contract: 'Add Ctr',
+  bea_cukai: 'Bc',
+  delivery_order: 'Do',
   invoice_fp_dp: 'DP',
   invoice_fp_payoff: 'Payoff',
   invoice_fp_full: 'Full',
@@ -58,13 +67,16 @@ export function isAnyCommercialDocumentType(value: string): value is AnyCommerci
   return ALL_COMMERCIAL_DOCUMENT_TYPES.includes(value);
 }
 
-/** Map legacy stored types to the 5 current checklist categories. */
+/** Map legacy stored types to the current checklist categories. */
 export function canonicalCommercialDocumentType(
   value: string,
 ): CommercialDocumentType | null {
   const map: Record<string, CommercialDocumentType> = {
+    draft_contract: 'draft_contract',
     contract: 'contract',
     addendum_contract: 'addendum_contract',
+    bea_cukai: 'bea_cukai',
+    delivery_order: 'delivery_order',
     invoice_fp_dp: 'invoice_fp_dp',
     invoice_fp_payoff: 'invoice_fp_payoff',
     invoice_fp_full: 'invoice_fp_full',
@@ -165,12 +177,37 @@ export function buildLegacyCommercialDocumentStoredName(poNumber: string, origin
   return `${base}.${ext}`;
 }
 
-/** Folder under uploads root: commercial-documents/YYYY-MM */
+/** Synology share folder under the KLIP upload root (`dev/KLIP`). */
+export const COMMERCIAL_DOCS_SHARE_FOLDER = 'COMMERCIAL DOCS';
+
+/** Calendar year/month in Asia/Jakarta (tahun berjalan), not contract date. */
+export function commercialDocumentUploadCalendar(now: Date = new Date()): { year: string; month: string } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(now);
+  const year = parts.find((p) => p.type === 'year')?.value ?? String(now.getUTCFullYear());
+  const month = parts.find((p) => p.type === 'month')?.value ?? '01';
+  return { year, month };
+}
+
+/**
+ * Relative dir under uploads root:
+ * `COMMERCIAL DOCS/{YYYY}/{MM}/{PO}`
+ */
+export function commercialDocumentUploadRelativeDir(poNumber: string, now: Date = new Date()): string {
+  const { year, month } = commercialDocumentUploadCalendar(now);
+  const po = sanitizePoForFilename(poNumber);
+  return `${COMMERCIAL_DOCS_SHARE_FOLDER}/${year}/${month}/${po}`;
+}
+
+/** @deprecated Use commercialDocumentUploadRelativeDir — kept for older path readers. */
 export function commercialDocumentMonthFolder(contractDate: Date | string | null | undefined): string {
   const raw = contractDate instanceof Date ? contractDate : new Date(String(contractDate ?? ''));
   if (Number.isNaN(raw.getTime())) {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const { year, month } = commercialDocumentUploadCalendar();
+    return `${year}-${month}`;
   }
   return `${raw.getFullYear()}-${String(raw.getMonth() + 1).padStart(2, '0')}`;
 }
