@@ -1963,13 +1963,57 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
-**Still different, and not an alias problem:** the two pages pick the destination from different
-sources. Shipments (`sqlRegionSiteRawForContract`) takes the B2B child copy keyed by `origin_po`,
-else the newest `sap_processed_data` row for the contract. Shipping Performance takes `b2b_end`,
-else a **per-shipment** SAP aggregate (`sa`), else the contract-level snapshot. A contract whose
-shipment carries a different destination from its contract-level one therefore still lands on two
-different sites. That moves rows between sites on a page read daily, so it is measured before it is
-changed, not folded into an alias fix.
+### One STO, two discharge destinations - a SAP anomaly, and the page that amplified it
+
+Measuring the source divergence (`docs/scripts/diag-sp-vs-shipments-site.cjs`) found **6 contracts
+of 2,027**, and reading the six is what turned a precedence question into a data finding. SAP gives
+**one STO different discharge destinations depending on which contract carries it**:
+
+```
+STO 1016010337  ->  KARAWANG  on contracts 1014002659, 2897, 2932, 2933
+                ->  BEKASI    on contracts 1014002893, 2909
+STO 1016010372  ->  KARAWANG  on contracts 1014002924, 2935
+                ->  BEKASI    on contract  1014002934
+```
+
+96 STOs database-wide are like this. Confirmed with Ryan 2026-09-18 as a SAP data defect - one STO
+is one physical movement and can only discharge in one place - and raised with the SAP team. It is
+**not** the blank-Contract-No class: 69 such rows exist and none of them touch these STOs.
+
+**Shipping Performance amplified it, and the other nine surfaces did not.** Region/Site is contract
+grain everywhere - `sqlRegionSiteRawForContract` on Shipments, Trucking, Pipeline and both unplanned
+hybrids, `MAX(sqlRegionSiteRawFromJsonAndB2b)` on Contract Performance and Late Performance. This
+page alone added a third source: a **per-shipment** SAP aggregate. Rows are then grouped by STO and
+`mergeShippingPerfStoGroup` keeps one row's `plant_site`, so five contracts displayed a destination
+their own SAP rows contradict.
+
+The per-shipment source is removed, and its now-dead `MAX(...) AS discharge_destination` with it.
+`plant_site` on both arms is now the same two branches in the same order as the shared helper:
+
+```sql
+COALESCE(normalise(b2b_end.discharge_destination), l.discharge_destination, 'Blank')
+```
+
+`l` stands in for the helper's "newest SAP row for this contract" - the same pick plus an
+`spd.id DESC` tiebreaker the helper lacks. 2,382 contracts have tied `created_at`; measured, **none**
+of them disagree on destination, so the two are equal on today's data and this side is the
+deterministic one.
+
+**The backlog arm shipped with no B2B overlay at all** - a defect introduced the same day, found by
+this measurement rather than by a test. Contract 9114100050 has a B2B ending child at EUP EDIBLE OIL
+BATAM, so the goods finish in Batam; the arm showed TANJUNG PURA, the origin's own destination,
+while every other surface in KLIP showed Batam. It carried **2,000 MT - the only outstanding in the
+entire divergence**.
+
+| | before | after |
+| --- | --- | --- |
+| contracts disagreeing with Shipments | 6 | 5 |
+| outstanding disagreeing | 2,000 MT | **0 MT** |
+
+**The remaining 5 are the SAP anomaly itself and cannot be fixed by a rule.** This page's row grain
+is the STO; when one STO belongs to contracts SAP gives different destinations, one of them must
+lose whatever the precedence. They carry 0 MT, they are display-only, and the diag script is the
+watch on them - the fix is in SAP.
 
 
 ### A whole voyage could disappear when the B2B origin had no shipment

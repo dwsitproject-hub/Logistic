@@ -35,10 +35,33 @@ describe('Shipping Performance normalises the discharge destination it stores an
    * Performance 1,360ms -> 3,342ms. If this ever fails because someone wrapped them, check the
    * timing before accepting it.
    */
-  it('does not wrap the two expressions that already normalise', async () => {
+  it('does not wrap the expression that already normalises', async () => {
     const sql = await buildShippingPerformanceSql();
-    expect(sql).not.toContain(wrapped("NULLIF(TRIM(sa.discharge_destination), '')"));
     expect(sql).not.toContain(wrapped("NULLIF(TRIM(l.discharge_destination), '')"));
+  });
+
+  /*
+   * Region/Site is contract grain on all ten surfaces. This page was the only one that added a
+   * PER-SHIPMENT source, and a shipment's STO can belong to several contracts that SAP gives
+   * different destinations (96 STOs; 1016010337 is KARAWANG on four contracts and BEKASI on two).
+   * Rows are grouped by STO afterwards and one row's plant_site survives, so five contracts showed
+   * a destination their own SAP rows contradict.
+   */
+  it('takes the destination from the contract, never from a per-shipment aggregate', async () => {
+    const sql = await buildShippingPerformanceSql();
+    expect(sql).not.toContain('sa.discharge_destination');
+  });
+
+  /*
+   * The B2B ending child is where the goods actually finish. The backlog arm shipped without it
+   * and put contract 9114100050 at TANJUNG PURA - its origin - while every other surface in KLIP
+   * showed BATAM, which is where EUP EDIBLE OIL BATAM receives it. 2,000 MT, the only outstanding
+   * in the whole divergence.
+   */
+  it('overlays the B2B ending child on the backlog arm, as every other surface does', async () => {
+    const sql = await buildShippingPerformanceBacklogSql();
+    expect(sql).toContain('b2b_end.origin_po');
+    expect(sql).toContain(wrapped("NULLIF(TRIM(b2b_end.discharge_destination), '')"));
   });
 
   /*

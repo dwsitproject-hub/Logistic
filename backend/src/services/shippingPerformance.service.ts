@@ -235,10 +235,10 @@ function maxMergeMilestoneFields(rows: Record<string, unknown>[]): Record<string
 
 /**
  * Manually entered TC (Time Charter) vessel metrics — a per-voyage attribute, not per shipment
- * row. STO groups can span multiple physical `shipments` rows (multi-contract STO, or duplicate
- * legs); the priority `pick` used for most other display fields is not guaranteed to be the
+ * row. STO groups can span multiple physical shipments rows (multi-contract STO, or duplicate
+ * legs); the priority pick used for most other display fields is not guaranteed to be the
  * specific row a user edited. Surface the value from whichever member has it set instead of
- * silently dropping it when `pick` resolves to a different (unset) member.
+ * silently dropping it when pick resolves to a different (unset) member.
  */
 const TC_VESSEL_METRIC_FIELDS = [
   'fuel_consumption',
@@ -415,19 +415,19 @@ const SHIPPING_PERF_VIEW_TABLE_QTY = buildShippingPerfViewTableQtySelectSql();
  * The latest SAP row per contract, shared by every query in this file.
  *
  * It used to live inside buildShippingPerformanceSql. It is module level now because the
- * unplanned-backlog query needs the same CTE and the same `l` alias - contractBacklogCoreWhereSql
+ * unplanned-backlog query needs the same CTE and the same l alias - contractBacklogCoreWhereSql
  * reads both - and a second copy of this definition is the kind of duplication that has drifted
  * elsewhere in this codebase more than once.
  */
 async function buildLatestSpdContractCte(): Promise<string> {
   /**
-   * `latest_spd_contract` is the latest SAP row per contract - which is exactly what
+   * latest_spd_contract is the latest SAP row per contract - which is exactly what
    * contract_latest_spd_snapshot stores, one row per contract_number (18,711 = 18,711 distinct,
    * verified). Built live it is a DISTINCT ON over every sap_processed_data row carrying its
    * jsonb: 12.0s of a 111.7s EXPLAIN (ANALYZE) on 2026-09-08.
    *
    * One projection, two sources, so the snapshot form and the live form cannot drift apart. The
-   * only column the snapshot lacks is `spd.sto_number`, which the live form reads first when
+   * only column the snapshot lacks is spd.sto_number, which the live form reads first when
    * building effective_sto - and dropping it is provably a no-op here: across all 18,711 latest
    * rows, 0 have that column set while the jsonb STO paths are empty, and 0 hold a different
    * value from them, so effective_sto is identical either way.
@@ -488,19 +488,19 @@ async function buildLatestSpdContractCte(): Promise<string> {
 }
 
 /**
- * The `latest_spd_contract` shape contractBacklogCoreWhereSql actually needs.
+ * The latest_spd_contract shape contractBacklogCoreWhereSql actually needs.
  *
  * There are TWO CTEs of that name in this codebase, and they are not interchangeable:
  *
  *   shipment.controller.ts   projects SHIPMENT_LATEST_SPD_COLUMNS - b2b_flag_raw,
  *                            contract_reference_po_raw, effective_sto, contract_ext_no_raw,
  *                            discharge_destination
- *   this file (above)        projects the same values WITHOUT the `_raw` suffix
+ *   this file (above)        projects the same values WITHOUT the _raw suffix
  *
  * contractBacklogCoreWhereSql was written against the first, and prePlannedManualEligibilitySql -
  * its only other caller - joins the first. The first version of this arm handed it the second: a
  * name that matched and a shape that did not. It reached production, failed with
- * `column l.b2b_flag_raw does not exist`, and because the query sat in the cache refresh unguarded
+ * column l.b2b_flag_raw does not exist, and because the query sat in the cache refresh unguarded
  * it took the whole page down rather than just itself.
  *
  * Columns are listed explicitly rather than with *, so a rename fails loudly here instead of
@@ -553,11 +553,17 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
       NULL::text                                AS operation_id,
       NULL::uuid                                AS id,
       c.product,
-      -- A STORED copy, so the alias is applied on READ: the rule is that every read of a stored
-      -- discharge destination normalises, because a row written before the map (or by a path that
-      -- does not normalise) would otherwise split KIJING from TANJUNG PURA here while Shipments
-      -- shows them as one. Safe to double the reference - this CTE selects a plain column.
-      COALESCE(${sqlNormalizeDischargeDestination("NULLIF(TRIM(l.discharge_destination), '')")}, 'Blank') AS plant_site,
+      -- Same two branches as the main query above, and as sqlRegionSiteRawForContract.
+      -- The B2B branch was MISSING here when this arm shipped, and it is not cosmetic: contract
+      -- 9114100050 has a B2B ending child at EUP EDIBLE OIL BATAM, so the goods end in Batam. This
+      -- arm showed TANJUNG PURA - the origin's own destination - while every other surface in KLIP
+      -- showed Batam. Both stored columns are normalised on read; both are plain columns, so
+      -- doubling them for the alias CASE is free.
+      COALESCE(
+        ${sqlNormalizeDischargeDestination("NULLIF(TRIM(b2b_end.discharge_destination), '')")},
+        ${sqlNormalizeDischargeDestination("NULLIF(TRIM(l.discharge_destination), '')")},
+        'Blank'
+      ) AS plant_site,
       c.incoterm,
       c.source_type,
       c.supplier,
@@ -579,6 +585,7 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
       TRUE                                      AS is_unplanned_backlog
     FROM contracts c
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+    ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
     LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
     WHERE ${contractBacklogCoreWhereSql('c', 'l')}
       AND (${os}) > 0`;
@@ -651,8 +658,7 @@ export async function buildShippingPerformanceSql(): Promise<string> {
           )), '')) AS remark,
           MAX(${sapSpdLoadingPortTextExpr('sk2')}) AS sap_vessel_loading_port_1,
           MAX(${sapSpdDischargePortTextExpr('sk2')}) AS sap_vessel_discharge_port,
-          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap,
-          MAX(${sapDischargeDestinationFromJson('sk2.data')}) AS discharge_destination
+          MAX(${sqlSapVesselNameFromSpdJsonb('sk2.data')}) AS vessel_name_sap
         FROM ship_keys sk
         LEFT JOIN spd_keyed sk2 ON sk2.shipment_pk = sk.shipment_pk
         GROUP BY sk.shipment_pk
@@ -740,19 +746,30 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         s.shortage,
         s.vessel_oa_budget,
         /*
-         * Only b2b_end is normalised here, and the omissions are deliberate:
-         *   b2b_end - a STORED column. Read raw until now, which is the one place this page could
-         *             disagree with the Shipments Region/Site filter, since that side wraps the
-         *             same column (regionSiteSql.ts). Latent today (0 KIJING rows), not harmless.
-         *   sa, l   - both computed by sapDischargeDestinationFromJson, which already wraps the
-         *             map. Wrapping again would be correct but not free: the alias compiles to a
-         *             CASE that reads its input TWICE, and latest_spd_contract is NOT MATERIALIZED,
-         *             so an inlined l.discharge_destination is a jsonb extraction, not a column.
-         *             Doubling those is what took Contract Performance 1,360ms -> 3,342ms.
+         * Region/Site, contract grain - the same two branches, in the same order, as
+         * sqlRegionSiteRawForContract, which Shipments, Trucking, Pipeline and both unplanned
+         * hybrids already use. This page was the only surface of ten that added a third source.
+         *
+         * THE SOURCE THAT WAS REMOVED, and why it was not merely redundant: sa is a PER-SHIPMENT
+         * aggregate, and a shipment's STO can belong to several contracts. SAP gives one STO
+         * different discharge destinations depending on which contract carries it (96 STOs
+         * database-wide; STO 1016010337 is KARAWANG on four contracts and BEKASI on two). Rows are
+         * then grouped by STO and mergeShippingPerfStoGroup keeps ONE row's plant_site, so five
+         * contracts displayed a destination their own SAP rows contradict. Reading the contract's
+         * own row instead makes that impossible rather than unlikely.
+         *
+         * Only b2b_end is wrapped in the alias: it is a STORED column, and the rule is that every
+         * read of a stored copy normalises. l comes from sapDischargeDestinationFromJson, which
+         * already wraps it - and latest_spd_contract is NOT MATERIALIZED, so wrapping an inlined
+         * jsonb read again is the doubling that took Contract Performance 1,360ms -> 3,342ms.
+         *
+         * l stands in for the helper's "newest SAP row for this contract": same pick, plus an
+         * spd.id DESC tiebreaker the helper lacks. 2,382 contracts have tied created_at, and
+         * measured, NONE of them disagree on destination - so the two are equal on today's data
+         * and this side is the deterministic one.
          */
         COALESCE(
           ${sqlNormalizeDischargeDestination("NULLIF(TRIM(b2b_end.discharge_destination), '')")},
-          NULLIF(TRIM(sa.discharge_destination), ''),
           NULLIF(TRIM(l.discharge_destination), ''),
           'Blank'
         ) AS plant_site,
@@ -1150,14 +1167,14 @@ export function startShippingPerformanceCacheWarmer(): Promise<void> {
   /**
    * The initial warm is returned, not fire-and-forget.
    *
-   * `runWarmupJobsSequentially` can only sequence a job that hands it a promise; a job returning
+   * runWarmupJobsSequentially can only sequence a job that hands it a promise; a job returning
    * void falls back to the 5s inter-job gap, which means the work carries on in parallel with
    * whatever runs next. Measured on the dev host 2026-09-09: this warmer, Trucking and Oil Loss
    * were all released in the 15s before the heaviest job (Shipments scope row sets) and were
    * still running throughout it - the queue's "one heavy query in flight" property was broken at
    * exactly the point it mattered most. Returning the promise restores it.
    *
-   * `warmShippingPerformanceRowCache` swallows its own errors, so this can never reject and the
+   * warmShippingPerformanceRowCache swallows its own errors, so this can never reject and the
    * queue's failure path stays unused.
    */
   const initialWarm = warmShippingPerformanceRowCache();
