@@ -143,6 +143,37 @@ const site = (v) => String(v ?? '').trim().toUpperCase() || 'BLANK';
     }
   }
 
+  /*
+   * Name them. A rule change is a decision; a place that moves to somewhere implausible is a data
+   * error, and the only way to tell the two apart is to look at the contracts themselves.
+   */
+  if (movedContracts.size) {
+    const detail = (await connection.query(
+      `SELECT c.contract_id, c.po_number, c.product, c.incoterm, c.supplier,
+              (${regionSite}) AS shipments_site
+       FROM contracts c
+       WHERE c.contract_id = ANY($1::text[])
+       ORDER BY c.contract_id`,
+      [[...movedContracts]],
+    )).rows;
+    const spSite = new Map();
+    for (const row of rows) {
+      for (const c of contractsOf(row)) {
+        if (movedContracts.has(c)) spSite.set(c, site(row.plant_site));
+      }
+    }
+    console.log('');
+    console.log('the contracts, so they can be checked in SAP:');
+    console.log('   contract      PO             product        SP site          Shipments site');
+    for (const r of detail) {
+      console.log('   ' + String(r.contract_id).padEnd(14) +
+        String(r.po_number || '-').padEnd(15) +
+        String(r.product || '-').slice(0, 14).padEnd(15) +
+        String(spSite.get(String(r.contract_id)) || '-').padEnd(17) +
+        String(site(r.shipments_site)));
+    }
+  }
+
   // Which of the two disagreeing sources is actually responsible. If the moving rows are almost all
   // ones where the per-shipment aggregate won, the fix is a source-precedence decision; if they are
   // b2b rows, it is a keying difference (origin_po vs the join) and a different fix entirely.
