@@ -1,4 +1,5 @@
 import { query } from '../database/connection';
+import logger from '../utils/logger';
 import {
   contractBacklogCoreWhereSql,
   sqlBacklogRemainingOsJoinExpr,
@@ -486,6 +487,37 @@ async function buildLatestSpdContractCte(): Promise<string> {
 }
 
 /**
+ * The `latest_spd_contract` shape contractBacklogCoreWhereSql actually needs.
+ *
+ * There are TWO CTEs of that name in this codebase, and they are not interchangeable:
+ *
+ *   shipment.controller.ts   projects SHIPMENT_LATEST_SPD_COLUMNS - b2b_flag_raw,
+ *                            contract_reference_po_raw, effective_sto, contract_ext_no_raw,
+ *                            discharge_destination
+ *   this file (above)        projects the same values WITHOUT the `_raw` suffix
+ *
+ * contractBacklogCoreWhereSql was written against the first, and prePlannedManualEligibilitySql -
+ * its only other caller - joins the first. The first version of this arm handed it the second: a
+ * name that matched and a shape that did not. It reached production, failed with
+ * `column l.b2b_flag_raw does not exist`, and because the query sat in the cache refresh unguarded
+ * it took the whole page down rather than just itself.
+ *
+ * Columns are listed explicitly rather than with *, so a rename fails loudly here instead of
+ * quietly changing what the membership rule reads.
+ */
+const BACKLOG_LATEST_SPD_CONTRACT_CTE = `
+  latest_spd_contract AS (
+    SELECT contract_number,
+           effective_sto,
+           b2b_flag_raw,
+           contract_reference_po_raw,
+           contract_ext_no_raw,
+           discharge_destination
+    FROM contract_latest_spd_snapshot
+    WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+  )`;
+
+/**
  * The unplanned contracts, as rows.
  *
  * Outstanding Qty meant two different things on two pages. The Shipments OS is two disjoint arms -
@@ -508,13 +540,12 @@ async function buildLatestSpdContractCte(): Promise<string> {
  * shipment has no sibling STOs to share with.
  */
 export async function buildShippingPerformanceBacklogSql(): Promise<string> {
-  const latestSpdContractCte = await buildLatestSpdContractCte();
   const os = sqlBacklogRemainingOsJoinExpr();
   return `
-    WITH ${latestSpdContractCte}
+    WITH ${BACKLOG_LATEST_SPD_CONTRACT_CTE}
     SELECT
       c.contract_id::text                       AS contract_number,
-      l.contract_ext_no,
+      l.contract_ext_no_raw AS contract_ext_no,
       c.po_number,
       NULL::text                                AS sto_number,
       NULL::text                                AS sto_key,
@@ -1040,8 +1071,23 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
       // STO, so putting them through the grouping would collapse every one of them into a single
       // row - they are appended afterwards for that reason, not merely for convenience.
       const shipmentRows = aggregateShippingPerformanceRowsBySto(result.rows as Record<string, unknown>[]);
-      const backlog = await query(await buildShippingPerformanceBacklogSql());
-      const rows = [...shipmentRows, ...(backlog.rows as Record<string, unknown>[])];
+      /*
+       * Guarded on purpose. The first version of this arm was not, and when its query failed the
+       * rejection propagated out of the refresh - the row cache was never filled and the whole
+       * Shipping Performance page went down, for a fault that belonged to one additional arm.
+       *
+       * A backlog failure now costs the backlog rows and nothing else: the page keeps working on
+       * its shipment rows, understating outstanding rather than showing nothing, and the error is
+       * logged for someone to find.
+       */
+      let backlogRows: Record<string, unknown>[] = [];
+      try {
+        const backlog = await query(await buildShippingPerformanceBacklogSql());
+        backlogRows = backlog.rows as Record<string, unknown>[];
+      } catch (err) {
+        logger.error('Shipping Performance backlog arm failed - page served without it', { err });
+      }
+      const rows = [...shipmentRows, ...backlogRows];
       ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       return rows;
     } finally {

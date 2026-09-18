@@ -1868,6 +1868,19 @@ with status **UNPLANNED**, so the figure can be traced rather than only reconcil
 
 **Verification:** the outstanding rises by exactly the backlog figure, every average delay is unchanged to the decimal, and Total Vessels is unchanged.
 
+**It shipped broken once, and the reason is worth keeping.** There are TWO CTEs named
+`latest_spd_contract` in this codebase: `shipment.controller.ts` projects the `_raw` columns
+(`b2b_flag_raw`, `contract_reference_po_raw`, …) and `shippingPerformance.service.ts` projects the
+same values without the suffix. `contractBacklogCoreWhereSql` was written against the first, and
+its only other caller joins the first. The arm was handed the second - a name that matched and a
+shape that did not - and production answered `column l.b2b_flag_raw does not exist`. Because the
+query sat in the cache refresh unguarded, that took the whole page down rather than one arm, and
+it was reverted within minutes.
+
+Five unit tests were green throughout, every one asserting on the SQL **string**. A correct string
+proves nothing about whether the query runs. The suite now executes it, and the refresh wraps the
+arm in try/catch so a failure costs the backlog rows and nothing else.
+
 **Built as a second query, not a UNION.** The main query takes ~52s cold and has OOMed the
 database before now, and this arm needs none of its vessel machinery. Joining the two rowsets in
 memory also keeps the backlog out of the STO grouping - those contracts have no STO, so grouping
