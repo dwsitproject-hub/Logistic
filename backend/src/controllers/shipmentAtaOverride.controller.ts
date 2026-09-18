@@ -7,7 +7,8 @@ import {
   mapOverrideRowToApi,
 } from '../services/shipmentAtaOverride.service';
 import { upsertShipmentAtaOverrideForStoGroup } from '../services/shipmentAtaStoFanOut.service';
-import { invalidateShipmentsListCache } from '../services/shipmentList.service';
+import { invalidateAfterShipmentWrite } from '../services/shipmentWriteInvalidation.service';
+import { resolveStoGroupShipmentIds } from '../utils/shipmentStoGroupMembersSql';
 import {
   SHIPMENT_ATA_API_FIELDS,
   type ShipmentAtaOverridePayload,
@@ -96,7 +97,11 @@ export const updateShipmentAtaOverride = async (req: AuthRequest, res: Response)
     }
 
     const row = await upsertShipmentAtaOverrideForStoGroup(id, payload, req.user?.id ?? null);
-    invalidateShipmentsListCache();
+    // The override fans out across the whole STO group, and the ATC it writes is what Trade Cycle
+    // and Log Cycle are measured from - so Contract Performance has to be refreshed for every
+    // member, not just the anchor the request named.
+    const affectedIds = await resolveStoGroupShipmentIds(id);
+    invalidateAfterShipmentWrite(affectedIds.length > 0 ? affectedIds : [id]);
 
     return res.json({
       success: true,

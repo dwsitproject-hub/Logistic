@@ -1835,6 +1835,40 @@ back to the edit modal - so without a second guard a COMPLETED backlog row would
 between the two handlers forever once Edit began delegating to Add. That guard is the reason the
 delegation is safe, not an optimisation.
 
+## Shipments
+
+### One door for invalidation, because a list of names drifts
+
+Invalidation after a shipment write was a list of named caches, spelled out at each write path.
+Measured across them:
+
+```
+createShipment.service.ts        Shipments  Shipping Performance  Contract Performance
+shipmentAtaOverride.controller   Shipments  -                     -
+ensureSapStoShipment.service     Shipments  -                     -
+prePlanned.controller (x6)       Shipments  -                     -
+```
+
+So a refresh did run on every update, and it was a real one - it simply named a single page. The
+other two kept serving cached rows until their TTL expired, which is why an edit showed on
+Shipments at once and elsewhere minutes later. The sharpest case was the ATA override: the ATC it
+writes is what Trade Cycle and Log Cycle are measured from, and Contract Performance was told
+nothing at all.
+
+Patching the nine call sites would have restored the invariant and kept the mechanism that lost it.
+They now all call `invalidateAfterShipmentWrite` (`shipmentWriteInvalidation.service.ts`), so
+adding a cache later means changing one function instead of finding every writer.
+
+`shipmentIds` is optional because not every writer knows them - a pre-planned rebuild reshapes many
+groups at once. The Contract Performance refresh is per-shipment and is skipped without them,
+exactly as before, but visibly rather than by omission; the two cache invalidations always run. The
+ATA override passes the whole STO group rather than the anchor the request named, because the
+override fans out across all of it.
+
+**This is the prerequisite for extending the Shipments TTL past 5 minutes.** A longer TTL is only
+safe once every writer reliably clears every cache; before this, it would have made the stale
+window longer on precisely the pages that were not being told.
+
 ## Trucking
 
 ### While GR is open, the weighbridge leads but does not get to hide SAP

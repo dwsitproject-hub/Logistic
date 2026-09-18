@@ -6,7 +6,7 @@ import type { PoolClient } from 'pg';
 import pool from '../database/connection';
 import logger from '../utils/logger';
 import { SapDataDistributionService } from './sapDataDistribution.service';
-import { invalidateShipmentsListCache } from './shipmentList.service';
+import { invalidateAfterShipmentWrite } from './shipmentWriteInvalidation.service';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
 import { isSapSeaStoLegForIncoterm, resolveSapStoTypeFromParsedData } from '../utils/sapSeaStoLeg';
 import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
@@ -321,7 +321,7 @@ export async function ensureSapStoShipmentsBatch(
       (result.created > 0 || result.repairedOperationIds > 0) &&
       opts.invalidateCache !== false
     ) {
-      invalidateShipmentsListCache();
+      invalidateAfterShipmentWrite();
     }
 
     if (result.created > 0 || result.repairedOperationIds > 0) {
