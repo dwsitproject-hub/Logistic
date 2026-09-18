@@ -2061,6 +2061,26 @@ entire divergence**.
 | contracts disagreeing with Shipments | 6 | 5 |
 | outstanding disagreeing | 2,000 MT | **0 MT** |
 
+**Membership closed, measured after the arm and the frontend fix (CPO / BONTANG):**
+
+| | before | after |
+| --- | --- | --- |
+| Shipping Performance outstanding | 54,126 MT | **107,234 MT** |
+| contracts outside it that Shipments **would** count | (not asked) | **0 contracts, 0 MT** |
+| contracts outside it that Shipments excludes too | - | 147 contracts, 142,372 MT |
+
+`diag-sp-vs-shipments-os.js` had been answering the wrong question and reporting the answer as a
+gap. It asked "which contracts have outstanding that Shipping Performance has no row for", which is
+not "which contracts does Shipments count that Shipping Performance does not". It also predated the
+backlog arm, so it counted 178 contracts / 185,958 MT as missing from a page that already showed
+them. Both are fixed: it now runs **both** arms, and it splits what is left by
+`contractBacklogCoreWhereSql` - the Shipments rule itself.
+
+The 147 that remain all fail `sqlIsContractSapInactiveForShipmentBacklogExpr`, which sits inside
+that rule, so **Shipments excludes them for the same reason** and nothing is diverging. Pinpointed
+by evaluating the six conditions of the rule one at a time rather than reasoning about the total,
+which had already produced two wrong explanations here.
+
 **The remaining 5 are the SAP anomaly itself and cannot be fixed by a rule.** This page's row grain
 is the STO; when one STO belongs to contracts SAP gives different destinations, one of them must
 lose whatever the precedence. They carry 0 MT, they are display-only, and the diag script is the

@@ -29,10 +29,12 @@
 const connection = require('/app/dist/database/connection');
 const {
   buildShippingPerformanceSql,
+  buildShippingPerformanceBacklogSql,
   aggregateShippingPerformanceRowsBySto,
 } = require('/app/dist/services/shippingPerformance.service');
 const { sumShippingPerfOutstandingQtyKg } = require('/app/dist/utils/shippingPerformanceOutstandingAgg');
 const { sqlRegionSiteDisplayForContract } = require('/app/dist/utils/regionSiteSql');
+const { contractBacklogCoreWhereSql } = require('/app/dist/utils/shipmentUnplannedHybridSql');
 const { sapStoTypeNormalizedExpr } = require('/app/dist/utils/shipmentStoTypeSql');
 
 const PRODUCT = (process.argv[2] || 'CPO').trim().toUpperCase();
@@ -43,9 +45,23 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
 (async () => {
   console.log(`scope: product ${PRODUCT}, site ${SITE}\n`);
   console.log('running the Shipping Performance query...');
-  const all = aggregateShippingPerformanceRowsBySto(
+  /*
+   * The page is TWO arms, and this script predated the second one. Measuring only
+   * buildShippingPerformanceSql counted every backlog contract as "outside Shipping Performance",
+   * which was the whole point of adding that arm - it reported 178 contracts / 185,958 MT missing
+   * from a page that already shows them.
+   */
+  const shipmentRows = aggregateShippingPerformanceRowsBySto(
     (await connection.query(await buildShippingPerformanceSql())).rows,
   );
+  let backlogRows = [];
+  try {
+    backlogRows = (await connection.query(await buildShippingPerformanceBacklogSql())).rows;
+  } catch (err) {
+    console.log(`backlog arm FAILED: ${String(err.message).slice(0, 160)}`);
+  }
+  const all = [...shipmentRows, ...backlogRows];
+  console.log(`   voyage rows ${shipmentRows.length}, backlog rows ${backlogRows.length}`);
   const inScope = all.filter(
     (r) => up(r.product).includes(PRODUCT) && up(r.plant_site).includes(SITE),
   );
@@ -75,6 +91,12 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   let outside = null;
   try {
     outside = (await connection.query(`
+      WITH latest_spd_contract AS (
+        SELECT contract_number, effective_sto, b2b_flag_raw, contract_reference_po_raw,
+               contract_ext_no_raw, discharge_destination
+        FROM contract_latest_spd_snapshot
+        WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+      )
       SELECT c.contract_id, c.incoterm, c.product,
              ROUND(COALESCE(c.quantity_ordered, 0) / 1000, 1) AS ordered_mt,
              ROUND(GREATEST(
@@ -83,8 +105,19 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
                  ELSE COALESCE(qms.quantity_receive, 0)
                END, 0) / 1000, 1) AS os_mt,
              (SELECT COUNT(*) FROM shipments sh
-               WHERE sh.contract_id = c.id AND COALESCE(sh.status, '') <> 'CANCELLED') AS shipment_rows
+               WHERE sh.contract_id = c.id AND COALESCE(sh.status, '') <> 'CANCELLED') AS shipment_rows,
+             /*
+              * Does the SHIPMENTS page count this contract at all?
+              *
+              * Without this the script asked "which contracts have outstanding that Shipping
+              * Performance has no row for" and reported the answer as a gap between the two pages.
+              * It is not the same question. 134 contracts / 132,849 MT of CPO/BONTANG turned out to
+              * fail sqlIsContractSapInactiveForShipmentBacklogExpr, which is inside this very rule -
+              * so Shipments excludes them too and nothing was diverging.
+              */
+             (${contractBacklogCoreWhereSql('c', 'l')}) AS shipments_would_count
       FROM contracts c
+      LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
       WHERE UPPER(TRIM(COALESCE(c.product, ''))) LIKE '%' || $1 || '%'
         AND UPPER(TRIM(COALESCE((${regionSite}), ''))) LIKE '%' || $2 || '%'
@@ -99,8 +132,15 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   if (outside) {
     const rows = outside.filter((r) => Number(r.os_mt) > 0);
     const kg = (rs) => rs.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000;
-    const noShipment = rows.filter((r) => Number(r.shipment_rows) === 0);
-    const withShipment = rows.filter((r) => Number(r.shipment_rows) > 0);
+    // Split by the ONLY question that matters: would Shipments show it?
+    const counted = rows.filter((r) => r.shipments_would_count === true);
+    const bothExclude = rows.filter((r) => r.shipments_would_count !== true);
+    console.log(`
+B0. of the contracts outside Shipping Performance:`);
+    console.log(`   Shipments excludes them too : ${bothExclude.length} contracts, ${mt(bothExclude.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000)} MT  <- NOT a divergence`);
+    console.log(`   Shipments WOULD count them  : ${counted.length} contracts, ${mt(counted.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000)} MT  <- the real gap`);
+    const noShipment = counted.filter((r) => Number(r.shipment_rows) === 0);
+    const withShipment = counted.filter((r) => Number(r.shipment_rows) > 0);
     console.log(`\nB. contracts in the same product/site with NO Shipping Performance row:`);
     console.log(`   contracts   : ${rows.length}`);
     console.log(`   outstanding : ${mt(kg(rows))} MT`);
@@ -164,7 +204,10 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
     console.log(`   present in Shipping Performance under another product/site : ${elsewhere.length}`);
     console.log(`   absent from Shipping Performance entirely                  : ${absent.length}   <- a real gap if non-zero`);
     for (const r of elsewhere) {
-      const where = byContract.get(r.contract_id)
+      // "covered" can be true because the B2B ORIGIN has the row, in which case this contract's own
+      // id is not a key at all. Reading it unguarded is what killed the run before it printed E-H.
+      const rows = byContract.get(r.contract_id) ?? byContract.get(originOf.get(r.contract_id)) ?? [];
+      const where = rows
         .map((x) => `${String(x.product || '-')} / ${String(x.plant_site || '-')}`);
       console.log(`      ${r.contract_id}  filed under: ${[...new Set(where)].join(', ')}`);
     }
