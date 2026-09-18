@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mergeSapPortQuality, mergeSapPortValue } from './vesselLoadingPortsFromSap.service';
+import {
+  isKlipOwnedField,
+  mergeSapPortQuality,
+  mergeSapPortValue,
+} from './vesselLoadingPortsFromSap.service';
 
 /**
  * The SAP sync fills gaps only. It must never overwrite a figure a user typed, but it must be able
@@ -57,5 +61,55 @@ describe('mergeSapPortQuality (FFA, M&I, DOBI, RED, D&S, Stone)', () => {
     expect(mergeSapPortQuality(fromSap.quality_mi, stored.quality_mi)).toBe(0.371);
     // Quantity keeps the stored 0 — it could be a deliberate entry.
     expect(mergeSapPortValue(fromSap.quantity_at_loading_port, stored.quantity_at_loading_port)).toBe(0);
+  });
+});
+
+describe('mergeSapPortValue: SAP may correct what SAP provably wrote', () => {
+  const D = (s: string) => new Date(`${s}T00:00:00Z`);
+
+  it('corrects a value that still matches the mirror', () => {
+    // 10,325 of the 10,684 set values on this table are in exactly this state. Before, SAP could
+    // never fix any of them - which is how one wrong date became permanent three migrations running.
+    expect(mergeSapPortValue('2026-07-30', D('2026-07-22'), D('2026-07-22'))).toBe('2026-07-30');
+  });
+
+  it('retracts when SAP sends the port with the field blank', () => {
+    // upsertVesselLoadingPortRow runs once per port SAP actually sent, so an empty incoming means
+    // SAP said "none" rather than "this STO was not in the export".
+    expect(mergeSapPortValue(null, D('2026-07-22'), D('2026-07-22'))).toBeNull();
+  });
+
+  it('matches across Date objects and strings, since the driver types them differently', () => {
+    expect(mergeSapPortValue('2026-07-30', D('2026-07-22'), '2026-07-22')).toBe('2026-07-30');
+  });
+
+  it('leaves a value alone once its mirror has gone - no evidence is not SAP evidence', () => {
+    // The 119 ambiguous rows. Migration 167 wrote the trap down: empty provenance means unknown.
+    expect(mergeSapPortValue('2026-07-30', D('2026-07-22'), null)).toEqual(D('2026-07-22'));
+  });
+
+  it('leaves a value alone when it differs from the mirror', () => {
+    expect(mergeSapPortValue('2026-07-30', D('2026-07-25'), D('2026-07-22'))).toEqual(D('2026-07-25'));
+  });
+
+  it('never overwrites a field the KLIP edit path has claimed, even when it equals the mirror', () => {
+    // Two systems can record the same real date. An explicit claim has to beat that coincidence.
+    expect(mergeSapPortValue('2026-07-30', D('2026-07-22'), D('2026-07-22'), true)).toEqual(D('2026-07-22'));
+  });
+
+  it('still fills a gap, which is the behaviour everything else depended on', () => {
+    expect(mergeSapPortValue('2026-07-30', null, null)).toBe('2026-07-30');
+    expect(mergeSapPortValue('2026-07-30', '', null)).toBe('2026-07-30');
+  });
+
+  it('is unchanged for fields with no mirror at all (ETA, quantity, rate)', () => {
+    expect(mergeSapPortValue('2026-07-30', D('2026-07-22'))).toEqual(D('2026-07-22'));
+  });
+
+  it('isKlipOwnedField reads the array literally and tolerates a missing one', () => {
+    expect(isKlipOwnedField(['ata_loading_completed'], 'ata_loading_completed')).toBe(true);
+    expect(isKlipOwnedField(['ata_vessel_sailed'], 'ata_loading_completed')).toBe(false);
+    expect(isKlipOwnedField([], 'ata_loading_completed')).toBe(false);
+    expect(isKlipOwnedField(null, 'ata_loading_completed')).toBe(false);
   });
 });

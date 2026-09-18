@@ -695,15 +695,20 @@ async function upsertVesselLoadingPortRow(
     port.port_sequence,
     mergeSapPortValue(port.quantity_at_loading_port, current?.quantity_at_loading_port),
     mergeSapPortValue(port.eta_vessel_arrival, current?.eta_vessel_arrival),
-    mergeSapPortValue(port.ata_vessel_arrival, current?.ata_vessel_arrival),
+    mergeSapPortValue(port.ata_vessel_arrival, current?.ata_vessel_arrival, current?.sap_ata_vessel_arrival,
+      isKlipOwnedField(current?.klip_edited_fields, 'ata_vessel_arrival')),
     mergeSapPortValue(port.eta_vessel_berthed, current?.eta_vessel_berthed),
-    mergeSapPortValue(port.ata_vessel_berthed, current?.ata_vessel_berthed),
+    mergeSapPortValue(port.ata_vessel_berthed, current?.ata_vessel_berthed, current?.sap_ata_vessel_berthed,
+      isKlipOwnedField(current?.klip_edited_fields, 'ata_vessel_berthed')),
     mergeSapPortValue(port.eta_loading_start, current?.eta_loading_start),
-    mergeSapPortValue(port.ata_loading_start, current?.ata_loading_start),
+    mergeSapPortValue(port.ata_loading_start, current?.ata_loading_start, current?.sap_ata_loading_start,
+      isKlipOwnedField(current?.klip_edited_fields, 'ata_loading_start')),
     mergeSapPortValue(port.eta_loading_completed, current?.eta_loading_completed),
-    mergeSapPortValue(port.ata_loading_completed, current?.ata_loading_completed),
+    mergeSapPortValue(port.ata_loading_completed, current?.ata_loading_completed, current?.sap_ata_loading_completed,
+      isKlipOwnedField(current?.klip_edited_fields, 'ata_loading_completed')),
     mergeSapPortValue(port.eta_vessel_sailed, current?.eta_vessel_sailed),
-    mergeSapPortValue(port.ata_vessel_sailed, current?.ata_vessel_sailed),
+    mergeSapPortValue(port.ata_vessel_sailed, current?.ata_vessel_sailed, current?.sap_ata_vessel_sailed,
+      isKlipOwnedField(current?.klip_edited_fields, 'ata_vessel_sailed')),
     mergeSapPortValue(port.loading_rate, current?.loading_rate),
     mergeSapPortQuality(port.quality_ffa, current?.quality_ffa),
     mergeSapPortQuality(port.quality_mi, current?.quality_mi),
@@ -888,11 +893,70 @@ async function cancelBogusExtraLoadingPorts(
  * written once from the WRONG sibling STO could never be corrected. Filling gaps fixes the
  * stale zeros without ever clobbering manual input.
  */
-export function mergeSapPortValue(incoming: unknown, current: unknown): unknown {
+/**
+ * True when two stored values are the same date/text, ignoring how the driver typed them.
+ * DATE columns come back as Date objects, incoming SAP values as strings.
+ */
+function sameStoredValue(a: unknown, b: unknown): boolean {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  const norm = (v: unknown): string => {
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? '' : v.toISOString().slice(0, 10);
+    const t = String(v).trim();
+    const d = new Date(t);
+    return t.length >= 8 && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : t;
+  };
+  const na = norm(a);
+  return na !== '' && na === norm(b);
+}
+
+/**
+ * Fill gaps, and let SAP correct or retract the values it provably wrote itself.
+ *
+ * The rule used to be `if (hasCurrent) return current` - fill gaps only, keep whatever is there
+ * forever. That exists to protect what a KLIP user typed, and it does, but production says there
+ * are **five** such values across all 10,684 set on this table. What it was really doing was
+ * stopping SAP from ever correcting the 10,325 values SAP itself had written - which is how one
+ * wrong date becomes permanent, and why migrations 169, 170 and 173 each had to go and clear one
+ * by hand.
+ *
+ * So: when the stored value still equals the SAP mirror, SAP demonstrably wrote it and may write
+ * it again, including writing nothing to take it back. Anything else - a value that differs from
+ * the mirror, or whose mirror has gone - is left exactly as it was.
+ *
+ * WHY RETRACTION IS SAFE HERE, and it is the part worth checking before believing:
+ * upsertVesselLoadingPortRow runs once per port SAP actually sent. An empty `incoming` therefore
+ * means SAP sent this port and left the field blank, not that the STO was missing from the export.
+ * A partial export does not reach this function at all.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO: treat "no evidence" as "SAP's". The 119 rows whose mirror has
+ * already been nulled stay untouched, because an empty klip_edited_fields means provenance
+ * unknown, not SAP - the trap migration 167 was written to end. Those need evidence this rule does
+ * not have.
+ */
+export function mergeSapPortValue(
+  incoming: unknown,
+  current: unknown,
+  currentSapMirror?: unknown,
+  klipOwned = false,
+): unknown {
   const hasCurrent =
     current !== null && current !== undefined && !(typeof current === 'string' && current.trim() === '');
-  if (hasCurrent) return current;
-  return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+  if (!hasCurrent) {
+    return incoming !== null && incoming !== undefined ? incoming : current ?? null;
+  }
+  // An explicit claim beats an inferred one. A user's edit can coincidentally equal the mirror -
+  // two systems recording the same real date - and without this the match alone would hand the
+  // field back to SAP.
+  if (klipOwned) return current;
+  if (currentSapMirror !== undefined && sameStoredValue(current, currentSapMirror)) {
+    return incoming !== null && incoming !== undefined ? incoming : null;
+  }
+  return current;
+}
+
+/** True when the KLIP edit path has claimed this column on this row (migration 167). */
+export function isKlipOwnedField(klipEditedFields: unknown, field: string): boolean {
+  return Array.isArray(klipEditedFields) && klipEditedFields.includes(field);
 }
 
 /**
