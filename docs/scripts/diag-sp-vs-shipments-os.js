@@ -32,7 +32,6 @@ const {
   aggregateShippingPerformanceRowsBySto,
 } = require('/app/dist/services/shippingPerformance.service');
 const { sumShippingPerfOutstandingQtyKg } = require('/app/dist/utils/shippingPerformanceOutstandingAgg');
-const { sqlContractGlobalOutstandingExpr, buildQtyMoveCte } = require('/app/dist/utils/contractGlobalOutstandingSql');
 const { sqlRegionSiteDisplayForContract } = require('/app/dist/utils/regionSiteSql');
 
 const PRODUCT = (process.argv[2] || 'CPO').trim().toUpperCase();
@@ -62,50 +61,53 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   console.log(`   contracts : ${spContracts.size}`);
   console.log(`   outstanding (apportioned) : ${mt(spTotal)} MT`);
 
-  // B. Contracts in the same product/site that Shipping Performance has no row for. These are what
-  //    the Shipments page counts through its backlog arm and Shipping Performance structurally
-  //    cannot show. Region/Site here is the Shipments page's own expression, not SP's.
+  // B. Contracts in the same product/site that Shipping Performance has no row for.
+  //
+  //    Outstanding comes straight from contract_qty_move_snapshot rather than through
+  //    sqlContractGlobalOutstandingExpr. That expression needs the qty_move CTE spliced in around
+  //    it, and an earlier version of this script asked for it without defining the scope CTE it
+  //    depends on: the query died with 42P01 and the connection logger printed several hundred KB
+  //    of generated SQL to the terminal. The snapshot holds the same figures, keyed by contract
+  //    number, and needs nothing around it.
   const regionSite = sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number');
-  const os = sqlContractGlobalOutstandingExpr({
-    contractQtyExpr: 'c.quantity_ordered',
-    incotermExpr: 'c.incoterm',
-    contractNumberExpr: 'c.contract_id',
-  });
   const known = [...spContracts];
-  const outside = (await connection.query(`
-    WITH ${buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' })}
-    SELECT c.contract_id, c.incoterm, c.product,
-           ROUND(COALESCE(c.quantity_ordered, 0) / 1000, 1) AS ordered_mt,
-           ROUND(GREATEST((${os}), 0) / 1000, 1) AS os_mt,
-           (SELECT COUNT(*) FROM shipments sh
-             WHERE sh.contract_id = c.id AND COALESCE(sh.status, '') <> 'CANCELLED') AS shipment_rows
-    FROM contracts c
-    WHERE UPPER(TRIM(COALESCE(c.product, ''))) LIKE '%' || $1 || '%'
-      AND UPPER(TRIM(COALESCE((${regionSite}), ''))) LIKE '%' || $2 || '%'
-      AND NOT (c.contract_id = ANY($3::text[]))
-      AND GREATEST((${os}), 0) > 0
-    ORDER BY (${os}) DESC`, [PRODUCT, SITE, known]).catch((e) => {
-    console.log(`   (contract-side query failed: ${e.message})`);
-    return { rows: null };
-  }));
+  let outside = null;
+  try {
+    outside = (await connection.query(`
+      SELECT c.contract_id, c.incoterm, c.product,
+             ROUND(COALESCE(c.quantity_ordered, 0) / 1000, 1) AS ordered_mt,
+             ROUND(GREATEST(
+               COALESCE(c.quantity_ordered, 0) - CASE
+                 WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) = 'FOB' THEN COALESCE(qms.quantity_delivery, 0)
+                 ELSE COALESCE(qms.quantity_receive, 0)
+               END, 0) / 1000, 1) AS os_mt,
+             (SELECT COUNT(*) FROM shipments sh
+               WHERE sh.contract_id = c.id AND COALESCE(sh.status, '') <> 'CANCELLED') AS shipment_rows
+      FROM contracts c
+      LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
+      WHERE UPPER(TRIM(COALESCE(c.product, ''))) LIKE '%' || $1 || '%'
+        AND UPPER(TRIM(COALESCE((${regionSite}), ''))) LIKE '%' || $2 || '%'
+        AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF', 'CFR')
+        AND NOT (c.contract_id = ANY($3::text[]))
+      ORDER BY 5 DESC`, [PRODUCT, SITE, known])).rows;
+  } catch (err) {
+    // Never let a failure print the generated SQL - the message alone is the useful part.
+    console.log(`\nB. could not be measured: ${String(err.message).slice(0, 200)}`);
+  }
 
-  if (outside.rows) {
-    const rows = outside.rows;
-    const total = rows.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000;
+  if (outside) {
+    const rows = outside.filter((r) => Number(r.os_mt) > 0);
+    const kg = (rs) => rs.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000;
     const noShipment = rows.filter((r) => Number(r.shipment_rows) === 0);
     const withShipment = rows.filter((r) => Number(r.shipment_rows) > 0);
-    console.log(`\nB. contracts in the same product/site that Shipping Performance has NO row for:`);
-    console.log(`   contracts : ${rows.length}`);
-    console.log(`   outstanding : ${mt(total)} MT`);
-    console.log(`   of those, with no shipment at all : ${noShipment.length} contracts, ` +
-      `${mt(noShipment.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000)} MT  <- the backlog arm`);
-    console.log(`   of those, WITH a shipment         : ${withShipment.length} contracts, ` +
-      `${mt(withShipment.reduce((a, r) => a + Number(r.os_mt || 0), 0) * 1000)} MT  <- these need explaining`);
+    console.log(`\nB. contracts in the same product/site with NO Shipping Performance row:`);
+    console.log(`   contracts   : ${rows.length}`);
+    console.log(`   outstanding : ${mt(kg(rows))} MT`);
+    console.log(`   no shipment at all : ${noShipment.length} contracts, ${mt(kg(noShipment))} MT  <- the backlog arm`);
+    console.log(`   HAS a shipment     : ${withShipment.length} contracts, ${mt(kg(withShipment))} MT  <- this one needs explaining`);
+    console.log(`\n   Shipping Performance ${mt(spTotal)} + outside ${mt(kg(rows))} = ${mt(spTotal + kg(rows))} MT`);
 
-    console.log(`\n   Shipping Performance ${mt(spTotal)} + outside ${mt(total)} = ${mt(spTotal + total)} MT`);
-    console.log('   (compare that with what the Shipments page shows for the same filter)');
-
-    console.log(`\nC. the largest contracts outside Shipping Performance (top 15):`);
+    console.log(`\nC. largest contracts outside Shipping Performance (top 15):`);
     console.log('   contract      inc    product          ordered      OS   shipments');
     for (const r of rows.slice(0, 15)) {
       console.log('   ' + String(r.contract_id).padEnd(14) + String(r.incoterm || '-').padEnd(7) +
@@ -114,6 +116,7 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
         String(r.shipment_rows).padStart(11));
     }
   }
+
 
   console.log('\nRead B first. A contract with no shipment at all cannot appear on a page built');
   console.log('from shipments, so that line is a definition difference rather than a fault. The');
