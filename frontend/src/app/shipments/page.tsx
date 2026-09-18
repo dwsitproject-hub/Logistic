@@ -2100,7 +2100,16 @@ function ShipmentsPageContent() {
       applyListEnvelope(listEnvelope)
       // Show shell immediately; background revalidation may still refresh rows.
       setListFetching(false)
-      if (searchTrim.length >= 2 || useAccurateQtySort) {
+      // Only useAccurateQtySort may open this gate here, because in that case the list request
+      // itself already ran with skipSapJoin=false (see the request build above) and the shell
+      // columns ARE the hydrated ones.
+      //
+      // A search used to open it too, and that is how a user searching STO 1016010373 saw Contract
+      // Qty paint 8,000 MT and then correct itself to 2,000 a moment later: the shell carries a
+      // grouped SUM from shipment_base, and hydration replaces it with sm.contract_qty. Showing a
+      // number the page cannot compute yet is worse than showing that it is still loading, and the
+      // hydrate fallback timer below already guarantees the dots stop within 15s on a search.
+      if (useAccurateQtySort) {
         setQtyFieldsReady(true)
       }
       if (kickSection1WithList) {
