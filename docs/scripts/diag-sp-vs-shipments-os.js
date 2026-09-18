@@ -200,6 +200,53 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   }
 
 
+  // F. My type-T guess was wrong: production says all 14 are SAP STO type V, real sea legs with
+  //    real vessels. What the data shows instead is that they SHARE STOs - seven contracts on
+  //    1006018515, two each on 1006019007, 1006019499 and 1006019951 - and Shipping Performance
+  //    merges its rows by STO (218 rows carrying 495 contracts).
+  //
+  //    So there are two quite different possibilities left, and they need opposite fixes:
+  //      - the STO is in Shipping Performance but its contract_number list does not name these
+  //        contracts, so they only LOOK absent (a naming problem, in the page or in my detection)
+  //      - the STO is not there at all (a real gap)
+  if (outside) {
+    const absentIds = new Set(outside
+      .filter((r) => Number(r.os_mt) > 0 && Number(r.shipment_rows) > 0)
+      .map((r) => r.contract_id));
+    if (absentIds.size) {
+      try {
+        const stos = (await connection.query(`
+          SELECT DISTINCT c.contract_id, NULLIF(TRIM(s.shipment_id::text), '') AS sto
+          FROM contracts c
+          JOIN shipments s ON s.contract_id = c.id AND COALESCE(s.status, '') <> 'CANCELLED'
+          WHERE c.contract_id = ANY($1::text[])`, [[...absentIds]])).rows;
+        const spBySto = new Map();
+        for (const r of all) {
+          const k = String(r.sto_key ?? r.sto_number ?? '').trim();
+          if (k) spBySto.set(k, r);
+        }
+        console.log(`\nF. is the STO itself present in Shipping Performance?`);
+        const seen = new Set();
+        for (const r of stos) {
+          if (!r.sto || seen.has(r.sto)) continue;
+          seen.add(r.sto);
+          const hit = spBySto.get(r.sto);
+          if (hit) {
+            const names = String(hit.contract_number ?? '').split(/,/).map((x) => x.trim()).filter(Boolean);
+            console.log(`   STO ${r.sto}: PRESENT, naming ${names.length} contract(s) - ${names.slice(0, 6).join(', ')}${names.length > 6 ? ' ...' : ''}`);
+          } else {
+            console.log(`   STO ${r.sto}: NOT in Shipping Performance at all  <- a real gap`);
+          }
+        }
+        console.log('   (PRESENT means the quantity IS counted, under an STO whose contract list');
+        console.log('    leaves these numbers out - so the total is right and the attribution is not)');
+      } catch (err) {
+        console.log(`\nF. could not be measured: ${String(err.message).slice(0, 200)}`);
+      }
+    }
+  }
+
+
   console.log('\nRead B first. A contract with no shipment at all cannot appear on a page built');
   console.log('from shipments, so that line is a definition difference rather than a fault. The');
   console.log('line below it - contracts that DO have a shipment yet are missing from Shipping');
