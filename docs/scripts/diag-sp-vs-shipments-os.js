@@ -118,6 +118,42 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   }
 
 
+  // D. The "HAS a shipment" contracts, split by the only two things that can explain them.
+  //
+  //    Either Shipping Performance has no row for the contract at all - which would be a real gap -
+  //    or it HAS one, filed under a different product or site. The second is live: SP derives site
+  //    from the raw discharge destination while the filter above uses the normalised Region/Site,
+  //    so the same contract can sit under two different labels on the two pages.
+  if (outside) {
+    const byContract = new Map();
+    for (const r of all) {
+      for (const cn of String(r.contract_number ?? '').split(/,/)) {
+        const k = cn.trim();
+        if (!k) continue;
+        if (!byContract.has(k)) byContract.set(k, []);
+        byContract.get(k).push(r);
+      }
+    }
+    const withShip = outside.filter((r) => Number(r.os_mt) > 0 && Number(r.shipment_rows) > 0);
+    const elsewhere = [];
+    const absent = [];
+    for (const r of withShip) {
+      (byContract.has(r.contract_id) ? elsewhere : absent).push(r);
+    }
+    console.log(`\nD. the ${withShip.length} contracts that HAVE a shipment but no row in this slice:`);
+    console.log(`   present in Shipping Performance under another product/site : ${elsewhere.length}`);
+    console.log(`   absent from Shipping Performance entirely                  : ${absent.length}   <- a real gap if non-zero`);
+    for (const r of elsewhere) {
+      const where = byContract.get(r.contract_id)
+        .map((x) => `${String(x.product || '-')} / ${String(x.plant_site || '-')}`);
+      console.log(`      ${r.contract_id}  filed under: ${[...new Set(where)].join(', ')}`);
+    }
+    for (const r of absent) {
+      console.log(`      ${r.contract_id}  ${r.incoterm || '-'}  ${r.shipment_rows} shipment(s), ${r.os_mt} MT  - ABSENT`);
+    }
+  }
+
+
   console.log('\nRead B first. A contract with no shipment at all cannot appear on a page built');
   console.log('from shipments, so that line is a definition difference rather than a fault. The');
   console.log('line below it - contracts that DO have a shipment yet are missing from Shipping');
