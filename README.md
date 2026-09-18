@@ -1938,6 +1938,39 @@ contract count span the backlog too.
 3rd Party) filters on it, and a missing column would have silently dropped every backlog row again,
 from a different place.
 
+### Region/Site: the alias was already there; the stored reads were not
+
+Shipping Performance was written up here as showing the **raw** discharge destination against
+Shipments' normalised one. That was wrong, and checking the data rather than repeating the claim is
+what caught it - `contract_latest_spd_snapshot` holds **0** KIJING rows against 6,032 TANJUNG PURA,
+and `b2b_ending_child_snapshot` holds 0 against 70. Both CTE branches of `latest_spd_contract`
+compute through `sapDischargeDestinationFromJson`, which wraps the map, and migration 161's backfill
+is that same expression compiled.
+
+What was real is narrower. The rule in `dischargeDestinationAlias.ts` is that the map applies at the
+JSON extraction point **and at every read of a stored copy**. This page read two stored copies raw:
+
+| read | before | now |
+| --- | --- | --- |
+| `b2b_end.discharge_destination` (main query) | raw | normalised |
+| `l.discharge_destination` (backlog arm, from the snapshot column) | raw | normalised |
+| `sa.discharge_destination`, `l.discharge_destination` (main query) | already normalised | left alone |
+
+The last row is a cost decision, not an oversight. The alias compiles to a `CASE` that reads its
+input **twice**, and `latest_spd_contract` is `NOT MATERIALIZED` - so an inlined
+`l.discharge_destination` is a jsonb extraction, and doubling those is exactly what took Contract
+Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, so doubling them is
+free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
+only asserting on its text.
+
+**Still different, and not an alias problem:** the two pages pick the destination from different
+sources. Shipments (`sqlRegionSiteRawForContract`) takes the B2B child copy keyed by `origin_po`,
+else the newest `sap_processed_data` row for the contract. Shipping Performance takes `b2b_end`,
+else a **per-shipment** SAP aggregate (`sa`), else the contract-level snapshot. A contract whose
+shipment carries a different destination from its contract-level one therefore still lands on two
+different sites. That moves rows between sites on a page read daily, so it is measured before it is
+changed, not folded into an alias fix.
+
 
 ### A whole voyage could disappear when the B2B origin had no shipment
 

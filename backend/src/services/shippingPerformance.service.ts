@@ -37,6 +37,7 @@ import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
 import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
+import { sqlNormalizeDischargeDestination } from '../utils/dischargeDestinationAlias';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
 import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 
@@ -552,7 +553,11 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
       NULL::text                                AS operation_id,
       NULL::uuid                                AS id,
       c.product,
-      COALESCE(NULLIF(TRIM(l.discharge_destination), ''), 'Blank') AS plant_site,
+      -- A STORED copy, so the alias is applied on READ: the rule is that every read of a stored
+      -- discharge destination normalises, because a row written before the map (or by a path that
+      -- does not normalise) would otherwise split KIJING from TANJUNG PURA here while Shipments
+      -- shows them as one. Safe to double the reference - this CTE selects a plain column.
+      COALESCE(${sqlNormalizeDischargeDestination("NULLIF(TRIM(l.discharge_destination), '')")}, 'Blank') AS plant_site,
       c.incoterm,
       c.source_type,
       c.supplier,
@@ -734,8 +739,19 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         s.sailing_speed,
         s.shortage,
         s.vessel_oa_budget,
+        /*
+         * Only b2b_end is normalised here, and the omissions are deliberate:
+         *   b2b_end - a STORED column. Read raw until now, which is the one place this page could
+         *             disagree with the Shipments Region/Site filter, since that side wraps the
+         *             same column (regionSiteSql.ts). Latent today (0 KIJING rows), not harmless.
+         *   sa, l   - both computed by sapDischargeDestinationFromJson, which already wraps the
+         *             map. Wrapping again would be correct but not free: the alias compiles to a
+         *             CASE that reads its input TWICE, and latest_spd_contract is NOT MATERIALIZED,
+         *             so an inlined l.discharge_destination is a jsonb extraction, not a column.
+         *             Doubling those is what took Contract Performance 1,360ms -> 3,342ms.
+         */
         COALESCE(
-          NULLIF(TRIM(b2b_end.discharge_destination), ''),
+          ${sqlNormalizeDischargeDestination("NULLIF(TRIM(b2b_end.discharge_destination), '')")},
           NULLIF(TRIM(sa.discharge_destination), ''),
           NULLIF(TRIM(l.discharge_destination), ''),
           'Blank'
