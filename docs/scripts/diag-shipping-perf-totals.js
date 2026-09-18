@@ -39,6 +39,16 @@ const {
 const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 });
 const raw = (row) => Number(row.outstanding_qty ?? row.outstanding_qty_actual ?? 0) || 0;
 
+// Mirrors frontend/src/lib/sapDisplayValue.ts + shippingPerformanceSummaryCounts.ts. The By Vessel
+// table drops rows whose vessel is one of these placeholders - "groups named ships only" - so they
+// are counted by Section 1 and absent from that table.
+const SAP_EMPTY = new Set(['unknown', 'blank', 'null', 'undefined', 'n/a', 'na', 'none', '-', '—']);
+const isCountableVessel = (v) => {
+  if (v === null || v === undefined) return false;
+  const t = String(v).trim();
+  return t !== '' && !SAP_EMPTY.has(t.toLowerCase());
+};
+
 (async () => {
   console.log('running the Shipping Performance query (cold path, one pass)...');
   const result = await connection.query(await buildShippingPerformanceSql());
@@ -54,10 +64,19 @@ const raw = (row) => Number(row.outstanding_qty ?? row.outstanding_qty_actual ??
 
   console.log(`\nrows after STO aggregation: ${rows.length}  (withdrawn ${withdrawn.length}, countable ${countable.length})`);
 
+  // The By Vessel table is a THIRD set: aggregateByVessel skips rows whose vessel_name is a
+  // placeholder ("groups named ships only; unnamed STOs stay in All Shipments view"), and it sums
+  // through the same apportioned helper. So it differs from Section 1 by membership, not by maths.
+  const named = countable.filter((r) => isCountableVessel(r.vessel_name));
+  const unnamed = countable.filter((r) => !isCountableVessel(r.vessel_name));
+  const byVesselTotal = sumShippingPerfOutstandingQtyKg(named);
+
   console.log('\nwhat each surface totals:');
-  console.log(`   view table   (raw, incl. withdrawn)   : ${mt(tableTotal)} MT`);
-  console.log(`   Section 1    (apportioned, countable) : ${mt(aggTotal)} MT`);
-  console.log(`   drilldown    (same input as Section 1): ${mt(aggTotal)} MT  <- identical by construction`);
+  console.log(`   Section 1     (apportioned, all countable) : ${mt(aggTotal)} MT`);
+  console.log(`   drilldown     (same input, same helper)    : ${mt(aggTotal)} MT  <- identical by construction`);
+  console.log(`   By Vessel     (apportioned, named ships)   : ${mt(byVesselTotal)} MT`);
+  console.log(`   All Shipments (raw per row, everything)    : ${mt(tableTotal)} MT`);
+  console.log(`\n   Section 1 - By Vessel = ${mt(aggTotal - byVesselTotal)} MT across ${unnamed.length} rows with no named vessel`);
 
   console.log('\nthe difference, decomposed:');
   console.log(`   withdrawn rows the table keeps       : ${mt(withdrawnRawTotal)} MT  (${withdrawn.length} rows)`);
