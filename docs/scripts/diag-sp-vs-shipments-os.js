@@ -33,6 +33,7 @@ const {
 } = require('/app/dist/services/shippingPerformance.service');
 const { sumShippingPerfOutstandingQtyKg } = require('/app/dist/utils/shippingPerformanceOutstandingAgg');
 const { sqlRegionSiteDisplayForContract } = require('/app/dist/utils/regionSiteSql');
+const { sapStoTypeNormalizedExpr } = require('/app/dist/utils/shipmentStoTypeSql');
 
 const PRODUCT = (process.argv[2] || 'CPO').trim().toUpperCase();
 const SITE = (process.argv[3] || 'BONTANG').trim().toUpperCase();
@@ -150,6 +151,51 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
     }
     for (const r of absent) {
       console.log(`      ${r.contract_id}  ${r.incoterm || '-'}  ${r.shipment_rows} shipment(s), ${r.os_mt} MT  - ABSENT`);
+    }
+  }
+
+
+  // E. Why the absent ones are absent. Shipping Performance's row scope is
+  //    (sea incoterm) AND NOT (FOB AND resolved STO type = 'T') - a FOB contract's TRUCKING leg is
+  //    deliberately not on a sea-performance page, the same rule that keeps STO 1016010384 off the
+  //    Shipments page. Every absent contract here is FOB, so this checks the type rather than
+  //    inferring it from the pattern.
+  if (outside) {
+    const absentIds = outside
+      .filter((r) => Number(r.os_mt) > 0 && Number(r.shipment_rows) > 0)
+      .map((r) => r.contract_id);
+    if (absentIds.length) {
+      try {
+        const types = (await connection.query(`
+          SELECT c.contract_id,
+                 NULLIF(TRIM(s.shipment_id::text), '') AS sto,
+                 s.status AS shipment_status,
+                 NULLIF(TRIM(s.vessel_name), '') AS vessel_name,
+                 (SELECT ${sapStoTypeNormalizedExpr('spd')}
+                    FROM sap_processed_data spd
+                   WHERE TRIM(COALESCE(spd.sto_number::text, '')) = TRIM(COALESCE(s.shipment_id::text, ''))
+                   ORDER BY spd.created_at DESC NULLS LAST
+                   LIMIT 1) AS sap_sto_type
+          FROM contracts c
+          JOIN shipments s ON s.contract_id = c.id AND COALESCE(s.status, '') <> 'CANCELLED'
+          WHERE c.contract_id = ANY($1::text[])
+          ORDER BY c.contract_id`, [absentIds])).rows;
+        console.log(`\nE. the absent contracts' shipments, and their SAP STO type:`);
+        console.log('   contract      STO            status        vessel               STO type');
+        let typeT = 0;
+        for (const r of types) {
+          if (String(r.sap_sto_type || '').trim().toUpperCase() === 'T') typeT += 1;
+          console.log('      ' + String(r.contract_id).padEnd(14) + String(r.sto || '-').padEnd(15) +
+            String(r.shipment_status || '-').padEnd(14) +
+            String(r.vessel_name || '-').slice(0, 20).padEnd(21) +
+            String(r.sap_sto_type || '-'));
+        }
+        console.log(`   of ${types.length} shipments, ${typeT} are SAP STO type T (a FOB trucking leg)`);
+        console.log('   (type T is excluded from Shipping Performance on purpose, so those are');
+        console.log('    definition, not a gap. Anything NOT type T here is the real finding.)');
+      } catch (err) {
+        console.log(`\nE. could not be measured: ${String(err.message).slice(0, 200)}`);
+      }
     }
   }
 
