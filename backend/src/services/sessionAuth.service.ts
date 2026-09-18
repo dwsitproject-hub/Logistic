@@ -19,7 +19,7 @@ export interface SessionUserPayload {
 }
 
 export async function buildSessionUserPayload(userRow: Record<string, unknown>): Promise<SessionUserPayload> {
-  const scope = await fetchUserScopeAssociations(String(userRow.id), userRow.plant as string | null);
+  const scope = await fetchUserScopeAssociations(String(userRow.id));
   return {
     id: String(userRow.id),
     username: String(userRow.username),

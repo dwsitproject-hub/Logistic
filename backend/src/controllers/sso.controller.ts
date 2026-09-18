@@ -103,7 +103,7 @@ export const ssoHubHandler = async (req: Request, res: Response): Promise<void> 
       userAgent: req.get('user-agent'),
     });
 
-    const scope = await fetchUserScopeAssociations(user.id, user.plant);
+    const scope = await fetchUserScopeAssociations(user.id);
 
     const exchangePayload: SsoExchangePayload = {
       user: {

@@ -5,15 +5,13 @@ import { query, getClient } from '../database/connection';
 import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
-import { canonicalizeUserRegionSites, expandRegionSiteMatchNames } from '../utils/userRegionSite';
+import { canonicalizeUserRegionSites } from '../utils/userRegionSite';
 import { isValidUserRole } from '../utils/userRoles';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
   productsByUser: Map<string, string[]>;
 };
-
-const MASTER_PLANT_GROUP_PLANT_SQL = `COALESCE(NULLIF(TRIM(mp.group_plant), ''), 'Blank')`;
 
 const legacyPlantSummary = (groupPlants: string[]): string | null => {
   if (groupPlants.length === 0) return null;
@@ -30,12 +28,10 @@ async function fetchUserAssociations(userIds: string[]): Promise<UserAssociation
 
   const [groupPlantsResult, productsResult] = await Promise.all([
     query(
-      `SELECT up.user_id, ${MASTER_PLANT_GROUP_PLANT_SQL} AS group_plant
-       FROM user_plants up
-       JOIN master_plants mp ON mp.id = up.master_plant_id
-       WHERE up.user_id = ANY($1::uuid[])
-       GROUP BY up.user_id, ${MASTER_PLANT_GROUP_PLANT_SQL}
-       ORDER BY group_plant`,
+      `SELECT urs.user_id, urs.region_site AS group_plant
+       FROM user_region_sites urs
+       WHERE urs.user_id = ANY($1::uuid[])
+       ORDER BY urs.region_site`,
       [userIds]
     ),
     query(
@@ -69,14 +65,14 @@ async function fetchUserAssociations(userIds: string[]): Promise<UserAssociation
 
 function enrichUserRow(row: Record<string, unknown>, associations: UserAssociations) {
   const userId = String(row.id);
-  const junctionGroupPlants = associations.groupPlantsByUser.get(userId) ?? [];
-  const legacyPlant = typeof row.plant === 'string' ? row.plant.trim() : '';
+  /*
+   * No fallback to the legacy `plant` text column. It holds labels from master_plants.group_plant -
+   * the plant dimension - so reading it when user_region_sites is empty would quietly restore the
+   * very scope migration 177 exists to retire, and an admin who cleared a user would see it come
+   * back. Empty means empty until someone picks from the Region/Site list.
+   */
   const groupPlants = canonicalizeUserRegionSites(
-    junctionGroupPlants.length > 0
-      ? junctionGroupPlants
-      : legacyPlant
-        ? legacyPlant.split(',').map((part) => part.trim())
-        : [],
+    associations.groupPlantsByUser.get(userId) ?? [],
   );
   const products = associations.productsByUser.get(userId) ?? [];
 
@@ -89,50 +85,43 @@ function enrichUserRow(row: Record<string, unknown>, associations: UserAssociati
   };
 }
 
-async function syncUserPlants(
+/**
+ * Store the Region/Site the admin actually picked.
+ *
+ * The picker has always listed SAP Discharge Destination - it reads
+ * /contracts/filter-options/group-plants, which is REGION_SITE_FILTER_OPTIONS_SQL, the same list
+ * the Region/Site dropdown on Shipments uses. This function used to take that choice and look it
+ * up in master_plants.group_plant so it could store a foreign key, and those are two different
+ * dimensions sharing four labels out of fourteen. LUBUK GAUNG, BATAM, KUMAI, PALEMBANG, BELAWAN,
+ * TANJUNG MORAWA and TANGERANG all matched nothing and were dropped with only a logger.warn, so
+ * the admin saw the name they picked disappear and the user opened Shipments scoped to nothing.
+ *
+ * Nothing is looked up now. What was chosen is what is stored, which is also what every page
+ * filters by - see migration 177.
+ */
+async function syncUserRegionSites(
   client: PoolClient,
   userId: string,
-  groupPlantNames: string[] | null | undefined
+  regionSiteNames: string[] | null | undefined
 ): Promise<string[]> {
+  await client.query('DELETE FROM user_region_sites WHERE user_id = $1', [userId]);
+  // The old junction rows hold values from the plant dimension. Clear them as each user is saved
+  // so nothing can quietly read a scope we no longer mean.
   await client.query('DELETE FROM user_plants WHERE user_id = $1', [userId]);
 
-  if (!groupPlantNames || groupPlantNames.length === 0) {
-    return [];
-  }
-
-  const uniqueNames = canonicalizeUserRegionSites(groupPlantNames);
+  const uniqueNames = canonicalizeUserRegionSites(regionSiteNames ?? []);
   if (uniqueNames.length === 0) {
     return [];
   }
 
-  const matchNames = expandRegionSiteMatchNames(uniqueNames);
-  const resolved = await client.query(
-    `SELECT id, ${MASTER_PLANT_GROUP_PLANT_SQL} AS group_plant
-     FROM master_plants mp
-     WHERE TRIM(LOWER(${MASTER_PLANT_GROUP_PLANT_SQL})) = ANY(
-       SELECT TRIM(LOWER(unnest($1::text[])))
-     )`,
-    [matchNames]
+  await client.query(
+    `INSERT INTO user_region_sites (user_id, region_site)
+     SELECT $1, unnest($2::text[])
+     ON CONFLICT (user_id, region_site) DO NOTHING`,
+    [userId, uniqueNames]
   );
 
-  for (const row of resolved.rows) {
-    await client.query(
-      `INSERT INTO user_plants (user_id, master_plant_id)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id, master_plant_id) DO NOTHING`,
-      [userId, row.id]
-    );
-  }
-
-  const saved = canonicalizeUserRegionSites(resolved.rows.map((row) => row.group_plant));
-  if (saved.length !== uniqueNames.length) {
-    logger.warn('User region/plant assignment: some values did not match master_plants.group_plant', {
-      userId,
-      requested: uniqueNames,
-      saved,
-    });
-  }
-  return saved;
+  return uniqueNames;
 }
 
 async function syncUserProducts(
@@ -343,7 +332,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
     );
 
     const userId = result.rows[0].id as string;
-    const savedPlants = await syncUserPlants(client, userId, scopedPlants);
+    const savedPlants = await syncUserRegionSites(client, userId, scopedPlants);
     const savedProducts = await syncUserProducts(client, userId, scopedProducts);
     const plantSummary = legacyPlantSummary(savedPlants);
 
@@ -485,7 +474,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
     let plantSummary: string | null | undefined;
 
     if (shouldSyncAssociations) {
-      savedPlants = await syncUserPlants(client, id, scopedPlants);
+      savedPlants = await syncUserRegionSites(client, id, scopedPlants);
       savedProducts = await syncUserProducts(client, id, scopedProducts);
       plantSummary = legacyPlantSummary(savedPlants);
     }

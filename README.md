@@ -1835,6 +1835,57 @@ back to the edit modal - so without a second guard a COMPLETED backlog row would
 between the two handlers forever once Edit began delegating to Add. That guard is the reason the
 delegation is safe, not an optimisation.
 
+## User Region/Site scope
+
+### The picker showed the right list and the save path threw the answer away
+
+A user scoped to Region/Plant **Bontang** opened Shipments and some of their contracts were simply
+absent; picking the region by hand found them. The suspicion - that the default carried the plant
+dimension - was right, and measuring it showed the fault was bigger than the symptom.
+
+The Users page picker has **always** listed SAP Discharge Destination: it reads
+`/contracts/filter-options/group-plants`, which is `REGION_SITE_FILTER_OPTIONS_SQL`, the same list
+the Region/Site dropdown on Shipments uses. `syncUserPlants` then looked that choice up in
+`master_plants.group_plant` so it could store a foreign key - and those are two dimensions that
+share **4 labels out of 14**:
+
+| `group_plant` | plants | exists as a discharge destination? |
+| --- | --- | --- |
+| Bekasi, Bontang, Karawang, Tanjung Pura | 27 | yes |
+| Bulking Lubuk Gaung | 8 | no - SAP says `LUBUK GAUNG` (3,251 rows) |
+| EOP Tj Morawa | 3 | no - `TANJUNG MORAWA` (2,030) |
+| Cisadane | 4 | no - `TANGERANG` (708) |
+| Bulking Kumai / Batam / Palembang / Belawan | 11 | no - `KUMAI`, `BATAM`, `PALEMBANG`, `BELAWAN` |
+| Bulking Sintang | 2 | no - its plants have no SAP rows at all |
+| Trading | 20 | no - spread across 8+ destinations |
+
+So an admin picking `LUBUK GAUNG` had it **silently dropped** - the only trace was a `logger.warn` -
+and that user opened Shipments scoped to nothing at all. The four that did match stored the
+plant-dimension spelling, which then filtered by destination and hid real work: Bontang's plants
+also ship to `MERAUKE` (15 rows), `TRADING TRANSIT HO` (2) and `KUMAI` (1), and none of it showed.
+That is the reported symptom, and it was the smaller half of the defect.
+
+**Nothing is looked up any more.** `user_region_sites` (migration 177) stores the text that was
+picked, and every page filters by that same text. The mapping table this could have needed does not
+exist, because the question it would answer is one the data already answers - the derivation from
+SAP `Plant Code` -> `master_plants.plant_code` is what produced the table above, including
+`Cisadane -> TANGERANG`, which nobody could have guessed.
+
+**Not backfilled** (Ryan, 2026-09-18). The scope is a default filter and an alert scope, not an
+access boundary - no page query enforces it server-side - so starting empty widens what people see
+rather than locking anyone out, and every stored assignment came from the wrong dimension anyway.
+Admins re-assign from the picker, which was always showing the right list. The legacy `users.plant`
+fallback is removed for the same reason, in both `enrichUserRow` and `fetchUserScopeAssociations`:
+consulting it when Region/Site is empty would restore the retired dimension exactly when an admin
+had deliberately cleared someone.
+
+**The second consumer had to move in the same change.** `missingEtaAlertScopeSql` compared the
+user's labels against `groupPlantExpr('c.plant_code', ...)`, which was consistent only while the
+stored scope came from there too. Left behind, it would have matched nothing and Staff would have
+stopped receiving missing-ETA alerts with no error anywhere. It now uses
+`sqlRegionSiteRawForContract`, the same expression the pages use, and its test asserts the plant
+dimension does **not** come back.
+
 ## Shipping Performance
 
 ### Shipping Performance counts the unplanned contracts too

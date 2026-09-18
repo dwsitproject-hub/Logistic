@@ -7,17 +7,28 @@ export type UserScopeAssociations = {
   products: string[];
 };
 
+/**
+ * The legacy `users.plant` column is no longer a parameter. It was resolved through
+ * master_plants.plant_name -> group_plant, the plant dimension migration 177 retired, and keeping
+ * it as a fallback would hand a user a scope in the wrong dimension exactly when their Region/Site
+ * is empty - the state an admin creates on purpose. Removing the argument rather than ignoring it
+ * means no caller can pass it back in by habit.
+ */
 export async function fetchUserScopeAssociations(
   userId: string,
-  legacyPlant: string | null | undefined,
 ): Promise<UserScopeAssociations> {
   const [plantsResult, productsResult, groupPlantsResult] = await Promise.all([
+    /*
+     * Region/Site, as the admin picked it from the SAP Discharge Destination list. `plants` and
+     * `group_plants` are the same values: the Users page offers one picker, and the legacy
+     * distinction between a plant name and its group belonged to the dimension migration 177
+     * retired. Keeping both keys means no caller has to change.
+     */
     query(
-      `SELECT mp.plant_name
-       FROM user_plants up
-       JOIN master_plants mp ON mp.id = up.master_plant_id
-       WHERE up.user_id = $1
-       ORDER BY mp.plant_name`,
+      `SELECT region_site AS plant_name
+       FROM user_region_sites
+       WHERE user_id = $1
+       ORDER BY region_site`,
       [userId],
     ),
     query(
@@ -29,35 +40,25 @@ export async function fetchUserScopeAssociations(
       [userId],
     ),
     query(
-      `SELECT DISTINCT COALESCE(NULLIF(TRIM(mp.group_plant), ''), 'Blank') AS group_plant
-       FROM user_plants up
-       JOIN master_plants mp ON mp.id = up.master_plant_id
-       WHERE up.user_id = $1
-       ORDER BY group_plant`,
+      `SELECT region_site AS group_plant
+       FROM user_region_sites
+       WHERE user_id = $1
+       ORDER BY region_site`,
       [userId],
     ),
   ]);
 
-  let plants = plantsResult.rows.map((row) => String(row.plant_name));
-  let group_plants = canonicalizeUserRegionSites(
+  const plants = plantsResult.rows.map((row) => String(row.plant_name));
+  const group_plants = canonicalizeUserRegionSites(
     groupPlantsResult.rows.map((row) => row.group_plant),
   );
   const products = productsResult.rows.map((row) => String(row.product_name));
 
-  const legacy = typeof legacyPlant === 'string' ? legacyPlant.trim() : '';
-  if (plants.length === 0 && legacy) {
-    plants = [legacy];
-    const legacyGroupResult = await query(
-      `SELECT DISTINCT COALESCE(NULLIF(TRIM(group_plant), ''), 'Blank') AS group_plant
-       FROM master_plants
-       WHERE TRIM(LOWER(plant_name)) = TRIM(LOWER($1))
-       ORDER BY group_plant`,
-      [legacy],
-    );
-    group_plants = canonicalizeUserRegionSites(
-      legacyGroupResult.rows.map((row) => row.group_plant),
-    );
-  }
-
+  /*
+   * The legacy `plant` text column is deliberately NOT consulted any more. It was resolved through
+   * master_plants.plant_name -> group_plant, which is the plant dimension migration 177 retired;
+   * using it as a fallback would hand a user a scope in the wrong dimension precisely when their
+   * Region/Site is empty, which is the state an admin creates on purpose.
+   */
   return { plants, group_plants, products };
 }

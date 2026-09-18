@@ -56,11 +56,19 @@ describe('missingEtaAlertScopeSql', () => {
     expect(scope.sql).not.toContain('transport_mode');
   });
 
-  it('Staff with group_plants adds group plant filter', () => {
+  /*
+   * This asserted on 'group_plant' - the PLANT dimension, via groupPlantExpr(c.plant_code, ...) -
+   * which was consistent only because the stored scope came from master_plants.group_plant too.
+   * Migration 177 made the stored value the SAP Discharge Destination the admin actually picked, so
+   * a plant-code comparison would match nothing and Staff would silently stop receiving alerts.
+   * The assertion is inverted deliberately: it now fails if the plant dimension comes back.
+   */
+  it('Staff with group_plants scopes by Region/Site, not by plant code', () => {
     const scope = buildMissingEtaAlertScopeClause(
       baseUser({ group_plants: ['PLANT-A', 'Blank'] }),
     );
-    expect(scope.sql).toContain('group_plant');
+    expect(scope.sql).not.toContain('plant_code');
+    expect(scope.sql).toContain('discharge_destination');
     expect(scope.sql).toContain('UPPER(');
     expect(scope.params).toEqual(['PLANT-A']);
   });
