@@ -109,6 +109,29 @@ const isCountableVessel = (v) => {
   console.log('    If the tree hides blank nodes, this is the amount the drilldown would lose.)');
 
   // How much of the apportionment gap is real multi-STO POs, for context.
+  // Which of the two halves of matchesPerfDrilldownRow actually moves the total, and what the
+  // filter would cost Section 1's OTHER numbers. The OS<=0 half cannot change a sum of
+  // outstanding at all - a zero adds nothing - so any quantity difference is entirely COMPLETED
+  // rows that still carry outstanding, which is a finding in its own right.
+  const completedRows = countable.filter((r) => String(r.status || '').trim().toUpperCase() === 'COMPLETED');
+  const completedWithOs = completedRows.filter((r) => raw(r) > 0);
+  const zeroOsRows = countable.filter((r) => raw(r) <= 0 && String(r.status || '').trim().toUpperCase() !== 'COMPLETED');
+  console.log('\nwhat the drilldown filter removes, by half:');
+  console.log(`   COMPLETED rows                 : ${completedRows.length}, of which ${completedWithOs.length} still carry outstanding`);
+  console.log(`   ...their quantity              : ${mt(sumShippingPerfOutstandingQtyKg(completedWithOs))} MT  <- the whole Section 1 / drilldown gap`);
+  console.log(`   outstanding <= 0 (not COMPLETED): ${zeroOsRows.length} rows, 0 MT by definition`);
+  console.log('   (so the second half of the filter changes counts and averages, never a total)');
+
+  // What the filter would cost the averages, which is the reason not to apply it wholesale.
+  const avg = (rs, field) => (rs.length ? rs.reduce((a, r) => a + (Number(r[field]) || 0), 0) / rs.length : 0);
+  console.log('\nSection 1 averages, full population vs drilldown-filtered:');
+  for (const f of ['ata_total_delta_days', 'total_delta_days']) {
+    console.log(`   ${f.padEnd(22)} all ${avg(countable, f).toFixed(2)} d   filtered ${avg(drilldownRows, f).toFixed(2)} d`);
+  }
+  console.log(`   rows behind them: ${countable.length} vs ${drilldownRows.length}`);
+  console.log('   (COMPLETED voyages are the ones with final actual dates - dropping them is');
+  console.log('    what makes an average of ATA deltas less trustworthy, not more)');
+
   const multi = countable.filter((r) => Number(r.po_sto_count ?? 1) > 1);
   console.log(`\nrows on a PO carrying several STOs: ${multi.length}`);
   console.log(`   raw         : ${mt(multi.reduce((a, r) => a + raw(r), 0))} MT`);
