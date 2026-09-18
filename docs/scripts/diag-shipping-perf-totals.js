@@ -71,12 +71,22 @@ const isCountableVessel = (v) => {
   const unnamed = countable.filter((r) => !isCountableVessel(r.vessel_name));
   const byVesselTotal = sumShippingPerfOutstandingQtyKg(named);
 
+  // The drilldown applies matchesPerfDrilldownRow, which Section 1 does NOT: it drops rows whose
+  // status is COMPLETED and rows whose raw outstanding is <= 0. An earlier version of this script
+  // printed "identical by construction" without applying it - stated as fact, never checked. The
+  // tree does keep blank keys (bucketed as Blank/Unknown), so that is not a cause.
+  const drilldownRows = countable.filter(
+    (r) => String(r.status || '').trim().toUpperCase() !== 'COMPLETED' && raw(r) > 0,
+  );
+  const drilldownTotal = sumShippingPerfOutstandingQtyKg(drilldownRows);
+
   console.log('\nwhat each surface totals:');
   console.log(`   Section 1     (apportioned, all countable) : ${mt(aggTotal)} MT`);
-  console.log(`   drilldown     (same input, same helper)    : ${mt(aggTotal)} MT  <- identical by construction`);
+  console.log(`   drilldown     (apportioned, not COMPLETED, OS>0) : ${mt(drilldownTotal)} MT`);
   console.log(`   By Vessel     (apportioned, named ships)   : ${mt(byVesselTotal)} MT`);
   console.log(`   All Shipments (raw per row, everything)    : ${mt(tableTotal)} MT`);
   console.log(`\n   Section 1 - By Vessel = ${mt(aggTotal - byVesselTotal)} MT across ${unnamed.length} rows with no named vessel`);
+  console.log(`   Section 1 - drilldown = ${mt(aggTotal - drilldownTotal)} MT across ${countable.length - drilldownRows.length} rows the drilldown filters out`);
 
   console.log('\nthe difference, decomposed:');
   console.log(`   withdrawn rows the table keeps       : ${mt(withdrawnRawTotal)} MT  (${withdrawn.length} rows)`);
