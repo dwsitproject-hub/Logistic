@@ -11,7 +11,7 @@ CREATE TABLE users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(255) NOT NULL,
-    role VARCHAR(50) NOT NULL CHECK (role IN ('ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT')),
+    role VARCHAR(50) NOT NULL CHECK (role IN ('ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT', 'ADMIN_SUPPORT')),
     is_active BOOLEAN DEFAULT true,
     is_first_login BOOLEAN DEFAULT true,
     last_password_change TIMESTAMP,
@@ -69,7 +69,8 @@ INSERT INTO roles (role_name, display_name, description) VALUES
 ('LOGISTICS', 'Logistics', 'Access to shipments, SLA monitoring, and logistics operations'),
 ('FINANCE', 'Finance', 'Access to payments, invoices, and financial reports'),
 ('MANAGEMENT', 'Management', 'Access to dashboards, insights, and high-level reports'),
-('SUPPORT', 'Support', 'Access to data validation, audit logs, and support functions')
+('SUPPORT', 'Support', 'Access to data validation, audit logs, and support functions'),
+('ADMIN_SUPPORT', 'Admin Support', 'Admin support access mirroring Support: data validation, audit logs, and support functions')
 ON CONFLICT (role_name) DO NOTHING;
 
 -- Seed default permissions

@@ -99,11 +99,11 @@ export const NAV_ITEMS: NavItem[] = [
     name: 'AI Agent Activity Log',
     href: '/ai-klip-agent-activity',
     icon: ScrollText,
-    roles: ['ADMIN', 'SUPPORT', 'MANAGEMENT', 'LOGISTICS'],
+    roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT', 'MANAGEMENT', 'LOGISTICS'],
     permissionKey: 'page.ai_klip_agent_activity',
   },
   { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'], permissionKey: 'page.documents' },
   { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ALL'], permissionKey: 'page.sap' },
   { name: 'Users', href: '/users', icon: Users, roles: ['ALL'], permissionKey: 'page.users' },
-  { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT'], permissionKey: 'page.audit' },
+  { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'], permissionKey: 'page.audit' },
 ]

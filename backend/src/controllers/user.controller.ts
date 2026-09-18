@@ -6,6 +6,7 @@ import logger from '../utils/logger';
 import { AuthRequest } from '../middleware/auth';
 import { deriveUsernameFromEmail, normalizeEmail } from '../utils/userIdentity';
 import { canonicalizeUserRegionSites, expandRegionSiteMatchNames } from '../utils/userRegionSite';
+import { isValidUserRole } from '../utils/userRoles';
 
 type UserAssociations = {
   groupPlantsByUser: Map<string, string[]>;
@@ -272,7 +273,6 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
     const validLevels = ['Dept Head', 'Section Head', 'Staff', 'Admin'];
     if (level != null && level !== '' && !validLevels.includes(level)) {
       res.status(400).json({
@@ -296,7 +296,7 @@ export const createUser = async (req: AuthRequest, res: Response): Promise<void>
       }
     }
 
-    if (!validRoles.includes(role)) {
+    if (!isValidUserRole(role)) {
       res.status(400).json({
         success: false,
         error: { message: 'Invalid role' },
@@ -418,8 +418,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       : null;
 
     if (role) {
-      const validRoles = ['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT'];
-      if (!validRoles.includes(role)) {
+      if (!isValidUserRole(role)) {
         res.status(400).json({
           success: false,
           error: { message: 'Invalid role' },

@@ -3,6 +3,7 @@ import {
   formatPoPlantLabel,
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
+  buildQuantityDeliveredByContractKg,
 } from './addNewShipmentTypes'
 import { classifyShipmentTransportMode } from '@/lib/shipmentTransportMode'
 
@@ -67,5 +68,17 @@ describe('classifyShipmentTransportMode', () => {
   it('returns null for blank', () => {
     expect(classifyShipmentTransportMode('')).toBe(null)
     expect(classifyShipmentTransportMode(null)).toBe(null)
+  })
+})
+
+describe('buildQuantityDeliveredByContractKg', () => {
+  it('converts positive MT inputs to kg and skips blanks', () => {
+    expect(
+      buildQuantityDeliveredByContractKg(
+        ['k1', 'k2', 'k3'],
+        { k1: '12.5', k2: '', k3: '0' },
+        (key) => (key === 'k1' ? '1004001' : '1004002'),
+      ),
+    ).toEqual({ '1004001': 12500 })
   })
 })

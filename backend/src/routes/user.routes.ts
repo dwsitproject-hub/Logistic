@@ -10,6 +10,7 @@ import {
   changePassword,
 } from '../controllers/user.controller';
 import { body } from 'express-validator';
+import { USER_ROLES } from '../utils/userRoles';
 
 const router = express.Router();
 
@@ -36,7 +37,7 @@ router.post(
     body('email').isEmail(),
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
-    body('role').isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
+    body('role').isIn([...USER_ROLES]),
     body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
     body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'ALL', 'MIX', 'sea', 'land', 'all', 'mix']),
     body('plants').optional({ nullable: true }).isArray(),
@@ -52,7 +53,7 @@ router.put(
   authorize('ADMIN'),
   [
     body('email').optional().isEmail(),
-    body('role').optional().isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
+    body('role').optional().isIn([...USER_ROLES]),
     body('level').optional({ nullable: true }).isIn(['Dept Head', 'Section Head', 'Staff', 'Admin']),
     body('transport_type').optional({ nullable: true }).isIn(['SEA', 'LAND', 'ALL', 'MIX', 'sea', 'land', 'all', 'mix']),
     body('plants').optional({ nullable: true }).isArray(),

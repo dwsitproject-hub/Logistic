@@ -50,6 +50,7 @@ import api from '@/lib/api'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { alignSelectedToRegionSiteOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
+import { formatRoleLabel } from '@/lib/userRoles'
 
 interface User {
   id: string
@@ -303,6 +304,7 @@ export default function UsersPage() {
       FINANCE: 'bg-yellow-500',
       MANAGEMENT: 'bg-purple-500',
       SUPPORT: 'bg-gray-500',
+      ADMIN_SUPPORT: 'bg-orange-500',
     }
     return colors[role] || 'bg-gray-500'
   }
@@ -436,7 +438,7 @@ export default function UsersPage() {
                         <TableCell>{user.email}</TableCell>
                         <TableCell>
                           <Badge className={`${getRoleBadgeColor(user.role)} text-white`}>
-                            {user.role}
+                            {formatRoleLabel(user.role)}
                           </Badge>
                         </TableCell>
                         <TableCell>

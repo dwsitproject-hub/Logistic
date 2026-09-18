@@ -1,3 +1,5 @@
+import { parseDecimalDotInput } from '@/lib/decimalDotInput'
+
 export type PrefilledVesselSnapshot = {
   vesselName?: string
   vesselCode?: string
@@ -60,6 +62,8 @@ export type CreateShipmentFormPayload = {
   /** Optional leftover planning allocation (MT). Add New no longer collects Shipment Plan Qty. */
   contractQtyAssigned?: Record<string, string | number>
   poQtyAssigned?: Record<string, string | number>
+  /** Per contract_id Qty Delivery (Klip) in kg. Optional; blank PO rows are omitted. */
+  quantityDeliveredByContract?: Record<string, number>
   vesselName: string
   vesselCode: string
   vesselOwner: string
@@ -379,4 +383,21 @@ export async function attachPurchaseOrderToShipment(args: {
   if (!res.data?.success) {
     throw new Error(res.data?.error?.message || 'Failed to add PO to shipment')
   }
+}
+
+/** Convert optional per-PO Qty Delivery (Klip) MT strings to kg keyed by contract_id. */
+export function buildQuantityDeliveredByContractKg(
+  selectionKeys: string[],
+  mtBySelectionKey: Record<string, string>,
+  resolveContractId: (selectionKey: string) => string,
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const key of selectionKeys) {
+    const mt = parseDecimalDotInput(String(mtBySelectionKey[key] ?? '').trim())
+    if (mt == null || mt <= 0) continue
+    const contractId = String(resolveContractId(key) ?? '').trim()
+    if (!contractId) continue
+    out[contractId] = mt * 1000
+  }
+  return out
 }

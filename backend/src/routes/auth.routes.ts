@@ -11,6 +11,7 @@ import {
 import { ssoExchangeHandler } from '../controllers/sso.controller';
 import { authenticateToken } from '../middleware/auth';
 import { body } from 'express-validator';
+import { USER_ROLES } from '../utils/userRoles';
 
 const router = express.Router();
 
@@ -40,7 +41,7 @@ const router = express.Router();
  *                 type: string
  *               role:
  *                 type: string
- *                 enum: [ADMIN, TRADING, LOGISTICS, FINANCE, MANAGEMENT, SUPPORT]
+ *                 enum: [ADMIN, TRADING, LOGISTICS, FINANCE, MANAGEMENT, SUPPORT, ADMIN_SUPPORT]
  *     responses:
  *       201:
  *         description: User registered successfully
@@ -53,7 +54,7 @@ router.post(
     body('email').isEmail(),
     body('password').isLength({ min: 6 }),
     body('full_name').notEmpty(),
-    body('role').isIn(['ADMIN', 'TRADING', 'LOGISTICS', 'FINANCE', 'MANAGEMENT', 'SUPPORT']),
+    body('role').isIn([...USER_ROLES]),
   ],
   register
 );

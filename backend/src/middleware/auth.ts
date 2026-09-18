@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import logger from '../utils/logger';
 import { query } from '../database/connection';
+import { isRoleAllowed } from '../utils/userRoles';
 import { resolveAuthenticatedUser } from './sessionAuth';
 
 export interface AuthRequest extends Request {
@@ -47,7 +48,7 @@ export const authorize = (...roles: string[]) => {
       return;
     }
 
-    if (!roles.includes(req.user.role)) {
+    if (!isRoleAllowed(req.user.role, roles)) {
       res.status(403).json({
         success: false,
         error: { message: 'Insufficient permissions' },

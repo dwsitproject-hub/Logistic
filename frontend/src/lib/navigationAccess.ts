@@ -8,6 +8,7 @@ import {
   type PermFlags,
 } from '@/components/PermissionsContext'
 import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
+import { navRoleAllowed } from '@/lib/userRoles'
 
 export type NavAccessContext = {
   byKey: Record<string, PermFlags>
@@ -37,7 +38,7 @@ export async function loadUserPermissionsByKey(): Promise<Record<string, PermFla
 }
 
 export function canViewNavItem(item: NavItem, userRole: string | undefined, perms: NavAccessContext): boolean {
-  const roleOk = item.roles.includes('ALL') || (userRole != null && item.roles.includes(userRole))
+  const roleOk = navRoleAllowed(item.roles, userRole)
   if (!roleOk) return false
   if (!perms.loaded) return false
   if (item.href === '/contract-performance') {

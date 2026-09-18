@@ -10,6 +10,7 @@ import {
 import type { VesselPortsQuantityEdits, VesselPortsQuantityRow } from '@/lib/vesselPortsQuantityEdits'
 import {
   hasVesselPortsQuantityUserEdits,
+  hasVesselPortsQuantityFieldEdits,
   quantityKgValuesEqual,
   buildPoKlipQtySaveRows,
 } from '@/lib/vesselPortsQuantityEdits'
@@ -237,12 +238,17 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
 
   const sums = sumVesselPortsQuantityEdits(input.qtyRows, input.qtyEdits)
   const qtyUserEdited = hasVesselPortsQuantityUserEdits(input.qtyRows, input.qtyEdits)
+  const receiveUserEdited = hasVesselPortsQuantityFieldEdits(
+    input.qtyRows,
+    input.qtyEdits,
+    'quantity_receive',
+  )
 
-  if (qtyUserEdited && !input.quantityUnlocked) {
-    throw new Error('Please upload an SLD or SDD document before editing Delivered or Receive quantities.')
+  if (receiveUserEdited && !input.quantityUnlocked) {
+    throw new Error('Please upload an SLD or SDD document before editing Received Qty (Klip).')
   }
-  if (qtyUserEdited && !input.hasSldOrSddDoc) {
-    throw new Error('An SLD or SDD document must be attached before saving quantity changes.')
+  if (receiveUserEdited && !input.hasSldOrSddDoc) {
+    throw new Error('An SLD or SDD document must be attached before saving Received Qty (Klip) changes.')
   }
 
   const effectiveEta =

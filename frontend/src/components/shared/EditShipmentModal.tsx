@@ -578,7 +578,7 @@ type ShipmentDetailRow = {
   quantity_delivered_sap: number | null
   /** SAP STO-scoped receive (read-only in PO table). */
   quantity_receive_sap: number | null
-  /** KLIP delivered seed (editable after SLD/SDD). */
+  /** KLIP delivered seed (editable without SLD/SDD). */
   quantity_delivered_klip: number | null
   /** KLIP receive seed (editable after SLD/SDD). */
   quantity_receive_klip: number | null
@@ -1567,7 +1567,7 @@ export function EditShipmentModal({
         contractRowId: selectedAddPoOption.key,
         stoQtyAssignedKg: 0,
       })
-      setNotification({ type: 'success', message: 'PO added. Set Delivered Qty (Klip) after SLD/SDD, or via Upload Planning.' })
+      setNotification({ type: 'success', message: 'PO added. Set Delivered Qty (Klip) on the row; Received Qty (Klip) needs SLD/SDD.' })
       const contractId = editContractId?.trim()
       const directId = editShipmentIdProp?.trim()
       const sto = editStoNumber?.trim()
@@ -2427,7 +2427,7 @@ export function EditShipmentModal({
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SLD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Received Qty (Klip).</p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Received Qty (Klip).</p>
                     <input
                       id="edit-shipment-sld"
                       type="file"
@@ -2459,7 +2459,7 @@ export function EditShipmentModal({
                   </div>
                   <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                     <p className="text-xs font-medium text-amber-900">Upload SDD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Delivered / Received Qty (Klip).</p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Received Qty (Klip).</p>
                     <input
                       id="edit-shipment-sdd"
                       type="file"
@@ -2493,7 +2493,7 @@ export function EditShipmentModal({
                 )}
                 {!readOnly && !isQuantityUnlocked && (
                   <p className="text-[11px] text-amber-800/80">
-                    Delivered Qty (Klip) / Received Qty (Klip) stay locked until at least one of SLD or SDD is uploaded.
+                    Received Qty (Klip) stays locked until at least one of SLD or SDD is uploaded.
                   </p>
                 )}
                 {canModifyCoreSections && (
@@ -2543,7 +2543,7 @@ export function EditShipmentModal({
                       </Button>
                     </div>
                     <p className="text-xs italic text-gray-500">
-                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be set after SLD/SDD or via Upload Planning.
+                      Search by PO, contract, supplier, or product (min. 2 characters). Delivered Qty (Klip) can be edited directly; Received Qty (Klip) needs SLD/SDD or Upload Planning.
                     </p>
                   </div>
                 )}
@@ -2623,7 +2623,7 @@ export function EditShipmentModal({
                               ) : (
                                 <MtQtyInput
                                   valueKg={deliveredKlipKg}
-                                  disabled={!canModifyCoreSections || !isQuantityUnlocked}
+                                  disabled={!canModifyCoreSections}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,

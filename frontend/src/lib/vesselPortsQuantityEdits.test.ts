@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPoKlipQtySaveRows,
+  hasVesselPortsQuantityFieldEdits,
   hasVesselPortsQuantityUserEdits,
 } from './vesselPortsQuantityEdits'
 
@@ -39,6 +40,17 @@ describe('hasVesselPortsQuantityUserEdits', () => {
         'sh-1-PO1': { quantity_receive: 98_500 },
       }),
     ).toBe(true)
+  })
+})
+
+describe('hasVesselPortsQuantityFieldEdits', () => {
+  it('detects receive-only edits without treating delivery as changed', () => {
+    expect(
+      hasVesselPortsQuantityFieldEdits(rows, { 'sh-1-PO1': { quantity_receive: 98_500 } }, 'quantity_receive'),
+    ).toBe(true)
+    expect(
+      hasVesselPortsQuantityFieldEdits(rows, { 'sh-1-PO1': { quantity_receive: 98_500 } }, 'quantity_delivered'),
+    ).toBe(false)
   })
 })
 

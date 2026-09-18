@@ -118,6 +118,33 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
     })
   })
 
+  it('saves Delivered Qty (Klip) without SLD/SDD', async () => {
+    await saveEditShipmentChanges(
+      baseInput({
+        quantityUnlocked: false,
+        hasSldOrSddDoc: false,
+      }),
+    )
+
+    const klipPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && String(c[0]).includes('/po-klip-qty'),
+    )
+    expect(klipPuts).toHaveLength(1)
+  })
+
+  it('rejects Received Qty (Klip) edits without SLD/SDD', async () => {
+    await expect(
+      saveEditShipmentChanges(
+        baseInput({
+          qtyEdits: { a: { quantity_receive: 91_000 } },
+          quantityUnlocked: false,
+          hasSldOrSddDoc: false,
+        }),
+      ),
+    ).rejects.toThrow('Please upload an SLD or SDD document before editing Received Qty (Klip).')
+    expect(putMock).not.toHaveBeenCalled()
+  })
+
   it('persists auto-computed R4 shortage MT when it differs from original', async () => {
     await saveEditShipmentChanges(
       baseInput({ autoPersistShortageMt: -3.5, originalShortage: 0 }),

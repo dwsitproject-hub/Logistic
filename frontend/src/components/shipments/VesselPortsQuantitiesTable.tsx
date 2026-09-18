@@ -117,6 +117,8 @@ export type VesselPortsQuantitiesTableProps = {
   editingRowKey: string | null
   edits: VesselPortsQuantityEdits
   quantityEditUnlocked: boolean
+  /** When omitted, receive uses the same lock as `quantityEditUnlocked`. */
+  receiveQtyEditUnlocked?: boolean
   onStartEditRow: (rowKey: string) => void
   onCancelEditRow: () => void
   onConfirmEditRow: (rowKey: string) => void
@@ -134,6 +136,7 @@ export function VesselPortsQuantitiesTable({
   editingRowKey,
   edits,
   quantityEditUnlocked,
+  receiveQtyEditUnlocked,
   onStartEditRow,
   onCancelEditRow,
   onConfirmEditRow,
@@ -162,6 +165,7 @@ export function VesselPortsQuantitiesTable({
     quantity_delivered: sumRowsMt(rows, edits, 'quantity_delivered'),
     quantity_receive: sumRowsMt(rows, edits, 'quantity_receive'),
   }
+  const receiveLockedFooter = !(receiveQtyEditUnlocked ?? quantityEditUnlocked)
 
   return (
     <div className="overflow-x-auto rounded-lg border border-gray-200">
@@ -182,6 +186,7 @@ export function VesselPortsQuantitiesTable({
             const isEditing = editingRowKey === row.rowKey
             const deliveredKg = resolveRowQty(row, edits, 'quantity_delivered')
             const receiveKg = resolveRowQty(row, edits, 'quantity_receive')
+            const receiveLocked = !(receiveQtyEditUnlocked ?? quantityEditUnlocked)
             const qtyLocked = !quantityEditUnlocked
 
             return (
@@ -216,7 +221,7 @@ export function VesselPortsQuantitiesTable({
                   {isEditing ? (
                     <MtQtyInput
                       valueKg={receiveKg}
-                      disabled={qtyLocked}
+                      disabled={receiveLocked}
                       onChange={(kg) => onChangeRowQty(row.rowKey, 'quantity_receive', kg)}
                     />
                   ) : (
@@ -285,9 +290,9 @@ export function VesselPortsQuantitiesTable({
           </TableRow>
         </TableFooter>
       </Table>
-      {editingRowKey && !quantityEditUnlocked ? (
+      {editingRowKey && receiveLockedFooter ? (
         <p className="border-t border-amber-100 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-          Upload SLD or SDD (Edit mode) before changing Delivered / Received quantities.
+          Upload SLD or SDD (Edit mode) before changing Received Qty (Klip).
         </p>
       ) : null}
     </div>

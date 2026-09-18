@@ -80,25 +80,27 @@ export function buildPoKlipQtySaveRows(
 }
 
 /** True only when the user changed Delivered / Receive in the qty edit grid (not mere load/sum drift). */
-export function hasVesselPortsQuantityUserEdits(
+export function hasVesselPortsQuantityFieldEdits(
   rows: VesselPortsQuantityRow[],
   edits: VesselPortsQuantityEdits,
+  field: 'quantity_delivered' | 'quantity_receive',
 ): boolean {
   for (const [rowKey, edit] of Object.entries(edits)) {
     const row = rows.find((r) => r.rowKey === rowKey)
     if (!row) continue
-    if (
-      edit.quantity_delivered !== undefined
-      && !quantityKgValuesEqual(edit.quantity_delivered, row.quantity_delivered)
-    ) {
-      return true
-    }
-    if (
-      edit.quantity_receive !== undefined
-      && !quantityKgValuesEqual(edit.quantity_receive, row.quantity_receive)
-    ) {
+    if (edit[field] !== undefined && !quantityKgValuesEqual(edit[field], row[field])) {
       return true
     }
   }
   return false
+}
+
+export function hasVesselPortsQuantityUserEdits(
+  rows: VesselPortsQuantityRow[],
+  edits: VesselPortsQuantityEdits,
+): boolean {
+  return (
+    hasVesselPortsQuantityFieldEdits(rows, edits, 'quantity_delivered')
+    || hasVesselPortsQuantityFieldEdits(rows, edits, 'quantity_receive')
+  )
 }

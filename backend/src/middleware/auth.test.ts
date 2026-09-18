@@ -102,6 +102,25 @@ describe('authorize', () => {
     mid(req, res, next);
     expect(next).toHaveBeenCalled();
   });
+
+  it('next for ADMIN_SUPPORT when SUPPORT is allowed', () => {
+    const mid = authorize('ADMIN', 'SUPPORT');
+    const req = { user: { id: '1', username: 'x', email: 'x', role: 'ADMIN_SUPPORT' } } as AuthRequest;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    mid(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('403 for ADMIN_SUPPORT on ADMIN-only routes', () => {
+    const mid = authorize('ADMIN');
+    const req = { user: { id: '1', username: 'x', email: 'x', role: 'ADMIN_SUPPORT' } } as AuthRequest;
+    const res = mockRes();
+    const next = vi.fn() as NextFunction;
+    mid(req, res, next);
+    expect(res.statusCode).toBe(403);
+    expect(next).not.toHaveBeenCalled();
+  });
 });
 
 describe('authorizeSapImportsUpload', () => {

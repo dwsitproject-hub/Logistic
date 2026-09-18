@@ -59,6 +59,7 @@ function sortRolesForEditor(roles: Role[]): Role[] {
     FINANCE: 1,
     MANAGEMENT: 2,
     SUPPORT: 3,
+    ADMIN_SUPPORT: 3.5,
     TRADING: 4,
     LOGISTICS: 5,
     ADMIN: 99,
@@ -77,6 +78,7 @@ function getScopeHint(roleName?: string): string {
     case 'MANAGEMENT':
       return 'Management permissions are configured per level. Each level (Dept Head, Section Head, Staff, Admin) has its own permission set.'
     case 'SUPPORT':
+    case 'ADMIN_SUPPORT':
       return 'Select Role + Level + Transport. One level per scope is required; transport can stay All Transport unless you need SEA/LAND/ALL/MIX.'
     case 'TRADING':
       return 'Example: Trading + Admin + All Transport is a separate scope from Trading + Staff + All Transport.'

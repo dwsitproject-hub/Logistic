@@ -55,6 +55,7 @@ import {
   formatPoPlantLabel,
   resolvePlotStoLookupKey,
   resolvePoPlantCode,
+  buildQuantityDeliveredByContractKg,
 } from '@/components/shared/addNewShipmentTypes'
 import { EditShipmentModal } from '@/components/shared/EditShipmentModal'
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
@@ -77,6 +78,11 @@ import {
   VESSEL_MODAL_STEP_STRIP_CLASS,
 } from '@/lib/vesselModalUi'
 import { charterTypeFromMasterTerms } from '@/lib/masterVesselTerms'
+import {
+  DECIMAL_DOT_HINT,
+  blockCommaDecimalKeyDown,
+  sanitizeDecimalDotInput,
+} from '@/lib/decimalDotInput'
 
 type EtaDetailFields = {
   loadingPort: string
@@ -457,6 +463,7 @@ export function AddNewShipmentModal({
   const [editShipmentId, setEditShipmentId] = useState<string | null>(null)
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
   const [newShipment, setNewShipment] = useState(emptyShipment)
+  const [qtyDeliveryKlipMtByKey, setQtyDeliveryKlipMtByKey] = useState<Record<string, string>>({})
   const [contractSuggestions, setContractSuggestions] = useState<any[]>([])
   const [contractSearchTerm, setContractSearchTerm] = useState('')
   const [showContractSuggestions, setShowContractSuggestions] = useState(false)
@@ -759,6 +766,11 @@ export function AddNewShipmentModal({
       contractNumbers: prev.contractNumbers.filter((id) => id !== contractId),
       operationId: prev.contractNumbers.filter((id) => id !== contractId).length > 0 ? prev.operationId : '',
     }))
+    setQtyDeliveryKlipMtByKey((prev) => {
+      const next = { ...prev }
+      delete next[contractId]
+      return next
+    })
     setContractValidations((prev) => {
       const next = { ...prev }
       delete next[contractId]
@@ -1366,6 +1378,7 @@ export function AddNewShipmentModal({
     setNewShipment(emptyShipment())
     contractNumbersRef.current = []
     setContractValidations({})
+    setQtyDeliveryKlipMtByKey({})
     setEtaDetails([])
     setContractSearchTerm('')
     setContractSuggestions([])
@@ -2093,12 +2106,20 @@ export function AddNewShipmentModal({
 
       const selectionKeys = newShipment.contractNumbers
       const contractNumbers = [...new Set(selectionKeys.map((k) => resolveContractIdForKey(k)))]
+      const quantityDeliveredByContract = buildQuantityDeliveredByContractKg(
+        selectionKeys,
+        qtyDeliveryKlipMtByKey,
+        resolveContractIdForKey,
+      )
 
       await onSubmit({
         kind: 'create',
         operationId,
         stoNumber: newShipment.stoNumber.trim() || String(prefilledStoNumber ?? '').trim(),
         contractNumbers,
+        ...(Object.keys(quantityDeliveredByContract).length > 0
+          ? { quantityDeliveredByContract }
+          : {}),
         vesselName: newShipment.vesselName,
         vesselCode: newShipment.vesselCode,
         vesselOwner: newShipment.vesselOwner,
@@ -2513,6 +2534,7 @@ export function AddNewShipmentModal({
                             <TableHead className={COMPACT_TH}>Supplier / Product</TableHead>
                             <TableHead className={`${COMPACT_TH} text-right`}>Contract Qty</TableHead>
                             <TableHead className={`${COMPACT_TH} text-right`}>OS Qty</TableHead>
+                            <TableHead className={`${COMPACT_TH} text-right`}>Qty Delivery (Klip)</TableHead>
                             <TableHead className={COMPACT_TH}>Del. Start</TableHead>
                             <TableHead className={COMPACT_TH}>Del. End</TableHead>
                             {!isEditMode && <TableHead className={`${COMPACT_TH} w-8`} />}
@@ -2575,6 +2597,36 @@ export function AddNewShipmentModal({
                                 <TableCell className={`${COMPACT_TD} text-right tabular-nums`}>
                                   {validation?.exists ? formatNumber(outstandingQtyMt) : '—'}
                                 </TableCell>
+                                <TableCell className={`${COMPACT_TD} text-right`}>
+                                  <div className="relative min-w-[5.5rem]">
+                                    <Input
+                                      type="text"
+                                      inputMode="decimal"
+                                      autoComplete="off"
+                                      value={qtyDeliveryKlipMtByKey[contractId] ?? ''}
+                                      placeholder="—"
+                                      title={DECIMAL_DOT_HINT}
+                                      onKeyDown={blockCommaDecimalKeyDown}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        if (raw === '') {
+                                          setQtyDeliveryKlipMtByKey((prev) => {
+                                            const next = { ...prev }
+                                            delete next[contractId]
+                                            return next
+                                          })
+                                          return
+                                        }
+                                        if (sanitizeDecimalDotInput(raw) === null) return
+                                        setQtyDeliveryKlipMtByKey((prev) => ({ ...prev, [contractId]: raw }))
+                                      }}
+                                      className="h-7 px-2 py-1 pr-8 text-right text-xs tabular-nums"
+                                    />
+                                    <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-500">
+                                      MT
+                                    </span>
+                                  </div>
+                                </TableCell>
                                 <TableCell className={COMPACT_TD}>
                                   {validation?.exists ? formatShortDate(data?.delivery_start_date || '') : '—'}
                                 </TableCell>
@@ -2599,6 +2651,7 @@ export function AddNewShipmentModal({
                         </TableBody>
                       </Table>
                     </div>
+                    <p className="mt-1 text-[11px] text-gray-500">{DECIMAL_DOT_HINT} Optional; blank keeps SAP as the source until filled.</p>
                   </div>
                 )}
               </div>

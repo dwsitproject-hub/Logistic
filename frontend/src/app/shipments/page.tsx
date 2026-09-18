@@ -72,7 +72,7 @@ import {
   VesselPortsQuantitiesTable,
   type VesselPortsQuantityEdits,
 } from '@/components/shipments/VesselPortsQuantitiesTable'
-import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
+import { hasVesselPortsQuantityUserEdits, hasVesselPortsQuantityFieldEdits } from '@/lib/vesselPortsQuantityEdits'
 import {
   VESSEL_MODAL_BODY_CLASS,
   VESSEL_MODAL_HEADER_CLASS,
@@ -5891,18 +5891,23 @@ function ShipmentsPageContent() {
             },
       )
       const qtyUserEdited = hasVesselPortsQuantityUserEdits(portsQtyRows, editedPortsContractQty)
+      const receiveUserEdited = hasVesselPortsQuantityFieldEdits(
+        portsQtyRows,
+        editedPortsContractQty,
+        'quantity_receive',
+      )
       if (qtyUserEdited && portsQtyRows.length > 0) {
         const sums = sumVesselPortsQuantityEdits(portsQtyRows, editedPortsContractQty)
         if (sums.quantity_delivered !== null) info.quantity_delivered = sums.quantity_delivered
         if (sums.quantity_receive !== null) info.actual_vessel_qty_receive = sums.quantity_receive
       }
 
-      if (qtyUserEdited && !isQuantityUnlockedRef.current) {
-        alert('Please upload an SLD or SDD document before editing Quantity Delivery or Quantity Receive.')
+      if (receiveUserEdited && !isQuantityUnlockedRef.current) {
+        alert('Please upload an SLD or SDD document before editing Quantity Receive.')
         return
       }
-      if (qtyUserEdited && !(sldDocIdRef.current || sddDocIdRef.current)) {
-        alert('An SLD or SDD document must be attached before saving quantity changes.')
+      if (receiveUserEdited && !(sldDocIdRef.current || sddDocIdRef.current)) {
+        alert('An SLD or SDD document must be attached before saving Quantity Receive changes.')
         return
       }
 
@@ -8436,7 +8441,8 @@ function ShipmentsPageContent() {
                           loading={Boolean(loadingContractDetails[selectedShipment.id])}
                           editingRowKey={editingPortsQtyRowKey}
                           edits={editedPortsContractQty}
-                          quantityEditUnlocked={editingShipmentInfo && isQuantityUnlocked}
+                          quantityEditUnlocked={Boolean(editingShipmentInfo)}
+                          receiveQtyEditUnlocked={Boolean(editingShipmentInfo && isQuantityUnlocked)}
                           onStartEditRow={(rowKey) => {
                             if (!editingShipmentInfo) {
                               handleEditShipmentInfo()
@@ -8456,7 +8462,7 @@ function ShipmentsPageContent() {
                                 <div>
                                   <p className="text-xs font-medium text-amber-900">Upload SLD</p>
                                   <p className="text-[11px] text-amber-800/80 mt-0.5">
-                                    SLD document for quantity authorization.
+                                    SLD document to unlock Received Qty (Klip).
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
@@ -8503,7 +8509,7 @@ function ShipmentsPageContent() {
                                 <div>
                                   <p className="text-xs font-medium text-amber-900">Upload SDD</p>
                                   <p className="text-[11px] text-amber-800/80 mt-0.5">
-                                    SDD document for quantity authorization.
+                                    SDD document to unlock Received Qty (Klip).
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
@@ -8547,7 +8553,7 @@ function ShipmentsPageContent() {
                             </div>
                             {!isQuantityUnlocked && (
                               <p className="sm:col-span-2 text-[11px] text-amber-800/80">
-                                Delivered / Received quantities stay locked until at least one of SLD or SDD is uploaded.
+                                Received Qty (Klip) stays locked until at least one of SLD or SDD is uploaded.
                               </p>
                             )}
                           </div>
