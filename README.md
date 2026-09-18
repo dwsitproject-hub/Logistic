@@ -1835,7 +1835,58 @@ back to the edit modal - so without a second guard a COMPLETED backlog row would
 between the two handlers forever once Edit began delegating to Add. That guard is the reason the
 delegation is safe, not an optimisation.
 
-## Shipments
+## SAP import
+
+### SAP may now correct what SAP provably wrote
+
+Two columns describe one field on `vessel_loading_ports`, maintained by opposite rules
+(`vesselLoadingPortsFromSap.service.ts`):
+
+```
+value   mergeSapPortValue   if (hasCurrent) return current   - fill gaps only, keeps it forever
+mirror  mergeSapSnapshot    no incoming value -> NULL        - reflects what SAP says now
+```
+
+One import in which SAP sends the port with a field blank nulls the mirror while the stale value
+survives, and the row becomes indistinguishable from something a user typed. Migrations 169 and 170
+proved SAP authorship by testing `value = mirror`; after such an import that test can never fire
+again. Migration 173 exists for exactly that shape, and STO 1006019867 proves it recurs - 170
+cleared it, and its mirror was NULL again with the value back.
+
+**The measurement reframed the problem** (`docs/scripts/diag-sap-mirror-asymmetry.js`, production
+2026-09-18):
+
+```
+values set                             10,684
+  provably SAP  (value = mirror)       10,325   96.6%
+  provably KLIP (klip_edited_fields)        5
+  AMBIGUOUS     (mirror gone)             119    1.1%
+```
+
+The fill-gaps rule exists to protect what a user typed. Across the whole table there are **five**
+such values. What it was actually doing was stopping SAP from correcting the 10,325 values SAP
+itself wrote - which is how one wrong date becomes permanent, and why three migrations had to clear
+them by hand.
+
+The rule is now: when the stored value still equals the mirror, SAP wrote it and may write it
+again, **including writing nothing to take it back**. Everything else is untouched.
+
+- **Retraction is safe here** because `upsertVesselLoadingPortRow` runs once per port SAP actually
+  sent. An empty incoming value means SAP sent this port and left the field blank, not that the STO
+  was missing from the export - a partial export never reaches the function.
+- **An explicit claim beats an inferred one.** A user's edit can coincidentally equal the mirror, so
+  a field named in `klip_edited_fields` is never overwritten even when the values match.
+- **"No evidence" is not "SAP's".** The 119 rows whose mirror has already gone stay exactly as they
+  are. Treating an empty `klip_edited_fields` as "from SAP" is the inference migration 167 was
+  written to end.
+
+Migration **174** clears the four ambiguous rows that sit on shipments which have **not sailed** -
+impossible rather than merely doubtful, the same test migration 173 used - and leaves the other
+115. Dry-run it first (`docs/scripts/dryrun-migration-174.js`): the container entrypoint applies
+migrations on start, so by the time the backend is up, 174 has already run.
+
+
+## Shipments — cache and invalidation
 
 ### One door for invalidation, because a list of names drifts
 
