@@ -1924,6 +1924,29 @@ receive, exactly as the SQL does. The zero guard is load-bearing: without it an 
 is unknown computes 0 - 0 = 0, lands inside the tolerance band, and reports Completed on the
 strength of knowing nothing.
 
+### A B2B origin's Table List STO is no longer empty
+
+SAP puts a B2B pair's STOs on the **child**, not the origin. Contract 1004028289 (PO 1001028289)
+therefore has no `contract_stos` row, no `contracts.sto_number` and no SAP row carrying an STO
+number - they all sit on child 1014002890 (STOs 1016010373 and 1016010384). Its Table List STO
+read "No STO information for this contract" while the Table List PO (Child) directly below it
+listed the child PO with 500 MT delivered and received, and the Quantity block already showed
+Delivery Quantity 500 MT rolled up from that child. Only the STO side stayed blank.
+
+`CONTRACT_STO_SCOPE_IDS_SQL` now defines, in one place, which contracts' STOs belong on one
+contract's detail page: itself, plus the B2B children pointing at its PO. The controller's four
+row laterals and the STO key gathering all scope to it, so the contract number on screen stays the
+parent's while the rows come from the child.
+
+**Three gates, all required**, and they are what make this safe to apply to every contract rather
+than to a flagged list: the children are added only when the parent has no `contract_stos` row, no
+`contracts.sto_number`, and no SAP row with an STO number. A contract that already has STOs of its
+own can never start collecting its children's. The change fills a gap; it cannot reinterpret
+anything that already worked.
+
+Only the Contract Details modal reads this SQL - two call sites, both in `contract.controller.ts` -
+so no list page or aggregate moves.
+
 ### A truck no longer reports that it arrived at a loading port
 
 Contract Details lists shipments and trucking operations in one table and ran every row through the

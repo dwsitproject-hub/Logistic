@@ -41,11 +41,53 @@ export function sqlSpdPoNumberExpr(spdAlias = 'spd'): string {
  * fetchLatestSapStoKeysForPo) so historical STOs no longer in SAP do not inflate the list.
  * Falls back to contract_stos when this PO has no SAP STO rows yet.
  */
+/**
+ * The contracts whose STOs belong on ONE contract's detail page.
+ *
+ * Normally that is the contract itself. The exception is a B2B origin: SAP puts the STOs on the
+ * children that point at the parent's PO, so the parent carries no STO line under its own number
+ * and its Table List STO came back "No STO information" while the child table right below it
+ * listed the child PO with its full quantities. Contract 1004028289 / child 1014002890 is the
+ * shape, and its Delivery Quantity already rolled up from the child - only the STO side did not.
+ *
+ * The children are added ONLY when the parent has no STO of its own by any route: no
+ * contract_stos row, no contracts.sto_number, and no SAP row carrying an STO number. This fills a
+ * gap and can never reinterpret a contract that already works, which is what keeps it safe to
+ * apply to every contract rather than to a flagged list.
+ *
+ * Takes $1 = the contract's uuid, the same parameter its two callers already bind.
+ */
+export const CONTRACT_STO_SCOPE_IDS_SQL = `
+  SELECT c.id FROM contracts c WHERE c.id = $1
+  UNION
+  SELECT child.id
+  FROM contracts child
+  JOIN contract_latest_spd_snapshot snap ON snap.contract_number = child.contract_id
+  JOIN contracts parent ON parent.id = $1
+  WHERE NULLIF(TRIM(parent.po_number::text), '') IS NOT NULL
+    AND NULLIF(TRIM(snap.contract_reference_po_raw), '') = NULLIF(TRIM(parent.po_number::text), '')
+    AND child.id <> parent.id
+    AND NULLIF(TRIM(parent.sto_number::text), '') IS NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM contract_stos own
+      WHERE own.contract_id = parent.id
+        AND NULLIF(TRIM(own.sto_number::text), '') IS NOT NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM sap_processed_data spd_own
+      WHERE (
+        spd_own.contract_number = parent.contract_id
+        OR ${sqlSpdPoNumberExpr('spd_own')} = NULLIF(TRIM(parent.po_number::text), '')
+      )
+        AND NULLIF(TRIM((${sapStoNumberKeyExpr('spd_own')})::text), '') IS NOT NULL
+    )
+`;
+
 export const CONTRACT_REAL_STO_KEYS_SQL = `
   WITH c_scope AS (
     SELECT c.id, c.contract_id, NULLIF(TRIM(c.po_number::text), '') AS po_number
     FROM contracts c
-    WHERE c.id = $1
+    WHERE c.id IN (${CONTRACT_STO_SCOPE_IDS_SQL})
   ),
   latest_import AS (
     SELECT spd.import_id

@@ -105,6 +105,7 @@ import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserSto
 import { toSapDisplayNumber } from '../utils/sapDisplayNumber';
 import {
   CONTRACT_REAL_STO_KEYS_SQL,
+  CONTRACT_STO_SCOPE_IDS_SQL,
   CONTRACT_SAP_ONLY_STOS_SQL,
   SHIPMENT_SAP_STO_DETAIL_SQL,
   SPD_EFFECTIVE_STO_SQL,
@@ -2143,7 +2144,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       op_fallback_keys AS (
         SELECT DISTINCT TRIM(s.operation_id::text) AS sto_key
         FROM shipments s
-        WHERE s.contract_id = $1
+        -- A B2B origin's own number carries no STO, so its rows sit on the children.
+        -- CONTRACT_STO_SCOPE_IDS_SQL adds them only when the parent has none of its own,
+        -- leaving every other contract's row set exactly as it was.
+        WHERE s.contract_id IN (${CONTRACT_STO_SCOPE_IDS_SQL})
           AND NULLIF(TRIM(s.operation_id::text), '') IS NOT NULL
           AND COALESCE(s.status, '') <> 'CANCELLED'
           AND NOT EXISTS (SELECT 1 FROM real_sto_keys)
@@ -2246,7 +2250,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
             )
           ) AS ata_arrival_loading
         FROM shipments s
-        WHERE s.contract_id = $1
+        -- A B2B origin's own number carries no STO, so its rows sit on the children.
+        -- CONTRACT_STO_SCOPE_IDS_SQL adds them only when the parent has none of its own,
+        -- leaving every other contract's row set exactly as it was.
+        WHERE s.contract_id IN (${CONTRACT_STO_SCOPE_IDS_SQL})
           AND ${sqlContractStoListShipmentMatchPred('s', 'sk.sto_key', '$1')}
         ORDER BY
           ${sqlContractStoListShipmentMatchRank('s', 'sk.sto_key')},
@@ -2273,7 +2280,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
         SELECT DISTINCT TRIM(t.operation_id::text) AS sto_key
         FROM trucking_operations t
         INNER JOIN contracts c ON c.id = t.contract_id
-        WHERE t.contract_id = $1
+        -- A B2B origin's own number carries no STO, so its rows sit on the children.
+        -- CONTRACT_STO_SCOPE_IDS_SQL adds them only when the parent has none of its own,
+        -- leaving every other contract's row set exactly as it was.
+        WHERE t.contract_id IN (${CONTRACT_STO_SCOPE_IDS_SQL})
           AND NULLIF(TRIM(t.operation_id::text), '') IS NOT NULL
           AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
           AND NOT EXISTS (SELECT 1 FROM real_sto_keys)
@@ -2393,7 +2403,10 @@ export const getContractStoInformation = async (req: AuthRequest, res: Response)
       LEFT JOIN LATERAL (
         SELECT t.*
         FROM trucking_operations t
-        WHERE t.contract_id = $1
+        -- A B2B origin's own number carries no STO, so its rows sit on the children.
+        -- CONTRACT_STO_SCOPE_IDS_SQL adds them only when the parent has none of its own,
+        -- leaving every other contract's row set exactly as it was.
+        WHERE t.contract_id IN (${CONTRACT_STO_SCOPE_IDS_SQL})
           AND ${sqlContractDetailsTruckingOpVisible('t', 'c')}
           AND (
             (sk.sto_key ~ '^(OP-|MNL-|MSEA-)' AND TRIM(t.operation_id::text) = sk.sto_key)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONTRACT_REAL_STO_KEYS_SQL,
+  CONTRACT_STO_SCOPE_IDS_SQL,
   CONTRACT_SAP_ONLY_STOS_SQL,
   sqlSapQtyDeliveredAnyFromSpd,
   sqlSapQtyDeliveredForStoKeyExpr,
@@ -162,5 +163,24 @@ describe('contractLogisticsStoDetailSql', () => {
     expect(pred).toContain('contract_stos');
     expect(pred).toContain('sap_processed_data');
     expect(sqlContractStoListShipmentMatchRank('s', 'sk.sto_key')).toContain('THEN 0');
+  });
+
+  describe('CONTRACT_STO_SCOPE_IDS_SQL', () => {
+    it('adds B2B children only when the parent has no STO of its own', () => {
+      // Contract 1004028289 is a B2B origin: SAP puts the STOs on child 1014002890, so the parent
+      // showed "No STO information" while the child table below it listed the child PO in full.
+      expect(CONTRACT_STO_SCOPE_IDS_SQL).toContain('contract_reference_po_raw');
+      // All three gates must be present, or a contract that already has STOs would start
+      // collecting its children's as well.
+      expect(CONTRACT_STO_SCOPE_IDS_SQL).toContain("NULLIF(TRIM(parent.sto_number::text), '') IS NULL");
+      expect(CONTRACT_STO_SCOPE_IDS_SQL).toContain('FROM contract_stos own');
+      expect(CONTRACT_STO_SCOPE_IDS_SQL).toContain('FROM sap_processed_data spd_own');
+      expect(CONTRACT_STO_SCOPE_IDS_SQL).toContain('child.id <> parent.id');
+    });
+
+    it('is what the STO key gathering scopes itself to', () => {
+      expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('WHERE c.id IN (');
+      expect(CONTRACT_REAL_STO_KEYS_SQL).toContain('contract_reference_po_raw');
+    });
   });
 });
