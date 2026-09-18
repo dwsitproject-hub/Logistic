@@ -135,11 +135,30 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
         byContract.get(k).push(r);
       }
     }
+    // A kept B2B child is shown under its ORIGIN's number, so looking for the child's own number
+    // and calling a miss 'absent' reports a gap that is not there. Resolve the origin first.
+    const originOf = new Map();
+    try {
+      const map = (await connection.query(`
+        SELECT c.contract_id,
+               (SELECT o.contract_id FROM contracts o
+                 WHERE NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(snap.contract_reference_po_raw), '')
+                 LIMIT 1) AS origin_contract
+        FROM contracts c
+        JOIN contract_latest_spd_snapshot snap ON snap.contract_number = c.contract_id
+        WHERE c.contract_id = ANY($1::text[])
+          AND UPPER(TRIM(COALESCE(snap.b2b_flag_raw, ''))) = 'B2B'
+          AND NULLIF(TRIM(snap.contract_reference_po_raw), '') IS NOT NULL`,
+        [outside.map((r) => r.contract_id)])).rows;
+      for (const r of map) if (r.origin_contract) originOf.set(r.contract_id, String(r.origin_contract).trim());
+    } catch { /* fall back to the plain check below */ }
     const withShip = outside.filter((r) => Number(r.os_mt) > 0 && Number(r.shipment_rows) > 0);
     const elsewhere = [];
     const absent = [];
     for (const r of withShip) {
-      (byContract.has(r.contract_id) ? elsewhere : absent).push(r);
+      const origin = originOf.get(r.contract_id);
+      const covered = byContract.has(r.contract_id) || (origin ? byContract.has(origin) : false);
+      (covered ? elsewhere : absent).push(r);
     }
     console.log(`\nD. the ${withShip.length} contracts that HAVE a shipment but no row in this slice:`);
     console.log(`   present in Shipping Performance under another product/site : ${elsewhere.length}`);
