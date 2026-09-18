@@ -587,7 +587,17 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         s.shipment_id,
         NULLIF(TRIM(s.operation_id), '') AS operation_id,
         ${SHIPPING_PERF_STO_GROUP_KEY_EXPR} AS sto_key,
-        COALESCE(sm.contract_numbers, c.contract_id::text) AS contract_number,
+        -- A kept B2B child is shown under its ORIGIN's number: the voyage belongs to the origin,
+        -- and Contract Details already names the parent while taking the child's values, so the
+        -- two pages agree about whose contract this is.
+        COALESCE(
+          CASE
+            WHEN COALESCE(l.b2b_flag, '') = 'B2B' AND l.contract_reference_po IS NOT NULL
+              THEN b2b_origin.contract_id::text
+          END,
+          sm.contract_numbers,
+          c.contract_id::text
+        ) AS contract_number,
         -- SAP presence of the owning contract, carried on the row: the page's cards are
         -- aggregated in JS from this same row set, so exclusion happens there while the
         -- table keeps showing the row.
@@ -719,16 +729,36 @@ export async function buildShippingPerformanceSql(): Promise<string> {
       ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
       ${perfStoStatusJoinSql()}
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
+      LEFT JOIN LATERAL (
+        SELECT o.contract_id
+        FROM contracts o
+        WHERE NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(l.contract_reference_po), '')
+        LIMIT 1
+      ) b2b_origin ON TRUE
       LEFT JOIN sap_agg sa ON sa.shipment_pk = s.id
       ${SHIPPING_PERF_MASTER_VESSEL_LATERAL_JOIN}
       LEFT JOIN loading_port lp ON lp.shipment_id = s.id
       LEFT JOIN discharge_port dp ON dp.shipment_id = s.id
       WHERE ${SHIPPING_PERF_SEA_ROW_SCOPE}
         AND COALESCE(s.status, '') <> 'CANCELLED'
+        -- Drop a B2B child so its quantity is not counted twice beside the origin's - but ONLY
+        -- when the origin actually has a shipment to carry it. SAP puts the shipment on the CHILD,
+        -- and the origin usually has none of its own; a page built from shipments cannot show a
+        -- contract without one, so dropping the child unconditionally made both halves vanish.
+        -- Measured on production before this line changed: 220 child contracts, 231 shipments,
+        -- 71 distinct STOs and 6,760 MT that appeared nowhere on the page - including
+        -- MT. GIAT ARMADA 02 with seven COMPLETED contracts, whose actual dates therefore never
+        -- reached a single one of the delay averages this page exists to compute.
         AND NOT (
           l.contract_number IS NOT NULL
           AND COALESCE(l.b2b_flag, '') = 'B2B'
           AND l.contract_reference_po IS NOT NULL
+          AND EXISTS (
+            SELECT 1
+            FROM contracts o
+            JOIN shipments so ON so.contract_id = o.id AND COALESCE(so.status, '') <> 'CANCELLED'
+            WHERE NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(l.contract_reference_po), '')
+          )
         )
       -- id tiebreaker: bulk-imported shipments share created_at, so without it row order
       -- among ties is plan-dependent, and the STO-group merge picks fields from the last

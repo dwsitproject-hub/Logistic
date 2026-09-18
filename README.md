@@ -1835,6 +1835,51 @@ back to the edit modal - so without a second guard a COMPLETED backlog row would
 between the two handlers forever once Edit began delegating to Add. That guard is the reason the
 delegation is safe, not an optimisation.
 
+## Shipping Performance
+
+### A whole voyage could disappear when the B2B origin had no shipment
+
+The page's row scope ended with an unconditional exclusion:
+
+```sql
+AND NOT (l.b2b_flag = 'B2B' AND l.contract_reference_po IS NOT NULL)
+```
+
+It drops B2B **child** contracts so their quantity is not counted twice beside the origin's. The
+assumption is that the origin carries it. SAP puts the shipment on the **child**, and the origin
+usually has none of its own - and a page built from shipments cannot show a contract without one.
+Both halves therefore vanished, and the voyage with them.
+
+**Measured on production, 2026-09-18** (`docs/scripts/diag-sp-vs-shipments-os.js`):
+
+```
+B2B child contracts with a shipment whose origin has none   220
+shipments involved                                          231
+distinct STOs                                                71
+outstanding never shown                                   6,760 MT
+```
+
+The quantity is modest; the 71 voyages are not. This page computes average ETA-vs-ATA delay, and
+those voyages - MT. GIAT ARMADA 02 with seven COMPLETED contracts among them, their actual dates
+final - never reached a single average. The cost was to the metric the page exists for, not to the
+outstanding column.
+
+The exclusion is now conditional: a child is dropped **only when the origin actually has a
+non-cancelled shipment** to carry it. Nothing that was already counted can be counted twice,
+because the gate only withholds the drop where nothing else covers the row.
+
+A kept child is shown under its **origin's** contract number, matching the choice already made for
+Contract Details' Table List STO, so the two pages agree about whose contract a voyage belongs to.
+
+**How this was found, because the route matters more than the answer:** CPO / Bontang read 49,107
+MT on Shipping Performance against 80,939 MT on Shipments. Most of that gap is a definition
+difference - 156 contracts with no shipment at all, which a shipments-derived page cannot show. The
+residue was 14 contracts that did have a shipment. Two guesses about them were wrong (an FOB
+trucking leg; SAP STO type T - production said all 14 were type V, real sea legs with real
+vessels), and only splitting the residue again, into "the STO is missing" versus "the STO is there
+but does not name this contract", exposed the clause above.
+
+
 ## SAP import
 
 ### SAP may now correct what SAP provably wrote
