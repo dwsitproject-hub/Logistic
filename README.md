@@ -1837,6 +1837,39 @@ delegation is safe, not an optimisation.
 
 ## Shipping Performance
 
+### Agreed, not yet built: Shipping Performance counts the unplanned contracts too
+
+Outstanding Qty means two different things on two pages. The Shipments OS is two disjoint arms -
+execution (a contract with a live shipment) and backlog (a contract without one). Shipping
+Performance is built from shipments, so it only ever had the first.
+
+That was never decided; it follows from where each page started. But one label with two meanings is
+a defect however it arose, and it cost a day of investigation: CPO / Bontang read 49,107 MT against
+80,939 MT, and almost all of the gap was backlog - 156 contracts, 126,011 MT in that slice alone.
+
+**The decision (Ryan, 2026-09-18):** Shipping Performance counts them, and shows them **as rows**
+with status **UNPLANNED**, so the figure can be traced rather than only reconciled.
+
+**The design, and the one hazard that must not be missed:**
+
+- Membership comes from `contractBacklogCoreWhereSql` - the SAME function the Shipments page uses,
+  not a copy of its criteria. Its own comments establish that the arm is disjoint from execution,
+  which is what makes adding it safe. A rewritten copy would agree today and drift later, exactly
+  as three write paths drifted into invalidating different caches.
+- It belongs **inside** `buildShippingPerformanceSql`, which already has `latest_spd_contract` as a
+  CTE and already joins it as `l` - the alias that function needs. Every attempt to run it from a
+  standalone script failed with 42P01: these builders are fragments of one query, not functions
+  that stand alone.
+- **The hazard:** Section 1's delay figures are `sum / rowCount`. A backlog contract has no vessel
+  and no dates, so counting it in that denominator would shrink every average simply because
+  something has not been planned yet - degrading the metric the page exists for, silently. The
+  outstanding total must span all rows; the averages and Total Vessels must span only rows with a
+  voyage.
+
+**Verification, to be run before and after:** the outstanding rises by exactly the backlog figure,
+every average delay is unchanged to the decimal, and Total Vessels is unchanged.
+
+
 ### A whole voyage could disappear when the B2B origin had no shipment
 
 The page's row scope ended with an unconditional exclusion:
