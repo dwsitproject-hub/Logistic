@@ -87,3 +87,7 @@ docs/*.docx
 docs/*.sql
 docs/*.dump
 docs/test-reports/
+
+# TypeScript incremental build cache — a local artifact, rewritten by every `tsc` run.
+# It was tracked, so two people running tsc produced a conflict about nothing.
+*.tsbuildinfo
