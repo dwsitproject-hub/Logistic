@@ -147,11 +147,68 @@ const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFra
     console.log(`   ${r.contract_id}  PO ${r.po_number || '-'}  reff_po ${r.contract_reference_po}  ${r.incoterm || '-'}  ordered ${r.ordered_mt} MT`);
   }
 
-  // reads. It is removed because that CTE is NOT self-contained: it references po_sto_counts and
-  // b2b_ending_child_snapshot, which the real query splices in around it, so standalone it dies
-  // with 42P01 - and prints several hundred KB of rendered SQL on the way out, which is worse than
-  // useless in a terminal. If that question needs answering, add the missing CTEs deliberately or
-  // read it through the endpoint; do not re-add a half-spliced copy.
+  // G. The per-contract lines behind each STO's sums, written out by hand.
+  //
+  //    all_sto_contract_links gathers EVERY contract tied to an STO through contract_stos, through
+  //    contracts.sto_number, or through any non-cancelled shipment on that STO. There is no PO
+  //    condition anywhere in that gathering, which is why POs that merely share the STO are
+  //    carried. What that alone does NOT explain is how Contract Qty reads 2,000 MT on the same
+  //    row where Received reads 4,001 MT - same link set, two different totals - so something
+  //    downstream drops contracts from one column and not the other. This prints both sides per
+  //    contract so the asymmetry is visible rather than argued about.
+  //
+  //    Not composed from buildStoPoMetricsCte: that CTE needs po_sto_counts and
+  //    b2b_ending_child_snapshot spliced around it, dies with 42P01 standalone, and prints several
+  //    hundred KB of rendered SQL on the way out.
+  if (stos.length) {
+    console.log('');
+    console.log('G. per-contract lines behind each STO:');
+    for (const sto of stos) {
+      const lines = (await connection.query(`
+        SELECT l.contract_id, l.po_number, l.src,
+               ROUND(l.contract_qty / 1000, 2) AS contract_qty_mt,
+               ROUND((
+                 SELECT NULLIF(REGEXP_REPLACE(COALESCE(spd.data->'raw'->>'Quantity Receive', ''), '[^0-9.-]', '', 'g'), '')::numeric
+                 FROM sap_processed_data spd
+                 WHERE spd.contract_number = l.contract_id
+                   AND TRIM(COALESCE(spd.sto_number::text, '')) = $1
+                 ORDER BY spd.created_at DESC NULLS LAST
+                 LIMIT 1
+               ), 2) AS sap_receive
+        FROM (
+          SELECT DISTINCT ON (cc.contract_id)
+                 cc.contract_id, cc.po_number, cc.quantity_ordered::numeric AS contract_qty, u.src
+          FROM (
+            SELECT cs.contract_id AS cid, 'contract_stos' AS src
+            FROM contract_stos cs WHERE TRIM(cs.sto_number::text) = $1
+            UNION ALL
+            SELECT c2.id, 'contracts.sto_number'
+            FROM contracts c2 WHERE TRIM(COALESCE(c2.sto_number::text, '')) = $1
+            UNION ALL
+            SELECT sh.contract_id, 'shipment'
+            FROM shipments sh
+            WHERE TRIM(COALESCE(sh.shipment_id::text, '')) = $1
+              AND COALESCE(sh.status, '') <> 'CANCELLED'
+          ) u
+          JOIN contracts cc ON cc.id = u.cid
+          ORDER BY cc.contract_id, u.src
+        ) l
+        ORDER BY l.contract_id`, [sto])).rows;
+      console.log(`   STO ${sto} - every contract the link step gathers:`);
+      console.log('      contract      PO            contract qty   SAP receive   linked via');
+      let qty = 0;
+      let rec = 0;
+      for (const r of lines) {
+        qty += Number(r.contract_qty_mt || 0);
+        rec += Number(r.sap_receive || 0);
+        console.log(`      ${String(r.contract_id).padEnd(14)}${String(r.po_number || '-').padEnd(14)}` +
+          `${String(r.contract_qty_mt).padStart(9)} MT ${String(r.sap_receive ?? '-').padStart(11)}    ${r.src}`);
+      }
+      console.log(`      summed: contract qty ${qty.toFixed(2)} MT, SAP receive ${rec.toFixed(2)} MT`);
+      console.log('      (a contract with a contract qty but no SAP receive here, or the reverse,');
+      console.log('       is how the two columns end up over different sets)');
+    }
+  }
 
   console.log('\nRead C first. If one STO carries several contracts, anything summed by STO key');
   console.log('carries all of them, while the contract column beside it carries one - which is');
