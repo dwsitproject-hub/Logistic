@@ -307,6 +307,46 @@ const up = (v) => String(v ?? '').trim().toUpperCase();
   }
 
 
+  // H. The same fault across the whole database, not just this product and site.
+  //
+  //    Shipping Performance drops B2B child contracts so their quantity is not double counted
+  //    beside the origin's. The assumption is that the origin carries it. SAP puts the shipment on
+  //    the CHILD, and the origin usually has none of its own - and a page built from shipments
+  //    cannot show a contract without one. So both halves disappear.
+  try {
+    const global = (await connection.query(`
+      SELECT COUNT(DISTINCT s.id)::int              AS shipments,
+             COUNT(DISTINCT c.contract_id)::int     AS child_contracts,
+             COUNT(DISTINCT NULLIF(TRIM(s.shipment_id::text), ''))::int AS stos,
+             ROUND(SUM(GREATEST(
+               COALESCE(c.quantity_ordered, 0) - CASE
+                 WHEN UPPER(TRIM(COALESCE(c.incoterm, ''))) = 'FOB' THEN COALESCE(qms.quantity_delivery, 0)
+                 ELSE COALESCE(qms.quantity_receive, 0)
+               END, 0)) / 1000)::int                AS os_mt
+      FROM contracts c
+      JOIN contract_latest_spd_snapshot snap ON snap.contract_number = c.contract_id
+      JOIN shipments s ON s.contract_id = c.id AND COALESCE(s.status, '') <> 'CANCELLED'
+      LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
+      WHERE UPPER(TRIM(COALESCE(snap.b2b_flag_raw, ''))) = 'B2B'
+        AND NULLIF(TRIM(snap.contract_reference_po_raw), '') IS NOT NULL
+        AND UPPER(TRIM(COALESCE(c.incoterm, ''))) IN ('FOB', 'CIF', 'CFR')
+        -- the origin has no shipment of its own, so nothing else can carry this
+        AND NOT EXISTS (
+          SELECT 1
+          FROM contracts o
+          JOIN shipments so ON so.contract_id = o.id AND COALESCE(so.status, '') <> 'CANCELLED'
+          WHERE NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(snap.contract_reference_po_raw), '')
+        )`)).rows[0];
+    console.log(`\nH. the same fault across the whole database:`);
+    console.log(`   B2B child contracts with a shipment whose origin has none : ${global.child_contracts}`);
+    console.log(`   shipments involved : ${global.shipments}   distinct STOs : ${global.stos}`);
+    console.log(`   outstanding never shown on Shipping Performance : ${Number(global.os_mt).toLocaleString('en-US')} MT`);
+    console.log('   (dropped as a child, and the origin it was meant to defer to has no row either)');
+  } catch (err) {
+    console.log(`\nH. could not be measured: ${String(err.message).slice(0, 200)}`);
+  }
+
+
   console.log('\nRead B first. A contract with no shipment at all cannot appear on a page built');
   console.log('from shipments, so that line is a definition difference rather than a fault. The');
   console.log('line below it - contracts that DO have a shipment yet are missing from Shipping');
