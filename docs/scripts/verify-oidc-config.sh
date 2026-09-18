@@ -5,9 +5,36 @@
 
 set -euo pipefail
 
+# The expected values differ per environment, and hard-coding SIT's made this script report FAIL
+# against a correctly configured production host on every single deploy - a check nobody believes
+# is worse than no check. KLIP_ENV picks the set; it is inferred from FRONTEND_URL when unset, so
+# the common case needs no flag.
 EXPECTED_CLIENT_ID="logistic"
-EXPECTED_REDIRECT_URI="http://test-klip.kpndomain.com/auth/oidc/callback"
-EXPECTED_DISCOVERY="http://test-dwshub.kpndomain.com/api/sso/.well-known/openid-configuration"
+
+infer_env() {
+  case "${FRONTEND_URL:-}" in
+    *test-klip*) echo sit ;;
+    *uat-klip*)  echo uat ;;
+    ""|*)        echo prod ;;
+  esac
+}
+
+set_expectations() {
+  case "$1" in
+    sit)
+      EXPECTED_REDIRECT_URI="http://test-klip.kpndomain.com/auth/oidc/callback"
+      EXPECTED_DISCOVERY="http://test-dwshub.kpndomain.com/api/sso/.well-known/openid-configuration"
+      ;;
+    uat)
+      EXPECTED_REDIRECT_URI="http://uat-klip.kpndomain.com/auth/oidc/callback"
+      EXPECTED_DISCOVERY="http://uat-dwshub.kpndomain.com/api/sso/.well-known/openid-configuration"
+      ;;
+    *)
+      EXPECTED_REDIRECT_URI="http://klip.kpndomain.com/auth/oidc/callback"
+      EXPECTED_DISCOVERY="https://dwshub.kpndomain.com/api/sso/.well-known/openid-configuration"
+      ;;
+  esac
+}
 
 fail=0
 
@@ -49,6 +76,10 @@ check_var() {
 
 echo "==> OIDC config check (Hub Admin must match)"
 load_env
+
+KLIP_ENV="${KLIP_ENV:-$(infer_env)}"
+set_expectations "${KLIP_ENV}"
+echo "    environment: ${KLIP_ENV} (set KLIP_ENV=sit|uat|prod to override)"
 
 check_var OIDC_CLIENT_ID "$EXPECTED_CLIENT_ID"
 check_var OIDC_REDIRECT_URI "$EXPECTED_REDIRECT_URI"
