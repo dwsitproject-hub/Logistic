@@ -1888,7 +1888,42 @@ them by STO key would collapse every one of them into a single row.
 
 `latest_spd_contract` moved to module scope so both queries share one definition rather than
 carrying a copy each.
-every average delay is unchanged to the decimal, and Total Vessels is unchanged.
+
+**Then it shipped again, correct, and the number still did not move.** The drilldown kept reading
+49,107 MT. The backend was right - the rows existed, the totals were right, the query ran - and the
+page threw every one of them away in its first line:
+
+```ts
+// frontend/src/app/shipping-performance/page.tsx - "Step A", the base of Sections 1-3
+const baseFilteredRows = materializeFlowRates(excludeUnplannedShippingRows(rows))
+```
+
+Two different things share the status `UNPLANNED`, and one rule was covering both:
+
+| | what it is | on this page |
+| --- | --- | --- |
+| UNPLANNED **shipment** | a shipment record not yet scheduled | excluded, as it always was |
+| **backlog** row | a contract with outstanding and no shipment to schedule | kept |
+
+The base filter now keeps a row that the backend **marked** `is_unplanned_backlog`, and is never
+allowed to infer that from the status - the flag is the backend's statement, the status is a
+coincidence of spelling. `frontend/src/lib/shippingPerfUnplannedBase.test.ts` pins both halves.
+
+The frontend keeps its own copy of the summary (`buildCardSummary`), so the same split the backend
+makes had to be made there too: outstanding over all rows, vessel count and averages over rows with
+a voyage. `buildPerVesselSummary` also stopped returning `EMPTY_SUMMARY` when `rowCount` is zero -
+a site where nothing has been planned yet has a real backlog, and reporting it as zero is the same
+class of error in miniature.
+
+**Where these rows do and do not appear, deliberately:** the All card and the All status filter. The
+On Going / Close cards are shipment execution stages (`shippingPerfRowIsOngoingStatus` excludes
+UNPLANNED) and the table's Open / Closed toggle is the same idea, so a contract with no shipment is
+in neither. Widening the toggle without widening the cards would make the table and the cards
+disagree, which is worse than the gap it would close.
+
+`c.source_type` is projected on the backlog rows for the same reason - the Source toggle (Interco /
+3rd Party) filters on it, and a missing column would have silently dropped every backlog row again,
+from a different place.
 
 
 ### A whole voyage could disappear when the B2B origin had no shipment

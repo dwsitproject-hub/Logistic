@@ -145,6 +145,8 @@ interface ShippingPerformanceRow {
   sto_key?: string | null
   operation_id?: string | null
   contract_date?: string | null
+  /** Backend flag: this row is a contract with outstanding and no shipment (backlog arm). */
+  is_unplanned_backlog?: boolean | null
   incoterm?: string | null
   product?: string | null
   /** contracts.source_type — used by client-only Source toggle (Interco / 3rd Party). */
@@ -294,9 +296,26 @@ function isUnplannedShippingStatus(status: string | null | undefined): boolean {
   return String(status ?? '').trim().toUpperCase() === 'UNPLANNED'
 }
 
-/** Shipping Performance page only — excludes UNPLANNED from all sections. */
+/**
+ * The backlog arm: contracts with outstanding and no shipment at all, added by the backend so this
+ * page's outstanding means the same thing as the identically labelled figure on Shipments. The
+ * backend marks them; they are never inferred from the status here.
+ */
+function isUnplannedBacklogRow(row: ShippingPerformanceRow): boolean {
+  return row.is_unplanned_backlog === true
+}
+
+/**
+ * Shipping Performance page only — excludes UNPLANNED from all sections, EXCEPT the backlog arm.
+ *
+ * The two look identical by status and are not the same thing. An UNPLANNED *shipment* is a
+ * shipment record that has not been scheduled, and this page has always dropped it. A backlog row
+ * is a contract with no shipment to schedule in the first place — it is the outstanding this page
+ * was missing, and dropping it here is what kept the drilldown reading 49,107 against Shipments'
+ * 80,939 for CPO/Bontang after the backend arm shipped.
+ */
 function excludeUnplannedShippingRows(rows: ShippingPerformanceRow[]): ShippingPerformanceRow[] {
-  return rows.filter((row) => !isUnplannedShippingStatus(row.status))
+  return rows.filter((row) => isUnplannedBacklogRow(row) || !isUnplannedShippingStatus(row.status))
 }
 
 /**
@@ -777,14 +796,24 @@ function buildCardSummary(rows: ShippingPerformanceRow[], mode: PerfDashMode): P
   const contracts = new Set<string>()
   let totalQty = 0
 
+  /*
+   * Mirrors buildPerVesselSummary on the backend, and must split the same way: outstanding spans
+   * every contract in scope, planned or not, while vessel count and the averages span only rows
+   * that have a voyage. A backlog contract has no vessel and no dates, so counting it would
+   * enlarge the denominator without touching the numerator and shrink every delay figure simply
+   * because something has not been planned yet.
+   */
+  const voyageRows = rows.filter((row) => !isUnplannedBacklogRow(row))
+
   for (const row of rows) {
-    addDistinctShippingPerfStoKey(stoKeys, row)
     addDistinctContractIds(contracts, row.contract_number)
     totalQty += shippingPerfOutstandingQtyKgForAggregate(row)
+    if (isUnplannedBacklogRow(row)) continue
+    addDistinctShippingPerfStoKey(stoKeys, row)
   }
 
   const avgDelta = (logicalKey: (typeof PERF_DELTA_LOGICAL_KEYS)[number]) =>
-    avgMetric(rows, resolvePerfTableDataKey(logicalKey, mode))
+    avgMetric(voyageRows, resolvePerfTableDataKey(logicalKey, mode))
 
   return {
     vesselCount: stoKeys.size,

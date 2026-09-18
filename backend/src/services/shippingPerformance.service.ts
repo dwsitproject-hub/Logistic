@@ -554,6 +554,7 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
       c.product,
       COALESCE(NULLIF(TRIM(l.discharge_destination), ''), 'Blank') AS plant_site,
       c.incoterm,
+      c.source_type,
       c.supplier,
       c.contract_date,
       NULL::text                                AS vessel_name,
@@ -969,7 +970,12 @@ function buildPerVesselSummary(rows: Record<string, unknown>[], mode: SummaryMod
     sumTotalDelta += Number(row[mode === 'ata' ? 'ata_total_delta_days' : 'total_delta_days'] ?? 0);
   }
 
-  if (rowCount === 0) return { ...EMPTY_SUMMARY };
+  /*
+   * No voyage in scope. The averages have no denominator, but the outstanding does not depend on
+   * one: a site where nothing has been planned yet still has a real backlog, and returning
+   * EMPTY_SUMMARY here would report it as zero.
+   */
+  if (rowCount === 0) return { ...EMPTY_SUMMARY, totalQty, contractCount: contracts.size };
 
   return {
     vesselCount: stoKeys.size,
