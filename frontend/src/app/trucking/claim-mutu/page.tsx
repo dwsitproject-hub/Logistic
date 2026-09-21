@@ -68,8 +68,13 @@ function money(n: number | undefined | null) {
   return v.toLocaleString('id-ID', { maximumFractionDigits: 0 })
 }
 
-function num(n: number | undefined | null) {
-  const v = Number(n || 0)
+function moneyIdr(n: number | undefined | null) {
+  return `${money(n)} IDR`
+}
+
+/** Excel qty is stored in kg; table header is Claim Qty (MT). */
+function qtyClaimMt(n: number | undefined | null) {
+  const v = Number(n || 0) / 1000
   return v.toLocaleString('id-ID', { maximumFractionDigits: 3 })
 }
 function formatDate(d?: string) {
@@ -281,8 +286,8 @@ export default function ClaimMutuPage() {
       col('sta', 'STA', 'sta', 'left', false),
       col('crno', 'CRNO', 'crno', 'left', false),
       col('cr_date', 'CR Date', 'cr_date', 'left', true),
-      col('os_days', 'OS Days', 'os_days', 'right', true),
-      col('dest', 'Dest', 'dest', 'left', false),
+      col('os_days', 'Aging', 'os_days', 'right', true),
+      col('dest', 'Destination', 'dest', 'left', true),
       col('po_number', 'PO Number', 'po_number', 'left', true),
       col('contract_ext_no', 'Contract Ext No', 'contract_ext_no', 'left', true),
       col('comm', 'COMM', 'comm', 'left', false),
@@ -295,7 +300,7 @@ export default function ClaimMutuPage() {
       col('mutu_klaim_dns', 'DNS', 'mutu_klaim_dns', 'right', false),
       col('mutu_klaim_dobi', 'DOBI', 'mutu_klaim_dobi', 'right', false),
       col('mutu_klaim_stone', 'STONE', 'mutu_klaim_stone', 'right', false),
-      col('qty_claim_kg', 'Qty Claim (Kg)', 'qty_claim_kg', 'right', true),
+      col('qty_claim_kg', 'Claim Qty (MT)', 'qty_claim_kg', 'right', true),
       col('amount_after_tax_idr', 'Amount (IDR)', 'amount_after_tax_idr', 'right', true),
       col('a_lt_30', 'Aging < 30', 'a_lt_30', 'right', true),
       col('a_30_60', 'Aging 30–60', 'a_30_60', 'right', true),
@@ -762,7 +767,7 @@ export default function ClaimMutuPage() {
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-gray-600">Group Name</th>
                         <th className="px-3 py-2 text-right font-medium text-gray-600">Rows</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Qty Claim (Kg)</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Claim Qty (MT)</th>
                         <th className="px-3 py-2 text-right font-medium text-gray-600">Amount After Tax (IDR)</th>
                         <th className="px-3 py-2 text-right font-medium text-gray-600">Aging &lt; 30 Days</th>
                         <th className="px-3 py-2 text-right font-medium text-gray-600">Aging 30 – 60 Days</th>
@@ -775,8 +780,8 @@ export default function ClaimMutuPage() {
                         <tr key={g.group_name} className="hover:bg-gray-50">
                           <td className="px-3 py-2 font-medium">{g.group_name}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{Number(g.row_count).toLocaleString('id-ID')}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{num(g.total_qty_claim_kg)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{money(g.total_amount_after_tax_idr)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{qtyClaimMt(g.total_qty_claim_kg)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{moneyIdr(g.total_amount_after_tax_idr)}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{money(g.a_lt_30)}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{money(g.a_30_60)}</td>
                           <td className="px-3 py-2 text-right tabular-nums">{money(g.a_61_90)}</td>
@@ -1017,9 +1022,9 @@ export default function ClaimMutuPage() {
                                 case 'os_days':
                                   return r.os_days ?? '-'
                                 case 'qty_claim_kg':
-                                  return num(r.qty_claim_kg)
+                                  return qtyClaimMt(r.qty_claim_kg)
                                 case 'amount_after_tax_idr':
-                                  return money(r.amount_after_tax_idr)
+                                  return moneyIdr(r.amount_after_tax_idr)
                                 case 'a_lt_30':
                                 case 'a_30_60':
                                 case 'a_61_90':

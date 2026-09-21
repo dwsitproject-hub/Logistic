@@ -85,7 +85,10 @@ function shouldApplyDrilldown(scope: ClaimSusutFilterScope): boolean {
 }
 
 function shouldApplyGroupOfTransport(scope: ClaimSusutFilterScope): boolean {
-  return scope === 'rows';
+  // Bar filter: Outstanding + drilldown + table. Options stay unfiltered so the
+  // dropdown lists every group in the import/date universe. Group-section
+  // breakdown (hidden for now) stays unfiltered so it can show all groups.
+  return scope === 'summary' || scope === 'tree' || scope === 'rows';
 }
 
 function appendUpperInFilter(
@@ -122,11 +125,11 @@ export function buildClaimSusutFilteredCte(
   let where = 'WHERE 1=1';
   if (filters.dateFrom) {
     params.push(filters.dateFrom);
-    where += ` AND e.cr_date >= $${params.length}::date`;
+    where += ` AND (e.cr_date IS NULL OR e.cr_date >= $${params.length}::date)`;
   }
   if (filters.dateTo) {
     params.push(filters.dateTo);
-    where += ` AND e.cr_date <= $${params.length}::date`;
+    where += ` AND (e.cr_date IS NULL OR e.cr_date <= $${params.length}::date)`;
   }
 
   if (shouldApplyDimensionFilters(scope)) {
@@ -170,7 +173,7 @@ sap_by_po AS (
     NULLIF(TRIM(s.discharge_destination), '') AS sap_dest
   FROM contracts c
   LEFT JOIN contract_latest_spd_snapshot s
-    ON s.contract_number = c.contract_number
+    ON s.contract_number = c.contract_id
   WHERE NULLIF(TRIM(c.po_number), '') IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM import_keys k
@@ -180,22 +183,22 @@ sap_by_po AS (
   ORDER BY UPPER(TRIM(c.po_number)), c.updated_at DESC NULLS LAST, c.created_at DESC NULLS LAST
 ),
 sap_by_ext AS (
-  SELECT DISTINCT ON (UPPER(TRIM(c.contract_ext_no)))
-    TRIM(c.contract_ext_no) AS ext_key,
+  SELECT DISTINCT ON (UPPER(TRIM(c.contract_id)))
+    TRIM(c.contract_id) AS ext_key,
     NULLIF(TRIM(c.incoterm), '') AS sap_incoterm,
     NULLIF(TRIM(s.discharge_destination), '') AS sap_dest
   FROM contracts c
   LEFT JOIN contract_latest_spd_snapshot s
-    ON s.contract_number = c.contract_number
-  WHERE NULLIF(TRIM(c.contract_ext_no), '') IS NOT NULL
+    ON s.contract_number = c.contract_id
+  WHERE NULLIF(TRIM(c.contract_id), '') IS NOT NULL
     AND EXISTS (
       SELECT 1 FROM import_keys k
       WHERE (
-        (k.ext_key IS NOT NULL AND UPPER(TRIM(c.contract_ext_no)) = UPPER(k.ext_key))
-        OR (k.po_key IS NOT NULL AND UPPER(TRIM(c.contract_ext_no)) = UPPER(k.po_key))
+        (k.ext_key IS NOT NULL AND UPPER(TRIM(c.contract_id)) = UPPER(k.ext_key))
+        OR (k.po_key IS NOT NULL AND UPPER(TRIM(c.contract_id)) = UPPER(k.po_key))
       )
     )
-  ORDER BY UPPER(TRIM(c.contract_ext_no)), c.updated_at DESC NULLS LAST, c.created_at DESC NULLS LAST
+  ORDER BY UPPER(TRIM(c.contract_id)), c.updated_at DESC NULLS LAST, c.created_at DESC NULLS LAST
 ),
 enriched AS (
   SELECT

@@ -10,6 +10,8 @@ const CONTENT_SECURITY_POLICY = [
   "base-uri 'self'",
   "form-action 'self'",
   "frame-ancestors 'self'",
+  // Commercial Documents PDF preview uses blob: URLs in an iframe.
+  "frame-src 'self' blob:",
   "object-src 'none'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",

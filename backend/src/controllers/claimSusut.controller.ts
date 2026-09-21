@@ -15,6 +15,7 @@ import {
   type ClaimSusutQueryFilters,
   type ClaimSusutTreeLeaf,
 } from '../utils/claimSusutQuerySql';
+import { parseFlexibleIsoDate } from '../utils/parseFlexibleIsoDate';
 
 type HeaderRow = (string | number | null | undefined)[];
 
@@ -24,32 +25,7 @@ function normHeader(v: unknown): string {
 }
 
 function parseFlexibleDateToIsoDate(v: unknown): string | null {
-  if (v == null || v === '') return null;
-  if (v instanceof Date && !Number.isNaN(v.getTime())) {
-    const yyyy = v.getFullYear();
-    const mm = String(v.getMonth() + 1).padStart(2, '0');
-    const dd = String(v.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  }
-  const s = String(v).trim();
-  if (!s) return null;
-  const ddmmyyyy = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (ddmmyyyy) {
-    const dd = ddmmyyyy[1].padStart(2, '0');
-    const mm = ddmmyyyy[2].padStart(2, '0');
-    const yyyy = ddmmyyyy[3];
-    return `${yyyy}-${mm}-${dd}`;
-  }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const t = Date.parse(s);
-  if (!Number.isNaN(t)) {
-    const d = new Date(t);
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
-  }
-  return null;
+  return parseFlexibleIsoDate(v);
 }
 
 function toNumberOrNull(v: unknown): number | null {
@@ -428,7 +404,8 @@ export const getClaimSusutFilterOptions = async (req: AuthRequest, res: Response
         ARRAY(SELECT DISTINCT product FROM filtered ORDER BY 1) AS products,
         ARRAY(SELECT DISTINCT region_plant FROM filtered ORDER BY 1) AS plants,
         ARRAY(SELECT DISTINCT source FROM filtered ORDER BY 1) AS sources,
-        ARRAY(SELECT DISTINCT incoterm FROM filtered ORDER BY 1) AS incoterms
+        ARRAY(SELECT DISTINCT incoterm FROM filtered ORDER BY 1) AS incoterms,
+        ARRAY(SELECT DISTINCT group_of_transport_norm FROM filtered ORDER BY 1) AS groups_of_transport
       `,
     );
     const row = result.rows?.[0] || {};
@@ -439,6 +416,7 @@ export const getClaimSusutFilterOptions = async (req: AuthRequest, res: Response
         plants: row.plants || [],
         sources: row.sources || [],
         incoterms: row.incoterms || [],
+        groupsOfTransport: row.groups_of_transport || [],
       },
       meta: { importId: filters.importId },
     });

@@ -10,6 +10,8 @@ import {
   claimSusutImportFailedCount,
   claimSusutImportSuccessRate,
   claimSusutImportStatus,
+  resolveClaimSusutPeriodRange,
+  SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT,
 } from './claimSusutView'
 
 describe('Claim Susut view helpers', () => {
@@ -44,19 +46,19 @@ describe('Claim Susut view helpers', () => {
     const params = appendClaimSusutFilterParams(new URLSearchParams(), {
       importId: 'imp-1',
       plants: ['BONTANG'],
-      groupOfTransport: 'TRUCK',
+      groupsOfTransport: ['TRUCKING', 'VESSEL TC'],
       drilldown: { ...EMPTY_CLAIM_SUSUT_DRILLDOWN, product: 'CPO', company: 'PT A' },
     })
     expect(params.get('importId')).toBe('imp-1')
     expect(params.getAll('plant')).toEqual(['BONTANG'])
     expect(params.get('ddProduct')).toBe('CPO')
     expect(params.get('ddCompany')).toBe('PT A')
-    expect(params.get('groupOfTransport')).toBe('TRUCK')
+    expect(params.getAll('groupOfTransport')).toEqual(['TRUCKING', 'VESSEL TC'])
 
     const summaryParams = appendClaimSusutFilterParams(
       new URLSearchParams(),
       {
-        groupOfTransport: 'TRUCK',
+        groupsOfTransport: ['TRUCKING'],
         drilldown: { ...EMPTY_CLAIM_SUSUT_DRILLDOWN, product: 'CPO' },
       },
       { includeDrilldown: false, includeGroup: false },
@@ -65,12 +67,21 @@ describe('Claim Susut view helpers', () => {
     expect(summaryParams.get('groupOfTransport')).toBeNull()
   })
 
+  it('keeps the Group of Transport aging card hidden but restorable', () => {
+    expect(SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT).toBe(false)
+  })
+
   it('treats a previous all-columns preference as the compact default', () => {
     const legacy = CLAIM_SUSUT_COLUMNS.filter((c) => c.id !== 'incoterm' && c.id !== 'region_plant').map(
       (c) => c.id,
     )
     expect(looksLikeLegacyAllVisibleClaimSusutColumns(legacy)).toBe(true)
     expect(looksLikeLegacyAllVisibleClaimSusutColumns(['crno', 'vendor_name'])).toBe(false)
+  })
+
+  it('All CR Date preset sends no date bounds', () => {
+    expect(resolveClaimSusutPeriodRange('ALL')).toEqual({ dateFrom: '', dateTo: '', label: 'All' })
+    expect(resolveClaimSusutPeriodRange('YTD', new Date('2026-09-21T00:00:00')).dateFrom).toBe('2026-01-01')
   })
 
   it('parses import errors and success rate for history details', () => {
