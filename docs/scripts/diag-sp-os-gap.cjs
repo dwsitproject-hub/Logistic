@@ -44,6 +44,7 @@ const {
   shippingPerfOutstandingQtyKgForAggregate,
 } = load('utils/shippingPerformanceOutstandingAgg');
 const { sqlRegionSiteDisplayForContract } = load('utils/regionSiteSql');
+const { sqlBacklogRemainingOsJoinExpr } = load('utils/shipmentUnplannedHybridSql');
 const {
   parseShippingPerfContractDateList,
   shippingPerfRowMatchesContractDateRange,
@@ -302,6 +303,62 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
       String(r.po_sto_count ?? 1).padStart(8) +
       (mt(Number(r.contract_qty ?? 0)) + ' MT').padStart(14));
   }
+  /*
+   * IS THE RESIDUAL OUTSTANDING THAT SITS ON OUT-OF-SCOPE STOs?
+   *
+   * Shipments counts a CONTRACT's outstanding once its shipment is in an active stage. This page
+   * counts each STO's share. When a contract's other STOs are completed, or sit outside the
+   * period or the site, their share is never counted here - so the contract is short by exactly
+   * that much, and the sum of those shortfalls should be the residual.
+   *
+   * The contract figure is read with sqlBacklogRemainingOsJoinExpr, the same clamp-at-zero
+   * formula the backlog arm uses. It is a diagnosis, not the execution arm's own expression, so
+   * treat the per-contract numbers as indicative and the SHAPE as the finding.
+   */
+  const voyageContracts = [...new Set(
+    vy.flatMap((r) => String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
+  )];
+  if (voyageContracts.length) {
+    const osExpr = sqlBacklogRemainingOsJoinExpr();
+    const contractOs = new Map();
+    for (const row of (await connection.query(
+      `SELECT c.contract_id, (${osExpr}) AS os_kg
+       FROM contracts c
+       LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
+       WHERE c.contract_id = ANY($1::text[])`,
+      [voyageContracts],
+    )).rows) {
+      contractOs.set(String(row.contract_id), Number(row.os_kg) || 0);
+    }
+    const attributed = new Map();
+    for (const r of vy) {
+      const cs = String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+      const share = shippingPerfOutstandingQtyKgForAggregate(r) / Math.max(cs.length, 1);
+      for (const c of cs) attributed.set(c, (attributed.get(c) ?? 0) + share);
+    }
+    let shortfall = 0;
+    const worst = [];
+    for (const c of voyageContracts) {
+      const whole = contractOs.get(c) ?? 0;
+      const here = attributed.get(c) ?? 0;
+      const d = whole - here;
+      if (d > 1) {
+        shortfall += d;
+        worst.push([c, whole, here, d]);
+      }
+    }
+    worst.sort((a, b) => b[3] - a[3]);
+    console.log('');
+    console.log('outstanding on contracts here that no in-scope STO carries:');
+    console.log('   contracts short : ' + worst.length + ' of ' + voyageContracts.length);
+    console.log('   total shortfall : ' + mt(shortfall) + ' MT   <- compare with the residual');
+    console.log('   contract        contract OS    counted here      short');
+    for (const [c, whole, here, d] of worst.slice(0, 12)) {
+      console.log('      ' + String(c).padEnd(15) + (mt(whole) + ' MT').padStart(12) +
+        (mt(here) + ' MT').padStart(15) + (mt(d) + ' MT').padStart(12));
+    }
+  }
+
   console.log('   voyage rows by status:');
   for (const [k, v] of [...byStatus.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
     console.log('      ' + k.padEnd(20) + String(v.n).padStart(4) + '  ' + (mt(v.kg) + ' MT').padStart(13));
