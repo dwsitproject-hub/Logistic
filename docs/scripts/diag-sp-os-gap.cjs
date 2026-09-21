@@ -181,6 +181,100 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
   console.log('   of those, rows whose dates STRADDLE the period boundary: ' + straddling.length);
   console.log('   they carry ' + mt(straddlingKg) + ' MT, counted WHOLE here and only partly by Shipments');
   console.log('   (an upper bound on how much of the remaining gap is the any-date rule)');
+
+  /*
+   * THE THREE SURFACES, all within the period above, because "the Shipping Performance number" is
+   * not one number and reading the wrong one sends the search somewhere else entirely.
+   *
+   *   Section 1  buildPerVesselSummary / buildCardSummary - every countable row
+   *   drilldown  matchesPerfDrilldownRow - drops COMPLETED and drops outstanding <= 0
+   *   table      the raw per-row column, no apportionment
+   *
+   * A claim repeated in this repo - including by an earlier version of this script - is that the
+   * "outstanding <= 0" half of the drilldown filter cannot move a total, because a zero adds
+   * nothing. Measured, that is FALSE, and the reason is a field mismatch:
+   *
+   *   matchesPerfDrilldownRow  tests outstanding_qty_actual ?? outstanding_qty   (STO level)
+   *   the sum                  uses  outstanding_qty_aggregate when present      (PO level)
+   *
+   * So a row whose own STO has nothing left, on a PO that still has outstanding, is DROPPED by the
+   * drilldown while contributing a positive figure to Section 1. On dev that is 3,954 of the
+   * 7,155 MT between them - more than the COMPLETED rows everyone assumed was the whole story.
+   */
+  const drill = inPeriod.filter((r) => up(r.status) !== 'COMPLETED' && raw(r) > 0);
+  const drillKg = drill.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+  const completedInPeriod = inPeriod.filter((r) => up(r.status) === 'COMPLETED' && raw(r) > 0);
+  const completedKg = completedInPeriod.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+  console.log('');
+  console.log('the three Shipping Performance surfaces, same period:');
+  console.log('   Section 1 (cards)      ' + String(inPeriod.length).padStart(5) + ' rows  ' + (mt(inPeriodKg) + ' MT').padStart(13));
+  console.log('   drilldown              ' + String(drill.length).padStart(5) + ' rows  ' + (mt(drillKg) + ' MT').padStart(13));
+  console.log('   table (raw per row)    ' + String(inPeriod.length).padStart(5) + ' rows  ' +
+    (mt(inPeriod.reduce((a, r) => a + raw(r), 0)) + ' MT').padStart(13));
+  const zeroRawPositiveAgg = inPeriod.filter(
+    (r) => raw(r) <= 0 && shippingPerfOutstandingQtyKgForAggregate(r) > 0,
+  );
+  const zeroRawKg = zeroRawPositiveAgg.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+  console.log('   Section 1 - drilldown = ' + mt(inPeriodKg - drillKg) + ' MT, and it is TWO causes:');
+  console.log('      COMPLETED still carrying outstanding : ' + String(completedInPeriod.length).padStart(4) +
+    ' rows  ' + (mt(completedKg) + ' MT').padStart(13));
+  console.log('      raw OS <= 0 but aggregate OS > 0     : ' + String(zeroRawPositiveAgg.length).padStart(4) +
+    ' rows  ' + (mt(zeroRawKg) + ' MT').padStart(13) + '  <- the filter and the sum read DIFFERENT fields');
+  console.log('   ^ NOTE: the frontend never fetches the backend tree - it builds its own from rows,');
+  console.log('     with no COMPLETED/OS filter, so on screen the drilldown and Section 1 agree and');
+  console.log('     the split above is between two BACKEND surfaces, one of which the UI never calls.');
+
+  /*
+   * THE CARDS, which is what a screen figure usually is. shippingPerfRowMatchesCard:
+   *   all      everything
+   *   close    status COMPLETED  - shows contract qty, not outstanding (Ryan, 2026-09-18)
+   *   ongoing  not CANCELLED, not COMPLETED, status present and not UNPLANNED - plus the
+   *            unplanned backlog, which is open work with no shipment yet
+   */
+  const cancelled = (r) => up(r.status) === 'CANCELLED' || up(r.status) === 'CANCELED';
+  const cards = {
+    All: inPeriod,
+    'On Going': inPeriod.filter(
+      (r) => !cancelled(r) && (r.is_unplanned_backlog === true ||
+        (up(r.status) !== 'COMPLETED' && up(r.status) !== '' && up(r.status) !== 'UNPLANNED')),
+    ),
+    Close: inPeriod.filter((r) => !cancelled(r) && up(r.status) === 'COMPLETED'),
+  };
+  console.log('');
+  console.log('the Section 1 cards, same period:');
+  for (const [name, rs] of Object.entries(cards)) {
+    console.log('   ' + name.padEnd(12) + String(rs.length).padStart(5) + ' rows  ' +
+      (mt(rs.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0)) + ' MT').padStart(13));
+  }
+  console.log('   ^ find your screen figure here. That names the card, and the card names the rule.');
+
+  /*
+   * THE STO ROWS THAT ARE CLOSED BUT SIT ON THE ON GOING CARD.
+   *
+   * Card membership reads row.status - the SHIPMENT status. The row also carries import_status,
+   * the per-STO Open/Close state from perf_sto_status, and the two can disagree: an STO whose SAP
+   * import status is CLOSE/CLOSED/COMPLETED while its shipment has not been stamped COMPLETED.
+   * Those rows land on On Going and bring their outstanding with them, which is exactly what
+   * "baris STO yang completed harusnya masuk ke card completed bukan Open" describes.
+   */
+  const CLOSED = new Set(['CLOSE', 'CLOSED', 'COMPLETED', 'COMPLETE']);
+  const closedButOngoing = cards['On Going'].filter((r) => CLOSED.has(up(r.import_status)));
+  const closedButOngoingKg = closedButOngoing.reduce(
+    (a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0,
+  );
+  console.log('');
+  console.log('STO rows on On Going whose per-STO import_status is already closed:');
+  console.log('   ' + String(closedButOngoing.length).padStart(5) + ' rows  ' +
+    (mt(closedButOngoingKg) + ' MT').padStart(13) + '   <- would move to Close');
+  console.log('   On Going after moving them: ' +
+    mt(cards['On Going'].reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0) - closedButOngoingKg) + ' MT');
+  const seen = new Map();
+  for (const r of cards['On Going']) {
+    const k = up(r.import_status) || '(blank)';
+    seen.set(k, (seen.get(k) ?? 0) + 1);
+  }
+  console.log('   import_status seen on On Going: ' +
+    [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => k + ':' + n).join('  '));
   void step;
 
   const apportioned = rows.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
