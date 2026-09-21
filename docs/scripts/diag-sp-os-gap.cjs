@@ -425,10 +425,20 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
    * on purpose - contributes nothing, and Shipments still counts it. After the correction the
    * CPO/BONTANG drilldown reads 81,414 MT against 81,575, and this is where the 161 MT should be.
    */
-  const spContractSet = new Set(
-    [...voyages, ...backlog].flatMap((r) =>
-      String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
-  );
+  /*
+   * The set that matters is the contracts the correction PRICED, not the contracts that merely
+   * have a row. A contract whose only rows here are COMPLETED - or whose only active-stage
+   * shipment is one the sea row scope drops, such as a FOB trucking leg - has a row and is still
+   * never priced, while Shipments prices it. Checking "has a row" missed exactly that case and
+   * reported 0.
+   */
+  const pricedContracts = new Set();
+  for (const r of [...voyages, ...backlog]) {
+    const kg = Number(r.outstanding_qty_aggregate ?? 0) || 0;
+    if (kg <= 0) continue;
+    for (const c of contractNumbersOf(r)) pricedContracts.add(c);
+  }
+  const spContractSet = pricedContracts;
   try {
     const regionSite2 = sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number');
     const osExpr2 = sqlContractExecutionOutstandingKgExpr('c.contract_id');
@@ -467,9 +477,9 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
     )).rows.filter((r) => !spContractSet.has(String(r.contract_id)));
     const missKg = missing.reduce((a, r) => a + (Number(r.os_kg) || 0), 0);
     console.log('');
-    console.log('contracts with a live shipment that this page has NO row for:');
+    console.log('contracts Shipments prices that this page never prices:');
     console.log('   ' + String(missing.length).padStart(4) + ' contracts  ' + (mt(missKg) + ' MT').padStart(13) +
-      '   <- Shipments prices these; the correction cannot');
+      '   <- the correction cannot reach these');
     for (const r of missing.slice(0, 10)) {
       console.log('      ' + String(r.contract_id).padEnd(15) + String(r.incoterm || '-').padEnd(6) +
         (mt(Number(r.os_kg)) + ' MT').padStart(11));
@@ -523,6 +533,49 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
     }
   }
   console.log('   (a disagreement decides both whether a contract is priced and which row wins it)');
+
+  /*
+   * THE LOADING-PORT STAGE, contract by contract.
+   *
+   * After the contract-grain correction, status no longer changes the TOTAL - that is the sum of
+   * each contract's outstanding. It decides which ROW wins a contract, and therefore which stage
+   * card it lands in. The one way status can still move the total is a contract with no
+   * active-stage row here at all: it is priced by Shipments and by nothing here.
+   *
+   * Production reads At Loading Port as 2,800 MT here against 3,059 on Shipments - 259 MT on a
+   * single shipment - so this lists every contract the correction placed at that stage, with every
+   * row it appears on, which is small enough to settle by reading.
+   */
+  const LP_STAGES = new Set(['ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING']);
+  const rowsByContract = new Map();
+  for (const r of inPeriod) {
+    if (r.is_unplanned_backlog === true) continue;
+    for (const c of contractNumbersOf(r)) {
+      const list = rowsByContract.get(c) ?? [];
+      list.push(r);
+      rowsByContract.set(c, list);
+    }
+  }
+  const lpRows = inPeriod.filter((r) => r.is_unplanned_backlog !== true && LP_STAGES.has(up(r.status)));
+  const lpContracts = [...new Set(lpRows.flatMap(contractNumbersOf))];
+  console.log('');
+  console.log('At Loading Port, contract by contract:');
+  console.log('   contract        contract OS   every row it appears on');
+  let lpAwarded = 0;
+  for (const c of lpContracts) {
+    const whole = contractOs.get(c) ?? 0;
+    const where = (rowsByContract.get(c) ?? [])
+      .map((r) => up(r.status) + (r.sto_number ? '/' + String(r.sto_number) : ''))
+      .join('  ');
+    const winnerIsLp = (rowsByContract.get(c) ?? []).every((r) => !r.is_unplanned_backlog &&
+      LP_STAGES.has(up(r.status)) || !['ARRIVED_DP', 'BERTHED_DP', 'UNLOADING', 'SAILED'].includes(up(r.status)));
+    if (winnerIsLp) lpAwarded += whole;
+    console.log('      ' + String(c).padEnd(15) + (mt(whole) + ' MT').padStart(11) + '   ' + where);
+  }
+  console.log('   contracts at this stage: ' + lpContracts.length +
+    ', their contract OS totals ' + mt(lpContracts.reduce((a, c) => a + (contractOs.get(c) ?? 0), 0)) + ' MT');
+  console.log('   (Shipments shows 3,059 MT here; a contract listed with a discharge row too is');
+  console.log('    awarded there instead, which moves it between cards without changing any total)');
 
   console.log('   voyage rows by status:');
   for (const [k, v] of [...byStatus.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
