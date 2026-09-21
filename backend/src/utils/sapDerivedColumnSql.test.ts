@@ -42,10 +42,17 @@ import {
  * wrong number with nothing failing. So the mapping is checked against the migration itself, and
  * the row/data forms are checked to differ only in how each arm is reached.
  */
+/*
+ * Line endings normalised. The assertions below are built with a bare newline and a Windows
+ * checkout stores the migration with CRLF, so every one of the 28 columns fails - and vitest
+ * reports only the first, which reads exactly like ONE mapping being wrong. It was red on SIT
+ * and main for a day on that misreading. What this file checks is the mapping; how the repo
+ * stores newlines is not part of it.
+ */
 const migration = readFileSync(
   join(__dirname, '..', 'database', 'migrations', '162_sap_processed_data_derived_columns.sql'),
   'utf8',
-);
+).replace(/\r\n/g, '\n');
 
 describe('sap derived column mapping', () => {
   it('every column maps to the path migration 162 generates it from', () => {
