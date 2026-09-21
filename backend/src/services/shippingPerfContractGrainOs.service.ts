@@ -1,4 +1,4 @@
-import { query } from '../database/connection';
+import { getClient } from '../database/connection';
 import { sqlContractExecutionOutstandingKgExpr } from '../utils/contractExecutionOutstandingSql';
 import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
 import {
@@ -55,6 +55,11 @@ export function osStageOf(row: ContractGrainOsRow): string {
   return own || String(row.status ?? '').trim();
 }
 
+/** Small enough that one bad chunk is cheap to lose, large enough to keep the round trips few. */
+const CONTRACT_OS_CHUNK = 400;
+/** Postgres kills a chunk that goes bad; the caller's timeout is the backstop, not the only one. */
+const CONTRACT_OS_STATEMENT_TIMEOUT_MS = 20_000;
+
 export function contractNumbersOf(row: ContractGrainOsRow): string[] {
   return String(row.contract_number ?? '')
     .split(',')
@@ -82,17 +87,53 @@ export async function loadContractExecutionOutstandingKg(
     kind: 'in_subquery',
     subquery: 'SELECT c_s.contract_id FROM contracts c_s WHERE c_s.contract_id = ANY($1::text[])',
   });
-  const result = await query(
-    `WITH ${qtyMoveCte}
-     SELECT c.contract_id,
-            (${sqlContractExecutionOutstandingKgExpr('c.contract_id')})::numeric AS os_kg
-     FROM contracts c
-     WHERE c.contract_id = ANY($1::text[])`,
-    [ids],
-  );
-  for (const row of result.rows as Record<string, unknown>[]) {
-    const kg = Number(row.os_kg) || 0;
-    if (kg > 0) out.set(String(row.contract_id), kg);
+
+  /*
+   * CHUNKED, and bounded by the server's own clock.
+   *
+   * The whole page's contracts went in as one array - thousands of ids, spliced into both the
+   * qty_move CTE and the outer WHERE, around an expression that is itself two correlated
+   * subqueries per row. On production that stopped coming back, and because the refresh had no
+   * timeout the page went down with it.
+   *
+   * statement_timeout is what makes this safe rather than merely smaller: a chunk that goes bad
+   * is killed by Postgres instead of being waited on, so the caller's timeout is the backstop and
+   * not the only defence.
+   */
+  /*
+   * statement_timeout goes on its OWN statement, on a dedicated client.
+   *
+   * Putting it in front of the SELECT as `SET LOCAL ...; WITH ...` fails with "cannot insert
+   * multiple commands into a prepared statement": the SELECT takes a parameter, so it goes
+   * through the extended protocol, which allows exactly one command. That was caught by running
+   * this - it would otherwise have been a second outage with a new cause.
+   */
+  const client = await getClient();
+  try {
+    await client.query(`SET statement_timeout = ${CONTRACT_OS_STATEMENT_TIMEOUT_MS}`);
+    for (let i = 0; i < ids.length; i += CONTRACT_OS_CHUNK) {
+      const chunk = ids.slice(i, i + CONTRACT_OS_CHUNK);
+      const result = await client.query(
+        `WITH ${qtyMoveCte}
+         SELECT c.contract_id,
+                (${sqlContractExecutionOutstandingKgExpr('c.contract_id')})::numeric AS os_kg
+         FROM contracts c
+         WHERE c.contract_id = ANY($1::text[])`,
+        [chunk],
+      );
+      for (const row of result.rows as Record<string, unknown>[]) {
+        const kg = Number(row.os_kg) || 0;
+        if (kg > 0) out.set(String(row.contract_id), kg);
+      }
+    }
+  } finally {
+    // Reset before returning it to the pool, or every later query on this connection inherits it.
+    try {
+      await client.query('SET statement_timeout = DEFAULT');
+    } catch {
+      /* the connection is going back to the pool either way */
+    }
+    client.release();
   }
   return out;
 }

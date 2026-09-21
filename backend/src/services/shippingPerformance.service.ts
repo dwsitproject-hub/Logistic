@@ -95,6 +95,31 @@ const EMPTY_SUMMARY: PerVesselPerfSummary = {
   avgTotalDelta: 0,
 };
 
+/**
+ * A hang must never outlive the thing it was helping.
+ *
+ * try/catch around an await catches a rejection and waits forever on a promise that simply never
+ * settles. That is what took Shipping Performance down: the contract-grain query stopped
+ * returning, the row cache was never filled, and every request queued behind a promise with no
+ * end. Anything optional inside the refresh goes through here.
+ */
+async function withRefreshTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Generous enough for a cold run, short enough that a stuck one cannot hold the page. */
+const CONTRACT_GRAIN_OS_TIMEOUT_MS = 45_000;
+
 const ROW_CACHE = new Map<string, { rows: Record<string, unknown>[]; expiresAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 /**
@@ -1228,14 +1253,30 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
        * 81,583 on Shipments, because a contract whose other STOs are completed or out of scope is
        * only ever counted in part.
        *
-       * Guarded like the backlog arm and for the same reason: a failure here must cost the
-       * contract-grain correction, not the page. Falling back leaves the per-STO shares in place,
-       * which understates outstanding rather than showing nothing.
+       * THE CACHE IS FILLED FIRST, AND THAT ORDER IS THE POINT.
+       *
+       * This was guarded by try/catch alone, which catches a FAILURE and does nothing about a
+       * HANG. On production the correction stopped returning, so ROW_CACHE was never set, the
+       * refresh promise never settled, and every later request waited on it forever:
+       * /shipments/performance answered nothing while the database sat idle and every other
+       * endpoint kept serving. The page was down until the container was rolled back.
+       *
+       * So the rows are cached BEFORE the correction runs, and the correction mutates that same
+       * array in place afterwards. The worst case is now a page showing per-STO shares - the
+       * figures it showed all of last week - instead of a page showing nothing.
        */
+      ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
+
       try {
         const contractNumbers = shipmentRows.flatMap((row) => contractNumbersOf(row));
-        const contractOsKg = await loadContractExecutionOutstandingKg(contractNumbers);
+        const contractOsKg = await withRefreshTimeout(
+          loadContractExecutionOutstandingKg(contractNumbers),
+          CONTRACT_GRAIN_OS_TIMEOUT_MS,
+          'contract-grain outstanding',
+        );
         applyContractGrainOutstanding(shipmentRows, contractOsKg);
+        // Re-stamp so the corrected rows carry a full TTL rather than inheriting a used one.
+        ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       } catch (err) {
         logger.error(
           'Shipping Performance contract-grain outstanding failed - page served on per-STO shares',

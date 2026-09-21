@@ -2105,6 +2105,43 @@ the contract's own quantity is the only sensible value. Zero rows remain.
 contract-grain correction fills. It does change the **By Vessel** contract-qty column, which sums
 this field: that total rises, and the rise is the correction.
 
+### The correction took the page down, and try/catch could not have stopped it
+
+`/api/shipments/performance` stopped answering on production. The logs show the request logged
+with no status and no size, over and over as the browser retried, while **`pg_stat_activity` was
+empty** - the database idle and every other endpoint still serving 304s. A restart did not clear
+it; a fresh container reproduced it.
+
+That shape is not a slow query. It is a promise that never settles: the contract-grain correction
+stopped returning, so `ROW_CACHE` was never filled, `refreshInFlight` never resolved, and every
+later request queued behind it forever.
+
+**The guard was the wrong kind.** The correction was wrapped in try/catch, copied from the backlog
+arm, and try/catch catches a *rejection*. Nothing catches an await that never comes back.
+
+Three changes, and the order of the first one is the point:
+
+| | |
+| --- | --- |
+| **cache first** | the rows are put in `ROW_CACHE` **before** the correction runs, and the correction mutates that array in place. The worst case is a page showing per-STO shares, never a page showing nothing |
+| **timeout** | `withRefreshTimeout` bounds anything optional inside the refresh. A hang now costs the correction, which is what the try/catch was always meant to guarantee |
+| **chunked** | the real cause |
+
+**The real cause, measured:** every contract on the page went into one query - **1,861 ids** spliced
+into the `qty_move` CTE *and* the outer `WHERE`, around an expression that is itself two correlated
+subqueries per row. Chunked at 400 the same work takes **1.7 seconds**.
+
+And one more that only running it could find: `SET LOCAL statement_timeout = ...; WITH ...` fails
+with *"cannot insert multiple commands into a prepared statement"* - the SELECT takes a parameter,
+so it uses the extended protocol, which allows one command. It is set on its own statement on a
+dedicated client now, and reset before the connection returns to the pool.
+
+**What actually went wrong in how this was worked.** The change was validated with unit tests and
+with scripts that call the builders. Neither calls the endpoint. A green unit test proves the rule
+is right; it says nothing about whether the request finishes. Every change to the refresh path is
+now checked by calling `runShippingPerformance` for all three parts and watching it resolve -
+which is how both faults above were caught before the second deploy.
+
 ### Closing the last 2%: the aggregates count the contract
 
 Chosen after the first plan was measured and abandoned, which is the part worth keeping.
