@@ -5,6 +5,7 @@ import {
   collectDistinctFormattedValues,
   formatPrePlannedGroupQtyMt,
   groupShipmentsByPrePlannedSuggestion,
+  resolvePrePlannedCancelGroupId,
   sumGroupQtyKg,
   sumGroupQtyKgForColumn,
 } from '@/lib/prePlannedGroupTableRows';
@@ -96,5 +97,19 @@ describe('prePlannedGroupTableRows', () => {
     expect(
       formatPrePlannedGroupBadge({ ...sampleGroup, excelGroupLabel: 'A' }),
     ).toBe('A · PPG-001');
+  });
+
+  it('resolvePrePlannedCancelGroupId prefers the accepted group id over singleton keys', () => {
+    const groups = groupShipmentsByPrePlannedSuggestion(
+      [{ id: 'r1', contract_number: '1001', pre_planned_group_id: 'group-1' }],
+      lookup,
+    );
+    expect(resolvePrePlannedCancelGroupId(groups[0])).toBe('group-1');
+    expect(
+      resolvePrePlannedCancelGroupId({
+        groupKey: 'singleton:r1',
+        members: [{ id: 'r1' }],
+      }),
+    ).toBeNull();
   });
 });

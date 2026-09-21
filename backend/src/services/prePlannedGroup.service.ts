@@ -702,6 +702,104 @@ export async function acceptPrePlannedGroupLink(
   });
 }
 
+export interface PrePlannedCancelToUnplannedResult {
+  groupId: string;
+  releasedContractCount: number;
+}
+
+/** Why an ACCEPTED group cannot be cancelled back to Unplanned; `null` when eligible. */
+export function prePlannedCancelToUnplannedBlockedReason(row: {
+  status?: string | null;
+  shipment_id?: string | null;
+} | null | undefined): string | null {
+  if (!row) return 'Preplanned group not found';
+  if (row.shipment_id) {
+    return 'This group is already linked to a shipment. Cancel from the Planned card instead.';
+  }
+  if (String(row.status ?? '').trim().toUpperCase() !== 'ACCEPTED') {
+    return 'Only Preplanned groups can be returned to Unplanned';
+  }
+  return null;
+}
+
+export function normalizePrePlannedCancelToUnplannedRemark(reason: string | undefined): string {
+  const trimmed = String(reason ?? '').trim();
+  if (!trimmed) {
+    throw new Error('Cancellation remark is required');
+  }
+  return trimmed;
+}
+
+/**
+ * Dissolve a Preplanned group (ACCEPTED, no shipment yet) so every member PO
+ * returns to Unplanned. Distinct from revert (SUGGESTED) and from KLIP shipment cancel.
+ */
+export async function dissolveAcceptedPrePlannedGroupToUnplanned(
+  groupId: string,
+  reason: string | undefined,
+  userId: string | undefined,
+): Promise<PrePlannedCancelToUnplannedResult> {
+  const remark = normalizePrePlannedCancelToUnplannedRemark(reason);
+  const existing = await query(
+    `
+    SELECT id, status, shipment_id
+    FROM pre_planned_groups
+    WHERE id = $1
+    `,
+    [groupId],
+  );
+  const blocked = prePlannedCancelToUnplannedBlockedReason(
+    (existing.rows[0] as { status?: string; shipment_id?: string | null } | undefined) ?? null,
+  );
+  if (blocked) {
+    throw new Error(blocked);
+  }
+
+  const client = await pool.connect();
+  let releasedContractCount = 0;
+  try {
+    await client.query('BEGIN');
+    const updated = await client.query(
+      `
+      UPDATE pre_planned_groups
+      SET status = 'DISMISSED', dismissed_reason = $2, updated_at = now()
+      WHERE id = $1 AND status = 'ACCEPTED' AND shipment_id IS NULL
+      RETURNING id
+      `,
+      [groupId, remark],
+    );
+    if (updated.rows.length === 0) {
+      throw new Error('Group is not a cancelable Preplanned group');
+    }
+    const members = await client.query(
+      `
+      UPDATE pre_planned_group_members
+      SET released_at = now()
+      WHERE group_id = $1 AND released_at IS NULL
+      RETURNING contract_id
+      `,
+      [groupId],
+    );
+    releasedContractCount = members.rows.length;
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  await AuditService.log({
+    userId: userId ?? '00000000-0000-0000-0000-000000000000',
+    action: 'PRE_PLANNED_CANCEL_TO_UNPLANNED',
+    entityType: 'PRE_PLANNED_GROUP',
+    entityId: groupId,
+    afterData: { reason: remark, releasedContractCount },
+  });
+
+  return { groupId, releasedContractCount };
+}
+
 /**
  * Revert a Preplanned group (ACCEPTED, no shipment yet) back to SUGGESTED so
  * it reappears as a Grouping Suggestion. Not allowed once a real shipment has

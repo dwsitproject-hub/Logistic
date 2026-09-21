@@ -64,6 +64,14 @@ export async function revertPrePlannedGroup(groupId: string): Promise<void> {
   await api.post(`/pre-planned/groups/${groupId}/revert`);
 }
 
+export async function cancelPrePlannedGroupToUnplanned(
+  groupId: string,
+  reason: string,
+): Promise<{ releasedContractCount: number }> {
+  const res = await api.post(`/pre-planned/groups/${groupId}/cancel-to-unplanned`, { reason });
+  return res.data.data as { releasedContractCount: number };
+}
+
 export async function rebuildPrePlannedGroups(): Promise<void> {
   await api.post('/pre-planned/rebuild');
 }

@@ -55,6 +55,43 @@ export function canCancelKlipShipment(shipment: {
   return cancelKlipShipmentDisabledReason(shipment) == null
 }
 
+/** Preplanned View Table Cancel dissolves the accepted group so member POs return to Unplanned. */
+export function canCancelPrePlannedGroup(shipment: {
+  status?: string | null
+  pre_planned_group_id?: string | null
+}): boolean {
+  return cancelPrePlannedGroupDisabledReason(shipment) == null
+}
+
+export function cancelPrePlannedGroupDisabledReason(shipment: {
+  status?: string | null
+  pre_planned_group_id?: string | null
+}): string | null {
+  if (normalizeShipmentStatusKey(shipment.status) !== 'PREPLANNED') {
+    return 'Only Preplanned groups can be returned to Unplanned'
+  }
+  const groupId = String(shipment.pre_planned_group_id ?? '').trim()
+  if (!groupId || groupId.startsWith('singleton:')) {
+    return 'This Preplanned row is missing a group id'
+  }
+  return null
+}
+
+export type ShipmentViewTableCancelKind = 'preplanned' | 'klip_shipment'
+
+export function resolveShipmentViewTableCancelKind(shipment: {
+  status?: string | null
+  row_kind?: string | null
+  sto_number?: string | null
+  sto_key?: string | null
+  operation_id?: string | null
+  pre_planned_group_id?: string | null
+}): ShipmentViewTableCancelKind | null {
+  if (canCancelPrePlannedGroup(shipment)) return 'preplanned'
+  if (canCancelKlipShipment(shipment)) return 'klip_shipment'
+  return null
+}
+
 /** Human-readable reason when Cancel is not allowed; `null` when eligible. */
 export function cancelKlipShipmentDisabledReason(shipment: {
   status?: string | null

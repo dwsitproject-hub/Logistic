@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canCancelKlipShipment, cancelKlipShipmentDisabledReason, resolveShipmentRowOpenTarget, resolveShipmentTablePrimaryAction, shipmentRowHasRegisteredPlanning } from './shipmentViewTableActions'
+import { canCancelKlipShipment, cancelKlipShipmentDisabledReason, resolveShipmentRowOpenTarget, resolveShipmentTablePrimaryAction, shipmentRowHasRegisteredPlanning, canCancelPrePlannedGroup, cancelPrePlannedGroupDisabledReason, resolveShipmentViewTableCancelKind } from './shipmentViewTableActions'
 
 describe('resolveShipmentTablePrimaryAction', () => {
   it('maps Unplanned to add', () => {
@@ -120,5 +120,39 @@ describe('resolveShipmentRowOpenTarget', () => {
     expect(resolveShipmentRowOpenTarget(real, { readOnly: false })).toBe('edit_shipment')
     expect(resolveShipmentRowOpenTarget(real, { readOnly: true })).toBe('edit_shipment')
     expect(resolveShipmentRowOpenTarget({}, {})).toBe('edit_shipment')
+  })
+})
+
+describe('canCancelPrePlannedGroup', () => {
+  it('allows Preplanned backlog rows that have a group id', () => {
+    expect(
+      canCancelPrePlannedGroup({
+        status: 'PREPLANNED',
+        pre_planned_group_id: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).toBe(true)
+    expect(
+      resolveShipmentViewTableCancelKind({
+        status: 'PREPLANNED',
+        row_kind: 'contract_backlog',
+        sto_number: null,
+        pre_planned_group_id: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).toBe('preplanned')
+  })
+
+  it('blocks Unplanned and missing group ids', () => {
+    expect(
+      canCancelPrePlannedGroup({
+        status: 'UNPLANNED',
+        pre_planned_group_id: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).toBe(false)
+    expect(
+      cancelPrePlannedGroupDisabledReason({
+        status: 'PREPLANNED',
+        pre_planned_group_id: 'singleton:abc',
+      }),
+    ).toMatch(/group id/i)
   })
 })
