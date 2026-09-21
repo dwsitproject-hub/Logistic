@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type DragEvent, type ReactNode } from 'react'
 import { X, Upload, Eye, Download, Loader2 } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -52,6 +52,30 @@ function revokePreviewUrl(url: string | null | undefined) {
   if (url) window.URL.revokeObjectURL(url)
 }
 
+function isPdfFile(file: File): boolean {
+  const mime = (file.type || '').toLowerCase()
+  const name = file.name.toLowerCase()
+  return mime === 'application/pdf' || name.endsWith('.pdf')
+}
+
+function isSettlementUploadFile(file: File): boolean {
+  const mime = (file.type || '').toLowerCase()
+  const name = file.name.toLowerCase()
+  if (isPdfFile(file)) return true
+  return /^image\/(png|jpe?g|webp)$/i.test(mime) || /\.(png|jpe?g|webp)$/i.test(name)
+}
+
+function dragHasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types || []).includes('Files')
+}
+
+function uploadErrorMessage(err: unknown): string {
+  return (
+    (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
+      ?.message || 'Upload failed. Please try again.'
+  )
+}
+
 async function messageFromPdfBlob(blob: Blob): Promise<string | null> {
   const type = String(blob.type || '').toLowerCase()
   if (type.includes('json') || type.includes('text') || type.includes('html')) {
@@ -86,6 +110,11 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
   const [pdfPreview, setPdfPreview] = useState<PdfPreviewState | null>(null)
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false)
   const [settlementUploadOpen, setSettlementUploadOpen] = useState(false)
+  const [settlementDroppedFile, setSettlementDroppedFile] = useState<File | null>(null)
+  const [dragOverType, setDragOverType] = useState<CommercialDocumentType | null>(null)
+  const [uploadError, setUploadError] = useState<{ type: CommercialDocumentType; message: string } | null>(
+    null,
+  )
 
   const closePdfPreview = useCallback(() => {
     setPdfPreview((prev) => {
@@ -152,6 +181,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
     const poNumber = String(row.po_number || row.contract_id || '').trim()
     if (!poNumber) return
     setUploadingType(type)
+    setUploadError(null)
     try {
       const form = new FormData()
       form.append('contract_ext_no', row.contract_ext_no)
@@ -168,9 +198,56 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
         closePdfPreview()
       }
       onSaved()
+    } catch (err: unknown) {
+      setUploadError({ type, message: uploadErrorMessage(err) })
     } finally {
       setUploadingType(null)
     }
+  }
+
+  const dropAllowed = canModifyDocuments && uploadingType === null
+
+  const handleCardDragOver = (
+    e: DragEvent<HTMLDivElement>,
+    type: CommercialDocumentType,
+  ) => {
+    if (!dropAllowed || !dragHasFiles(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDragOverType(type)
+  }
+
+  const handleCardDragLeave = (e: DragEvent<HTMLDivElement>, type: CommercialDocumentType) => {
+    const next = e.relatedTarget as Node | null
+    if (next && e.currentTarget.contains(next)) return
+    setDragOverType((cur) => (cur === type ? null : cur))
+  }
+
+  const handleCardDrop = (
+    e: DragEvent<HTMLDivElement>,
+    type: CommercialDocumentType,
+    isFullReceive: boolean,
+  ) => {
+    e.preventDefault()
+    setDragOverType(null)
+    if (!dropAllowed) return
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+    setUploadError(null)
+    if (isFullReceive) {
+      if (!isSettlementUploadFile(file)) {
+        setUploadError({ type, message: 'Drop a PDF or image (PNG/JPEG/WebP).' })
+        return
+      }
+      setSettlementDroppedFile(file)
+      setSettlementUploadOpen(true)
+      return
+    }
+    if (!isPdfFile(file)) {
+      setUploadError({ type, message: 'Only PDF files can be uploaded here.' })
+      return
+    }
+    void handleUpload(type, file)
   }
 
   const togglePdfPreview = async (file: CommercialDocumentFileRecord, type: CommercialDocumentType) => {
@@ -339,19 +416,42 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                       const inputId = `commercial-doc-upload-${type}`
                       const isPreviewActive = pdfPreview?.fileId === latest?.id
                       const isFullReceive = type === 'invoice_fp_full'
+                      const isDraggingOver = dragOverType === type
+                      const dropEnabled = canModifyDocuments && uploadingType === null
                       return (
                         <div
                           key={type}
+                          onDragOver={(e) => handleCardDragOver(e, type)}
+                          onDragLeave={(e) => handleCardDragLeave(e, type)}
+                          onDrop={(e) => handleCardDrop(e, type, isFullReceive)}
                           className={cn(
                             'rounded-lg border px-4 py-3 transition-colors',
-                            isPreviewActive && 'border-blue-300 bg-blue-50/40 ring-1 ring-blue-200',
+                            isPreviewActive && !isDraggingOver && 'border-blue-300 bg-blue-50/40 ring-1 ring-blue-200',
+                            dropEnabled && isDraggingOver && 'border-dashed border-green-400 bg-green-50/70 ring-1 ring-green-300',
                           )}
                         >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                               <div className="font-medium text-sm">{COMMERCIAL_DOCUMENT_LABELS[type]}</div>
                               {versions.length === 0 ? (
-                                <div className="text-xs text-gray-500 mt-1">Not uploaded</div>
+                                <div
+                                  className={cn(
+                                    'text-xs mt-1',
+                                    isDraggingOver && dropEnabled
+                                      ? 'text-green-700 font-medium'
+                                      : 'text-gray-500',
+                                  )}
+                                >
+                                  {isDraggingOver && dropEnabled
+                                    ? isFullReceive
+                                      ? 'Drop PDF or image to continue'
+                                      : 'Drop PDF to upload'
+                                    : canModifyDocuments
+                                      ? isFullReceive
+                                        ? 'Not uploaded · Drop PDF or image, or use Upload'
+                                        : 'Not uploaded · Drop PDF here, or use Upload'
+                                      : 'Not uploaded'}
+                                </div>
                               ) : (
                                 <ul className="mt-2 space-y-1.5">
                                   {versions.map((file, idx) => (
@@ -391,6 +491,16 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                   ))}
                                 </ul>
                               )}
+                              {versions.length > 0 && isDraggingOver && dropEnabled ? (
+                                <div className="text-xs text-green-700 mt-1 font-medium">
+                                  {isFullReceive
+                                    ? 'Drop PDF or image to continue'
+                                    : 'Drop PDF to upload a new version'}
+                                </div>
+                              ) : null}
+                              {uploadError?.type === type ? (
+                                <div className="text-xs text-red-600 mt-1">{uploadError.message}</div>
+                              ) : null}
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
                               {canModifyDocuments && !isFullReceive ? (
@@ -401,8 +511,13 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                   className="hidden"
                                   onChange={(e) => {
                                     const f = e.target.files?.[0]
-                                    if (f) void handleUpload(type, f)
                                     e.target.value = ''
+                                    if (!f) return
+                                    if (!isPdfFile(f)) {
+                                      setUploadError({ type, message: 'Only PDF files can be uploaded here.' })
+                                      return
+                                    }
+                                    void handleUpload(type, f)
                                   }}
                                 />
                               ) : null}
@@ -413,6 +528,7 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
                                   disabled={uploadingType === type}
                                   onClick={() => {
                                     if (isFullReceive) {
+                                      setSettlementDroppedFile(null)
                                       setSettlementUploadOpen(true)
                                       return
                                     }
@@ -517,9 +633,14 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
         <SettlementInvoiceUploadModal
           row={row}
           existingFileName={latestFileForType('invoice_fp_full')?.file_name}
-          onClose={() => setSettlementUploadOpen(false)}
+          initialFile={settlementDroppedFile}
+          onClose={() => {
+            setSettlementUploadOpen(false)
+            setSettlementDroppedFile(null)
+          }}
           onSaved={async () => {
             await loadModalData()
+            setSettlementDroppedFile(null)
             onSaved()
           }}
         />
