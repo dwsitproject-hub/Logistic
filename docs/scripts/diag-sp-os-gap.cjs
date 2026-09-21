@@ -46,6 +46,7 @@ const {
 const { sqlRegionSiteDisplayForContract } = load('utils/regionSiteSql');
 const { sqlBacklogRemainingOsJoinExpr } = load('utils/shipmentUnplannedHybridSql');
 const { sqlContractExecutionOutstandingKgExpr } = load('utils/contractExecutionOutstandingSql');
+const { shipmentPageExcludeB2bChildCond } = load('utils/shipmentPagePipelineSql');
 const { resolveContractsQtyMoveCte } = load('services/contractQtyMoveSnapshot.service');
 const {
   parseShippingPerfContractDateList,
@@ -394,6 +395,67 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
     };
     table('short - outstanding no in-scope STO carries:', short);
     table('over - counted here beyond the contract outstanding:', over);
+  }
+
+  /*
+   * THE LAST CHECK: contracts Shipments prices that this page has no row for at all.
+   *
+   * The contract-grain correction can only price a contract that appears on some row here. A
+   * contract whose only shipment this page excludes - the sea row scope drops FOB trucking legs
+   * on purpose - contributes nothing, and Shipments still counts it. After the correction the
+   * CPO/BONTANG drilldown reads 81,414 MT against 81,575, and this is where the 161 MT should be.
+   */
+  const spContractSet = new Set(
+    [...voyages, ...backlog].flatMap((r) =>
+      String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
+  );
+  try {
+    const regionSite2 = sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number');
+    const osExpr2 = sqlContractExecutionOutstandingKgExpr('c.contract_id');
+    const qmCte2 = await resolveContractsQtyMoveCte({
+      kind: 'in_subquery',
+      subquery: 'SELECT c_s.contract_id FROM contracts c_s',
+    });
+    const missing = (await connection.query(
+      `WITH ${qmCte2},
+       latest_spd_contract AS (
+         SELECT contract_number, effective_sto, b2b_flag_raw, contract_reference_po_raw,
+                contract_ext_no_raw, discharge_destination
+         FROM contract_latest_spd_snapshot
+         WHERE contract_number IS NOT NULL AND TRIM(contract_number) != ''
+       )
+       SELECT c.contract_id, c.incoterm, (${osExpr2}) AS os_kg
+       FROM contracts c
+       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
+       WHERE UPPER(TRIM(COALESCE(c.product, ''))) LIKE '%' || $1 || '%'
+         /*
+          * A B2B CHILD is not missing - this page drops it on purpose and shows the ORIGIN
+          * instead. Without this the check reported 9,500 MT on dev, which is exactly the four
+          * children of 9194100034/35 and 9334100045/46 from the B2B double-count section. Using
+          * the page's own exclusion rather than a hand-written b2b test keeps the two in step.
+          */
+         AND ${shipmentPageExcludeB2bChildCond('l')}
+         AND UPPER(TRIM(COALESCE((${regionSite2}), ''))) = $2
+         AND EXISTS (
+           SELECT 1 FROM shipments s_x
+           WHERE s_x.contract_id = c.id
+             AND UPPER(TRIM(COALESCE(s_x.status, ''))) NOT IN ('CANCELLED', 'CANCELED')
+         )
+         AND (${osExpr2}) > 0
+       ORDER BY 3 DESC`,
+      [PRODUCT, SITE],
+    )).rows.filter((r) => !spContractSet.has(String(r.contract_id)));
+    const missKg = missing.reduce((a, r) => a + (Number(r.os_kg) || 0), 0);
+    console.log('');
+    console.log('contracts with a live shipment that this page has NO row for:');
+    console.log('   ' + String(missing.length).padStart(4) + ' contracts  ' + (mt(missKg) + ' MT').padStart(13) +
+      '   <- Shipments prices these; the correction cannot');
+    for (const r of missing.slice(0, 10)) {
+      console.log('      ' + String(r.contract_id).padEnd(15) + String(r.incoterm || '-').padEnd(6) +
+        (mt(Number(r.os_kg)) + ' MT').padStart(11));
+    }
+  } catch (err) {
+    console.log('   (could not be measured: ' + String(err.message).slice(0, 140) + ')');
   }
 
   console.log('   voyage rows by status:');
