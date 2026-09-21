@@ -249,6 +249,30 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
   console.log('   ^ find your screen figure here. That names the card, and the card names the rule.');
 
   /*
+   * THE SAME POPULATIONS WITHOUT APPORTIONMENT.
+   *
+   * Shipments computes outstanding PER CONTRACT (sqlShipmentExecutionOsPerContractCtes) and does
+   * not divide. Shipping Performance sums per STO row and divides by po_sto_count. And Shipments
+   * already excludes COMPLETED - sqlShipmentOutstandingActiveStagePredicate allows only
+   * PLANNED..UNLOADING - so COMPLETED is NOT the difference, which is worth stating because the
+   * first reading of these numbers said it was.
+   *
+   * If a raw figure below lands on the Shipments number, the gap is the division and nothing is
+   * missing from either page.
+   */
+  const rawOf = (rs) => rs.reduce((a, r) => a + raw(r), 0);
+  console.log('');
+  console.log('the same populations, apportioned vs raw:');
+  const pops = [['card All', cards.All], ['card On Going', cards['On Going']], ['drilldown', drill]];
+  for (const [name, rs] of pops) {
+    const ap = rs.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+    console.log('   ' + name.padEnd(16) + 'apportioned ' + (mt(ap) + ' MT').padStart(12) +
+      '   raw ' + (mt(rawOf(rs)) + ' MT').padStart(12) +
+      '   diff ' + (mt(rawOf(rs) - ap) + ' MT').padStart(11));
+  }
+  console.log('   ^ compare the RAW column with the Shipments figure.');
+
+  /*
    * THE STO ROWS THAT ARE CLOSED BUT SIT ON THE ON GOING CARD.
    *
    * Card membership reads row.status - the SHIPMENT status. The row also carries import_status,
