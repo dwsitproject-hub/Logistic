@@ -2044,10 +2044,26 @@ contracts moved the CPO/BONTANG total **down**, 103,545 -> 103,142 MT on dev. Th
 contract to the merged row it belongs to - and that row is COMPLETED, so the On Going card filters
 it straight back out. The outstanding moved somewhere nothing counts.
 
-**What it actually needs:** a second status on the row - group-wide for display, narrowed to the
-row's own STO for the OS decision AND for card membership - mirroring the split Shipments makes.
-That is a change to what the card filters on, not just to what the aggregate sums, so it is not a
-one-line fix and it was not attempted at the end of a long session.
+**The fix: `os_status`, a second stage on the row.** `status` stays the group-wide value and the
+table still shows it. `os_status` is derived from the milestones of the rows whose OWN STO is the
+group's, and it is what the aggregates and the **cards** read - both, because putting a contract's
+outstanding on a row the Close card then swallows is exactly how the first attempt moved the total
+DOWN.
+
+Two mistakes inside this change, both caught by measurement rather than reading:
+
+| | |
+| --- | --- |
+| filtered with `shippingPerfStoGroupKey(row) === groupKey` | vacuous - every row in a group has that key by construction, so it matched everything and changed nothing |
+| spread the own-STO milestones over `merged` | `maxMergeMilestoneFields` only writes fields it found a value for, so the foreign row's ATC survived. The milestones are cleared first now |
+
+**Dev cannot demonstrate the effect**, and that is worth stating rather than hiding: the mechanism
+fires on **39 of 887** groups there and **2** rows end up with a different `os_status`, but none of
+them sit in CPO / BONTANG, so the slice total is unchanged on dev. The three contracts are on
+production. Unit tests build the shape directly instead of relying on data that happens to exist.
+
+The narrowing can only make a stage EARLIER - fewer milestones, never more - so it can restore
+outstanding that was wrongly dropped and can never invent any.
 
 ### Contract Qty read 0 for a contract that has one
 

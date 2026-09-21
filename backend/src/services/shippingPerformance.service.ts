@@ -333,8 +333,56 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
       pick.import_status,
   };
 
-  const derived = deriveShippingPerfRowStatus(merged);
-  merged.status = derived;
+  merged.status = deriveShippingPerfRowStatus(merged);
+
+  /*
+   * A SECOND status, narrowed to the row's OWN STO, for outstanding and card membership.
+   *
+   * maxMergeMilestoneFields takes the MAX across the STO group, and a group can hold a shipment
+   * whose own STO is a different one - so one finished voyage marks the whole group COMPLETED.
+   * Three contracts were dropped that way (1004029445 on STO 1006019867, 1004030359, 1004031792):
+   * their own shipments are PLANNED with no discharge ATC at all, yet the merged row read
+   * COMPLETED, so this page never counted their outstanding while Shipments did - the last 161 MT
+   * of a 31,832 MT gap on CPO / BONTANG.
+   *
+   * Shipments makes exactly this split: the list keeps the group-wide value, and only the OS path
+   * reads ata_vessel_complete_discharge_own_sto. Its comment names the same STO - "STO 1006019867
+   * cost 3 contracts / 2,700 MT".
+   *
+   * `status` is unchanged, so the table still shows the group's stage as it always has.
+   * `os_status` is what the aggregates and the cards read.
+   *
+   * Rows carrying no STO of their own stay counted either way - they have no other group to
+   * belong to - which is the same exception buildShipmentListAtaSelectSql makes.
+   */
+  /*
+   * The comparison is the shipment's OWN sto (s.shipment_id) against the GROUP's sto - not
+   * shippingPerfStoGroupKey(row) against the group key, which is vacuous: every row in the group
+   * has that key by construction, so the first version of this filter matched everything and
+   * changed nothing. Same predicate as buildShipmentListAtaSelectSql's own-STO FILTER.
+   */
+  const groupSto = shippingPerfStoGroupKey(merged).replace(/^(sto:|ship:|op:|id:)/, '').trim();
+  const ownStoRows = rows.filter((row) => {
+    const own = String(row.shipment_id ?? '').trim();
+    if (!own) return true;
+    return own === groupSto;
+  });
+  /*
+   * The milestones are CLEARED before the own-STO ones are laid in. maxMergeMilestoneFields only
+   * writes a field it found a value for, so spreading it over `merged` left the foreign row's ATC
+   * in place and the narrowing did nothing - caught by the test, not by reading.
+   */
+  const clearedMilestones = Object.fromEntries(
+    SHIPPING_PERF_MILESTONE_FIELDS.map((field) => [field, null]),
+  );
+  merged.os_status =
+    ownStoRows.length === rows.length
+      ? merged.status
+      : deriveShippingPerfRowStatus({
+          ...merged,
+          ...clearedMilestones,
+          ...maxMergeMilestoneFields(ownStoRows),
+        });
   Object.assign(merged, computeShippingPerfDeltaFields(merged));
   return merged;
 }

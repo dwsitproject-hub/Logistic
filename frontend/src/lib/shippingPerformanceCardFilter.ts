@@ -10,6 +10,13 @@ import type { ShippingPerfCardFilter } from '@/lib/shippingPerformanceLabels'
 export type ShippingPerfCardRow = {
   id?: string
   status?: string | null
+  /**
+   * The stage narrowed to the row's OWN STO. `status` is a MAX across the STO group, so one
+   * finished voyage marks the whole group COMPLETED. Card membership reads this one: putting a
+   * contract's outstanding on a row the Close card then swallows is how the first attempt at this
+   * moved CPO/BONTANG DOWN, 103,545 -> 103,142 MT.
+   */
+  os_status?: string | null
   /** Backend flag: contract with outstanding and no shipment. See shippingPerfRowIsUnplannedBacklog. */
   is_unplanned_backlog?: boolean | null
   import_status?: string | null
@@ -103,15 +110,26 @@ export function shippingPerfRowIsOngoingStatus(status: string | null | undefined
  * - Close: status === COMPLETED
  * - On Going: any ongoing status (with or without ETA)
  */
+/**
+ * The stage card membership is decided by: the row's OWN STO when the merge computed one, else
+ * the row's status. The table keeps showing `status`, the group-wide value, as it always has -
+ * the same split Shipments makes between its list and its OS path.
+ */
+export function shippingPerfCardStage(row: ShippingPerfCardRow): string | null | undefined {
+  const own = String(row.os_status ?? '').trim()
+  return own || row.status
+}
+
 export function shippingPerfRowMatchesCard(
   row: ShippingPerfCardRow,
   card: ShippingPerfCardFilter,
 ): boolean {
   if (card === 'all') return true
-  if (isCancelledShipmentStatus(row.status)) return false
+  const stage = shippingPerfCardStage(row)
+  if (isCancelledShipmentStatus(stage)) return false
 
   if (card === 'close') {
-    return shippingPerfRowIsCompletedStatus(row.status)
+    return shippingPerfRowIsCompletedStatus(stage)
   }
 
   if (card === 'ongoing') {
@@ -119,7 +137,7 @@ export function shippingPerfRowMatchesCard(
     // as Open, on the cards and on the table's Open/Closed toggle together - splitting them would
     // let the table and the card above it disagree about the same rows.
     if (shippingPerfRowIsUnplannedBacklog(row)) return true
-    return shippingPerfRowIsOngoingStatus(row.status)
+    return shippingPerfRowIsOngoingStatus(stage)
   }
 
   return false

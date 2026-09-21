@@ -39,9 +39,21 @@ import {
 export type ContractGrainOsRow = Record<string, unknown> & {
   contract_number?: unknown;
   status?: unknown;
+  /**
+   * The stage narrowed to the row's OWN STO. `status` is a MAX across the STO group, so one
+   * finished voyage marks the whole group COMPLETED and drops contracts whose own shipment has
+   * not sailed - see mergeShippingPerfStoGroup. Shipments makes the same split.
+   */
+  os_status?: unknown;
   outstanding_qty_aggregate?: unknown;
   is_unplanned_backlog?: unknown;
 };
+
+/** The stage that decides outstanding: own-STO when the merge computed one, else the row's. */
+export function osStageOf(row: ContractGrainOsRow): string {
+  const own = String(row.os_status ?? '').trim();
+  return own || String(row.status ?? '').trim();
+}
 
 export function contractNumbersOf(row: ContractGrainOsRow): string[] {
   return String(row.contract_number ?? '')
@@ -100,8 +112,9 @@ export function applyContractGrainOutstanding<T extends ContractGrainOsRow>(
 
   for (const row of rows) {
     if (row.is_unplanned_backlog === true) continue;
-    const rank = shipmentActiveStageRank(row.status as string | null | undefined);
-    if (!isShipmentActiveStage(row.status as string | null | undefined)) continue;
+    const stage = osStageOf(row);
+    const rank = shipmentActiveStageRank(stage);
+    if (!isShipmentActiveStage(stage)) continue;
     for (const contract of contractNumbersOf(row)) {
       if (!contractOsKg.has(contract)) continue;
       const held = winnerByContract.get(contract);
