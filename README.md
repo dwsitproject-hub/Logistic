@@ -2014,6 +2014,40 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
+### Two files, one function name, two answers
+
+`shippingPerformanceOutstandingAgg.ts` exists twice - `backend/src/utils/` and `frontend/src/lib/` -
+exporting `shippingPerfOutstandingQtyKgForAggregate` from both. They drifted, and nothing caught
+it because the name, the file name and the signature all matched.
+
+```
+backend   prefer outstanding_qty_aggregate, else outstanding_qty / po_sto_count
+frontend  outstanding_qty / po_sto_count          <- never read the column at all
+```
+
+The backend's own comment already priced the fallback: it "understated every PO spanning fewer
+STOs than the widest one by 5.76% (203,568,180 kg) over 728 STOs" and was "kept only for rows that
+predate the column". The page ran it for **every** row, so every figure it drew - drilldown, cards,
+By Vessel - was that understatement.
+
+Found by measuring the screen against the builders rather than reasoning about either. Production,
+CPO / BONTANG / YTD:
+
+| | MT |
+| --- | --- |
+| drilldown on screen | 76,863 |
+| the same rows through the backend rule | 79,914 |
+| Shipments Outstanding Qty | 81,583 |
+
+So most of what looked like a Shipping-Performance-versus-Shipments gap was Shipping Performance
+disagreeing with its own backend. `shippingPerfAggParity.test.ts` pins the contract between the two
+files.
+
+**The generalisation worth keeping:** every discrepancy chased on 2026-09-18 and 09-21 had the same
+shape - one rule with two spellings. The B2B child exclusion, the Region/Site chain, the per-STO
+destination, and now this. When a rule has to hold in two places, share the expression or pin the
+two against each other in a test; "equivalent today" is not a property that survives.
+
 ### Region/Site: one helper, evaluated once per contract
 
 Shipping Performance kept its own spelling of Region/Site - a COALESCE over `b2b_end`, a

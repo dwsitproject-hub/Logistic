@@ -148,6 +148,12 @@ interface ShippingPerformanceRow {
   contract_date?: string | null
   /** Backend flag: this row is a contract with outstanding and no shipment (backlog arm). */
   is_unplanned_backlog?: boolean | null
+  /**
+   * PO-level OS already apportioned in SQL. Declared so the aggregate helper's preferred field is
+   * visible here: it arrives in the payload either way, and for a while nothing on this page read
+   * it, which quietly put every figure on the legacy fallback.
+   */
+  outstanding_qty_aggregate?: number | null
   incoterm?: string | null
   product?: string | null
   /** contracts.source_type — used by client-only Source toggle (Interco / 3rd Party). */
