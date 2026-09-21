@@ -2014,6 +2014,28 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
+### Contract Qty read 0 for a contract that has one
+
+Reported while chasing the last 161 MT, and bigger than what was being chased: **9194100035**, a
+B2B parent of child PO 9191000035 holding **3,000 MT**, displayed **Contract Qty 0 MT**.
+
+It was first written up here as dirty data. It is not. `sqlContractExecutionOutstandingKgExpr`
+reads that contract at 3,000 MT correctly - only the ROW's `contract_qty` was zero, because it
+came from `COALESCE(sm.contract_qty, 0)` and `sto_metrics` is keyed by **STO**. A B2B parent has
+no STO of its own; the child carries it, while this page deliberately shows the parent. The key
+misses, and the fallback said zero.
+
+Measured before touching it: **40 rows of 887, whose contracts hold 108,970 MT, all shown as 0** -
+against a 161 MT reconciliation gap.
+
+`COALESCE(sm.contract_qty, c.quantity_ordered, 0)`. Preferring `sm` is right whenever it exists,
+because it SUMs over the PO's contracts; when it does not exist there is no STO to sum over, so
+the contract's own quantity is the only sensible value. Zero rows remain.
+
+**It does not touch outstanding** - the aggregates read `outstanding_qty_aggregate`, which the
+contract-grain correction fills. It does change the **By Vessel** contract-qty column, which sums
+this field: that total rises, and the rise is the correction.
+
 ### Closing the last 2%: the aggregates count the contract
 
 Chosen after the first plan was measured and abandoned, which is the part worth keeping.

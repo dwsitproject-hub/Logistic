@@ -755,7 +755,18 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         c.source_type,
         c.supplier,
         pss.import_status AS import_status,
-        COALESCE(sm.contract_qty, 0)::numeric AS contract_qty,
+        /*
+         * sto_metrics is keyed by STO, and a row can have no STO of its own - a B2B PARENT is the
+         * clearest case: the child carries the STO, while this page deliberately shows the parent.
+         * The old COALESCE(..., 0) then printed Contract Qty 0 for a real contract. Reported on
+         * 9194100035, a parent of child PO 9191000035 with 3,000 MT, shown as 0; measured across
+         * the page: 40 rows of 887, whose contracts hold 108,970 MT, all displayed as zero.
+         *
+         * Falling back to the contract's own quantity is right precisely when sm is missing: sm
+         * is a SUM over the PO's contracts, so it is preferred whenever it exists, and when it
+         * does not exist there is no STO to sum over.
+         */
+        COALESCE(sm.contract_qty, c.quantity_ordered, 0)::numeric AS contract_qty,
         ${sqlShipmentDisplayVesselName('mv.vessel_name_master', 'sa.vessel_name_sap', 's.vessel_name')} AS vessel_name,
         s.status,
         NULLIF(TRIM(s.charter_type), '') AS charter_type,
