@@ -43,6 +43,7 @@ const {
 const {
   shippingPerfOutstandingQtyKgForAggregate,
 } = load('utils/shippingPerformanceOutstandingAgg');
+const { parseShippingPerfContractDateList } = load('services/shippingPerformance.service');
 
 const PRODUCT = (process.argv[2] || 'CPO').trim().toUpperCase();
 const SITE = (process.argv[3] || 'BONTANG').trim().toUpperCase();
@@ -65,6 +66,88 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
   const rows = [...voyages, ...backlog].filter(
     (r) => up(r.product).includes(PRODUCT) && up(r.plant_site).includes(SITE),
   );
+
+  /*
+   * A WATERFALL, because the first version of this script reported 97,607 MT for a slice the page
+   * itself shows as 75,876 - a 21,731 MT disagreement between the measurement and the thing being
+   * measured, which is larger than the gap it was written to explain. Guessing which filter
+   * accounts for it would have been the third wrong hypothesis in a day; this prints every step so
+   * one run names it.
+   *
+   * The steps are the page's own pipeline, in order:
+   *   sap_presence WITHDRAWN  - runShippingPerformance drops these from the cards and the tree
+   *                             (the table keeps them on purpose, so their history stays reachable)
+   *   CANCELLED               - shippingPerfRowMatchesCard excludes them from every card
+   *   UNPLANNED not backlog   - excludeUnplannedShippingRows, the page's Step A
+   *   exact vs substring      - this script matched the site and product as SUBSTRINGS; the page
+   *                             matches normalised whole values, so 'BONTANG' here also swept up
+   *                             anything merely containing it
+   */
+  const step = (label, keep) => {
+    const before = rows.length;
+    const beforeKg = rows.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+    const kept = rows.filter(keep);
+    const afterKg = kept.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+    console.log('   ' + label.padEnd(34) + String(kept.length).padStart(5) + ' rows  ' +
+      (mt(afterKg) + ' MT').padStart(13) + '   (removed ' + (before - kept.length) + ' rows, ' +
+      mt(beforeKg - afterKg) + ' MT)');
+    return kept;
+  };
+
+  console.log('');
+  console.log('the page pipeline, step by step:');
+  console.log('   ' + 'everything in this slice'.padEnd(34) + String(rows.length).padStart(5) + ' rows  ' +
+    (mt(rows.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0)) + ' MT').padStart(13));
+  let cur = rows;
+  const chain = [
+    ['drop sap_presence WITHDRAWN', (r) => up(r.sap_presence || 'PRESENT') !== 'WITHDRAWN'],
+    ['drop CANCELLED', (r) => up(r.status) !== 'CANCELLED' && up(r.status) !== 'CANCELED'],
+    ['drop UNPLANNED that is not backlog', (r) => r.is_unplanned_backlog === true || up(r.status) !== 'UNPLANNED'],
+    ['site matched exactly, not substring', (r) => up(r.plant_site) === SITE],
+    ['product matched exactly', (r) => up(r.product) === PRODUCT],
+  ];
+  for (const [label, keep] of chain) {
+    const prev = cur;
+    cur = (() => {
+      const before = prev.length;
+      const beforeKg = prev.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+      const kept = prev.filter(keep);
+      const afterKg = kept.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+      console.log('   ' + label.padEnd(34) + String(kept.length).padStart(5) + ' rows  ' +
+        (mt(afterKg) + ' MT').padStart(13) + '   (-' + (before - kept.length) + ' rows, -' +
+        mt(beforeKg - afterKg) + ' MT)');
+      return kept;
+    })();
+  }
+  console.log('   ^ the step where this lands on the figure your screen shows is the answer.');
+
+  /*
+   * The Performance Period, which none of the steps above model. The page filters on contract_date
+   * and a merged STO row can carry SEVERAL dates, so this uses the service's own parser rather
+   * than reading the field as one date. If the screen figure appears against one year here, the
+   * script was simply measuring a wider period than the screen - not a defect in either page.
+   */
+  const byYear = new Map();
+  for (const r of rows) {
+    const dates = parseShippingPerfContractDateList(r.contract_date);
+    const years = dates.length ? [...new Set(dates.map((d) => String(d).slice(0, 4)))] : ['(no date)'];
+    const kg = shippingPerfOutstandingQtyKgForAggregate(r);
+    for (const y of years) {
+      const acc = byYear.get(y) ?? { rows: 0, kg: 0 };
+      acc.rows += 1;
+      // A row spanning two years is counted once in each, exactly as a period filter would keep it.
+      acc.kg += kg;
+      byYear.set(y, acc);
+    }
+  }
+  console.log('');
+  console.log('by contract_date year (the Performance Period filter):');
+  for (const [y, acc] of [...byYear.entries()].sort()) {
+    console.log('   ' + String(y).padEnd(12) + String(acc.rows).padStart(5) + ' rows  ' +
+      (mt(acc.kg) + ' MT').padStart(13));
+  }
+  console.log('   (a row carrying dates in two years appears under both, as the filter would keep it)');
+  void step;
 
   const apportioned = rows.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
   const rawTotal = rows.reduce((a, r) => a + raw(r), 0);
