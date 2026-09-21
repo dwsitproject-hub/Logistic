@@ -43,10 +43,17 @@ const {
 const {
   shippingPerfOutstandingQtyKgForAggregate,
 } = load('utils/shippingPerformanceOutstandingAgg');
-const { parseShippingPerfContractDateList } = load('services/shippingPerformance.service');
+const {
+  parseShippingPerfContractDateList,
+  shippingPerfRowMatchesContractDateRange,
+} = load('services/shippingPerformance.service');
 
 const PRODUCT = (process.argv[2] || 'CPO').trim().toUpperCase();
 const SITE = (process.argv[3] || 'BONTANG').trim().toUpperCase();
+// Both pages default to YTD and both filter contract_date, so compare on the same period.
+const YEAR_START = new Date().getFullYear() + '-01-01';
+const DATE_FROM = (process.argv[4] || YEAR_START).trim();
+const DATE_TO = (process.argv[5] || new Date().toISOString().slice(0, 10)).trim();
 const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFractionDigits: 0 });
 const up = (v) => String(v ?? '').trim().toUpperCase();
 const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) || 0;
@@ -147,6 +154,33 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
       (mt(acc.kg) + ' MT').padStart(13));
   }
   console.log('   (a row carrying dates in two years appears under both, as the filter would keep it)');
+
+  /*
+   * The period as the page actually applies it, through the service's own matcher.
+   *
+   * And the divergence this exposes. Shipments filters in SQL on ONE c.contract_date per contract.
+   * Shipping Performance filters in JS on a MERGED STO row whose contract_date can be a list of
+   * dates, keeping the row if ANY of them falls in range - so a row spanning a 2025 contract and a
+   * 2026 one is kept WHOLE here and only partly there. Same root as everything else in this file:
+   * an STO grain against a contract grain.
+   */
+  const inPeriod = rows.filter((r) => shippingPerfRowMatchesContractDateRange(r.contract_date, DATE_FROM, DATE_TO));
+  const inPeriodKg = inPeriod.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+  console.log('');
+  console.log('period as the page applies it (' + DATE_FROM + ' .. ' + DATE_TO + '):');
+  console.log('   ' + String(inPeriod.length).padStart(5) + ' rows  ' + (mt(inPeriodKg) + ' MT').padStart(13) +
+    '   <- compare THIS with the Shipping Performance screen');
+
+  const straddling = inPeriod.filter((r) => {
+    const dates = parseShippingPerfContractDateList(r.contract_date);
+    if (dates.length < 2) return false;
+    const inside = dates.filter((d) => d >= DATE_FROM && d <= DATE_TO).length;
+    return inside > 0 && inside < dates.length;
+  });
+  const straddlingKg = straddling.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+  console.log('   of those, rows whose dates STRADDLE the period boundary: ' + straddling.length);
+  console.log('   they carry ' + mt(straddlingKg) + ' MT, counted WHOLE here and only partly by Shipments');
+  console.log('   (an upper bound on how much of the remaining gap is the any-date rule)');
   void step;
 
   const apportioned = rows.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
