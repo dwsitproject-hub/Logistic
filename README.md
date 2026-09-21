@@ -2014,6 +2014,45 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
+### Closing the last 2%: the aggregates count the contract
+
+Chosen after the first plan was measured and abandoned, which is the part worth keeping.
+
+**The plan that failed.** A remainder row per contract - contract outstanding minus what its
+in-scope STOs carry - needed each row's outstanding split across the contracts it carries, and a
+merged STO row can carry several. Every split is an invention. A diagnosis that divided evenly
+produced ten contracts "over-counted" by the same few values (684, 634, 3,833 MT) - the even split
+showing through, not the data. A remainder computed against an invented split moves the
+arbitrariness instead of removing it.
+
+Two earlier explanations died the same way and are worth recording:
+
+| claim | how it died |
+| --- | --- |
+| the shortfall is 5,162 MT | one-sided. Both directions exist and net off |
+| the 5,162 is wrong because the diagnosis used the backlog formula | swapping in the execution expression changed nothing; the two agree |
+
+**What shipped instead.** Each contract's outstanding, valued by
+`sqlContractExecutionOutstandingKgExpr` - the execution arm's own rule, lifted unchanged - is
+placed **whole** on the one row carrying its furthest active stage, the rule Shipments already
+applies. Every contract lands on exactly one row, so the total equals Shipments by construction,
+the drilldown stays additive, and nothing is apportioned.
+
+Only `outstanding_qty_aggregate` is rewritten - the field that means "the value to use in
+aggregates". `outstanding_qty` is untouched, so the view table still shows each STO's own
+outstanding.
+
+`shipmentActiveStageRank.ts` defines the ranks **once** and renders them to both SQL and
+TypeScript. Shipments applies the rule in SQL; this page has to apply the identical rule in TS.
+That is the one case in this codebase where a copy is unavoidable, so it is generated rather than
+written.
+
+Measured end to end on dev: On Going CPO/BONTANG **101,369 -> 103,545 MT, +2,176** - exactly the
+net the per-contract comparison had measured, which is the check that the implementation
+reproduces the diagnosis rather than merely moving in its direction.
+
+Guarded like the backlog arm: a failure costs the correction, not the page.
+
 ### Where the CPO / Bontang gap actually went, and what the last 2% is
 
 Reported 2026-09-18 as Shipping Performance 49,107 MT against Shipments 80,939. Closed by
