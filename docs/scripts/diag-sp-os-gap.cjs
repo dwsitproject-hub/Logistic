@@ -484,6 +484,23 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
       console.log('      ' + String(r.contract_id).padEnd(15) + String(r.incoterm || '-').padEnd(6) +
         (mt(Number(r.os_kg)) + ' MT').padStart(11));
     }
+    /*
+     * WHY each one is never priced: every row it appears on here, with its stage.
+     *
+     * A reverse check - "contracts this page prices that Shipments does not" - was written here
+     * and removed. Its comparison query required the contract to own a shipment, but a contract
+     * can appear in this page's contract list through an STO belonging to another contract, so it
+     * under-matched and claimed 47 contracts / 66,411 MT. Quoting that would have been an eighth
+     * wrong explanation; the per-contract rows below are checkable by reading instead.
+     */
+    for (const r of missing) {
+      const c = String(r.contract_id);
+      const where = [...voyages, ...backlog]
+        .filter((x) => contractNumbersOf(x).includes(c))
+        .map((x) => up(x.status) + (x.sto_number ? '/' + String(x.sto_number) : '') +
+          (x.is_unplanned_backlog === true ? ' [backlog]' : ''));
+      console.log('      ' + c.padEnd(15) + 'rows here: ' + (where.length ? where.join('  ') : 'NONE'));
+    }
   } catch (err) {
     console.log('   (could not be measured: ' + String(err.message).slice(0, 140) + ')');
   }
@@ -533,49 +550,6 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
     }
   }
   console.log('   (a disagreement decides both whether a contract is priced and which row wins it)');
-
-  /*
-   * THE LOADING-PORT STAGE, contract by contract.
-   *
-   * After the contract-grain correction, status no longer changes the TOTAL - that is the sum of
-   * each contract's outstanding. It decides which ROW wins a contract, and therefore which stage
-   * card it lands in. The one way status can still move the total is a contract with no
-   * active-stage row here at all: it is priced by Shipments and by nothing here.
-   *
-   * Production reads At Loading Port as 2,800 MT here against 3,059 on Shipments - 259 MT on a
-   * single shipment - so this lists every contract the correction placed at that stage, with every
-   * row it appears on, which is small enough to settle by reading.
-   */
-  const LP_STAGES = new Set(['ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING']);
-  const rowsByContract = new Map();
-  for (const r of inPeriod) {
-    if (r.is_unplanned_backlog === true) continue;
-    for (const c of contractNumbersOf(r)) {
-      const list = rowsByContract.get(c) ?? [];
-      list.push(r);
-      rowsByContract.set(c, list);
-    }
-  }
-  const lpRows = inPeriod.filter((r) => r.is_unplanned_backlog !== true && LP_STAGES.has(up(r.status)));
-  const lpContracts = [...new Set(lpRows.flatMap(contractNumbersOf))];
-  console.log('');
-  console.log('At Loading Port, contract by contract:');
-  console.log('   contract        contract OS   every row it appears on');
-  let lpAwarded = 0;
-  for (const c of lpContracts) {
-    const whole = contractOs.get(c) ?? 0;
-    const where = (rowsByContract.get(c) ?? [])
-      .map((r) => up(r.status) + (r.sto_number ? '/' + String(r.sto_number) : ''))
-      .join('  ');
-    const winnerIsLp = (rowsByContract.get(c) ?? []).every((r) => !r.is_unplanned_backlog &&
-      LP_STAGES.has(up(r.status)) || !['ARRIVED_DP', 'BERTHED_DP', 'UNLOADING', 'SAILED'].includes(up(r.status)));
-    if (winnerIsLp) lpAwarded += whole;
-    console.log('      ' + String(c).padEnd(15) + (mt(whole) + ' MT').padStart(11) + '   ' + where);
-  }
-  console.log('   contracts at this stage: ' + lpContracts.length +
-    ', their contract OS totals ' + mt(lpContracts.reduce((a, c) => a + (contractOs.get(c) ?? 0), 0)) + ' MT');
-  console.log('   (Shipments shows 3,059 MT here; a contract listed with a discharge row too is');
-  console.log('    awarded there instead, which moves it between cards without changing any total)');
 
   console.log('   voyage rows by status:');
   for (const [k, v] of [...byStatus.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
