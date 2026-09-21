@@ -47,6 +47,11 @@ const { sqlRegionSiteDisplayForContract } = load('utils/regionSiteSql');
 const { sqlBacklogRemainingOsJoinExpr } = load('utils/shipmentUnplannedHybridSql');
 const { sqlContractExecutionOutstandingKgExpr } = load('utils/contractExecutionOutstandingSql');
 const { shipmentPageExcludeB2bChildCond } = load('utils/shipmentPagePipelineSql');
+const {
+  applyContractGrainOutstanding,
+  contractNumbersOf,
+  loadContractExecutionOutstandingKg,
+} = load('services/shippingPerfContractGrainOs.service');
 const { resolveContractsQtyMoveCte } = load('services/contractQtyMoveSnapshot.service');
 const {
   parseShippingPerfContractDateList,
@@ -75,6 +80,20 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
   } catch (err) {
     console.log(`backlog arm FAILED: ${String(err.message).slice(0, 160)}`);
   }
+  /*
+   * Apply the contract-grain correction the refresh applies, or this script measures a state the
+   * page no longer serves. It drifted out of step once already - reporting 79,914 MT while the
+   * screen showed 81,414 - and a diagnostic that disagrees with the thing it diagnoses is worse
+   * than no diagnostic.
+   */
+  try {
+    const osKg = await loadContractExecutionOutstandingKg(voyages.flatMap(contractNumbersOf));
+    applyContractGrainOutstanding(voyages, osKg);
+    console.log(`   contract-grain correction applied: ${osKg.size} contracts priced`);
+  } catch (err) {
+    console.log(`   contract-grain correction FAILED: ${String(err.message).slice(0, 140)}`);
+  }
+
   const rows = [...voyages, ...backlog].filter(
     (r) => up(r.product).includes(PRODUCT) && up(r.plant_site).includes(SITE),
   );
