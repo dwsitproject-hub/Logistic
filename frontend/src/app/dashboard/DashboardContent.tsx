@@ -4715,9 +4715,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Contract ext</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Vendor</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">Product</th>
-                        <th className="px-4 py-3 text-right font-medium text-gray-600">Qty claim (Kg)</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Claim Qty (MT)</th>
                         <th className="px-4 py-3 text-right font-medium text-gray-600">Amount IDR (after tax)</th>
-                        <th className="px-4 py-3 text-right font-medium text-gray-600">OS days</th>
+                        <th className="px-4 py-3 text-right font-medium text-gray-600">Aging</th>
                         <th className="px-4 py-3 text-left font-medium text-gray-600">CR date</th>
                       </tr>
                     </thead>
@@ -4728,7 +4728,9 @@ export function DashboardContent({ pageTitle }: { pageTitle: string }) {
                           <td className="px-4 py-3">{String(r.contract_ext_no ?? '-')}</td>
                           <td className="px-4 py-3">{String(r.vendor_name ?? '-')}</td>
                           <td className="px-4 py-3">{String(r.product ?? '-')}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">{formatNumber(r.qty_claim_kg as number)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {formatNumber((Number(r.qty_claim_kg) || 0) / 1000)}
+                          </td>
                           <td className="px-4 py-3 text-right tabular-nums text-teal-800 font-medium">
                             {formatRupiah(r.amount_after_tax_idr)}
                           </td>

@@ -1,6 +1,37 @@
+import {
+  buildPerformancePeriodOptions,
+  resolvePerformancePeriodDateRange,
+  type PerformancePeriodKey,
+} from '@/lib/performancePeriodFilters'
+
 export const CLAIM_SUSUT_VIEW_PREF_KEY = 'claim_susut.view.v1'
 export const CLAIM_SUSUT_COLUMN_ORDER_KEY = 'claimSusut.columnOrder.v1'
 export const CLAIM_SUSUT_BLANK = '(Blank)'
+
+/**
+ * Aging-by-transport card. Keep the UI/API wiring; set true to restore the section.
+ */
+export const SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT = false
+
+/** CR Date preset: All = entire import (Claim Susut register is multi-year). */
+export type ClaimSusutPeriodKey = PerformancePeriodKey | 'ALL'
+
+export function resolveClaimSusutPeriodRange(
+  period: ClaimSusutPeriodKey,
+  referenceDate = new Date(),
+): { dateFrom: string; dateTo: string; label: string } {
+  if (period === 'ALL') return { dateFrom: '', dateTo: '', label: 'All' }
+  return resolvePerformancePeriodDateRange(period, referenceDate)
+}
+
+export function buildClaimSusutPeriodOptions(
+  referenceDate = new Date(),
+): Array<{ value: ClaimSusutPeriodKey; label: string }> {
+  return [
+    { value: 'ALL', label: 'All' },
+    ...buildPerformancePeriodOptions(referenceDate),
+  ]
+}
 
 export type ClaimSusutDrilldownLevel = 'product' | 'plant' | 'incoterm' | 'company'
 
@@ -191,7 +222,7 @@ export type ClaimSusutApiFilters = {
   sources?: string[]
   incoterms?: string[]
   products?: string[]
-  groupOfTransport?: string | null
+  groupsOfTransport?: string[]
   drilldown?: ClaimSusutDrilldownFilters
 }
 
@@ -209,7 +240,9 @@ export function appendClaimSusutFilterParams(
   for (const v of filters.sources ?? []) params.append('source', v)
   for (const v of filters.incoterms ?? []) params.append('incoterm', v)
   for (const v of filters.products ?? []) params.append('product', v)
-  if (includeGroup && filters.groupOfTransport) params.append('groupOfTransport', filters.groupOfTransport)
+  if (includeGroup) {
+    for (const v of filters.groupsOfTransport ?? []) params.append('groupOfTransport', v)
+  }
   if (includeDrilldown && filters.drilldown) {
     if (filters.drilldown.product) params.set('ddProduct', filters.drilldown.product)
     if (filters.drilldown.plant) params.set('ddPlant', filters.drilldown.plant)

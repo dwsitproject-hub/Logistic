@@ -45,6 +45,29 @@ type PdfPreviewState = {
   fileName: string
   documentType: CommercialDocumentType
   url: string
+  error?: string
+}
+
+function revokePreviewUrl(url: string | null | undefined) {
+  if (url) window.URL.revokeObjectURL(url)
+}
+
+async function messageFromPdfBlob(blob: Blob): Promise<string | null> {
+  const type = String(blob.type || '').toLowerCase()
+  if (type.includes('json') || type.includes('text') || type.includes('html')) {
+    try {
+      const text = await blob.text()
+      const parsed = JSON.parse(text) as { error?: { message?: string }; message?: string }
+      return parsed?.error?.message || parsed?.message || 'Failed to load document preview'
+    } catch {
+      return 'Failed to load document preview'
+    }
+  }
+  const sig = new TextDecoder().decode(await blob.slice(0, 5).arrayBuffer())
+  if (!sig.startsWith('%PDF')) {
+    return 'This file is not a valid PDF and cannot be previewed.'
+  }
+  return null
 }
 
 type Props = {
@@ -52,10 +75,6 @@ type Props = {
   canModifyDocuments?: boolean
   onClose: () => void
   onSaved: () => void
-}
-
-function revokePreviewUrl(url: string | null | undefined) {
-  if (url) window.URL.revokeObjectURL(url)
 }
 
 export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose, onSaved }: Props) {
@@ -167,12 +186,34 @@ export function DocumentCheckingModal({ row, canModifyDocuments = true, onClose,
       const response = await api.get(`/commercial-documents/file/${file.id}/view`, {
         responseType: 'blob',
       })
-      const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/pdf' }))
+      const raw = response.data instanceof Blob ? response.data : new Blob([response.data])
+      const invalid = await messageFromPdfBlob(raw)
+      if (invalid) {
+        setPdfPreview({
+          fileId: file.id,
+          fileName: file.file_name,
+          documentType: type,
+          url: '',
+          error: invalid,
+        })
+        return
+      }
+      const url = window.URL.createObjectURL(new Blob([raw], { type: 'application/pdf' }))
       setPdfPreview({
         fileId: file.id,
         fileName: file.file_name,
         documentType: type,
         url,
+      })
+    } catch (e) {
+      const data = (e as { response?: { data?: Blob } })?.response?.data
+      const fromBlob = data instanceof Blob ? await messageFromPdfBlob(data) : null
+      setPdfPreview({
+        fileId: file.id,
+        fileName: file.file_name,
+        documentType: type,
+        url: '',
+        error: fromBlob || 'Failed to load document preview',
       })
     } finally {
       setPdfPreviewLoading(false)
@@ -519,11 +560,17 @@ function PdfPreviewPanel({
           </Button>
         </div>
       </div>
-      <iframe
-        src={preview.url}
-        title={preview.fileName}
-        className="w-full flex-1 min-h-[280px] lg:min-h-0 bg-gray-100 border-0"
-      />
+      {preview.error ? (
+        <div className="flex-1 min-h-[280px] lg:min-h-0 flex items-center justify-center px-6 text-center text-sm text-gray-600 bg-gray-50">
+          {preview.error}
+        </div>
+      ) : (
+        <iframe
+          src={`${preview.url}#toolbar=1`}
+          title={preview.fileName}
+          className="w-full flex-1 min-h-[280px] lg:min-h-0 bg-gray-100 border-0"
+        />
+      )}
     </div>
   )
 }

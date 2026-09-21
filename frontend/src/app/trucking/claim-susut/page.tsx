@@ -20,12 +20,8 @@ import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceD
 import { ClaimSusutUploadResultDialog } from '@/components/claim-susut/ClaimSusutUploadResultDialog'
 import { ClaimSusutImportHistoryModal } from '@/components/claim-susut/ClaimSusutImportHistoryModal'
 import {
-  buildPerformancePeriodOptions,
-  resolvePerformancePeriodDateRange,
-  type PerformancePeriodKey,
-} from '@/lib/performancePeriodFilters'
-import {
   appendClaimSusutFilterParams,
+  buildClaimSusutPeriodOptions,
   buildNextClaimSusutDrilldownSelection,
   CLAIM_SUSUT_COLUMN_ORDER_KEY,
   CLAIM_SUSUT_COLUMNS,
@@ -39,10 +35,13 @@ import {
   EMPTY_CLAIM_SUSUT_DRILLDOWN,
   formatClaimSusutIdr,
   looksLikeLegacyAllVisibleClaimSusutColumns,
+  resolveClaimSusutPeriodRange,
+  SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT,
   type ClaimSusutApiFilters,
   type ClaimSusutColumnDef,
   type ClaimSusutDrilldownFilters,
   type ClaimSusutDrilldownLevel,
+  type ClaimSusutPeriodKey,
   type ClaimSusutTreeNode,
 } from '@/lib/claimSusutView'
 
@@ -143,22 +142,22 @@ export default function ClaimSusutPage() {
   const [uploadResultOpen, setUploadResultOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
 
-  const ytd = resolvePerformancePeriodDateRange('YTD')
-  const [period, setPeriod] = useState<PerformancePeriodKey>('YTD')
-  const [dateFrom, setDateFrom] = useState(ytd.dateFrom)
-  const [dateTo, setDateTo] = useState(ytd.dateTo)
+  const [period, setPeriod] = useState<ClaimSusutPeriodKey>('ALL')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [selectedPlants, setSelectedPlants] = useState<string[]>([])
   const [selectedSources, setSelectedSources] = useState<string[]>([])
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<string[]>([])
+  const [selectedGroupsOfTransport, setSelectedGroupsOfTransport] = useState<string[]>([])
   const [plantOptions, setPlantOptions] = useState<string[]>([])
   const [sourceOptions, setSourceOptions] = useState<string[]>([])
   const [incotermOptions, setIncotermOptions] = useState<string[]>([])
   const [productOptions, setProductOptions] = useState<string[]>([])
+  const [transportOptions, setTransportOptions] = useState<string[]>([])
   const [drilldown, setDrilldown] = useState<ClaimSusutDrilldownFilters>(EMPTY_CLAIM_SUSUT_DRILLDOWN)
   const [tree, setTree] = useState<ClaimSusutTreeNode[]>([])
   const [summary, setSummary] = useState({ qtyClaim: 0, amountAfterTax: 0, rowCount: 0 })
-  const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
   const [groupTransportRows, setGroupTransportRows] = useState<ClaimSusutGroupTransportRow[]>([])
 
   const [page, setPage] = useState(1)
@@ -193,7 +192,7 @@ export default function ClaimSusutPage() {
       sources: selectedSources,
       incoterms: selectedIncoterms,
       products: selectedProducts,
-      groupOfTransport: selectedGroup,
+      groupsOfTransport: selectedGroupsOfTransport,
       drilldown,
     }),
     [
@@ -204,13 +203,13 @@ export default function ClaimSusutPage() {
       selectedSources,
       selectedIncoterms,
       selectedProducts,
-      selectedGroup,
+      selectedGroupsOfTransport,
       drilldown,
     ],
   )
 
   useEffect(() => {
-    const { dateFrom: from, dateTo: to } = resolvePerformancePeriodDateRange(period)
+    const { dateFrom: from, dateTo: to } = resolveClaimSusutPeriodRange(period)
     setDateFrom(from)
     setDateTo(to)
   }, [period])
@@ -315,6 +314,7 @@ export default function ClaimSusutPage() {
       setSourceOptions([])
       setIncotermOptions([])
       setProductOptions([])
+      setTransportOptions([])
       return
     }
     const params = appendClaimSusutFilterParams(new URLSearchParams(), filters, {
@@ -325,12 +325,15 @@ export default function ClaimSusutPage() {
     params.delete('source')
     params.delete('incoterm')
     params.delete('product')
+    params.delete('groupOfTransport')
+    params.delete('groupsOfTransport')
     const res = await api.get(`/claim-susut/filter-options?${params.toString()}`)
     const data = res.data?.data || {}
     setPlantOptions((data.plants || []).map(String))
     setSourceOptions((data.sources || []).map(String))
     setIncotermOptions((data.incoterms || []).map(String))
     setProductOptions((data.products || []).map(String))
+    setTransportOptions((data.groupsOfTransport || []).map(String))
   }, [])
 
   const loadSummaryAndTree = useCallback(async (filters: ClaimSusutApiFilters) => {
@@ -341,7 +344,7 @@ export default function ClaimSusutPage() {
     }
     const params = appendClaimSusutFilterParams(new URLSearchParams(), filters, {
       includeDrilldown: false,
-      includeGroup: false,
+      includeGroup: true,
     })
     setSummaryLoading(true)
     setTreeLoading(true)
@@ -416,13 +419,13 @@ export default function ClaimSusutPage() {
   useEffect(() => {
     if (!selectedImportId) return
     setPage(1)
-    setSelectedGroup(null)
-  }, [selectedImportId, dateFrom, dateTo, selectedPlants, selectedSources, selectedIncoterms, selectedProducts])
+    setSelectedGroupsOfTransport([])
+  }, [selectedImportId])
 
   useEffect(() => {
     if (!selectedImportId) return
     setPage(1)
-  }, [drilldown, selectedGroup, sortKey, sortDir])
+  }, [dateFrom, dateTo, selectedPlants, selectedSources, selectedIncoterms, selectedProducts, selectedGroupsOfTransport, drilldown, sortKey, sortDir])
 
   useEffect(() => {
     if (!selectedImportId) return
@@ -441,11 +444,16 @@ export default function ClaimSusutPage() {
     selectedSources,
     selectedIncoterms,
     selectedProducts,
+    selectedGroupsOfTransport,
     loadSummaryAndTree,
     scopeFilters,
   ])
 
   useEffect(() => {
+    if (!SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT) {
+      setGroupTransportRows([])
+      return
+    }
     if (!selectedImportId) return
     loadByGroupOfTransport(scopeFilters).catch((e) =>
       setError(apiErrorMessage(e, 'Failed to load group of transport summary')),
@@ -474,8 +482,8 @@ export default function ClaimSusutPage() {
     selectedSources,
     selectedIncoterms,
     selectedProducts,
+    selectedGroupsOfTransport,
     drilldown,
-    selectedGroup,
     page,
     sortKey,
     sortDir,
@@ -492,7 +500,12 @@ export default function ClaimSusutPage() {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [columnsOpen])
 
-  const busy = loading || summaryLoading || treeLoading || groupTransportLoading || uploading
+  const busy =
+    loading ||
+    summaryLoading ||
+    treeLoading ||
+    uploading ||
+    (SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT && groupTransportLoading)
   usePageHeaderBusy(busy)
 
   const onUploadFile = async (uploadFile: File) => {
@@ -537,35 +550,34 @@ export default function ClaimSusutPage() {
   }
 
   const resetFilters = () => {
-    setPeriod('YTD')
-    const range = resolvePerformancePeriodDateRange('YTD')
-    setDateFrom(range.dateFrom)
-    setDateTo(range.dateTo)
+    setPeriod('ALL')
+    setDateFrom('')
+    setDateTo('')
     setSelectedPlants([])
     setSelectedSources([])
     setSelectedIncoterms([])
     setSelectedProducts([])
+    setSelectedGroupsOfTransport([])
     setDrilldown(EMPTY_CLAIM_SUSUT_DRILLDOWN)
-    setSelectedGroup(null)
     setPage(1)
   }
 
   const applyDrilldown = (level: ClaimSusutDrilldownLevel, label: string) => {
     setDrilldown((prev) => buildNextClaimSusutDrilldownSelection(prev, level, label))
-    setSelectedGroup(null)
     setPage(1)
   }
 
   const drilldownScopeSegments = useMemo(() => {
     const parts: string[] = [
       formatContractDateScopeLabel(period, dateFrom, dateTo, (p) =>
-        resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
+        resolveClaimSusutPeriodRange(p as ClaimSusutPeriodKey),
       ),
     ]
     if (selectedPlants.length > 0) parts.push(selectedPlants.join(', '))
     if (selectedSources.length > 0) parts.push(selectedSources.join(', '))
     if (selectedIncoterms.length > 0) parts.push(selectedIncoterms.join(', '))
     if (selectedProducts.length > 0) parts.push(selectedProducts.join(', '))
+    if (selectedGroupsOfTransport.length > 0) parts.push(selectedGroupsOfTransport.join(', '))
     if (drilldown.product) parts.push(drilldown.product)
     if (drilldown.plant) parts.push(drilldown.plant)
     if (drilldown.incoterm) parts.push(drilldown.incoterm)
@@ -579,11 +591,12 @@ export default function ClaimSusutPage() {
     selectedSources,
     selectedIncoterms,
     selectedProducts,
+    selectedGroupsOfTransport,
     drilldown,
   ])
 
   const denomAmount = Math.abs(summary.amountAfterTax) > 0 ? Math.abs(summary.amountAfterTax) : 1
-  const periodOptions = useMemo(() => buildPerformancePeriodOptions(), [])
+  const periodOptions = useMemo(() => buildClaimSusutPeriodOptions(), [])
 
   const renderTreeCard = (
     node: ClaimSusutTreeNode,
@@ -684,7 +697,7 @@ export default function ClaimSusutPage() {
             onPeriodChange={setPeriod}
             onDateFromChange={setDateFrom}
             onDateToChange={setDateTo}
-            resolvePeriodRange={resolvePerformancePeriodDateRange}
+            resolvePeriodRange={resolveClaimSusutPeriodRange}
           />
           <div className="w-48">
             <SearchableMultiSelect
@@ -730,6 +743,18 @@ export default function ClaimSusutPage() {
               onChange={setSelectedProducts}
               placeholder="All products"
               emptyMessage="No products"
+              uppercaseOptionLabels
+              pinSelectedToTop
+            />
+          </div>
+          <div className="w-56">
+            <SearchableMultiSelect
+              label="Filter by Transport"
+              options={transportOptions}
+              selected={selectedGroupsOfTransport}
+              onChange={setSelectedGroupsOfTransport}
+              placeholder="All transports"
+              emptyMessage="No transport groups"
               uppercaseOptionLabels
               pinSelectedToTop
             />
@@ -805,6 +830,7 @@ export default function ClaimSusutPage() {
           </CardContent>
         </Card>
 
+        {SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT ? (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
@@ -835,13 +861,19 @@ export default function ClaimSusutPage() {
                   </thead>
                   <tbody className="divide-y">
                     {groupTransportRows.map((g) => {
-                      const selected = selectedGroup === g.group_of_transport
+                      const selected =
+                        selectedGroupsOfTransport.length === 1 &&
+                        selectedGroupsOfTransport[0] === g.group_of_transport
                       return (
                         <tr
                           key={g.group_of_transport}
                           className={`cursor-pointer ${selected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                           onClick={() =>
-                            setSelectedGroup((prev) => (prev === g.group_of_transport ? null : g.group_of_transport))
+                            setSelectedGroupsOfTransport((prev) =>
+                              prev.length === 1 && prev[0] === g.group_of_transport
+                                ? []
+                                : [g.group_of_transport],
+                            )
                           }
                         >
                           <td className="px-3 py-2 font-medium">{g.group_of_transport}</td>
@@ -862,6 +894,7 @@ export default function ClaimSusutPage() {
             </div>
           </CardContent>
         </Card>
+        ) : null}
 
         <Card>
           <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

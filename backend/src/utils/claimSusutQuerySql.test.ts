@@ -29,6 +29,7 @@ describe('parseClaimSusutQueryFilters', () => {
     expect(filters.dateFrom).toBe('2026-01-01');
     expect(filters.plants).toEqual(['BONTANG', 'KIJING']);
     expect(filters.sources).toEqual(['MILL', 'TRADER']);
+    expect(filters.groupsOfTransport).toEqual(['TRUCK']);
     expect(filters.ddCompany).toBe('PT Example');
   });
 
@@ -79,7 +80,10 @@ describe('buildClaimSusutFilteredCte', () => {
     expect(sql).toContain('EXISTS (');
     expect(sql).toContain('contract_latest_spd_snapshot');
     expect(sql).toContain('discharge_destination');
-    expect(sql).toContain('c.contract_ext_no');
+    expect(sql).toContain('s.contract_number = c.contract_id');
+    expect(sql).toContain('c.contract_id');
+    expect(sql).not.toContain('c.contract_number');
+    expect(sql).not.toContain('c.contract_ext_no');
     expect(sql).not.toContain('sap_processed_data');
     expect(sql).not.toContain('spd_by_po');
     expect(sql).not.toContain('spd_by_ext');
@@ -94,13 +98,13 @@ describe('buildClaimSusutFilteredCte', () => {
     expect(sql).not.toContain('delivery');
     expect(sql).not.toContain('0.5');
     expect(params[0]).toBe('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
-    expect(sql).toContain('e.cr_date >=');
+    expect(sql).toContain('e.cr_date IS NULL OR e.cr_date >=');
     expect(sql).toContain('UPPER(e.region_plant) = ANY');
     expect(sql).toContain('e.product = $');
     expect(sql).toContain('UPPER(e.group_of_transport_norm) = ANY');
   });
 
-  it('summary scope ignores drilldown and group-of-transport filters', () => {
+  it('summary scope applies group-of-transport but ignores drilldown', () => {
     const { sql } = buildClaimSusutFilteredCte(
       {
         importId: null,
@@ -118,11 +122,33 @@ describe('buildClaimSusutFilteredCte', () => {
       },
       'summary',
     );
-    expect(sql).not.toContain('e.group_of_transport_norm');
+    expect(sql).toContain('UPPER(e.group_of_transport_norm) = ANY');
     expect(sql).not.toContain('e.company = $');
     expect(sql).not.toContain('e.product = $');
     expect(sql).toContain('import_keys AS');
     expect(sql).toContain('EXISTS (');
+  });
+
+  it('tree scope applies group-of-transport like summary', () => {
+    const { sql } = buildClaimSusutFilteredCte(
+      {
+        importId: null,
+        dateFrom: null,
+        dateTo: null,
+        plants: [],
+        sources: [],
+        incoterms: [],
+        products: [],
+        groupsOfTransport: ['TRUCKING'],
+        ddProduct: 'CPO',
+        ddPlant: null,
+        ddIncoterm: null,
+        ddCompany: null,
+      },
+      'tree',
+    );
+    expect(sql).toContain('UPPER(e.group_of_transport_norm) = ANY');
+    expect(sql).not.toContain('e.product = $');
   });
 
   it('options scope only keeps import + CR date', () => {
@@ -135,7 +161,7 @@ describe('buildClaimSusutFilteredCte', () => {
         sources: ['MILL'],
         incoterms: ['FOB'],
         products: ['CPO'],
-        groupsOfTransport: [],
+        groupsOfTransport: ['TRUCKING'],
         ddProduct: null,
         ddPlant: null,
         ddIncoterm: null,
@@ -143,10 +169,11 @@ describe('buildClaimSusutFilteredCte', () => {
       },
       'options',
     );
-    expect(sql).toContain('e.cr_date >=');
+    expect(sql).toContain('e.cr_date IS NULL OR e.cr_date >=');
     expect(sql).not.toContain('UPPER(e.region_plant)');
     expect(sql).not.toContain('UPPER(e.product)');
     expect(sql).not.toContain('UPPER(e.incoterm)');
+    expect(sql).not.toContain('UPPER(e.group_of_transport_norm)');
   });
 });
 
