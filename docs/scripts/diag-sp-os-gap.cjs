@@ -45,6 +45,8 @@ const {
 } = load('utils/shippingPerformanceOutstandingAgg');
 const { sqlRegionSiteDisplayForContract } = load('utils/regionSiteSql');
 const { sqlBacklogRemainingOsJoinExpr } = load('utils/shipmentUnplannedHybridSql');
+const { sqlContractExecutionOutstandingKgExpr } = load('utils/contractExecutionOutstandingSql');
+const { resolveContractsQtyMoveCte } = load('services/contractQtyMoveSnapshot.service');
 const {
   parseShippingPerfContractDateList,
   shippingPerfRowMatchesContractDateRange,
@@ -319,17 +321,27 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
     vy.flatMap((r) => String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
   )];
   if (voyageContracts.length) {
-    const osExpr = sqlBacklogRemainingOsJoinExpr();
+    /*
+     * The EXECUTION arm's own rule, not a stand-in. An earlier pass used the backlog formula here
+     * and reported 5,162 MT where the residual is 1,661 - right in shape, wrong by 3x.
+     */
+    const osExpr = sqlContractExecutionOutstandingKgExpr('c.contract_id');
+    // in_subquery, not the default join_scope: there is no contract_scope CTE in this query.
+    const qtyMoveCte = await resolveContractsQtyMoveCte({
+      kind: 'in_subquery',
+      subquery: `SELECT c_s.contract_id FROM contracts c_s WHERE c_s.contract_id = ANY($1::text[])`,
+    });
     const contractOs = new Map();
     for (const row of (await connection.query(
-      `SELECT c.contract_id, (${osExpr}) AS os_kg
+      `WITH ${qtyMoveCte}
+       SELECT c.contract_id, (${osExpr}) AS os_kg
        FROM contracts c
-       LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
        WHERE c.contract_id = ANY($1::text[])`,
       [voyageContracts],
     )).rows) {
       contractOs.set(String(row.contract_id), Number(row.os_kg) || 0);
     }
+    void sqlBacklogRemainingOsJoinExpr;
     const attributed = new Map();
     for (const r of vy) {
       const cs = String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean);
