@@ -2014,6 +2014,36 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
+### Region/Site: one helper, evaluated once per contract
+
+Shipping Performance kept its own spelling of Region/Site - a COALESCE over `b2b_end`, a
+per-shipment SAP aggregate and the latest-SPD CTE. It was argued branch-for-branch equivalent to
+`sqlRegionSiteRawForContract` and it measured as equivalent. **"Equivalent today" is how two
+spellings of one rule drift**, and both drifts were found the same week: the per-shipment branch
+filed five contracts under a destination their own SAP rows contradict, and the backlog arm shipped
+with no B2B overlay at all, putting contract 9114100050 at TANJUNG PURA while every other surface
+said BATAM.
+
+Both arms now emit the **same expression** as `sqlRegionSiteDisplayForContract`, the one Shipments,
+Trucking, Pipeline and both unplanned hybrids already call.
+`shippingPerfRegionSiteShared.test.ts` asserts the expression itself, not that the SQL mentions a
+column, so it cannot drift without failing.
+
+**Where it is evaluated matters as much as which expression it is.** The helper is two correlated
+subqueries, one of them ordering `sap_processed_data` per contract. Spliced into the row projection
+it runs once per ROW for a value that only varies per CONTRACT:
+
+| | dev, 2,213 rows |
+| --- | --- |
+| before (own chain) | ~52s |
+| helper in the row projection | **96.8s** |
+| helper in `perf_region_site AS MATERIALIZED`, joined | **55.5s** |
+
+`MATERIALIZED` is explicit because Postgres inlines a single-reference CTE by default, which puts
+the evaluation straight back per row. This is the same trap as the Contract Performance
+1,360ms -> 3,342ms regression: the alias compiles to a `CASE` that reads its input twice, so where
+you put it decides what it costs.
+
 ### One STO, two discharge destinations - a SAP anomaly, and the page that amplified it
 
 Measuring the source divergence (`docs/scripts/diag-sp-vs-shipments-site.cjs`) found **6 contracts

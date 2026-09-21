@@ -43,6 +43,7 @@ const {
 const {
   shippingPerfOutstandingQtyKgForAggregate,
 } = load('utils/shippingPerformanceOutstandingAgg');
+const { sqlRegionSiteDisplayForContract } = load('utils/regionSiteSql');
 const {
   parseShippingPerfContractDateList,
   shippingPerfRowMatchesContractDateRange,
@@ -271,6 +272,62 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
       '   diff ' + (mt(rawOf(rs) - ap) + ' MT').padStart(11));
   }
   console.log('   ^ compare the RAW column with the Shipments figure.');
+
+  /*
+   * THE LAST STRUCTURAL DIFFERENCE: which site a row is filed under.
+   *
+   * Shipments filters CONTRACTS by the contract's Region/Site (sqlRegionSiteRawForContract).
+   * Shipping Performance filters ROWS by the row's own plant_site, which for a voyage row comes
+   * from the B2B overlay or the contract-level snapshot but is carried per STO. A contract whose
+   * Region/Site is BONTANG can therefore have STO rows filed elsewhere: Shipments counts the whole
+   * contract in this slice, Shipping Performance counts none of those rows.
+   *
+   * Definitions are already aligned by this point - both pages drop COMPLETED, and the raw column
+   * above removes the apportionment - so anything left is membership, and this is the only place
+   * it can come from.
+   */
+  const regionSite = sqlRegionSiteDisplayForContract('c.contract_id', 'c.po_number');
+  const allContracts = [...new Set(
+    [...voyages, ...backlog].flatMap((r) =>
+      String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean)),
+  )];
+  const contractSite = new Map();
+  for (const row of (await connection.query(
+    `SELECT c.contract_id, (${regionSite}) AS site FROM contracts c WHERE c.contract_id = ANY($1::text[])`,
+    [allContracts],
+  )).rows) {
+    contractSite.set(String(row.contract_id), up(row.site));
+  }
+
+  const elsewhere = [...voyages, ...backlog].filter((r) => {
+    if (up(r.plant_site) === SITE) return false;
+    if (!up(r.product).includes(PRODUCT)) return false;
+    const cs = String(r.contract_number ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+    return cs.some((c) => contractSite.get(c) === SITE);
+  });
+  const inPeriodElsewhere = elsewhere.filter(
+    (r) => shippingPerfRowMatchesContractDateRange(r.contract_date, DATE_FROM, DATE_TO),
+  );
+  const ongoingElsewhere = inPeriodElsewhere.filter(
+    (r) => !cancelled(r) && (r.is_unplanned_backlog === true ||
+      (up(r.status) !== 'COMPLETED' && up(r.status) !== '' && up(r.status) !== 'UNPLANNED')),
+  );
+  console.log('');
+  console.log('rows whose CONTRACT is ' + SITE + ' but whose row is filed elsewhere:');
+  console.log('   in period, any status : ' + String(inPeriodElsewhere.length).padStart(4) + ' rows  raw ' +
+    (mt(inPeriodElsewhere.reduce((a, r) => a + raw(r), 0)) + ' MT').padStart(12));
+  console.log('   in period, On Going   : ' + String(ongoingElsewhere.length).padStart(4) + ' rows  raw ' +
+    (mt(ongoingElsewhere.reduce((a, r) => a + raw(r), 0)) + ' MT').padStart(12) +
+    '   <- Shipments counts these here, SP does not');
+  const sites = new Map();
+  for (const r of ongoingElsewhere) {
+    const k = up(r.plant_site) || '(blank)';
+    sites.set(k, (sites.get(k) ?? 0) + raw(r));
+  }
+  if (sites.size) {
+    console.log('   they are filed under: ' +
+      [...sites.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => k + ' ' + mt(v) + 'MT').join('  '));
+  }
 
   /*
    * THE STO ROWS THAT ARE CLOSED BUT SIT ON THE ON GOING CARD.

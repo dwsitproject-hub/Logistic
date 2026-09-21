@@ -37,7 +37,7 @@ import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
 import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
-import { sqlNormalizeDischargeDestination } from '../utils/dischargeDestinationAlias';
+import { sqlRegionSiteDisplayForContract } from '../utils/regionSiteSql';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
 import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 
@@ -540,10 +540,30 @@ const BACKLOG_LATEST_SPD_CONTRACT_CTE = `
  * helper prefers it and divides nothing, which is correct here because a contract without a
  * shipment has no sibling STOs to share with.
  */
+/**
+ * Region/Site per contract, evaluated ONCE.
+ *
+ * sqlRegionSiteDisplayForContract is two correlated subqueries, one of them ordering
+ * sap_processed_data per contract. Splicing it straight into the row projection made the page
+ * 52s -> 96.8s on dev, because it then runs per ROW (2,213 of them) for a value that only ever
+ * varies per CONTRACT. MATERIALIZED is explicit: Postgres inlines a single-reference CTE by
+ * default, which would put us straight back to per-row evaluation.
+ *
+ * The helper is still the ONE definition - Shipments, Trucking, Pipeline and both unplanned
+ * hybrids call it too. Only where it is evaluated changed.
+ */
+export const SHIPPING_PERF_REGION_SITE_CTE = `
+  perf_region_site AS MATERIALIZED (
+    SELECT c_rs.contract_id,
+           ${sqlRegionSiteDisplayForContract('c_rs.contract_id', 'c_rs.po_number')} AS plant_site
+    FROM contracts c_rs
+  )`;
+
 export async function buildShippingPerformanceBacklogSql(): Promise<string> {
   const os = sqlBacklogRemainingOsJoinExpr();
   return `
-    WITH ${BACKLOG_LATEST_SPD_CONTRACT_CTE}
+    WITH ${BACKLOG_LATEST_SPD_CONTRACT_CTE},
+    ${SHIPPING_PERF_REGION_SITE_CTE}
     SELECT
       c.contract_id::text                       AS contract_number,
       l.contract_ext_no_raw AS contract_ext_no,
@@ -553,17 +573,10 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
       NULL::text                                AS operation_id,
       NULL::uuid                                AS id,
       c.product,
-      -- Same two branches as the main query above, and as sqlRegionSiteRawForContract.
-      -- The B2B branch was MISSING here when this arm shipped, and it is not cosmetic: contract
-      -- 9114100050 has a B2B ending child at EUP EDIBLE OIL BATAM, so the goods end in Batam. This
-      -- arm showed TANJUNG PURA - the origin's own destination - while every other surface in KLIP
-      -- showed Batam. Both stored columns are normalised on read; both are plain columns, so
-      -- doubling them for the alias CASE is free.
-      COALESCE(
-        ${sqlNormalizeDischargeDestination("NULLIF(TRIM(b2b_end.discharge_destination), '')")},
-        ${sqlNormalizeDischargeDestination("NULLIF(TRIM(l.discharge_destination), '')")},
-        'Blank'
-      ) AS plant_site,
+      -- The same shared helper the main query and Shipments use. This arm shipped with no B2B
+      -- overlay at all and put contract 9114100050 at TANJUNG PURA while every other surface said
+      -- BATAM; calling the helper makes that class of omission impossible rather than unlikely.
+      COALESCE(rs.plant_site, 'Blank') AS plant_site,
       c.incoterm,
       c.source_type,
       c.supplier,
@@ -586,6 +599,7 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
     FROM contracts c
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
     ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+    LEFT JOIN perf_region_site rs ON rs.contract_id = c.contract_id
     LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
     WHERE ${contractBacklogCoreWhereSql('c', 'l')}
       AND (${os}) > 0`;
@@ -596,6 +610,7 @@ export async function buildShippingPerformanceSql(): Promise<string> {
 
   return `
       WITH ${latestSpdContractCte},
+      ${SHIPPING_PERF_REGION_SITE_CTE},
       ship_keys AS (
         SELECT
           s.id AS shipment_pk,
@@ -746,33 +761,19 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         s.shortage,
         s.vessel_oa_budget,
         /*
-         * Region/Site, contract grain - the same two branches, in the same order, as
-         * sqlRegionSiteRawForContract, which Shipments, Trucking, Pipeline and both unplanned
-         * hybrids already use. This page was the only surface of ten that added a third source.
+         * Region/Site: the SHARED helper, not a second spelling of it.
          *
-         * THE SOURCE THAT WAS REMOVED, and why it was not merely redundant: sa is a PER-SHIPMENT
-         * aggregate, and a shipment's STO can belong to several contracts. SAP gives one STO
-         * different discharge destinations depending on which contract carries it (96 STOs
-         * database-wide; STO 1016010337 is KARAWANG on four contracts and BEKASI on two). Rows are
-         * then grouped by STO and mergeShippingPerfStoGroup keeps ONE row's plant_site, so five
-         * contracts displayed a destination their own SAP rows contradict. Reading the contract's
-         * own row instead makes that impossible rather than unlikely.
+         * This page used to build its own COALESCE chain over b2b_end and the latest-SPD CTE. That
+         * was argued to be branch-for-branch equivalent to sqlRegionSiteRawForContract, and it
+         * measured as equivalent - but "equivalent today" is how two spellings of one rule drift,
+         * which is what produced every discrepancy chased on 2026-09-18 and 09-21. Calling the
+         * function Shipments, Trucking, Pipeline and both unplanned hybrids already call makes the
+         * two pages file a contract under the same site by construction rather than by agreement.
          *
-         * Only b2b_end is wrapped in the alias: it is a STORED column, and the rule is that every
-         * read of a stored copy normalises. l comes from sapDischargeDestinationFromJson, which
-         * already wraps it - and latest_spd_contract is NOT MATERIALIZED, so wrapping an inlined
-         * jsonb read again is the doubling that took Contract Performance 1,360ms -> 3,342ms.
-         *
-         * l stands in for the helper's "newest SAP row for this contract": same pick, plus an
-         * spd.id DESC tiebreaker the helper lacks. 2,382 contracts have tied created_at, and
-         * measured, NONE of them disagree on destination - so the two are equal on today's data
-         * and this side is the deterministic one.
+         * It costs two correlated subqueries per row where the old chain cost a join and a CTE
+         * column; the timing is recorded in the README section for this change.
          */
-        COALESCE(
-          ${sqlNormalizeDischargeDestination("NULLIF(TRIM(b2b_end.discharge_destination), '')")},
-          NULLIF(TRIM(l.discharge_destination), ''),
-          'Blank'
-        ) AS plant_site,
+        COALESCE(rs.plant_site, 'Blank') AS plant_site,
         NULLIF(TRIM(s.port_of_loading), '') AS port_of_loading,
         NULLIF(TRIM(s.port_of_discharge), '') AS port_of_discharge,
         (
@@ -871,6 +872,7 @@ export async function buildShippingPerformanceSql(): Promise<string> {
       ${SHIPMENT_ATA_OVERRIDES_JOIN}
       LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
       ${sqlB2bOriginEndingChildLateralJoin({ originPoExpr: 'c.po_number' })}
+      LEFT JOIN perf_region_site rs ON rs.contract_id = c.contract_id
       ${perfStoStatusJoinSql()}
       LEFT JOIN sto_metrics sm ON TRIM(sm.sto_key) = TRIM((${SHIPPING_PERF_STO_GROUP_KEY_EXPR}))
       LEFT JOIN LATERAL (
