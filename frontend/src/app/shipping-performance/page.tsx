@@ -28,7 +28,7 @@ import {
   rowMatchesToolbarMultiFilters,
 } from '@/lib/globalScopeFilters'
 import {
-  formatAvgDays,
+  formatAvgDaysCompact,
   formatSignedCycleDays,
   formatSignedDeltaDays,
   signedCycleDaysClass,
@@ -772,8 +772,8 @@ function buildPerfDatasetBundle(
   const tree = buildPerfTree(modeRows)
   const metrics = buildCardSummary(modeRows, dataMode)
   const vesselCount = countUniqueVessels(modeRows)
-  // On Going / Close card "Contracts" metric = unique contracts in the filtered row set
-  // (e.g. 1 STO × 3 contract shipments → Contracts 3).
+  // Unique contracts in the filtered row set (Section 1 green badge + Section 3 count).
+  // e.g. 1 STO × 3 contract shipments → 3 unique contracts.
   const contractCount = countUniqueContractsFromRows(modeRows)
 
   return {
@@ -1386,6 +1386,17 @@ function TopRankBadge({ rank }: { rank: number | null | undefined }) {
   )
 }
 
+/** Same chrome as Contract Performance On Time badge — headerEnd of On Going / Completed cards. */
+function ShippingPerfContractsBadge({ count }: { count: number }) {
+  return (
+    <div className="flex flex-wrap gap-1.5 justify-end shrink-0">
+      <Badge className="bg-green-100 text-green-800 hover:bg-green-100 border-0 font-normal text-xs">
+        Contracts: {count.toLocaleString('en-US')}
+      </Badge>
+    </div>
+  )
+}
+
 export default function ShippingPerformancePage() {
   return (
     <Layout>
@@ -1924,33 +1935,19 @@ function ShippingPerformancePageContent() {
 
   const renderSummaryPrimaryTotals = (summary: PerVesselPerfSummary) => {
     return (
-      <div className="space-y-2.5">
-        <div>
-          <div className="text-[11px] font-medium tracking-wider text-gray-500 leading-none">
-            Total Vessels
-          </div>
-          <div className="mt-0.5 text-xl font-bold leading-none tabular-nums text-gray-900">
-            {summary.vesselCount.toLocaleString('en-US')}
-          </div>
+      <>
+        <div className="text-sm text-gray-500 mb-1">Total Vessels</div>
+        <div className="text-xl font-bold text-gray-900 mb-3 tabular-nums">
+          {summary.vesselCount.toLocaleString('en-US')}
         </div>
-        <div>
-          <div className="text-[10px] font-medium tracking-wider text-gray-500 leading-none">
-            Contracts
-          </div>
-          <div className="mt-0.5 text-sm font-semibold leading-none tabular-nums text-gray-700">
-            {summary.contractCount.toLocaleString('en-US')}
-          </div>
-        </div>
-      </div>
+      </>
     )
   }
 
   const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, card: ShippingPerfCardFilter) => {
     const labelMode = card === 'close' ? 'actual' : 'estimated'
     const fmt = (days: number | null) =>
-      formatAvgDays(days == null || !Number.isFinite(days) ? null : Math.abs(days))
-    const metricValueClass = (days: number | null) =>
-      cn('text-[10px] font-semibold leading-none text-gray-900 tabular-nums', signedCycleDaysClass(days))
+      formatAvgDaysCompact(days == null || !Number.isFinite(days) ? null : Math.abs(days))
     const metrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
       { key: 'loadingEtr', value: summary.avgLoadingEtaEtr },
       { key: 'loadingEtb', value: summary.avgLoadingEtaEtb },
@@ -1960,42 +1957,32 @@ function ShippingPerformancePageContent() {
     ]
 
     return (
-      <div className="flex w-fit shrink-0 flex-col gap-y-1.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
         {metrics.map(({ key, value }) => {
           const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
           const fullLabel = getShippingSummaryMetricLabel(key, labelMode, 'full')
           return (
-            <div
-              key={key}
-              className="flex min-w-[max-content] flex-row items-center justify-between gap-3"
-            >
-              <span
-                className="min-w-0 shrink text-[10px] leading-none text-gray-500 whitespace-nowrap"
-                title={fullLabel}
-              >
-                {shortLabel}
+            <span key={key} className="shrink-0" title={fullLabel}>
+              {shortLabel}:{' '}
+              <span className={cn('font-semibold tabular-nums', signedCycleDaysClass(value))}>
+                {fmt(value)}
               </span>
-              <span className={cn('shrink-0', metricValueClass(value))}>{fmt(value)}</span>
-            </div>
+            </span>
           )
         })}
       </div>
     )
   }
 
-  /** Section 1 body — left stays tight under icon; Avg bottom-aligns to Contracts. */
+  /** Section 1 body — Total Vessels matches CP Outstanding Qty; Avg metrics wrap like Open/Close. */
   const renderShippingSummaryCardBody = (
     card: ShippingPerfCardFilter,
     summary: PerVesselPerfSummary,
   ) => {
     return (
-      <div className="relative w-full min-w-0 text-left">
-        <div className="min-w-0 pt-1 sm:max-w-[calc(100%-10.5rem)]">
-          {renderSummaryPrimaryTotals(summary)}
-        </div>
-        <div className="mt-2 w-fit shrink-0 sm:absolute sm:bottom-0 sm:right-0 sm:mt-0">
-          {renderSummaryGapMetrics(summary, card)}
-        </div>
+      <div className="w-full min-w-0 text-left">
+        {renderSummaryPrimaryTotals(summary)}
+        {renderSummaryGapMetrics(summary, card)}
       </div>
     )
   }
@@ -2286,13 +2273,14 @@ function ShippingPerformancePageContent() {
                 (summaryLoading || summaryFetching) && rows.length > 0 ? 'opacity-65' : 'opacity-100'
               }`}
             >
-              <div className="flex w-full flex-col gap-4 xl:flex-row xl:items-stretch">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <PerformanceSection1CardShell
                   variant="ongoing"
                   title={SHIPPING_PERF_CARD_TITLES.ongoing}
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
                   className="min-w-0 flex-1"
+                  headerEnd={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
                 >
                   {renderShippingSummaryCardBody('ongoing', ongoingPerformanceSummary)}
                 </PerformanceSection1CardShell>
@@ -2303,6 +2291,7 @@ function ShippingPerformancePageContent() {
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
                   className="min-w-0 flex-1"
+                  headerEnd={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
                 >
                   {renderShippingSummaryCardBody('close', closePerformanceSummary)}
                 </PerformanceSection1CardShell>

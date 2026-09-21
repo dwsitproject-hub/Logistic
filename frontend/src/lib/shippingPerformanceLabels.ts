@@ -64,8 +64,8 @@ export const SHIPPING_SUMMARY_METRIC_LABELS = {
   loadingEtr: 'Avg Load (ETA-ETR)',
   loadingEtb: 'Avg Load (ETA-ETB)',
   loadingEtc: 'Avg Load (ETB-ETC)',
-  dischargeEtb: 'Avg Discharge (ETA-ETB)',
-  dischargeEtc: 'Avg Discharge (ETB-ETC)',
+  dischargeEtb: 'Avg Disc (ETA-ETB)',
+  dischargeEtc: 'Avg Disc (ETB-ETC)',
   total: 'Avg Total',
 } as const
 
