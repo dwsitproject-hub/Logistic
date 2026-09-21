@@ -2105,6 +2105,34 @@ the contract's own quantity is the only sensible value. Zero rows remain.
 contract-grain correction fills. It does change the **By Vessel** contract-qty column, which sums
 this field: that total rises, and the rise is the correction.
 
+### One check that asks whether the pages still agree
+
+`docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches
+outstanding, not after.
+
+Every discrepancy in these sections had one shape - one rule with two spellings - and the cost was
+never the first page. Closing Shipping Performance against Shipments left Shipments no longer
+agreeing with Contract Performance, and that only surfaced when someone opened the third page days
+later.
+
+It calls the pages' **own entry points**: `runShippingPerformance` and `loadLatePerformanceRows`.
+Copying a page's query to measure it has produced a confidently wrong answer four times here - the
+backlog formula standing in for the execution one (5,162 MT against a real 1,661), an even split
+of a merged row across its contracts, "has a shipment" standing in for "is at an active stage",
+and a group key compared against itself.
+
+| | |
+| --- | --- |
+| **Invariant 1** | Shipping Performance backlog == Shipments Unplanned + Preplanned. Both call `contractBacklogCoreWhereSql`, so a difference can only be scope or period, never a rule. **Dev: 0 MT** |
+| **Invariant 2** | Shipping Performance == Contract Performance, the agreed reference |
+| **Invariant 3** | Shipments, which it says plainly it cannot prove: `loadShipmentOutstandingQtyForRequest` needs the `shipmentBaseCteSql` the controller assembles. That figure is read off the page, and the script prints what it should equal |
+
+**Its first run found its own fault**, which is the standard to keep: comparing the two pages whole
+reported 75,477 MT of "drift" that was simply trucking, because Contract Performance covers every
+incoterm and Shipping Performance covers CIF/CFR/FOB. The scopes are matched with the page's own
+`isShipmentPageSeaIncoterm` rather than a list written out again. A check that cries wolf gets
+ignored, and an ignored check is worse than none.
+
 ### The correction took the page down, and try/catch could not have stopped it
 
 `/api/shipments/performance` stopped answering on production. The logs show the request logged
