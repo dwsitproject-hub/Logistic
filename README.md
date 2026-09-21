@@ -2014,6 +2014,41 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
+### The last 161 MT: one finished voyage marks its whole STO group finished
+
+Named, verified, and NOT fixed - the first fix made it worse, and the reason is worth keeping.
+
+Three contracts are priced by Shipments and never by Shipping Performance:
+
+```
+1004030359  CIF  3,003 MT     own STO MNL-37125720-...  status PLANNED  own ATC NULL
+1004029445  FOB    259 MT     own STO 1006019867        status PLANNED  own ATC NULL
+1004031792  CIF     12 MT     own STO 1006020003        status PLANNED  own ATC NULL
+```
+
+Their own shipments are PLANNED with no discharge ATC at all, yet this page shows their rows as
+COMPLETED - because `aggregateShippingPerformanceRowsBySto` MAX-merges milestones across the STO
+group, and a *sibling* shipment in that group has an ATC.
+
+**Shipments already solved exactly this**, and its comment names the same STO:
+
+> the plain column is a MAX over the whole STO group ... a finished voyage can mark a group of
+> still-planned shipments as COMPLETED ... only the OS buckets use the narrowed one.
+> "STO 1006019867 cost 3 contracts / 2,700 MT"
+
+So Shipments keeps the group-wide value for the list and uses
+`ata_vessel_complete_discharge_own_sto` for OS. This page has one status serving both.
+
+**Why the obvious fix failed.** Deciding the stage from the pre-merge rows and rescuing those
+contracts moved the CPO/BONTANG total **down**, 103,545 -> 103,142 MT on dev. The rescue awards the
+contract to the merged row it belongs to - and that row is COMPLETED, so the On Going card filters
+it straight back out. The outstanding moved somewhere nothing counts.
+
+**What it actually needs:** a second status on the row - group-wide for display, narrowed to the
+row's own STO for the OS decision AND for card membership - mirroring the split Shipments makes.
+That is a change to what the card filters on, not just to what the aggregate sums, so it is not a
+one-line fix and it was not attempted at the end of a long session.
+
 ### Contract Qty read 0 for a contract that has one
 
 Reported while chasing the last 161 MT, and bigger than what was being chased: **9194100035**, a
