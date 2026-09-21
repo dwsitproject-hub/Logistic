@@ -250,6 +250,44 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
   console.log('   ^ find your screen figure here. That names the card, and the card names the rule.');
 
   /*
+   * SPLIT THE SEARCH IN HALF.
+   *
+   * The Shipments cards already separate the two arms on screen, so the same split here says
+   * which arm the residual lives in:
+   *
+   *   backlog   = Unplanned + Preplanned      - both pages call contractBacklogCoreWhereSql, the
+   *                                             SAME function, so a difference here would be a
+   *                                             scope or period difference, never a rule one
+   *   execution = Planned + At LP + Sailed + At DP
+   *
+   * Production 2026-09-21, CPO/BONTANG/YTD: Shipments showed backlog 28,019 MT and execution
+   * 53,556 MT against a Shipping Performance drilldown of 79,914 MT.
+   */
+  const bk = inPeriod.filter((r) => r.is_unplanned_backlog === true);
+  const vy = inPeriod.filter((r) => r.is_unplanned_backlog !== true && up(r.status) !== 'COMPLETED');
+  const sum = (rs) => rs.reduce((a, r) => a + shippingPerfOutstandingQtyKgForAggregate(r), 0);
+  console.log('');
+  console.log('which arm holds the residual:');
+  console.log('   backlog rows   ' + String(bk.length).padStart(4) + '  ' + (mt(sum(bk)) + ' MT').padStart(13) +
+    '   <- compare with Shipments Unplanned + Preplanned');
+  console.log('   voyage rows    ' + String(vy.length).padStart(4) + '  ' + (mt(sum(vy)) + ' MT').padStart(13) +
+    '   <- compare with Planned + At LP + Sailed + At DP');
+  console.log('   together       ' + String(bk.length + vy.length).padStart(4) + '  ' +
+    (mt(sum(bk) + sum(vy)) + ' MT').padStart(13));
+  const byStatus = new Map();
+  for (const r of vy) {
+    const k = up(r.status) || '(blank)';
+    const acc = byStatus.get(k) ?? { n: 0, kg: 0 };
+    acc.n += 1;
+    acc.kg += shippingPerfOutstandingQtyKgForAggregate(r);
+    byStatus.set(k, acc);
+  }
+  console.log('   voyage rows by status:');
+  for (const [k, v] of [...byStatus.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
+    console.log('      ' + k.padEnd(20) + String(v.n).padStart(4) + '  ' + (mt(v.kg) + ' MT').padStart(13));
+  }
+
+  /*
    * THE SAME POPULATIONS WITHOUT APPORTIONMENT.
    *
    * Shipments computes outstanding PER CONTRACT (sqlShipmentExecutionOsPerContractCtes) and does
