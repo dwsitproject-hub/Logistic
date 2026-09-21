@@ -282,6 +282,26 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
     acc.kg += shippingPerfOutstandingQtyKgForAggregate(r);
     byStatus.set(k, acc);
   }
+  /*
+   * The residual, row by row.
+   *
+   * Production 2026-09-21 put all 1,661 MT of it in two stages - At Loading Port (259 MT, 1 row)
+   * and the discharge group (1,401 MT, 8 rows) - while backlog and Planned matched exactly. The
+   * shape is visible on one shipment: MT. GIAT ARMADA 02 reads 2,800 MT here and 3,059 MT on
+   * Shipments. Same shipment, two numbers, because Shipments takes the CONTRACT's outstanding and
+   * this page takes the STO's share of it. No filter can close that; only picking one grain can.
+   */
+  console.log('   voyage rows outside PLANNED, where the residual sits:');
+  console.log('      contract        STO            status         agg OS      raw OS   po_sto  contract qty');
+  for (const r of vy.filter((x) => up(x.status) !== 'PLANNED')) {
+    console.log('      ' + String(r.contract_number || '-').slice(0, 15).padEnd(16) +
+      String(r.sto_number || '-').slice(0, 14).padEnd(15) +
+      up(r.status).padEnd(15) +
+      (mt(shippingPerfOutstandingQtyKgForAggregate(r)) + ' MT').padStart(11) +
+      (mt(raw(r)) + ' MT').padStart(12) +
+      String(r.po_sto_count ?? 1).padStart(8) +
+      (mt(Number(r.contract_qty ?? 0)) + ' MT').padStart(14));
+  }
   console.log('   voyage rows by status:');
   for (const [k, v] of [...byStatus.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
     console.log('      ' + k.padEnd(20) + String(v.n).padStart(4) + '  ' + (mt(v.kg) + ' MT').padStart(13));

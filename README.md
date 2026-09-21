@@ -2014,6 +2014,44 @@ Performance 1,360ms -> 3,342ms. The two stored-column reads are plain columns, s
 free. `shippingPerfDischargeAlias.test.ts` pins all three, and EXPLAINs the real query rather than
 only asserting on its text.
 
+### Where the CPO / Bontang gap actually went, and what the last 2% is
+
+Reported 2026-09-18 as Shipping Performance 49,107 MT against Shipments 80,939. Closed by
+measurement, in this order - each step found by measuring rather than by reasoning from the total,
+which produced four wrong explanations along the way:
+
+| | gap |
+| --- | --- |
+| reported | 31,832 MT |
+| + the unplanned backlog arm | |
+| + the page's Step A no longer discards it | |
+| + Region/Site from the shared helper | |
+| + the frontend aggregate rule matched to the backend's | **1,661 MT (2.0%)** |
+
+**The residual is one difference, and it is structural.** Splitting by arm the way the Shipments
+cards already do puts it in two stages and nowhere else:
+
+| stage | Shipping Performance | Shipments | gap |
+| --- | --- | --- | --- |
+| backlog (Unplanned + Preplanned) | 28,019 MT | 28,019 MT | **0** |
+| Planned | 36,500 (11 rows) | 36,500 (11) | **0** |
+| At Loading Port | 2,800 (1) | 3,059 (1) | 259 |
+| At Discharge Port group | 12,596 (8) | 13,997 (6) | 1,401 |
+
+The backlog arm agrees to the MT because both pages call `contractBacklogCoreWhereSql` - the same
+function, which is the whole argument for sharing rather than copying. Planned agrees because those
+POs carry one STO each.
+
+One shipment shows the rest: **MT. GIAT ARMADA 02**, Arrived LP, reads **2,800 MT** here and
+**3,059 MT** on Shipments. Same shipment, two numbers, because Shipments takes the CONTRACT's
+outstanding (`sqlShipmentExecutionOsPerContractCtes`, per contract, no division) while this page
+takes the STO's share of it. **No filter can close that.** It closes only by choosing one grain,
+and the two grains are each right for their own page: a contract-grain figure cannot be broken down
+by vessel, and an STO-grain figure cannot be summed per contract without apportioning.
+
+So 2% is where this stops being a defect and starts being a definition. Fixing it means deciding
+that one page's grain wins everywhere, not finding another bug.
+
 ### Two files, one function name, two answers
 
 `shippingPerformanceOutstandingAgg.ts` exists twice - `backend/src/utils/` and `frontend/src/lib/` -
