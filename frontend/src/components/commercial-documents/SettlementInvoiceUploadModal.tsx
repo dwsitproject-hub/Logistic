@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { X, Upload, Loader2, AlertCircle } from 'lucide-react'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -17,8 +17,20 @@ import { cn } from '@/lib/utils'
 type Props = {
   row: CommercialDocumentRow
   existingFileName?: string | null
+  initialFile?: File | null
   onClose: () => void
   onSaved: () => void
+}
+
+function isSettlementUploadFile(file: File): boolean {
+  const mime = (file.type || '').toLowerCase()
+  const name = file.name.toLowerCase()
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return true
+  return /^image\/(png|jpe?g|webp)$/i.test(mime) || /\.(png|jpe?g|webp)$/i.test(name)
+}
+
+function dragHasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types || []).includes('Files')
 }
 
 type OcrBanner = {
@@ -29,6 +41,7 @@ type OcrBanner = {
 export function SettlementInvoiceUploadModal({
   row,
   existingFileName,
+  initialFile = null,
   onClose,
   onSaved,
 }: Props) {
@@ -38,6 +51,8 @@ export function SettlementInvoiceUploadModal({
   const [submitting, setSubmitting] = useState(false)
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [banner, setBanner] = useState<OcrBanner | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  const appliedInitialFile = useRef(false)
 
   const loadExistingSummary = useCallback(async () => {
     const poNumber = String(row.po_number || row.contract_id || '').trim()
@@ -54,7 +69,8 @@ export function SettlementInvoiceUploadModal({
         `/commercial-documents/settlement-invoice/${encodeURIComponent(poNumber)}${qs}`,
       )
       const data = res.data?.data
-      if (data) {
+      // A dropped file should keep OCR values; do not overwrite with the saved summary.
+      if (data && !initialFile) {
         setFields(settlementFieldsFromApi(data))
       }
     } catch {
@@ -62,7 +78,7 @@ export function SettlementInvoiceUploadModal({
     } finally {
       setLoadingSummary(false)
     }
-  }, [row.po_number, row.contract_id, row.contract_ext_no])
+  }, [row.po_number, row.contract_id, row.contract_ext_no, initialFile])
 
   useEffect(() => {
     void loadExistingSummary()
@@ -100,6 +116,14 @@ export function SettlementInvoiceUploadModal({
     setSelectedFile(file)
     if (file) void runOcr(file)
   }
+
+  useEffect(() => {
+    if (appliedInitialFile.current || !initialFile || loadingSummary) return
+    appliedInitialFile.current = true
+    handleFileChange(initialFile)
+    // Apply dropped file once after any saved settlement fields have loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFile, loadingSummary])
 
   const handleFieldChange = (key: SettlementInvoiceFieldKey, value: number | null) => {
     setFields((prev) => ({ ...prev, [key]: value }))
@@ -184,16 +208,45 @@ export function SettlementInvoiceUploadModal({
               disabled={busy}
               onChange={(e) => {
                 const f = e.target.files?.[0] ?? null
-                handleFileChange(f)
                 e.target.value = ''
+                if (!f) return
+                if (!isSettlementUploadFile(f)) {
+                  setBanner({ type: 'error', message: 'Drop a PDF or image (PNG/JPEG/WebP).' })
+                  return
+                }
+                handleFileChange(f)
               }}
             />
             <div
               className={cn(
                 'rounded-lg border border-dashed px-4 py-6 text-center transition-colors',
-                selectedFile ? 'border-blue-200 bg-blue-50/40' : 'border-gray-200',
+                selectedFile && !dragOver ? 'border-blue-200 bg-blue-50/40' : 'border-gray-200',
                 ocrScanning && 'border-blue-300 bg-blue-50/60',
+                dragOver && !busy && 'border-green-400 bg-green-50/70',
               )}
+              onDragOver={(e) => {
+                if (busy || !dragHasFiles(e)) return
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'copy'
+                setDragOver(true)
+              }}
+              onDragLeave={(e) => {
+                const next = e.relatedTarget as Node | null
+                if (next && e.currentTarget.contains(next)) return
+                setDragOver(false)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragOver(false)
+                if (busy) return
+                const file = e.dataTransfer.files?.[0]
+                if (!file) return
+                if (!isSettlementUploadFile(file)) {
+                  setBanner({ type: 'error', message: 'Drop a PDF or image (PNG/JPEG/WebP).' })
+                  return
+                }
+                handleFileChange(file)
+              }}
             >
               {ocrScanning ? (
                 <div className="flex flex-col items-center gap-2 text-blue-700">
@@ -205,7 +258,11 @@ export function SettlementInvoiceUploadModal({
                 <>
                   <Upload className="h-8 w-8 mx-auto text-gray-400 mb-2" />
                   <p className="text-sm text-gray-700">
-                    {selectedFile ? selectedFile.name : 'Select a PDF or image (PNG/JPEG)'}
+                    {dragOver
+                      ? 'Drop file to attach'
+                      : selectedFile
+                        ? selectedFile.name
+                        : 'Drop a PDF or image here, or browse'}
                   </p>
                   <Button
                     variant="outline"
