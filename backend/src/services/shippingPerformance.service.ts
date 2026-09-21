@@ -375,6 +375,17 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
   const clearedMilestones = Object.fromEntries(
     SHIPPING_PERF_MILESTONE_FIELDS.map((field) => [field, null]),
   );
+  /*
+   * import_status is narrowed too, and it matters MORE than the milestones: deriveShipmentStatus
+   * tests it FIRST, before any ATA, so a group-aggregated Close makes the row COMPLETED whatever
+   * its dates say. Measured: 289 of 844 COMPLETED rows carry no ATA at all - Close alone did it.
+   *
+   * Narrowing only the milestones therefore changed nothing on production, which is how this was
+   * found: the page did not move after the first version shipped.
+   *
+   * 15 of 887 groups on dev take their Close solely from a foreign-STO row. Those are the ones
+   * this releases - and only for OS and card membership; `status` keeps the group's value.
+   */
   merged.os_status =
     ownStoRows.length === rows.length
       ? merged.status
@@ -382,6 +393,8 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
           ...merged,
           ...clearedMilestones,
           ...maxMergeMilestoneFields(ownStoRows),
+          import_status:
+            aggregateImportStatusForStoGroup(ownStoRows.map((row) => row.import_status)) ?? null,
         });
   Object.assign(merged, computeShippingPerfDeltaFields(merged));
   return merged;

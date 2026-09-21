@@ -2057,6 +2057,16 @@ Two mistakes inside this change, both caught by measurement rather than reading:
 | filtered with `shippingPerfStoGroupKey(row) === groupKey` | vacuous - every row in a group has that key by construction, so it matched everything and changed nothing |
 | spread the own-STO milestones over `merged` | `maxMergeMilestoneFields` only writes fields it found a value for, so the foreign row's ATC survived. The milestones are cleared first now |
 
+**`import_status` had to be narrowed too, and it matters more than the milestones.**
+`deriveShipmentStatus` tests it FIRST, before any ATA, so a group-aggregated `Close` makes a row
+COMPLETED whatever its dates say. Measured: **289 of 844** COMPLETED rows carry no ATA at all -
+`Close` alone did it. Narrowing only the milestones therefore changed nothing on production, and
+that is how this was found: the page did not move after the first version shipped.
+
+**15 of 887** groups on dev take their `Close` solely from a foreign-STO row; those are the ones
+the narrowing releases, and only for OS and card membership. Rows differing on `os_status` went
+from 2 to 17.
+
 **Dev cannot demonstrate the effect**, and that is worth stating rather than hiding: the mechanism
 fires on **39 of 887** groups there and **2** rows end up with a different `os_status`, but none of
 them sit in CPO / BONTANG, so the slice total is unchanged on dev. The three contracts are on
