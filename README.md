@@ -2105,6 +2105,44 @@ the contract's own quantity is the only sensible value. Zero rows remain.
 contract-grain correction fills. It does change the **By Vessel** contract-qty column, which sums
 this field: that total rises, and the rise is the correction.
 
+### Is the OS calculation the same on all four pages? Mostly - and where it is not
+
+Asked directly (Ryan, 2026-09-21) of Contract Performance, Shipping Performance, Shipments and
+Trucking. Checked rather than assumed, and the answer is better than expected in one way and worse
+in another.
+
+**The formula is already shared.** All four reach `sqlContractGlobalOutstandingExpr`. There is one
+definition of "ordered minus delivered, clamped at zero", and nobody has a private copy.
+
+**The arguments are not.** The incoterm decides which delivery column the quantity is read from -
+trucking or vessel - and each page spells it differently:
+
+| page | `incotermExpr` |
+| --- | --- |
+| Contract Performance | `contractEffectiveIncotermExpr` - the contract's, falling back to the latest SAP row |
+| Shipments (execution) | the contract's own, falling back to the STO group's |
+| Trucking | `c.incoterm`, the raw column alone |
+| Shipping Performance | the contract's own, no fallback |
+
+**Measured: 0 contracts** where the own incoterm differs from the effective one. So this is latent,
+not live - it costs nothing today and will cost something the first time SAP carries an incoterm
+the contract row does not. Worth collapsing onto one expression, not worth a rushed change.
+
+**The live difference is a gate, not a formula.** Shipments and Shipping Performance zero a
+contract whose own GR says Close (`sqlIsContractSapClosedExpr`, tested per contract). Contract
+Performance uses that expression only as a status *filter*, never to zero the quantity.
+
+> **50 contracts, 9,485 MT** (CPO / BONTANG / YTD, sea incoterms) are valued by Contract
+> Performance and zeroed by the other two.
+
+That is 43% of the 22,130 MT the invariants script reports between Shipping Performance and
+Contract Performance on dev. The rest is not yet traced.
+
+**Which page is right is a decision, not a bug**: a contract whose GR is closed but whose
+quantities do not reconcile either still has outstanding (Contract Performance's reading) or is
+finished and the residual is a data question (the other two). They cannot both be shown as "OS"
+without one of them being wrong.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches
