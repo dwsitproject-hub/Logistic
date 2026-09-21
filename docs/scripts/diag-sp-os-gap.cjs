@@ -348,27 +348,52 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
       const share = shippingPerfOutstandingQtyKgForAggregate(r) / Math.max(cs.length, 1);
       for (const c of cs) attributed.set(c, (attributed.get(c) ?? 0) + share);
     }
+    /*
+     * BOTH DIRECTIONS.
+     *
+     * Reporting only the shortfall said 5,162 MT where the residual is 1,661, and the first
+     * explanation offered for that - that the diagnosis used the backlog formula rather than the
+     * execution one - was wrong: swapping in the execution expression changed nothing. The two
+     * agree. What the one-sided figure hid is that some contracts are counted for MORE here than
+     * their contract outstanding, and the two directions net off.
+     */
     let shortfall = 0;
-    const worst = [];
+    let excess = 0;
+    const short = [];
+    const over = [];
     for (const c of voyageContracts) {
       const whole = contractOs.get(c) ?? 0;
       const here = attributed.get(c) ?? 0;
       const d = whole - here;
       if (d > 1) {
         shortfall += d;
-        worst.push([c, whole, here, d]);
+        short.push([c, whole, here, d]);
+      } else if (d < -1) {
+        excess += -d;
+        over.push([c, whole, here, -d]);
       }
     }
-    worst.sort((a, b) => b[3] - a[3]);
+    short.sort((a, b) => b[3] - a[3]);
+    over.sort((a, b) => b[3] - a[3]);
     console.log('');
-    console.log('outstanding on contracts here that no in-scope STO carries:');
-    console.log('   contracts short : ' + worst.length + ' of ' + voyageContracts.length);
-    console.log('   total shortfall : ' + mt(shortfall) + ' MT   <- compare with the residual');
-    console.log('   contract        contract OS    counted here      short');
-    for (const [c, whole, here, d] of worst.slice(0, 12)) {
-      console.log('      ' + String(c).padEnd(15) + (mt(whole) + ' MT').padStart(12) +
-        (mt(here) + ' MT').padStart(15) + (mt(d) + ' MT').padStart(12));
-    }
+    console.log('contract outstanding vs what in-scope STOs carry:');
+    console.log('   short here  : ' + String(short.length).padStart(3) + ' contracts  ' +
+      (mt(shortfall) + ' MT').padStart(12));
+    console.log('   over here   : ' + String(over.length).padStart(3) + ' contracts  ' +
+      (mt(excess) + ' MT').padStart(12));
+    console.log('   NET         : ' + (mt(shortfall - excess) + ' MT').padStart(29) +
+      '   <- this is what should equal the residual');
+    const table = (label, rows) => {
+      if (!rows.length) return;
+      console.log('   ' + label);
+      console.log('      contract        contract OS    counted here         diff');
+      for (const [c, whole, here, d] of rows.slice(0, 12)) {
+        console.log('      ' + String(c).padEnd(15) + (mt(whole) + ' MT').padStart(12) +
+          (mt(here) + ' MT').padStart(15) + (mt(d) + ' MT').padStart(13));
+      }
+    };
+    table('short - outstanding no in-scope STO carries:', short);
+    table('over - counted here beyond the contract outstanding:', over);
   }
 
   console.log('   voyage rows by status:');

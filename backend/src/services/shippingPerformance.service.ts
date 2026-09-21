@@ -19,6 +19,11 @@ import {
   SHIPPING_PERF_STO_GROUP_KEY_EXPR,
 } from '../utils/shippingPerformanceStoMetricsSql';
 import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
+import {
+  applyContractGrainOutstanding,
+  contractNumbersOf,
+  loadContractExecutionOutstandingKg,
+} from './shippingPerfContractGrainOs.service';
 import { shippingPerfOutstandingQtyKgForAggregate } from '../utils/shippingPerformanceOutstandingAgg';
 import {
   shippingPerfStoGroupKeyFromRow,
@@ -1129,6 +1134,28 @@ function refreshShippingPerformanceRows(): Promise<Record<string, unknown>[]> {
         logger.error('Shipping Performance backlog arm failed - page served without it', { err });
       }
       const rows = [...shipmentRows, ...backlogRows];
+
+      /*
+       * Give the aggregates the CONTRACT's outstanding, the way Shipments values it, instead of
+       * each STO's share of its PO. Without this the same slice reads 79,914 MT here against
+       * 81,583 on Shipments, because a contract whose other STOs are completed or out of scope is
+       * only ever counted in part.
+       *
+       * Guarded like the backlog arm and for the same reason: a failure here must cost the
+       * contract-grain correction, not the page. Falling back leaves the per-STO shares in place,
+       * which understates outstanding rather than showing nothing.
+       */
+      try {
+        const contractNumbers = shipmentRows.flatMap((row) => contractNumbersOf(row));
+        const contractOsKg = await loadContractExecutionOutstandingKg(contractNumbers);
+        applyContractGrainOutstanding(shipmentRows, contractOsKg);
+      } catch (err) {
+        logger.error(
+          'Shipping Performance contract-grain outstanding failed - page served on per-STO shares',
+          { err },
+        );
+      }
+
       ROW_CACHE.set(ROW_CACHE_KEY, { rows, expiresAt: Date.now() + CACHE_TTL_MS });
       return rows;
     } finally {

@@ -8,6 +8,7 @@ import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
  */
 
 import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlShipmentActiveStageRankExpr } from './shipmentActiveStageRank';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
 import { sqlContractOutstandingFromFields, sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
@@ -225,15 +226,13 @@ export function sqlShipmentSection1LightExecutionEnrichSelect(alias: string): st
 }
 
 /** Furthest active pipeline stage wins when one PO sits on multiple STOs. */
-export function sqlShipmentActiveStageRankExpr(effectiveStatusExpr: string): string {
-  return `CASE
-    WHEN ${effectiveStatusExpr} IN ('ARRIVED_DP', 'BERTHED_DP', 'UNLOADING') THEN 5
-    WHEN ${effectiveStatusExpr} = 'SAILED' THEN 4
-    WHEN ${effectiveStatusExpr} IN ('ARRIVED_LP', 'BERTHED_LP', 'LOADING', 'COMPLETED_LOADING') THEN 3
-    WHEN ${effectiveStatusExpr} = 'PLANNED' THEN 2
-    ELSE 1
-  END`;
-}
+/**
+ * Re-exported from shipmentActiveStageRank.ts, where the ranks are defined once and rendered to
+ * both SQL and TypeScript. Shipping Performance has to apply this rule in TS to place a contract's
+ * outstanding on its furthest-stage row, and a second hand-written copy of it is exactly the
+ * failure mode this repo keeps hitting.
+ */
+export { sqlShipmentActiveStageRankExpr };
 
 /**
  * Collapse execution OS to one row per contract (qty_move, floor 0).
