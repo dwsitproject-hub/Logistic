@@ -56,6 +56,7 @@ const { resolveContractsQtyMoveCte } = load('services/contractQtyMoveSnapshot.se
 const {
   parseShippingPerfContractDateList,
   shippingPerfRowMatchesContractDateRange,
+  deriveShippingPerfRowStatus,
 } = load('services/shippingPerformance.service');
 
 const PRODUCT = (process.argv[2] || 'CPO').trim().toUpperCase();
@@ -476,6 +477,52 @@ const raw = (r) => Number(r.outstanding_qty_actual ?? r.outstanding_qty ?? 0) ||
   } catch (err) {
     console.log('   (could not be measured: ' + String(err.message).slice(0, 140) + ')');
   }
+
+  /*
+   * DO THE TWO PAGES AGREE ON WHICH STAGE A SHIPMENT IS AT?
+   *
+   * Shipments decides with shipmentEffectiveStatusExpr, derived from the milestone dates. This
+   * page carries s.status straight from the table and never derives - applyShippingPerfDerivedStatuses
+   * exists and is called nowhere. deriveShippingPerfRowStatus is the TS twin of that SQL ladder,
+   * already mapped to this page's column names, so comparing the two says exactly how much of the
+   * last 161 MT is a stage the two pages read differently.
+   *
+   * A disagreement matters twice over: it decides whether a contract is priced at all, and which
+   * row wins it under the furthest-active-stage rule.
+   */
+  const disagree = new Map();
+  let disagreeKg = 0;
+  let disagreeRows = 0;
+  for (const r of inPeriod) {
+    if (r.is_unplanned_backlog === true) continue;
+    const carried = up(r.status);
+    let derived;
+    try {
+      derived = up(deriveShippingPerfRowStatus(r));
+    } catch {
+      continue;
+    }
+    if (carried === derived) continue;
+    disagreeRows += 1;
+    const kg = shippingPerfOutstandingQtyKgForAggregate(r);
+    disagreeKg += kg;
+    const key = `${carried || '(blank)'} -> ${derived || '(blank)'}`;
+    const acc = disagree.get(key) ?? { n: 0, kg: 0 };
+    acc.n += 1;
+    acc.kg += kg;
+    disagree.set(key, acc);
+  }
+  console.log('');
+  console.log('stage read from the table vs derived from the milestones:');
+  console.log('   rows that disagree : ' + disagreeRows + ' of ' + inPeriod.filter((r) => r.is_unplanned_backlog !== true).length);
+  console.log('   outstanding on them: ' + mt(disagreeKg) + ' MT');
+  if (disagree.size) {
+    console.log('   carried -> derived'.padEnd(46) + 'rows' + 'OS'.padStart(14));
+    for (const [k, v] of [...disagree.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
+      console.log('   ' + k.slice(0, 42).padEnd(46) + String(v.n).padStart(4) + (mt(v.kg) + ' MT').padStart(14));
+    }
+  }
+  console.log('   (a disagreement decides both whether a contract is priced and which row wins it)');
 
   console.log('   voyage rows by status:');
   for (const [k, v] of [...byStatus.entries()].sort((a, b) => b[1].kg - a[1].kg)) {
