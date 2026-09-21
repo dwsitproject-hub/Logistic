@@ -181,6 +181,22 @@ export function getPrePlannedGroupRepresentativeMember<T extends PrePlannedTable
   return group.members[0];
 }
 
+/** Group UUID used by Preplanned View Table Cancel → Unplanned. Ignores singleton placeholders. */
+export function resolvePrePlannedCancelGroupId<T extends PrePlannedTableGroupMember>(
+  group: PrePlannedTableGroup<T>,
+): string | null {
+  const candidates = [
+    group.group?.id,
+    ...group.members.map((member) => member.pre_planned_group_id),
+    group.groupKey.startsWith('singleton:') ? '' : group.groupKey,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim();
+    if (value && !value.startsWith('singleton:')) return value;
+  }
+  return null;
+}
+
 export function getPrePlannedGroupSortValue<T extends PrePlannedTableGroupMember>(
   group: PrePlannedTableGroup<T>,
   colId: string,

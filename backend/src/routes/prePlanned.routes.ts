@@ -13,6 +13,7 @@ import {
   postPrePlannedManualCreate,
   postPrePlannedRebuild,
   postPrePlannedRevert,
+  postPrePlannedCancelToUnplanned,
 } from '../controllers/prePlanned.controller';
 
 const router = express.Router();
@@ -79,6 +80,12 @@ router.post(
   authorize('ADMIN', 'MANAGEMENT', 'LOGISTICS'),
   auditLog('REVERT', 'PRE_PLANNED_GROUP'),
   postPrePlannedRevert,
+);
+router.post(
+  '/groups/:id/cancel-to-unplanned',
+  authorize('ADMIN', 'MANAGEMENT', 'LOGISTICS'),
+  auditLog('PRE_PLANNED_CANCEL_TO_UNPLANNED', 'PRE_PLANNED_GROUP'),
+  postPrePlannedCancelToUnplanned,
 );
 
 export default router;

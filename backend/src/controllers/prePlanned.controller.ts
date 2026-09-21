@@ -6,6 +6,7 @@ import {
   acceptPrePlannedGroupLink,
   createManualPrePlannedGroup,
   dismissPrePlannedGroup,
+  dissolveAcceptedPrePlannedGroupToUnplanned,
   getPrePlannedGroupById,
   getPrePlannedMetrics,
   listPrePlannedGroups,
@@ -13,6 +14,7 @@ import {
   revertPrePlannedGroupToSuggested,
 } from '../services/prePlannedGroup.service';
 import { invalidateShipmentsListCache } from '../services/shipmentList.service';
+import { invalidateAfterShipmentWrite } from '../services/shipmentWriteInvalidation.service';
 import {
   fetchShipmentGroupingTemplateRows,
   parseGroupingTemplateQueryFromRequest,
@@ -154,6 +156,27 @@ export const postPrePlannedRevert = async (req: AuthRequest, res: Response): Pro
     res.status(400).json({
       success: false,
       error: { message: error instanceof Error ? error.message : 'Failed to revert pre-planned group' },
+    });
+  }
+};
+
+export const postPrePlannedCancelToUnplanned = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!isPrePlannedGroupingEnabled()) {
+      disabled(res);
+      return;
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
+    const data = await dissolveAcceptedPrePlannedGroupToUnplanned(req.params.id, reason, req.user?.id);
+    invalidateAfterShipmentWrite();
+    res.json({ success: true, data: { cancelledToUnplanned: true, ...data } });
+  } catch (error) {
+    logger.error('postPrePlannedCancelToUnplanned failed', error);
+    res.status(400).json({
+      success: false,
+      error: {
+        message: error instanceof Error ? error.message : 'Failed to return preplanned group to Unplanned',
+      },
     });
   }
 };

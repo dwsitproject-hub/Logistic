@@ -48,6 +48,7 @@ import {
 } from '@/components/contracts/ContractDetailModal'
 import {
   acceptPrePlannedGroup,
+  cancelPrePlannedGroupToUnplanned,
   createManualPrePlannedGroup,
   downloadShipmentGroupingTemplate,
   dismissPrePlannedGroup,
@@ -193,6 +194,7 @@ import {
   getPrePlannedGroupSortValue,
   groupShipmentsByPrePlannedSuggestion,
   prePlannedGroupColumnAggregationMode,
+  resolvePrePlannedCancelGroupId,
   sumGroupQtyKgForColumn,
   type PrePlannedTableGroup,
 } from '@/lib/prePlannedGroupTableRows'
@@ -1446,6 +1448,13 @@ function ShipmentsPageContent() {
   const [cancelShipmentTarget, setCancelShipmentTarget] = useState<Shipment | null>(null)
   const [cancelShipmentRemark, setCancelShipmentRemark] = useState('')
   const [cancelShipmentSubmitting, setCancelShipmentSubmitting] = useState(false)
+  const [cancelPrePlannedTarget, setCancelPrePlannedTarget] = useState<{
+    groupId: string
+    groupLabel: string
+    memberCount: number
+  } | null>(null)
+  const [cancelPrePlannedRemark, setCancelPrePlannedRemark] = useState('')
+  const [cancelPrePlannedSubmitting, setCancelPrePlannedSubmitting] = useState(false)
 
   // ---- Section 1 / 2 summaries from API (toolbar + scoped ETA); Section 3 from paginated list ----
 
@@ -6163,6 +6172,52 @@ function ShipmentsPageContent() {
     setCancelShipmentRemark('')
   }
 
+  const openCancelPrePlannedGroupDialog = (group: PrePlannedTableGroup<Shipment>) => {
+    const groupId = resolvePrePlannedCancelGroupId(group)
+    if (!groupId) return
+    setCancelPrePlannedTarget({
+      groupId,
+      groupLabel: group.group ? formatPrePlannedGroupBadge(group.group) : 'Preplanned group',
+      memberCount: group.members.length,
+    })
+    setCancelPrePlannedRemark('')
+  }
+
+  const closeCancelPrePlannedGroupDialog = () => {
+    if (cancelPrePlannedSubmitting) return
+    setCancelPrePlannedTarget(null)
+    setCancelPrePlannedRemark('')
+  }
+
+  const handleConfirmCancelPrePlannedGroup = async () => {
+    if (!cancelPrePlannedTarget) return
+
+    const remark = cancelPrePlannedRemark.trim()
+    if (!remark) {
+      alert('Cancellation remark is required.')
+      return
+    }
+
+    setCancelPrePlannedSubmitting(true)
+    try {
+      await cancelPrePlannedGroupToUnplanned(cancelPrePlannedTarget.groupId, remark)
+      setCancelPrePlannedTarget(null)
+      setCancelPrePlannedRemark('')
+      await Promise.all([refetchPrePlannedGroups(), refetchPrePlannedAcceptedGroups()])
+      invalidateLogisticsListCaches()
+      section1SummaryForceNextFetchRef.current = true
+      await fetchShipments(undefined, undefined, { force: true })
+      alert('Preplanned group returned to Unplanned.')
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
+        (err instanceof Error ? err.message : 'Failed to return preplanned group to Unplanned')
+      alert(message)
+    } finally {
+      setCancelPrePlannedSubmitting(false)
+    }
+  }
+
   const handleConfirmCancelShipment = async () => {
     if (!cancelShipmentTarget) return
 
@@ -7430,6 +7485,7 @@ function ShipmentsPageContent() {
                           if (statusFilter === 'PREPLANNED' && sortedPrePlannedTableGroups) {
                             return sortedPrePlannedTableGroups.map((group) => {
                               const rep = getPrePlannedGroupRepresentativeMember(group)
+                              const cancelGroupId = resolvePrePlannedCancelGroupId(group)
                               const rowBg = stripeIdx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                               stripeIdx += 1
                               return (
@@ -7455,13 +7511,18 @@ function ShipmentsPageContent() {
                                     className={`sticky right-0 z-10 border-l align-middle shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)] ${CONTRACT_PERF_TABLE_CELL_PAD} ${rowBg}`}
                                   >
                                     <ShipmentViewTableRowActions
-                                      shipment={rep}
+                                      shipment={{
+                                        ...rep,
+                                        status: 'PREPLANNED',
+                                        pre_planned_group_id: cancelGroupId,
+                                      }}
                                       onAddShipment={() => void handleOpenAddShipmentForContractRow(rep)}
                                       onEditShipment={() => handleOpenEditShipmentModal(rep)}
                                       onViewShipment={() => handleOpenViewShipmentModal(rep)}
-                                      onCancelShipment={() => openCancelShipmentDialog(rep)}
+                                      onCancelShipment={() => openCancelPrePlannedGroupDialog(group)}
                                       cancelShipmentLoading={
-                                        cancelShipmentSubmitting && cancelShipmentTarget?.id === rep.id
+                                        cancelPrePlannedSubmitting &&
+                                        cancelPrePlannedTarget?.groupId === cancelGroupId
                                       }
                                       onViewDocs={() => void handleViewDocuments(rep)}
                                     />
@@ -7918,6 +7979,7 @@ function ShipmentsPageContent() {
                   ) : statusFilter === 'PREPLANNED' && sortedPrePlannedTableGroups ? (
                   sortedPrePlannedTableGroups.map((group) => {
                     const rep = getPrePlannedGroupRepresentativeMember(group)
+                    const cancelGroupId = resolvePrePlannedCancelGroupId(group)
                     return (
                       <div
                         key={group.groupKey}
@@ -7940,13 +8002,18 @@ function ShipmentsPageContent() {
                               </Badge>
                             </div>
                             <ShipmentViewTableRowActions
-                              shipment={rep}
+                              shipment={{
+                                ...rep,
+                                status: 'PREPLANNED',
+                                pre_planned_group_id: cancelGroupId,
+                              }}
                               onAddShipment={() => void handleOpenAddShipmentForContractRow(rep)}
                               onEditShipment={() => handleOpenEditShipmentModal(rep)}
                               onViewShipment={() => handleOpenViewShipmentModal(rep)}
-                              onCancelShipment={() => openCancelShipmentDialog(rep)}
+                              onCancelShipment={() => openCancelPrePlannedGroupDialog(group)}
                               cancelShipmentLoading={
-                                cancelShipmentSubmitting && cancelShipmentTarget?.id === rep.id
+                                cancelPrePlannedSubmitting &&
+                                cancelPrePlannedTarget?.groupId === cancelGroupId
                               }
                               onViewDocs={() => void handleViewDocuments(rep)}
                             />
@@ -9556,6 +9623,50 @@ function ShipmentsPageContent() {
               disabled={cancelShipmentSubmitting || !cancelShipmentRemark.trim()}
             >
               {cancelShipmentSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!cancelPrePlannedTarget} onOpenChange={(open) => { if (!open) closeCancelPrePlannedGroupDialog() }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancel Preplanned Group</DialogTitle>
+            <DialogDescription>
+              {cancelPrePlannedTarget
+                ? `${cancelPrePlannedTarget.groupLabel} • ${cancelPrePlannedTarget.memberCount} ${
+                    cancelPrePlannedTarget.memberCount === 1 ? 'PO' : 'POs'
+                  }`
+                : 'Return all POs in this group to Unplanned.'}
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm text-gray-600">
+            All POs in this group will return to <span className="font-medium">Unplanned</span>.
+            This does not cancel a shipment.
+          </p>
+          <div className="space-y-2">
+            <label htmlFor="cancel-preplanned-remark" className="text-sm font-medium text-gray-700">
+              Cancellation Reason <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="cancel-preplanned-remark"
+              className="w-full min-h-[96px] border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-200"
+              placeholder="Enter reason for returning this group to Unplanned..."
+              value={cancelPrePlannedRemark}
+              onChange={(e) => setCancelPrePlannedRemark(e.target.value)}
+              disabled={cancelPrePlannedSubmitting}
+            />
+          </div>
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={closeCancelPrePlannedGroupDialog} disabled={cancelPrePlannedSubmitting}>
+              Close
+            </Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => void handleConfirmCancelPrePlannedGroup()}
+              disabled={cancelPrePlannedSubmitting || !cancelPrePlannedRemark.trim()}
+            >
+              {cancelPrePlannedSubmitting ? 'Cancelling...' : 'Confirm Cancel'}
             </Button>
           </DialogFooter>
         </DialogContent>

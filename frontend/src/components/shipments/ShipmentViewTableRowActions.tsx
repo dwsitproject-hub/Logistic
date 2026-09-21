@@ -3,10 +3,12 @@
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { FileText, Pencil, Ship, Ban } from 'lucide-react'
+import { normalizeShipmentStatusKey } from '@/lib/shipmentStatusDisplay'
 import {
-  canCancelKlipShipment,
   cancelKlipShipmentDisabledReason,
+  cancelPrePlannedGroupDisabledReason,
   resolveShipmentTablePrimaryAction,
+  resolveShipmentViewTableCancelKind,
 } from '@/lib/shipmentViewTableActions'
 
 export interface ShipmentViewTableRowActionsShipment {
@@ -16,6 +18,7 @@ export interface ShipmentViewTableRowActionsShipment {
   sto_number?: string | null
   sto_key?: string | null
   operation_id?: string | null
+  pre_planned_group_id?: string | null
 }
 
 export interface ShipmentViewTableRowActionsProps {
@@ -44,10 +47,23 @@ export function ShipmentViewTableRowActions({
   onViewDocs,
 }: ShipmentViewTableRowActionsProps) {
   const primary = resolveShipmentTablePrimaryAction(shipment.status)
-  const canCancel = canCancelKlipShipment(shipment)
-  const cancelDisabledReason = cancelKlipShipmentDisabledReason(shipment)
+  const cancelKind = resolveShipmentViewTableCancelKind(shipment)
+  const canCancel = cancelKind != null
+  const cancelDisabledReason = canCancel
+    ? null
+    : normalizeShipmentStatusKey(shipment.status) === 'PREPLANNED'
+      ? cancelPrePlannedGroupDisabledReason(shipment)
+      : cancelKlipShipmentDisabledReason(shipment)
   const showCancel = typeof onCancelShipment === 'function'
   const cancelDisabled = !canCancel || cancelShipmentLoading
+  const cancelLabel =
+    cancelKind === 'preplanned'
+      ? 'Return all POs in this group to Unplanned'
+      : cancelKind === 'klip_shipment'
+        ? 'Cancel shipment (KLIP only)'
+        : cancelDisabledReason || 'Cancel not available'
+  const cancelAriaLabel =
+    cancelKind === 'preplanned' ? 'Cancel preplanned group' : 'Cancel shipment'
 
   const primaryButton = (() => {
     if (primary === 'add') {
@@ -142,7 +158,7 @@ export function ShipmentViewTableRowActions({
                     ? 'border-gray-200 bg-gray-50 text-gray-400'
                     : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'
                 }
-                aria-label="Cancel shipment"
+                aria-label={cancelAriaLabel}
               >
                 {cancelShipmentLoading ? (
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-red-300 border-t-red-700" />
@@ -153,9 +169,7 @@ export function ShipmentViewTableRowActions({
             </span>
           </TooltipTrigger>
           <TooltipContent side="top">
-            {canCancel
-              ? 'Cancel shipment (KLIP only)'
-              : cancelDisabledReason || 'Cancel not available'}
+            {cancelLabel}
           </TooltipContent>
         </Tooltip>
       ) : null}
