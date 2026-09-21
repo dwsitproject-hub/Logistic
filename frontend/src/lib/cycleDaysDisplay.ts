@@ -104,6 +104,12 @@ export function formatAvgDays(days: number | null | undefined): string {
   return `${rounded} ${unit}`
 }
 
+/** Compact Section 1 wrap metrics — `12 d` instead of `12 days`. */
+export function formatAvgDaysCompact(days: number | null | undefined): string {
+  if (days == null || !Number.isFinite(days)) return '-'
+  return `${daysMagnitude(Math.round(days))} d`
+}
+
 /** Section 1 status cards: nullable cycle averages; trade avg when no contracts in scope. */
 export function statusCardAvgDaysClass(
   days: number | null | undefined,

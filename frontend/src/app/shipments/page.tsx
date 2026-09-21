@@ -142,6 +142,7 @@ import {
   buildShipmentVisibleColumns,
   filterShipmentVisibleColumnIdsForStage,
   isShipmentGroupingSuggestionColumnEligible,
+  isShipmentManualSelectColumnEligible,
   isShipmentTradeCycleColumnEligible,
   mergeShipmentColumnOrder,
   migrateShipmentColumnLayout,
@@ -4213,30 +4214,19 @@ function ShipmentsPageContent() {
       id: SHIPMENT_MANUAL_SELECT_COLUMN_ID,
       label: 'Grouping Manual',
       formulaHelp:
-        'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Shown only on Unplanned / Preplanned cards; checkboxes are enabled on Unplanned only.',
+        'Manually multi-select Unplanned contracts and group them into a Preplanned grouping — an alternative to waiting for an auto Grouping Suggestion. Shown only when the Unplanned card is selected.',
       defaultVisible: false,
       sortable: false,
       render: (s) => {
         if (!isContractBacklogRow(s)) return null
         const key = String(s.contract_row_id || s.id || '').trim()
         if (!key) return null
-        const enabled = statusFilter === 'UNPLANNED'
-        const checkbox = (
+        return (
           <Checkbox
             checked={selectedManualGroupContractIds.has(key)}
             onCheckedChange={() => toggleManualGroupRowSelection(s)}
-            disabled={!enabled}
             aria-label="Select for manual Preplanned grouping"
           />
-        )
-        if (enabled) return checkbox
-        return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex cursor-not-allowed">{checkbox}</span>
-            </TooltipTrigger>
-            <TooltipContent side="top">Select the Unplanned card to enable</TooltipContent>
-          </Tooltip>
         )
       },
     },
@@ -5035,6 +5025,9 @@ function ShipmentsPageContent() {
       const hidden = new Set<string>()
       if (!isShipmentGroupingSuggestionColumnEligible(statusFilter)) {
         for (const id of SHIPMENT_STAGE_GATED_COLUMN_IDS) hidden.add(id)
+      }
+      if (!isShipmentManualSelectColumnEligible(statusFilter)) {
+        hidden.add(SHIPMENT_MANUAL_SELECT_COLUMN_ID)
       }
       if (!isShipmentTradeCycleColumnEligible(statusFilter, shipmentColumnStageOptions)) {
         for (const id of SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS) hidden.add(id)

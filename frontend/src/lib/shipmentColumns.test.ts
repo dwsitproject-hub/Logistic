@@ -22,6 +22,8 @@ import {
 
   isShipmentGroupingSuggestionColumnEligible,
 
+  isShipmentManualSelectColumnEligible,
+
   isShipmentTradeCycleColumnEligible,
 
   isShipmentUnplannedOnlyColumnEligible,
@@ -72,7 +74,7 @@ describe('shipmentColumns', () => {
 
 
 
-  it('shows Grouping Suggestion and Grouping Manual on Unplanned and Preplanned only', () => {
+  it('shows Grouping Suggestion on Unplanned and Preplanned; Grouping Manual on Unplanned only', () => {
 
     const allIds = [...SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS, 'contract_date', SHIPMENT_MANUAL_SELECT_COLUMN_ID]
 
@@ -83,6 +85,12 @@ describe('shipmentColumns', () => {
     expect(isShipmentGroupingSuggestionColumnEligible('ALL')).toBe(false)
 
     expect(isShipmentGroupingSuggestionColumnEligible('PLANNED')).toBe(false)
+
+    expect(isShipmentManualSelectColumnEligible('UNPLANNED')).toBe(true)
+
+    expect(isShipmentManualSelectColumnEligible('PREPLANNED')).toBe(false)
+
+    expect(isShipmentManualSelectColumnEligible('PLANNED')).toBe(false)
 
 
 
@@ -132,7 +140,7 @@ describe('shipmentColumns', () => {
 
     expect(preplannedFiltered.has(SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID)).toBe(true)
 
-    expect(preplannedFiltered.has(SHIPMENT_MANUAL_SELECT_COLUMN_ID)).toBe(true)
+    expect(preplannedFiltered.has(SHIPMENT_MANUAL_SELECT_COLUMN_ID)).toBe(false)
 
   })
 

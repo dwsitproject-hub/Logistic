@@ -42,6 +42,18 @@ describe('getShippingSummaryMetricLabel', () => {
       'Avg Load (ATA - ATR)',
     )
   })
+
+  it('uses compact Avg Disc on the card short label', () => {
+    expect(getShippingSummaryMetricLabel('dischargeEtb', 'estimated', 'short')).toBe(
+      'Avg Disc (ETA-ETB)',
+    )
+    expect(getShippingSummaryMetricLabel('dischargeEtc', 'actual', 'short')).toBe(
+      'Avg Disc (ATB-ATC)',
+    )
+    expect(getShippingSummaryMetricLabel('dischargeEtb', 'estimated', 'full')).toBe(
+      'Avg Discharge (ETA - ETB)',
+    )
+  })
 })
 
 describe('shippingPerfCardTitleLines', () => {

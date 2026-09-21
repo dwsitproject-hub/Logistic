@@ -32,9 +32,7 @@ export const SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID = 'pre_planned_group' as con
 
  * Manual grouping checkbox column — multi-select Unplanned contracts into a manual
 
- * Preplanned group. Opt-in (hidden by default); shown only on Unplanned / Preplanned
-
- * cards, same stage gate as Grouping Suggestion.
+ * Preplanned group. Opt-in (hidden by default); Unplanned card only.
 
  */
 
@@ -51,8 +49,6 @@ export const SHIPMENT_TRADE_CYCLE_COLUMN_ID = 'trade_cycle_days' as const
 export const SHIPMENT_STAGE_GATED_COLUMN_IDS: readonly string[] = [
 
   SHIPMENT_GROUPING_SUGGESTION_COLUMN_ID,
-
-  SHIPMENT_MANUAL_SELECT_COLUMN_ID,
 
 ] as const
 
@@ -282,7 +278,7 @@ export function shipmentDefaultVisibleColumnIds(allIds: string[]): string[] {
 
 
 
-/** Grouping Suggestion + Grouping Manual — eligible on Unplanned and Preplanned only. */
+/** Grouping Suggestion — eligible on Unplanned and Preplanned. */
 
 export function isShipmentGroupingSuggestionColumnEligible(
 
@@ -291,6 +287,20 @@ export function isShipmentGroupingSuggestionColumnEligible(
 ): boolean {
 
   return pipelineStage === 'UNPLANNED' || pipelineStage === 'PREPLANNED'
+
+}
+
+
+
+/** Grouping Manual — Unplanned card only. */
+
+export function isShipmentManualSelectColumnEligible(
+
+  pipelineStage: ShipmentsPipelineStageFilter,
+
+): boolean {
+
+  return pipelineStage === 'UNPLANNED'
 
 }
 
@@ -328,6 +338,9 @@ export function shipmentColumnsHiddenForStage(
   const hidden: string[] = [];
   if (!isShipmentGroupingSuggestionColumnEligible(pipelineStage)) {
     hidden.push(...SHIPMENT_STAGE_GATED_COLUMN_IDS);
+  }
+  if (!isShipmentManualSelectColumnEligible(pipelineStage)) {
+    hidden.push(SHIPMENT_MANUAL_SELECT_COLUMN_ID);
   }
   if (!isShipmentTradeCycleColumnEligible(pipelineStage, options)) {
     hidden.push(...SHIPMENT_UNPLANNED_ONLY_COLUMN_IDS);
