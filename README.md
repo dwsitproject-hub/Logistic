@@ -2067,6 +2067,14 @@ that is how this was found: the page did not move after the first version shippe
 the narrowing releases, and only for OS and card membership. Rows differing on `os_status` went
 from 2 to 17.
 
+**Narrowing applies only inside a real STO group** (`sto:`), and that bound was learned the
+expensive way. An `op:` group has no STO for a row to be foreign to, so comparing a KLIP shipment
+id against an operation id marked **every** row foreign, cleared every milestone and rescued the
+whole group. Production went from 161 MT **under** Shipments to **2,841 MT over** - almost exactly
+contract 1004030359 (own STO `MNL-37125720-1004030359`, an `op:` group) at 3,003 MT. Same exception
+`buildShipmentListAtaSelectSql` makes: a row with no STO of its own has no other group to belong
+to, so it stays counted.
+
 **Dev cannot demonstrate the effect**, and that is worth stating rather than hiding: the mechanism
 fires on **39 of 887** groups there and **2** rows end up with a different `os_status`, but none of
 them sit in CPO / BONTANG, so the slice total is unchanged on dev. The three contracts are on

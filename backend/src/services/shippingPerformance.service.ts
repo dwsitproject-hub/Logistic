@@ -361,12 +361,27 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
    * has that key by construction, so the first version of this filter matched everything and
    * changed nothing. Same predicate as buildShipmentListAtaSelectSql's own-STO FILTER.
    */
-  const groupSto = shippingPerfStoGroupKey(merged).replace(/^(sto:|ship:|op:|id:)/, '').trim();
-  const ownStoRows = rows.filter((row) => {
-    const own = String(row.shipment_id ?? '').trim();
-    if (!own) return true;
-    return own === groupSto;
-  });
+  const groupKey = shippingPerfStoGroupKey(merged);
+  /*
+   * Narrow ONLY inside a real STO group.
+   *
+   * An `op:` / `ship:` / `id:` group has no STO for a row to be foreign to, and comparing a
+   * KLIP shipment id against an operation id marks every row foreign - which cleared every
+   * milestone and rescued the whole group. That over-rescued contract 1004030359 (own STO
+   * MNL-37125720-1004030359, an `op:` group) by 3,003 MT and pushed CPO / BONTANG from 161 MT
+   * under Shipments to 2,841 MT over it.
+   *
+   * Same exception buildShipmentListAtaSelectSql makes: a row with no STO of its own has no
+   * other group to belong to, so it stays counted.
+   */
+  const groupSto = groupKey.startsWith('sto:') ? groupKey.slice('sto:'.length).trim() : '';
+  const ownStoRows = groupSto
+    ? rows.filter((row) => {
+        const own = String(row.shipment_id ?? '').trim();
+        if (!own) return true;
+        return own === groupSto;
+      })
+    : rows;
   /*
    * The milestones are CLEARED before the own-STO ones are laid in. maxMergeMilestoneFields only
    * writes a field it found a value for, so spreading it over `merged` left the foreign row's ATC

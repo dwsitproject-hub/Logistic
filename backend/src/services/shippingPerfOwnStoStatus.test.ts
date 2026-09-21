@@ -71,3 +71,34 @@ describe('os_status narrows the stage to the row own STO', () => {
     expect(String(merged.os_status)).toBe(String(merged.status));
   });
 });
+
+/**
+ * An `op:` group has no STO for a row to be foreign to. Comparing a KLIP shipment id against an
+ * operation id marked every row foreign, cleared every milestone, and rescued the whole group -
+ * over-rescuing contract 1004030359 (own STO MNL-37125720-1004030359) by 3,003 MT and pushing
+ * CPO / BONTANG from 161 MT under Shipments to 2,841 MT over it.
+ */
+describe('narrowing applies only inside a real STO group', () => {
+  it('leaves an operation-keyed group alone', () => {
+    const merged = mergeShippingPerfStoGroup([
+      {
+        sto_key: '',
+        operation_id: 'OP-SEA-170920260001',
+        shipment_id: 'MNL-37125720-1004030359',
+        contract_number: '1004030359',
+        status: 'PLANNED',
+        discharge_ata_completed: '2026-09-01',
+      },
+      {
+        sto_key: '',
+        operation_id: 'OP-SEA-170920260001',
+        shipment_id: 'MNL-25691105-1004031651',
+        contract_number: '1004031651',
+        status: 'PLANNED',
+      },
+    ]);
+    expect(String(merged.status).toUpperCase()).toBe('COMPLETED');
+    // No STO to be foreign to, so the stage is not narrowed and the group stays finished.
+    expect(String(merged.os_status)).toBe(String(merged.status));
+  });
+});
