@@ -2348,7 +2348,7 @@ contract, so the ATC and sto_count lookups run once per contract rather than onc
 row-contract pair on a hot path. The zero-band half is not repeated - the CTE below it already
 promotes a row with nothing outstanding.
 
-**All three pages now agree exactly.** Measured on a copy of production, BONTANG / YTD / sea:
+**All FOUR pages now agree exactly.** Measured on a copy of production, BONTANG / YTD:
 
 | | before the day's work | after |
 | --- | --- | --- |
@@ -2359,6 +2359,19 @@ promotes a row with nothing outstanding.
 
 Both arms match too - backlog 44,072.8 MT each, execution 55,008.8 MT each - and so does each
 incoterm bucket. The 258.7 MT on FOB that had been left untraced turned out to be this same class.
+
+**Trucking, the fourth page, was checked too** and needed no change: 51,842.6 MT against Contract
+Performance's LCO+FRC total of 51,842.6 MT, 0 MT apart, with the FRC/LCO split matching as well.
+It could not have moved - the KLIP overlay is scoped to `IN ('FOB', 'CIF', 'CFR')` and none of the
+14 contracts it shifted are land, and the ATC gate lives inside the Shipments execution arm. Only
+the unclamp touches it at all.
+
+`docs/scripts/diag-four-page-os.cjs` now measures all four through their own entry points, with
+Contract Performance split by incoterm so each operational page meets the half it owns. Comparing
+either half against the whole is what reported 75,477 MT of "DRIFT" the first time, and it was
+simply the other transport mode. Trucking's figure comes from `trucking_list_stage_snapshot`, so
+the script prints `summaryFreshness` beside it - a full rebuild of that snapshot is ~21 minutes and
+is not something to trigger by accident.
 
 ### The test suite is flaky under its own parallelism, not under change
 

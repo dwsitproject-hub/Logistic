@@ -1,8 +1,13 @@
 /*
- * READ-ONLY: all THREE outstanding figures at once, each through its own entry point.
+ * READ-ONLY: all FOUR outstanding figures at once, each through its own entry point.
  *
- *   node /app/diag-three-page-os.cjs BONTANG
- *   node /app/diag-three-page-os.cjs BONTANG 2026-01-01 2026-09-22
+ *   node /app/diag-four-page-os.cjs BONTANG
+ *   node /app/diag-four-page-os.cjs BONTANG 2026-01-01 2026-09-22
+ *
+ * Contract Performance is split by incoterm so each operational page meets the half it owns:
+ * Shipping Performance and Shipments against FOB/CIF/CFR, Trucking against LCO/FRC. Comparing
+ * either against the whole reported 75,477 MT of "DRIFT" the first time this was tried, which was
+ * simply the other transport mode.
  *
  * WHY THIS EXISTS. diag-cross-page-invariants.cjs states plainly that it cannot measure the
  * Shipments OS card: `loadShipmentOutstandingQtyForRequest` needs the `shipmentBaseCteSql` the
@@ -35,6 +40,7 @@ if (!DIST) {
 const load = (m) => require(path.join(DIST, m));
 
 const { getShipments } = load('controllers/shipment.controller');
+const { getTruckingOperations } = load('controllers/trucking.controller');
 const { runShippingPerformance } = load('services/shippingPerformance.service');
 const {
   parseLatePerformanceFilters,
@@ -68,7 +74,7 @@ const mt = (kg) => (Number(kg || 0) / 1000).toLocaleString('en-US', { maximumFra
 const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
 (async () => {
-  console.log(`scope: ${SITE} / ${FROM}..${TO} / sea incoterms / all products`);
+  console.log(`scope: ${SITE} / ${FROM}..${TO} / all products, sea AND land`);
 
   // ---- Shipments, through its route handler ------------------------------------------------
   let shipmentsKg = null;
@@ -126,6 +132,43 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
     console.log('   Shipments could not be read: ' + String(err && err.message).slice(0, 160));
   }
 
+  // ---- Trucking, through its own route handler ----------------------------------------------
+  /*
+   * summaryOnly=true is Trucking's equivalent of the Shipments flag above, and it answers from
+   * trucking_list_stage_snapshot - the payload's `summaryFreshness` says which source and as-of,
+   * and a stale one is worth knowing about before reading the number, because a full rebuild of
+   * that snapshot is ~21 minutes and is not something to trigger by accident.
+   */
+  let truckingKg = null;
+  let truckingFreshness = null;
+  try {
+    const req = {
+      query: { summaryOnly: 'true', dateFrom: FROM, dateTo: TO, plant: SITE },
+    };
+    let payload = null;
+    const res = {
+      status() { return this; },
+      json(p) { payload = p; return this; },
+      setHeader() { return this; },
+      send(p) { payload = p; return this; },
+    };
+    const t0 = Date.now();
+    await getTruckingOperations(req, res);
+    const sum = payload && payload.data && payload.data.summary;
+    if (sum && sum.outstandingQty) {
+      truckingKg = Number(sum.outstandingQty.totalKg) || 0;
+      truckingFreshness = sum.summaryFreshness || null;
+      console.log(`   (Trucking answered in ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+      if (truckingFreshness) {
+        console.log(`   Trucking summary source=${truckingFreshness.source} isStale=${truckingFreshness.isStale} asOf=${truckingFreshness.asOf}`);
+      }
+    } else {
+      console.log('   Trucking returned no outstandingQty summary');
+    }
+  } catch (err) {
+    console.log('   Trucking could not be read: ' + String(err && err.message).slice(0, 160));
+  }
+
   // ---- Shipping Performance, through its own entry point ------------------------------------
   const sp = await runShippingPerformance(
     { query: { scope: 'ytd', dateFrom: FROM, dateTo: TO } },
@@ -142,9 +185,10 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
 
   // ---- Contract Performance, through its own entry point ------------------------------------
   const cpFilters = parseLatePerformanceFilters({ query: { dateFrom: FROM, dateTo: TO } }, 'rows');
-  const cpRows = (await loadLatePerformanceRows(cpFilters))
-    .filter((r) => up(r.plant_site) === SITE)
-    .filter((r) => isShipmentPageSeaIncoterm(r.incoterm));
+  const cpAllRows = (await loadLatePerformanceRows(cpFilters)).filter(
+    (r) => up(r.plant_site) === SITE,
+  );
+  const cpRows = cpAllRows.filter((r) => isShipmentPageSeaIncoterm(r.incoterm));
   const cpKg = cpRows
     .filter((r) => ['OPEN', 'ACTIVE'].includes(resolveContractEffectiveStatusText(r)))
     .reduce((a, r) => a + resolveOpenPerfOutstandingQtyKg(r), 0);
@@ -152,11 +196,24 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
   const line = (label, kg) =>
     console.log('   ' + label.padEnd(34) + (kg === null ? '-' : mt(kg) + ' MT').padStart(14));
 
+  const cpLandKg = cpAllRows
+    .filter((r) => ['OPEN', 'ACTIVE'].includes(resolveContractEffectiveStatusText(r)))
+    .filter((r) => ['LCO', 'FRC'].includes(up(r.incoterm)))
+    .reduce((a, r) => a + resolveOpenPerfOutstandingQtyKg(r), 0);
+
   console.log('');
-  console.log('OUTSTANDING, one scope, three entry points:');
+  console.log('SEA (FOB / CIF / CFR), one scope, three entry points:');
   line('Contract Performance (Open)', cpKg);
   line('Shipping Performance (On Going)', spKg);
   line('Shipments (OS card)', shipmentsKg);
+  console.log('');
+  console.log('LAND (LCO / FRC):');
+  line('Contract Performance (Open)', cpLandKg);
+  line('Trucking (OS card)', truckingKg);
+  if (truckingKg !== null) {
+    const d = truckingKg - cpLandKg;
+    console.log(`   ${'Trucking - Contract Perf'.padEnd(30)} ${(Math.abs(d) < 1000 ? 'OK    ' : 'DRIFT ') + mt(d) + ' MT'}`);
+  }
   console.log('');
   const gap = (a, b, label) => {
     if (a === null || b === null) return;
