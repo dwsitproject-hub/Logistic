@@ -2175,6 +2175,45 @@ The direction of the gap differs between environments - on dev Contract Performa
 on production 2026-09-22 it reads *lower* (80,413 vs 81,414 MT) - so the dev composition must not be
 carried over. Run the script where the question is being asked.
 
+### B2B: which side of the family carries outstanding, decided from the data
+
+Asked by Ryan on 2026-09-22, with a warning attached: B2B doubling is how outstanding ballooned
+here before, which is why each page picks one side rather than summing both. His rule: take the PO
+parent, and fall back to the B2B child when the parent is null.
+
+`docs/scripts/diag-b2b-policy.cjs` classifies every pair by who holds the VALUE and who holds the
+LINK. Over all 566 pairs on the dev copy, two absolutes:
+
+| | |
+| --- | --- |
+| parents holding an sto / shipment link of their own | **0 of 566** |
+| parents with no `contract_qty_move_snapshot` row | **0 of 566** |
+
+So the value is always on the parent and the movement is always on the child. Only one policy
+covers both: **keep the child's row as the carrier, value and attribute it under the parent.**
+
+**The trap is case C**, 49 pairs and 17,402 MT: the parent is fully delivered (4,500 delivered,
+4,500 received) and the child is an empty SAP duplicate (0 / 0) still showing its whole quantity.
+A guard that falls back to the child "when the parent has no outstanding" inflates outstanding by
+all of it. The first version of `applyB2bParentPreference` did exactly that. **Zero is not null** -
+the fallback now keys on whether the parent has a `qty_move` row at all, and none of the 566 lack
+one, so the child is never the source today.
+
+**Where each page stood, checked rather than assumed:**
+
+| page | B2B handling | verdict |
+| --- | --- | --- |
+| Contract Performance | excludes children, values the parent | already correct |
+| Shipments | `sqlShipmentListB2bOriginContractJoins` remaps the child's shipment to the origin (`c.id = COALESCE(c_origin.id, c_link.id)`) | already correct |
+| Shipping Performance | relabels the child row to the origin in the main query, then **threw it away at the STO merge** | the only one wrong |
+
+An earlier note in this work claimed Shipments drops B2B children and would need the same change.
+That was read off the comment above its exclusion clause without following the join: `c` there is
+ALREADY the origin, so the clause tests the origin, not the child. Verified against the builder -
+shipments on children 1004030568, 1004031407 and 1004030594 are attributed to origins 9194100034,
+9194100035 and 9334100045. Shipments needs no change, and fixing Shipping Performance moves it
+INTO agreement with the other two rather than away from them.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches
