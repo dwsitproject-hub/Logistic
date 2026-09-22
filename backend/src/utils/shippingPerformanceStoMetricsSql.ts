@@ -38,6 +38,29 @@ export {
   sqlB2bChildSpdDataExcludeWhere,
 };
 
+/**
+ * The latest SAP row per contract, for the B2B flag and its reference PO.
+ *
+ * SCOPE IT whenever the caller knows which contracts it needs. Unscoped this is a DISTINCT ON over
+ * every row in sap_processed_data, and the jsonb `data` column is detoasted once per row to read
+ * two fields out of it - 26,379 rows on the production copy. Measured inside the shipment
+ * edit-payload endpoint, which needs a handful of contracts: 1,193-3,953 ms per call, the single
+ * largest cost of opening the modal.
+ *
+ * The index (contract_number, created_at DESC) already exists and is not the problem; the row count
+ * is.
+ */
+export function sqlLatestSpdB2bCte(scopeSubquery?: string): string {
+  const scope = scopeSubquery
+    ? `
+          AND spd.contract_number IN (${scopeSubquery})`
+    : '';
+  return LATEST_SPD_B2B_CTE.replace(
+    "AND TRIM(spd.contract_number) != ''",
+    `AND TRIM(spd.contract_number) != ''${scope}`,
+  );
+}
+
 export const LATEST_SPD_B2B_CTE = `
       latest_spd_b2b AS (
         SELECT DISTINCT ON (spd.contract_number)

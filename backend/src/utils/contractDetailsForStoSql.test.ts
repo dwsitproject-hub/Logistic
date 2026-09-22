@@ -67,3 +67,32 @@ describe('buildContractDetailsForStoSql', () => {
     expect(sql).toContain('LEFT JOIN latest_spd_b2b b2b ON b2b.contract_number = pl.contract_number');
   });
 });
+
+/*
+ * The B2B lookup must be scoped, and it must stay below the CTEs it is scoped to.
+ *
+ * Unscoped it was a DISTINCT ON over every sap_processed_data row, detoasting the jsonb column on
+ * each to read two fields - the largest single cost of opening the shipment edit modal
+ * (1,193-3,953 ms per call on a copy of production, against 229-278 ms scoped). It is only ever
+ * joined to po_lines and sap_only_contracts, so limiting it to those contract numbers drops only
+ * rows no join could have matched: verified by comparing contractDetails for 12 shipments before
+ * and after - identical, 12/12.
+ */
+describe('the B2B lookup is scoped to the contracts this query can join', () => {
+  it('restricts latest_spd_b2b to po_lines and sap_only_contracts', () => {
+    const sql = buildContractDetailsForStoSql();
+    expect(sql).toContain('SELECT pl_s.contract_number FROM po_lines pl_s');
+    expect(sql).toContain('SELECT soc_s.contract_number FROM sap_only_contracts soc_s');
+  });
+
+  it('defines it AFTER both, or the scope cannot resolve', () => {
+    const sql = buildContractDetailsForStoSql();
+    const poLines = sql.indexOf('po_lines AS (');
+    const sapOnly = sql.indexOf('sap_only_contracts AS (');
+    const b2b = sql.indexOf('latest_spd_b2b AS (');
+    expect(poLines).toBeGreaterThan(-1);
+    expect(sapOnly).toBeGreaterThan(-1);
+    expect(b2b).toBeGreaterThan(sapOnly);
+    expect(b2b).toBeGreaterThan(poLines);
+  });
+});
