@@ -7,7 +7,9 @@ import { OUTSTANDING_QTY_ZERO_TOLERANCE_KG } from './qtyZeroTolerance';
  * incoterm (FOB / CIF / CFR) filters on that OS.
  */
 
-import { sqlIsContractSapClosedExpr } from './contractDeliveryStatus';
+import { sqlIsContractSapClosedExpr,
+  sqlContractAtcFinishesExpr,
+} from './contractDeliveryStatus';
 import { sqlShipmentActiveStageRankExpr } from './shipmentActiveStageRank';
 import { sqlContractGlobalOutstandingExpr } from './contractGlobalOutstandingSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
@@ -290,6 +292,30 @@ export function sqlShipmentExecutionOsPerContractCtes(
     incotermExpr: `COALESCE(NULLIF(TRIM(${contractOwnIncoterm}), ''), NULLIF(TRIM(r.os_incoterm), ''), '')`,
     contractNumberExpr: 'r.contract_number',
   });
+  /*
+   * The contract's own ATC, from the same three sources Contract Performance reads: the KLIP
+   * override, the shipment's own column, then the discharge leg. Reading only the middle one left
+   * 8 contracts on the dev copy showing no ATC while Shipments showed them finished.
+   */
+  const contractAtc = `(
+    SELECT MAX(COALESCE(
+      sao_f.ata_discharge_complete::date,
+      s_f.ata_discharge_complete::date,
+      vlp_f.ata_loading_completed::date
+    ))
+    FROM shipments s_f
+    JOIN contracts c_f ON c_f.id = s_f.contract_id
+    LEFT JOIN shipment_ata_overrides sao_f ON sao_f.shipment_id = s_f.id
+    LEFT JOIN vessel_loading_ports vlp_f
+      ON vlp_f.shipment_id = s_f.id AND COALESCE(vlp_f.is_discharge_port, false) = true
+    WHERE c_f.contract_id = r.contract_number
+      AND COALESCE(s_f.status, '') <> 'CANCELLED'
+  )`;
+  const contractStoCount = `(
+    SELECT sa_f.sto_count FROM contract_sto_agg_snapshot sa_f
+    WHERE sa_f.contract_number = r.contract_number
+  )`;
+  const contractAtcFinished = sqlContractAtcFinishesExpr(contractAtc, contractStoCount);
   return `
     execution_os_contracts AS (
       SELECT
@@ -331,6 +357,27 @@ export function sqlShipmentExecutionOsPerContractCtes(
         COALESCE(NULLIF(TRIM(${contractOwnIncoterm}), ''), NULLIF(TRIM(r.os_incoterm), ''), '') AS incoterm,
         (${outstandingExpr})::numeric AS outstanding_quantity
       FROM execution_os_ranked r
+      /*
+       * A PO that has finished discharging carries no outstanding, even while its STO group is
+       * still active.
+       *
+       * Ryan's rule, 2026-09-22: a PO with an ATC should be Completed; the STO or shipment stays
+       * un-completed while another PO on the same STO is not closed by GR, still has outstanding,
+       * or has no ATC. Two grains, not a contradiction - and this arm is the only place the page
+       * applied neither. PO 1004030359: its own ATC recorded 2026-09-12, its shipment still
+       * PLANNED because the STO carries siblings, and it contributed 3,002.5 MT that Contract
+       * Performance had already closed.
+       *
+       * Same expression Contract Performance uses (sqlContractAtcFinishesExpr, shared, not
+       * re-spelled), applied per CONTRACT - which is the whole point, since the group must stay
+       * active for the siblings. Placed in this CTE rather than execution_os_contracts because
+       * this one is already one row per contract, so the two lookups run once each instead of once
+       * per row-contract pair on a hot path.
+       *
+       * The zero-band half of "effectively done" is not repeated here: the CTE below already
+       * promotes a row with nothing outstanding to COMPLETED.
+       */
+      WHERE NOT (${contractAtcFinished})
     ),
     /*
      * A shipment with nothing left outstanding is finished, even when no ATC has been recorded

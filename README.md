@@ -2329,6 +2329,45 @@ of 1004030359, which Shipments counts and Contract Performance does not because 
 override marks it discharged while its shipment is still PLANNED. That one is a data contradiction,
 not a rule: see the ATC override note.
 
+### A PO with an ATC carries no outstanding, even while its STO group stays active
+
+Ryan stated the rule on 2026-09-22: **a PO that has an ATC should be Completed. The STO or the
+shipment stays un-completed while another PO on the same STO is not closed by GR, still has
+outstanding, or has no ATC.** Two grains, not a contradiction - which is why PO 1004030359 shows an
+ATC of 2026-09-12 on a shipment that is correctly still PLANNED.
+
+Contract Performance applies the PO rule (`isContractEffectivelyDone`). Shipping Performance ends
+up agreeing through its merged row. Shipments applied neither: its execution arm decides a PO's
+outstanding from the SHIPMENT's stage, so a finished PO kept contributing for as long as its
+siblings kept the group alive.
+
+`sqlContractAtcFinishesExpr` is now the single spelling of that arm - `sqlContractEffectivelyDoneExpr`
+composes from it, and the Shipments execution arm applies it per CONTRACT, which is the whole point:
+the group must stay active for the siblings. It sits in `execution_os_raw`, already one row per
+contract, so the ATC and sto_count lookups run once per contract rather than once per
+row-contract pair on a hot path. The zero-band half is not repeated - the CTE below it already
+promotes a row with nothing outstanding.
+
+**All three pages now agree exactly.** Measured on a copy of production, BONTANG / YTD / sea:
+
+| | before the day's work | after |
+| --- | --- | --- |
+| Contract Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipping Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipments | 104,755.9 MT | 99,081.7 MT |
+| every pairwise difference | up to 3,261.2 MT | **0 MT** |
+
+Both arms match too - backlog 44,072.8 MT each, execution 55,008.8 MT each - and so does each
+incoterm bucket. The 258.7 MT on FOB that had been left untraced turned out to be this same class.
+
+### The test suite is flaky under its own parallelism, not under change
+
+Three full runs on 2026-09-22 failed 3, 8 and 7 files, and the failing SET differed each time; every
+one of them passed when run alone. `npx vitest run --poolOptions.threads.maxThreads=3` gives
+**242/242**. The suite is DB-backed and saturates the local Postgres at full fan-out - one file
+alone takes 122s. Read a red full run as a reason to re-run the named files individually, not as a
+regression, and use the reduced-parallelism form as the gate before a push.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches
