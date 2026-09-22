@@ -108,6 +108,13 @@ services:
       # read-only, or when two environments read the same folder and would overwrite each other.
       SAP_AUTO_IMPORT_RESULTS_ROOT: "${SAP_AUTO_IMPORT_RESULTS_ROOT:-}"
       SAP_AUTO_IMPORT_EXTRA_RECIPIENTS: ${SAP_AUTO_IMPORT_EXTRA_RECIPIENTS:-}
+      # DHM hub (vessel). Set real keys in /opt/klip/.env or backend/.env — never commit them.
+      DHM_ENABLED: ${DHM_ENABLED:-false}
+      DHM_BASE_URL: ${DHM_BASE_URL:-}
+      DHM_PUBLIC_KEY: ${DHM_PUBLIC_KEY:-}
+      DHM_PRIVATE_KEY: ${DHM_PRIVATE_KEY:-}
+      DHM_WEBHOOK_SECRET: ${DHM_WEBHOOK_SECRET:-}
+      DHM_SYNC_CRON: ${DHM_SYNC_CRON:-*/15 * * * *}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:

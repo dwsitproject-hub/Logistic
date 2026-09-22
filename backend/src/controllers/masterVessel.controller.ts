@@ -17,6 +17,8 @@ import {
   MASTER_VESSEL_TYPE_OPTIONS,
   parseMasterVesselListQuery,
 } from '../utils/masterVesselListFilters';
+import { pushMasterVesselToDhm } from '../dhm';
+import type { KlipVesselForDhm } from '../dhm/types';
 
 /** Charter terms accept only V/C or T/C (case-insensitive); anything else stores NULL. */
 const normalizeTerms = (value: unknown): string | null => {
@@ -32,6 +34,24 @@ function pickVesselType(body: Record<string, unknown>): string | null {
   return uppercaseText(body.vessel_type ?? body.hull_type);
 }
 
+function vesselRowForDhm(row: Record<string, unknown>): KlipVesselForDhm & { dhm_code?: string | null } {
+  return {
+    vessel_code: row.vessel_code != null ? String(row.vessel_code) : null,
+    vessel_name: String(row.vessel_name ?? ''),
+    vessel_capacity_mt: row.vessel_capacity_mt != null ? Number(row.vessel_capacity_mt) : null,
+    heating: typeof row.heating === 'boolean' ? row.heating : null,
+    vessel_type: row.vessel_type != null ? String(row.vessel_type) : null,
+    lambung_type: row.lambung_type != null ? String(row.lambung_type) : null,
+    terms: row.terms != null ? String(row.terms) : null,
+    dhm_code: row.dhm_code != null ? String(row.dhm_code) : null,
+  };
+}
+
+function wantsDhmOverwrite(req: AuthRequest): boolean {
+  const q = String((req.query as { dhmOverwrite?: unknown }).dhmOverwrite ?? '').toLowerCase();
+  return q === 'true' || q === '1';
+}
+
 export const listMasterVessels = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { page = 1, limit = 20 } = req.query as Record<string, unknown>;
@@ -43,7 +63,7 @@ export const listMasterVessels = async (req: AuthRequest, res: Response): Promis
     const listSql = `
       SELECT id, vessel_code, vessel_name, vessel_capacity_mt, vessel_owner, vessel_owner_group,
              vessel_type, sap_vendor_code, code_status, year_of_creation, heating, lambung_type,
-             terms, created_at, updated_at
+             terms, dhm_id, dhm_code, created_at, updated_at
       FROM master_vessels
       ${where}
       ${orderBy}
@@ -173,10 +193,22 @@ export const createMasterVessel = async (req: AuthRequest, res: Response): Promi
     const fetchResult = await query(`SELECT * FROM master_vessels WHERE id = $1`, [
       resolved.master_vessel_id,
     ]);
+    const saved = fetchResult.rows[0] as Record<string, unknown>;
+    const dhm = await pushMasterVesselToDhm(
+      String(resolved.master_vessel_id),
+      vesselRowForDhm(saved),
+      { overwrite: wantsDhmOverwrite(req) },
+    );
+    const refreshed = await query(`SELECT * FROM master_vessels WHERE id = $1`, [
+      resolved.master_vessel_id,
+    ]);
 
     res.status(resolved.created ? 201 : 200).json({
       success: true,
-      data: mapMasterVesselForApi(fetchResult.rows[0]),
+      data: {
+        ...mapMasterVesselForApi(refreshed.rows[0] ?? saved),
+        ...dhm,
+      },
     });
     return;
   } catch (error: any) {
@@ -256,7 +288,19 @@ export const updateMasterVessel = async (req: AuthRequest, res: Response): Promi
       );
     }
 
-    res.json({ success: true, data: mapMasterVesselForApi(result.rows[0]) });
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushMasterVesselToDhm(String(id), vesselRowForDhm(saved), {
+      overwrite: wantsDhmOverwrite(req),
+    });
+    const refreshed = await query(`SELECT * FROM master_vessels WHERE id = $1`, [id]);
+
+    res.json({
+      success: true,
+      data: {
+        ...mapMasterVesselForApi(refreshed.rows[0] ?? saved),
+        ...dhm,
+      },
+    });
     return;
   } catch (error: any) {
     logger.error('Update master vessel error:', error);

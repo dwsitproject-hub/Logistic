@@ -26,6 +26,7 @@ export interface MasterVesselFormData {
   heating: boolean | null
   lambung_type: string | null
   terms: string | null
+  dhm_code?: string | null
 }
 
 const TERMS_OPTIONS = ['V/C', 'T/C'] as const
@@ -116,10 +117,21 @@ export function EditVesselModal({
         terms: form.terms || null,
       }
       setSaving(true)
-      if (mode === 'edit' && vessel?.id) {
-        await api.put(`/master-vessels/${vessel.id}`, payload)
-      } else {
-        await api.post('/master-vessels', payload)
+      const overwriteQs = ''
+      const persist = async (overwrite: boolean) => {
+        const qs = overwrite ? '?dhmOverwrite=true' : overwriteQs
+        if (mode === 'edit' && vessel?.id) {
+          return api.put(`/master-vessels/${vessel.id}${qs}`, payload)
+        }
+        return api.post(`/master-vessels${qs}`, payload)
+      }
+      const res = await persist(false)
+      const dhmConflict = Boolean((res.data as { data?: { dhmConflict?: boolean } })?.data?.dhmConflict)
+      if (dhmConflict) {
+        const updateDhm = window.confirm(
+          'DHM already has this vessel. Update DHM with the KLIP values?',
+        )
+        if (updateDhm) await persist(true)
       }
       onSaved()
       onClose()
@@ -149,6 +161,13 @@ export function EditVesselModal({
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
                 <p className="text-sm text-gray-500">{subtitle}</p>
+                {(vessel?.dhm_code || form.dhm_code) ? (
+                  <p className="mt-1">
+                    <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                      DHM: {vessel?.dhm_code || form.dhm_code}
+                    </span>
+                  </p>
+                ) : null}
               </div>
             </div>
             <button
