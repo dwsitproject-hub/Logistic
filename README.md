@@ -2433,8 +2433,34 @@ after, identical 12/12.
 | after | 932 / 939 / 706 ms |
 
 That query alone fell from 3,953 to 278 ms, and total SQL across three calls from 10,028 to
-2,748 ms. Time outside SQL is ~0 - the endpoint is entirely database-bound, so the next gain has to
-come from the remaining hot query (`WITH ship AS (...)`, ~500 ms per call), not from the Node side.
+2,748 ms. Time outside SQL is ~0 - the endpoint is entirely database-bound.
+
+**Then the sample got wider and the average went the wrong way**, which is what forced the second
+half of this. Twelve shipments split cleanly in two: seven at 4,150-5,053 ms and five at
+248-547 ms. The slow ones all had `ports = 0`, and all of them ran a lookup keyed on an expression
+no index matched.
+
+Three expressions were unindexed, each an equality in a hot predicate:
+
+| expression | why the existing index missed it | cost |
+| --- | --- | --- |
+| `sapStoNumberKeyExpr` (6 branches) | `idx_spd_effective_sto` has 5 - no `'STO No'`; `idx_spd_effective_sto_trim` has 6 but an extra outer `TRIM` | Seq Scan, 123,954 buffer hits, 6,420 ms |
+| the operation-id key in `sqlStoLookupKeyMatchExpr` | never indexed; fires on every `OP-` / `MNL-` / `MSEA-` key | two scans per call, 1,885 + 1,434 ms, both returning ZERO rows |
+| `TRIM(COALESCE(sto_number::text, ''))` | the index is on the bare column, and the expression is not the column | part of the same scan |
+
+Migration 179 adds all three. Access path only, verified the way 101 / 107 / 108 / 130 were: the
+endpoint's `contractDetails` for 12 shipments is byte-identical before and after, 12/12.
+
+| same 12 shipments | before | after |
+| --- | --- | --- |
+| median | 4,264 ms | **248 ms** |
+| worst | 5,053 ms | 537 ms |
+| mean | 2,875 ms | 246 ms |
+
+The bimodal split is gone: every shipment now opens in 171-537 ms. Two lessons worth keeping - a
+three-row sample hid a fault that affected most rows, and *an index that looks right is not an
+index that matches*: two near-miss indexes on this exact expression already existed and neither
+could be used.
 
 ### The test suite is flaky under its own parallelism, not under change
 
