@@ -2279,6 +2279,143 @@ The clamp also has nothing to do with why over-delivered contracts are absent fr
 `sqlContractEffectivelyDoneExpr` treats `outstanding <= 499 kg` as finished, and a negative is
 always ≤ 499. That classification is unchanged.
 
+### The KLIP overlay replaced SAP instead of topping it up
+
+Reported by Ryan on 2026-09-22 against a copy of production in SIT: contract 1004030359 read
+3,010 MT outstanding where SAP says **24 MT**, and the SAP export proved him right -
+
+| contract | Contract Qty | Delivery Vessel | Delivery Trucking | Receive |
+| --- | --- | --- | --- | --- |
+| 1004030359 | 4,000,000 | 3,983,564 | 0 | 3,983,564 |
+| 1004030942 | 1,600,000 | 1,595,994 | 0 | 1,595,994 |
+| 1004030943 | 1,400,000 | 1,396,494 | 0 | 1,396,494 |
+| | 7,000,000 | 6,976,052 | | 6,976,052 |
+
+7,000,000 - 6,976,052 = **23,948 kg**. But `contract_qty_move_snapshot` held receive 997,496 and
+vessel 1,000,000 for the first contract - the quantities of its KLIP shipment, which is still
+**PLANNED** and carries only part of the contract.
+
+`qty_move_resolved` took the KLIP overlay outright:
+
+    WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
+
+The weighbridge overlay two lines above it already used `GREATEST`, and its comment says why: one
+ticket used to discard SAP outright and left contract 1364002000 reading 100 MT outstanding on
+89.74 MT received. The KLIP branch had the same shape and the same fault, unnoticed because it
+only bites when KLIP is BEHIND SAP - a partial shipment against a contract SAP has already
+fulfilled.
+
+Both branches now take `GREATEST(klip, sap)`. Measured on the production copy: **14 contracts
+move, and all 14 then equal SAP's own sum per STO** - checked against the per-STO sum, because
+comparing with a single latest SAP row reported 12 false mismatches first.
+
+**What it moved**, CPO+all products / BONTANG / YTD:
+
+| | before | after |
+| --- | --- | --- |
+| Contract Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipping Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipments | 104,755.9 MT | 99,356.8 MT |
+| Shipments - Contract Performance | 3,261.2 MT | **275.1 MT** |
+
+Note the reported figures themselves fall by ~2,413 MT: outstanding was overstated wherever a
+partial KLIP shipment had been masking a completed SAP receive.
+
+**`contract_qty_move_snapshot` is materialised**, so this changes nothing until the snapshot is
+rebuilt - `ContractQtyMoveSnapshotService.refreshAll()`, 22.6s on the production copy.
+
+What is left of the gap: **258.7 MT on FOB**, not yet traced, and **16.4 MT on CIF** - the residual
+of 1004030359, which Shipments counts and Contract Performance does not because a manual KLIP ATC
+override marks it discharged while its shipment is still PLANNED. That one is a data contradiction,
+not a rule: see the ATC override note.
+
+### A PO with an ATC carries no outstanding, even while its STO group stays active
+
+Ryan stated the rule on 2026-09-22: **a PO that has an ATC should be Completed. The STO or the
+shipment stays un-completed while another PO on the same STO is not closed by GR, still has
+outstanding, or has no ATC.** Two grains, not a contradiction - which is why PO 1004030359 shows an
+ATC of 2026-09-12 on a shipment that is correctly still PLANNED.
+
+Contract Performance applies the PO rule (`isContractEffectivelyDone`). Shipping Performance ends
+up agreeing through its merged row. Shipments applied neither: its execution arm decides a PO's
+outstanding from the SHIPMENT's stage, so a finished PO kept contributing for as long as its
+siblings kept the group alive.
+
+`sqlContractAtcFinishesExpr` is now the single spelling of that arm - `sqlContractEffectivelyDoneExpr`
+composes from it, and the Shipments execution arm applies it per CONTRACT, which is the whole point:
+the group must stay active for the siblings. It sits in `execution_os_raw`, already one row per
+contract, so the ATC and sto_count lookups run once per contract rather than once per
+row-contract pair on a hot path. The zero-band half is not repeated - the CTE below it already
+promotes a row with nothing outstanding.
+
+**All FOUR pages now agree exactly.** Measured on a copy of production, BONTANG / YTD:
+
+| | before the day's work | after |
+| --- | --- | --- |
+| Contract Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipping Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipments | 104,755.9 MT | 99,081.7 MT |
+| every pairwise difference | up to 3,261.2 MT | **0 MT** |
+
+Both arms match too - backlog 44,072.8 MT each, execution 55,008.8 MT each - and so does each
+incoterm bucket. The 258.7 MT on FOB that had been left untraced turned out to be this same class.
+
+**Trucking, the fourth page, was checked too** and needed no change: 51,842.6 MT against Contract
+Performance's LCO+FRC total of 51,842.6 MT, 0 MT apart, with the FRC/LCO split matching as well.
+It could not have moved - the KLIP overlay is scoped to `IN ('FOB', 'CIF', 'CFR')` and none of the
+14 contracts it shifted are land, and the ATC gate lives inside the Shipments execution arm. Only
+the unclamp touches it at all.
+
+`docs/scripts/diag-four-page-os.cjs` now measures all four through their own entry points, with
+Contract Performance split by incoterm so each operational page meets the half it owns. Comparing
+either half against the whole is what reported 75,477 MT of "DRIFT" the first time, and it was
+simply the other transport mode. Trucking's figure comes from `trucking_list_stage_snapshot`, so
+the script prints `summaryFreshness` beside it - a full rebuild of that snapshot is ~21 minutes and
+is not something to trigger by accident.
+
+### The Shipments card had two producers, and they disagreed twice
+
+Ryan on SIT, CPO + BONTANG: the Outstanding Qty headline read 78,903 MT while the 3rd Party and
+Interco panels under it summed to 78,001. Two numbers, one card - and `reconcileShipmentOutstandingQtySummary`
+is explicit about it: *"Prefer cardTotalKg (status-card OS sum) when provided so hero matches
+Section 1 cards"*, with the remainder absorbed into `otherKg`, which appears only in the tooltip.
+So the original 902 MT was hidden by design rather than reported.
+
+**Two distinct faults sat underneath it.**
+
+1. **Region/Site, 1,000 MT.** Only the OS card passed `requireResolvedRegionSite`; the status-card
+   query and the combined summary did not, so they counted contracts whose Region/Site does not
+   resolve - contract 1004032347 alone - while the card beside them, and Contract Performance,
+   dropped them.
+
+2. **The combined-summary shortcut, 98 MT.** When the combined summary row carried status-card
+   quantities, the controller used them instead of running the status-card query. That summary
+   builds its own `enriched`, and its `effective_status` comes from the scope CTE **without** the
+   own-STO discharge column that `sqlShipmentSection1LightExecutionEnrichSelect` uses - the same
+   own-STO narrowing Shipping Performance needed. A row whose ATC belongs to a SIBLING STO reads
+   COMPLETED there, falls out of every status card, and takes its outstanding with it.
+
+Fixing (1) alone made it worse in a quieter way: the card sum fell to 77,902.9 MT, now *below* the
+buckets, so `otherKg = max(0, total - classified)` clamped to zero and the identity the tooltip
+promises stopped holding at all. Both had to go.
+
+**Proved by disabling only the shortcut**: the cards then read 78,000.9 MT exactly, matching the OS
+card, Contract Performance and Shipping Performance. The status-card quantities now always come
+from their own query. Cost: one extra query, 6,838 ms -> 7,343 ms cold on that slice, unchanged
+warm (~8 ms, cached).
+
+Two hypotheses were killed by measurement before the real one was found: the active-stage row
+predicate (removed it, nothing moved) and the COMPLETED-promotion (each such row is capped at
+499 kg, so 98 MT would need ~197 of them in a slice holding ~70 contracts).
+
+### The test suite is flaky under its own parallelism, not under change
+
+Three full runs on 2026-09-22 failed 3, 8 and 7 files, and the failing SET differed each time; every
+one of them passed when run alone. `npx vitest run --poolOptions.threads.maxThreads=3` gives
+**242/242**. The suite is DB-backed and saturates the local Postgres at full fan-out - one file
+alone takes 122s. Read a red full run as a reason to re-run the named files individually, not as a
+regression, and use the reduced-parallelism form as the gate before a push.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches

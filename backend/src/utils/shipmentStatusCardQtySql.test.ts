@@ -201,3 +201,26 @@ describe('shipmentStatusCardQtySql', () => {
     expect(vessels.completed).toEqual(['F']);
   });
 });
+
+/*
+ * The status cards must count the same population as the OS card beside them.
+ *
+ * Ryan, 2026-09-22 on SIT with CPO + BONTANG: the headline read 78,903 MT while the 3rd Party and
+ * Interco panels beneath it summed to 78,001 - two producers for one card. The status cards and the
+ * combined summary called sqlShipmentExecutionOsPerContractCtes WITHOUT requireResolvedRegionSite,
+ * so they counted contracts whose Region/Site does not resolve and the OS card did not. Contract
+ * 1004032347 alone is 1,000 MT of that, and Contract Performance drops it too - Region/Site is the
+ * agreed reference.
+ */
+describe('status cards count the same population as the OS card', () => {
+  it('requires a resolved Region/Site, exactly as the OS card does', async () => {
+    const sql = await buildShipmentStatusCardQtyExecutionAggregateQuery(
+      'WITH shipment_base AS (SELECT 1)',
+      '',
+    );
+    // The same predicate the OS card applies: sqlContractHasResolvedRegionSiteExpr, joined on the
+    // contract rather than on the row, so a blank Region/Site cannot ride a resolved row in.
+    expect(sql).toContain('FROM contracts c_rs');
+    expect(sql).toContain('c_rs.contract_id = TRIM(cn)');
+  });
+});

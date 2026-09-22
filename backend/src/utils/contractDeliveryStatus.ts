@@ -556,16 +556,39 @@ export function resolveContractEffectiveStatusText(
 }
 
 /** SQL form of isContractEffectivelyDone, for row sets that carry OS and ATC columns. */
+/**
+ * The ATC half of "effectively done", on its own.
+ *
+ * Split out because Shipments needs exactly this half and nothing else. Its OS cards already drop
+ * a contract whose outstanding is inside the zero band, but they had no ATC rule at all, so a PO
+ * that had finished discharging kept contributing outstanding as long as its STO group stayed
+ * active - and the group legitimately stays active while a SIBLING PO on the same STO is still
+ * open. PO 1004030359 is that case: its own ATC was recorded on 2026-09-12, its shipment is still
+ * PLANNED because the STO carries other POs, and it was contributing 3,002.5 MT that Contract
+ * Performance had already closed.
+ *
+ * Ryan stated the rule on 2026-09-22: a PO that has an ATC should be Completed; the STO or
+ * shipment stays un-completed while another PO on it is not closed by GR, still has outstanding,
+ * or has no ATC. Those are two grains, not a contradiction - so the PO-level rule has to be
+ * applied at PO grain, which is what this expression is for.
+ *
+ * An ATC on a PO spanning several STOs does NOT finish it: the ATC is a MAX across them, so one
+ * discharged STO must not close a PO whose other STO is still open. That is the stoCountExpr arm.
+ */
+export function sqlContractAtcFinishesExpr(atcExpr: string, stoCountExpr?: string): string {
+  return stoCountExpr
+    ? `((${atcExpr}) IS NOT NULL
+      AND COALESCE((${stoCountExpr})::numeric, 1) <= 1)`
+    : `(${atcExpr}) IS NOT NULL`;
+}
+
 export function sqlContractEffectivelyDoneExpr(opts: {
   outstandingKgExpr: string;
   atcExpr: string;
   /** PO-level STO count; when it is above 1 an ATC no longer finishes the PO (see the JS form). */
   stoCountExpr?: string;
 }): string {
-  const atcArm = opts.stoCountExpr
-    ? `((${opts.atcExpr}) IS NOT NULL
-      AND COALESCE((${opts.stoCountExpr})::numeric, 1) <= 1)`
-    : `(${opts.atcExpr}) IS NOT NULL`;
+  const atcArm = sqlContractAtcFinishesExpr(opts.atcExpr, opts.stoCountExpr);
   return `(
     ((${opts.outstandingKgExpr}) IS NOT NULL
       AND (${opts.outstandingKgExpr})::numeric <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})

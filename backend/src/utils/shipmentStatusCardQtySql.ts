@@ -229,7 +229,7 @@ export async function buildShipmentStatusCardQtyExecutionAggregateQuery(
         (${shipmentListRowContractQtySql('sp')}) AS contract_qty
       FROM shipment_page sp
     ),
-    ${sqlShipmentExecutionOsPerContractCtes('enriched')}
+    ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}
     SELECT
       COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE is_unplanned_execution), 0)::numeric AS unplanned_execution_contract_qty,
       COALESCE(SUM(COALESCE(contract_qty, 0)) FILTER (WHERE effective_status = 'PLANNED'), 0)::numeric AS planned_contract_qty,

@@ -132,7 +132,7 @@ async function buildShipmentSection1SummaryCteBlock(opts: ShipmentSection1Combin
         FROM ${opts.summaryEnrichedFrom} f
         ${masterJoin}
       ),
-      ${sqlShipmentExecutionOsPerContractCtes('enriched')}`;
+      ${sqlShipmentExecutionOsPerContractCtes('enriched', { requireResolvedRegionSite: true })}`;
 }
 
 /**
