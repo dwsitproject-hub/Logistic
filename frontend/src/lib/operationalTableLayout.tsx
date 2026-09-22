@@ -256,6 +256,7 @@ const MASTER_VESSEL_COLUMN_LAYOUT: Readonly<Record<string, OperationalColumnLayo
   heating: 'short',
   lambung_type: 'short',
   terms: 'short',
+  dhm_status: 'token',
 }
 
 export function getOperationalColumnLayout(

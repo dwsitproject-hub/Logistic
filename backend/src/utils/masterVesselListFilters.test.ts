@@ -56,6 +56,12 @@ describe('masterVesselListFilters', () => {
     );
   });
 
+  it('buildMasterVesselOrderBy sorts DHM status by replica link', () => {
+    const sql = buildMasterVesselOrderBy('dhm_status', 'desc');
+    expect(sql).toContain('dhm_id IS NOT NULL');
+    expect(sql).toContain('DESC');
+  });
+
   it('parseMasterVesselListQuery maps sort params', () => {
     const parsed = parseMasterVesselListQuery({ sortKey: 'vessel_code', sortDir: 'desc' });
     expect(parsed.sortKey).toBe('vessel_code');
