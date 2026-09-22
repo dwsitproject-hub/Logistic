@@ -1,5 +1,6 @@
 import { getClient } from '../database/connection';
 import { sqlContractExecutionOutstandingKgExpr } from '../utils/contractExecutionOutstandingSql';
+import { sqlContractHasResolvedRegionSiteExpr } from '../utils/regionSiteSql';
 import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
 import {
   isShipmentActiveStage,
@@ -67,6 +68,75 @@ export function contractNumbersOf(row: ContractGrainOsRow): string[] {
     .filter(Boolean);
 }
 
+/** One B2B link: the child contract, its ORIGIN (parent), and whether SAP moves the parent at all. */
+export type B2bOriginLink = { child: string; origin: string; parentHasQtyMove: boolean };
+
+/**
+ * Parent first, child only when the parent has NO movement record at all - Ryan's rule, exactly.
+ *
+ * WHY THIS EXISTS RATHER THAN A COMMENT SAYING IT CANNOT HAPPEN. The STO merge now UNIONS the
+ * contract numbers `sto_metrics` knows with the ones the rows carry, because preferring one source
+ * silently discarded relabelled B2B origins - 5,000 MT invisible on the dev copy, 2026-09-22. A
+ * union can, in principle, name a child AND its origin on the same STO, and B2B double counting is
+ * exactly how outstanding ballooned here before. That is why the page picks one side at all.
+ *
+ * Measured right after the union landed: **0** of 566 B2B pairs on dev had both sides valued,
+ * including the 6 where the origin has a shipment of its own. So this guard fires on nothing
+ * today. It is structural insurance, not a fix for an observed fault - nothing in the query
+ * FORBIDS the shape, and "the data does not currently do that" is a weaker guarantee than these
+ * totals deserve.
+ *
+ * ZERO IS NOT NULL, and the first version of this guard conflated them. It dropped the child only
+ * when the parent's outstanding was above 0, so a parent that had been fully delivered handed the
+ * family over to its child - and on the dev copy 49 such pairs exist carrying 17,402 MT, where the
+ * PARENT holds the movement (4,500 delivered, 4,500 received) and the child is an empty duplicate
+ * (0 / 0). Falling back there would have inflated outstanding by that whole amount.
+ *
+ * So the fallback keys on whether the parent has a `contract_qty_move_snapshot` row at all. On the
+ * dev copy, 2026-09-22: **0 of 566** B2B parents lack one, so the child is in practice never the
+ * source today - the branch is kept because the rule is Ryan's and a future SAP shape may need it,
+ * not because anything currently uses it.
+ */
+export function applyB2bParentPreference(
+  osByContract: Map<string, number>,
+  links: ReadonlyArray<B2bOriginLink>,
+): Map<string, number> {
+  for (const { child, parentHasQtyMove } of links) {
+    if (!osByContract.has(child)) continue;
+    if (parentHasQtyMove) osByContract.delete(child);
+  }
+  return osByContract;
+}
+
+/** The B2B child -> origin links among the given contracts, read once from the SPD snapshot. */
+async function loadB2bOriginLinks(
+  client: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> },
+  contractIds: string[],
+): Promise<B2bOriginLink[]> {
+  const result = await client.query(
+    `SELECT l.contract_number AS child,
+            o.contract_id AS origin,
+            EXISTS (
+              SELECT 1 FROM contract_qty_move_snapshot q
+              WHERE q.contract_number = o.contract_id
+            ) AS parent_has_qty_move
+     FROM contract_latest_spd_snapshot l
+     JOIN contracts o
+       ON NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(l.contract_reference_po_raw), '')
+     WHERE l.contract_number = ANY($1::text[])
+       AND UPPER(TRIM(COALESCE(l.b2b_flag_raw, ''))) = 'B2B'
+       AND NULLIF(TRIM(l.contract_reference_po_raw), '') IS NOT NULL`,
+    [contractIds],
+  );
+  return (
+    result.rows as { child: string; origin: string; parent_has_qty_move: boolean }[]
+  ).map((r) => ({
+    child: String(r.child),
+    origin: String(r.origin),
+    parentHasQtyMove: r.parent_has_qty_move === true,
+  }));
+}
+
 /**
  * The contract's outstanding, valued exactly as the Shipments execution arm values it.
  * Returns kg keyed by contract number; contracts with nothing outstanding are simply absent.
@@ -113,12 +183,27 @@ export async function loadContractExecutionOutstandingKg(
     await client.query(`SET statement_timeout = ${CONTRACT_OS_STATEMENT_TIMEOUT_MS}`);
     for (let i = 0; i < ids.length; i += CONTRACT_OS_CHUNK) {
       const chunk = ids.slice(i, i + CONTRACT_OS_CHUNK);
+      /*
+       * A contract whose Region/Site does not resolve is NOT counted.
+       *
+       * Contract Performance drops those rows outright (`hasResolvedRegionSite`) and Shipments
+       * applies the same test through `requireResolvedRegionSite`, so Region/Site is the agreed
+       * reference and this page was the only one still counting them. Measured against a copy of
+       * production taken 2026-09-22: exactly one contract, 1004032347 at 1,000 MT, which is the
+       * whole of the 1,001 MT by which Shipping Performance (81,414 MT) exceeded Contract
+       * Performance (80,413 MT) on CPO / BONTANG / YTD.
+       *
+       * It reaches a site-filtered scope at all because outstanding is contract grain while the
+       * drilldown filters at ROW grain: the contract's own site is blank, but its outstanding is
+       * placed on the row carrying its furthest active stage, and that row's site is BONTANG.
+       */
       const result = await client.query(
         `WITH ${qtyMoveCte}
          SELECT c.contract_id,
                 (${sqlContractExecutionOutstandingKgExpr('c.contract_id')})::numeric AS os_kg
          FROM contracts c
-         WHERE c.contract_id = ANY($1::text[])`,
+         WHERE c.contract_id = ANY($1::text[])
+           AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}`,
         [chunk],
       );
       for (const row of result.rows as Record<string, unknown>[]) {
@@ -126,6 +211,12 @@ export async function loadContractExecutionOutstandingKg(
         if (kg > 0) out.set(String(row.contract_id), kg);
       }
     }
+    /*
+     * The links are read against the WHOLE id list, not the chunk. A parent and its child can
+     * easily land in different chunks of 400, and a guard that only looked inside one chunk would
+     * pass every test and still let the pair through in production.
+     */
+    applyB2bParentPreference(out, await loadB2bOriginLinks(client, ids));
   } finally {
     // Reset before returning it to the pool, or every later query on this connection inherits it.
     try {

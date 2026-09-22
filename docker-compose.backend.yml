@@ -60,7 +60,12 @@ services:
       # DB host: default in-stack postgres; SIT overlay sets Aliyun RDS via /opt/klip/.env
       DB_HOST: ${DB_HOST:-klip-postgres}
       DB_PORT: ${DB_PORT:-5432}
-      # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) unless you set them in /opt/klip/.env
+      # DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET: from env_file (backend/.env) ONLY.
+      # Not from /opt/klip/.env - that file feeds Compose variable SUBSTITUTION, and none of
+      # these four appear as ${...} here, so setting them there changes nothing. Editing
+      # /opt/klip/.env to repoint DB_NAME on SIT 2026-09-22 left the container on the old
+      # database while the file read the new one, and `up -d` reported "Running" because no
+      # part of the config had actually changed.
       JWT_EXPIRES_IN: 7d
       # Shared upload root inside container (see backend_uploads volume below; Synology optional override)
       UPLOAD_DIR: /app/uploads

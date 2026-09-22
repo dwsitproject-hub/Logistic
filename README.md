@@ -2175,6 +2175,110 @@ The direction of the gap differs between environments - on dev Contract Performa
 on production 2026-09-22 it reads *lower* (80,413 vs 81,414 MT) - so the dev composition must not be
 carried over. Run the script where the question is being asked.
 
+### B2B: which side of the family carries outstanding, decided from the data
+
+Asked by Ryan on 2026-09-22, with a warning attached: B2B doubling is how outstanding ballooned
+here before, which is why each page picks one side rather than summing both. His rule: take the PO
+parent, and fall back to the B2B child when the parent is null.
+
+`docs/scripts/diag-b2b-policy.cjs` classifies every pair by who holds the VALUE and who holds the
+LINK. Over all 566 pairs on the dev copy, two absolutes:
+
+| | |
+| --- | --- |
+| parents holding an sto / shipment link of their own | **0 of 566** |
+| parents with no `contract_qty_move_snapshot` row | **0 of 566** |
+
+So the value is always on the parent and the movement is always on the child. Only one policy
+covers both: **keep the child's row as the carrier, value and attribute it under the parent.**
+
+**The trap is case C**, 49 pairs and 17,402 MT: the parent is fully delivered (4,500 delivered,
+4,500 received) and the child is an empty SAP duplicate (0 / 0) still showing its whole quantity.
+A guard that falls back to the child "when the parent has no outstanding" inflates outstanding by
+all of it. The first version of `applyB2bParentPreference` did exactly that. **Zero is not null** -
+the fallback now keys on whether the parent has a `qty_move` row at all, and none of the 566 lack
+one, so the child is never the source today.
+
+**Where each page stood, checked rather than assumed:**
+
+| page | B2B handling | verdict |
+| --- | --- | --- |
+| Contract Performance | excludes children, values the parent | already correct |
+| Shipments | `sqlShipmentListB2bOriginContractJoins` remaps the child's shipment to the origin (`c.id = COALESCE(c_origin.id, c_link.id)`) | already correct |
+| Shipping Performance | relabels the child row to the origin in the main query, then **threw it away at the STO merge** | the only one wrong |
+
+An earlier note in this work claimed Shipments drops B2B children and would need the same change.
+That was read off the comment above its exclusion clause without following the join: `c` there is
+ALREADY the origin, so the clause tests the origin, not the child. Verified against the builder -
+shipments on children 1004030568, 1004031407 and 1004030594 are attributed to origins 9194100034,
+9194100035 and 9334100045. Shipments needs no change, and fixing Shipping Performance moves it
+INTO agreement with the other two rather than away from them.
+
+### The 1,001 MT between Shipping Performance and Contract Performance: one contract
+
+Measured against a **copy of production** (dumped 2026-09-22, restored locally), because dev and
+production disagreed on the direction of this gap and dev had already sent two conclusions the
+wrong way.
+
+| | script, production copy | the screen |
+| --- | --- | --- |
+| Contract Performance (Open) | 80,413.2 MT | 80,413 MT |
+| Shipping Performance | 81,413.9 MT | 81,414 MT |
+| difference | 1,000.7 MT | 1,001 MT |
+
+`diag-os-per-contract.cjs` named it: **one contract, 1004032347, 1,000 MT.** Not B2B, not the
+clamp, not the SAP-closed gate - all three of which had been proposed and measured away.
+
+**Region/Site is the agreed reference, and this page was the only one not applying it.**
+`loadLatePerformanceRows` ends with `.filter(hasResolvedRegionSite)`, so Contract Performance drops
+every contract whose SAP discharge destination is blank; Shipments applies the same test through
+`requireResolvedRegionSite`. Shipping Performance did not. The rule's own comment in
+`regionSiteSql.ts` names this exact contract, so the gap was documented before it was found again.
+
+It reaches a BONTANG-filtered scope at all because outstanding is **contract** grain while the
+drilldown filters at **row** grain: 1004032347's own site is blank, but its outstanding is placed on
+the row carrying its furthest active stage, and that row's site is BONTANG.
+
+Both arms of Shipping Performance now require a resolved Region/Site - the contract-grain execution
+arm and the backlog arm, since an unresolved site is no more countable in one than the other.
+Re-measured on the same production copy: **1,000.7 MT -> 0.7 MT, and no contract differs by more
+than 1 MT.**
+
+**What is left, and it is a different fault.** On the dev copy a 500 MT residual remains: contract
+1004031937 is a **POME** contract counted inside a **CPO** scope. Its site resolves, so the fix
+above does not touch it. Same root shape as the site case - contract-grain outstanding placed on a
+row, then filtered by that row's attributes - but through product rather than site. It does not
+appear in the production slice measured here.
+
+### Over-delivery subtracts, and membership does not move
+
+Ryan, 2026-09-22: *"tampil pada baris halaman dan juga mengurangi OS agar konsisten antara
+summary/total dengan detail data pada view table"*. The principle is that the rows shown must sum
+to the total shown.
+
+`sqlContractGlobalOutstandingExpr` no longer clamps at zero. It and Contract Performance's
+`sqlContractOutstandingSignedExpr` are the same function, `sqlContractOutstandingFromFields`,
+differing only by that flag - so the clamp meant one contract showed a negative outstanding on
+Contract Performance and zero on Shipments, Shipping Performance and Trucking.
+
+**Membership was deliberately left alone.** Every `(os) > 0` gate excludes a negative exactly as it
+excluded the clamped zero, so this changes what a counted row is WORTH, not which rows exist.
+That was the choice between two readings, and the measurement is what made it choosable:
+
+| | contracts | MT |
+| --- | --- | --- |
+| negative outstanding, YTD, all products | 1,583 | −7,686.9 |
+| of which SAP-closed or with no shipment | 1,572 | −7,682.4 |
+| **of which reachable by a total at all** (active shipment) | **11** | **−4.5** |
+
+So the alternative - reclassifying over-delivered contracts from Close to Open so they appear on
+the Open card - would have moved 23 contracts and −3,530.8 MT, and made "Open" mean *not yet
+administratively closed* rather than *still has something to deliver*. Rejected on those grounds.
+
+The clamp also has nothing to do with why over-delivered contracts are absent from the Open card:
+`sqlContractEffectivelyDoneExpr` treats `outstanding <= 499 kg` as finished, and a negative is
+always ≤ 499. That classification is unchanged.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches

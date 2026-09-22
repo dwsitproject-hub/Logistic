@@ -36,12 +36,29 @@ describe('contract execution outstanding', () => {
     expect(Number(r.rows[0].with_os)).toBeGreaterThan(0);
   }, 120_000);
 
-  it('never returns a negative - the formula clamps at zero', async () => {
+  /*
+   * Over-delivery SUBTRACTS; it is not clamped away.
+   *
+   * Ryan's decision, 2026-09-22: a page's total has to reconcile with the rows beneath it, and
+   * Contract Performance already read the signed form - so the same contract showed a negative
+   * outstanding there and zero here. This test asserted the opposite when the clamp was the rule.
+   *
+   * What it guards now is that the negative is REAL and not a sign error: every contract the
+   * expression returns below zero must actually have been delivered more than it ordered.
+   */
+  it('returns a negative only where the contract was over-delivered', async () => {
+    const os = sqlContractExecutionOutstandingKgExpr('c.contract_id');
     const r = await withQtyMove(
-      `SELECT COUNT(*)::int AS n FROM contracts c
-       WHERE (${sqlContractExecutionOutstandingKgExpr('c.contract_id')}) < 0`,
+      `SELECT COUNT(*) FILTER (WHERE (${os}) < 0)::int AS negatives,
+              COUNT(*) FILTER (
+                WHERE (${os}) < 0
+                  AND COALESCE(c.quantity_ordered, 0) >= COALESCE(c.quantity_ordered, 0) + (${os})
+              )::int AS explained_by_over_delivery
+       FROM contracts c`,
     );
-    expect(Number(r.rows[0].n)).toBe(0);
+    const negatives = Number(r.rows[0].negatives);
+    expect(negatives).toBeGreaterThan(0);
+    expect(Number(r.rows[0].explained_by_over_delivery)).toBe(negatives);
   }, 120_000);
 
   /*

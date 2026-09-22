@@ -527,12 +527,27 @@ export function sqlContractGlobalOutstandingExpr(opts: {
   // do not correlate sap_processed_data here (this expr is used in list/OS membership).
   const transportExpr = `(SELECT UPPER(TRIM(COALESCE(c.transport_mode, ''))) FROM contracts c WHERE c.contract_id = ${contractNumberExpr} LIMIT 1)`;
   const qmDelivery = sqlQtyMoveIncotermDelivery(incotermExpr, contractNumberExpr, transportExpr);
+  /*
+   * NOT clamped at zero: over-delivery subtracts.
+   *
+   * Ryan's decision, 2026-09-22 - "tampil pada baris halaman dan juga mengurangi OS agar konsisten
+   * antara summary/total dengan detail data pada view table". Contract Performance already reads
+   * the signed form (`sqlContractOutstandingSignedExpr`, the same function with this flag off), so
+   * a clamp here meant the same contract showed a negative outstanding on one page and zero on
+   * another, and the totals could not reconcile with the rows beneath them.
+   *
+   * Membership is deliberately left alone. Every `(os) > 0` gate still excludes a negative exactly
+   * as it excluded the clamped zero, so this changes what a counted row is WORTH, not which rows
+   * exist. Measured on the dev copy: 1,583 contracts carry a negative outstanding, but only 11 of
+   * them (-4.5 MT) have an active shipment and can reach a total at all; the other 1,572 are
+   * SAP-closed or have no shipment.
+   */
   const outstanding = sqlContractOutstandingFromFields({
     contractQtyExpr,
     incotermExpr,
     receiveExpr: qmReceive,
     deliveryExpr: qmDelivery,
-    clampAtZero: true,
+    clampAtZero: false,
   });
   // Cancelled-by-delete POs are excluded from OS Qty (PO-scoped).
   const cancelled = `(

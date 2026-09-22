@@ -49,7 +49,17 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('quantity_delivery_vessel');
     expect(sql).toContain("'FRC', 'CIF', 'CFR'");
     expect(sql).toContain("'LCO', 'FOB'");
-    expect(sql).toContain('GREATEST');
+    /*
+     * NOT clamped at zero. Ryan decided on 2026-09-22 that over-delivery must subtract, so that a
+     * page's total reconciles with the rows beneath it - Contract Performance already read the
+     * signed form, and a clamp here made the same contract show a negative outstanding on one page
+     * and zero on another. This assertion is the guard against the clamp coming back: it was
+     * `toContain('GREATEST')` when the clamp was the rule.
+     *
+     * Membership is untouched - every `(os) > 0` gate excludes a negative exactly as it excluded
+     * the clamped zero - so this changes what a counted row is worth, not which rows exist.
+     */
+    expect(sql).not.toContain('GREATEST(0,');
     expect(sql).not.toMatch(/SELECT qm\.quantity_delivery FROM qty_move/);
   });
 

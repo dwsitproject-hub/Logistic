@@ -42,7 +42,9 @@ import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
 import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
-import { sqlRegionSiteDisplayForContract } from '../utils/regionSiteSql';
+import { sqlRegionSiteDisplayForContract,
+  sqlContractHasResolvedRegionSiteExpr,
+} from '../utils/regionSiteSql';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
 import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 
@@ -169,6 +171,43 @@ function joinDistinctValues(rows: Record<string, unknown>[], field: string): str
       if (v) values.add(v);
     }
   }
+  return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
+}
+
+/**
+ * Every contract on the STO: the ones sto_metrics knows about AND the ones the rows carry.
+ *
+ * WHY A UNION AND NOT A CHOICE. The merged row used to prefer `pick.contract_numbers`, built in
+ * SQL by `all_sto_contract_links`, which reads `cc.contract_id` straight off `contracts`. The main
+ * query, by contrast, relabels a kept B2B CHILD row to its ORIGIN's contract number, because the
+ * voyage belongs to the origin and SAP raises the shipment on the child. So the two sources
+ * disagree by construction on exactly the B2B families - and preferring the SQL one silently threw
+ * the origin's number away.
+ *
+ * Measured on the dev copy, 2026-09-22: the page's own SQL returned rows for B2B parents
+ * 9194100034 and 9334100045 (PLANNED, CPO / BONTANG), and after the merge neither number existed
+ * anywhere in the output. `applyContractGrainOutstanding` keys on `contract_number`, so their
+ * 3,200 MT and 1,800 MT were never placed on any row - 5,000 MT that Contract Performance counts
+ * and this page could not see.
+ *
+ * A union cannot double count: `applyContractGrainOutstanding` awards each contract to exactly one
+ * winning row, so a contract named on several rows is still valued once. It cannot smuggle a B2B
+ * child back in either - the rows have already been relabelled to the origin by the main query.
+ */
+function unionDistinctValues(
+  metricsList: unknown,
+  rows: Record<string, unknown>[],
+  field: string,
+): string {
+  const values = new Set<string>();
+  const addAll = (raw: unknown): void => {
+    for (const part of String(raw ?? '').split(',')) {
+      const value = part.trim();
+      if (value) values.add(value);
+    }
+  };
+  addAll(metricsList);
+  for (const row of rows) addAll(row[field]);
   return [...values].sort((a, b) => a.localeCompare(b)).join(', ');
 }
 
@@ -324,8 +363,7 @@ export function mergeShippingPerfStoGroup(rows: Record<string, unknown>[]): Reco
       (pick.po_numbers as string | undefined) ??
       (joinDistinctValues(rows, 'po_number') || pick.po_number),
     contract_number:
-      (pick.contract_numbers as string | undefined) ??
-      (joinDistinctValues(rows, 'contract_number') || pick.contract_number),
+      unionDistinctValues(pick.contract_numbers, rows, 'contract_number') || pick.contract_number,
     contract_ext_no: joinDistinctValues(rows, 'contract_ext_no') || pick.contract_ext_no,
     contract_date: joinDistinctContractDates(rows) || pick.contract_date,
     source_type: joinDistinctValues(rows, 'source_type') || pick.source_type,
@@ -708,7 +746,14 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
     LEFT JOIN perf_region_site rs ON rs.contract_id = c.contract_id
     LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
     WHERE ${contractBacklogCoreWhereSql('c', 'l')}
-      AND (${os}) > 0`;
+      AND (${os}) > 0
+      /*
+       * Same Region/Site rule the execution arm now applies, and for the same reason: Contract
+       * Performance drops contracts whose site does not resolve, Shipments does too, and a backlog
+       * row is no different from an execution one in that respect. Without it the two arms of this
+       * page would disagree with each other about which contracts exist.
+       */
+      AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}`;
 }
 
 export async function buildShippingPerformanceSql(): Promise<string> {
