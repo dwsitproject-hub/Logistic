@@ -1,6 +1,7 @@
 import { documentTypesForCategory } from './commercialDocumentsConstants';
 import { sqlB2bOriginEndingChildLateralJoin } from './b2bOriginEndingSql';
 import { appendRegionSiteFilter, sqlRegionSiteDisplayFromJsonAndB2b } from './regionSiteSql';
+import { resolveCommercialDocumentsListSort } from './commercialDocumentsListSort';
 
 /** Open contract status for summary card counts. */
 export const COMMERCIAL_DOCS_OPEN_STATUS_SQL = `(
@@ -23,6 +24,8 @@ export type CommercialDocumentsListParams = {
   plant?: string | string[] | null;
   page?: number;
   limit?: number;
+  sortKey?: string | null;
+  sortDir?: string | null;
 };
 
 function parseSapPaymentDateFromTrimmedExpr(trimmedExpr: string): string {
@@ -270,11 +273,13 @@ export function buildCommercialDocumentsListQuery(params: CommercialDocumentsLis
     SELECT COUNT(*)::int AS total FROM enriched e WHERE ${whereSql}
   `;
 
+  const listSort = resolveCommercialDocumentsListSort(params.sortKey, params.sortDir);
+  const dirSql = listSort.sortDir === 'asc' ? 'ASC' : 'DESC';
   const sql = `
     ${base}
     SELECT e.* FROM enriched e
     WHERE ${whereSql}
-    ORDER BY e.contract_date DESC NULLS LAST, e.contract_ext_no ASC
+    ORDER BY ${listSort.orderExpr} ${dirSql} NULLS LAST, e.contract_ext_no ASC, e.contract_id ASC
     LIMIT $${idx++} OFFSET $${idx++}
   `;
   values.push(limit, offset);

@@ -116,6 +116,8 @@ export const getCommercialDocuments = async (req: AuthRequest, res: Response) =>
       plant: parseQueryStringList(req.query.plant),
       page,
       limit,
+      sortKey: q.sortKey || null,
+      sortDir: q.sortDir || null,
     };
 
     const includeSummary = String(q.includeSummary ?? 'true').toLowerCase() !== 'false';

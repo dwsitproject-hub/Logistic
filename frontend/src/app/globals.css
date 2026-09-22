@@ -332,6 +332,21 @@
     overflow: hidden;
   }
 
+  /* Commercial Docs qty/price: grow with formatted value, do not clip. */
+  .klip-compact-table--perf-narrow-cols th.klip-op-col--dynamic-fit,
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--dynamic-fit {
+    max-width: none;
+    overflow: visible;
+    white-space: nowrap;
+  }
+
+  .klip-compact-table--perf-narrow-cols td.klip-op-col--dynamic-fit .klip-compact-table-cell-inner {
+    width: max-content;
+    min-width: 100%;
+    max-width: none;
+    overflow: visible;
+  }
+
   .klip-compact-table--perf-narrow-cols th.klip-op-col--two-line,
   .klip-compact-table--perf-narrow-cols td.klip-op-col--two-line {
     max-width: none;
