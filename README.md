@@ -2408,6 +2408,34 @@ Two hypotheses were killed by measurement before the real one was found: the act
 predicate (removed it, nothing moved) and the COMPLETED-promotion (each such row is capped at
 499 kg, so 98 MT would need ~197 of them in a slice holding ~70 contracts).
 
+### The shipment edit modal: a whole-table lookup for a handful of contracts
+
+Asked by Ryan, 2026-09-22. Measured through the endpoint the modal actually calls,
+`/shipments/:id/edit-payload`, against a copy of production.
+
+The dominant cost was `latest_spd_b2b`: a `DISTINCT ON (contract_number)` over **every** row of
+`sap_processed_data` - 26,379 of them - detoasting the jsonb `data` column on each to read two
+fields, in order to answer for the handful of contracts one shipment touches. **1,193-3,953 ms per
+call**, and the index `(contract_number, created_at DESC)` already existed, so the index was never
+the problem; the row count was.
+
+It is only ever joined to `po_lines` and `sap_only_contracts` in the final SELECT, so the CTE now
+sits **after** both and is scoped to exactly their contract numbers - the rows it drops are ones no
+join could have matched. `sqlLatestSpdB2bCte(scope?)` carries the scope; the unscoped
+`LATEST_SPD_B2B_CTE` stays for Shipping Performance, which needs it whole.
+
+**Output-preserving, checked rather than argued**: `contractDetails` for 12 shipments, before and
+after, identical 12/12.
+
+| | per call, warm |
+| --- | --- |
+| before | 1,559 / 1,392 / 1,540 ms |
+| after | 932 / 939 / 706 ms |
+
+That query alone fell from 3,953 to 278 ms, and total SQL across three calls from 10,028 to
+2,748 ms. Time outside SQL is ~0 - the endpoint is entirely database-bound, so the next gain has to
+come from the remaining hot query (`WITH ship AS (...)`, ~500 ms per call), not from the Node side.
+
 ### The test suite is flaky under its own parallelism, not under change
 
 Three full runs on 2026-09-22 failed 3, 8 and 7 files, and the failing SET differed each time; every

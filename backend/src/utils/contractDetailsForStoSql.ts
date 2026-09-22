@@ -9,7 +9,7 @@ import { sqlPoStoSapQtyKg } from './contractPoGlobalMetricsSql';
 import { shipmentOutstandingQtyExpr } from './shipmentOutstandingQtySql';
 import { sqlShipmentListOsBaseQtyExpr } from './shipmentListQtySql';
 import { sapStoNumberKeyExpr } from './shipmentStoTypeSql';
-import { LATEST_SPD_B2B_CTE, sqlB2bChildExcludeWhere } from './shippingPerformanceStoMetricsSql';
+import { sqlLatestSpdB2bCte, sqlB2bChildExcludeWhere } from './shippingPerformanceStoMetricsSql';
 
 /** PO number from SAP JSON (raw / contract) — default spd alias. */
 export const SPD_PO_NUMBER_SQL = sqlSpdPoNumberExpr('spd');
@@ -320,7 +320,7 @@ export function buildContractDetailsForStoSql(): string {
   );
 
   return `
-      WITH ${LATEST_SPD_B2B_CTE.trim().replace(/^WITH\s+/i, '')},
+      WITH
       /*
        * One STO legitimately spans several POs, but only the ones SAP still reports for it.
        *
@@ -443,7 +443,22 @@ export function buildContractDetailsForStoSql(): string {
           WHERE c.contract_id = cc.contract_number
             AND UPPER(COALESCE(NULLIF(TRIM(c.transport_mode), ''), 'SEA')) IN ('SEA', 'MIXED', 'MIX')
         )
-      )
+      ),
+      /*
+       * Defined HERE, not at the top, and scoped to the contracts this query can actually join to.
+       *
+       * It is only ever joined to po_lines and sap_only_contracts in the final SELECT, so limiting
+       * it to exactly those contract numbers cannot change a single join result - the rows it drops
+       * are ones no join could have matched. Unscoped it was a DISTINCT ON over all 26,379
+       * sap_processed_data rows, detoasting the jsonb column on each to read two fields, and it was
+       * the largest single cost of opening the shipment edit modal: 1,193-3,953 ms per call
+       * measured on a copy of production.
+       */
+      ${sqlLatestSpdB2bCte(
+        `SELECT pl_s.contract_number FROM po_lines pl_s
+           UNION
+           SELECT soc_s.contract_number FROM sap_only_contracts soc_s`,
+      ).trim().replace(/^WITH\s+/i, '')}
       SELECT
         pl.contract_number,
         pl.po_number,
