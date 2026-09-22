@@ -28,13 +28,14 @@ import {
   rowMatchesToolbarMultiFilters,
 } from '@/lib/globalScopeFilters'
 import {
-  formatAvgDaysCompact,
+  formatAvgDays,
   formatSignedCycleDays,
   formatSignedDeltaDays,
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
 import {
   formatShippingPerfDisplayLabel,
+  getShippingSummaryMetricFormula,
   getShippingSummaryMetricLabel,
   perfDataModeFromCard,
   resolveShippingPerfLabelMode,
@@ -1947,22 +1948,24 @@ function ShippingPerformancePageContent() {
   const renderSummaryGapMetrics = (summary: PerVesselPerfSummary, card: ShippingPerfCardFilter) => {
     const labelMode = card === 'close' ? 'actual' : 'estimated'
     const fmt = (days: number | null) =>
-      formatAvgDaysCompact(days == null || !Number.isFinite(days) ? null : Math.abs(days))
-    const metrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
+      formatAvgDays(days == null || !Number.isFinite(days) ? null : Math.abs(days))
+    const loadMetrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
       { key: 'loadingEtr', value: summary.avgLoadingEtaEtr },
       { key: 'loadingEtb', value: summary.avgLoadingEtaEtb },
       { key: 'loadingEtc', value: summary.avgLoadingEtbEtc },
+    ]
+    const discMetrics: { key: ShippingSummaryMetricKey; value: number | null }[] = [
       { key: 'dischargeEtb', value: summary.avgDischargeEtaEtb },
       { key: 'dischargeEtc', value: summary.avgDischargeEtbEtc },
     ]
 
-    return (
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+    const renderMetricRow = (metrics: { key: ShippingSummaryMetricKey; value: number | null }[]) => (
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         {metrics.map(({ key, value }) => {
           const shortLabel = getShippingSummaryMetricLabel(key, labelMode, 'short')
-          const fullLabel = getShippingSummaryMetricLabel(key, labelMode, 'full')
+          const formula = getShippingSummaryMetricFormula(key, labelMode)
           return (
-            <span key={key} className="shrink-0" title={fullLabel}>
+            <span key={key} className="shrink-0 cursor-help" title={formula}>
               {shortLabel}:{' '}
               <span className={cn('font-semibold tabular-nums', signedCycleDaysClass(value))}>
                 {fmt(value)}
@@ -1972,9 +1975,16 @@ function ShippingPerformancePageContent() {
         })}
       </div>
     )
+
+    return (
+      <div className="space-y-1 text-xs text-gray-500">
+        {renderMetricRow(loadMetrics)}
+        {renderMetricRow(discMetrics)}
+      </div>
+    )
   }
 
-  /** Section 1 body — Total Vessels matches CP Outstanding Qty; Avg metrics wrap like Open/Close. */
+  /** Section 1 body — Total Vessels; Avg Load on row 1, Avg Disc on row 2. */
   const renderShippingSummaryCardBody = (
     card: ShippingPerfCardFilter,
     summary: PerVesselPerfSummary,

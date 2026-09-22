@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatShippingPerfDisplayLabel,
+  getShippingSummaryMetricFormula,
   getShippingSummaryMetricLabel,
   resolveShippingPerfLabelMode,
   shippingPerfCardTitleLines,
@@ -40,6 +41,18 @@ describe('getShippingSummaryMetricLabel', () => {
     )
     expect(getShippingSummaryMetricLabel('loadingEtr', 'actual', 'full')).toBe(
       'Avg Load (ATA - ATR)',
+    )
+  })
+
+  it('returns Formula: hover text and maps ETA to ATA on Completed', () => {
+    expect(getShippingSummaryMetricFormula('loadingEtr', 'estimated')).toBe(
+      'Formula: ETA Vessel Arrival at Loading Port - Cargo Readiness Date',
+    )
+    expect(getShippingSummaryMetricFormula('loadingEtr', 'actual')).toBe(
+      'Formula: ATA Vessel Arrival at Loading Port - Cargo Readiness Date',
+    )
+    expect(getShippingSummaryMetricFormula('dischargeEtc', 'actual')).toBe(
+      'Formula: ATA Vessel Berthed at Discharge Port - ATA Vessel Complete Discharge',
     )
   })
 
