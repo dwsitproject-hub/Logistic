@@ -26,6 +26,7 @@ export interface MasterVesselFormData {
   heating: boolean | null
   lambung_type: string | null
   terms: string | null
+  dhm_id?: string | null
   dhm_code?: string | null
 }
 
@@ -126,12 +127,21 @@ export function EditVesselModal({
         return api.post(`/master-vessels${qs}`, payload)
       }
       const res = await persist(false)
-      const dhmConflict = Boolean((res.data as { data?: { dhmConflict?: boolean } })?.data?.dhmConflict)
-      if (dhmConflict) {
+      type DhmSave = { dhmConflict?: boolean; dhmCode?: string | null; dhmError?: string }
+      let dhm = (res.data as { data?: DhmSave })?.data
+      if (dhm?.dhmConflict) {
         const updateDhm = window.confirm(
           'DHM already has this vessel. Update DHM with the KLIP values?',
         )
-        if (updateDhm) await persist(true)
+        if (updateDhm) {
+          const overwritten = await persist(true)
+          dhm = (overwritten.data as { data?: DhmSave })?.data ?? dhm
+        }
+      }
+      if (dhm?.dhmError && !dhm.dhmConflict) {
+        alert(`Saved in KLIP, but DHM was not linked: ${dhm.dhmError}`)
+      } else if (dhm?.dhmCode) {
+        alert(`Saved. DHM code: ${dhm.dhmCode}`)
       }
       onSaved()
       onClose()

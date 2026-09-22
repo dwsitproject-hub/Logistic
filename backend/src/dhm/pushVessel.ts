@@ -26,17 +26,17 @@ export async function pushMasterVesselToDhm(
       : await postVesselInbound(row);
 
     if (result.ok) {
-      await persistDhmReplica(localId, result.record);
+      await persistDhmReplica(localId, result.record, result.code);
       return { dhmStatus: result.status, dhmCode: result.code };
     }
 
     if (result.conflict) {
-      await persistDhmReplica(localId, result.record);
+      await persistDhmReplica(localId, result.record, result.code);
       const code = result.code || String(result.record.data?.code || '').trim();
       if (options?.overwrite && code) {
         const updated = await putVesselInbound(code, row);
         if (updated.ok) {
-          await persistDhmReplica(localId, updated.record);
+          await persistDhmReplica(localId, updated.record, updated.code);
           return { dhmStatus: updated.status, dhmCode: updated.code };
         }
         return {

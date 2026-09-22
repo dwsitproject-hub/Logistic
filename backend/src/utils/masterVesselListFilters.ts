@@ -107,6 +107,7 @@ export const MASTER_VESSEL_SORT_COLUMNS: Record<string, string> = {
   heating: 'heating',
   lambung_type: 'lambung_type',
   terms: 'terms',
+  dhm_status: `(dhm_id IS NOT NULL OR NULLIF(BTRIM(dhm_code), '') IS NOT NULL)`,
 };
 
 export function buildMasterVesselOrderBy(sortKey?: string, sortDir?: string): string {

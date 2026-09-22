@@ -3,32 +3,45 @@ import { normalizeVesselName, uppercaseText } from '../utils/vesselNameNormalize
 import { fromDhmVesselData } from './mapper';
 import type { DhmRecord } from './types';
 
-export async function persistDhmReplica(masterVesselId: string, record: DhmRecord): Promise<void> {
-  const mapped = fromDhmVesselData(record.data);
+/** Inbound 201 often returns `code` on the envelope while `record.data` is empty. */
+export function resolveDhmReplicaCode(
+  record: DhmRecord,
+  envelopeCode?: string | null,
+): string | null {
+  const fromData = fromDhmVesselData(record.data).dhm_code;
+  const fromEnvelope = String(envelopeCode || '').trim();
+  return fromData || fromEnvelope || null;
+}
+
+export async function persistDhmReplica(
+  masterVesselId: string,
+  record: DhmRecord,
+  envelopeCode?: string | null,
+): Promise<void> {
+  const code = resolveDhmReplicaCode(record, envelopeCode);
+  const payload = { ...(record.data ?? {}) };
+  if (code && payload.code == null) payload.code = code;
+  const dhmId = String(record.id || '').trim() || null;
   await query(
     `UPDATE master_vessels
-     SET dhm_id = $2::uuid,
-         dhm_code = $3,
-         dhm_version = $4,
-         dhm_updated_at = $5::timestamptz,
+     SET dhm_id = COALESCE($2::uuid, dhm_id),
+         dhm_code = COALESCE($3, dhm_code),
+         dhm_version = COALESCE($4, dhm_version),
+         dhm_updated_at = COALESCE($5::timestamptz, dhm_updated_at),
          dhm_is_deleted = $6,
          dhm_payload = $7::jsonb,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $1`,
     [
       masterVesselId,
-      record.id,
-      mapped.dhm_code || dhmCodeFromRecord(record),
-      record.version,
+      dhmId,
+      code,
+      record.version || null,
       record.updatedAt || null,
       record.isDeleted,
-      JSON.stringify(record.data ?? {}),
+      JSON.stringify(payload),
     ],
   );
-}
-
-function dhmCodeFromRecord(record: DhmRecord): string | null {
-  return fromDhmVesselData(record.data).dhm_code;
 }
 
 async function findLocalVesselId(record: DhmRecord): Promise<string | null> {

@@ -23,6 +23,7 @@ backend/dist/
 .env.production.local
 backend/.env
 frontend/.env.local
+docs/scripts/sit-set-dhm-env.sh
 .synology-credentials
 /opt/klip/.synology-credentials
 

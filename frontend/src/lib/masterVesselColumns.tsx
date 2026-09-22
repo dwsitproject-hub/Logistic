@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import type { MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
+import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
 
 export type MasterVesselColumnId =
   | 'vessel_code'
@@ -15,6 +16,7 @@ export type MasterVesselColumnId =
   | 'heating'
   | 'lambung_type'
   | 'terms'
+  | 'dhm_status'
 
 export type MasterVesselRow = MasterVesselFormData & { id: string }
 
@@ -54,6 +56,8 @@ export function getMasterVesselCellText(colId: MasterVesselColumnId, row: Master
       return row.lambung_type || '-'
     case 'terms':
       return row.terms || '-'
+    case 'dhm_status':
+      return masterVesselDhmStatusLabel(row)
     default:
       return '-'
   }
@@ -70,7 +74,8 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   year_of_creation: 72,
   heating: 80,
   lambung_type: 104,
-  terms: 80,
+  terms: 104,
+  dhm_status: 108,
 }
 
 export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 96
@@ -138,9 +143,29 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   },
   {
     id: 'terms',
-    label: 'Terms',
+    label: 'Charter Type',
     getCellText: (row) => getMasterVesselCellText('terms', row),
     render: (row) => masterVesselCell(getMasterVesselCellText('terms', row)),
+  },
+  {
+    id: 'dhm_status',
+    label: 'DHM Status',
+    getCellText: (row) => getMasterVesselCellText('dhm_status', row),
+    render: (row) => {
+      const synced = masterVesselDhmStatusLabel(row) === 'Sync'
+      return masterVesselCell(
+        <span
+          className={
+            synced
+              ? 'inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800'
+              : 'inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800'
+          }
+          title={row.dhm_code ? `DHM: ${row.dhm_code}` : undefined}
+        >
+          {synced ? 'Sync' : 'Not Sync'}
+        </span>,
+      )
+    },
   },
 ]
 
