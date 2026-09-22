@@ -67,6 +67,60 @@ export function contractNumbersOf(row: ContractGrainOsRow): string[] {
     .filter(Boolean);
 }
 
+/** One B2B link: the child contract and the ORIGIN (parent) contract its PO points at. */
+export type B2bOriginLink = { child: string; origin: string };
+
+/**
+ * Parent first, child only when the parent carries nothing - Ryan's rule, enforced here.
+ *
+ * WHY THIS EXISTS RATHER THAN A COMMENT SAYING IT CANNOT HAPPEN. The STO merge now UNIONS the
+ * contract numbers `sto_metrics` knows with the ones the rows carry, because preferring one source
+ * silently discarded relabelled B2B origins - 5,000 MT invisible on the dev copy, 2026-09-22. A
+ * union can, in principle, name a child AND its origin on the same STO, and B2B double counting is
+ * exactly how outstanding ballooned here before. That is why the page picks one side at all.
+ *
+ * Measured right after the union landed: **0** of 566 B2B pairs on dev had both sides valued,
+ * including the 6 where the origin has a shipment of its own. So this guard fires on nothing
+ * today. It is structural insurance, not a fix for an observed fault - nothing in the query
+ * FORBIDS the shape, and "the data does not currently do that" is a weaker guarantee than these
+ * totals deserve.
+ *
+ * The parent wins only when it actually carries outstanding. A parent valued at 0 - fully
+ * delivered, or SAP-closed - lets the child through, which is the "jika null bisa ambil dari
+ * child" half of the rule.
+ */
+export function applyB2bParentPreference(
+  osByContract: Map<string, number>,
+  links: ReadonlyArray<B2bOriginLink>,
+): Map<string, number> {
+  for (const { child, origin } of links) {
+    if (!osByContract.has(child)) continue;
+    if ((osByContract.get(origin) ?? 0) > 0) osByContract.delete(child);
+  }
+  return osByContract;
+}
+
+/** The B2B child -> origin links among the given contracts, read once from the SPD snapshot. */
+async function loadB2bOriginLinks(
+  client: { query: (sql: string, params: unknown[]) => Promise<{ rows: unknown[] }> },
+  contractIds: string[],
+): Promise<B2bOriginLink[]> {
+  const result = await client.query(
+    `SELECT l.contract_number AS child, o.contract_id AS origin
+     FROM contract_latest_spd_snapshot l
+     JOIN contracts o
+       ON NULLIF(TRIM(o.po_number::text), '') = NULLIF(TRIM(l.contract_reference_po_raw), '')
+     WHERE l.contract_number = ANY($1::text[])
+       AND UPPER(TRIM(COALESCE(l.b2b_flag_raw, ''))) = 'B2B'
+       AND NULLIF(TRIM(l.contract_reference_po_raw), '') IS NOT NULL`,
+    [contractIds],
+  );
+  return (result.rows as { child: string; origin: string }[]).map((r) => ({
+    child: String(r.child),
+    origin: String(r.origin),
+  }));
+}
+
 /**
  * The contract's outstanding, valued exactly as the Shipments execution arm values it.
  * Returns kg keyed by contract number; contracts with nothing outstanding are simply absent.
@@ -126,6 +180,12 @@ export async function loadContractExecutionOutstandingKg(
         if (kg > 0) out.set(String(row.contract_id), kg);
       }
     }
+    /*
+     * The links are read against the WHOLE id list, not the chunk. A parent and its child can
+     * easily land in different chunks of 400, and a guard that only looked inside one chunk would
+     * pass every test and still let the pair through in production.
+     */
+    applyB2bParentPreference(out, await loadB2bOriginLinks(client, ids));
   } finally {
     // Reset before returning it to the pool, or every later query on this connection inherits it.
     try {
