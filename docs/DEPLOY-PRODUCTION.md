@@ -411,6 +411,29 @@ User Hub yang emailnya tidak ada di tabel `users` ditolak ke `/login?error=sso_n
 
 ---
 
+## STEP 8B — Commercial Documents ke NAS (`dev/KLIP`)
+
+Upload Commercial Documents di **production saja** menulis ke:
+
+`\\172.30.1.94\APPs\dev\KLIP\COMMERCIAL DOCS\{YYYY}\{MM}\{PO}`
+
+`{YYYY}/{MM}` adalah **bulan berjalan** (Asia/Jakarta), bukan tanggal kontrak. Oktober 2026 → `2026/10`. SIT dan local **tidak** memakai folder ini (volume Docker `commercial-documents/{PO}`).
+
+Di `/opt/klip/.env` production:
+
+```env
+KLIP_ENV=prod
+KLIP_COMMERCIAL_DOCS_SHARE=1
+KLIP_UPLOAD_MOUNT=/mnt/synology/dev/KLIP
+UPLOAD_DIR=/app/uploads
+```
+
+Prasyarat: share sudah ter-mount di host (`/mnt/synology/dev/KLIP`). Kalau mount kosong, file tetap di volume Docker dan Explorer NAS tetap kosong.
+
+`production-deploy-backend.sh` menambahkan overlay Synology jika folder mount ada.
+
+---
+
 ## STEP 9 — SAP auto-import dari share IT
 
 Terbukti di SIT 2026-09-14: hanya file terbaru yang diimpor, sumber tidak tersentuh, hasil

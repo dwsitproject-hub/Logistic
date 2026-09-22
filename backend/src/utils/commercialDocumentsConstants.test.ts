@@ -6,7 +6,28 @@ import {
   commercialDocumentUploadRelativeDir,
   documentTypesForCategory,
   supplierFilenamePrefix,
+  useCommercialDocsNasLayout,
 } from './commercialDocumentsConstants';
+
+function withNasLayoutEnv(enabled: boolean, run: () => void): void {
+  const prevShare = process.env.KLIP_COMMERCIAL_DOCS_SHARE;
+  const prevEnv = process.env.KLIP_ENV;
+  try {
+    if (enabled) {
+      process.env.KLIP_COMMERCIAL_DOCS_SHARE = '1';
+      delete process.env.KLIP_ENV;
+    } else {
+      delete process.env.KLIP_COMMERCIAL_DOCS_SHARE;
+      delete process.env.KLIP_ENV;
+    }
+    run();
+  } finally {
+    if (prevShare === undefined) delete process.env.KLIP_COMMERCIAL_DOCS_SHARE;
+    else process.env.KLIP_COMMERCIAL_DOCS_SHARE = prevShare;
+    if (prevEnv === undefined) delete process.env.KLIP_ENV;
+    else process.env.KLIP_ENV = prevEnv;
+  }
+}
 
 describe('commercialDocumentsConstants', () => {
   it('buyerFilenamePrefix uses first 3 uppercase letters', () => {
@@ -107,19 +128,36 @@ describe('commercialDocumentsConstants', () => {
     ).toBe('EOP_Do_1381002868.pdf');
   });
 
-  it('commercialDocumentUploadRelativeDir uses year month PO under COMMERCIAL DOCS', () => {
-    const dir = commercialDocumentUploadRelativeDir(
-      '1381002868',
-      new Date('2026-09-18T03:00:00.000Z'),
-    );
-    expect(dir).toBe('COMMERCIAL DOCS/2026/09/1381002868');
+  it('SIT/local writes under commercial-documents without NAS year-month folders', () => {
+    withNasLayoutEnv(false, () => {
+      expect(useCommercialDocsNasLayout()).toBe(false);
+      expect(
+        commercialDocumentUploadRelativeDir(
+          '1381002868',
+          new Date('2026-09-18T03:00:00.000Z'),
+        ),
+      ).toBe('commercial-documents/1381002868');
+    });
   });
 
-  it('commercialDocumentUploadRelativeDir rolls to the next Jakarta year', () => {
-    const dir = commercialDocumentUploadRelativeDir(
-      '1381002868',
-      new Date('2026-12-31T17:30:00.000Z'),
-    );
-    expect(dir).toBe('COMMERCIAL DOCS/2027/01/1381002868');
+  it('production NAS layout uses current Jakarta year/month under COMMERCIAL DOCS', () => {
+    withNasLayoutEnv(true, () => {
+      expect(useCommercialDocsNasLayout()).toBe(true);
+      const dir = commercialDocumentUploadRelativeDir(
+        '1381002868',
+        new Date('2026-09-18T03:00:00.000Z'),
+      );
+      expect(dir).toBe('COMMERCIAL DOCS/2026/09/1381002868');
+    });
+  });
+
+  it('production NAS layout rolls to the next Jakarta year', () => {
+    withNasLayoutEnv(true, () => {
+      const dir = commercialDocumentUploadRelativeDir(
+        '1381002868',
+        new Date('2026-12-31T17:30:00.000Z'),
+      );
+      expect(dir).toBe('COMMERCIAL DOCS/2027/01/1381002868');
+    });
   });
 });

@@ -1,12 +1,14 @@
 # Optional override: bind-mount Synology share into backend /app/uploads.
-# Use only when backend server can reach Synology (ping 172.30.1.94, port 445 open).
+# Commercial Documents year/month folders on \\172.30.1.94\APPs\dev\KLIP are PRODUCTION ONLY.
 #
-#   cd /opt/klip
-#   sudo bash docs/scripts/staging-mount-synology-dev.sh
-#   docker compose -f docker-compose.backend.yml -f docker-compose.backend.synology.yml up -d --build backend
+# Production (/opt/klip/.env):
+#   KLIP_ENV=prod
+#   KLIP_COMMERCIAL_DOCS_SHARE=1
+#   KLIP_UPLOAD_MOUNT=/mnt/synology/dev/KLIP
+#   docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml \
+#     -f docker-compose.backend.synology.yml up -d --build backend
 #
-# Requires in /opt/klip/.env:
-#   KLIP_UPLOAD_MOUNT=/mnt/synology-apps/dev/klip
+# SIT/local: do not attach this overlay for commercial docs. Keep Docker volume backend_uploads.
 
 services:
   backend:
