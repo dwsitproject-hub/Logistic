@@ -2373,6 +2373,41 @@ simply the other transport mode. Trucking's figure comes from `trucking_list_sta
 the script prints `summaryFreshness` beside it - a full rebuild of that snapshot is ~21 minutes and
 is not something to trigger by accident.
 
+### The Shipments card had two producers, and they disagreed twice
+
+Ryan on SIT, CPO + BONTANG: the Outstanding Qty headline read 78,903 MT while the 3rd Party and
+Interco panels under it summed to 78,001. Two numbers, one card - and `reconcileShipmentOutstandingQtySummary`
+is explicit about it: *"Prefer cardTotalKg (status-card OS sum) when provided so hero matches
+Section 1 cards"*, with the remainder absorbed into `otherKg`, which appears only in the tooltip.
+So the original 902 MT was hidden by design rather than reported.
+
+**Two distinct faults sat underneath it.**
+
+1. **Region/Site, 1,000 MT.** Only the OS card passed `requireResolvedRegionSite`; the status-card
+   query and the combined summary did not, so they counted contracts whose Region/Site does not
+   resolve - contract 1004032347 alone - while the card beside them, and Contract Performance,
+   dropped them.
+
+2. **The combined-summary shortcut, 98 MT.** When the combined summary row carried status-card
+   quantities, the controller used them instead of running the status-card query. That summary
+   builds its own `enriched`, and its `effective_status` comes from the scope CTE **without** the
+   own-STO discharge column that `sqlShipmentSection1LightExecutionEnrichSelect` uses - the same
+   own-STO narrowing Shipping Performance needed. A row whose ATC belongs to a SIBLING STO reads
+   COMPLETED there, falls out of every status card, and takes its outstanding with it.
+
+Fixing (1) alone made it worse in a quieter way: the card sum fell to 77,902.9 MT, now *below* the
+buckets, so `otherKg = max(0, total - classified)` clamped to zero and the identity the tooltip
+promises stopped holding at all. Both had to go.
+
+**Proved by disabling only the shortcut**: the cards then read 78,000.9 MT exactly, matching the OS
+card, Contract Performance and Shipping Performance. The status-card quantities now always come
+from their own query. Cost: one extra query, 6,838 ms -> 7,343 ms cold on that slice, unchanged
+warm (~8 ms, cached).
+
+Two hypotheses were killed by measurement before the real one was found: the active-stage row
+predicate (removed it, nothing moved) and the COMPLETED-promotion (each such row is capped at
+499 kg, so 98 MT would need ~197 of them in a slice holding ~70 contracts).
+
 ### The test suite is flaky under its own parallelism, not under change
 
 Three full runs on 2026-09-22 failed 3, 8 and 7 files, and the failing SET differed each time; every

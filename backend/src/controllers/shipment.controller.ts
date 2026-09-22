@@ -54,12 +54,10 @@ import {
   loadShipmentEtcNoAtcDueWithin7dForRequest,
   loadShipmentStatusCardQtyForRequest,
   loadShipmentSummaryBundle,
-  mergeShipmentStatusCardQtyFromCombinedSummaryRow,
   normalizeShipmentListRows,
   resolveShipmentsListForRequest,
   buildShipmentListStatusFilteredCountQuery,
   seedShipmentListFilteredTotal,
-  summaryRowHasCombinedStatusCardQty,
   type ShipmentEtcNoAtcDueWithin7d,
   type ShipmentOutstandingQtySummary,
   type ShipmentStatusCardQtyBacklogParts,
@@ -1488,12 +1486,30 @@ ${vlpLateralJoins}
         unplannedBacklogOutstandingQtyKg: unplannedBreakdownForSummary.outstandingQtyKg,
         preplannedOutstandingQtyKg: preplannedBreakdownForSummary.outstandingQtyKg,
       };
-      const statusCardQtyPromise = summaryRowHasCombinedStatusCardQty(sr)
-        ? mergeShipmentStatusCardQtyFromCombinedSummaryRow(sr, statusCardQtyBacklogParts)
-        : loadSection1StatusCardQty(statusCardQtyBacklogParts).catch((err) => {
-            logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
-            return null;
-          });
+      /*
+       * The status-card quantities always come from their OWN query, never from the combined
+       * summary row.
+       *
+       * The combined summary builds its own `enriched`, and its effective_status arrives from the
+       * scope CTE above it - computed WITHOUT the own-STO discharge column that
+       * sqlShipmentSection1LightExecutionEnrichSelect uses. So a row whose ATC belongs to a SIBLING
+       * STO reads COMPLETED there, drops out of every status card, and its outstanding vanishes
+       * from the card sum while the OS card beside it still counts it.
+       *
+       * Measured on a copy of production, CPO / BONTANG / YTD: the card sum read 77,902.9 MT
+       * against 78,000.9 MT on the OS card, Contract Performance and Shipping Performance - 98 MT,
+       * and the shortcut was the whole of it. Proved by disabling only this branch: the cards then
+       * read 78,000.9 MT exactly.
+       *
+       * The cost is one extra query: 6,838 ms -> 7,343 ms cold on that slice, unchanged warm
+       * (~8 ms, cached). That is the price of the cards and the strip agreeing, and it is small.
+       */
+      const statusCardQtyPromise = loadSection1StatusCardQty(statusCardQtyBacklogParts).catch(
+        (err) => {
+          logger.error('Shipment status card qty failed (summaryOnly-compact)', err);
+          return null;
+        },
+      );
       const attentionInsightsPromise = isAttentionInsightsEnabled()
         ? loadShipmentAttentionInsightsForRequest(
             req,
@@ -2176,15 +2192,14 @@ ${vlpLateralJoins}
         unplannedBacklogOutstandingQtyKg: unplannedBreakdownForSummary.outstandingQtyKg,
         preplannedOutstandingQtyKg: preplannedBreakdownForSummary.outstandingQtyKg,
       };
-      const statusCardQty = summaryRowHasCombinedStatusCardQty(sr)
-        ? await mergeShipmentStatusCardQtyFromCombinedSummaryRow(sr, statusCardQtyBacklogParts).catch((err) => {
-            logger.error('Shipment status card qty failed (summaryOnly combined)', err);
-            return null;
-          })
-        : await loadSection1StatusCardQty(statusCardQtyBacklogParts).catch((err) => {
-            logger.error('Shipment status card qty failed (summaryOnly)', err);
-            return null;
-          });
+      // Same reason as the branch above: the combined summary's effective_status is not the
+      // own-STO one, and the cards lose 98 MT to it.
+      const statusCardQty = await loadSection1StatusCardQty(statusCardQtyBacklogParts).catch(
+        (err) => {
+          logger.error('Shipment status card qty failed (summaryOnly)', err);
+          return null;
+        },
+      );
       const etcNoAtcDueWithin7d = await loadShipmentEtcNoAtcDueWithin7dForRequest({
         shipmentBaseCteSql: shipmentBaseCteSqlSummary,
         toolbarOuterSql: section1SummaryFilterSql,
