@@ -79,6 +79,17 @@ export const SHIPPING_SUMMARY_METRIC_FULL_LABELS = {
   total: 'Avg Total',
 } as const
 
+/** Section 1 hover formulas (ETA → ATA on Completed via formatShippingPerfDisplayLabel). */
+export const SHIPPING_SUMMARY_METRIC_FORMULAS = {
+  loadingEtr: 'ETA Vessel Arrival at Loading Port - Cargo Readiness Date',
+  loadingEtb: 'ETA Vessel Arrival at Loading Port - ETA Vessel Berthed at Loading Port',
+  loadingEtc: 'ETA Vessel Berthed at Loading Port - ETA Vessel Completed Loading',
+  dischargeEtb: 'ETA Vessel Arrive at Discharge Port - ETA Vessel Berthed at Discharge Port',
+  dischargeEtc: 'ETA Vessel Berthed at Discharge Port - ETA Vessel Complete Discharge',
+  total:
+    'Sum of Loading (ETA-ETR), Loading (ETA-ETB), Loading (ETB-ETC), Discharge (ETA-ETB), and Discharge (ETB-ETC)',
+} as const
+
 export type ShippingSummaryMetricKey = keyof typeof SHIPPING_SUMMARY_METRIC_LABELS
 
 export function getShippingSummaryMetricLabel(
@@ -89,4 +100,12 @@ export function getShippingSummaryMetricLabel(
   const base =
     variant === 'short' ? SHIPPING_SUMMARY_METRIC_LABELS[key] : SHIPPING_SUMMARY_METRIC_FULL_LABELS[key]
   return formatShippingPerfDisplayLabel(base, labelMode)
+}
+
+export function getShippingSummaryMetricFormula(
+  key: ShippingSummaryMetricKey,
+  labelMode: ShippingPerfLabelMode,
+): string {
+  const formula = formatShippingPerfDisplayLabel(SHIPPING_SUMMARY_METRIC_FORMULAS[key], labelMode)
+  return `Formula: ${formula}`
 }
