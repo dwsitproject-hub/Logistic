@@ -2250,6 +2250,35 @@ above does not touch it. Same root shape as the site case - contract-grain outst
 row, then filtered by that row's attributes - but through product rather than site. It does not
 appear in the production slice measured here.
 
+### Over-delivery subtracts, and membership does not move
+
+Ryan, 2026-09-22: *"tampil pada baris halaman dan juga mengurangi OS agar konsisten antara
+summary/total dengan detail data pada view table"*. The principle is that the rows shown must sum
+to the total shown.
+
+`sqlContractGlobalOutstandingExpr` no longer clamps at zero. It and Contract Performance's
+`sqlContractOutstandingSignedExpr` are the same function, `sqlContractOutstandingFromFields`,
+differing only by that flag - so the clamp meant one contract showed a negative outstanding on
+Contract Performance and zero on Shipments, Shipping Performance and Trucking.
+
+**Membership was deliberately left alone.** Every `(os) > 0` gate excludes a negative exactly as it
+excluded the clamped zero, so this changes what a counted row is WORTH, not which rows exist.
+That was the choice between two readings, and the measurement is what made it choosable:
+
+| | contracts | MT |
+| --- | --- | --- |
+| negative outstanding, YTD, all products | 1,583 | −7,686.9 |
+| of which SAP-closed or with no shipment | 1,572 | −7,682.4 |
+| **of which reachable by a total at all** (active shipment) | **11** | **−4.5** |
+
+So the alternative - reclassifying over-delivered contracts from Close to Open so they appear on
+the Open card - would have moved 23 contracts and −3,530.8 MT, and made "Open" mean *not yet
+administratively closed* rather than *still has something to deliver*. Rejected on those grounds.
+
+The clamp also has nothing to do with why over-delivered contracts are absent from the Open card:
+`sqlContractEffectivelyDoneExpr` treats `outstanding <= 499 kg` as finished, and a negative is
+always ≤ 499. That classification is unchanged.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches
