@@ -176,7 +176,11 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.quantity_ordered,
-      render: (r) => <span className="text-sm tabular-nums">{formatCommercialQtyKg(r.quantity_ordered)}</span>,
+      render: (r) => (
+        <span className="text-sm tabular-nums whitespace-nowrap">
+          {formatCommercialQtyKg(r.quantity_ordered)}
+        </span>
+      ),
     },
     {
       id: 'unit_price',
@@ -184,7 +188,11 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       defaultVisible: true,
       sortable: true,
       getSortValue: (r) => r.unit_price,
-      render: (r) => <span className="text-sm tabular-nums">{formatCommercialIdr(r.unit_price, r.currency)}</span>,
+      render: (r) => (
+        <span className="text-sm tabular-nums whitespace-nowrap">
+          {formatCommercialIdr(r.unit_price, r.currency)}
+        </span>
+      ),
     },
     {
       id: 'total_price',
@@ -194,7 +202,9 @@ export function buildCommercialDocsColumns(): CommercialDocsColumnMeta[] {
       formulaHelp: COMMERCIAL_TOTAL_PRICE_FORMULA_HELP,
       getSortValue: (r) => r.total_price,
       render: (r) => (
-        <span className="text-sm tabular-nums">{formatCommercialIdr(r.total_price, r.currency)}</span>
+        <span className="text-sm tabular-nums whitespace-nowrap">
+          {formatCommercialIdr(r.total_price, r.currency)}
+        </span>
       ),
     },
     {
@@ -297,4 +307,50 @@ export function commercialDocsTableColumnWidthPx(
     hasFormulaHelp: options?.hasFormulaHelp,
     hasSort: true,
   })
+}
+
+/** Money/qty cells size to the longest formatted value so digits are not clipped. */
+export const COMMERCIAL_DOCS_DYNAMIC_WIDTH_COLUMN_IDS = new Set<CommercialDocsColumnId>([
+  'contract_qty',
+  'unit_price',
+  'total_price',
+])
+
+export function isCommercialDocsDynamicWidthColumn(colId: string): boolean {
+  return COMMERCIAL_DOCS_DYNAMIC_WIDTH_COLUMN_IDS.has(colId as CommercialDocsColumnId)
+}
+
+/** text-sm tabular-nums — slightly wider than header text-xs estimate. */
+const DYNAMIC_CELL_CHAR_PX = 8.5
+const DYNAMIC_CELL_PAD_PX = 16
+const DYNAMIC_CELL_BUFFER_PX = 8
+
+export function formatCommercialDocsDynamicCell(
+  colId: string,
+  row: Pick<CommercialDocumentRow, 'quantity_ordered' | 'unit_price' | 'total_price' | 'currency'>,
+): string {
+  if (colId === 'contract_qty') return formatCommercialQtyKg(row.quantity_ordered)
+  if (colId === 'unit_price') return formatCommercialIdr(row.unit_price, row.currency)
+  if (colId === 'total_price') return formatCommercialIdr(row.total_price, row.currency)
+  return ''
+}
+
+export function estimateCommercialDocsDynamicValueWidthPx(formatted: string): number {
+  const text = String(formatted ?? '')
+  if (!text) return 0
+  return Math.ceil(text.length * DYNAMIC_CELL_CHAR_PX) + DYNAMIC_CELL_PAD_PX + DYNAMIC_CELL_BUFFER_PX
+}
+
+export function commercialDocsDynamicColumnWidthPx(
+  colId: string,
+  headerLabel: string,
+  formattedValues: readonly string[],
+  options?: { hasFormulaHelp?: boolean },
+): number {
+  const headerPx = commercialDocsTableColumnWidthPx(colId, headerLabel, options)
+  let contentPx = 0
+  for (const value of formattedValues) {
+    contentPx = Math.max(contentPx, estimateCommercialDocsDynamicValueWidthPx(value))
+  }
+  return Math.max(headerPx, contentPx)
 }

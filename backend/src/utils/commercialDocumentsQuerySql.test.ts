@@ -29,6 +29,22 @@ describe('commercialDocumentsQuerySql Region/Site', () => {
     expect(sql).not.toContain('UPPER(NULLIF(TRIM(e.plant_site)');
   });
 
+  it('orders by requested column then stable tie-breakers (all pages)', () => {
+    const { sql } = buildCommercialDocumentsListQuery({
+      page: 1,
+      limit: 50,
+      sortKey: 'po_number',
+      sortDir: 'asc',
+    });
+    expect(sql).toContain('ORDER BY e.po_number ASC NULLS LAST, e.contract_ext_no ASC, e.contract_id ASC');
+    expect(sql).not.toContain('ORDER BY e.contract_date DESC NULLS LAST, e.contract_ext_no ASC, e.contract_id ASC');
+  });
+
+  it('defaults ORDER BY contract_date DESC when sortKey is missing', () => {
+    const { sql } = buildCommercialDocumentsListQuery({ page: 1, limit: 50 });
+    expect(sql).toContain('ORDER BY e.contract_date DESC NULLS LAST');
+  });
+
   it('selects payoff_date from SAP / MV / payments and new doc flags', () => {
     const cte = buildCommercialDocumentsBaseCte();
     expect(cte).toContain("->>'payoff_date'");

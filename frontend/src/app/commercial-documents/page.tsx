@@ -63,7 +63,10 @@ import {
   COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX,
   COMMERCIAL_DOCS_ALL_COLUMNS,
   COMMERCIAL_DOCS_COLUMN_BY_ID,
+  commercialDocsDynamicColumnWidthPx,
   commercialDocsTableColumnWidthPx,
+  formatCommercialDocsDynamicCell,
+  isCommercialDocsDynamicWidthColumn,
   type CommercialDocsColumnId,
   type CommercialDocsColumnMeta,
   isCommercialDocStatusColumn,
@@ -197,6 +200,26 @@ function CommercialDocumentsPageContent() {
     [visibleColumnIds],
   )
 
+  const dynamicColumnWidthById = useMemo(() => {
+    const out: Partial<Record<CommercialDocsColumnId, number>> = {}
+    for (const col of visibleColumns) {
+      if (!isCommercialDocsDynamicWidthColumn(col.id)) continue
+      out[col.id] = commercialDocsDynamicColumnWidthPx(
+        col.id,
+        col.label,
+        rows.map((row) => formatCommercialDocsDynamicCell(col.id, row)),
+        { hasFormulaHelp: Boolean(col.formulaHelp) },
+      )
+    }
+    return out
+  }, [visibleColumns, rows])
+
+  const resolveColumnWidthPx = (col: CommercialDocsColumnMeta): number =>
+    dynamicColumnWidthById[col.id] ??
+    commercialDocsTableColumnWidthPx(col.id, col.label, {
+      hasFormulaHelp: Boolean(col.formulaHelp),
+    })
+
   const columnsMenuItems = useMemo(() => {
     const byId = new Map(COMMERCIAL_DOCS_ALL_COLUMNS.map((c) => [c.id, c]))
     const visibleSet = new Set(visibleColumnIds)
@@ -216,6 +239,8 @@ function CommercialDocumentsPageContent() {
       const params = new URLSearchParams()
       params.set('page', String(currentPage))
       params.set('limit', String(PAGE_SIZE))
+      params.set('sortKey', sortKey)
+      params.set('sortDir', sortDir)
       params.set('dateFrom', dateFrom)
       params.set('dateTo', dateTo)
       params.set('includeSummary', COMMERCIAL_DOCUMENTS_SHOW_SUMMARY_SECTION ? 'true' : 'false')
@@ -240,6 +265,8 @@ function CommercialDocumentsPageContent() {
     }
   }, [
     currentPage,
+    sortKey,
+    sortDir,
     dateFrom,
     dateTo,
     debouncedSearch,
@@ -263,6 +290,8 @@ function CommercialDocumentsPageContent() {
         selectedPlants,
         dateFrom,
         dateTo,
+        sortKey,
+        sortDir,
       }),
     [
       debouncedSearch,
@@ -274,6 +303,8 @@ function CommercialDocumentsPageContent() {
       selectedPlants,
       dateFrom,
       dateTo,
+      sortKey,
+      sortDir,
     ],
   )
 
@@ -343,23 +374,9 @@ function CommercialDocumentsPageContent() {
     calc()
     window.addEventListener('resize', calc)
     return () => window.removeEventListener('resize', calc)
-  }, [visibleColumns, rows.length])
+  }, [visibleColumns, rows.length, dynamicColumnWidthById])
 
-  const sortedRows = useMemo(() => {
-    const col = COMMERCIAL_DOCS_COLUMN_BY_ID[sortKey]
-    if (!col?.getSortValue) return rows
-    const copy = [...rows]
-    copy.sort((a, b) => {
-      const av = col.getSortValue!(a)
-      const bv = col.getSortValue!(b)
-      if (av === bv) return 0
-      if (av == null) return 1
-      if (bv == null) return -1
-      const cmp = av < bv ? -1 : 1
-      return sortDir === 'asc' ? cmp : -cmp
-    })
-    return copy
-  }, [rows, sortKey, sortDir])
+  const sortedRows = rows
 
   const hasActiveFilters =
     search.trim().length > 0 ||
@@ -744,11 +761,7 @@ function CommercialDocumentsPageContent() {
                     <col
                       key={col.id}
                       style={{
-                        width: compactTableColWidthCss(
-                          commercialDocsTableColumnWidthPx(col.id, col.label, {
-                            hasFormulaHelp: Boolean(col.formulaHelp),
-                          }),
-                        ),
+                        width: compactTableColWidthCss(resolveColumnWidthPx(col)),
                       }}
                     />
                   ))}
@@ -769,6 +782,7 @@ function CommercialDocumentsPageContent() {
                             centerHeader ? 'text-center' : 'text-left',
                             CONTRACT_PERF_TABLE_CELL_PAD,
                             opColClass,
+                            isCommercialDocsDynamicWidthColumn(col.id) && 'klip-op-col--dynamic-fit',
                           )}
                         >
                           {centerHeader ? (
@@ -857,6 +871,7 @@ function CommercialDocumentsPageContent() {
                                   CONTRACT_PERF_TABLE_CELL_PAD,
                                   centerCell && 'text-center',
                                   stripe,
+                                  isCommercialDocsDynamicWidthColumn(col.id) && 'klip-op-col--dynamic-fit',
                                 )}
                               >
                                 <div
