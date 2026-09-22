@@ -49,7 +49,13 @@ const inScope = (r) => up(r.product).indexOf(PRODUCT) >= 0 && up(r.plant_site) =
 
 (async () => {
   // ---- Shipping Performance, per contract -------------------------------------------------
-  invalidateShippingPerformanceRowCache();
+  /*
+   * The CACHE is read by default, deliberately. Invalidating forces a cold refresh - the exact
+   * path that took /api/shipments/performance down on production on 2026-09-21 - and the cached
+   * rows are the ones drawn on the screen, which is what this script is comparing. Pass
+   * KLIP_DIAG_COLD=1 only when a cold number is the point.
+   */
+  if (process.env.KLIP_DIAG_COLD === '1') invalidateShippingPerformanceRowCache();
   const t0 = Date.now();
   const sp = await runShippingPerformance({ query: { scope: 'ytd', dateFrom: FROM, dateTo: TO } }, 'rows');
   const spRows = sp.rows.filter(inScope);
