@@ -26,6 +26,34 @@ describe('isExactStoGlobalSearch', () => {
 });
 
 describe('buildExactNumericGlobalSearchInnerSql', () => {
+  /*
+   * A contract with no STO line was unfindable by its own number.
+   *
+   * The identity branch reaches other contracts' numbers only when they share the row's STO, and
+   * the direct tests covered the STO key, the shipment id, the operation id and the PO - never the
+   * shipment's own contract_id. Ryan reported it on 2026-09-22: searching 1004030359 returned
+   * nothing while the contract filter and a vessel search both returned the row it sits on, and
+   * the OS card was counting its 3,010 MT the whole time. That contract has 0 rows in
+   * contract_stos, so every STO-keyed branch failed.
+   */
+  it('matches the shipment OWN contract number, so a contract with no STO is findable', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
+    expect(sql).toContain("TRIM(COALESCE(c.contract_id::text, '')) = TRIM($3::text)");
+  });
+
+  /*
+   * And it must not be inside the STO-linked EXISTS, which is what keeps it from fanning out to
+   * every sibling STO row on the PO - the failure the existing comment in the builder warns about.
+   */
+  it('tests the own contract number OUTSIDE the STO-linked EXISTS', () => {
+    const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
+    const own = sql.indexOf("TRIM(COALESCE(c.contract_id::text, '')) = TRIM($3::text)");
+    const exists = sql.indexOf('FROM contracts c_ident');
+    expect(own).toBeGreaterThan(-1);
+    expect(exists).toBeGreaterThan(-1);
+    expect(own).toBeLessThan(exists);
+  });
+
   it('matches STO key, shipment_id, operation_id, and PO number', () => {
     const sql = buildExactNumericGlobalSearchInnerSql('COALESCE(c.sto_number)', 3);
     expect(sql).toContain('COALESCE(c.sto_number)');

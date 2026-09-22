@@ -160,6 +160,22 @@ export function buildExactNumericGlobalSearchInnerSql(
         OR TRIM(COALESCE(s.operation_id::text, '')) = TRIM(${p}::text)
         OR TRIM(COALESCE(c.po_number::text, '')) = TRIM(${p}::text)
         /*
+         * The row's OWN contract number. It was missing, and the branch below does not cover it:
+         * that one reaches other contracts' numbers only when they share this row's STO, so a
+         * contract with NO STO line was unfindable by its own number while its row sat on the page.
+         *
+         * Found by Ryan on 2026-09-22: searching 1004030359 returned nothing, the contract filter
+         * returned the row, and searching the vessel returned it too - "1004030359, 1004030942,
+         * 1004030943", MT. BIO EXPRESS, carrying 3,010 MT of outstanding that the OS card was
+         * counting. The contract has 0 rows in contract_stos and the row has no STO of its own, so
+         * every STO-keyed branch failed, and the po_number test compares a PO, not a contract.
+         *
+         * The alias c is the shipment's own contract, so this matches only rows whose shipment
+         * actually belongs to the searched contract. It cannot fan out to sibling STO rows - the
+         * failure mode the comment below warns about - because it tests no STO linkage at all.
+         */
+        OR TRIM(COALESCE(c.contract_id::text, '')) = TRIM(${p}::text)
+        /*
          * Exact STO search is identity-only (sto_key / shipment_id / operation_id).
          * Do not match via contract_stos on the same contract: the list is one row per STO,
          * so that EXISTS pulled every sibling STO on the PO.
