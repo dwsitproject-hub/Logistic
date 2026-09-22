@@ -2279,6 +2279,56 @@ The clamp also has nothing to do with why over-delivered contracts are absent fr
 `sqlContractEffectivelyDoneExpr` treats `outstanding <= 499 kg` as finished, and a negative is
 always ≤ 499. That classification is unchanged.
 
+### The KLIP overlay replaced SAP instead of topping it up
+
+Reported by Ryan on 2026-09-22 against a copy of production in SIT: contract 1004030359 read
+3,010 MT outstanding where SAP says **24 MT**, and the SAP export proved him right -
+
+| contract | Contract Qty | Delivery Vessel | Delivery Trucking | Receive |
+| --- | --- | --- | --- | --- |
+| 1004030359 | 4,000,000 | 3,983,564 | 0 | 3,983,564 |
+| 1004030942 | 1,600,000 | 1,595,994 | 0 | 1,595,994 |
+| 1004030943 | 1,400,000 | 1,396,494 | 0 | 1,396,494 |
+| | 7,000,000 | 6,976,052 | | 6,976,052 |
+
+7,000,000 - 6,976,052 = **23,948 kg**. But `contract_qty_move_snapshot` held receive 997,496 and
+vessel 1,000,000 for the first contract - the quantities of its KLIP shipment, which is still
+**PLANNED** and carries only part of the contract.
+
+`qty_move_resolved` took the KLIP overlay outright:
+
+    WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
+
+The weighbridge overlay two lines above it already used `GREATEST`, and its comment says why: one
+ticket used to discard SAP outright and left contract 1364002000 reading 100 MT outstanding on
+89.74 MT received. The KLIP branch had the same shape and the same fault, unnoticed because it
+only bites when KLIP is BEHIND SAP - a partial shipment against a contract SAP has already
+fulfilled.
+
+Both branches now take `GREATEST(klip, sap)`. Measured on the production copy: **14 contracts
+move, and all 14 then equal SAP's own sum per STO** - checked against the per-STO sum, because
+comparing with a single latest SAP row reported 12 false mismatches first.
+
+**What it moved**, CPO+all products / BONTANG / YTD:
+
+| | before | after |
+| --- | --- | --- |
+| Contract Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipping Performance | 101,494.7 MT | 99,081.7 MT |
+| Shipments | 104,755.9 MT | 99,356.8 MT |
+| Shipments - Contract Performance | 3,261.2 MT | **275.1 MT** |
+
+Note the reported figures themselves fall by ~2,413 MT: outstanding was overstated wherever a
+partial KLIP shipment had been masking a completed SAP receive.
+
+**`contract_qty_move_snapshot` is materialised**, so this changes nothing until the snapshot is
+rebuilt - `ContractQtyMoveSnapshotService.refreshAll()`, 22.6s on the production copy.
+
+What is left of the gap: **258.7 MT on FOB**, not yet traced, and **16.4 MT on CIF** - the residual
+of 1004030359, which Shipments counts and Contract Performance does not because a manual KLIP ATC
+override marks it discharged while its shipment is still PLANNED. That one is a data contradiction,
+not a rule: see the ATC override note.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches

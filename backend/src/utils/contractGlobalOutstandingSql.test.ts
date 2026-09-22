@@ -104,10 +104,27 @@ describe('contractGlobalOutstandingSql', () => {
     expect(sql).toContain('sk.klip_receive_kg');
   });
 
-  it('buildQtyMoveCte prefers KLIP delivery/receive over SAP when Open overlay present', () => {
+  /*
+   * The KLIP overlay TAKES THE GREATER, it does not replace.
+   *
+   * It used to win outright, which let a shipment still PLANNED - carrying only part of the
+   * contract - erase a completed SAP quantity. Contract 1004030359 (CIF): SAP receive and vessel
+   * both 3,983,564 kg, the KLIP shipment 997,496 received on 1,000,000 delivered, and the snapshot
+   * kept the KLIP pair. Its STO group then read 3,010 MT outstanding where SAP says 24 MT.
+   *
+   * This is the rule the weighbridge overlay directly above it already applies, and for the same
+   * reason its comment gives: one ticket used to discard SAP outright. Measured on a copy of
+   * production: 14 contracts move, and all 14 then equal SAP's own sum per STO.
+   */
+  it('buildQtyMoveCte takes the GREATER of KLIP and SAP, never discarding SAP', () => {
     const sql = buildQtyMoveCte({ kind: 'join_scope', scopeCteName: 'contract_scope' });
-    expect(sql).toContain('WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg');
-    expect(sql).toContain('WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg');
+    expect(sql).toContain(
+      'THEN GREATEST(sk.klip_delivery_kg, COALESCE(s.quantity_delivery_vessel, 0))',
+    );
+    expect(sql).toContain('THEN GREATEST(sk.klip_receive_kg, COALESCE(s.quantity_receive, 0))');
+    // and the bare replacement must not come back
+    expect(sql).not.toContain('WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg');
+    expect(sql).not.toContain('WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg');
     expect(sql).toMatch(/shipment_klip_overlay[\s\S]*AND NOT \(/);
   });
 

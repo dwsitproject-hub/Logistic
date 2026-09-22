@@ -320,12 +320,21 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter, cteName = 'qty_mo
                 THEN GREATEST(w.wb_delivery_qty_kg, COALESCE(s.quantity_delivery_trucking, 0))
               ELSE s.quantity_delivery_trucking
             END AS quantity_delivery_trucking,
+            -- GREATEST, for the same reason the weighbridge overlay above uses it: a KLIP figure
+            -- must not DISCARD a larger SAP one. This branch replaced SAP outright, so a shipment
+            -- still PLANNED, carrying only part of the contract, erased a completed SAP quantity.
+            -- Contract 1004030359 (CIF): SAP receive and vessel both 3,983,564 kg, the KLIP
+            -- shipment 997,496 received on 1,000,000 delivered - and the snapshot kept the KLIP
+            -- pair. Its STO group then read 3,010 MT outstanding where SAP says 24 MT, which is
+            -- the figure Ryan reported on 2026-09-22.
             CASE
-              WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
+              WHEN sk.klip_delivery_kg IS NOT NULL
+                THEN GREATEST(sk.klip_delivery_kg, COALESCE(s.quantity_delivery_vessel, 0))
               ELSE s.quantity_delivery_vessel
             END AS quantity_delivery_vessel,
             CASE
-              WHEN sk.klip_receive_kg IS NOT NULL THEN sk.klip_receive_kg
+              WHEN sk.klip_receive_kg IS NOT NULL
+                THEN GREATEST(sk.klip_receive_kg, COALESCE(s.quantity_receive, 0))
               WHEN w.wb_receive_qty_kg > 0
                 THEN GREATEST(w.wb_receive_qty_kg, COALESCE(s.quantity_receive, 0))
               ELSE s.quantity_receive
@@ -333,7 +342,8 @@ export function buildQtyMoveCte(filter: QtyMoveContractFilter, cteName = 'qty_mo
             COALESCE(
               NULLIF(
                 CASE
-                  WHEN sk.klip_delivery_kg IS NOT NULL THEN sk.klip_delivery_kg
+                  WHEN sk.klip_delivery_kg IS NOT NULL
+                    THEN GREATEST(sk.klip_delivery_kg, COALESCE(s.quantity_delivery_vessel, 0))
                   ELSE s.quantity_delivery_vessel
                 END,
                 0
