@@ -81,6 +81,19 @@ fi
 echo "==> Env (from ${ROOT_ENV}): DB_HOST=${DB_HOST} DB_PORT=${DB_PORT:-5432} BACKEND_PORT=${BACKEND_PORT}"
 
 COMPOSE_ARGS=(-f "${COMPOSE_FILE}" -f "${OVERLAY_FILE}")
+KLIP_UPLOAD_MOUNT="$(env_value "${ROOT_ENV}" KLIP_UPLOAD_MOUNT)"
+KLIP_UPLOAD_MOUNT="${KLIP_UPLOAD_MOUNT:-/mnt/synology/dev/KLIP}"
+export KLIP_UPLOAD_MOUNT
+if [[ -d "${KLIP_UPLOAD_MOUNT}" ]]; then
+  COMPOSE_ARGS+=(-f docker-compose.backend.synology.yml)
+  echo "==> Commercial docs NAS (production): ${KLIP_UPLOAD_MOUNT} -> /app/uploads"
+else
+  echo "WARN: ${KLIP_UPLOAD_MOUNT} missing — commercial uploads stay on Docker volume (NAS folder will stay empty)"
+fi
+KLIP_COMMERCIAL_DOCS_SHARE="$(env_value "${ROOT_ENV}" KLIP_COMMERCIAL_DOCS_SHARE)"
+if [[ "${KLIP_COMMERCIAL_DOCS_SHARE}" != "1" ]]; then
+  echo "WARN: set KLIP_ENV=prod and KLIP_COMMERCIAL_DOCS_SHARE=1 in ${ROOT_ENV} so uploads use COMMERCIAL DOCS/{YYYY}/{MM}"
+fi
 echo "==> Rebuild backend with Apsara overlay (will not start klip-postgres)"
 docker compose "${COMPOSE_ARGS[@]}" up -d --build backend
 

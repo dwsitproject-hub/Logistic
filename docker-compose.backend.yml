@@ -64,6 +64,9 @@ services:
       JWT_EXPIRES_IN: 7d
       # Shared upload root inside container (see backend_uploads volume below; Synology optional override)
       UPLOAD_DIR: /app/uploads
+      # COMMERCIAL DOCS/{YYYY}/{MM} NAS layout is production-only. SIT/local leave these unset/0.
+      KLIP_ENV: ${KLIP_ENV:-}
+      KLIP_COMMERCIAL_DOCS_SHARE: ${KLIP_COMMERCIAL_DOCS_SHARE:-0}
       # GEMINI_API_KEY comes from env_file: ./backend/.env (do not override here or it will be empty)
       # ANTHROPIC_API_KEY does too, and is REQUIRED — it powers KLIP Agent AI (chat) and the AI
       # Shipment Planner. Without it the agent answers with a clear "not configured" error.
