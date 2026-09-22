@@ -2128,20 +2128,52 @@ trucking or vessel - and each page spells it differently:
 not live - it costs nothing today and will cost something the first time SAP carries an incoterm
 the contract row does not. Worth collapsing onto one expression, not worth a rushed change.
 
-**The live difference is a gate, not a formula.** Shipments and Shipping Performance zero a
-contract whose own GR says Close (`sqlIsContractSapClosedExpr`, tested per contract). Contract
-Performance uses that expression only as a status *filter*, never to zero the quantity.
+**The gate I first reported was not a live difference - the measurement was wrong.** Shipments and
+Shipping Performance zero a contract whose own GR says Close (`sqlIsContractSapClosedExpr`).
+Contract Performance uses that expression only as a status *filter*. From that I reported "50
+contracts, 9,485 MT valued by one page and zeroed by two". That number came from
+`diag-cross-page-invariants.cjs`, which calls `parseLatePerformanceFilters` with **no status**, so
+it summed Contract Performance's Open **and** Close rows and compared them with Shipping
+Performance's On Going. Not a comparison of like with like.
 
-> **50 contracts, 9,485 MT** (CPO / BONTANG / YTD, sea incoterms) are valued by Contract
-> Performance and zeroed by the other two.
+The Open card never contained those contracts in the first place:
+`sqlContractImportStatusIsOpenExpr` requires `import_status IN ('OPEN', 'ACTIVE')`, so a SAP-Close
+contract is already out. The gate is real in the code and aligned in effect. Corrected 2026-09-22.
 
-That is 43% of the 22,130 MT the invariants script reports between Shipping Performance and
-Contract Performance on dev. The rest is not yet traced.
+**The clamp is a real difference in the code, and latent in the data.** Contract Performance's
+`outstanding_quantity` is built by `sqlContractOutstandingSignedExpr`; Shipments and Shipping
+Performance use `sqlContractGlobalOutstandingExpr`. Both are the same function,
+`sqlContractOutstandingFromFields`, differing by one flag - `clampAtZero`. Over-delivery therefore
+*subtracts* on Contract Performance and contributes 0 on the other two. Measured on the dev copy
+(CPO / BONTANG / YTD, sea): **240 MT across 59 over-delivered contracts** - and **none of them
+reached the Open card**, because an over-delivered contract is Close and the Open filter had
+already dropped it. Live in the table column, latent in the card.
 
-**Which page is right is a decision, not a bug**: a contract whose GR is closed but whose
-quantities do not reconcile either still has outstanding (Contract Performance's reading) or is
-finished and the residual is a data question (the other two). They cannot both be shown as "OS"
-without one of them being wrong.
+### Which contracts actually disagree - measured per contract, not reasoned from totals
+
+`docs/scripts/diag-os-per-contract.cjs`. On the dev copy (CPO / BONTANG / YTD) 77 contracts carry
+Open outstanding and **exactly three** disagree:
+
+| contract | Contract Performance | Shipping Performance | why |
+| --- | --- | --- | --- |
+| 9194100034 | 3,200 MT Open | 0 | B2B **parent** - no shipment is raised against it |
+| 9334100045 | 1,800 MT Open | 0 | B2B parent, same shape |
+| 1004031937 | absent | 500 MT | a **POME** contract counted inside a CPO scope |
+
+Neither is an arithmetic fault, and that is the point: both are questions about what *should*
+count.
+
+1. **B2B parents.** The parent carries the quantity; the movement happens on the child PO, so
+   Shipping Performance and Shipments never see the parent. Contract Performance counts it. Nothing
+   is double counted today - the other two simply cannot see it.
+2. **Product and site follow the ROW, not the contract.** `applyContractGrainOutstanding` places a
+   contract's whole outstanding on the row carrying its furthest active stage, and the drilldown
+   then filters by that **row's** product and region/site. A contract whose own product is POME can
+   therefore be counted under CPO. Contract grain placed on a row grain, filtered at row grain.
+
+The direction of the gap differs between environments - on dev Contract Performance reads *higher*,
+on production 2026-09-22 it reads *lower* (80,413 vs 81,414 MT) - so the dev composition must not be
+carried over. Run the script where the question is being asked.
 
 ### One check that asks whether the pages still agree
 
