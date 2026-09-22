@@ -2214,6 +2214,42 @@ shipments on children 1004030568, 1004031407 and 1004030594 are attributed to or
 9194100035 and 9334100045. Shipments needs no change, and fixing Shipping Performance moves it
 INTO agreement with the other two rather than away from them.
 
+### The 1,001 MT between Shipping Performance and Contract Performance: one contract
+
+Measured against a **copy of production** (dumped 2026-09-22, restored locally), because dev and
+production disagreed on the direction of this gap and dev had already sent two conclusions the
+wrong way.
+
+| | script, production copy | the screen |
+| --- | --- | --- |
+| Contract Performance (Open) | 80,413.2 MT | 80,413 MT |
+| Shipping Performance | 81,413.9 MT | 81,414 MT |
+| difference | 1,000.7 MT | 1,001 MT |
+
+`diag-os-per-contract.cjs` named it: **one contract, 1004032347, 1,000 MT.** Not B2B, not the
+clamp, not the SAP-closed gate - all three of which had been proposed and measured away.
+
+**Region/Site is the agreed reference, and this page was the only one not applying it.**
+`loadLatePerformanceRows` ends with `.filter(hasResolvedRegionSite)`, so Contract Performance drops
+every contract whose SAP discharge destination is blank; Shipments applies the same test through
+`requireResolvedRegionSite`. Shipping Performance did not. The rule's own comment in
+`regionSiteSql.ts` names this exact contract, so the gap was documented before it was found again.
+
+It reaches a BONTANG-filtered scope at all because outstanding is **contract** grain while the
+drilldown filters at **row** grain: 1004032347's own site is blank, but its outstanding is placed on
+the row carrying its furthest active stage, and that row's site is BONTANG.
+
+Both arms of Shipping Performance now require a resolved Region/Site - the contract-grain execution
+arm and the backlog arm, since an unresolved site is no more countable in one than the other.
+Re-measured on the same production copy: **1,000.7 MT -> 0.7 MT, and no contract differs by more
+than 1 MT.**
+
+**What is left, and it is a different fault.** On the dev copy a 500 MT residual remains: contract
+1004031937 is a **POME** contract counted inside a **CPO** scope. Its site resolves, so the fix
+above does not touch it. Same root shape as the site case - contract-grain outstanding placed on a
+row, then filtered by that row's attributes - but through product rather than site. It does not
+appear in the production slice measured here.
+
 ### One check that asks whether the pages still agree
 
 `docs/scripts/diag-cross-page-invariants.cjs`. Run it **before** a deploy that touches

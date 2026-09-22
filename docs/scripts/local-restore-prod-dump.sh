@@ -24,6 +24,14 @@
 # startup before trusting any number.)
 set -euo pipefail
 
+# Git Bash on Windows rewrites anything that looks like a Unix path before it reaches docker, so
+# "/tmp/x.dump" arrived at pg_restore as "C:/Users/.../Temp/x.dump" and the restore failed while
+# every step before it reported success. These switches turn that translation off - which then
+# breaks the HOST side of `docker cp`, because "/d/Project/x.dump" is exactly the form that needed
+# translating. So the container paths stay literal and the host path is converted explicitly below.
+export MSYS_NO_PATHCONV=1
+export MSYS2_ARG_CONV_EXCL='*'
+
 DUMP_FILE="${1:-}"
 REPLACE="${2:-}"
 [ -n "$DUMP_FILE" ] || { echo "usage: $0 <dump-file> [--replace]"; exit 1; }
@@ -74,8 +82,10 @@ docker exec "$CONTAINER" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1 
   echo; echo "it never became ready - check 'docker logs $CONTAINER'"; exit 1; }
 
 BASE="$(basename "$DUMP_FILE")"
+# cygpath exists only on Git Bash / MSYS; elsewhere the path is already what docker expects.
+HOST_DUMP="$(cygpath -w "$DUMP_FILE" 2>/dev/null || echo "$DUMP_FILE")"
 echo "copying ${BASE} in"
-docker cp "$DUMP_FILE" "${CONTAINER}:/tmp/${BASE}"
+docker cp "$HOST_DUMP" "${CONTAINER}:/tmp/${BASE}"
 
 # Errors are not fatal on purpose: a production dump routinely references roles and extensions this
 # fresh cluster lacks, and those failures are noise. The row counts below are what says whether the

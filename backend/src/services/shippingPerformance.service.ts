@@ -42,7 +42,9 @@ import { SHIPMENT_ATA_OVERRIDES_JOIN } from '../utils/shipmentAtaOverrideSql';
 import { buildShipmentPageSeaRowScopeSql } from '../utils/shipmentStoTypeSql';
 import { computeShippingPerfDeltaFields } from '../utils/shippingPerformanceDeltas';
 import { sapDischargeDestinationFromJson } from '../utils/sapTruckingLoadingLocationSql';
-import { sqlRegionSiteDisplayForContract } from '../utils/regionSiteSql';
+import { sqlRegionSiteDisplayForContract,
+  sqlContractHasResolvedRegionSiteExpr,
+} from '../utils/regionSiteSql';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
 import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
 
@@ -744,7 +746,14 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
     LEFT JOIN perf_region_site rs ON rs.contract_id = c.contract_id
     LEFT JOIN contract_qty_move_snapshot qm ON qm.contract_number = c.contract_id
     WHERE ${contractBacklogCoreWhereSql('c', 'l')}
-      AND (${os}) > 0`;
+      AND (${os}) > 0
+      /*
+       * Same Region/Site rule the execution arm now applies, and for the same reason: Contract
+       * Performance drops contracts whose site does not resolve, Shipments does too, and a backlog
+       * row is no different from an execution one in that respect. Without it the two arms of this
+       * page would disagree with each other about which contracts exist.
+       */
+      AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}`;
 }
 
 export async function buildShippingPerformanceSql(): Promise<string> {

@@ -1,5 +1,6 @@
 import { getClient } from '../database/connection';
 import { sqlContractExecutionOutstandingKgExpr } from '../utils/contractExecutionOutstandingSql';
+import { sqlContractHasResolvedRegionSiteExpr } from '../utils/regionSiteSql';
 import { resolveContractsQtyMoveCte } from './contractQtyMoveSnapshot.service';
 import {
   isShipmentActiveStage,
@@ -182,12 +183,27 @@ export async function loadContractExecutionOutstandingKg(
     await client.query(`SET statement_timeout = ${CONTRACT_OS_STATEMENT_TIMEOUT_MS}`);
     for (let i = 0; i < ids.length; i += CONTRACT_OS_CHUNK) {
       const chunk = ids.slice(i, i + CONTRACT_OS_CHUNK);
+      /*
+       * A contract whose Region/Site does not resolve is NOT counted.
+       *
+       * Contract Performance drops those rows outright (`hasResolvedRegionSite`) and Shipments
+       * applies the same test through `requireResolvedRegionSite`, so Region/Site is the agreed
+       * reference and this page was the only one still counting them. Measured against a copy of
+       * production taken 2026-09-22: exactly one contract, 1004032347 at 1,000 MT, which is the
+       * whole of the 1,001 MT by which Shipping Performance (81,414 MT) exceeded Contract
+       * Performance (80,413 MT) on CPO / BONTANG / YTD.
+       *
+       * It reaches a site-filtered scope at all because outstanding is contract grain while the
+       * drilldown filters at ROW grain: the contract's own site is blank, but its outstanding is
+       * placed on the row carrying its furthest active stage, and that row's site is BONTANG.
+       */
       const result = await client.query(
         `WITH ${qtyMoveCte}
          SELECT c.contract_id,
                 (${sqlContractExecutionOutstandingKgExpr('c.contract_id')})::numeric AS os_kg
          FROM contracts c
-         WHERE c.contract_id = ANY($1::text[])`,
+         WHERE c.contract_id = ANY($1::text[])
+           AND ${sqlContractHasResolvedRegionSiteExpr('c.contract_id', 'c.po_number')}`,
         [chunk],
       );
       for (const row of result.rows as Record<string, unknown>[]) {
