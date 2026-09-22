@@ -119,6 +119,21 @@ app.use(compression());
 app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
 app.use(cookieParser());
 app.use(createSessionMiddleware());
+app.post(
+  '/api/dhm/webhooks',
+  express.raw({ type: '*/*', limit: '1mb' }),
+  async (req, res) => {
+    const { handleDhmWebhook } = await import('./dhm');
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
+    const signature = String(req.header('X-DHM-Signature') || '');
+    const result = await handleDhmWebhook(raw, signature);
+    if (!result.accepted) {
+      res.status(401).json({ success: false, error: { message: result.error || 'Rejected' } });
+      return;
+    }
+    res.status(200).json({ success: true, duplicate: Boolean(result.duplicate) });
+  },
+);
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 const swaggerOptions = {

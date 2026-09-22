@@ -35,6 +35,7 @@ export class SchedulerService {
     // Independent cron (not part of the Excel-import ScheduledImport framework/admin UI).
     this.startContractEtaReminderCron();
     this.startSapFolderAutoImportCron();
+    this.startDhmVesselSyncCron();
 
     logger.info('Scheduler service initialized successfully');
   }
@@ -82,6 +83,29 @@ export class SchedulerService {
       { timezone: 'Asia/Jakarta' },
     );
     logger.info(`SAP folder auto-import cron scheduled: ${schedule} (Asia/Jakarta)`);
+  }
+
+  /**
+   * Incremental DHM vessel replica pull. Off unless DHM_ENABLED=true and keys are set.
+   */
+  private static startDhmVesselSyncCron(): void {
+    void import('../dhm').then(({ isDhmEnabled, dhmSyncCron, syncDhmVessels }) => {
+      if (!isDhmEnabled()) {
+        logger.info('DHM vessel sync cron is disabled (DHM_ENABLED is not true)');
+        return;
+      }
+      const schedule = dhmSyncCron();
+      cron.schedule(
+        schedule,
+        async () => {
+          await syncDhmVessels();
+        },
+        { timezone: 'Asia/Jakarta' },
+      );
+      logger.info(`DHM vessel sync cron scheduled: ${schedule} (Asia/Jakarta)`);
+    }).catch((error) => {
+      logger.warn('DHM vessel sync cron not started', { error });
+    });
   }
   
   /**
