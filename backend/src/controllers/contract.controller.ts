@@ -671,8 +671,19 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
                   ELSE (${effectiveDeliveryEndDateSql} - last_eta_vessel_complete_discharge::date)
                 END
               )
+            /*
+             * Condition B, the last fallback: a running contract with no actual and no estimate is
+             * measured against today. It used to be LAND-only, which left SEA and MIX with no
+             * value at all - they fell out of Late AND On Time, so the two filters together did
+             * not cover the page. Must stay in step with computeOpenTradeCycleDays, which returns
+             * the same (due end - today) for the same case; this expression drives the filter
+             * while that one drives the displayed number.
+             *
+             * Still restricted to OPEN/ACTIVE. A CLOSE contract with no completion date has
+             * genuinely lost its milestone, and dating it today would claim it finished today.
+             */
             ELSE CASE
-              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE') AND ${_transportExpr} LIKE 'LAND%'
+              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
                 THEN (${effectiveDeliveryEndDateSql} - CURRENT_DATE)
               ELSE NULL
             END END

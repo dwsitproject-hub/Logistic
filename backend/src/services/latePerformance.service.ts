@@ -1289,8 +1289,22 @@ export function resolveSeaTradeCycleCompletionDate(row: any, todayMid: Date): Da
 
 /**
  * Open Trade Cycle: Due Date Delivery End vs completion date.
- * SEA: ATA → else ETA (or today when ETA &lt; today); ETA null → null (no Condition B).
- * LAND: Last Receive → WB → planning → ETA; when none, Condition B (today vs due end).
+ * SEA: ATA → else ETA (or today when ETA &lt; today). LAND: Last Receive → WB → planning.
+ * Neither → today (Condition B).
+ *
+ * TODAY IS THE LAST FALLBACK, and only here. A contract that is still running and has no estimate
+ * at all is not unmeasurable - it is measurable against now, and every day it stays open it is one
+ * day further from its due date. Returning "-" instead dropped it out of Late AND On Time, so the
+ * two filters together did not cover the page: 730 running contracts on a copy of production, of
+ * which 85 are the MIX transport that resolveCycleCompletionDate does not recognise at all.
+ *
+ * Deliberately NOT applied to CLOSE/CLOSED/COMPLETED, which never reach this function. Giving a
+ * finished contract today's date would claim it completed today, and the figure would grow one day
+ * more negative every day - 2,352 contracts, and last month's report would not reproduce.
+ *
+ * The sign matches tradeCycleSqlExpr's own fallback branch (`deliveryEnd - CURRENT_DATE`), which
+ * drives the Late / On Time filter. The two must agree or a row is filtered by one rule and
+ * displayed by another.
  */
 function computeOpenTradeCycleDays(
   row: any,
@@ -1299,8 +1313,7 @@ function computeOpenTradeCycleDays(
   deliveryEnd: Date,
 ): number | null {
   const end = resolveCycleCompletionDate(row, transport, todayMid);
-  // No ATC and no ETC means "-", for LAND as well as SEA: see the note above resolveCycleCompletionDate.
-  if (!end) return null;
+  if (!end) return diffCalendarDays(todayMid, deliveryEnd);
   return diffCalendarDays(end, deliveryEnd);
 }
 

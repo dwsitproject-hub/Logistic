@@ -242,15 +242,18 @@ describe('normalizeShipmentListRows', () => {
     expect(rows[0]?.status).toBe('PREPLANNED');
   });
 
-  it('attaches SEA Trade Cycle on contract_backlog when ETC present; null without ETC', async () => {
-    const yesterday = new Date();
-    yesterday.setHours(0, 0, 0, 0);
-    yesterday.setDate(yesterday.getDate() - 2);
-    const dueIso = yesterday.toISOString().slice(0, 10);
-    const etaPast = new Date();
-    etaPast.setHours(0, 0, 0, 0);
-    etaPast.setDate(etaPast.getDate() - 1);
-    const etaPastIso = etaPast.toISOString().slice(0, 10);
+  it('attaches SEA Trade Cycle on contract_backlog, measuring against today without an ETC', async () => {
+    // Local calendar components, not toISOString(). The cycle helpers compare calendar DAYS, and
+    // toISOString() on a UTC+7 machine rolls a local-midnight Date back to the previous day - which
+    // made this fixture read two days old on a UTC runner and three days old here.
+    const localIso = (daysAgo: number): string => {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - daysAgo);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const dueIso = localIso(2);
+    const etaPastIso = localIso(1);
 
     const withoutEta = normalizeShipmentListRows([
       {
@@ -263,7 +266,9 @@ describe('normalizeShipmentListRows', () => {
       },
     ] as Parameters<typeof normalizeShipmentListRows>[0]);
     expect(withoutEta[0]?.status).toBe('UNPLANNED');
-    expect(withoutEta[0]?.trade_cycle_days).toBeNull();
+    // No ATC and no ETC no longer means "-". The due date was two days ago and nothing is planned,
+    // so the row is two days Late rather than absent from both filters.
+    expect(withoutEta[0]?.trade_cycle_days).toBe(-2);
 
     const withPastEta = normalizeShipmentListRows([
       {

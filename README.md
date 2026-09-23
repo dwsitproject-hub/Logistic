@@ -3764,6 +3764,52 @@ and Vessel History.
 vessel silently (`resolveMasterVessel` step 4). The agreed replacement is an `UNMAPPED` review
 queue that also consults DHM first - tracked as its own task, not done here.
 
+### Trade Cycle: a running contract with no estimate is measured against today
+
+Asked by Ryan on 2026-09-23. The completion chain is ATC, then ETC (clamped to today once the
+estimate has passed). When neither exists the cycle used to read "-", which took the contract out of
+Late AND On Time - so the two filters together did not cover the page, and a contract nobody had
+planned simply vanished from the performance view rather than showing as overdue.
+
+Today is now the last fallback, in two places that have to agree:
+
+| | |
+| --- | --- |
+| `computeOpenTradeCycleDays` (`latePerformance.service.ts`) | the displayed number |
+| `tradeCycleSqlExpr` (`contract.controller.ts`) | the Late / On Time filter and its count |
+
+Both return `due end - today`, same sign. The SQL branch already did this for LAND; the change was
+to stop restricting it to LAND, which also gave the `MIX` transport a value for the first time -
+`resolveCycleCompletionDate` matches only `LAND*` and `SEA*`, so 209 MIX contracts had been reading
+"-" in all four cycles whatever their data.
+
+**Only OPEN/ACTIVE.** `computeOpenTradeCycleDays` is never called for a closed contract, and the SQL
+branch keeps its status test. Dating a finished contract today would claim it completed today, and
+the figure would grow one day more negative every day it was looked at - 2,352 contracts, and last
+month's report would not reproduce. Ryan chose running contracts only.
+
+**Trade Cycle only.** Log, DP and Cash share `resolveCycleCompletionDate` and are deliberately
+untouched; the fallback sits in Trade's own wrapper, so no branching was added to the shared chain.
+
+**Measured before and after on a copy of production.** The eight cross-page OS invariants are
+byte-identical - SEA 96,559.1 MT across Contract Performance, Shipping Performance and Shipments,
+LAND 54,471.2 MT across Contract Performance and Trucking, every pairing 0 MT - because no
+outstanding expression references the trade cycle at all. The Section 1 cards are unchanged too
+(`openOutstandingQty` 594,458,115, `closeContractQty` 3,382,132,890): `aggregateLatePerformanceRows`
+adds a row's quantity to the card *before* it tests the trade cycle.
+
+What moves is the composition of the drilldown, and it balances exactly:
+
+| | before | after |
+| --- | --- | --- |
+| Late tree | 3,485 | 3,595 |
+| On Time tree | 3,139 | 3,416 |
+| Unscheduled tree | 1,032 | **645** |
+| total of the three | 7,656 | 7,656 |
+
+387 contracts leave Unscheduled for Late (+110) or On Time (+277). Closed counts are untouched
+(2,859 / 3,052 either way), which is the check that the OPEN-only restriction held.
+
 ### Jetty Planning System: one instruction per STO, for BONTANG only
 
 KLIP submits a Shipping Instruction to the Jetty Planning System so a berth can be planned for a
