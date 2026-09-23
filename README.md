@@ -2462,6 +2462,41 @@ three-row sample hid a fault that affected most rows, and *an index that looks r
 index that matches*: two near-miss indexes on this exact expression already existed and neither
 could be used.
 
+### Shipping Performance was detoasting a snapshot it had already extracted
+
+Asked by Ryan on 2026-09-23, measured against a copy of production (19,053 contracts, 26,440 SAP
+rows). Cold load 67s, warm 12ms - the page is cached, so this is the first viewer's cost.
+
+The page's `latest_spd_contract` CTE reads `contract_latest_spd_snapshot`, and then derived its six
+fields **out of that table's jsonb `data` column** - even though migration 161 added typed columns
+for exactly those fields, written by exactly those expressions
+(`contractLatestSpdDerivedSql.ts`), so that consumers would stop pulling jsonb keys per row. The
+backlog query in the same file already read the columns; the main query did not.
+
+    CTE latest_spd_contract   Buffers: shared hit=431,949   for 19,021 rows, to read five scalars
+
+**Output-preserving, checked over every row**: across all 19,021 snapshot rows the jsonb form and
+the column form differ on **0** for each of the five fields - including `b2b_flag`, where the stored
+column carries two extra COALESCE arms that never fire.
+
+| | baseline | reading the columns |
+| --- | --- | --- |
+| CTE `latest_spd_contract` | 431,949 buffers | **320** |
+| whole query | 2,864,949 buffers | 2,493,329 |
+| EXPLAIN execution time | 54.9s | 37.9s |
+
+**`MATERIALIZED` was tried and rejected on the measurement.** With the columns in place, materialising
+the CTE moved buffers by 0.01% (2,493,329 against 2,493,649) - all the saving comes from the column
+read, none from the materialisation. Wall-clock suggested it helped, but wall-clock on this copy is
+unusable: the same unchanged query varied 2,999–8,132 ms between runs, and the page varied 61–126s,
+because the copy container runs default `shared_buffers` (128 MB) against a query touching ~23 GB of
+buffers. Buffers are the instrument here; time is not.
+
+**What this does NOT fix, and it is the larger fault**: the planner estimates **36 rows** where 2,226
+come back, at nearly every join in the tree, and picks nested loops and hash sizes from that. 2.5M
+buffer hits to return 2,226 rows is the symptom. One CTE was worth 13%; the estimate is worth the
+rest.
+
 ### The test suite is flaky under its own parallelism, not under change
 
 Three full runs on 2026-09-22 failed 3, 8 and 7 files, and the failing SET differed each time; every
