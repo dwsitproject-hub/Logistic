@@ -25,6 +25,19 @@ describe('resolveCanonicalVesselDisplayName', () => {
   it('passes through simple vessel names', () => {
     expect(resolveCanonicalVesselDisplayName('BG. AS MARINA 10')).toBe('BG. AS MARINA 10');
   });
+
+  // TK./TKG. (tongkang) and SPOB. carry cargo too. While only BG./MT. counted, no segment of
+  // "TK. SHERIN 03/TB. PACIFIC STAR I" matched and the LAST one won - the tug. That is how
+  // MSHERIN03 came to sit under a Pacific Star name.
+  it('returns the TK tongkang segment, not the tug that pushes it', () => {
+    expect(resolveCanonicalVesselDisplayName('TK. SHERIN 03/TB. PACIFIC STAR I')).toBe(
+      'TK. SHERIN 03',
+    );
+  });
+
+  it('returns the TKG tongkang segment even when the tug is written first', () => {
+    expect(resolveCanonicalVesselDisplayName('TB. BEATRICE 01 / TKG. PON 1')).toBe('TKG. PON 1');
+  });
 });
 
 describe('normalizeVesselName', () => {
@@ -110,5 +123,31 @@ describe('pickPreferredVesselDisplayName', () => {
         'TB. AS MARINA 9 / BG. AS MARINA 12',
       ),
     ).toBe('BG. AS MARINA 12');
+  });
+});
+
+describe('cargo-carrier prefixes', () => {
+  // `TK` used to be tried before `TKG`, so `TKG. PON 1` lost only the `TK` and normalized to
+  // `G PON 1` - which is why the cleanup workbook records that vessel as "TK. G. PON 1".
+  it('strips TKG whole rather than leaving a stray G', () => {
+    expect(normalizeVesselName('TKG. PON 1')).toBe('PON 1');
+  });
+
+  it('strips the SPOB prefix', () => {
+    expect(normalizeVesselName('SPOB. REZEKI BERSAMA')).toBe('REZEKI BERSAMA');
+  });
+
+  it('matches an SPOB vessel to the same name written without the prefix', () => {
+    expect(normalizeVesselName('SPOB. JULVINDA')).toBe(normalizeVesselName('JULVINDA'));
+  });
+
+  it('resolves a TK/TB pair to the tongkang', () => {
+    expect(normalizeVesselName('TK. SINAR BAHAGIA 02/TB.KAWAN KITA')).toBe('SINAR BAHAGIA 02');
+  });
+
+  // Roman numerals still convert after the wider prefix list, so the display spelling chosen for
+  // the master ("BG. PENATA BESAR I") and the digit spelling key the same.
+  it('keeps roman-to-arabic conversion for the chosen display spelling', () => {
+    expect(normalizeVesselName('BG. PENATA BESAR I')).toBe(normalizeVesselName('BG. PENATA BESAR 1'));
   });
 });

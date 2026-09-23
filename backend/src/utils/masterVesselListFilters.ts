@@ -1,3 +1,16 @@
+/**
+ * SAP codes for one vessel, newest-first by primary then code. A vessel can hold several - SAP
+ * issues a code per tug/barge combination, so BG. AS MARINA 12 carries four - which is why this is
+ * an aggregate and not a column. Only namespace='SAP' rows appear: the same table also holds the
+ * vessel's KLIP-invented legacy codes.
+ */
+export const MASTER_VESSEL_SAP_CODES_SQL = `(
+  SELECT string_agg(a.vessel_code, ', ' ORDER BY a.is_primary DESC, a.vessel_code)
+  FROM master_vessel_code_aliases a
+  WHERE a.master_vessel_id = master_vessels.id
+    AND a.namespace = 'SAP'
+)`;
+
 /** Parse repeated or comma-separated query params into string[]. */
 export function parseMultiQueryParam(raw: unknown): string[] {
   if (raw == null) return [];
@@ -37,6 +50,8 @@ export function buildMasterVesselListWhere(
     params.push(`%${filters.search.trim()}%`);
     where += ` AND (
       vessel_code ILIKE $${params.length}
+      OR vessel_code_klip ILIKE $${params.length}
+      OR dhm_code ILIKE $${params.length}
       OR vessel_name ILIKE $${params.length}
       OR normalized_vessel_name ILIKE $${params.length}
       OR EXISTS (
@@ -96,7 +111,12 @@ export function buildMasterVesselListWhere(
 }
 
 export const MASTER_VESSEL_SORT_COLUMNS: Record<string, string> = {
-  vessel_code: 'vessel_code',
+  // The table's "Vessel Code (KLIP)" column keeps the id `vessel_code` so saved column order
+  // survives, but it shows - and therefore sorts by - the KLIP code.
+  vessel_code: 'vessel_code_klip',
+  vessel_code_klip: 'vessel_code_klip',
+  vessel_codes_sap: MASTER_VESSEL_SAP_CODES_SQL,
+  dhm_code: 'dhm_code',
   vessel_name: 'vessel_name',
   vessel_capacity_mt: 'vessel_capacity_mt',
   vessel_owner: 'vessel_owner',

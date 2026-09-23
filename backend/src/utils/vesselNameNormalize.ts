@@ -1,6 +1,16 @@
 /** Normalize vessel name for cross-source matching (Jovin, KLIP sheet, SAP). */
 
-const TYPE_PREFIX_RE = /^(BG|MT|TB|KLM|TK)\.?\s*/i;
+// Longer prefixes first: `TK` would otherwise eat the start of `TKG.` and leave a stray `G.`,
+// which is how `TKG. PON 1` came to be stored as `G PON 1`.
+const TYPE_PREFIX_RE = /^(SPOB|TKG|KLM|BG|MT|TB|TK)\.?\s*/i;
+
+/**
+ * Segments that carry cargo, as opposed to the tug that pushes them. `TK.`/`TKG.` (tongkang)
+ * and `SPOB.` are cargo carriers just as `BG.`/`MT.` are; leaving them out made
+ * `TK. SHERIN 03/TB. PACIFIC STAR I` resolve to the TUG, because no segment matched and the
+ * last one won.
+ */
+const CARGO_SEGMENT_RE = /^(BG|MT|SPOB|TKG|TK)\.?\s*/i;
 
 const ROMAN_TO_ARABIC: Record<string, string> = {
   I: '1',
@@ -22,7 +32,7 @@ const ROMAN_TO_ARABIC: Record<string, string> = {
 
 /**
  * SAP often sends tug/barge pairs like "TB. AS MARINA 9 / BG. AS MARINA 12".
- * Display and master data should prefer the sea/barge segment (BG./MT.) over the compound string.
+ * Display and master data should prefer the cargo-carrying segment over the compound string.
  */
 export function resolveCanonicalVesselDisplayName(name: unknown): string | null {
   const raw = String(name ?? '').trim();
@@ -35,9 +45,9 @@ export function resolveCanonicalVesselDisplayName(name: unknown): string | null 
     .filter(Boolean);
   if (segments.length === 0) return null;
 
-  const seaSegments = segments.filter((s) => /^(BG|MT)\.?\s*/i.test(s));
-  if (seaSegments.length > 0) {
-    return seaSegments[seaSegments.length - 1].toUpperCase();
+  const cargoSegments = segments.filter((s) => CARGO_SEGMENT_RE.test(s));
+  if (cargoSegments.length > 0) {
+    return cargoSegments[cargoSegments.length - 1].toUpperCase();
   }
 
   return segments[segments.length - 1].toUpperCase();
