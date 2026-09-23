@@ -36,3 +36,33 @@ export const SHIPMENT_LIST_STO_JOIN_SQL = `
       LEFT JOIN sap_discharge_ports_agg sdpa ON sdpa.sto_key::text = sp.sto_key::text
       LEFT JOIN contract_ext_agg cex ON cex.sto_key::text = sp.sto_key::text
       LEFT JOIN po_numbers_agg pna ON pna.sto_key::text = sp.sto_key::text`;
+
+/**
+ * The Jetty Planning System instruction for this STO, if KLIP has submitted one.
+ *
+ * Keyed on sto_key because that is the grain JPS is submitted at - one instruction per STO, not
+ * per shipment row. `state = 'SUBMITTED'` excludes the go-live seed and the held rows, which are
+ * KLIP bookkeeping and mean nothing to a user looking at the list.
+ *
+ * DISTINCT ON keeps the newest revision: a rejected instruction is replaced rather than amended,
+ * so an STO can accumulate several rows and only the latest describes where it stands now.
+ */
+export const SHIPMENT_LIST_JPS_JOIN_SQL = `
+      LEFT JOIN LATERAL (
+        SELECT j.jps_status, j.jetty_name, j.planned_berthing_time, j.rejection_reason,
+               j.submitted_at, j.last_polled_at
+        FROM jps_shipping_instructions j
+        WHERE j.sto_key = sp.sto_key::text
+          AND j.state = 'SUBMITTED'
+        ORDER BY j.revision DESC
+        LIMIT 1
+      ) jps ON TRUE`;
+
+/** Columns the shipments list and its shell both project for the Jetty columns. */
+export const SHIPMENT_LIST_JPS_SELECT_SQL = `
+        jps.jps_status AS jetty_status,
+        jps.jetty_name AS jetty_name,
+        jps.planned_berthing_time AS jetty_planned_berthing_time,
+        jps.rejection_reason AS jetty_rejection_reason,
+        jps.submitted_at AS jetty_submitted_at,
+        jps.last_polled_at AS jetty_last_synced_at`;

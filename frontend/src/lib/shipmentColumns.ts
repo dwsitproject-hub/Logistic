@@ -102,6 +102,13 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 
   'ata_vessel_complete_discharge',
 
+  // Jetty Planning System. Visible by default because the whole point of the integration is that
+  // an operator can see, without leaving KLIP, whether a berth has been asked for and granted.
+
+  'jetty_status',
+
+  'jetty_sync_dates',
+
 ] as const
 
 
@@ -130,7 +137,7 @@ export const SHIPMENT_OBSOLETE_COLUMN_IDS = [
 
 /** Bump when default column order/visibility changes — triggers one-time layout migration. */
 
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v11'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v12'
 
 
 
@@ -141,6 +148,11 @@ export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayou
 /** Compact fixed px widths — header longest-word logic may expand via resolveCompactColumnWidthPx. */
 
 export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
+
+  jetty_status: 112,
+
+  jetty_sync_dates: 176,
+
 
   select_group: 120,
 

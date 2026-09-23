@@ -233,6 +233,8 @@ export interface ShipmentEditPayload {
   ports: Record<string, unknown>[];
   shipmentInfo: Record<string, unknown> | null;
   contractDetails: Record<string, unknown>[];
+  /** Latest JPS Shipping Instruction for this STO, or null when none has been submitted. */
+  jettyStatus: Record<string, unknown> | null;
 }
 
 async function loadPortsAndInfo(
@@ -457,6 +459,28 @@ async function resolveShipmentEditPayloadUncached(
     loadKlipFieldHistory(shipmentUuid),
   ]);
 
+/**
+ * The Jetty Planning System instruction for this shipment's STO, for the badge on Section 2.
+ *
+ * Keyed on the STO rather than the shipment row, because that is the grain KLIP submits at, and
+ * newest revision first - a rejected instruction is replaced, never amended, so an STO can carry
+ * several and only the latest says where it stands.
+ */
+async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<string, unknown> | null> {
+  const res = await query(
+    `SELECT j.jps_status, j.jetty_name, j.planned_berthing_time, j.rejection_reason,
+            j.submitted_at, j.last_polled_at, j.external_reference, j.revision
+     FROM shipments s
+     INNER JOIN jps_shipping_instructions j
+       ON j.sto_key = COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), ''))
+     WHERE s.id = $1 AND j.state = 'SUBMITTED'
+     ORDER BY j.revision DESC
+     LIMIT 1`,
+    [shipmentId],
+  );
+  return (res.rows[0] as Record<string, unknown>) ?? null;
+}
+
   if (shipmentRes.rows.length === 0 || !editContext) {
     return null;
   }
@@ -479,5 +503,6 @@ async function resolveShipmentEditPayloadUncached(
     ports: portsBundle.ports,
     shipmentInfo: portsBundle.shipmentInfo,
     contractDetails,
+    jettyStatus: await loadJettyStatusForShipment(String(shipment.id)),
   };
 }

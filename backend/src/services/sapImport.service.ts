@@ -167,8 +167,14 @@ export class SapImportService {
         import('./contractStoAggSnapshot.service')
           .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
           .catch(() => {});
+        // The JPS sweep is chained onto this one on purpose. Its eligibility query reads
+        // contract_latest_spd_snapshot for the Region/Site, so running it before the snapshot
+        // refreshes would judge a freshly imported shipment against a stale discharge destination
+        // - and a BONTANG call could be missed for a whole cycle.
         import('./contractLatestSpdSnapshot.service')
           .then(({ ContractLatestSpdSnapshotService }) => ContractLatestSpdSnapshotService.refreshAll())
+          .then(() => import('../jps'))
+          .then(({ runJpsSync }) => runJpsSync('sap-import'))
           .catch(() => {});
         import('./b2bEndingChildSnapshot.service')
           .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
