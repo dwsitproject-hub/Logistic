@@ -604,8 +604,31 @@ async function buildLatestSpdContractCte(): Promise<string> {
           ${sapDischargeDestinationFromJson(dataExpr)} AS discharge_destination`;
 
   const latestSpdContractCte = (await isContractLatestSpdSnapshotFresh())
-    ? `latest_spd_contract AS NOT MATERIALIZED (
-        SELECT ${latestSpdContractProjection('lspd.data')}
+    ? /*
+       * The snapshot's STORED columns, not its jsonb.
+       *
+       * contract_latest_spd_snapshot has carried typed columns for all six of these since
+       * migration 161, and they are written by the very expressions below
+       * (contractLatestSpdDerivedSql) - the point of storing them was that consumers stop pulling
+       * jsonb keys per row. This query kept deriving them from `lspd.data` anyway, which meant
+       * detoasting the jsonb of all 19,021 rows to read five scalars: 431,949 shared buffers and
+       * 3.4s inside a 52s page load, measured on a copy of production 2026-09-23.
+       *
+       * Output-preserving, checked rather than argued: across all 19,021 snapshot rows the jsonb
+       * form and the column form differ on 0 rows for every one of the five fields - including
+       * b2b_flag, where the stored column carries two extra COALESCE arms that never fire.
+       *
+       * The live fallback below still derives from jsonb, because when the snapshot is stale its
+       * columns are stale too.
+       */
+      `latest_spd_contract AS NOT MATERIALIZED (
+        SELECT
+          lspd.contract_number,
+          lspd.effective_sto,
+          lspd.contract_ext_no_raw AS contract_ext_no,
+          UPPER(TRIM(COALESCE(lspd.b2b_flag_raw, ''))) AS b2b_flag,
+          NULLIF(TRIM(COALESCE(lspd.contract_reference_po_raw, '')), '') AS contract_reference_po,
+          lspd.discharge_destination
         FROM contract_latest_spd_snapshot lspd
         WHERE lspd.contract_number IS NOT NULL AND TRIM(lspd.contract_number) != ''
       )`

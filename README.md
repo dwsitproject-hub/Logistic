@@ -2433,8 +2433,69 @@ after, identical 12/12.
 | after | 932 / 939 / 706 ms |
 
 That query alone fell from 3,953 to 278 ms, and total SQL across three calls from 10,028 to
-2,748 ms. Time outside SQL is ~0 - the endpoint is entirely database-bound, so the next gain has to
-come from the remaining hot query (`WITH ship AS (...)`, ~500 ms per call), not from the Node side.
+2,748 ms. Time outside SQL is ~0 - the endpoint is entirely database-bound.
+
+**Then the sample got wider and the average went the wrong way**, which is what forced the second
+half of this. Twelve shipments split cleanly in two: seven at 4,150-5,053 ms and five at
+248-547 ms. The slow ones all had `ports = 0`, and all of them ran a lookup keyed on an expression
+no index matched.
+
+Three expressions were unindexed, each an equality in a hot predicate:
+
+| expression | why the existing index missed it | cost |
+| --- | --- | --- |
+| `sapStoNumberKeyExpr` (6 branches) | `idx_spd_effective_sto` has 5 - no `'STO No'`; `idx_spd_effective_sto_trim` has 6 but an extra outer `TRIM` | Seq Scan, 123,954 buffer hits, 6,420 ms |
+| the operation-id key in `sqlStoLookupKeyMatchExpr` | never indexed; fires on every `OP-` / `MNL-` / `MSEA-` key | two scans per call, 1,885 + 1,434 ms, both returning ZERO rows |
+| `TRIM(COALESCE(sto_number::text, ''))` | the index is on the bare column, and the expression is not the column | part of the same scan |
+
+Migration 179 adds all three. Access path only, verified the way 101 / 107 / 108 / 130 were: the
+endpoint's `contractDetails` for 12 shipments is byte-identical before and after, 12/12.
+
+| same 12 shipments | before | after |
+| --- | --- | --- |
+| median | 4,264 ms | **248 ms** |
+| worst | 5,053 ms | 537 ms |
+| mean | 2,875 ms | 246 ms |
+
+The bimodal split is gone: every shipment now opens in 171-537 ms. Two lessons worth keeping - a
+three-row sample hid a fault that affected most rows, and *an index that looks right is not an
+index that matches*: two near-miss indexes on this exact expression already existed and neither
+could be used.
+
+### Shipping Performance was detoasting a snapshot it had already extracted
+
+Asked by Ryan on 2026-09-23, measured against a copy of production (19,053 contracts, 26,440 SAP
+rows). Cold load 67s, warm 12ms - the page is cached, so this is the first viewer's cost.
+
+The page's `latest_spd_contract` CTE reads `contract_latest_spd_snapshot`, and then derived its six
+fields **out of that table's jsonb `data` column** - even though migration 161 added typed columns
+for exactly those fields, written by exactly those expressions
+(`contractLatestSpdDerivedSql.ts`), so that consumers would stop pulling jsonb keys per row. The
+backlog query in the same file already read the columns; the main query did not.
+
+    CTE latest_spd_contract   Buffers: shared hit=431,949   for 19,021 rows, to read five scalars
+
+**Output-preserving, checked over every row**: across all 19,021 snapshot rows the jsonb form and
+the column form differ on **0** for each of the five fields - including `b2b_flag`, where the stored
+column carries two extra COALESCE arms that never fire.
+
+| | baseline | reading the columns |
+| --- | --- | --- |
+| CTE `latest_spd_contract` | 431,949 buffers | **320** |
+| whole query | 2,864,949 buffers | 2,493,329 |
+| EXPLAIN execution time | 54.9s | 37.9s |
+
+**`MATERIALIZED` was tried and rejected on the measurement.** With the columns in place, materialising
+the CTE moved buffers by 0.01% (2,493,329 against 2,493,649) - all the saving comes from the column
+read, none from the materialisation. Wall-clock suggested it helped, but wall-clock on this copy is
+unusable: the same unchanged query varied 2,999–8,132 ms between runs, and the page varied 61–126s,
+because the copy container runs default `shared_buffers` (128 MB) against a query touching ~23 GB of
+buffers. Buffers are the instrument here; time is not.
+
+**What this does NOT fix, and it is the larger fault**: the planner estimates **36 rows** where 2,226
+come back, at nearly every join in the tree, and picks nested loops and hash sizes from that. 2.5M
+buffer hits to return 2,226 rows is the symptom. One CTE was worth 13%; the estimate is worth the
+rest.
 
 ### The test suite is flaky under its own parallelism, not under change
 
