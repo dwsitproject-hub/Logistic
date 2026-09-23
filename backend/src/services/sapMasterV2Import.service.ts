@@ -1791,7 +1791,7 @@ export class SapMasterV2ImportService {
       }
 
       if (processedRecords > 0) {
-        invalidateShipmentsListCache();
+        invalidateShipmentsListCache({ refreshOilLoss: false });
         invalidateShippingPerformanceRowCache();
         /*
          * Caches cleared now, rebuild deferred. The trucking/shipment build reads the four
@@ -1820,8 +1820,18 @@ export class SapMasterV2ImportService {
             const upstream: Array<[string, () => Promise<unknown>]> = [
               [
                 'qty_move',
-                async () =>
-                  (await import('./contractQtyMoveSnapshot.service')).ContractQtyMoveSnapshotService.refreshAll(),
+                async () => {
+                  await (
+                    await import('./contractQtyMoveSnapshot.service')
+                  ).ContractQtyMoveSnapshotService.refreshAll();
+                  // Oil Loss delivery/receive comes from qty_move. Start the rebuild once that
+                  // snapshot has committed. Do not await it here: the scan takes minutes and the
+                  // Contract Performance refresh below only needs qty_move itself.
+                  const { refreshOilLossSnapshotAfterCurrent } = await import('./oilLossSnapshot.service');
+                  void refreshOilLossSnapshotAfterCurrent().catch((err) =>
+                    logger.error('Oil loss snapshot refresh failed after SAP import', { err }),
+                  );
+                },
               ],
               [
                 'sto_agg',

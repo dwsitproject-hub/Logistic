@@ -22,6 +22,8 @@ describe('buildOilLossMainSql', () => {
     expect(sql).toContain('b2b_ending_buyer');
     expect(sql).not.toContain('plants_by_code');
     expect(sql).not.toContain('master_plants');
+    expect(sql).toContain("IN ('CIF', 'FOB', 'CFR') THEN 'SEA'");
+    expect(sql).not.toContain("NULLIF(TRIM(oil_loss_eligible.transport_mode)");
     expect(sql).toContain('quantity_delivery_trucking');
     expect(sql).toContain('quantity_delivery_vessel');
   });
@@ -43,18 +45,13 @@ describe('buildOilLossMainSql', () => {
   });
 });
 
-describe('operation_id derivation (SEA voyage / LAND trucking op id, with fallback)', () => {
-  it('prefers shipment/trucking Operation ID over the legacy Contract Ext No fallback', async () => {
+describe('operation_id derivation (shipment voyage id only)', () => {
+  it('uses the shipment Operation ID and does not fall back to STO or Contract Ext No', async () => {
     const sql = await buildOilLossMainSql();
-    expect(sql).toContain('operation_id_sap_fallback');
     expect(sql).toContain('sh_sto.operation_id');
-    expect(sql).toContain('sh_sto.sto_key');
     expect(sql).toContain('sh_ct.operation_id');
-    expect(sql).toContain('tr_sto.operation_id');
-    expect(sql).toContain('tr_ct.operation_id');
-    // Final fallback is still the pre-existing SAP Contract Ext No value, so rows with no
-    // shipment/trucking match never lose their operation_id.
-    expect(sql).toContain("NULLIF(TRIM(p.operation_id_sap_fallback), '')");
+    expect(sql).not.toContain('sh_sto.sto_key,');
+    expect(sql).not.toContain("NULLIF(TRIM(p.operation_id_sap_fallback), '')");
   });
 
   it('selects operation_id from shipments and trucking lookup CTEs', async () => {
@@ -68,6 +65,8 @@ describe('buildOilLossGainSql', () => {
     const sql = buildOilLossGainSql();
     expect(sql).toContain('with_delivery');
     expect(sql).toContain('import_status');
+    expect(sql).toContain("IN ('CIF', 'FOB', 'CFR') THEN 'SEA'");
+    expect(sql).not.toContain('SEA / LAND');
   });
 });
 

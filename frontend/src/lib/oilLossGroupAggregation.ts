@@ -1,18 +1,17 @@
 /**
- * Oil Loss — shared mode-aware grouping key + two-level ("contract-then-voyage") aggregation.
+ * Oil Loss — grouping by Incoterm, then two-level ("contract-then-voyage") aggregation.
  *
- * Cardinality (see plan): SEA (FOB/CIF/CFR) — one STO/voyage Operation ID can span multiple
- * POs/contracts, which must merge into one row/total (summed). LAND (FRC/LCO) — an Operation ID
- * is already 1:1 with its PO, so grouping by Operation ID is a no-op vs. grouping by contract.
+ * Vessel (CIF/FOB/CFR): one Shipment Operation ID can span multiple POs/contracts, which
+ * merge into one row/total (summed). Trucking (FRC/LCO): one row per contract (PO).
  *
- * Level 1 (existing behavior, unchanged): dedupe multiple SAP rows of the SAME contract —
- * take delivery/receive once, sum SFAL/SFBD across duplicate rows.
- * Level 2 (new): merge distinct contracts sharing one SEA voyage Operation ID — sum their
- * level-1 subtotals. For LAND this is a no-op because the outer key already equals the
- * contract key.
+ * Level 1: dedupe multiple SAP rows of the SAME contract — take delivery/receive once,
+ * sum SFAL/SFBD across duplicate rows.
+ * Level 2: merge distinct contracts sharing one vessel Operation ID. Trucking stays at
+ * the contract key.
  */
 
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
+import { isOilLossVesselIncoterm } from '@/lib/oilLossEligibility'
 
 function parseNum(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
@@ -63,29 +62,42 @@ export function oilLossContractGroupKey(
   return `row:${row.id}`
 }
 
-export function isSeaOilLossTransportMode(mode: string | null | undefined): boolean {
-  return String(mode ?? '').trim().toUpperCase() === 'SEA'
+/**
+ * Vessel group: Shipment Operation ID, then the first STO number.
+ * Contract Ext No is not a group key. Returns null when neither id is present.
+ */
+export function oilLossVesselGroupKey(
+  row: Pick<OilLossSourceRow, 'operation_id' | 'sto_number'>,
+): string | null {
+  const opId = String(row.operation_id ?? '').trim()
+  if (opId) return `op:${opId}`
+  const sto = String(row.sto_number ?? '').split(',')[0]?.trim() ?? ''
+  if (sto) return `sto:${sto}`
+  return null
 }
 
 /**
- * Outer group key derived from an already-known inner (contract-level) key: SEA rows sharing
- * one STO/voyage Operation ID merge onto `op:{operationId}`; LAND (and SEA rows with no
- * resolvable Operation ID) stay at the given inner key, matching today's behavior exactly.
+ * Outer group key derived from an already-known inner (contract-level) key.
+ * Vessel incoterms (CIF/FOB/CFR) merge on Shipment Operation ID, then STO.
+ * Trucking incoterms stay at the inner (PO/contract) key.
  */
 export function oilLossOuterGroupKeyFromInner(
   innerKey: string,
-  row: Pick<OilLossSourceRow, 'transport_mode' | 'operation_id'>,
+  row: Pick<OilLossSourceRow, 'incoterm' | 'operation_id' | 'sto_number'>,
 ): string {
-  if (isSeaOilLossTransportMode(row.transport_mode)) {
-    const opId = String(row.operation_id ?? '').trim()
-    if (opId) return `op:${opId}`
+  if (isOilLossVesselIncoterm(row.incoterm)) {
+    const vesselKey = oilLossVesselGroupKey(row)
+    if (vesselKey) return vesselKey
   }
   return innerKey
 }
 
 /** Convenience: derive the outer group key directly from a raw row. */
 export function oilLossOuterGroupKey(
-  row: Pick<OilLossSourceRow, 'id' | 'contract_number' | 'contract_ext_no' | 'transport_mode' | 'operation_id'>,
+  row: Pick<
+    OilLossSourceRow,
+    'id' | 'contract_number' | 'contract_ext_no' | 'incoterm' | 'operation_id' | 'sto_number' | 'transport_mode'
+  >,
 ): string {
   return oilLossOuterGroupKeyFromInner(oilLossContractGroupKey(row), row)
 }
@@ -107,8 +119,9 @@ export type OilLossQuantityAgg = {
 
 type ContractQuantityAgg = OilLossQuantityAgg & {
   contract_key: string
-  transport_mode: string | null
+  incoterm: string | null
   operation_id: string | null
+  sto_number: string | null
 }
 
 function emptyQuantityAgg(): OilLossQuantityAgg {
@@ -135,10 +148,14 @@ export function aggregateOilLossQuantitiesByContract(rows: OilLossSourceRow[]): 
       agg = {
         ...emptyQuantityAgg(),
         contract_key: key,
-        transport_mode: row.transport_mode ?? null,
-        operation_id: row.operation_id ?? null,
+        incoterm: String(row.incoterm ?? '').trim() || null,
+        operation_id: String(row.operation_id ?? '').trim() || null,
+        sto_number: String(row.sto_number ?? '').trim() || null,
       }
       map.set(key, agg)
+    } else {
+      if (!agg.operation_id) agg.operation_id = String(row.operation_id ?? '').trim() || null
+      if (!agg.sto_number) agg.sto_number = String(row.sto_number ?? '').trim() || null
     }
     const delivery = parseNum(row.quantity_sent ?? row.quantity_delivery)
     const receive = parseNum(row.quantity_received)
@@ -166,23 +183,9 @@ export function aggregateOilLossQuantitiesByContract(rows: OilLossSourceRow[]): 
   return map
 }
 
-/**
- * Level 2 — combine per-contract subtotals onto their outer group (SEA voyage or LAND contract).
- * Summing is correct here: each input is already one deduped subtotal per distinct contract, so
- * merging distinct contracts never double-counts.
- */
-export function aggregateContractsByOuterGroup(
-  byContract: Map<string, ContractQuantityAgg>,
-): Map<string, OilLossQuantityAgg> {
-  const outer = new Map<string, OilLossQuantityAgg>()
-
-  for (const agg of byContract.values()) {
-    const key = oilLossOuterGroupKeyFromInner(agg.contract_key, agg)
-    let out = outer.get(key)
-    if (!out) {
-      out = emptyQuantityAgg()
-      outer.set(key, out)
-    }
+function sumContractQuantityAggs(aggs: Iterable<OilLossQuantityAgg>): OilLossQuantityAgg {
+  const out = emptyQuantityAgg()
+  for (const agg of aggs) {
     if (agg.has_sent) {
       out.quantity_sent += agg.quantity_sent
       out.has_sent = true
@@ -200,13 +203,29 @@ export function aggregateContractsByOuterGroup(
       out.has_sfbd = true
     }
   }
-
-  return outer
+  return out
 }
 
-/** Convenience: rows -> two-level (contract-then-voyage) quantity groups in one call. */
+/**
+ * Vessel rows are bucketed by their own Shipment Operation ID, or by their own STO when
+ * that id is empty, before contracts are deduped. A PO that sits on two STOs therefore
+ * contributes to both STO groups. Inside one group, delivery/receive are still taken once
+ * per contract. Trucking stays one group per PO.
+ */
 export function aggregateOilLossQuantitiesByOuterGroup(rows: OilLossSourceRow[]): Map<string, OilLossQuantityAgg> {
-  return aggregateContractsByOuterGroup(aggregateOilLossQuantitiesByContract(rows))
+  const buckets = new Map<string, OilLossSourceRow[]>()
+  for (const row of rows) {
+    const key = oilLossOuterGroupKey(row)
+    const list = buckets.get(key)
+    if (list) list.push(row)
+    else buckets.set(key, [row])
+  }
+
+  const outer = new Map<string, OilLossQuantityAgg>()
+  for (const [key, groupRows] of buckets) {
+    outer.set(key, sumContractQuantityAggs(aggregateOilLossQuantitiesByContract(groupRows).values()))
+  }
+  return outer
 }
 
 /* --------------------------------------------------------------------------------------- */
@@ -298,6 +317,10 @@ function mergeSameContractRowInto(existing: OilLossMergedRow, row: OilLossSource
   if (!existing.supplier) existing.supplier = String(row.supplier ?? '').trim() || null
   if (!existing.buyer) existing.buyer = String(row.buyer ?? '').trim() || null
   if (!existing.transporter) existing.transporter = String(row.transporter ?? '').trim() || null
+  if (!existing.operation_id) {
+    const op = String(row.operation_id ?? '').trim()
+    if (op) existing.operation_id = op
+  }
 
   const contractQty = parseNum(row.quantity_contract)
   if (contractQty != null) {
@@ -366,23 +389,33 @@ function mergeOuterGroupInto(existing: OilLossMergedRow, incoming: OilLossMerged
 }
 
 /**
- * Two-level mode-aware aggregation: rows -> one merged row per contract (level 1), then
- * per-contract subtotals sharing a SEA voyage Operation ID merge into one row (level 2, summed).
- * LAND rows are unaffected (their outer key already equals their contract key).
+ * Vessel: one row per Shipment Operation ID, or per STO when Operation ID is empty.
+ * Each source row joins that key on its own, so several POs on one STO become one row
+ * and a PO that has several STOs appears on each of those STO rows.
+ * Inside the group, duplicate SAP rows of the same contract are deduped (delivery/receive
+ * taken once). Trucking stays one row per PO.
  */
 export function aggregateOilLossRowsByGroup(rows: OilLossSourceRow[]): OilLossMergedRow[] {
-  const byContract = aggregateOilLossRowsByContract(rows)
-  const byGroup = new Map<string, OilLossMergedRow>()
-
-  for (const [contractKey, contractRow] of byContract) {
-    const outerKey = oilLossOuterGroupKeyFromInner(contractKey, contractRow)
-    const existing = byGroup.get(outerKey)
-    if (!existing) {
-      byGroup.set(outerKey, { ...contractRow, id: outerKey })
-      continue
-    }
-    mergeOuterGroupInto(existing, contractRow, outerKey)
+  const buckets = new Map<string, OilLossSourceRow[]>()
+  for (const row of rows) {
+    const key = oilLossOuterGroupKey(row)
+    const list = buckets.get(key)
+    if (list) list.push(row)
+    else buckets.set(key, [row])
   }
 
-  return [...byGroup.values()]
+  const merged: OilLossMergedRow[] = []
+  for (const [outerKey, groupRows] of buckets) {
+    const byContract = aggregateOilLossRowsByContract(groupRows)
+    let group: OilLossMergedRow | null = null
+    for (const contractRow of byContract.values()) {
+      if (!group) {
+        group = { ...contractRow, id: outerKey }
+        continue
+      }
+      mergeOuterGroupInto(group, contractRow, outerKey)
+    }
+    if (group) merged.push(group)
+  }
+  return merged
 }

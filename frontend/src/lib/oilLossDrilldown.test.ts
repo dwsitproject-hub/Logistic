@@ -55,8 +55,8 @@ describe('oilLossDrilldown contract-level qty', () => {
     const tree = buildOilLossDrilldownTree(rows)
     expect(tree).toHaveLength(1)
     expect(tree[0].contractCount).toBe(2)
-    // CN-1: -10_000 + CN-2: -10_000 = -20_000 (not -30_000)
-    expect(tree[0].totalOilLossKg).toBe(-20_000)
+    // CN-1: (90-100)/100 = -10%. CN-2: (190-200)/200 = -5%. Unweighted avg = -7.5%.
+    expect(tree[0].avgLossPct).toBeCloseTo(-7.5, 4)
   })
 
   it('sums oil loss once per contract', () => {
@@ -100,8 +100,8 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
     const tree = buildOilLossDrilldownTree(voyageRows)
     expect(tree).toHaveLength(1)
     expect(tree[0].contractCount).toBe(1)
-    // Merged voyage: (90k-100k) + (190k-200k) = -20_000, summed once (not per-PO).
-    expect(tree[0].totalOilLossKg).toBe(-20_000)
+    // Merged voyage: (280k − 300k) / 300k = -6.666...%, one sample (not per-PO).
+    expect(tree[0].avgLossPct).toBeCloseTo((-20_000 / 300_000) * 100, 4)
   })
 
   it('sums the merged voyage once via sumOilLossKgFromRows', () => {
@@ -112,7 +112,7 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
     expect(countUniqueOilLossContracts(voyageRows)).toBe(1)
   })
 
-  it('LAND rows spanning distinct contracts stay ungrouped (Operation ID is 1:1 with PO)', () => {
+  it('LAND rows spanning distinct contracts stay ungrouped (trucking is one sample per PO)', () => {
     const landRows: OilLossSourceRow[] = [
       {
         id: '1',
@@ -121,7 +121,7 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
         contract_number: 'CN-1',
         product: 'PK',
         group_plant: 'Plant B',
-        incoterm: 'FOR',
+        incoterm: 'FRC',
         transporter: 'Truck Co',
         supplier: 'Supp C',
         quantity_sent: 50_000,
@@ -135,7 +135,7 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
         contract_number: 'CN-3',
         product: 'PK',
         group_plant: 'Plant B',
-        incoterm: 'FOR',
+        incoterm: 'FRC',
         transporter: 'Truck Co',
         supplier: 'Supp C',
         quantity_sent: 60_000,

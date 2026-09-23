@@ -1090,7 +1090,7 @@ function evictMapIfNeeded(map: Map<string, { expiresAt: number }>, max: number):
   }
 }
 
-export function invalidateShipmentsListCache(): void {
+export function invalidateShipmentsListCache(options?: { refreshOilLoss?: boolean }): void {
   shipmentListCachesEpoch += 1;
   PAGE_CACHE.clear();
   // Hybrid list keeps its own cache (see listCacheRegistry) - clear it too, or an edit
@@ -1105,11 +1105,15 @@ export function invalidateShipmentsListCache(): void {
   OUTSTANDING_QTY_IN_FLIGHT.clear();
   ETC_NO_ATC_DUE_IN_FLIGHT.clear();
   markPipelineDailySummaryStale(['shipment']).catch(() => {});
-  // Oil Loss reads shipment quantities (sfal/sfbd/delivered/receive) — refresh its
-  // cache after any shipment mutation so the page reflects the edit immediately.
-  import('./oilLoss.service')
-    .then(({ invalidateOilLossCache }) => invalidateOilLossCache())
-    .catch(() => {});
+  // Oil Loss reads shipment quantities (sfal/sfbd/delivered/receive). Mark the snapshot
+  // stale and rebuild it in the background; the page keeps serving the last snapshot.
+  // SAP import passes refreshOilLoss: false and rebuilds only after qty_move commits,
+  // because the Oil Loss query reads that snapshot.
+  if (options?.refreshOilLoss !== false) {
+    import('./oilLoss.service')
+      .then(({ invalidateOilLossCache }) => invalidateOilLossCache())
+      .catch(() => {});
+  }
   // Rebuild the recently used pages in the background so the next viewer after an
   // edit is served from memory instead of paying the full query cost.
   PAGE_KEEP_WARM.rewarmRecentlyUsed();

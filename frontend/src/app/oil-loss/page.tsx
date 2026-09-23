@@ -15,7 +15,7 @@ import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
-import { formatOilLossMtFromKg, formatOilLossTotalMt } from '@/lib/oilLossFormat'
+import { formatOilLossAvgMt, formatOilLossAvgPct, formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
 import {
   ContractDetailModal,
   fetchContractForDetailModal,
@@ -38,6 +38,7 @@ import {
   OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS,
   OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT,
   OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS,
+  oilLossGlobalTransportLabel,
   resolveOilLossPeriodDateRange,
   type OilLossGlobalPeriodKey,
   type OilLossGlobalTransportFilter,
@@ -155,11 +156,31 @@ type ViewColumnPrefs = {
   sortDir: 'asc' | 'desc'
 }
 
-const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string }> = [
-  { key: 'r1', label: 'R1', formula: 'Quantity SFAL - Quantity Delivery' },
-  { key: 'r2', label: 'R2', formula: 'Quantity SFBD - Quantity SFAL' },
-  { key: 'r3', label: 'R3', formula: 'Quantity Receive - Quantity SFBD' },
-  { key: 'r4', label: 'R4', formula: 'Quantity Receive - Quantity Delivery' },
+const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; mtLabel: string; formula: string }> = [
+  {
+    key: 'r1',
+    label: 'R1',
+    mtLabel: 'R1 (MT)',
+    formula: '(Quantity SFAL − Quantity Delivery) / Quantity Delivery × 100%',
+  },
+  {
+    key: 'r2',
+    label: 'R2',
+    mtLabel: 'R2 (MT)',
+    formula: '(Quantity SFBD − Quantity SFAL) / Quantity SFAL × 100%',
+  },
+  {
+    key: 'r3',
+    label: 'R3',
+    mtLabel: 'R3 (MT)',
+    formula: '(Quantity Receive − Quantity SFBD) / Quantity SFBD × 100%',
+  },
+  {
+    key: 'r4',
+    label: 'Loss',
+    mtLabel: 'Loss (MT)',
+    formula: '(Quantity Receive − Quantity Delivery) / Quantity Delivery × 100%',
+  },
 ]
 
 function parseOilLossRowQty(v: unknown): number | null {
@@ -210,9 +231,23 @@ function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
 function renderROilLossCell(kg: number | null): ReactNode {
   if (kg == null) return <span className="text-sm text-gray-400">—</span>
   const tone = kg < 0 ? 'text-red-600' : kg > 0 ? 'text-green-600' : 'text-gray-900'
-  return (
-    <span className={`text-sm tabular-nums ${tone}`}>{`${formatOilLossMtFromKg(kg)} MT`}</span>
+  return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
+}
+
+/** Loss % on an aggregated row: (Qty Receive − Qty Delivery) / Qty Delivery × 100. */
+function computeRowLossPct(row: OilLossTableRow): number | null {
+  const lossKg = computeRowROilLossKg(row, 'r4')
+  const delivery = parseOilLossRowQty(
+    'quantity_delivery' in row ? (row as { quantity_delivery?: number | null }).quantity_delivery : null,
   )
+  if (lossKg == null || delivery == null || delivery <= 0) return null
+  return (lossKg / delivery) * 100
+}
+
+function renderLossPctCell(pct: number | null): ReactNode {
+  if (pct == null) return <span className="text-sm text-gray-400">—</span>
+  const tone = pct < 0 ? 'text-red-600' : pct > 0 ? 'text-green-600' : 'text-gray-900'
+  return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
 }
 
 /** Prefer contract_number; fall back to contract_ext_no; use first token if multi-value. */
@@ -225,15 +260,28 @@ function resolveOilLossRowContractNumber(row: OilLossTableRow): string {
 }
 
 function buildROilLossCompactColumns(): CompactColumn[] {
-  return R_OIL_LOSS_CARDS.map((card) => ({
+  const lossFormula = R_OIL_LOSS_CARDS.find((card) => card.key === 'r4')?.formula ?? ''
+  const mtColumns: CompactColumn[] = R_OIL_LOSS_CARDS.map((card) => ({
     id: card.key,
-    label: card.label,
+    label: card.mtLabel,
     formulaHelp: `Formula: ${card.formula}`,
     defaultVisible: true,
     sortable: true,
     getSortValue: (r) => computeRowROilLossKg(r, card.key) ?? Number.NEGATIVE_INFINITY,
     render: (r) => renderROilLossCell(computeRowROilLossKg(r, card.key)),
   }))
+  return [
+    ...mtColumns,
+    {
+      id: 'loss_pct',
+      label: 'Loss (%)',
+      formulaHelp: `Formula: ${lossFormula}`,
+      defaultVisible: true,
+      sortable: true,
+      getSortValue: (r) => computeRowLossPct(r) ?? Number.NEGATIVE_INFINITY,
+      render: (r) => renderLossPctCell(computeRowLossPct(r)),
+    },
+  ]
 }
 
 function oilLossValueTone(value: number | null, emphasis: 'primary' | 'secondary'): string {
@@ -1012,6 +1060,11 @@ function readSavedOilLossColumns(
   }
 }
 
+function oilLossColumnLayoutIsCurrent(versionKey: string, version: string): boolean {
+  if (typeof window === 'undefined') return true
+  return window.localStorage.getItem(versionKey) === version
+}
+
 function loadAllContractColumnPrefs(allIds: string[]): ViewColumnPrefs {
   const defaults: ViewColumnPrefs = {
     visibleIds: new Set(oilLossAllContractDefaultVisibleColumnIds(allIds)),
@@ -1020,6 +1073,12 @@ function loadAllContractColumnPrefs(allIds: string[]): ViewColumnPrefs {
     sortDir: 'desc',
   }
   if (typeof window === 'undefined') return defaults
+  if (!oilLossColumnLayoutIsCurrent(
+    OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY,
+    OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION,
+  )) {
+    return defaults
+  }
   const loaded = readSavedOilLossColumns(
     'oil-loss.all-contract.visibleColumns',
     'oil-loss.all-contract.columnOrder',
@@ -1039,6 +1098,12 @@ function loadByTransporterColumnPrefs(allIds: string[]): ViewColumnPrefs {
     sortDir: 'asc',
   }
   if (typeof window === 'undefined') return defaults
+  if (!oilLossColumnLayoutIsCurrent(
+    OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION_KEY,
+    OIL_LOSS_BY_TRANSPORTER_COLUMN_LAYOUT_VERSION,
+  )) {
+    return defaults
+  }
   const loaded = readSavedOilLossColumns(
     'oil-loss.by-transporter.visibleColumns',
     'oil-loss.by-transporter.columnOrder',
@@ -1058,6 +1123,12 @@ function loadBySupplierColumnPrefs(allIds: string[]): ViewColumnPrefs {
     sortDir: 'asc',
   }
   if (typeof window === 'undefined') return defaults
+  if (!oilLossColumnLayoutIsCurrent(
+    OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION_KEY,
+    OIL_LOSS_BY_SUPPLIER_COLUMN_LAYOUT_VERSION,
+  )) {
+    return defaults
+  }
   const loaded = readSavedOilLossColumns(
     'oil-loss.by-supplier.visibleColumns',
     'oil-loss.by-supplier.columnOrder',
@@ -1164,7 +1235,7 @@ export default function OilLossPage() {
     () =>
       OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS.map((value) => ({
         value,
-        label: value,
+        label: oilLossGlobalTransportLabel(value),
       })),
     [],
   )
@@ -1835,15 +1906,23 @@ export default function OilLossPage() {
               totalMt: null,
               totalPct: null,
             }
-            const totalMt = showBlockingLoad ? null : summary.totalMt
+            const cardDisabled = globalTransport !== 'Vessel' && card.key !== 'r4'
+            const avgPct = cardDisabled || showBlockingLoad ? null : summary.avgPct
+            const avgMt = cardDisabled || showBlockingLoad ? null : summary.avgMt
 
             return (
               <div
                 key={card.key}
-                className="flex min-h-full flex-col rounded-lg border bg-white px-3 py-3 shadow-sm"
+                className={`flex min-h-full flex-col rounded-lg border px-3 py-3 shadow-sm ${
+                  cardDisabled ? 'border-gray-200 bg-gray-50' : 'bg-white'
+                }`}
               >
                 <div className="mb-2 flex items-center gap-1.5">
-                  <span className="text-lg font-bold leading-none tracking-tight text-gray-900">
+                  <span
+                    className={`text-lg font-bold leading-none tracking-tight ${
+                      cardDisabled ? 'text-gray-400' : 'text-gray-900'
+                    }`}
+                  >
                     {card.label}
                   </span>
                   <FieldHelp text={`Formula: ${card.formula}`} />
@@ -1851,16 +1930,34 @@ export default function OilLossPage() {
 
                 <div className="min-w-0">
                   <div className="text-[10px] font-medium uppercase tracking-wide text-gray-500 leading-none">
-                    Total
+                    Avg
                   </div>
                   <div
                     className={`mt-1 text-lg font-semibold leading-tight tabular-nums ${
-                      showBlockingLoad ? 'text-gray-400' : oilLossValueTone(totalMt, 'primary')
+                      cardDisabled || showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgPct, 'primary')
                     }`}
                   >
-                    {showBlockingLoad ? '…' : `${formatOilLossTotalMt(totalMt)} MT`}
+                    {showBlockingLoad ? '…' : cardDisabled ? '—' : formatOilLossAvgPct(avgPct)}
                   </div>
                 </div>
+                {card.key === 'r4' ? (
+                  <div className="mt-2 min-w-0">
+                    <div className="text-[10px] font-medium uppercase tracking-wide text-gray-400 leading-none">
+                      Avg MT
+                    </div>
+                    <div
+                      className={`mt-1 text-sm font-medium leading-tight tabular-nums ${
+                        showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgMt, 'secondary')
+                      }`}
+                    >
+                      {showBlockingLoad
+                        ? '…'
+                        : avgMt == null
+                          ? '—'
+                          : `${formatOilLossAvgMt(avgMt)} MT`}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )
           })}
@@ -1875,7 +1972,7 @@ export default function OilLossPage() {
             formatContractDateScopeLabel(globalPeriod, dateFrom, dateTo, (p) =>
               resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
             ),
-            globalTransport,
+            oilLossGlobalTransportLabel(globalTransport),
             ...(selectedGroupPlants.length > 0 ? [selectedGroupPlants.join(', ')] : []),
             ...(selectedProducts.length > 0 ? [selectedProducts.join(', ')] : []),
           ]}
@@ -1889,7 +1986,7 @@ export default function OilLossPage() {
               <CardTitle className="flex items-center gap-2">
                 <span>
                   {viewMode === 'all_contract'
-                    ? 'All Contract'
+                    ? 'All Oil Loss'
                     : viewMode === 'by_transporter'
                       ? 'By Transporter'
                       : 'By Supplier'}
@@ -1936,7 +2033,7 @@ export default function OilLossPage() {
                   onClick={() => switchViewMode('all_contract')}
                   className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${viewMode === 'all_contract' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'}`}
                 >
-                  All Contract
+                  All Oil Loss
                 </button>
                 <button
                   type="button"
@@ -2397,10 +2494,12 @@ export default function OilLossPage() {
 
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
-                    ? 'Aggregated by contract. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
+                    ? globalTransport === 'Vessel'
+                      ? 'Aggregated by shipment operation, or by STO when Operation ID is empty. POs that share that operation or STO are one row. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                      : 'Aggregated by PO. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
                     : viewMode === 'by_transporter'
-                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'
-                      : 'Aggregated by supplier. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Oil Loss (MT) = Qty Receive − Qty Delivery.'}
+                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                      : 'Aggregated by supplier. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'}
                 </p>
               </div>
           </CardContent>

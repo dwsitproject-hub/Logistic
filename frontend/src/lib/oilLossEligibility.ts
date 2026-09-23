@@ -1,13 +1,13 @@
 /**
- * Oil Loss page — eligible Incoterm × transport segment rules (mirrors backend).
+ * Oil Loss page — eligible Incoterm segment rules (mirrors backend).
  * Used as a defensive filter after API fetch on the Oil Loss page only.
  *
- * Vessel: (FOB|CIF) + (SEA or (MIX + STO Type V))
- * Truck:  (FRC|LCO) + LAND
- * All other incoterm × transport combinations are excluded.
+ * Vessel: CIF, FOB, CFR (same as the Shipments page)
+ * Truck:  FRC, LCO (same as the Trucking page)
+ * SAP SEA / LAND is not a gate.
  */
 
-export const OIL_LOSS_VESSEL_INCOTERMS = ['CIF', 'FOB'] as const
+export const OIL_LOSS_VESSEL_INCOTERMS = ['CIF', 'FOB', 'CFR'] as const
 export const OIL_LOSS_TRUCK_INCOTERMS = ['FRC', 'LCO'] as const
 
 export type OilLossTransportSegmentRow = {
@@ -20,7 +20,15 @@ export function normalizeOilLossIncoterm(value: string | null | undefined): stri
   return String(value ?? '').trim().toUpperCase()
 }
 
-/** Normalize SAP SEA / LAND / MIX (case-insensitive; MIXED → MIX). */
+export function isOilLossVesselIncoterm(value: string | null | undefined): boolean {
+  return (OIL_LOSS_VESSEL_INCOTERMS as readonly string[]).includes(normalizeOilLossIncoterm(value))
+}
+
+export function isOilLossTruckIncoterm(value: string | null | undefined): boolean {
+  return (OIL_LOSS_TRUCK_INCOTERMS as readonly string[]).includes(normalizeOilLossIncoterm(value))
+}
+
+/** Normalize SAP SEA / LAND / MIX (case-insensitive; MIXED → MIX). Kept for unused mode hooks. */
 export function normalizeOilLossMode(value: string | null | undefined): string {
   const raw = String(value ?? '').trim()
   if (!raw) return 'LAND'
@@ -31,46 +39,20 @@ export function normalizeOilLossMode(value: string | null | undefined): string {
   return upper
 }
 
-export function normalizeOilLossStoType(value: string | null | undefined): string {
-  return String(value ?? '').trim().toUpperCase()
-}
-
-export function isOilLossVesselTransportMode(
-  mode: string | null | undefined,
-  stoType?: string | null | undefined,
-): boolean {
-  const m = normalizeOilLossMode(mode)
-  const sto = normalizeOilLossStoType(stoType)
-  return m === 'SEA' || (m === 'MIX' && sto === 'V')
-}
-
-export function isOilLossTruckTransportMode(mode: string | null | undefined): boolean {
-  return normalizeOilLossMode(mode) === 'LAND'
-}
-
 export function matchesOilLossVesselSegment(row: OilLossTransportSegmentRow): boolean {
-  const inc = normalizeOilLossIncoterm(row.incoterm)
-  if (!(OIL_LOSS_VESSEL_INCOTERMS as readonly string[]).includes(inc)) return false
-  return isOilLossVesselTransportMode(row.transport_mode, row.sto_type)
+  return isOilLossVesselIncoterm(row.incoterm)
 }
 
 export function matchesOilLossTruckSegment(row: OilLossTransportSegmentRow): boolean {
-  const inc = normalizeOilLossIncoterm(row.incoterm)
-  if (!(OIL_LOSS_TRUCK_INCOTERMS as readonly string[]).includes(inc)) return false
-  return isOilLossTruckTransportMode(row.transport_mode)
+  return isOilLossTruckIncoterm(row.incoterm)
 }
 
 export function isOilLossEligibleIncotermMode(
   incoterm: string | null | undefined,
-  mode: string | null | undefined,
-  stoType?: string | null | undefined,
+  _mode?: string | null | undefined,
+  _stoType?: string | null | undefined,
 ): boolean {
-  const row: OilLossTransportSegmentRow = {
-    incoterm,
-    transport_mode: mode,
-    sto_type: stoType,
-  }
-  return matchesOilLossVesselSegment(row) || matchesOilLossTruckSegment(row)
+  return isOilLossVesselIncoterm(incoterm) || isOilLossTruckIncoterm(incoterm)
 }
 
 export function filterOilLossEligibleRows<T extends OilLossTransportSegmentRow>(rows: readonly T[]): T[] {

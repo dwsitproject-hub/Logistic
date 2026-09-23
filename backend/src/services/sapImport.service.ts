@@ -161,6 +161,8 @@ export class SapImportService {
           .catch(() => {});
         import('./contractQtyMoveSnapshot.service')
           .then(({ ContractQtyMoveSnapshotService }) => ContractQtyMoveSnapshotService.refreshAll())
+          .then(() => import('./oilLossSnapshot.service'))
+          .then(({ refreshOilLossSnapshotAfterCurrent }) => refreshOilLossSnapshotAfterCurrent())
           .catch(() => {});
         import('./contractStoAggSnapshot.service')
           .then(({ ContractStoAggSnapshotService }) => ContractStoAggSnapshotService.refreshAll())
@@ -170,9 +172,6 @@ export class SapImportService {
           .catch(() => {});
         import('./b2bEndingChildSnapshot.service')
           .then(({ B2bEndingChildSnapshotService }) => B2bEndingChildSnapshotService.refreshAll())
-          .catch(() => {});
-        import('./oilLoss.service')
-          .then(({ invalidateOilLossCache }) => invalidateOilLossCache())
           .catch(() => {});
       });
       

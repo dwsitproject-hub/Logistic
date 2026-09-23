@@ -2,6 +2,7 @@ import {
   OIL_LOSS_ELIGIBILITY_WHERE_SQL,
   OIL_LOSS_TRANSPORTER_EXPR,
   OIL_LOSS_VESSEL_ELIGIBILITY_WHERE_SQL,
+  sqlOilLossQtyTransportModeExpr,
 } from './oilLossEligibility';
 import { sqlContractImportStatusIsClosedExpr } from './contractDeliveryStatus';
 import { shipmentManualQtyResolveSql } from './shipmentManualQtyResolveSql';
@@ -176,17 +177,12 @@ export function buildOilLossWithQtyCtes(): string {
     enriched AS (
       SELECT
         p.*,
-        -- Real execution/voyage grouping key (matches Shipments/Trucking "Operation ID"):
-        -- SEA -> shipments.operation_id (fallback: shipment_id/STO key); LAND -> trucking_operations.operation_id.
-        -- Falls back to the old SAP Contract Ext No value when no shipment/trucking match exists,
-        -- so rows are never left without a group key.
+        -- Voyage id for Vessel grouping. STO stays on sto_number and is the fallback key
+        -- in the page. Contract Ext No and the STO key are unique per PO, so they must
+        -- not fill this column or All Oil Loss stays one row per PO.
         COALESCE(
           sh_sto.operation_id,
-          sh_sto.sto_key,
-          sh_ct.operation_id,
-          tr_sto.operation_id,
-          tr_ct.operation_id,
-          NULLIF(TRIM(p.operation_id_sap_fallback), '')
+          sh_ct.operation_id
         ) AS operation_id,
         COALESCE(sh_sto.sfal_qty, sh_ct.sfal_qty) AS shipment_sfal_kg,
         COALESCE(sh_sto.sfbd_qty, sh_ct.sfbd_qty) AS shipment_sfbd_kg,
@@ -238,7 +234,9 @@ export function buildOilLossWithQtyCtes(): string {
         e.*,
         ${sqlOilLossUatQtyDeliveryExpr({
           incotermExpr: `COALESCE(NULLIF(e.contract_incoterm, ''), NULLIF(e.incoterm_raw, ''), '')`,
-          transportExpr: `UPPER(TRIM(COALESCE(NULLIF(e.transport_mode, ''), 'LAND')))`,
+          transportExpr: sqlOilLossQtyTransportModeExpr(
+            `COALESCE(NULLIF(e.contract_incoterm, ''), NULLIF(e.incoterm_raw, ''), '')`,
+          ),
           truckingCol: 'e.qty_trucking',
           vesselCol: 'e.qty_vessel',
           legacyCol: 'e.qty_delivery_legacy',
@@ -256,10 +254,11 @@ export function buildOilLossWithQtyCtes(): string {
 
 export async function buildOilLossMainSql(): Promise<string> {
   // Align Qty Delivery with Contracts View Table: qty_move + UAT Incoterm×Mode matrix.
+  const oilLossIncotermExpr = `COALESCE(NULLIF(TRIM(oil_loss_eligible.incoterm), ''), '')`;
   const contractsListDeliveryExpr = sqlQtyMoveJoinIncotermDelivery(
-    `COALESCE(NULLIF(TRIM(oil_loss_eligible.incoterm), ''), '')`,
+    oilLossIncotermExpr,
     'qm',
-    `UPPER(TRIM(COALESCE(NULLIF(TRIM(oil_loss_eligible.transport_mode), ''), 'LAND')))`,
+    sqlOilLossQtyTransportModeExpr(oilLossIncotermExpr),
   );
 
   return `
@@ -399,7 +398,6 @@ export function buildOilLossGainSql(): string {
         ${SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC} AS qty_delivery_legacy,
         ${SAP_OIL_LOSS_QTY_RECEIVE_NUMERIC} AS qty_receive,
         COALESCE(NULLIF(TRIM(spd.data->'raw'->>'Incoterm'), ''), '') AS incoterm_raw,
-        COALESCE(spd.data->'raw'->>'SEA / LAND', 'LAND') AS transport_mode,
         ${SAP_OIL_LOSS_IMPORT_STATUS_EXPR} AS import_status,
         COALESCE(spd.data->'raw'->>'Status', '') AS status
       FROM sap_processed_data spd
@@ -420,7 +418,7 @@ export function buildOilLossGainSql(): string {
         p.*,
         ${sqlOilLossUatQtyDeliveryExpr({
           incotermExpr: 'p.incoterm_raw',
-          transportExpr: `UPPER(TRIM(COALESCE(NULLIF(p.transport_mode, ''), 'LAND')))`,
+          transportExpr: sqlOilLossQtyTransportModeExpr('p.incoterm_raw'),
           truckingCol: 'p.qty_trucking',
           vesselCol: 'p.qty_vessel',
           legacyCol: 'p.qty_delivery_legacy',
@@ -440,7 +438,7 @@ export function buildOilLossGainSql(): string {
 }
 
 /**
- * Shipments Attention — top loss rows aligned with Oil Loss (SAP receive < delivery, vessel CIF/FOB).
+ * Shipments Attention — top loss rows aligned with Oil Loss (SAP receive < delivery, vessel CIF/FOB/CFR).
  * Toolbar-scoped via contract filters (date / plant / contract / search / column filters).
  */
 export async function buildShipmentAttentionOilLossQuery(

@@ -9,10 +9,8 @@ import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 export type OilLossGlobalPeriodKey = 'YTD' | 'MTD' | `month-${number}`
 
 /**
- * No "All" option on purpose: Vessel (SEA) and Truck (LAND) group Section 1 (R1-R4),
- * the view table, and the drilldown differently — SEA merges by STO/Operation ID
- * (a voyage can span multiple POs), LAND stays per-PO. Mixing both under "All" would
- * make those totals/groupings inconsistent and confusing, so the user must pick one.
+ * Vessel and Trucking are separate grains (voyage vs PO), so the toolbar has no All.
+ * Vessel shows R1–Loss. Trucking shows only the Loss card.
  */
 export type OilLossGlobalTransportFilter = 'Vessel' | 'Truck'
 
@@ -22,6 +20,12 @@ export const OIL_LOSS_GLOBAL_TRANSPORT_OPTIONS: readonly OilLossGlobalTransportF
   'Vessel',
   'Truck',
 ] as const
+
+/** Truck stays the stored value; the toolbar label is Trucking. */
+export function oilLossGlobalTransportLabel(value: OilLossGlobalTransportFilter): string {
+  if (value === 'Truck') return 'Trucking'
+  return value
+}
 
 export const OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT: OilLossGlobalTransportFilter = 'Vessel'
 
@@ -112,7 +116,7 @@ function resolveRowDate(row: OilLossSourceRow): string {
   return String(row.contract_date ?? row.operation_date ?? '').slice(0, 10)
 }
 
-/** Vessel / Truck toggle — incoterm × transport segment (SSOT with global eligibility). */
+/** All / Vessel / Truck — incoterm × transport segment (SSOT with global eligibility). */
 export function matchesOilLossGlobalTransportFilter(
   row: OilLossSourceRow,
   filter: OilLossGlobalTransportFilter,

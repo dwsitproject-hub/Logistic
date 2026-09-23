@@ -139,13 +139,16 @@ describe('oilLossGlobalFilters', () => {
     })
   })
 
-  it('matchesOilLossGlobalTransportFilter — no more "All": must pick Vessel or Truck', () => {
-    // Default row is SEA + CIF => a Vessel-segment row.
+  it('matchesOilLossGlobalTransportFilter — Vessel and Truck stay exclusive', () => {
     expect(matchesOilLossGlobalTransportFilter(row(), 'Vessel')).toBe(true)
     expect(matchesOilLossGlobalTransportFilter(row(), 'Truck')).toBe(false)
 
-    const truckRow = row({ transport_mode: 'LAND', incoterm: 'FRC' })
+    const truckRow = row({ transport_mode: 'SEA', incoterm: 'FRC' })
     expect(matchesOilLossGlobalTransportFilter(truckRow, 'Truck')).toBe(true)
     expect(matchesOilLossGlobalTransportFilter(truckRow, 'Vessel')).toBe(false)
+
+    const cfrRow = row({ transport_mode: 'LAND', incoterm: 'CFR' })
+    expect(matchesOilLossGlobalTransportFilter(cfrRow, 'Vessel')).toBe(true)
+    expect(matchesOilLossGlobalTransportFilter(cfrRow, 'Truck')).toBe(false)
   })
 })

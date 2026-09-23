@@ -93,17 +93,18 @@ describe('computeROilLossSummary', () => {
     expect(summary.totalMt).toBe(-100);
   });
 
-  it('merges a SEA voyage spanning multiple contracts into one sample (summed)', () => {
+  it('merges a vessel voyage spanning multiple contracts into one sample (summed)', () => {
     const rows = [
       {
-        transport_mode: 'SEA',
+        incoterm: 'CIF',
+        transport_mode: 'LAND',
         operation_id: 'OP-1',
         contract_number: 'CN-1',
         quantity_sent: 100_000,
         quantity_received: 90_000,
       },
       {
-        transport_mode: 'SEA',
+        incoterm: 'CFR',
         operation_id: 'OP-1',
         contract_number: 'CN-2',
         quantity_sent: 200_000,
@@ -118,17 +119,78 @@ describe('computeROilLossSummary', () => {
     expect(summary.totalMt).toBe(-20);
   });
 
-  it('keeps LAND contracts ungrouped even when Operation ID happens to repeat', () => {
+  it('merges vessel contracts that share an STO when Operation ID is empty', () => {
+    const summary = computeROilLossSummary(
+      [
+        {
+          incoterm: 'CIF',
+          operation_id: null,
+          sto_number: 'STO-9',
+          contract_number: 'CN-1',
+          quantity_sent: 100_000,
+          quantity_received: 90_000,
+        },
+        {
+          incoterm: 'FOB',
+          sto_number: 'STO-9',
+          contract_number: 'CN-2',
+          quantity_sent: 200_000,
+          quantity_received: 190_000,
+        },
+      ],
+      'r4',
+    );
+    expect(summary.sampleCount).toBe(1);
+    expect(summary.totalMt).toBe(-20);
+  });
+
+  it('counts a shared STO once even when each PO also has another STO', () => {
+    const summary = computeROilLossSummary(
+      [
+        {
+          incoterm: 'FOB',
+          operation_id: null,
+          sto_number: 'STO-9',
+          contract_number: 'CN-1',
+          quantity_sent: 100_000,
+          quantity_received: 90_000,
+        },
+        {
+          incoterm: 'FOB',
+          operation_id: null,
+          sto_number: 'STO-1',
+          contract_number: 'CN-1',
+          quantity_sent: 100_000,
+          quantity_received: 90_000,
+        },
+        {
+          incoterm: 'FOB',
+          operation_id: null,
+          sto_number: 'STO-9',
+          contract_number: 'CN-2',
+          quantity_sent: 200_000,
+          quantity_received: 190_000,
+        },
+      ],
+      'r4',
+    );
+    // STO-9 (both POs) and STO-1 (CN-1 only).
+    expect(summary.sampleCount).toBe(2);
+    expect(summary.totalMt).toBe(-30);
+  });
+
+  it('keeps trucking contracts ungrouped even when Operation ID happens to repeat', () => {
     const rows = [
       {
-        transport_mode: 'LAND',
+        incoterm: 'FRC',
+        transport_mode: 'SEA',
         operation_id: 'TRK-1',
         contract_number: 'CN-1',
         quantity_sent: 100_000,
         quantity_received: 90_000,
       },
       {
-        transport_mode: 'LAND',
+        incoterm: 'LCO',
         operation_id: 'TRK-1',
         contract_number: 'CN-2',
         quantity_sent: 200_000,
@@ -138,7 +200,7 @@ describe('computeROilLossSummary', () => {
 
     const summary = computeROilLossSummary(rows, 'r4');
 
-    // LAND stays per-contract — two distinct contracts, two samples.
+    // Trucking stays per-contract — two distinct contracts, two samples.
     expect(summary.sampleCount).toBe(2);
     expect(summary.totalMt).toBe(-20);
   });

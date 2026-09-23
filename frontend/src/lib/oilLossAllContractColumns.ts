@@ -12,7 +12,7 @@ import {
   type OilLossMergedRow,
 } from '@/lib/oilLossGroupAggregation'
 
-export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v3'
+export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION = 'oil-loss-all-contract-v4'
 export const OIL_LOSS_ALL_CONTRACT_COLUMN_LAYOUT_VERSION_KEY =
   'oil-loss.all-contract.compact.columnLayoutVersion'
 
@@ -31,6 +31,7 @@ export const OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[]
   'r2',
   'r3',
   'r4',
+  'loss_pct',
   'status',
 ] as const
 
@@ -48,6 +49,7 @@ export const OIL_LOSS_ALL_CONTRACT_COLUMN_WIDTH_PX: Readonly<Record<string, numb
   r2: 96,
   r3: 96,
   r4: 96,
+  loss_pct: 96,
   status: 80,
   transport_mode: 72,
   group_name: 88,
@@ -98,8 +100,9 @@ export type OilLossSourceRow = {
 }
 
 /**
- * SEA rows sharing one STO/voyage Operation ID are merged into a single row (summed quantities);
- * LAND rows stay one row per PO (unchanged). See `oilLossGroupAggregation.ts` for the shared logic.
+ * Vessel rows sharing one Shipment Operation ID (or one STO, when Operation ID is empty)
+ * are merged into a single row. Trucking rows stay one row per PO.
+ * See `oilLossGroupAggregation.ts`.
  */
 export type OilLossAllContractRow = OilLossMergedRow
 
@@ -113,10 +116,10 @@ export const sumNullableOilLossQtyKg = sharedSumNullableOilLossQtyKg
 export const oilLossContractGroupKey = sharedOilLossContractGroupKey
 
 /**
- * All Contract rows: level 1 dedupes duplicate SAP rows of the same contract (take
- * delivery/receive once, sum SFAL/SFBD); level 2 merges distinct contracts sharing one SEA
- * voyage Operation ID into a single row (summed quantities, comma-merged PO/STO/Contract Ext No).
- * LAND rows are unaffected — see `oilLossGroupAggregation.ts`.
+ * All Oil Loss rows: Vessel is one row per Shipment Operation ID, or per STO when that id
+ * is empty, with the POs on that voyage listed together. A PO on several STOs appears on
+ * each of those rows. Trucking stays one row per PO.
+ * See `oilLossGroupAggregation.ts`.
  */
 export function aggregateOilLossByContract(rows: OilLossSourceRow[]): OilLossAllContractRow[] {
   return aggregateOilLossRowsByGroup(rows)

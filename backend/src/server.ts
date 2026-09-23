@@ -293,6 +293,12 @@ if (process.env.NODE_ENV !== 'test') {
       } catch (error) {
         logger.warn('Pipeline daily summary startup refresh skipped', { error });
       }
+      try {
+        const { refreshOilLossSnapshotIfNeeded } = await import('./services/oilLossSnapshot.service');
+        await refreshOilLossSnapshotIfNeeded();
+      } catch (error) {
+        logger.warn('Oil loss snapshot startup refresh skipped', { error });
+      }
     });
 
     /*
@@ -358,6 +364,8 @@ if (process.env.NODE_ENV !== 'test') {
         },
         { name: 'Shipping Performance', run: () => startShippingPerformanceCacheWarmer() },
         { name: 'Trucking summary', run: () => startTruckingListCacheWarmer() },
+        // Reads the snapshot table into memory only. The SAP scan is refreshOilLossSnapshotIfNeeded
+        // above, after qty_move, so this job does not compete with the warmers ahead of it.
         { name: 'Oil Loss', run: () => startOilLossCacheWarmer() },
       ],
       {

@@ -34,7 +34,8 @@ export type OilLossDrilldownTreeNode = {
   key: string
   label: string
   contractCount: number
-  totalOilLossKg: number
+  /** Unweighted average Loss % across groups in this node. Null when no group has Qty Delivery. */
+  avgLossPct: number | null
   children: OilLossDrilldownTreeNode[]
 }
 
@@ -44,7 +45,7 @@ function normalizeGroupLabel(value: unknown, fallback = 'Blank'): string {
 }
 
 /**
- * R4 basis (Qty Receive − Qty Delivery) on an already-merged group (one row per contract, or
+ * R4 / Loss kg (Qty Receive − Qty Delivery) on an already-merged group (one row per contract, or
  * one row per SEA voyage when it spans multiple contracts — quantities are pre-summed).
  */
 function groupR4OilLossKg(group: OilLossMergedRow): number {
@@ -52,11 +53,26 @@ function groupR4OilLossKg(group: OilLossMergedRow): number {
   return group.quantity_received - group.quantity_delivery
 }
 
-function touchAgg(agg: { contracts: Set<string>; totalOilLossKg: number }, groupKey: string, lossKg: number) {
+/** Loss % for one group. Null when Qty Delivery is missing or not positive. */
+function groupLossPct(group: OilLossMergedRow): number | null {
+  if (group.quantity_delivery <= 0) return null
+  return (groupR4OilLossKg(group) / group.quantity_delivery) * 100
+}
+
+type PctAcc = { contracts: Set<string>; pctSum: number; pctCount: number }
+
+function touchAgg(agg: PctAcc, groupKey: string, pct: number | null) {
   // Count each group (voyage/contract) once — delivery/receive are already group-level totals.
   if (agg.contracts.has(groupKey)) return
   agg.contracts.add(groupKey)
-  agg.totalOilLossKg += lossKg
+  if (pct == null) return
+  agg.pctSum += pct
+  agg.pctCount += 1
+}
+
+function avgLossPctFromAcc(agg: PctAcc): number | null {
+  if (agg.pctCount === 0) return null
+  return agg.pctSum / agg.pctCount
 }
 
 export function groupLabelForRow(row: OilLossSourceRow, category: OilLossDrilldownCategory): string {
@@ -208,15 +224,19 @@ export function applyOilLossDrilldownFilters(
   })
 }
 
-type SupplierAcc = { contracts: Set<string>; totalOilLossKg: number }
-type TransporterAcc = { contracts: Set<string>; totalOilLossKg: number; suppliers: Map<string, SupplierAcc> }
-type IncotermAcc = { contracts: Set<string>; totalOilLossKg: number; transporters: Map<string, TransporterAcc> }
-type PlantAcc = { contracts: Set<string>; totalOilLossKg: number; incoterms: Map<string, IncotermAcc> }
-type ProductAcc = { contracts: Set<string>; totalOilLossKg: number; plants: Map<string, PlantAcc> }
+type SupplierAcc = PctAcc
+type TransporterAcc = PctAcc & { suppliers: Map<string, SupplierAcc> }
+type IncotermAcc = PctAcc & { transporters: Map<string, TransporterAcc> }
+type PlantAcc = PctAcc & { incoterms: Map<string, IncotermAcc> }
+type ProductAcc = PctAcc & { plants: Map<string, PlantAcc> }
+
+function emptyPctAcc(): PctAcc {
+  return { contracts: new Set(), pctSum: 0, pctCount: 0 }
+}
 
 function sortTreeNodes(nodes: OilLossDrilldownTreeNode[]): OilLossDrilldownTreeNode[] {
   return [...nodes].sort(
-    (a, b) => Math.abs(b.totalOilLossKg) - Math.abs(a.totalOilLossKg) || b.contractCount - a.contractCount,
+    (a, b) => Math.abs(b.avgLossPct ?? 0) - Math.abs(a.avgLossPct ?? 0) || b.contractCount - a.contractCount,
   )
 }
 
@@ -226,7 +246,7 @@ function suppliersToNodes(map: Map<string, SupplierAcc>): OilLossDrilldownTreeNo
       key,
       label: key,
       contractCount: agg.contracts.size,
-      totalOilLossKg: agg.totalOilLossKg,
+      avgLossPct: avgLossPctFromAcc(agg),
       children: [],
     })),
   )
@@ -238,7 +258,7 @@ function transportersToNodes(map: Map<string, TransporterAcc>): OilLossDrilldown
       key,
       label: key,
       contractCount: agg.contracts.size,
-      totalOilLossKg: agg.totalOilLossKg,
+      avgLossPct: avgLossPctFromAcc(agg),
       children: suppliersToNodes(agg.suppliers),
     })),
   )
@@ -250,7 +270,7 @@ function incotermsToNodes(map: Map<string, IncotermAcc>): OilLossDrilldownTreeNo
       key,
       label: key,
       contractCount: agg.contracts.size,
-      totalOilLossKg: agg.totalOilLossKg,
+      avgLossPct: avgLossPctFromAcc(agg),
       children: transportersToNodes(agg.transporters),
     })),
   )
@@ -262,7 +282,7 @@ function plantsToNodes(map: Map<string, PlantAcc>): OilLossDrilldownTreeNode[] {
       key,
       label: key,
       contractCount: agg.contracts.size,
-      totalOilLossKg: agg.totalOilLossKg,
+      avgLossPct: avgLossPctFromAcc(agg),
       children: incotermsToNodes(agg.incoterms),
     })),
   )
@@ -271,7 +291,7 @@ function plantsToNodes(map: Map<string, PlantAcc>): OilLossDrilldownTreeNode[] {
 /**
  * Hierarchical drilldown tree — Product → Region/Plant → Incoterm → Transporter → Supplier.
  * Rows are first merged into one row per group (SEA voyage or LAND contract/PO) so a
- * multi-PO SEA voyage contributes its summed R4 loss once, not once per member PO.
+ * multi-PO SEA voyage contributes one Loss % sample, not one per member PO.
  */
 export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDrilldownTreeNode[] {
   const groups = aggregateOilLossRowsByGroup(rows)
@@ -279,7 +299,7 @@ export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDril
 
   for (const group of groups) {
     const contractKey = group.id
-    const lossKg = groupR4OilLossKg(group)
+    const pct = groupLossPct(group)
     const prod = groupLabelForRow(group, 'product')
     const plant = groupLabelForRow(group, 'plant')
     const incoterm = groupLabelForRow(group, 'incoterm')
@@ -287,34 +307,34 @@ export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDril
     const supplier = groupLabelForRow(group, 'supplier')
 
     if (!root.has(prod)) {
-      root.set(prod, { contracts: new Set(), totalOilLossKg: 0, plants: new Map() })
+      root.set(prod, { ...emptyPctAcc(), plants: new Map() })
     }
     const pN = root.get(prod)!
-    touchAgg(pN, contractKey, lossKg)
+    touchAgg(pN, contractKey, pct)
 
     if (!pN.plants.has(plant)) {
-      pN.plants.set(plant, { contracts: new Set(), totalOilLossKg: 0, incoterms: new Map() })
+      pN.plants.set(plant, { ...emptyPctAcc(), incoterms: new Map() })
     }
     const plN = pN.plants.get(plant)!
-    touchAgg(plN, contractKey, lossKg)
+    touchAgg(plN, contractKey, pct)
 
     if (!plN.incoterms.has(incoterm)) {
-      plN.incoterms.set(incoterm, { contracts: new Set(), totalOilLossKg: 0, transporters: new Map() })
+      plN.incoterms.set(incoterm, { ...emptyPctAcc(), transporters: new Map() })
     }
     const iN = plN.incoterms.get(incoterm)!
-    touchAgg(iN, contractKey, lossKg)
+    touchAgg(iN, contractKey, pct)
 
     if (!iN.transporters.has(transporter)) {
-      iN.transporters.set(transporter, { contracts: new Set(), totalOilLossKg: 0, suppliers: new Map() })
+      iN.transporters.set(transporter, { ...emptyPctAcc(), suppliers: new Map() })
     }
     const tN = iN.transporters.get(transporter)!
-    touchAgg(tN, contractKey, lossKg)
+    touchAgg(tN, contractKey, pct)
 
     if (!tN.suppliers.has(supplier)) {
-      tN.suppliers.set(supplier, { contracts: new Set(), totalOilLossKg: 0 })
+      tN.suppliers.set(supplier, emptyPctAcc())
     }
     const sN = tN.suppliers.get(supplier)!
-    touchAgg(sN, contractKey, lossKg)
+    touchAgg(sN, contractKey, pct)
   }
 
   return sortTreeNodes(
@@ -322,7 +342,7 @@ export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDril
       key,
       label: key,
       contractCount: agg.contracts.size,
-      totalOilLossKg: agg.totalOilLossKg,
+      avgLossPct: avgLossPctFromAcc(agg),
       children: plantsToNodes(agg.plants),
     })),
   )

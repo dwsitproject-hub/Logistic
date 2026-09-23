@@ -1,93 +1,113 @@
 /**
- * Oil Loss page data — in-memory cache + background keep-warm.
+ * Oil Loss page data — memory cache over the database snapshot.
  *
- * The two oil-loss queries scan every sap_processed_data row and evaluate ~20 JSONB
- * expressions each (~9s + ~3.5s even after CTE materialization), which made the page
- * load 40s+ cold. Caching serves the identical query results from memory; the warmer
- * pre-runs them off the request path (startup, near-TTL renewal, after invalidation).
- * Mirrors shippingPerformance.service.ts conventions.
+ * The SAP scan lives in oilLossSnapshot.service (rebuilt off the request, swapped in one
+ * transaction). This module only serves that stored row set: from memory when warm, otherwise
+ * a SELECT. A process restart no longer recomputes sap_processed_data on the first page load.
  */
 
-import { query } from '../database/connection';
 import logger from '../utils/logger';
-import { buildOilLossGainSql, buildOilLossMainSql } from '../utils/oilLossQuerySql';
+import {
+  loadOilLossPayloadFromSnapshot,
+  oilLossSnapshotNeedsRebuild,
+  readOilLossSnapshotMeta,
+  refreshOilLossSnapshot,
+  scheduleOilLossSnapshotRefresh,
+} from './oilLossSnapshot.service';
 
 export type OilLossPayload = {
   rows: Record<string, unknown>[];
   gainRow: { total_gain_kg: unknown; gain_count: unknown };
 };
 
-// Freshness is primarily event-driven (invalidateOilLossCache on SAP import / shipment
-// edits). The TTL only bounds staleness from out-of-band DB changes, so it can be long;
-// the warmer renews just before it so every page load — including the first after a
-// quiet period — is served from memory. Renewal cost (~12s of queries per ~25 min) is
-// negligible and burst-free.
 const CACHE_TTL_MS = 30 * 60 * 1000;
-const KEEP_WARM_CHECK_MS = 60 * 1000; // how often the warmer wakes up
-const KEEP_WARM_REFRESH_AFTER_MS = 25 * 60 * 1000; // renew cache once it is this old (< TTL)
+const KEEP_WARM_CHECK_MS = 60 * 1000;
+const KEEP_WARM_REFRESH_AFTER_MS = 25 * 60 * 1000;
 
 let cached: { payload: OilLossPayload; expiresAt: number } | null = null;
-let refreshInFlight: Promise<OilLossPayload> | null = null;
 let keepWarmTimer: NodeJS.Timeout | null = null;
 
-/** Run both queries and repopulate the cache. Concurrent callers share one execution. */
-async function refreshOilLossPayload(): Promise<OilLossPayload> {
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
-    try {
-      const [result, gainResult] = await Promise.all([
-        query(await buildOilLossMainSql()),
-        query(buildOilLossGainSql()),
-      ]);
-      const payload: OilLossPayload = {
-        rows: result.rows as Record<string, unknown>[],
-        gainRow:
-          (gainResult.rows[0] as OilLossPayload['gainRow']) ?? { total_gain_kg: 0, gain_count: 0 },
-      };
-      cached = { payload, expiresAt: Date.now() + CACHE_TTL_MS };
-      return payload;
-    } finally {
-      refreshInFlight = null;
-    }
-  })();
-  return refreshInFlight;
+function emptyPayload(): OilLossPayload {
+  return { rows: [], gainRow: { total_gain_kg: 0, gain_count: 0 } };
 }
 
-/** Request path: serve from memory when fresh; otherwise run the identical queries. */
+function storePayload(payload: OilLossPayload): OilLossPayload {
+  cached = { payload, expiresAt: Date.now() + CACHE_TTL_MS };
+  return payload;
+}
+
+/** Fill memory from the snapshot table. No-op until the snapshot has been built once. */
+export async function rememberOilLossPayloadFromSnapshot(): Promise<OilLossPayload | null> {
+  const payload = await loadOilLossPayloadFromSnapshot();
+  if (!payload) return null;
+  return storePayload(payload);
+}
+
+/**
+ * Request path. Memory when warm. Otherwise the snapshot, including a stale one.
+ * The live SAP queries run only inside the snapshot rebuild. The first build (no
+ * refreshed_at yet) is the only case that waits.
+ */
 export async function loadOilLossPayload(): Promise<OilLossPayload> {
   if (cached && cached.expiresAt > Date.now()) {
     return cached.payload;
   }
-  return refreshOilLossPayload();
+
+  let meta: Awaited<ReturnType<typeof readOilLossSnapshotMeta>> = null;
+  try {
+    meta = await readOilLossSnapshotMeta();
+  } catch (err) {
+    logger.warn('Oil loss snapshot meta read failed', { err });
+    return cached?.payload ?? emptyPayload();
+  }
+
+  if (!meta?.refreshedAt) {
+    try {
+      await refreshOilLossSnapshot();
+    } catch (err) {
+      logger.warn('Oil loss initial snapshot build failed', { err });
+      return cached?.payload ?? emptyPayload();
+    }
+    return (await rememberOilLossPayloadFromSnapshot()) ?? emptyPayload();
+  }
+
+  if (oilLossSnapshotNeedsRebuild(meta)) {
+    void refreshOilLossSnapshot().catch((err) => {
+      logger.warn('Background oil loss snapshot refresh failed', { err });
+    });
+  }
+
+  try {
+    return (await rememberOilLossPayloadFromSnapshot()) ?? cached?.payload ?? emptyPayload();
+  } catch (err) {
+    logger.warn('Oil loss snapshot read failed', { err });
+    return cached?.payload ?? emptyPayload();
+  }
 }
 
-/** After SAP imports / shipment edits — drop the cache and rebuild it off-request. */
+/** Shipment, trucking, and presence edits — keep serving the last snapshot while it rebuilds. */
 export function invalidateOilLossCache(): void {
-  cached = null;
-  void warmOilLossCache();
+  scheduleOilLossSnapshotRefresh();
 }
 
-/** Pre-populate the cache off the request path (startup + background warmer). */
+/** Load the snapshot into memory. Does not scan SAP. */
 export async function warmOilLossCache(): Promise<void> {
   try {
-    await refreshOilLossPayload();
+    await rememberOilLossPayloadFromSnapshot();
   } catch (err) {
-    // Best-effort; a failed warm just means the next request runs cold.
     logger.warn('Oil loss cache warm failed', { err });
   }
 }
 
 /**
- * Keep the cache populated so page loads are served from memory. Renews shortly
- * before TTL while the page is in active use; data freshness is unchanged (cache
- * is still at most CACHE_TTL_MS old).
+ * Startup queue job. Only reads the snapshot table so it does not compete with the
+ * Shipments / Shipping Performance / Trucking warmers. A stale or missing snapshot is
+ * rebuilt from server startup, after qty_move, not from here.
  */
 export function startOilLossCacheWarmer(): Promise<void> {
-  /** Returned so the startup queue sequences it - see startShippingPerformanceCacheWarmer. */
   const initialWarm = warmOilLossCache();
   if (keepWarmTimer) return initialWarm;
   keepWarmTimer = setInterval(() => {
-    if (refreshInFlight) return;
     const ageMs = cached ? CACHE_TTL_MS - (cached.expiresAt - Date.now()) : Number.POSITIVE_INFINITY;
     if (ageMs >= KEEP_WARM_REFRESH_AFTER_MS) {
       void warmOilLossCache();

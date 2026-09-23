@@ -5,14 +5,13 @@ import { Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import type { OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
-import { formatOilLossMtFromKg } from '@/lib/oilLossFormat'
+import { formatOilLossAvgPct } from '@/lib/oilLossFormat'
 import {
   buildOilLossDrilldownTree,
   displayOilLossGroupLabel,
   OIL_LOSS_DRILLDOWN_CATEGORIES,
   OIL_LOSS_DRILLDOWN_LEVEL_STYLES,
   oilLossDrilldownColumnSubtitle,
-  sumOilLossKgFromRows,
   type OilLossDrilldownCategory,
   type OilLossDrilldownFilters,
   type OilLossDrilldownTreeNode,
@@ -28,8 +27,17 @@ type OilLossDrilldownSectionProps = {
   dataFetching?: boolean
 }
 
-function formatOilLossMtSuffix(kg: number): string {
-  return `${formatOilLossMtFromKg(kg)} MT`
+function lossPctTone(pct: number | null): string {
+  if (pct == null) return 'text-gray-400'
+  if (pct < 0) return 'text-red-600'
+  if (pct > 0) return 'text-green-600'
+  return 'text-gray-900'
+}
+
+function barWidthPct(node: OilLossDrilldownTreeNode, siblings: readonly OilLossDrilldownTreeNode[]): number {
+  const max = siblings.reduce((m, item) => Math.max(m, Math.abs(item.avgLossPct ?? 0)), 0)
+  if (max <= 0) return 1
+  return Math.max(1, Math.round((Math.abs(node.avgLossPct ?? 0) / max) * 100))
 }
 
 export default function OilLossDrilldownSection({
@@ -41,7 +49,6 @@ export default function OilLossDrilldownSection({
   dataFetching = false,
 }: OilLossDrilldownSectionProps) {
   const tree = useMemo(() => buildOilLossDrilldownTree(rows), [rows])
-  const scopeTotalKg = useMemo(() => sumOilLossKgFromRows(rows), [rows])
 
   const productNode = tree.find((n) => n.key === filters.product)
   const plantNode = productNode?.children.find((n) => n.key === filters.plant)
@@ -60,16 +67,16 @@ export default function OilLossDrilldownSection({
 
   const showBlocking = loading && rows.length === 0
   const isRefreshing = dataFetching && rows.length > 0
-  const denom = Math.abs(scopeTotalKg) > 0 ? Math.abs(scopeTotalKg) : 1
 
   const renderCard = (
     node: OilLossDrilldownTreeNode,
     level: OilLossDrilldownCategory,
     selected: boolean,
+    siblings: readonly OilLossDrilldownTreeNode[],
     onClick: () => void,
   ) => {
     const style = OIL_LOSS_DRILLDOWN_LEVEL_STYLES[level]
-    const pct = Math.max(1, Math.round((Math.abs(node.totalOilLossKg) / denom) * 100))
+    const pct = barWidthPct(node, siblings)
     const itemClass = `w-full text-left rounded-lg border px-3 py-2 hover:bg-gray-50 focus:outline-none ${
       selected ? `bg-white border-2 ${style.selectedBorder}` : 'bg-white border-gray-200'
     }`
@@ -89,8 +96,8 @@ export default function OilLossDrilldownSection({
               {node.contractCount.toLocaleString('en-US')}
             </span>
           </span>
-          <span className="font-semibold tabular-nums text-red-600 shrink-0">
-            {formatOilLossMtSuffix(node.totalOilLossKg)}
+          <span className={`font-semibold tabular-nums shrink-0 ${lossPctTone(node.avgLossPct)}`}>
+            {formatOilLossAvgPct(node.avgLossPct)}
           </span>
         </div>
       </button>
@@ -129,7 +136,7 @@ export default function OilLossDrilldownSection({
                     return (
                       <div className="space-y-2">
                         {tree.map((node) =>
-                          renderCard(node, level, filters.product === node.key, () => {
+                          renderCard(node, level, filters.product === node.key, tree, () => {
                             applyClick({
                               product: node.key,
                               plant: null,
@@ -149,7 +156,7 @@ export default function OilLossDrilldownSection({
                     return (
                       <div className="space-y-2">
                         {(productNode?.children ?? []).map((node) =>
-                          renderCard(node, level, filters.plant === node.key, () => {
+                          renderCard(node, level, filters.plant === node.key, productNode?.children ?? [], () => {
                             applyClick({ plant: node.key, incoterm: null, transporter: null, supplier: null })
                           }),
                         )}
@@ -163,7 +170,7 @@ export default function OilLossDrilldownSection({
                     return (
                       <div className="space-y-2">
                         {(plantNode?.children ?? []).map((node) =>
-                          renderCard(node, level, filters.incoterm === node.key, () => {
+                          renderCard(node, level, filters.incoterm === node.key, plantNode?.children ?? [], () => {
                             applyClick({ incoterm: node.key, transporter: null, supplier: null })
                           }),
                         )}
@@ -177,7 +184,7 @@ export default function OilLossDrilldownSection({
                     return (
                       <div className="space-y-2">
                         {(incotermNode?.children ?? []).map((node) =>
-                          renderCard(node, level, filters.transporter === node.key, () => {
+                          renderCard(node, level, filters.transporter === node.key, incotermNode?.children ?? [], () => {
                             applyClick({ transporter: node.key, supplier: null })
                           }),
                         )}
@@ -190,7 +197,7 @@ export default function OilLossDrilldownSection({
                   return (
                     <div className="space-y-2">
                       {(transporterNode?.children ?? []).map((node) =>
-                        renderCard(node, level, filters.supplier === node.key, () => {
+                        renderCard(node, level, filters.supplier === node.key, transporterNode?.children ?? [], () => {
                           applyClick({ supplier: node.key })
                         }),
                       )}

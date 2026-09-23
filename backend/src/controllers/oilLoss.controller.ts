@@ -5,9 +5,8 @@ import { loadOilLossPayload } from '../services/oilLoss.service';
 
 export const getOilLoss = async (_req: AuthRequest, res: Response) => {
   try {
-    // Rows + gain come from the in-memory cache (identical queries, pre-run off the
-    // request path). ytdSummary is recomputed per request because its YTD window
-    // depends on the current date.
+    // Rows + gain come from the snapshot (memory when warm). ytdSummary is recomputed
+    // per request because its YTD window depends on the current date.
     const { rows, gainRow } = await loadOilLossPayload();
     const ytdSummary = buildYtdOilLossSummary(rows);
     return res.json({

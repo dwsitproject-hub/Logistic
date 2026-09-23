@@ -112,9 +112,8 @@ function sampleFromContractAgg(
 }
 
 /**
- * Section 1 R1–R4 cards. Uses the two-level (contract-then-voyage) aggregation: a SEA voyage
- * spanning multiple POs contributes one merged sample (summed quantities), so `sampleCount`
- * counts voyages (not POs) for SEA — an intended, visible change when a voyage spans >1 PO.
+ * Section 1 R1–R4 cards. Vessel incoterms sharing one Operation ID contribute one
+ * merged sample, so sampleCount counts voyages. Trucking stays one sample per contract.
  */
 export function computeROilLossSummary(rows: OilLossSourceRow[], kind: ROilLossKey): ROilLossSummary {
   const byGroup = aggregateOilLossQuantitiesByOuterGroup(rows)
