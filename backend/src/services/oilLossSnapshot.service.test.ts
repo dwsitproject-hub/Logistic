@@ -23,4 +23,9 @@ describe('oilLossSnapshotNeedsRebuild', () => {
   it('keeps a fresh snapshot at the current logic version', () => {
     expect(oilLossSnapshotNeedsRebuild(built)).toBe(false);
   });
+
+  it('rebuilds a snapshot built before vessel rows followed Shipments Completed', () => {
+    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBe(4);
+    expect(oilLossSnapshotNeedsRebuild({ ...built, logicVersion: 3 })).toBe(true);
+  });
 });

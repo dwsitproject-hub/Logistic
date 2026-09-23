@@ -9,18 +9,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Droplets, Eye, GripVertical, Loader2, SlidersHorizontal, X } from 'lucide-react'
+import { Droplets, Eye, GripVertical, Loader2, Ship, SlidersHorizontal, Truck, X } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
+import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatOperationalTableTextDisplay } from '@/lib/sapDisplayValue'
 import { formatOilLossAvgMt, formatOilLossAvgPct, formatOilLossMtFromKg, formatOilLossPct } from '@/lib/oilLossFormat'
-import {
-  ContractDetailModal,
-  fetchContractForDetailModal,
-  type ContractDetailModalContract,
-} from '@/components/contracts/ContractDetailModal'
 import { filterOilLossEligibleRows } from '@/lib/oilLossEligibility'
 import { filterRegionSiteOptions } from '@/lib/globalScopeFilters'
 import {
@@ -70,7 +68,6 @@ import {
   COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
   COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
-  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   compactTableColWidthCss,
 } from '@/lib/compactTableUi'
@@ -223,13 +220,13 @@ function computeRowROilLossKg(row: OilLossTableRow, kind: ROilLossKey): number |
 
 function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
   if (kg == null || !Number.isFinite(Number(kg))) {
-    return <span className="text-sm text-gray-400">—</span>
+    return <span className="text-sm text-gray-400">-</span>
   }
   return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
 }
 
 function renderROilLossCell(kg: number | null): ReactNode {
-  if (kg == null) return <span className="text-sm text-gray-400">—</span>
+  if (kg == null) return <span className="text-sm text-gray-400">-</span>
   const tone = kg < 0 ? 'text-red-600' : kg > 0 ? 'text-green-600' : 'text-gray-900'
   return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
 }
@@ -245,18 +242,20 @@ function computeRowLossPct(row: OilLossTableRow): number | null {
 }
 
 function renderLossPctCell(pct: number | null): ReactNode {
-  if (pct == null) return <span className="text-sm text-gray-400">—</span>
+  if (pct == null) return <span className="text-sm text-gray-400">-</span>
   const tone = pct < 0 ? 'text-red-600' : pct > 0 ? 'text-green-600' : 'text-gray-900'
   return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossPct(pct)}</span>
 }
 
-/** Prefer contract_number; fall back to contract_ext_no; use first token if multi-value. */
-function resolveOilLossRowContractNumber(row: OilLossTableRow): string {
-  const raw = String(
-    ('contract_number' in row && row.contract_number) || row.contract_ext_no || '',
-  ).trim()
-  if (!raw) return ''
-  return raw.split(',')[0]?.trim() || ''
+/** One icon. Other pages use 112px because Actions holds two buttons. */
+const OIL_LOSS_ACTIONS_COL_WIDTH_PX = 76
+
+function firstOilLossToken(value: string | null | undefined): string {
+  return String(value ?? '').split(',')[0]?.trim() ?? ''
+}
+
+function isShipmentUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
 
 function buildROilLossCompactColumns(): CompactColumn[] {
@@ -406,7 +405,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       sortable: true,
       getSortValue: (r) => r.status || '',
       render: (r) => (
-        <Badge className={getStatusColor(r.status || '')}>{r.status || '—'}</Badge>
+        <Badge className={getStatusColor(r.status || '')}>{r.status || '-'}</Badge>
       ),
     },
     {
@@ -421,7 +420,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
             r.transport_mode === 'SEA' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'
           }
         >
-          {r.transport_mode || '—'}
+          {r.transport_mode || '-'}
         </Badge>
       ),
     },
@@ -431,7 +430,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.group_name || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.group_name, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.group_name, '-')}</span>,
     },
     {
       id: 'supplier',
@@ -439,7 +438,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.supplier || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.supplier, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.supplier, '-')}</span>,
     },
     {
       id: 'buyer',
@@ -447,7 +446,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.buyer || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.buyer, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.buyer, '-')}</span>,
     },
     {
       id: 'plant_site',
@@ -455,7 +454,7 @@ function buildAllContractCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => r.plant_site || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.plant_site, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay(r.plant_site, '-')}</span>,
     },
     {
       id: 'operation_id',
@@ -555,7 +554,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '—')}
+          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '-')}
         </span>
       ),
     },
@@ -567,7 +566,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('unloading_location' in r ? r.unloading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('unloading_location' in r ? r.unloading_location : null, '—')}
+          {formatOperationalTableTextDisplay('unloading_location' in r ? r.unloading_location : null, '-')}
         </span>
       ),
     },
@@ -651,7 +650,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('status' in r ? r.status : '') || '',
       render: (r) => (
         <Badge className={getStatusColor(('status' in r && r.status) || '')}>
-          {('status' in r && r.status) || '—'}
+          {('status' in r && r.status) || '-'}
         </Badge>
       ),
     },
@@ -669,7 +668,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
               : 'bg-orange-100 text-orange-800'
           }
         >
-          {('transport_mode' in r && r.transport_mode) || '—'}
+          {('transport_mode' in r && r.transport_mode) || '-'}
         </Badge>
       ),
     },
@@ -679,7 +678,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('group_name' in r ? r.group_name : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('group_name' in r ? r.group_name : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('group_name' in r ? r.group_name : null, '-')}</span>,
     },
     {
       id: 'supplier',
@@ -687,7 +686,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('supplier' in r ? r.supplier : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('supplier' in r ? r.supplier : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('supplier' in r ? r.supplier : null, '-')}</span>,
     },
     {
       id: 'buyer',
@@ -695,7 +694,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('buyer' in r ? r.buyer : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('buyer' in r ? r.buyer : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('buyer' in r ? r.buyer : null, '-')}</span>,
     },
     {
       id: 'plant_site',
@@ -703,7 +702,7 @@ function buildByTransporterCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('plant_site' in r ? r.plant_site : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('plant_site' in r ? r.plant_site : null, '-')}</span>,
     },
     {
       id: 'operation_id',
@@ -811,7 +810,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('loading_location' in r ? r.loading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '—')}
+          {formatOperationalTableTextDisplay('loading_location' in r ? r.loading_location : null, '-')}
         </span>
       ),
     },
@@ -823,7 +822,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('unloading_location' in r ? r.unloading_location : '') || '',
       render: (r) => (
         <span className="text-sm break-words">
-          {formatOperationalTableTextDisplay('unloading_location' in r ? r.unloading_location : null, '—')}
+          {formatOperationalTableTextDisplay('unloading_location' in r ? r.unloading_location : null, '-')}
         </span>
       ),
     },
@@ -907,7 +906,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       getSortValue: (r) => ('status' in r ? r.status : '') || '',
       render: (r) => (
         <Badge className={getStatusColor(('status' in r && r.status) || '')}>
-          {('status' in r && r.status) || '—'}
+          {('status' in r && r.status) || '-'}
         </Badge>
       ),
     },
@@ -925,7 +924,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
               : 'bg-orange-100 text-orange-800'
           }
         >
-          {('transport_mode' in r && r.transport_mode) || '—'}
+          {('transport_mode' in r && r.transport_mode) || '-'}
         </Badge>
       ),
     },
@@ -935,7 +934,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('group_name' in r ? r.group_name : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('group_name' in r ? r.group_name : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('group_name' in r ? r.group_name : null, '-')}</span>,
     },
     {
       id: 'transporter',
@@ -957,7 +956,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('buyer' in r ? r.buyer : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('buyer' in r ? r.buyer : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('buyer' in r ? r.buyer : null, '-')}</span>,
     },
     {
       id: 'plant_site',
@@ -965,7 +964,7 @@ function buildBySupplierCompactColumns(): CompactColumn[] {
       defaultVisible: false,
       sortable: true,
       getSortValue: (r) => ('plant_site' in r ? r.plant_site : '') || '',
-      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('plant_site' in r ? r.plant_site : null, '—')}</span>,
+      render: (r) => <span className="text-sm break-words">{formatOperationalTableTextDisplay('plant_site' in r ? r.plant_site : null, '-')}</span>,
     },
     {
       id: 'operation_id',
@@ -1174,8 +1173,18 @@ export default function OilLossPage() {
   const [viewMode, setViewMode] = useState<OilLossTableViewMode>('all_contract')
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [selectedGroupData, setSelectedGroupData] = useState<OilLossGroupHistoryModalSelection | null>(null)
-  const [selectedContract, setSelectedContract] = useState<ContractDetailModalContract | null>(null)
-  const [openingContractKey, setOpeningContractKey] = useState<string | null>(null)
+  const [openingLogisticsKey, setOpeningLogisticsKey] = useState<string | null>(null)
+  const [viewShipmentModal, setViewShipmentModal] = useState<{
+    shipmentId: string
+    editContractId: string | null
+    editStoNumber: string | null
+    editContractNumbers: string | null
+  } | null>(null)
+  const [viewTruckingModal, setViewTruckingModal] = useState<{
+    contractId: string
+    contractExtNo: string | null
+    poNumber: string | null
+  } | null>(null)
   const pageSize = 20
 
   const activePrefs = columnPrefsByView[viewMode]
@@ -1665,27 +1674,61 @@ export default function OilLossPage() {
     setGroupModalOpen(true)
   }, [])
 
-  const openContractDetailFromRow = useCallback(async (row: OilLossTableRow) => {
-    const contractNumber = resolveOilLossRowContractNumber(row)
-    if (!contractNumber) {
-      alert('Contract number is required to open Contract Details.')
+  const openVesselFromOilLossRow = useCallback(async (row: OilLossAllContractRow) => {
+    const lookupKey = firstOilLossToken(row.sto_number) || String(row.operation_id ?? '').trim()
+    if (!lookupKey) {
+      alert('Shipment Operation ID or STO is required to open View Shipment.')
       return
     }
-    const requestKey = `${row.id}:${contractNumber}`
-    setOpeningContractKey(requestKey)
+    const contractNumber = firstOilLossToken(row.contract_number)
+    const requestKey = `vessel:${row.id}`
+    setOpeningLogisticsKey(requestKey)
     try {
-      const detail = await fetchContractForDetailModal(contractNumber)
-      if (!detail) {
-        alert(`Contract ${contractNumber} was not found.`)
+      const loadShipmentId = async (withContract: boolean) => {
+        const res = await api.get('/shipments', {
+          params: {
+            sto: lookupKey,
+            ...(withContract && contractNumber ? { contract: contractNumber } : {}),
+            limit: 5,
+            page: 1,
+            compact: 'true',
+            includeSummary: 'false',
+          },
+        })
+        const shipments = (res.data?.data?.shipments ?? []) as Array<{ id?: string }>
+        const id = String(shipments[0]?.id ?? '').trim()
+        return isShipmentUuid(id) ? id : ''
+      }
+      const shipmentId = (await loadShipmentId(true)) || (await loadShipmentId(false))
+      if (!shipmentId) {
+        alert('No shipment was found for this operation or STO.')
         return
       }
-      setSelectedContract(detail)
+      setViewShipmentModal({
+        shipmentId,
+        editContractId: contractNumber || null,
+        editStoNumber: firstOilLossToken(row.sto_number) || lookupKey,
+        editContractNumbers: String(row.contract_number ?? '').trim() || null,
+      })
     } catch (err) {
-      console.error('openContractDetailFromRow:', err)
-      alert('Failed to open Contract Details.')
+      console.error('openVesselFromOilLossRow:', err)
+      alert('Failed to open View Shipment.')
     } finally {
-      setOpeningContractKey((current) => (current === requestKey ? null : current))
+      setOpeningLogisticsKey((current) => (current === requestKey ? null : current))
     }
+  }, [])
+
+  const openTruckingFromOilLossRow = useCallback((row: OilLossAllContractRow) => {
+    const contractId = firstOilLossToken(row.contract_number) || firstOilLossToken(row.contract_ext_no)
+    if (!contractId) {
+      alert('PO or contract number is required to open View Trucking.')
+      return
+    }
+    setViewTruckingModal({
+      contractId,
+      contractExtNo: firstOilLossToken(row.contract_ext_no) || null,
+      poNumber: firstOilLossToken(row.po_number) || null,
+    })
   }, [])
 
   const aggregatedRows = useMemo(() => {
@@ -1937,7 +1980,7 @@ export default function OilLossPage() {
                       cardDisabled || showBlockingLoad ? 'text-gray-400' : oilLossValueTone(avgPct, 'primary')
                     }`}
                   >
-                    {showBlockingLoad ? '…' : cardDisabled ? '—' : formatOilLossAvgPct(avgPct)}
+                    {showBlockingLoad ? '…' : cardDisabled ? '-' : formatOilLossAvgPct(avgPct)}
                   </div>
                 </div>
                 {card.key === 'r4' ? (
@@ -1953,7 +1996,7 @@ export default function OilLossPage() {
                       {showBlockingLoad
                         ? '…'
                         : avgMt == null
-                          ? '—'
+                          ? '-'
                           : `${formatOilLossAvgMt(avgMt)} MT`}
                     </div>
                   </div>
@@ -2226,6 +2269,7 @@ export default function OilLossPage() {
                         COMPACT_OPERATIONAL_TABLE_CLASS,
                         COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
                         'klip-compact-table--perf-narrow-cols',
+                        'klip-oil-loss-table',
                       )}
                     >
                       <colgroup>
@@ -2249,7 +2293,7 @@ export default function OilLossPage() {
                             />
                           )
                         })}
-                        <col style={{ width: compactTableColWidthCss(COMPACT_TABLE_ACTIONS_COL_WIDTH_PX) }} />
+                        <col style={{ width: compactTableColWidthCss(OIL_LOSS_ACTIONS_COL_WIDTH_PX) }} />
                       </colgroup>
                       <thead>
                         <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
@@ -2333,62 +2377,18 @@ export default function OilLossPage() {
                                 {visibleColumns.map((col) => {
                                   const layout = getOperationalColumnLayout(operationalTableType, col.id)
                                   const opColClass = operationalTableColumnClass(layout)
-                                  const isLinkCell =
-                                    (col.id === 'transporter' && viewMode === 'by_transporter') ||
-                                    (col.id === 'supplier' && viewMode === 'by_supplier')
-                                  const useTruncateTooltip =
-                                    !isLinkCell &&
-                                    shouldApplyOperationalTruncateTooltip(
-                                      col.id,
-                                      layout,
-                                      OIL_LOSS_TRUNCATE_TOOLTIP_COLUMN_IDS,
-                                    )
+                                  const useTruncateTooltip = shouldApplyOperationalTruncateTooltip(
+                                    col.id,
+                                    layout,
+                                    OIL_LOSS_TRUNCATE_TOOLTIP_COLUMN_IDS,
+                                  )
                                   const truncateTooltip = useTruncateTooltip
                                     ? operationalRowFieldTooltipText(
                                         col.id,
                                         row as unknown as Record<string, unknown>,
                                       )
                                     : null
-                                  const cellContent =
-                                    col.id === 'transporter' && viewMode === 'by_transporter' ? (
-                                          (() => {
-                                            const transporterRow = row as OilLossByTransporterRow
-                                            const name = formatOperationalTableTextDisplay(transporterRow.transporter)
-                                            return (
-                                              <button
-                                                type="button"
-                                                className="block w-full min-w-0 truncate text-left text-sm text-blue-700 hover:text-blue-900 hover:underline"
-                                                title={name === '-' ? undefined : name}
-                                                onClick={(e) => {
-                                                  e.stopPropagation()
-                                                  openTransporterModal(transporterRow)
-                                                }}
-                                              >
-                                                {name}
-                                              </button>
-                                            )
-                                          })()
-                                        ) : col.id === 'supplier' && viewMode === 'by_supplier' ? (
-                                          (() => {
-                                            const supplierRow = row as OilLossBySupplierRow
-                                            const name = formatOperationalTableTextDisplay(supplierRow.supplier)
-                                            return (
-                                              <button
-                                                type="button"
-                                                className="block w-full min-w-0 truncate text-left text-sm text-blue-700 hover:text-blue-900 hover:underline"
-                                                title={name === '-' ? undefined : name}
-                                                onClick={(e) => {
-                                                  e.stopPropagation()
-                                                  openSupplierModal(supplierRow)
-                                                }}
-                                              >
-                                                {name}
-                                              </button>
-                                            )
-                                          })()
-                                        ) : (
-                                          col.render(row)
-                                        )
+                                  const cellContent = col.render(row)
                                   return (
                                     <td
                                       key={col.id}
@@ -2409,32 +2409,75 @@ export default function OilLossPage() {
                                   )
                                 })}
                                 <td className={cn(COMPACT_TABLE_ACTIONS_CELL_CLASS, stripeClass)}>
-                                  <div className="flex items-center justify-center gap-1.5">
-                                    {(() => {
-                                      const contractNumber = resolveOilLossRowContractNumber(row)
-                                      const requestKey = `${row.id}:${contractNumber}`
-                                      const isOpening = openingContractKey === requestKey
-                                      return (
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          disabled={!contractNumber || isOpening}
-                                          onClick={() => void openContractDetailFromRow(row)}
-                                          title={
-                                            contractNumber
-                                              ? 'View Contract'
-                                              : 'Contract number unavailable'
-                                          }
-                                          className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
-                                        >
-                                          {isOpening ? (
-                                            <Loader2 className="h-4 w-4 animate-spin" />
-                                          ) : (
-                                            <Eye className="h-4 w-4" />
-                                          )}
-                                        </Button>
-                                      )
-                                    })()}
+                                  <div className="flex items-center justify-center">
+                                    {viewMode === 'all_contract' ? (
+                                      (() => {
+                                        const contractRow = row as OilLossAllContractRow
+                                        const isVessel = globalTransport === 'Vessel'
+                                        const lookupKey = isVessel
+                                          ? String(contractRow.operation_id ?? '').trim() ||
+                                            firstOilLossToken(contractRow.sto_number)
+                                          : firstOilLossToken(contractRow.contract_number) ||
+                                            firstOilLossToken(contractRow.contract_ext_no)
+                                        const requestKey = `${isVessel ? 'vessel' : 'truck'}:${contractRow.id}`
+                                        const isOpening = openingLogisticsKey === requestKey
+                                        const label = isVessel ? 'View shipment' : 'View trucking'
+                                        return (
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <Button
+                                                variant="outline"
+                                                size="icon"
+                                                disabled={!lookupKey || isOpening}
+                                                onClick={() => {
+                                                  if (isVessel) void openVesselFromOilLossRow(contractRow)
+                                                  else openTruckingFromOilLossRow(contractRow)
+                                                }}
+                                                className={
+                                                  isVessel
+                                                    ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                                                    : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'
+                                                }
+                                                aria-label={label}
+                                              >
+                                                {isOpening ? (
+                                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                                ) : isVessel ? (
+                                                  <Ship className="h-4 w-4" />
+                                                ) : (
+                                                  <Truck className="h-4 w-4" />
+                                                )}
+                                              </Button>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="top">{label}</TooltipContent>
+                                          </Tooltip>
+                                        )
+                                      })()
+                                    ) : (
+                                      (() => {
+                                        const isTransporter = viewMode === 'by_transporter'
+                                        const label = isTransporter ? 'View transporter' : 'View supplier'
+                                        return (
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <Button
+                                                variant="outline"
+                                                size="icon"
+                                                onClick={() => {
+                                                  if (isTransporter) openTransporterModal(row as OilLossByTransporterRow)
+                                                  else openSupplierModal(row as OilLossBySupplierRow)
+                                                }}
+                                                className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100"
+                                                aria-label={label}
+                                              >
+                                                <Eye className="h-4 w-4" />
+                                              </Button>
+                                            </TooltipTrigger>
+                                            <TooltipContent side="top">{label}</TooltipContent>
+                                          </Tooltip>
+                                        )
+                                      })()
+                                    )}
                                   </div>
                                 </td>
                               </tr>
@@ -2495,7 +2538,7 @@ export default function OilLossPage() {
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
                     ? globalTransport === 'Vessel'
-                      ? 'Aggregated by shipment operation, or by STO when Operation ID is empty. POs that share that operation or STO are one row. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                      ? 'One row per STO, the same rows as Shipments Completed. POs on that STO stay in the row. Qty Delivery, Qty Receive, SFAL, and SFBD are the R1–Loss figures for that STO. A completed STO with missing quantities still appears. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
                       : 'Aggregated by PO. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
                     : viewMode === 'by_transporter'
                       ? 'Aggregated by transporter. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
@@ -2515,9 +2558,23 @@ export default function OilLossPage() {
           sourceRows={groupHistorySourceRows}
         />
 
-        <ContractDetailModal
-          contract={selectedContract}
-          onClose={() => setSelectedContract(null)}
+        <ViewShipmentModal
+          open={viewShipmentModal != null}
+          onClose={() => setViewShipmentModal(null)}
+          editShipmentId={viewShipmentModal?.shipmentId ?? null}
+          editContractId={viewShipmentModal?.editContractId ?? null}
+          editStoNumber={viewShipmentModal?.editStoNumber ?? null}
+          editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
+          onSubmit={async () => {}}
+        />
+
+        <ViewTruckingOperationModal
+          open={viewTruckingModal != null}
+          onClose={() => setViewTruckingModal(null)}
+          editTruckingOperationId={null}
+          initialContractId={viewTruckingModal?.contractId ?? null}
+          initialContractExtNo={viewTruckingModal?.contractExtNo ?? null}
+          initialPoNumber={viewTruckingModal?.poNumber ?? null}
         />
       </div>
     </Layout>

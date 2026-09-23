@@ -93,12 +93,13 @@ describe('computeROilLossSummary', () => {
     expect(summary.totalMt).toBe(-100);
   });
 
-  it('merges a vessel voyage spanning multiple contracts into one sample (summed)', () => {
+  it('merges contracts that share one STO into one R4 sample', () => {
     const rows = [
       {
         incoterm: 'CIF',
         transport_mode: 'LAND',
         operation_id: 'OP-1',
+        sto_number: 'STO-1',
         contract_number: 'CN-1',
         quantity_sent: 100_000,
         quantity_received: 90_000,
@@ -106,6 +107,7 @@ describe('computeROilLossSummary', () => {
       {
         incoterm: 'CFR',
         operation_id: 'OP-1',
+        sto_number: 'STO-1',
         contract_number: 'CN-2',
         quantity_sent: 200_000,
         quantity_received: 190_000,
@@ -114,8 +116,33 @@ describe('computeROilLossSummary', () => {
 
     const summary = computeROilLossSummary(rows, 'r4');
 
-    // One merged voyage sample, not two per-contract samples.
     expect(summary.sampleCount).toBe(1);
+    expect(summary.totalMt).toBe(-20);
+  });
+
+  it('counts two STOs that share an Operation ID as two R1 samples', () => {
+    const summary = computeROilLossSummary(
+      [
+        {
+          incoterm: 'CIF',
+          operation_id: 'OP-1',
+          sto_number: 'STO-1',
+          contract_number: 'CN-1',
+          quantity_sent: 100_000,
+          quantity_sfal: 90_000,
+        },
+        {
+          incoterm: 'CIF',
+          operation_id: 'OP-1',
+          sto_number: 'STO-2',
+          contract_number: 'CN-2',
+          quantity_sent: 200_000,
+          quantity_sfal: 190_000,
+        },
+      ],
+      'r1',
+    );
+    expect(summary.sampleCount).toBe(2);
     expect(summary.totalMt).toBe(-20);
   });
 

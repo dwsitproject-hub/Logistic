@@ -1,6 +1,6 @@
 import {
-  OIL_LOSS_ELIGIBILITY_WHERE_SQL,
   OIL_LOSS_TRANSPORTER_EXPR,
+  OIL_LOSS_TRUCK_ELIGIBILITY_WHERE_SQL,
   OIL_LOSS_VESSEL_ELIGIBILITY_WHERE_SQL,
   sqlOilLossQtyTransportModeExpr,
 } from './oilLossEligibility';
@@ -29,6 +29,7 @@ import {
   sqlOilLossUatQtyDeliveryExpr,
 } from './oilLossSapSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
+import { buildOilLossVesselCompletedCtes } from './oilLossVesselCompletedSql';
 import { sqlQtyMoveJoinIncotermDelivery } from './sapIncotermMetrics';
 
 /** Pre-aggregated lookups — avoids per-row LATERAL scans over full SAP dataset. */
@@ -301,7 +302,7 @@ export async function buildOilLossMainSql(): Promise<string> {
         ${OIL_LOSS_SFAL_QTY_EXPR} AS quantity_sfal,
         ${OIL_LOSS_SFBD_QTY_EXPR} AS quantity_sfbd
       FROM with_qty
-      WHERE ${OIL_LOSS_ELIGIBILITY_WHERE_SQL}
+      WHERE ${OIL_LOSS_TRUCK_ELIGIBILITY_WHERE_SQL}
         AND qty_receive_resolved < qty_delivery_resolved
     ),
     oil_loss_contract_scope AS (
@@ -309,7 +310,8 @@ export async function buildOilLossMainSql(): Promise<string> {
       FROM oil_loss_eligible
       WHERE NULLIF(TRIM(contract_number), '') IS NOT NULL
     ),
-    ${await resolveContractsQtyMoveCte({ kind: 'join_scope', scopeCteName: 'oil_loss_contract_scope' })}
+    ${await resolveContractsQtyMoveCte({ kind: 'join_scope', scopeCteName: 'oil_loss_contract_scope' })},
+    trucking_rows AS (
     SELECT
       id,
       transport_mode,
@@ -384,7 +386,12 @@ export async function buildOilLossMainSql(): Promise<string> {
       LEFT JOIN qty_move qm
         ON qm.contract_number = TRIM(oil_loss_eligible.contract_number)
     ) oil_loss_with_contracts_qty
-    ORDER BY (quantity_received - quantity_delivery) ASC, id ASC
+    ),
+    ${buildOilLossVesselCompletedCtes()}
+    SELECT * FROM vessel_rows
+    UNION ALL
+    SELECT * FROM trucking_rows
+    ORDER BY gain_loss_amount ASC NULLS LAST, id ASC
   `;
 }
 

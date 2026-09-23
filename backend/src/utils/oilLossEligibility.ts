@@ -56,6 +56,11 @@ export const OIL_LOSS_VESSEL_ELIGIBILITY_WHERE_SQL = `(
   ${OIL_LOSS_RESOLVED_INCOTERM_SQL} IN ('CIF', 'FOB', 'CFR')
 )`;
 
+/** Trucking snapshot rows stay one PO per contract (FRC/LCO). Vessel rows are not in this set. */
+export const OIL_LOSS_TRUCK_ELIGIBILITY_WHERE_SQL = `(
+  ${OIL_LOSS_RESOLVED_INCOTERM_SQL} IN ('FRC', 'LCO')
+)`;
+
 /** WHERE fragment — reference columns available on `enriched` / final row. */
 export const OIL_LOSS_ELIGIBILITY_WHERE_SQL = `(
   ${OIL_LOSS_RESOLVED_INCOTERM_SQL} IN ('CIF', 'FOB', 'CFR', 'FRC', 'LCO')

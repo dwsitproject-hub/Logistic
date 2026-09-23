@@ -134,7 +134,7 @@ function matchesGroupKey(
 function renderContractCell(row: OilLossGroupHistoryContractRow, key: keyof OilLossGroupHistoryContractRow) {
   if (key === 'contract_date') {
     const d = String(row.contract_date ?? '').slice(0, 10)
-    return <span>{d ? formatDateDMY(d) : '—'}</span>
+    return <span>{d ? formatDateDMY(d) : '-'}</span>
   }
   if (key === 'contract_ext_no' || key === 'po_number' || key === 'sto_number') {
     const val = row[key]
@@ -157,10 +157,10 @@ function renderContractCell(row: OilLossGroupHistoryContractRow, key: keyof OilL
   }
   if (key === 'status') {
     const status = String(row.status ?? '').trim()
-    if (!status) return <span className="text-gray-400">—</span>
+    if (!status) return <span className="text-gray-400">-</span>
     return <Badge className={getStatusColor(status)}>{status}</Badge>
   }
-  return <span>—</span>
+  return <span>-</span>
 }
 
 function GroupContractTable({
@@ -228,7 +228,7 @@ function LocationList({ label, items }: { label: string; items: string[] }) {
     <div>
       <div className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">{label}</div>
       {items.length === 0 ? (
-        <div className="text-sm text-gray-400">—</div>
+        <div className="text-sm text-gray-400">-</div>
       ) : (
         <ul className="space-y-1">
           {items.map((item) => (

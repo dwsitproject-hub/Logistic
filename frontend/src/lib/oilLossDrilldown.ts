@@ -290,8 +290,8 @@ function plantsToNodes(map: Map<string, PlantAcc>): OilLossDrilldownTreeNode[] {
 
 /**
  * Hierarchical drilldown tree — Product → Region/Plant → Incoterm → Transporter → Supplier.
- * Rows are first merged into one row per group (SEA voyage or LAND contract/PO) so a
- * multi-PO SEA voyage contributes one Loss % sample, not one per member PO.
+ * Rows are first merged into one row per group (vessel STO or trucking contract/PO) so a
+ * multi-PO STO contributes one Loss % sample, not one per member PO.
  */
 export function buildOilLossDrilldownTree(rows: OilLossSourceRow[]): OilLossDrilldownTreeNode[] {
   const groups = aggregateOilLossRowsByGroup(rows)

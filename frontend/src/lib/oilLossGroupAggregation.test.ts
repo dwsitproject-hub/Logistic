@@ -8,13 +8,14 @@ import {
 } from '@/lib/oilLossGroupAggregation'
 
 describe('oilLossOuterGroupKey', () => {
-  it('groups vessel incoterms by Operation ID regardless of contract or SAP mode', () => {
+  it('keeps two vessel STOs apart when they share an Operation ID', () => {
     const a = oilLossOuterGroupKey({
       id: '1',
       contract_number: 'CN-1',
       contract_ext_no: null,
       incoterm: 'CIF',
       operation_id: 'OP-1',
+      sto_number: 'STO-1',
     })
     const b = oilLossOuterGroupKey({
       id: '2',
@@ -23,12 +24,13 @@ describe('oilLossOuterGroupKey', () => {
       incoterm: 'cfr',
       transport_mode: 'LAND',
       operation_id: 'OP-1',
+      sto_number: 'STO-2',
     })
-    expect(a).toBe(b)
-    expect(a).toBe('op:OP-1')
+    expect(a).toBe('sto:STO-1')
+    expect(b).toBe('sto:STO-2')
   })
 
-  it('falls back to the contract key for vessel rows with no Operation ID', () => {
+  it('falls back to the contract key for vessel rows with no STO', () => {
     const key = oilLossOuterGroupKey({
       id: '1',
       contract_number: 'CN-1',
@@ -60,7 +62,7 @@ describe('oilLossOuterGroupKey', () => {
     expect(a).toBe(b)
   })
 
-  it('prefers Shipment Operation ID over STO', () => {
+  it('groups vessel rows by STO even when Operation ID is set', () => {
     const key = oilLossOuterGroupKey({
       id: '1',
       contract_number: 'CN-1',
@@ -69,7 +71,7 @@ describe('oilLossOuterGroupKey', () => {
       operation_id: 'OP-1',
       sto_number: 'STO-9',
     })
-    expect(key).toBe('op:OP-1')
+    expect(key).toBe('sto:STO-9')
   })
   it('keeps trucking rows at the contract key even when Operation ID is set', () => {
     const key = oilLossOuterGroupKey({
@@ -85,10 +87,10 @@ describe('oilLossOuterGroupKey', () => {
 })
 
 describe('aggregateOilLossQuantitiesByOuterGroup', () => {
-  it('sums quantities across distinct contracts sharing one SEA voyage', () => {
+  it('sums quantities across distinct contracts sharing one STO', () => {
     const rows: OilLossSourceRow[] = [
-      { id: '1', incoterm: 'CIF', operation_id: 'OP-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
-      { id: '2', incoterm: 'FOB', operation_id: 'OP-1', contract_number: 'CN-2', quantity_sent: 200_000, quantity_received: 190_000 },
+      { id: '1', incoterm: 'CIF', operation_id: 'OP-1', sto_number: 'STO-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
+      { id: '2', incoterm: 'FOB', operation_id: 'OP-1', sto_number: 'STO-1', contract_number: 'CN-2', quantity_sent: 200_000, quantity_received: 190_000 },
     ]
     const groups = aggregateOilLossQuantitiesByOuterGroup(rows)
     expect(groups.size).toBe(1)
@@ -99,10 +101,10 @@ describe('aggregateOilLossQuantitiesByOuterGroup', () => {
 
   it('does not double-sum duplicate SPD rows of the same contract within a voyage', () => {
     const rows: OilLossSourceRow[] = [
-      { id: '1', incoterm: 'CIF', operation_id: 'OP-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
-      // Duplicate SPD/STO row for the same contract — must not re-sum delivery/receive.
-      { id: '1b', incoterm: 'CIF', operation_id: 'OP-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
-      { id: '2', incoterm: 'CIF', operation_id: 'OP-1', contract_number: 'CN-2', quantity_sent: 200_000, quantity_received: 190_000 },
+      { id: '1', incoterm: 'CIF', operation_id: 'OP-1', sto_number: 'STO-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
+      // Duplicate SPD row for the same contract on this STO — must not re-sum delivery/receive.
+      { id: '1b', incoterm: 'CIF', operation_id: 'OP-1', sto_number: 'STO-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
+      { id: '2', incoterm: 'CIF', operation_id: 'OP-1', sto_number: 'STO-1', contract_number: 'CN-2', quantity_sent: 200_000, quantity_received: 190_000 },
     ]
     const groups = aggregateOilLossQuantitiesByOuterGroup(rows)
     expect(groups.size).toBe(1)
@@ -176,6 +178,14 @@ describe('aggregateOilLossRowsByGroup', () => {
     const onlyPo1 = merged.find((row) => row.sto_number === 'STO-1')!
     expect(onlyPo1.po_number).toBe('PO-1')
     expect(onlyPo1.quantity_delivery).toBe(100_000)
+  })
+
+  it('keeps two STOs that share an Operation ID as two rows', () => {
+    const rows: OilLossSourceRow[] = [
+      { id: '1', incoterm: 'CIF', operation_id: 'OP-1', sto_number: 'STO-1', contract_number: 'CN-1', quantity_sent: 100_000, quantity_received: 90_000 },
+      { id: '2', incoterm: 'CIF', operation_id: 'OP-1', sto_number: 'STO-2', contract_number: 'CN-2', quantity_sent: 200_000, quantity_received: 190_000 },
+    ]
+    expect(aggregateOilLossRowsByGroup(rows)).toHaveLength(2)
   })
 
   it('keeps trucking rows one-per-PO with STOs comma-merged', () => {

@@ -419,6 +419,16 @@
     background-color: rgb(249 250 251);
   }
 
+  /* Oil Loss has one action icon. 112px is the two-button width used on other pages. */
+  .klip-compact-table--operational.klip-oil-loss-table th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-oil-loss-table td.klip-op-col--actions {
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+    padding-left: 0.375rem;
+    padding-right: 0.375rem;
+  }
+
   /*
    * Operational list tables (Contract, Shipment, Trucking) — Actions header only.
    * Body <td> sticky classes stay as-is on each page.

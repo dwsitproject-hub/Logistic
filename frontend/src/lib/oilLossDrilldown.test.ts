@@ -64,12 +64,13 @@ describe('oilLossDrilldown contract-level qty', () => {
   })
 })
 
-describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
+describe('oilLossDrilldown SEA STO merge (multi-PO)', () => {
   const voyageRows: OilLossSourceRow[] = [
     {
       id: '1',
       transport_mode: 'SEA',
       operation_id: 'OP-1',
+      sto_number: 'STO-1',
       contract_number: 'CN-1',
       product: 'CPO',
       group_plant: 'Plant A',
@@ -84,6 +85,7 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
       id: '2',
       transport_mode: 'SEA',
       operation_id: 'OP-1',
+      sto_number: 'STO-1',
       contract_number: 'CN-2',
       product: 'CPO',
       group_plant: 'Plant A',
@@ -96,7 +98,7 @@ describe('oilLossDrilldown SEA voyage merge (multi-PO Operation ID)', () => {
     },
   ]
 
-  it('merges a multi-PO SEA voyage into one group: contractCount 1, summed loss', () => {
+  it('merges a multi-PO STO into one group: contractCount 1, summed loss', () => {
     const tree = buildOilLossDrilldownTree(voyageRows)
     expect(tree).toHaveLength(1)
     expect(tree[0].contractCount).toBe(1)

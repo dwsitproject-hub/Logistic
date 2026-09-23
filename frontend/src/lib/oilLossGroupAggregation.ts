@@ -1,12 +1,13 @@
 /**
  * Oil Loss — grouping by Incoterm, then two-level ("contract-then-voyage") aggregation.
  *
- * Vessel (CIF/FOB/CFR): one Shipment Operation ID can span multiple POs/contracts, which
- * merge into one row/total (summed). Trucking (FRC/LCO): one row per contract (PO).
+ * Vessel (CIF/FOB/CFR): one row per STO, the same grain as Shipments Completed.
+ * POs on that STO stay inside the row. Operation ID does not merge STOs.
+ * Trucking (FRC/LCO): one row per contract (PO).
  *
  * Level 1: dedupe multiple SAP rows of the SAME contract — take delivery/receive once,
  * sum SFAL/SFBD across duplicate rows.
- * Level 2: merge distinct contracts sharing one vessel Operation ID. Trucking stays at
+ * Level 2: merge distinct contracts that share one vessel STO. Trucking stays at
  * the contract key.
  */
 
@@ -63,14 +64,12 @@ export function oilLossContractGroupKey(
 }
 
 /**
- * Vessel group: Shipment Operation ID, then the first STO number.
- * Contract Ext No is not a group key. Returns null when neither id is present.
+ * Vessel group: the STO key, matching one Shipments Completed row.
+ * Operation ID is not a group key. Returns null when the STO is empty.
  */
 export function oilLossVesselGroupKey(
   row: Pick<OilLossSourceRow, 'operation_id' | 'sto_number'>,
 ): string | null {
-  const opId = String(row.operation_id ?? '').trim()
-  if (opId) return `op:${opId}`
   const sto = String(row.sto_number ?? '').split(',')[0]?.trim() ?? ''
   if (sto) return `sto:${sto}`
   return null
@@ -78,7 +77,7 @@ export function oilLossVesselGroupKey(
 
 /**
  * Outer group key derived from an already-known inner (contract-level) key.
- * Vessel incoterms (CIF/FOB/CFR) merge on Shipment Operation ID, then STO.
+ * Vessel incoterms (CIF/FOB/CFR) merge on STO. Operation ID does not merge rows.
  * Trucking incoterms stay at the inner (PO/contract) key.
  */
 export function oilLossOuterGroupKeyFromInner(

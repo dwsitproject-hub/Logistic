@@ -10,7 +10,7 @@ export function formatOilLossMtFromKg(kg: number | null | undefined): string {
 }
 
 export function formatOilLossPct(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—'
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-'
   return `${Number(value).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -29,7 +29,7 @@ export function formatOilLossAvgMt(value: number | null | undefined): string {
 
 /** YTD summary cards — avg oil loss %. */
 export function formatOilLossAvgPct(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '—'
+  if (value == null || !Number.isFinite(value)) return '-'
   return `${value.toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,

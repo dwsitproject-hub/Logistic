@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { aggregateOilLossByContract, type OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
 
 describe('aggregateOilLossByContract — SEA multi-PO voyage merge', () => {
-  it('merges POs sharing one STO/voyage Operation ID into a single summed row', () => {
+  it('merges POs sharing one STO into a single summed row', () => {
     const rows: OilLossSourceRow[] = [
       {
         id: '1',

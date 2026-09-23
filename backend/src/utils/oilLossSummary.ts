@@ -12,7 +12,7 @@ export type ROilLossSummary = {
 
 export type OilLossSummaryRow = {
   id?: string | null;
-  /** Vessel incoterms merge onto their shared Shipment Operation ID; trucking stays per-contract. */
+  /** Vessel rows merge on STO; trucking stays per-contract. */
   incoterm?: string | null;
   operation_id?: string | null;
   sto_number?: string | null;
@@ -75,19 +75,17 @@ function contractGroupKey(row: OilLossSummaryRow): string {
 }
 
 /**
- * Vessel group: Shipment Operation ID, then the first STO number.
- * Contract Ext No is not a group key.
+ * Vessel group: the STO key, matching one Shipments Completed row.
+ * Operation ID is not a group key.
  */
 function oilLossVesselGroupKey(row: { operation_id?: string | null; sto_number?: string | null }): string | null {
-  const opId = String(row.operation_id ?? '').trim();
-  if (opId) return `op:${opId}`;
   const sto = String(row.sto_number ?? '').split(',')[0]?.trim() ?? '';
   if (sto) return `sto:${sto}`;
   return null;
 }
 
 /**
- * Vessel (CIF/FOB/CFR): this row's Shipment Operation ID, else this row's STO.
+ * Vessel (CIF/FOB/CFR): this row's STO. Operation ID does not merge rows.
  * Trucking stays on the contract key. Do not collapse a PO to one STO first —
  * a PO on several STOs belongs to each of those groups.
  */
@@ -251,7 +249,7 @@ function sampleFromContractAgg(
 }
 
 export function computeROilLossSummary(rows: OilLossSummaryRow[], kind: ROilLossKey): ROilLossSummary {
-  // Vessel sampleCount is one per Operation ID, or per STO when Operation ID is empty.
+  // Vessel sampleCount is one per STO, the same grain as a Shipments Completed row.
   const byGroup = aggregateQuantitiesByOuterGroup(rows);
   const samples: { lossKg: number; baseKg: number; pct: number; deliveryKg: number }[] = [];
 
