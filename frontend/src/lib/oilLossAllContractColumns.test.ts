@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { aggregateOilLossByContract, type OilLossSourceRow } from '@/lib/oilLossAllContractColumns'
+import {
+  aggregateOilLossByContract,
+  filterOilLossColumnsForTransport,
+  type OilLossSourceRow,
+} from '@/lib/oilLossAllContractColumns'
 
 describe('aggregateOilLossByContract — SEA multi-PO voyage merge', () => {
   it('merges POs sharing one STO into a single summed row', () => {
@@ -101,5 +105,34 @@ describe('aggregateOilLossByContract — LAND single-PO multi-STO row (unchanged
 
     const result = aggregateOilLossByContract(rows)
     expect(result).toHaveLength(2)
+  })
+})
+
+describe('filterOilLossColumnsForTransport', () => {
+  const columns = [
+    { id: 'quantity_delivery' },
+    { id: 'quantity_received' },
+    { id: 'quantity_sfal' },
+    { id: 'quantity_sfbd' },
+    { id: 'r1' },
+    { id: 'r2' },
+    { id: 'r3' },
+    { id: 'r4' },
+    { id: 'loss_pct' },
+  ]
+
+  it('keeps R1–SFBD on Vessel', () => {
+    expect(filterOilLossColumnsForTransport(columns, 'Vessel').map((col) => col.id)).toEqual(
+      columns.map((col) => col.id),
+    )
+  })
+
+  it('keeps only delivery, receive, and Loss on Trucking', () => {
+    expect(filterOilLossColumnsForTransport(columns, 'Truck').map((col) => col.id)).toEqual([
+      'quantity_delivery',
+      'quantity_received',
+      'r4',
+      'loss_pct',
+    ])
   })
 })

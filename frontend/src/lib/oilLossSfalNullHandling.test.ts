@@ -64,6 +64,20 @@ describe('computeROilLossSummary R1 with null SFAL', () => {
     expect(summary.totalMt).toBeNull()
   })
 
+  it('skips R1 through Loss when delivery or receive is zero', () => {
+    const row = {
+      id: 'row-zero-delivery',
+      contract_number: 'CN-1',
+      quantity_sent: 0,
+      quantity_received: 0,
+      quantity_sfal: 4_002_138,
+      quantity_sfbd: 4_036_906,
+    }
+    for (const kind of ['r1', 'r2', 'r3', 'r4'] as const) {
+      expect(computeROilLossSummary([row], kind).sampleCount).toBe(0)
+    }
+  })
+
   it('computes R1 when SFAL is genuine zero', () => {
     const summary = computeROilLossSummary(
       [

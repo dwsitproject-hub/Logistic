@@ -477,8 +477,18 @@ async function persistAtaOverride(input: SaveEditShipmentInput): Promise<void> {
   }
 }
 
-/** View Shipment limited save — ATA overrides + port quality only. */
+/** View Shipment limited save — ATA overrides, port quality, and SFAL/SFBD. */
 export async function saveAtaAndQualityChanges(input: SaveEditShipmentInput): Promise<void> {
+  const sfalBody: Record<string, unknown> = {}
+  if (!quantityValuesEqual(input.sfalQty, input.originalSfalQty)) sfalBody.sfal_qty = input.sfalQty
+  if (!quantityValuesEqual(input.sfbdQty, input.originalSfbdQty)) sfalBody.sfbd_qty = input.sfbdQty
+  if (Object.keys(sfalBody).length > 0) {
+    const sfalRes = await api.put(`/shipments/${input.shipmentId}`, sfalBody)
+    if (!sfalRes.data?.success) {
+      throw new Error(sfalRes.data?.error?.message || 'Failed to update SFAL/SFBD')
+    }
+  }
+
   const portsRes = await api.get(`/shipments/${input.shipmentId}/loading-ports`)
   const ports: LoadingPortRef[] = portsRes.data?.data?.ports ?? input.loadingPorts
 

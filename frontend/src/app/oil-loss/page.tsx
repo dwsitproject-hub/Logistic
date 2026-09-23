@@ -90,6 +90,7 @@ import {
   OIL_LOSS_ALL_CONTRACT_DEFAULT_VISIBLE_COLUMN_IDS,
   aggregateOilLossByContract,
   buildOilLossAllContractVisibleColumns,
+  filterOilLossColumnsForTransport,
   mergeOilLossAllContractColumnOrder,
   oilLossAllContractCompactColumnFallbackOrder,
   oilLossAllContractDefaultVisibleColumnIds,
@@ -199,8 +200,10 @@ function computeRowROilLossKg(row: OilLossTableRow, kind: ROilLossKey): number |
     'quantity_sfbd' in row ? (row as { quantity_sfbd?: number | null }).quantity_sfbd : null,
   )
 
+  if (delivery == null || delivery === 0 || receive == null || receive === 0) return null
+
   if (kind === 'r1') {
-    if (sfal == null || delivery == null) return null
+    if (sfal == null) return null
     return sfal - delivery
   }
   if (kind === 'r2') {
@@ -208,11 +211,10 @@ function computeRowROilLossKg(row: OilLossTableRow, kind: ROilLossKey): number |
     return sfbd - sfal
   }
   if (kind === 'r3') {
-    if (receive == null || sfbd == null) return null
+    if (sfbd == null) return null
     return receive - sfbd
   }
   if (kind === 'r4') {
-    if (receive == null || delivery == null) return null
     return receive - delivery
   }
   return null
@@ -222,7 +224,7 @@ function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
   if (kg == null || !Number.isFinite(Number(kg))) {
     return <span className="text-sm text-gray-400">-</span>
   }
-  return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
+  return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg, { maxFractionDigits: 3 })}</span>
 }
 
 function renderROilLossCell(kg: number | null): ReactNode {
@@ -1738,26 +1740,26 @@ export default function OilLossPage() {
   }, [viewMode, aggregatedContractRows, aggregatedTransporterRows, aggregatedSupplierRows])
 
   const visibleColumns = useMemo(() => {
-    if (viewMode === 'all_contract') {
-      return buildOilLossAllContractVisibleColumns(
-        ALL_CONTRACT_COMPACT_COLUMNS,
-        visibleColumnIds,
-        columnOrderIds,
-      )
-    }
-    if (viewMode === 'by_transporter') {
-      return buildOilLossByTransporterVisibleColumns(
-        BY_TRANSPORTER_COMPACT_COLUMNS,
-        visibleColumnIds,
-        columnOrderIds,
-      )
-    }
-    return buildOilLossBySupplierVisibleColumns(
-      BY_SUPPLIER_COMPACT_COLUMNS,
-      visibleColumnIds,
-      columnOrderIds,
-    )
-  }, [viewMode, visibleColumnIds, columnOrderIds])
+    const picked =
+      viewMode === 'all_contract'
+        ? buildOilLossAllContractVisibleColumns(
+            ALL_CONTRACT_COMPACT_COLUMNS,
+            visibleColumnIds,
+            columnOrderIds,
+          )
+        : viewMode === 'by_transporter'
+          ? buildOilLossByTransporterVisibleColumns(
+              BY_TRANSPORTER_COMPACT_COLUMNS,
+              visibleColumnIds,
+              columnOrderIds,
+            )
+          : buildOilLossBySupplierVisibleColumns(
+              BY_SUPPLIER_COMPACT_COLUMNS,
+              visibleColumnIds,
+              columnOrderIds,
+            )
+    return filterOilLossColumnsForTransport(picked, globalTransport)
+  }, [viewMode, visibleColumnIds, columnOrderIds, globalTransport])
 
   const filteredRows = useMemo(() => {
     const sortCol = activeCompactColumns.find((c) => c.id === sortKey)
@@ -1866,12 +1868,13 @@ export default function OilLossPage() {
       .map((id) => byId.get(id))
       .filter((c): c is CompactColumn => !!c && !visibleIds.has(c.id))
       .sort((a, b) => a.label.localeCompare(b.label))
-    return [...visibleColumns, ...hiddenCols]
+    return filterOilLossColumnsForTransport([...visibleColumns, ...hiddenCols], globalTransport)
   }, [
     visibleColumns,
     columnOrderIds,
     activeCompactColumns,
     viewMode,
+    globalTransport,
     allContractColumnIds,
     transporterColumnIds,
     supplierColumnIds,
@@ -2538,11 +2541,15 @@ export default function OilLossPage() {
                 <p className="text-xs text-gray-500 mt-3">
                   {viewMode === 'all_contract'
                     ? globalTransport === 'Vessel'
-                      ? 'One row per STO, the same rows as Shipments Completed. POs on that STO stay in the row. Qty Delivery, Qty Receive, SFAL, and SFBD are the R1–Loss figures for that STO. A completed STO with missing quantities still appears. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                      : 'Aggregated by PO. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm). SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                    : viewMode === 'by_transporter'
-                      ? 'Aggregated by transporter. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
-                      : 'Aggregated by supplier. Qty Delivery & Qty Receive match Contracts View Table (qty_move + UAT Incoterm), summed once per contract. SFAL/SFBD from SAP with shipment fallback. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'}
+                      ? 'One row per STO, the same rows as Shipments Completed. POs on that STO stay in the row. Qty Delivery and Qty Receive are SAP. SFAL and SFBD are the shipment figures for R1–R3. A completed STO with missing quantities still appears. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                      : 'One row per PO. Trucking calculates Loss only (Qty Receive − Qty Delivery). SFAL and SFBD are not used. Quantities in MT (stored as Kg). Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                    : globalTransport === 'Vessel'
+                      ? viewMode === 'by_transporter'
+                        ? 'Aggregated by transporter. Qty Delivery and Qty Receive are SAP, summed once per contract. SFAL and SFBD are the shipment figures for R1–R3. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                        : 'Aggregated by supplier. Qty Delivery and Qty Receive are SAP, summed once per contract. SFAL and SFBD are the shipment figures for R1–R3. Quantities in MT (stored as Kg). Loss (MT) = Qty Receive − Qty Delivery. Loss (%) = (Qty Receive − Qty Delivery) / Qty Delivery × 100%.'
+                      : viewMode === 'by_transporter'
+                        ? 'Aggregated by transporter. Trucking calculates Loss only (Qty Receive − Qty Delivery). SFAL and SFBD are not used. Quantities in MT (stored as Kg).'
+                        : 'Aggregated by supplier. Trucking calculates Loss only (Qty Receive − Qty Delivery). SFAL and SFBD are not used. Quantities in MT (stored as Kg).'}
                 </p>
               </div>
           </CardContent>

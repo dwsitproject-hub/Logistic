@@ -34,20 +34,11 @@ describe('buildOilLossMainSql', () => {
     expect(sql).toContain('quantity_delivery_vessel');
   });
 
-  it('resolves SFAL/SFBD via SAP then trucking then non-zero shipment', async () => {
+  it('leaves SFAL and SFBD off trucking rows', async () => {
     const sql = await buildOilLossMainSql();
-    expect(sql).toContain('trucking_sfal_kg');
-    expect(sql).toContain('trucking_sfbd_kg');
-    expect(sql).toContain('NULLIF(shipment_sfal_kg, 0)');
-    expect(sql).toContain('NULLIF(shipment_sfbd_kg, 0)');
-    expect(sql).toContain('sfal_qty');
-    expect(sql).toContain('sfbd_qty');
-    expect(sql).toContain(
-      'COALESCE(qty_sfal_raw, trucking_sfal_kg, NULLIF(shipment_sfal_kg, 0))',
-    );
-    expect(sql).toContain(
-      'COALESCE(qty_sfbd_raw, trucking_sfbd_kg, NULLIF(shipment_sfbd_kg, 0))',
-    );
+    expect(sql).toContain('NULL::numeric AS quantity_sfal');
+    expect(sql).toContain('NULL::numeric AS quantity_sfbd');
+    expect(sql).not.toContain('trucking_sfal_kg, NULLIF(shipment_sfal_kg, 0)');
   });
 });
 
@@ -66,6 +57,14 @@ describe('vessel completed population', () => {
     expect(sql).toContain("= 'PRESENT'");
     expect(sql).not.toContain('oil_loss_closed');
     expect(sql).not.toContain('qty_receive_resolved < qty_delivery_resolved');
+    expect(sql).toContain('NULLIF(s.sfal_qty, 0)');
+    expect(sql).toContain('NULLIF(s.sfbd_qty, 0)');
+    expect(sql).toContain('/ 100');
+    expect(sql).not.toContain('qty_sfal_raw');
+    expect(sql).not.toContain('spd_fig');
+    expect(sql).not.toContain('actual_vessel_qty_receive');
+    expect(sql).toContain('LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id');
+    expect(sql).not.toContain('qms.quantity_delivery_vessel AS quantity_delivery');
   });
 
   it('leaves the loss filter on the trucking branch only', async () => {
