@@ -28,6 +28,10 @@ export interface MasterVesselFormData {
   terms: string | null
   dhm_id?: string | null
   dhm_code?: string | null
+  /** System-issued KLIP code (KVSL-0001). Read-only: the database generates it. */
+  vessel_code_klip?: string | null
+  /** Every SAP code mapped to this vessel, comma separated. Read-only: SAP issues them. */
+  vessel_codes_sap?: string | null
 }
 
 const TERMS_OPTIONS = ['V/C', 'T/C'] as const

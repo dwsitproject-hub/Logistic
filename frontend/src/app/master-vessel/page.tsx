@@ -275,7 +275,9 @@ export default function MasterVesselPage() {
 
   const handleDelete = async (v: MasterVessel) => {
     if (!isAdmin) return
-    const codeLabel = formatVesselCodeDisplay(v.vessel_code)
+    // Identify the vessel by the code that always exists. formatVesselCodeDisplay renders a
+    // provisional legacy code as "-", which made this prompt read "Delete vessel? - <name>".
+    const codeLabel = v.vessel_code_klip || formatVesselCodeDisplay(v.vessel_code)
     const ok = confirm(`Delete vessel?\n\n${codeLabel} - ${v.vessel_name}`)
     if (!ok) return
     try {

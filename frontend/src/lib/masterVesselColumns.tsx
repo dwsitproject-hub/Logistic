@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
-import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import type { MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
 
 export type MasterVesselColumnId =
   | 'vessel_code'
+  | 'vessel_codes_sap'
+  | 'dhm_code'
   | 'vessel_name'
   | 'vessel_capacity_mt'
   | 'vessel_owner'
@@ -35,7 +36,13 @@ function masterVesselCell(value: ReactNode): ReactNode {
 export function getMasterVesselCellText(colId: MasterVesselColumnId, row: MasterVesselRow): string {
   switch (colId) {
     case 'vessel_code':
-      return formatVesselCodeDisplay(row.vessel_code)
+      // The KLIP code, not the legacy vessel_code column. Every vessel has one and it never
+      // changes, so unlike the old code there is nothing to hide behind formatVesselCodeDisplay.
+      return row.vessel_code_klip || '-'
+    case 'vessel_codes_sap':
+      return row.vessel_codes_sap || '-'
+    case 'dhm_code':
+      return row.dhm_code || '-'
     case 'vessel_name':
       return row.vessel_name || '-'
     case 'vessel_capacity_mt':
@@ -64,7 +71,9 @@ export function getMasterVesselCellText(colId: MasterVesselColumnId, row: Master
 }
 
 const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
-  vessel_code: 108,
+  vessel_code: 112,
+  vessel_codes_sap: 168,
+  dhm_code: 132,
   vessel_name: 176,
   vessel_capacity_mt: 112,
   vessel_owner: 128,
@@ -83,9 +92,31 @@ export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 96
 export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   {
     id: 'vessel_code',
-    label: 'Vessel Code',
+    label: 'Vessel Code (KLIP)',
     getCellText: (row) => getMasterVesselCellText('vessel_code', row),
     render: (row) => masterVesselCell(getMasterVesselCellText('vessel_code', row)),
+  },
+  {
+    // A vessel can hold several: SAP issues a code per tug/barge combination, so BG. AS MARINA 12
+    // carries four. The cell shows them all and the title attribute keeps them readable when the
+    // column is narrow.
+    id: 'vessel_codes_sap',
+    label: 'Vessel Code (SAP)',
+    getCellText: (row) => getMasterVesselCellText('vessel_codes_sap', row),
+    render: (row) => {
+      const text = getMasterVesselCellText('vessel_codes_sap', row)
+      return (
+        <span className="block truncate text-sm" title={text === '-' ? undefined : text}>
+          {text}
+        </span>
+      )
+    },
+  },
+  {
+    id: 'dhm_code',
+    label: 'Vessel Code (DHM)',
+    getCellText: (row) => getMasterVesselCellText('dhm_code', row),
+    render: (row) => masterVesselCell(getMasterVesselCellText('dhm_code', row)),
   },
   {
     id: 'vessel_name',
@@ -113,7 +144,9 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   },
   {
     id: 'sap_vendor_code',
-    label: 'SAP Vendor Code',
+    // The SHIPOWNER's code in SAP, not the vessel's - it sat next to "Vessel Code" and was read
+    // as one. Now that a real Vessel Code (SAP) column exists, the label has to separate them.
+    label: 'SAP Vendor Code (Owner)',
     getCellText: (row) => getMasterVesselCellText('sap_vendor_code', row),
     render: (row) => masterVesselCell(getMasterVesselCellText('sap_vendor_code', row)),
   },

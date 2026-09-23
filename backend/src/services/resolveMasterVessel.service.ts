@@ -102,6 +102,21 @@ async function findMasterByNormName(
   }) ?? null;
 }
 
+/**
+ * Which system issued this code. `source` records where KLIP first SAW a code, which is not the
+ * same question - source='db_existing' holds 84 genuine SAP codes next to 382 that are not - so
+ * the namespace is derived from the sources that are known to carry SAP-issued codes. Codes typed
+ * into KLIP by hand (source='manual') are KLIP's own; migration 181 backfilled the rest.
+ */
+function namespaceForAliasSource(source: VesselAliasSource): 'SAP' | 'KLIP' {
+  return source === 'sap_import' ||
+    source === 'jovin' ||
+    source === 'klip_sheet' ||
+    source === 'excel_cleanup'
+    ? 'SAP'
+    : 'KLIP';
+}
+
 async function ensureAlias(
   run: QueryFn,
   masterVesselId: string,
@@ -109,15 +124,37 @@ async function ensureAlias(
   source: VesselAliasSource,
   isPrimary: boolean,
 ): Promise<boolean> {
+  // uq_master_vessel_code_aliases_one_primary (migration 181) allows a vessel exactly one primary
+  // code, and the index is checked per row - so the sitting primary has to step down before this
+  // one can take the flag, or the insert below fails outright.
+  if (isPrimary) {
+    await run(
+      `UPDATE master_vessel_code_aliases
+       SET is_primary = false, updated_at = CURRENT_TIMESTAMP
+       WHERE master_vessel_id = $1
+         AND is_primary
+         AND upper(trim(vessel_code)) <> upper(trim($2))`,
+      [masterVesselId, code],
+    );
+  }
   const result = await run(
-    `INSERT INTO master_vessel_code_aliases (master_vessel_id, vessel_code, source, is_primary)
-     VALUES ($1, upper(trim($2)), $3, $4)
+    `INSERT INTO master_vessel_code_aliases (master_vessel_id, vessel_code, source, is_primary, namespace)
+     VALUES ($1, upper(trim($2)), $3, $4, $5)
      ON CONFLICT (vessel_code) DO UPDATE SET
        master_vessel_id = EXCLUDED.master_vessel_id,
        source = CASE WHEN master_vessel_code_aliases.is_primary THEN master_vessel_code_aliases.source ELSE EXCLUDED.source END,
+       namespace = CASE WHEN EXCLUDED.namespace = 'SAP' THEN 'SAP' ELSE master_vessel_code_aliases.namespace END,
+       -- Moving a code to another vessel takes the caller's flag (false unless it is being made
+       -- that vessel's primary, which the demote above already cleared room for). A code staying
+       -- put may be promoted but is never silently demoted, or its vessel would lose its primary.
+       is_primary = CASE
+         WHEN master_vessel_code_aliases.master_vessel_id <> EXCLUDED.master_vessel_id
+           THEN EXCLUDED.is_primary
+         ELSE master_vessel_code_aliases.is_primary OR EXCLUDED.is_primary
+       END,
        updated_at = CURRENT_TIMESTAMP
      RETURNING xmax = 0 AS inserted`,
-    [masterVesselId, code, source, isPrimary],
+    [masterVesselId, code, source, isPrimary, namespaceForAliasSource(source)],
   );
   return Boolean(result.rows[0]?.inserted);
 }
