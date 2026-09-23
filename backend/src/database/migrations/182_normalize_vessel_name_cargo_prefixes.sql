@@ -15,9 +15,18 @@
 --    wrong vessel.
 --
 -- Measured on a copy of production before applying: 20 of 474 master rows change their
--- normalized_vessel_name, all of them SPOB. and all still PROVISIONAL, and the partial unique
--- index uq_master_vessels_normalized_name_official gains ZERO collisions. No index anywhere is
--- built on this function, so redefining it invalidates nothing.
+-- normalized_vessel_name, all of them SPOB. No index anywhere is built on this function, so
+-- redefining it invalidates nothing.
+--
+-- THE RENAME CAN COLLIDE, and on SIT it did. Stripping SPOB. makes a row key on the same name as
+-- its prefix-less twin, and uq_master_vessels_normalized_name_official rejects that when BOTH are
+-- OFFICIAL. On the production copy one side of every such pair happened to be PROVISIONAL, so the
+-- collision count read zero and this migration looked safe; SIT has SPOB. REZEKI BERSAMA and
+-- REZEKI BERSAMA both OFFICIAL, and the backend crash-looped on the failed migration.
+--
+-- Counting collisions in one environment is not the same as handling them, so the merge below runs
+-- first and folds any pair that WOULD collide - which is the right outcome anyway: they are the
+-- same vessel written two ways, which is exactly what widening the prefix list set out to detect.
 
 CREATE OR REPLACE FUNCTION normalize_vessel_name(p_name text)
 RETURNS text
@@ -99,6 +108,45 @@ $$;
 
 COMMENT ON FUNCTION normalize_vessel_name(text) IS
   'Canonical vessel-name key; must stay aligned with normalizeVesselName() in vesselNameNormalize.ts';
+
+-- Fold vessels that the new keys would put on the same name. Grouped by the NEW key, so it catches
+-- both pairs that were already duplicated and pairs this migration is about to create.
+-- Survivor: OFFICIAL first, then whichever row carries more shipments, then the oldest.
+DO $$
+DECLARE
+  dup RECORD;
+BEGIN
+  FOR dup IN
+    SELECT keep.id AS keep_id, drop_row.id AS dup_id
+    FROM (
+      SELECT DISTINCT ON (normalize_vessel_name(vessel_name)) id,
+             normalize_vessel_name(vessel_name) AS new_key
+      FROM master_vessels
+      WHERE NULLIF(trim(vessel_name), '') IS NOT NULL
+      ORDER BY normalize_vessel_name(vessel_name),
+               CASE WHEN code_status = 'OFFICIAL' THEN 0 ELSE 1 END,
+               (SELECT count(*) FROM shipments s WHERE s.master_vessel_id = master_vessels.id) DESC,
+               created_at NULLS LAST,
+               id
+    ) keep
+    INNER JOIN master_vessels drop_row
+      ON normalize_vessel_name(drop_row.vessel_name) = keep.new_key
+     AND drop_row.id <> keep.id
+  LOOP
+    UPDATE master_vessel_code_aliases a
+    SET master_vessel_id = dup.keep_id, is_primary = false, updated_at = CURRENT_TIMESTAMP
+    WHERE a.master_vessel_id = dup.dup_id
+      AND NOT EXISTS (
+        SELECT 1 FROM master_vessel_code_aliases b
+        WHERE b.master_vessel_id = dup.keep_id
+          AND upper(trim(b.vessel_code)) = upper(trim(a.vessel_code))
+      );
+    DELETE FROM master_vessel_code_aliases WHERE master_vessel_id = dup.dup_id;
+    UPDATE shipments SET master_vessel_id = dup.keep_id, updated_at = CURRENT_TIMESTAMP
+    WHERE master_vessel_id = dup.dup_id;
+    DELETE FROM master_vessels WHERE id = dup.dup_id;
+  END LOOP;
+END $$;
 
 -- Stored keys were computed by the old definition, so bring them back in line. Only rows whose
 -- key actually changes are touched.
