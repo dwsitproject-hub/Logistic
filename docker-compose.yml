@@ -103,6 +103,12 @@ services:
       JPS_PORT_ID: ${JPS_PORT_ID:-1}
       JPS_REGION_SITE: ${JPS_REGION_SITE:-BONTANG}
       JPS_SWEEP_CRON: ${JPS_SWEEP_CRON:-*/15 * * * *}
+      JPS_TIMEOUT_MS: ${JPS_TIMEOUT_MS:-30000}
+      JPS_MIN_POLL_INTERVAL_MS: ${JPS_MIN_POLL_INTERVAL_MS:-300000}
+      JPS_MAX_SUBMITS_PER_SWEEP: ${JPS_MAX_SUBMITS_PER_SWEEP:-25}
+      # Testing only: resend what JPS rejected outright, once it has gone cold. See jpsRetryFailed().
+      JPS_RETRY_FAILED: ${JPS_RETRY_FAILED:-false}
+      JPS_RETRY_FAILED_AFTER_MS: ${JPS_RETRY_FAILED_AFTER_MS:-300000}
     ports:
       - "${BACKEND_PORT:-5001}:5001"
     depends_on:
