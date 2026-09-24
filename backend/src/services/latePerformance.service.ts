@@ -571,6 +571,34 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
+  /*
+   * Planning Status pushdown - the same narrowing idea as the product pushdown above, and the
+   * reason this filter felt slow rather than fast.
+   *
+   * Applied only at the end, on `base`, it decided nothing until every expensive CTE had already
+   * run over all ~19,000 contracts in the date range, and then threw away nine rows in ten. Here it
+   * cuts `contract_scope` to the contracts that can survive - measured on a copy of production,
+   * 1,650 of 19,053 for Planned and 1,853 for Unplanned, so qty_move, latest_spd, sto_agg and the
+   * sibling set do roughly a tenth of the work.
+   *
+   * Safe by construction, like the others: a narrowing pre-filter, never the deciding one. It is
+   * built by the same helper as the authoritative filter on `base`, `contracts.contract_id` is
+   * unique so scope-to-contract is 1:1, and the post-base filter still decides.
+   *
+   * No parameters: the helper embeds its own status literals.
+   */
+  {
+    const scopePlanning = sqlContractPlanningStatusFilter(
+      planningStatusFilters as Parameters<typeof sqlContractPlanningStatusFilter>[0],
+      {
+      contractAlias: 'c',
+      incotermExpr: 'c.incoterm',
+      includeTrucking: true,
+      },
+    );
+    if (scopePlanning) contractScopeWhere += ` AND ${scopePlanning}`;
+  }
+
   const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, latestSpdSnapshotFresh] =
     await Promise.all([
       resolveContractsQtyMoveCte('contract_scope'),

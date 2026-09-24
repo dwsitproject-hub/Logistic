@@ -347,6 +347,23 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       paramIndex++;
     }
 
+    /*
+     * Planning Status pushdown, mirroring latePerformance.service. Narrows `contract_scope` so the
+     * qty_move / latest_spd / sto_agg CTEs hanging off it run over the contracts that can survive
+     * rather than every contract in the date range - about a tenth of them. The authoritative
+     * filter still runs on `base` further down and is what decides.
+     *
+     * Costs nothing when no Planning Status is selected: the helper returns null and this is a
+     * no-op, so the plain Contracts page is untouched.
+     */
+    {
+      const scopePlanning = sqlContractPlanningStatusFilter(
+        normalizePlanningStatusValues(parseCommaSeparatedQuery((req.query as any).planningStatuses)),
+        { contractAlias: 'c', incotermExpr: 'c.incoterm', includeTrucking: true },
+      );
+      if (scopePlanning) contractScopeWhere += ` AND ${scopePlanning}`;
+    }
+
     const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, cpSnapshotFresh] =
       await Promise.all([
         resolveContractsQtyMoveCte('contract_scope'),
