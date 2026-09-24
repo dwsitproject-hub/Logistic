@@ -85,6 +85,8 @@ export function buildPagePrefetchRequests(href: string): PrefetchRequest[] {
         selectedProducts: [],
         selectedIncoterms: [],
         selectedSuppliers: [],
+        selectedSupplierGroups: [],
+        selectedPlanningStatuses: [],
         selectedGroupPlants: [],
         lateOnTimeFilter: 'ALL',
         perfDashMode: 'late',

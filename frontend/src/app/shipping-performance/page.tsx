@@ -18,6 +18,7 @@ import { PerformanceScopeFilters } from '@/components/performance/PerformanceSco
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
@@ -723,6 +724,10 @@ function applyGlobalFiltersToRows(
     selectedIncoterms: string[]
     selectedProducts: string[]
     selectedGroupPlants: string[]
+    selectedSuppliers: string[]
+    selectedSupplierGroups: string[]
+    /** 'Planned' / 'Unplanned'. Both selected, or neither, is no filter. */
+    selectedPlanningStatuses: string[]
     selectedVessels: string[]
     statusFilter: TableStatusFilter
     dateFrom: string
@@ -747,7 +752,14 @@ function applyGlobalFiltersToRows(
 
   return sourceRows.filter((row) => {
     if (!rowMatchesGlobalSearch(row, searchTrim, searchFields)) return false
-    if (!rowMatchesToolbarMultiFilters(row, filters)) return false
+    if (
+      !rowMatchesToolbarMultiFilters(row, {
+        ...filters,
+        selectedGroups: filters.selectedSupplierGroups,
+      })
+    ) {
+      return false
+    }
     const vessel = normalizeVesselKey(row.vessel_name)
     if (filters.selectedVessels.length > 0 && !filters.selectedVessels.includes(vessel)) return false
     if (!matchesTableStatusFilter(row, filters.statusFilter)) return false
@@ -1447,6 +1459,9 @@ function ShippingPerformancePageContent() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedSources, setSelectedSources] = useState<string[]>([])
+  const [selectedSuppliers, setSelectedSuppliers] = useState<string[]>([])
+  const [selectedSupplierGroups, setSelectedSupplierGroups] = useState<string[]>([])
+  const [selectedPlanningStatuses, setSelectedPlanningStatuses] = useState<string[]>([])
   const {
     selectedProducts,
     selectedGroupPlants,
@@ -1606,6 +1621,26 @@ function ShippingPerformancePageContent() {
     [scopeFilteredRows],
   )
   const availableIncoterms = useMemo(() => distinctScopeOptions('incoterm'), [distinctScopeOptions])
+  /*
+   * Options are derived from the rows already loaded rather than fetched: this page holds its whole
+   * dataset client-side and filters in the browser, so an option list from elsewhere could offer a
+   * value that matches nothing here.
+   */
+  const availableSuppliers = useMemo(
+    () =>
+      [...new Set(rows.map((r) => String(r.supplier ?? '').trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [rows],
+  )
+  const availableSupplierGroups = useMemo(
+    () =>
+      [...new Set(rows.map((r) => String(r.group_name ?? '').trim()).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [rows],
+  )
+
   const availableGroupPlants = useMemo(
     () => filterRegionSiteOptions(distinctScopeOptions('plant_site')),
     [distinctScopeOptions],
@@ -1635,6 +1670,9 @@ function ShippingPerformancePageContent() {
         selectedIncoterms,
         selectedProducts,
         selectedGroupPlants,
+        selectedSuppliers,
+        selectedSupplierGroups,
+        selectedPlanningStatuses,
         selectedVessels,
         statusFilter,
         dateFrom,
@@ -1652,6 +1690,9 @@ function ShippingPerformancePageContent() {
       rowMatchesToolbarMultiFilters(row, {
         selectedIncoterms,
         selectedGroupPlants,
+        selectedSuppliers,
+        selectedGroups: selectedSupplierGroups,
+        selectedPlanningStatuses,
       }),
     )
   }, [
@@ -1659,6 +1700,9 @@ function ShippingPerformancePageContent() {
     selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
+    selectedSuppliers,
+    selectedSupplierGroups,
+    selectedPlanningStatuses,
     selectedVessels,
     statusFilter,
     dateFrom,
@@ -1675,6 +1719,9 @@ function ShippingPerformancePageContent() {
       selectedIncoterms,
       selectedProducts,
       selectedGroupPlants,
+      selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       selectedVessels,
       statusFilter: 'All',
       dateFrom,
@@ -1686,6 +1733,9 @@ function ShippingPerformancePageContent() {
     selectedIncoterms,
     selectedProducts,
     selectedGroupPlants,
+    selectedSuppliers,
+    selectedSupplierGroups,
+    selectedPlanningStatuses,
     selectedVessels,
     dateFrom,
     dateTo,
@@ -1773,6 +1823,9 @@ function ShippingPerformancePageContent() {
     selectedSources,
     selectedProducts,
     selectedGroupPlants,
+    selectedSuppliers,
+    selectedSupplierGroups,
+    selectedPlanningStatuses,
     selectedVessels,
     selectedIncoterms,
     statusFilter,
@@ -2052,6 +2105,9 @@ function ShippingPerformancePageContent() {
     perfCardFilter,
     selectedIncoterms,
     selectedGroupPlants,
+    selectedSuppliers,
+    selectedSupplierGroups,
+    selectedPlanningStatuses,
     selectedVessels,
     performancePeriod,
     dateFrom,
@@ -2224,6 +2280,52 @@ function ShippingPerformancePageContent() {
                 placeholder="All region/plants"
                 emptyMessage="No region/plant values"
                 uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Supplier"
+                options={availableSuppliers}
+                selected={selectedSuppliers}
+                onChange={(values) => {
+                  setSelectedSuppliers(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All suppliers"
+                emptyMessage="No suppliers"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Group Supplier"
+                options={availableSupplierGroups}
+                selected={selectedSupplierGroups}
+                onChange={(values) => {
+                  setSelectedSupplierGroups(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All groups"
+                emptyMessage="No supplier groups"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              {/*
+                Planned means scheduled and still running, up to but not including completed. A
+                finished shipment is in neither option, so selecting both is the same as selecting
+                none. Shipping Performance reads the shipment status only - it has no trucking arm.
+              */}
+              <SearchableMultiSelect
+                label="Planning Status"
+                options={[...PLANNING_STATUS_OPTIONS]}
+                selected={selectedPlanningStatuses}
+                onChange={(values) => {
+                  setSelectedPlanningStatuses(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All planning statuses"
+                emptyMessage="No planning statuses"
               />
             </div>
             <div className="w-48">

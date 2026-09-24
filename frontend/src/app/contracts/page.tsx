@@ -20,7 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
-import { planningStatusBadgeClass } from '@/lib/planningStatus'
+import { PLANNING_STATUS_OPTIONS, planningStatusBadgeClass } from '@/lib/planningStatus'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -1107,6 +1107,9 @@ function ContractsPageContent() {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  const [availableSupplierGroups, setAvailableSupplierGroups] = useState<string[]>([])
+  const [selectedSupplierGroups, setSelectedSupplierGroups] = useState<string[]>([])
+  const [selectedPlanningStatuses, setSelectedPlanningStatuses] = useState<string[]>([])
   /**
    * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
    * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
@@ -1211,6 +1214,8 @@ function ContractsPageContent() {
         selectedProducts: contractPerfSelectedProducts,
         selectedIncoterms: contractPerfSelectedIncoterms,
         selectedSuppliers,
+        selectedSupplierGroups,
+        selectedPlanningStatuses,
         selectedGroupPlants: contractPerfSelectedGroupPlants,
         lateOnTimeFilter,
         perfDashMode,
@@ -1262,6 +1267,8 @@ function ContractsPageContent() {
       selectedProducts: contractPerfSelectedProducts,
       selectedIncoterms: contractPerfSelectedIncoterms,
       selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       selectedGroupPlants: contractPerfSelectedGroupPlants,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -1277,6 +1284,8 @@ function ContractsPageContent() {
       contractPerfSelectedProducts,
       contractPerfSelectedIncoterms,
       selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       contractPerfSelectedGroupPlants,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -2132,12 +2141,12 @@ function ContractsPageContent() {
       api.get('/contracts/filter-options/incoterms'),
       api.get('/contracts/filter-options/group-plants'),
       api.get('/dashboard/filter-options/suppliers'),
+      // Group Supplier = SAP's Vendor Group, which this endpoint reads straight from
+      // contracts.group_name. Loaded on Contract Performance too now that the page filters by it.
+      api.get('/dashboard/filter-options/groups'),
     ]
     if (!isContractPerformance) {
-      requests.push(
-        api.get('/dashboard/filter-options/products'),
-        api.get('/dashboard/filter-options/groups'),
-      )
+      requests.push(api.get('/dashboard/filter-options/products'))
     }
     Promise.all(requests)
       .then((results) => {
@@ -2152,9 +2161,14 @@ function ContractsPageContent() {
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
+        const supplierGroupRes = results[3] as { data?: { data?: unknown } }
+        const supplierGroupPayload = supplierGroupRes.data?.data
+        setAvailableSupplierGroups(
+          Array.isArray(supplierGroupPayload) ? (supplierGroupPayload as string[]) : [],
+        )
         if (!isContractPerformance) {
-          const productRes = results[3] as { data?: { data?: unknown } }
-          const groupRes = results[4] as { data?: { data?: unknown } }
+          const productRes = results[4] as { data?: { data?: unknown } }
+          const groupRes = results[3] as { data?: { data?: unknown } }
           const productPayload = productRes.data?.data
           const products = (Array.isArray(productPayload)
             ? productPayload
@@ -3600,6 +3614,40 @@ function ContractsPageContent() {
                   placeholder="All region/plants"
                   emptyMessage="No region/plant values"
                   uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Group Supplier"
+                  options={availableSupplierGroups}
+                  selected={selectedSupplierGroups}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setSelectedSupplierGroups(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All groups"
+                  emptyMessage="No supplier groups"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                {/*
+                  Planned means scheduled and still running - up to but not including completed,
+                  and never cancelled. A finished contract is in neither option, which is why
+                  selecting both is the same as selecting none.
+                */}
+                <SearchableMultiSelect
+                  label="Planning Status"
+                  options={[...PLANNING_STATUS_OPTIONS]}
+                  selected={selectedPlanningStatuses}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setSelectedPlanningStatuses(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All planning statuses"
+                  emptyMessage="No planning statuses"
                 />
               </div>
               <div className="w-48">

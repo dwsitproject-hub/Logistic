@@ -3,6 +3,7 @@
  * All sections MUST derive scope and row sets from this module — no localized filter() copies.
  */
 
+import { planningStatusParamValue } from '@/lib/planningStatus'
 import { valueInRegionSiteList } from '@/lib/globalScopeFilters'
 
 export type ContractPerfProductTab = 'All' | 'CPO' | 'PK' | 'POME' | 'Shell Palm'
@@ -99,6 +100,10 @@ export type ContractPerformanceGlobalFilters = {
   selectedIncoterms: string[]
   selectedSuppliers: string[]
   selectedGroupPlants: string[]
+  /** SAP Vendor Group, from the stored contracts.group_name column. */
+  selectedSupplierGroups: string[]
+  /** 'Planned' / 'Unplanned'. Both selected, or neither, is no filter. */
+  selectedPlanningStatuses: string[]
   summaryCardStatus: 'All' | 'Open' | 'Close'
   lateOnTimeFilter: 'ALL' | 'LATE' | 'ON_TIME'
   perfDashMode: 'late' | 'ontrack'
@@ -863,6 +868,21 @@ export function appendContractPerformanceApiParams(
   if (resolvedIncoterms.length > 0) {
     params.append('incoterms', resolvedIncoterms.join(','))
   }
+  if (scope.global.selectedSuppliers.length > 0) {
+    params.append('suppliers', scope.global.selectedSuppliers.join(','))
+  }
+  if (scope.global.selectedSupplierGroups.length > 0) {
+    params.append('supplierGroups', scope.global.selectedSupplierGroups.join(','))
+  }
+  /*
+   * Only a single selection is a filter. Planned and Unplanned do not cover the page between them
+   * - a completed contract is in neither - so sending both would read as "everything" to a human
+   * and as "drop every completed row" to the backend if it ever built (A OR B).
+   */
+  {
+    const planning = planningStatusParamValue(scope.global.selectedPlanningStatuses)
+    if (planning) params.append('planningStatuses', planning)
+  }
   resolvedPlants.forEach((plant) => params.append('plant', plant))
 }
 
@@ -926,6 +946,8 @@ export function buildContractPerfToolbarGlobal(input: {
   selectedProducts: string[]
   selectedIncoterms: string[]
   selectedSuppliers: string[]
+  selectedSupplierGroups: string[]
+  selectedPlanningStatuses: string[]
   selectedGroupPlants: string[]
   lateOnTimeFilter: ContractPerformanceGlobalFilters['lateOnTimeFilter']
   perfDashMode: ContractPerformanceGlobalFilters['perfDashMode']

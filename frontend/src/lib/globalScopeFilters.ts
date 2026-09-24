@@ -6,6 +6,12 @@ export type ToolbarMultiFilterState = {
   selectedSuppliers?: string[]
   selectedGroups?: string[]
   selectedGroupPlants: string[]
+  /**
+   * 'Planned' / 'Unplanned'. Planned means scheduled and still running - up to but not including
+   * completed, never cancelled - so a finished row belongs to neither value. Selecting both is
+   * therefore NOT "everything": only a single selection filters.
+   */
+  selectedPlanningStatuses?: string[]
 }
 
 type MultiColumnFilter = {
@@ -112,6 +118,7 @@ export function rowMatchesToolbarMultiFilters(
     group_name?: unknown
     plant_site?: unknown
     group_plant?: unknown
+    status?: unknown
   },
   filters: Partial<ToolbarMultiFilterState>,
 ): boolean {
@@ -135,6 +142,16 @@ export function rowMatchesToolbarMultiFilters(
   }
   if (filters.selectedGroupPlants && filters.selectedGroupPlants.length > 0) {
     if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
+  }
+  if (filters.selectedPlanningStatuses && filters.selectedPlanningStatuses.length === 1) {
+    const st = String(row.status ?? '').trim().toUpperCase()
+    const wanted = filters.selectedPlanningStatuses[0].trim().toUpperCase()
+    // Trucking reports IN_PROGRESS where shipments report PLANNED/SAILED/ARRIVED_LP; both mean
+    // scheduled and under way, so both count here and the caller need not say which page it is.
+    const isPlanned =
+      st === 'PLANNED' || st === 'SAILED' || st === 'ARRIVED_LP' || st === 'IN_PROGRESS'
+    if (wanted === 'PLANNED' && !isPlanned) return false
+    if (wanted === 'UNPLANNED' && st !== 'UNPLANNED') return false
   }
   return true
 }
