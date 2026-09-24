@@ -6,6 +6,7 @@ import {
 } from './oilLossVesselCompletedSql';
 import { shipmentEffectiveStatusExpr } from './shipmentListFilters';
 import { deriveShipmentStatus } from './shipmentStatus';
+import { shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
 import {
   SAP_OIL_LOSS_QTY_TRUCKING_NUMERIC,
   SAP_OIL_LOSS_QTY_VESSEL_NUMERIC,
@@ -47,11 +48,12 @@ function collapseSql(sql: string): string {
 }
 
 describe('vessel completed population', () => {
-  it('keeps one STO using the Shipments Completed status', () => {
+  it('keeps one STO of stored Completed shipments', () => {
     const sql = buildOilLossVesselCompletedCtes();
     const flat = collapseSql(sql);
-    expect(flat).toContain(collapseSql(sqlOilLossVesselCompletedStatus('f')));
-    expect(flat).toContain(collapseSql(shipmentEffectiveStatusExpr('f')));
+    expect(flat).toContain(collapseSql(sqlOilLossVesselCompletedStatus('s')));
+    expect(flat).toContain(collapseSql(shipmentListSeaStoKeyExpr('c', 'l', 's')));
+    expect(flat).not.toContain(collapseSql(shipmentEffectiveStatusExpr('f')));
     expect(sql).toContain('GROUP BY');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
     expect(sql).toContain("= 'PRESENT'");
@@ -59,12 +61,15 @@ describe('vessel completed population', () => {
     expect(sql).not.toContain('qty_receive_resolved < qty_delivery_resolved');
     expect(sql).toContain('NULLIF(s.sfal_qty, 0)');
     expect(sql).toContain('NULLIF(s.sfbd_qty, 0)');
+    expect(sql).toContain('g.shipment_sfal_kg AS quantity_sfal');
+    expect(sql).not.toContain('SUM(quantity_sfal)');
+    expect(sql).not.toContain('SUM(quantity_sfbd)');
     expect(sql).toContain('/ 100');
     expect(sql).not.toContain('qty_sfal_raw');
     expect(sql).not.toContain('spd_fig');
     expect(sql).not.toContain('actual_vessel_qty_receive');
-    expect(sql).toContain('LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id');
-    expect(sql).not.toContain('qms.quantity_delivery_vessel AS quantity_delivery');
+    expect(sql).not.toContain('contract_qty_move_snapshot');
+    expect(sql).not.toContain('vlp_load_first');
   });
 
   it('leaves the loss filter on the trucking branch only', async () => {

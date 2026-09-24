@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Layout from '@/components/Layout'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import api from '@/lib/api'
-import { buildCacheKey, cachedGet, peekCache } from '@/lib/clientDataCache'
+import { buildCacheKey, cachedGet, invalidateClientCacheByPathPrefix, peekCache } from '@/lib/clientDataCache'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -133,6 +133,12 @@ interface OilLossRow extends OilLossSourceRow {
   contract_number: string
 }
 
+type OilLossApiEnvelope = {
+  data?: OilLossRow[]
+  snapshotStale?: boolean
+  snapshotRefreshedAt?: string | null
+}
+
 type OilLossTableViewMode = 'all_contract' | 'by_transporter' | 'by_supplier'
 
 type OilLossTableRow = OilLossAllContractRow | OilLossByTransporterRow | OilLossBySupplierRow
@@ -224,7 +230,7 @@ function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
   if (kg == null || !Number.isFinite(Number(kg))) {
     return <span className="text-sm text-gray-400">-</span>
   }
-  return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg, { maxFractionDigits: 3 })}</span>
+  return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
 }
 
 function renderROilLossCell(kg: number | null): ReactNode {
@@ -1175,7 +1181,6 @@ export default function OilLossPage() {
   const [viewMode, setViewMode] = useState<OilLossTableViewMode>('all_contract')
   const [groupModalOpen, setGroupModalOpen] = useState(false)
   const [selectedGroupData, setSelectedGroupData] = useState<OilLossGroupHistoryModalSelection | null>(null)
-  const [openingLogisticsKey, setOpeningLogisticsKey] = useState<string | null>(null)
   const [viewShipmentModal, setViewShipmentModal] = useState<{
     shipmentId: string
     editContractId: string | null
@@ -1262,48 +1267,89 @@ export default function OilLossPage() {
     setDateTo(globalPeriodMeta.dateTo)
   }, [globalPeriodMeta.dateFrom, globalPeriodMeta.dateTo])
 
-  useEffect(() => {
+  const oilLossReloadRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const reloadOilLoss = useCallback(async (options?: { force?: boolean }) => {
     const cacheKey = buildCacheKey('GET', '/oil-loss')
-    const cached = peekCache<{ data?: OilLossRow[] }>(cacheKey)
+    if (options?.force) invalidateClientCacheByPathPrefix('/oil-loss')
+    const cached = !options?.force ? peekCache<OilLossApiEnvelope>(cacheKey) : null
     if (cached) {
-      const raw: OilLossRow[] = Array.isArray(cached.data) ? cached.data : []
-      setRows(filterOilLossEligibleRows(raw))
+      setRows(filterOilLossEligibleRows(Array.isArray(cached.data) ? cached.data : []))
       setLoading(false)
     }
-
-    const applyOilLossEnvelope = (envelope: { data?: OilLossRow[] }) => {
-      const raw: OilLossRow[] = Array.isArray(envelope?.data) ? envelope.data : []
-      setRows(filterOilLossEligibleRows(raw))
+    const applyOilLossEnvelope = (envelope: OilLossApiEnvelope) => {
+      setRows(filterOilLossEligibleRows(Array.isArray(envelope?.data) ? envelope.data : []))
     }
-
-    const fetch = async () => {
-      try {
-        if (!cached) setLoading(true)
-        setDataFetching(true)
-        const { data, revalidating } = await cachedGet(
-          cacheKey,
-          (signal) => api.get('/oil-loss', { signal }).then((r) => r.data),
-          {
-            onRevalidate: (fresh) => {
-              applyOilLossEnvelope(fresh)
-              setDataFetching(false)
-            },
+    try {
+      if (!cached) setLoading(true)
+      setDataFetching(true)
+      const { data, revalidating } = await cachedGet(
+        cacheKey,
+        (signal) => api.get('/oil-loss', { signal }).then((r) => r.data as OilLossApiEnvelope),
+        {
+          force: options?.force,
+          onRevalidate: (fresh) => {
+            applyOilLossEnvelope(fresh)
+            setDataFetching(false)
           },
-        )
-        applyOilLossEnvelope(data)
-        if (!revalidating) setDataFetching(false)
-      } catch (err) {
+        },
+      )
+      applyOilLossEnvelope(data)
+      if (!revalidating) setDataFetching(false)
+      return data
+    } catch (err) {
+      const canceled = (err as { code?: string; message?: string })?.code === 'ERR_CANCELED'
+        || (err as { message?: string })?.message === 'canceled'
+      if (!canceled) {
         console.error('Oil loss load error:', err)
-        if (!cached) {
-          setRows([])
+        if (!cached) setRows([])
+      }
+      setDataFetching(false)
+      return null
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void reloadOilLoss()
+    return () => {
+      if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
+    }
+  }, [reloadOilLoss])
+
+  const reloadOilLossAfterShipmentEdit = useCallback(() => {
+    if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
+    let seenRefreshedAt: string | null | undefined
+    let tries = 0
+    let pulling = false
+    const pull = async () => {
+      if (pulling) return
+      pulling = true
+      tries += 1
+      const envelope = await reloadOilLoss({ force: true })
+      pulling = false
+      if (!envelope) return
+      if (seenRefreshedAt === undefined) {
+        seenRefreshedAt = envelope.snapshotRefreshedAt ?? null
+        if (envelope.snapshotStale !== true) {
+          if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
+          oilLossReloadRef.current = null
+          return
         }
-        setDataFetching(false)
-      } finally {
-        setLoading(false)
+      }
+      const rebuilt = envelope.snapshotStale !== true
+        && envelope.snapshotRefreshedAt !== seenRefreshedAt
+      if (rebuilt || tries >= 90) {
+        if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
+        oilLossReloadRef.current = null
       }
     }
-    void fetch()
-  }, [])
+    void pull()
+    oilLossReloadRef.current = setInterval(() => {
+      void pull()
+    }, 4000)
+  }, [reloadOilLoss])
 
   useEffect(() => {
     let cancelled = false
@@ -1676,48 +1722,19 @@ export default function OilLossPage() {
     setGroupModalOpen(true)
   }, [])
 
-  const openVesselFromOilLossRow = useCallback(async (row: OilLossAllContractRow) => {
-    const lookupKey = firstOilLossToken(row.sto_number) || String(row.operation_id ?? '').trim()
-    if (!lookupKey) {
-      alert('Shipment Operation ID or STO is required to open View Shipment.')
+  const openVesselFromOilLossRow = useCallback((row: OilLossAllContractRow) => {
+    const shipmentId = String(row.shipment_id ?? '').trim()
+    if (!isShipmentUuid(shipmentId)) {
+      alert('No completed shipment was found for this STO.')
       return
     }
     const contractNumber = firstOilLossToken(row.contract_number)
-    const requestKey = `vessel:${row.id}`
-    setOpeningLogisticsKey(requestKey)
-    try {
-      const loadShipmentId = async (withContract: boolean) => {
-        const res = await api.get('/shipments', {
-          params: {
-            sto: lookupKey,
-            ...(withContract && contractNumber ? { contract: contractNumber } : {}),
-            limit: 5,
-            page: 1,
-            compact: 'true',
-            includeSummary: 'false',
-          },
-        })
-        const shipments = (res.data?.data?.shipments ?? []) as Array<{ id?: string }>
-        const id = String(shipments[0]?.id ?? '').trim()
-        return isShipmentUuid(id) ? id : ''
-      }
-      const shipmentId = (await loadShipmentId(true)) || (await loadShipmentId(false))
-      if (!shipmentId) {
-        alert('No shipment was found for this operation or STO.')
-        return
-      }
-      setViewShipmentModal({
-        shipmentId,
-        editContractId: contractNumber || null,
-        editStoNumber: firstOilLossToken(row.sto_number) || lookupKey,
-        editContractNumbers: String(row.contract_number ?? '').trim() || null,
-      })
-    } catch (err) {
-      console.error('openVesselFromOilLossRow:', err)
-      alert('Failed to open View Shipment.')
-    } finally {
-      setOpeningLogisticsKey((current) => (current === requestKey ? null : current))
-    }
+    setViewShipmentModal({
+      shipmentId,
+      editContractId: contractNumber || null,
+      editStoNumber: firstOilLossToken(row.sto_number) || null,
+      editContractNumbers: String(row.contract_number ?? '').trim() || null,
+    })
   }, [])
 
   const openTruckingFromOilLossRow = useCallback((row: OilLossAllContractRow) => {
@@ -2417,13 +2434,12 @@ export default function OilLossPage() {
                                       (() => {
                                         const contractRow = row as OilLossAllContractRow
                                         const isVessel = globalTransport === 'Vessel'
-                                        const lookupKey = isVessel
-                                          ? String(contractRow.operation_id ?? '').trim() ||
-                                            firstOilLossToken(contractRow.sto_number)
-                                          : firstOilLossToken(contractRow.contract_number) ||
-                                            firstOilLossToken(contractRow.contract_ext_no)
-                                        const requestKey = `${isVessel ? 'vessel' : 'truck'}:${contractRow.id}`
-                                        const isOpening = openingLogisticsKey === requestKey
+                                        const canOpen = isVessel
+                                          ? isShipmentUuid(String(contractRow.shipment_id ?? '').trim())
+                                          : Boolean(
+                                              firstOilLossToken(contractRow.contract_number) ||
+                                                firstOilLossToken(contractRow.contract_ext_no),
+                                            )
                                         const label = isVessel ? 'View shipment' : 'View trucking'
                                         return (
                                           <Tooltip>
@@ -2431,9 +2447,9 @@ export default function OilLossPage() {
                                               <Button
                                                 variant="outline"
                                                 size="icon"
-                                                disabled={!lookupKey || isOpening}
+                                                disabled={!canOpen}
                                                 onClick={() => {
-                                                  if (isVessel) void openVesselFromOilLossRow(contractRow)
+                                                  if (isVessel) openVesselFromOilLossRow(contractRow)
                                                   else openTruckingFromOilLossRow(contractRow)
                                                 }}
                                                 className={
@@ -2443,9 +2459,7 @@ export default function OilLossPage() {
                                                 }
                                                 aria-label={label}
                                               >
-                                                {isOpening ? (
-                                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                                ) : isVessel ? (
+                                                {isVessel ? (
                                                   <Ship className="h-4 w-4" />
                                                 ) : (
                                                   <Truck className="h-4 w-4" />
@@ -2573,6 +2587,7 @@ export default function OilLossPage() {
           editStoNumber={viewShipmentModal?.editStoNumber ?? null}
           editContractNumbers={viewShipmentModal?.editContractNumbers ?? null}
           onSubmit={async () => {}}
+          onShipmentChanged={reloadOilLossAfterShipmentEdit}
         />
 
         <ViewTruckingOperationModal

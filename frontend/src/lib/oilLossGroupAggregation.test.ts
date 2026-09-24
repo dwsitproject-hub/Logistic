@@ -159,6 +159,25 @@ describe('aggregateOilLossRowsByGroup', () => {
     expect(merged.sto_number).toBe('STO-1')
     expect(merged.contract_number).toBe('CN-1, CN-2')
     expect(merged.contract_ext_no).toBe('EXT-1, EXT-2')
+    expect(merged.id).toBe('sto:STO-1')
+    expect(merged.shipment_id).toBeNull()
+  })
+
+  it('keeps the shipment UUID after the row id becomes the STO key', () => {
+    const shipmentId = 'cca6094b-d0fa-4b83-bfbf-d9ce777ac96c'
+    const [merged] = aggregateOilLossRowsByGroup([
+      {
+        id: shipmentId,
+        incoterm: 'FOB',
+        sto_number: '1006019817',
+        contract_number: 'CN-1',
+        po_number: 'PO-1',
+        quantity_sent: 5_000_000,
+        quantity_received: 5_000_000,
+      },
+    ])
+    expect(merged.id).toBe('sto:1006019817')
+    expect(merged.shipment_id).toBe(shipmentId)
   })
 
   it('puts two POs that share one STO on that STO row even when each PO has other STOs', () => {

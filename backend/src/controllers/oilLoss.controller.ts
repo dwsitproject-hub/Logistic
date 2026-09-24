@@ -7,10 +7,12 @@ export const getOilLoss = async (_req: AuthRequest, res: Response) => {
   try {
     // Rows + gain come from the snapshot (memory when warm). ytdSummary is recomputed
     // per request because its YTD window depends on the current date.
-    const { rows, gainRow } = await loadOilLossPayload();
+    const { rows, gainRow, snapshotStale, snapshotRefreshedAt } = await loadOilLossPayload();
     const ytdSummary = buildYtdOilLossSummary(rows);
     return res.json({
       data: rows,
+      snapshotStale: snapshotStale === true,
+      snapshotRefreshedAt: snapshotRefreshedAt ?? null,
       ytdSummary,
       gainSummary: {
         totalGainKg: Number(gainRow.total_gain_kg),
