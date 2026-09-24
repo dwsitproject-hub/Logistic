@@ -22,6 +22,12 @@ import {
   sqlHasCycleCompletionDate,
 } from '../utils/contractsListCycleSql';
 import {
+  normalizePlanningStatusValues,
+  sqlContractPlanningStatusFilter,
+  sqlRepresentativeShipmentStatusExpr,
+  sqlRepresentativeTruckingStatusExpr,
+} from '../utils/contractPlanningStatusSql';
+import {
   compareContractsListSortRows,
   resolveContractsListSort,
 } from '../utils/contractsListSort';
@@ -415,6 +421,15 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           ${sqlB2bEndingBuyerAgg()} AS buyer,
           MAX(c.supplier) AS supplier,
           MAX(c.group_name) AS group_name,
+          /*
+           * One PO can carry several STOs, and the live one represents the contract: a PO with one
+           * STO Planned and another Completed reads Planned, because that is the half still needing
+           * attention. The per-STO breakdown is on the contract detail modal. CANCELLED sorts last
+           * so it only wins when it is all there is - 35 of the 47 contracts with mixed shipment
+           * statuses are CANCELLED + COMPLETED, and calling those Cancelled would hide finished work.
+           */
+          MAX(${sqlRepresentativeShipmentStatusExpr('c')}) AS shipment_status,
+          MAX(${sqlRepresentativeTruckingStatusExpr('c')}) AS trucking_status,
           MAX(c.product) AS product,
           ${sqlB2bEndingCompanyAgg()} AS company_name,
           MAX(c.quantity_ordered) AS quantity_ordered,
@@ -523,6 +538,54 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
       queryText += ` AND UPPER(TRIM(COALESCE(base.incoterm, ''))) = ANY($${paramIndex}::text[])`;
       queryParams.push(incotermsFilter);
       paramIndex++;
+    }
+
+    /*
+     * Supplier, Group Supplier and Planning Status - the Contract Performance toolbar filters.
+     *
+     * They reached Section 1 and the Section 2 tree, which read them in latePerformance.service,
+     * but not this paginated list, so the View table listed contracts the cards above it had
+     * already excluded. Same spelling as there, and the same columns: `base.supplier` and
+     * `base.group_name` are the stored snapshot values, not the jsonb blob.
+     *
+     * The plain Contracts page never sends any of the three, so nothing changes for it.
+     */
+    const supplierMultiFilters = parseCommaSeparatedQuery((req.query as any).suppliers)
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+    if (supplierMultiFilters.length > 0) {
+      queryText += ` AND UPPER(TRIM(COALESCE(base.supplier, ''))) = ANY($${paramIndex}::text[])`;
+      queryParams.push(supplierMultiFilters);
+      paramIndex++;
+    }
+
+    const supplierGroupFilters = parseCommaSeparatedQuery((req.query as any).supplierGroups)
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+    if (supplierGroupFilters.length > 0) {
+      queryText += ` AND UPPER(TRIM(COALESCE(base.group_name, ''))) = ANY($${paramIndex}::text[])`;
+      queryParams.push(supplierGroupFilters);
+      paramIndex++;
+    }
+
+    /*
+     * Planning Status is derived, not stored, so it is built by the same helper Section 1 uses -
+     * EXISTS over shipments or trucking, chosen by incoterm. Deliberately NOT read off the
+     * `shipment_status` / `trucking_status` columns this CTE already computes: those pick the ONE
+     * status that represents the contract in the table, and for trucking they rank UNPLANNED above
+     * IN_PROGRESS so the half still needing attention is the one shown. A contract with both would
+     * then read Unplanned here while Section 1 counted it Planned.
+     */
+    {
+      const planningStatusFilters = normalizePlanningStatusValues(
+        parseCommaSeparatedQuery((req.query as any).planningStatuses),
+      );
+      const planningSql = sqlContractPlanningStatusFilter(planningStatusFilters, {
+        contractAlias: 'base',
+        incotermExpr: 'base.incoterm',
+        includeTrucking: true,
+      });
+      if (planningSql) queryText += ` AND ${planningSql}`;
     }
 
     if (companyCode) {
@@ -671,8 +734,19 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
                   ELSE (${effectiveDeliveryEndDateSql} - last_eta_vessel_complete_discharge::date)
                 END
               )
+            /*
+             * Condition B, the last fallback: a running contract with no actual and no estimate is
+             * measured against today. It used to be LAND-only, which left SEA and MIX with no
+             * value at all - they fell out of Late AND On Time, so the two filters together did
+             * not cover the page. Must stay in step with computeOpenTradeCycleDays, which returns
+             * the same (due end - today) for the same case; this expression drives the filter
+             * while that one drives the displayed number.
+             *
+             * Still restricted to OPEN/ACTIVE. A CLOSE contract with no completion date has
+             * genuinely lost its milestone, and dating it today would claim it finished today.
+             */
             ELSE CASE
-              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE') AND ${_transportExpr} LIKE 'LAND%'
+              WHEN ${_statusExpr} IN ('OPEN', 'ACTIVE')
                 THEN (${effectiveDeliveryEndDateSql} - CURRENT_DATE)
               ELSE NULL
             END END

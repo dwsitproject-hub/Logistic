@@ -13,7 +13,11 @@ import { parseColumnFiltersQuery, shipmentEffectiveStatusExpr } from '../utils/s
 import { resolveContractLogisticsStoNumber } from '../utils/contractLogisticsStoDisplay';
 import { computePerfTradeCycleDaysForRow } from './latePerformance.service';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
-import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
+import {
+  SHIPMENT_LIST_JPS_JOIN_SQL,
+  SHIPMENT_LIST_JPS_SELECT_SQL,
+  SHIPMENT_LIST_STO_JOIN_SQL,
+} from '../utils/shipmentListStoJoinSql';
 import {
   SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN,
   SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN_SHELL,
@@ -1292,8 +1296,10 @@ const LIST_PAGE_SELECT = `
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+${SHIPMENT_LIST_JPS_SELECT_SQL}
       ${SHIPMENT_LIST_STO_JOIN_SQL}
+      ${SHIPMENT_LIST_JPS_JOIN_SQL}
       ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
 
 /** Final SELECT when rows are pre-enriched in shipment_page (qty sort path). */
@@ -1343,12 +1349,14 @@ const LIST_PAGE_SELECT_ENRICHED = `
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+${SHIPMENT_LIST_JPS_SELECT_SQL}
       FROM shipment_page sp
       LEFT JOIN sap_latest sl ON sl.sto_key::text = sp.sto_key::text
       LEFT JOIN sap_loading_ports_agg slpa ON slpa.sto_key::text = sp.sto_key::text
       LEFT JOIN sap_discharge_ports_agg sdpa ON sdpa.sto_key::text = sp.sto_key::text
       LEFT JOIN po_numbers_agg pna ON pna.sto_key::text = sp.sto_key::text
+      ${SHIPMENT_LIST_JPS_JOIN_SQL}
       ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
 
 /** Single round-trip list query: page rows + __filter_total (C). */

@@ -170,7 +170,11 @@ import {
 } from '../utils/shipmentSection1CombinedSummarySql';
 import { normalizePipelineVesselNameList } from '../utils/pipelineVesselNames';
 import { shipmentListSpdAggCtes } from '../utils/shipmentListSapAggSql';
-import { SHIPMENT_LIST_STO_JOIN_SQL } from '../utils/shipmentListStoJoinSql';
+import {
+  SHIPMENT_LIST_JPS_JOIN_SQL,
+  SHIPMENT_LIST_JPS_SELECT_SQL,
+  SHIPMENT_LIST_STO_JOIN_SQL,
+} from '../utils/shipmentListStoJoinSql';
 import { SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN } from '../utils/masterVesselDisplaySql';
 import {
   sqlShipmentListDischargePortsKlipAgg,
@@ -2323,8 +2327,10 @@ ${vlpLateralJoins}
         sl.vessel_code_sap,
         sl.vessel_owner_sap,
         mv.vessel_name_master,
-        ${shipmentEffectiveStatusExpr('sp')} AS effective_status
+        ${shipmentEffectiveStatusExpr('sp')} AS effective_status,
+${SHIPMENT_LIST_JPS_SELECT_SQL}
       ${SHIPMENT_LIST_STO_JOIN_SQL}
+      ${SHIPMENT_LIST_JPS_JOIN_SQL}
       ${SHIPMENT_LIST_MASTER_VESSEL_LATERAL_JOIN}`;
     const mainParams = [...innerParams, ...outerParams, Number(limit), offset];
 
@@ -3329,6 +3335,13 @@ export const updateShipment = async (req: AuthRequest, res: Response) => {
     } catch (err) {
       logger.warn('Contract qty_move snapshot refresh after shipment update failed', { err, shipmentId });
     }
+
+    // ATC Loading and the discharge ETA are both edited here, and both are part of what makes an
+    // STO eligible for a jetty booking. Fired after the response is on its way so a slow or
+    // unreachable JPS never delays a save; runJpsSync swallows its own failures.
+    setImmediate(() => {
+      void import('../jps').then(({ runJpsSync }) => runJpsSync('shipment-edit')).catch(() => {});
+    });
 
     return res.json({
       success: true,

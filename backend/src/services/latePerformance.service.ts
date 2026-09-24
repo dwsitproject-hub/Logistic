@@ -49,6 +49,10 @@ import {
 import { sqlActiveSeaStoSiblingContractIdsCte } from '../utils/seaStoSiblingSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
+  normalizePlanningStatusValues,
+  sqlContractPlanningStatusFilter,
+} from '../utils/contractPlanningStatusSql';
+import {
   B2B_ENDING_CHILD_SNAPSHOT_TABLE,
   sqlB2bEndingCompanyAgg,
   sqlB2bEndingPlantCodeAgg,
@@ -80,6 +84,11 @@ export interface LatePerformanceFilters {
   productFilters: string[];
   sourceTypeFilter: string | undefined;
   sourceTypeFilters: string[];
+  /** Multi-select Supplier / Group Supplier, read from the stored snapshot columns. */
+  supplierFilters: string[];
+  supplierGroupFilters: string[];
+  /** PLANNED / UNPLANNED. Both selected, or neither, means no filter. */
+  planningStatusFilters: string[];
   /** Open/Close tab filter for tree aggregation (in-memory when part=all). */
   statusNorm: string;
   /** Status filter pushed into SQL — empty for part=all/summary so one row load serves both cards + tree. */
@@ -141,6 +150,9 @@ function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
     productFilters: [...f.productFilters].sort(),
     sourceTypeFilter: f.sourceTypeFilter ?? '',
     sourceTypeFilters: [...f.sourceTypeFilters].sort(),
+    supplierFilters: [...f.supplierFilters].sort(),
+    supplierGroupFilters: [...f.supplierGroupFilters].sort(),
+    planningStatusFilters: [...f.planningStatusFilters].sort(),
   };
   return JSON.stringify(norm);
 }
@@ -185,6 +197,11 @@ export function parseLatePerformanceFilters(
       : sourceTypeFilter?.trim()
         ? [sourceTypeFilter.trim()]
         : [];
+  const supplierFilters = parseCommaSeparatedQuery((req.query as any).suppliers);
+  const supplierGroupFilters = parseCommaSeparatedQuery((req.query as any).supplierGroups);
+  const planningStatusFilters = normalizePlanningStatusValues(
+    parseCommaSeparatedQuery((req.query as any).planningStatuses),
+  );
 
   const now = new Date();
   const y = now.getFullYear();
@@ -225,6 +242,9 @@ export function parseLatePerformanceFilters(
     productFilters,
     sourceTypeFilter,
     sourceTypeFilters,
+    supplierFilters,
+    supplierGroupFilters,
+    planningStatusFilters,
     statusNorm,
     sqlStatusNorm,
     plants,
@@ -455,6 +475,9 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     productFilters,
     sourceTypeFilter,
     sourceTypeFilters,
+    supplierFilters,
+    supplierGroupFilters,
+    planningStatusFilters,
   } = filters;
 
   const queryParams: any[] = [];
@@ -678,6 +701,35 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     queryParams.push(`%${supplier}%`);
     paramIndex++;
   }
+  /*
+   * Supplier and Group Supplier read the STORED snapshot columns, not latest_spd_data. The single
+   * free-text `supplier` filter above still goes through the jsonb, which detoasts the whole blob
+   * per row; `base.supplier` and `base.group_name` carry the same values - group_name was verified
+   * row for row against the SAP `Vendor Group` field - at a fraction of the cost. 566 suppliers and
+   * 354 groups, so an exact ANY() match is right rather than ILIKE.
+   */
+  if (supplierFilters.length > 0) {
+    queryText += ` AND UPPER(TRIM(COALESCE(base.supplier, ''))) = ANY($${paramIndex}::text[])`;
+    queryParams.push(supplierFilters.map((v) => v.trim().toUpperCase()));
+    paramIndex++;
+  }
+  if (supplierGroupFilters.length > 0) {
+    queryText += ` AND UPPER(TRIM(COALESCE(base.group_name, ''))) = ANY($${paramIndex}::text[])`;
+    queryParams.push(supplierGroupFilters.map((v) => v.trim().toUpperCase()));
+    paramIndex++;
+  }
+  /*
+   * Planning Status reads shipments AND trucking, chosen by incoterm. Scoping it to shipments
+   * alone would call 16,121 LAND contracts Unplanned while their trucks were running.
+   */
+  {
+    const planningSql = sqlContractPlanningStatusFilter(
+      planningStatusFilters as Parameters<typeof sqlContractPlanningStatusFilter>[0],
+      { contractAlias: 'base', incotermExpr: 'base.incoterm', includeTrucking: true },
+    );
+    if (planningSql) queryText += ` AND ${planningSql}`;
+  }
+
   if (scope === 'filtered' && buyer) {
     queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ILIKE $${paramIndex} OR base.latest_spd_data->>'Buyer' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
     queryParams.push(`%${buyer}%`);
@@ -1289,8 +1341,22 @@ export function resolveSeaTradeCycleCompletionDate(row: any, todayMid: Date): Da
 
 /**
  * Open Trade Cycle: Due Date Delivery End vs completion date.
- * SEA: ATA → else ETA (or today when ETA &lt; today); ETA null → null (no Condition B).
- * LAND: Last Receive → WB → planning → ETA; when none, Condition B (today vs due end).
+ * SEA: ATA → else ETA (or today when ETA &lt; today). LAND: Last Receive → WB → planning.
+ * Neither → today (Condition B).
+ *
+ * TODAY IS THE LAST FALLBACK, and only here. A contract that is still running and has no estimate
+ * at all is not unmeasurable - it is measurable against now, and every day it stays open it is one
+ * day further from its due date. Returning "-" instead dropped it out of Late AND On Time, so the
+ * two filters together did not cover the page: 730 running contracts on a copy of production, of
+ * which 85 are the MIX transport that resolveCycleCompletionDate does not recognise at all.
+ *
+ * Deliberately NOT applied to CLOSE/CLOSED/COMPLETED, which never reach this function. Giving a
+ * finished contract today's date would claim it completed today, and the figure would grow one day
+ * more negative every day - 2,352 contracts, and last month's report would not reproduce.
+ *
+ * The sign matches tradeCycleSqlExpr's own fallback branch (`deliveryEnd - CURRENT_DATE`), which
+ * drives the Late / On Time filter. The two must agree or a row is filtered by one rule and
+ * displayed by another.
  */
 function computeOpenTradeCycleDays(
   row: any,
@@ -1299,8 +1365,7 @@ function computeOpenTradeCycleDays(
   deliveryEnd: Date,
 ): number | null {
   const end = resolveCycleCompletionDate(row, transport, todayMid);
-  // No ATC and no ETC means "-", for LAND as well as SEA: see the note above resolveCycleCompletionDate.
-  if (!end) return null;
+  if (!end) return diffCalendarDays(todayMid, deliveryEnd);
   return diffCalendarDays(end, deliveryEnd);
 }
 

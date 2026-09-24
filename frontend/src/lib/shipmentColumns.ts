@@ -21,6 +21,7 @@ import {
   type CompactTableColumnWidthInput,
 
 } from '@/lib/compactTableUi'
+import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
 
 
 
@@ -102,6 +103,12 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 
   'ata_vessel_complete_discharge',
 
+  // Jetty Planning System — only where the integration is live (NEXT_PUBLIC_JPS_ENABLED=true).
+  // Everywhere else the two would read "Not Sent" and "-" on every row, which is accurate and
+  // useless; an operator who wants them anyway can still turn them on from the column settings.
+
+  ...(JETTY_COLUMNS_ENABLED ? ['jetty_status', 'jetty_sync_dates'] : []),
+
 ] as const
 
 
@@ -130,7 +137,7 @@ export const SHIPMENT_OBSOLETE_COLUMN_IDS = [
 
 /** Bump when default column order/visibility changes — triggers one-time layout migration. */
 
-export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v11'
+export const SHIPMENT_COLUMN_LAYOUT_VERSION = 'shipments-columns-v12'
 
 
 
@@ -141,6 +148,11 @@ export const SHIPMENT_COLUMN_LAYOUT_VERSION_KEY = 'shipments.compact.columnLayou
 /** Compact fixed px widths — header longest-word logic may expand via resolveCompactColumnWidthPx. */
 
 export const SHIPMENT_COLUMN_WIDTH_PX: Readonly<Record<string, number>> = {
+
+  jetty_status: 112,
+
+  jetty_sync_dates: 176,
+
 
   select_group: 120,
 

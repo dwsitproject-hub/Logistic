@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { PLANNING_STATUS_OPTIONS, planningStatusBadgeClass } from '@/lib/planningStatus'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -309,6 +310,9 @@ interface Contract {
   contract_perf_on_time?: boolean | null
   contract_perf_in_tree?: boolean | null
   payment_status?: string
+  /** Representative status across the PO's STOs: the live one wins over a completed one. */
+  shipment_status?: string | null
+  trucking_status?: string | null
   company_name?: string
   vessel_name?: string | null
   eta_vessel_completed_loading?: string | null
@@ -1103,6 +1107,60 @@ function ContractsPageContent() {
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
+  const [availableSupplierGroups, setAvailableSupplierGroups] = useState<string[]>([])
+  /*
+   * Group Supplier -> its suppliers, loaded once. The Supplier list narrows to the ticked groups,
+   * so the two boxes cannot disagree; without it a user can hold a supplier from one group while
+   * filtering to another and get an empty page with no hint why.
+   */
+  const [supplierGroupPairs, setSupplierGroupPairs] = useState<Record<string, string[]>>({})
+
+  const [selectedSupplierGroups, setSelectedSupplierGroups] = useState<string[]>([])
+  const [selectedPlanningStatuses, setSelectedPlanningStatuses] = useState<string[]>([])
+  /** Uppercased suppliers of the ticked groups, or null when nothing is ticked (= no narrowing). */
+  const suppliersInSelectedGroups = useMemo<Set<string> | null>(() => {
+    if (selectedSupplierGroups.length === 0) return null
+    // The map has not arrived yet: narrowing to an empty set would blank the Supplier list and
+    // silently drop a selection the user made before it loaded.
+    if (Object.keys(supplierGroupPairs).length === 0) return null
+    const allowed = new Set<string>()
+    for (const group of selectedSupplierGroups) {
+      for (const supplier of supplierGroupPairs[group.trim().toUpperCase()] ?? []) {
+        allowed.add(supplier.trim().toUpperCase())
+      }
+    }
+    return allowed
+  }, [selectedSupplierGroups, supplierGroupPairs])
+
+  const contractPerfSupplierOptions = useMemo(() => {
+    if (!suppliersInSelectedGroups) return availableSuppliers
+    return availableSuppliers.filter((supplier) =>
+      suppliersInSelectedGroups.has(supplier.trim().toUpperCase()),
+    )
+  }, [availableSuppliers, suppliersInSelectedGroups])
+
+  /**
+   * Changing the groups drops any supplier that is no longer offered.
+   *
+   * Leaving it selected is the failure this is here to prevent: the Supplier box would keep
+   * counting it while the list no longer shows it, and the two filters would AND into nothing.
+   */
+  const handleContractPerfSupplierGroupsChange = useCallback(
+    (values: string[]) => {
+      setSelectedSupplierGroups(values)
+      if (values.length === 0 || Object.keys(supplierGroupPairs).length === 0) return
+      const allowed = new Set<string>()
+      for (const group of values) {
+        for (const supplier of supplierGroupPairs[group.trim().toUpperCase()] ?? []) {
+          allowed.add(supplier.trim().toUpperCase())
+        }
+      }
+      setSelectedSuppliers((prev) =>
+        prev.filter((supplier) => allowed.has(supplier.trim().toUpperCase())),
+      )
+    },
+    [supplierGroupPairs],
+  )
   /**
    * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
    * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
@@ -1207,6 +1265,8 @@ function ContractsPageContent() {
         selectedProducts: contractPerfSelectedProducts,
         selectedIncoterms: contractPerfSelectedIncoterms,
         selectedSuppliers,
+        selectedSupplierGroups,
+        selectedPlanningStatuses,
         selectedGroupPlants: contractPerfSelectedGroupPlants,
         lateOnTimeFilter,
         perfDashMode,
@@ -1258,6 +1318,8 @@ function ContractsPageContent() {
       selectedProducts: contractPerfSelectedProducts,
       selectedIncoterms: contractPerfSelectedIncoterms,
       selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       selectedGroupPlants: contractPerfSelectedGroupPlants,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -1273,6 +1335,8 @@ function ContractsPageContent() {
       contractPerfSelectedProducts,
       contractPerfSelectedIncoterms,
       selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       contractPerfSelectedGroupPlants,
       summaryCardStatus,
       lateOnTimeFilter,
@@ -1591,6 +1655,8 @@ function ContractsPageContent() {
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
     setSelectedSuppliers([])
+    setSelectedSupplierGroups([])
+    setSelectedPlanningStatuses([])
     resetContractPerfUserScopeFilters()
     resetUserScopeFilters()
     setPerfTransportMode('ALL')
@@ -2128,12 +2194,14 @@ function ContractsPageContent() {
       api.get('/contracts/filter-options/incoterms'),
       api.get('/contracts/filter-options/group-plants'),
       api.get('/dashboard/filter-options/suppliers'),
+      // Group Supplier = SAP's Vendor Group, which this endpoint reads straight from
+      // contracts.group_name. Loaded on Contract Performance too now that the page filters by it.
+      api.get('/dashboard/filter-options/groups'),
     ]
     if (!isContractPerformance) {
-      requests.push(
-        api.get('/dashboard/filter-options/products'),
-        api.get('/dashboard/filter-options/groups'),
-      )
+      requests.push(api.get('/dashboard/filter-options/products'))
+    } else {
+      requests.push(api.get('/dashboard/filter-options/supplier-groups'))
     }
     Promise.all(requests)
       .then((results) => {
@@ -2148,9 +2216,20 @@ function ContractsPageContent() {
         const supplierPayload = supplierRes.data?.data
         const suppliers = (Array.isArray(supplierPayload) ? supplierPayload : []) as string[]
         setAvailableSuppliers(Array.isArray(suppliers) ? suppliers : [])
+        const supplierGroupRes = results[3] as { data?: { data?: unknown } }
+        const supplierGroupPayload = supplierGroupRes.data?.data
+        setAvailableSupplierGroups(
+          Array.isArray(supplierGroupPayload) ? (supplierGroupPayload as string[]) : [],
+        )
+        if (isContractPerformance) {
+          const pairsRes = results[4] as {
+            data?: { data?: { byGroup?: Record<string, string[]> } }
+          }
+          setSupplierGroupPairs(pairsRes.data?.data?.byGroup ?? {})
+        }
         if (!isContractPerformance) {
-          const productRes = results[3] as { data?: { data?: unknown } }
-          const groupRes = results[4] as { data?: { data?: unknown } }
+          const productRes = results[4] as { data?: { data?: unknown } }
+          const groupRes = results[3] as { data?: { data?: unknown } }
           const productPayload = productRes.data?.data
           const products = (Array.isArray(productPayload)
             ? productPayload
@@ -2169,6 +2248,7 @@ function ContractsPageContent() {
         setAvailableIncoterms([])
         setAvailableGroupPlants([])
         setAvailableSuppliers([])
+        setSupplierGroupPairs({})
         if (!isContractPerformance) {
           setAvailableProducts([])
           setAvailableGroups([])
@@ -2642,6 +2722,38 @@ function ContractsPageContent() {
           </Badge>
         )
       }
+    },
+    {
+      /*
+       * The live STO represents the contract. A PO with one STO Planned and another Completed
+       * reads Planned - that is the half still needing attention, and the per-STO breakdown is in
+       * the contract detail modal. Blank means no shipment at all, which for a LAND contract is
+       * normal rather than missing.
+       */
+      id: 'shipment_status',
+      label: 'Shipment Status',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (c) => String(c.shipment_status || ''),
+      render: (c) =>
+        c.shipment_status ? (
+          <Badge className={planningStatusBadgeClass(c.shipment_status)}>{c.shipment_status}</Badge>
+        ) : (
+          <span className="text-sm text-gray-400">—</span>
+        ),
+    },
+    {
+      id: 'trucking_status',
+      label: 'Trucking Status',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (c) => String(c.trucking_status || ''),
+      render: (c) =>
+        c.trucking_status ? (
+          <Badge className={planningStatusBadgeClass(c.trucking_status)}>{c.trucking_status}</Badge>
+        ) : (
+          <span className="text-sm text-gray-400">—</span>
+        ),
     },
     {
       id: 'contract_qty',
@@ -3609,6 +3721,59 @@ function ContractsPageContent() {
                   placeholder="All products"
                   emptyMessage="No products"
                   uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Group Supplier"
+                  options={availableSupplierGroups}
+                  selected={selectedSupplierGroups}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    handleContractPerfSupplierGroupsChange(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All groups"
+                  emptyMessage="No supplier groups"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                {/*
+                  Options narrow to the ticked groups, and a supplier outside them is dropped from
+                  the selection rather than left to AND the page down to nothing.
+                */}
+                <SearchableMultiSelect
+                  label="Supplier"
+                  options={contractPerfSupplierOptions}
+                  selected={selectedSuppliers}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setSelectedSuppliers(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All suppliers"
+                  emptyMessage="No suppliers"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                {/*
+                  Planned means scheduled and still running - up to but not including completed,
+                  and never cancelled. A finished contract is in neither option, which is why
+                  selecting both is the same as selecting none.
+                */}
+                <SearchableMultiSelect
+                  label="Planning Status"
+                  options={[...PLANNING_STATUS_OPTIONS]}
+                  selected={selectedPlanningStatuses}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setSelectedPlanningStatuses(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All planning statuses"
+                  emptyMessage="No planning statuses"
                 />
               </div>
               <button

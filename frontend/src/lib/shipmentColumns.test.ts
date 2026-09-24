@@ -42,9 +42,9 @@ import {
 
 describe('shipmentColumns', () => {
 
-  it('uses v11 default visible order (status then grouping; Trade Cycle; no OS Plan)', () => {
+  it('uses v12 default visible order (status then grouping; Trade Cycle; Jetty columns off; no OS Plan)', () => {
 
-    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v11')
+    expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v12')
 
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS.slice(0, 5)).toEqual([
 
@@ -61,6 +61,13 @@ describe('shipmentColumns', () => {
     ])
 
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain('contract_qty')
+
+    // The Jetty columns exist but stay off until JPS_ENABLED is set - otherwise every row would
+    // read "Not Sent", which is accurate and useless. Operators can turn them on per column.
+
+    expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('jetty_status')
+
+    expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('jetty_sync_dates')
 
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain(SHIPMENT_TRADE_CYCLE_COLUMN_ID)
 

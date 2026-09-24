@@ -150,6 +150,14 @@ import {
   shipmentDefaultVisibleColumnIdsForStage,
   shipmentTableColumnWidthPx,
 } from '@/lib/shipmentColumns'
+import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
+import {
+  JettyStatusBadge,
+  formatJettySyncDates,
+  jettyStatusLabel,
+  jettySyncDatesTooltip,
+  type JettyStatusFields,
+} from '@/lib/jettyStatus'
 import {
   resolveShipmentListDischargePorts,
   resolveShipmentListLoadingPorts,
@@ -4583,6 +4591,32 @@ function ShipmentsPageContent() {
           </span>
         )
       }
+    },
+    {
+      // Jetty Planning System. Only STOs discharging at BONTANG are submitted, so every other row
+      // reads "Not Sent" - that is the correct answer, not a gap.
+      id: 'jetty_status',
+      label: 'Jetty Status',
+      defaultVisible: JETTY_COLUMNS_ENABLED,
+      sortable: true,
+      getSortValue: (s) => jettyStatusLabel(s as JettyStatusFields),
+      render: (s) => <JettyStatusBadge row={s as JettyStatusFields} />,
+      className: 'whitespace-nowrap',
+    },
+    {
+      id: 'jetty_sync_dates',
+      label: 'Jetty Sync Dates',
+      defaultVisible: JETTY_COLUMNS_ENABLED,
+      sortable: false,
+      render: (s) => (
+        <span
+          className="text-sm whitespace-nowrap tabular-nums"
+          title={jettySyncDatesTooltip(s as JettyStatusFields)}
+        >
+          {formatJettySyncDates(s as JettyStatusFields)}
+        </span>
+      ),
+      className: 'whitespace-nowrap',
     },
     {
       id: SHIPMENT_TRADE_CYCLE_COLUMN_ID,

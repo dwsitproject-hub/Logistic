@@ -3764,6 +3764,127 @@ and Vessel History.
 vessel silently (`resolveMasterVessel` step 4). The agreed replacement is an `UNMAPPED` review
 queue that also consults DHM first - tracked as its own task, not done here.
 
+### Trade Cycle: a running contract with no estimate is measured against today
+
+Asked by Ryan on 2026-09-23. The completion chain is ATC, then ETC (clamped to today once the
+estimate has passed). When neither exists the cycle used to read "-", which took the contract out of
+Late AND On Time - so the two filters together did not cover the page, and a contract nobody had
+planned simply vanished from the performance view rather than showing as overdue.
+
+Today is now the last fallback, in two places that have to agree:
+
+| | |
+| --- | --- |
+| `computeOpenTradeCycleDays` (`latePerformance.service.ts`) | the displayed number |
+| `tradeCycleSqlExpr` (`contract.controller.ts`) | the Late / On Time filter and its count |
+
+Both return `due end - today`, same sign. The SQL branch already did this for LAND; the change was
+to stop restricting it to LAND, which also gave the `MIX` transport a value for the first time -
+`resolveCycleCompletionDate` matches only `LAND*` and `SEA*`, so 209 MIX contracts had been reading
+"-" in all four cycles whatever their data.
+
+**Only OPEN/ACTIVE.** `computeOpenTradeCycleDays` is never called for a closed contract, and the SQL
+branch keeps its status test. Dating a finished contract today would claim it completed today, and
+the figure would grow one day more negative every day it was looked at - 2,352 contracts, and last
+month's report would not reproduce. Ryan chose running contracts only.
+
+**Trade Cycle only.** Log, DP and Cash share `resolveCycleCompletionDate` and are deliberately
+untouched; the fallback sits in Trade's own wrapper, so no branching was added to the shared chain.
+
+**Measured before and after on a copy of production.** The eight cross-page OS invariants are
+byte-identical - SEA 96,559.1 MT across Contract Performance, Shipping Performance and Shipments,
+LAND 54,471.2 MT across Contract Performance and Trucking, every pairing 0 MT - because no
+outstanding expression references the trade cycle at all. The Section 1 cards are unchanged too
+(`openOutstandingQty` 594,458,115, `closeContractQty` 3,382,132,890): `aggregateLatePerformanceRows`
+adds a row's quantity to the card *before* it tests the trade cycle.
+
+What moves is the composition of the drilldown, and it balances exactly:
+
+| | before | after |
+| --- | --- | --- |
+| Late tree | 3,485 | 3,595 |
+| On Time tree | 3,139 | 3,416 |
+| Unscheduled tree | 1,032 | **645** |
+| total of the three | 7,656 | 7,656 |
+
+387 contracts leave Unscheduled for Late (+110) or On Time (+277). Closed counts are untouched
+(2,859 / 3,052 either way), which is the check that the OPEN-only restriction held.
+
+### Jetty Planning System: one instruction per STO, for BONTANG only
+
+KLIP submits a Shipping Instruction to the Jetty Planning System so a berth can be planned for a
+vessel discharging at BONTANG, then polls for the operator's decision. Outbound only - JPS has no
+webhook in v1, and no way to cancel an instruction once sent.
+
+**The trigger**, agreed with Ryan on 2026-09-23:
+
+    Region/Site = BONTANG
+      AND ATC Loading filled              (SAP import or a KLIP edit)
+      AND no discharge ATA at all         (arrival, berthed, start, complete)
+      AND status not COMPLETED/CANCELLED
+      AND ETA discharge arrival filled    (JPS requires `eta`)
+      AND no row in jps_shipping_instructions
+
+ATA Sailed appears nowhere on purpose. SAP fills it alongside ATC Loading on 1,799 of 1,818
+shipments, so requiring it changes nothing - and requiring its *absence*, which the first reading of
+the rule implied, would mean the trigger never fires at all.
+
+Both guards earn their place, and neither is enough alone. On a copy of production the ATA
+condition alone matched 58 STOs of which 57 were already COMPLETED; the status guard alone let
+through 3 STOs that had already arrived but whose status was never updated. Together: 1.
+
+**The grain is the STO, not the shipment row.** 470 of 1,042 STOs carry more than one `shipments`
+row - one per PO - so submitting per row would ask JPS to berth the same vessel several times, and
+`external_reference` being unique per API key means every repeat after the first returns 409. One
+instruction carries one cargo line per PO, which is exactly the shape `cargo[]` has.
+
+**Tonnage is SAP's STO quantity, not the contract quantity.** KLIP's STO-grain pages display the
+sum of the contract quantities of the POs under an STO, and for the 66% of edges whose contract sits
+on a single STO the two are identical. For the other 34% the contract quantity is what the whole
+contract covers, not what this voyage carries: measured against the carrying vessel's own capacity,
+the contract quantity put 43 of 209 STOs over the limit against 16 for the STO quantity, at an
+average load of 97% versus 88%. One contract of 5,000 MT is spread over five STOs totalling 10,000,
+so a line whose STO quantity exceeds its contract by more than 10% is held rather than sent.
+
+**What the staging API says that the partner document does not.** The document (v4.2 §5.1) lists 20
+commodities; `valid_cargo_types` returns 25, and five codes differ - `MEOH` not `METHANOL`, `RPO`
+not `RBD PO`, `INS POMEFAD`, `SCPKOFA`, `SRPKFA` - with `COAL`, `SAND` and `SBE` absent from the
+document entirely. It also carries `PK`, which the document does not, so KLIP's raw Palm Kernel goes
+across untouched instead of being mapped onto a derivative. All five products that reach BONTANG now
+map: CPO, PK, CPKO, POME, and SHELL PALM as `PKS`.
+
+`shipper_name` is never sent. The document is right that a shipper must already exist in JPS
+("unknown shipper: ... Create it first via POST /shippers", confirmed on staging), and KLIP's 57
+BONTANG suppliers do not match its 25 registered names without a human mapping. `agent_name` is the
+fixed `"Other"`, a real row in JPS master data, because KLIP has no shipping-agent master at all.
+`trade_term` goes only for FOB/CIF/CFR; FRC (12,056 contracts) and LCO (4,018) have no counterpart
+in `GET /terms`, and the field is optional.
+
+**Dates keep their calendar day.** `pg` hands a DATE back as a JS Date at local midnight, so
+`toISOString()` on a UTC+7 server rolls it to 17:00 the previous day - an ETA stored as 2026-09-18
+first went out as 2026-09-17, a day early for a berth booking. `toJpsDateTime` reads the local
+calendar components instead.
+
+**No backfill.** Migration 184 seeds `jps_shipping_instructions` with every STO that already
+satisfied the rule at go-live, marked `SKIPPED_PRE_EXISTING` - one row on the production copy - so
+only STOs that become eligible afterwards are sent. A timestamp watermark was the alternative and
+was rejected: a SAP import bumps `updated_at` on thousands of rows it did not meaningfully change,
+so "changed since deploy" would fire on noise.
+
+**Where it runs.** A cron sweep (`JPS_SWEEP_CRON`, default every 15 minutes), plus a pass right
+after each SAP import and after each shipment save so a user who has just filled in ATC Loading or
+the discharge ETA does not wait for the next tick. The import hook is chained *after*
+`ContractLatestSpdSnapshotService.refreshAll()` on purpose - eligibility reads
+`contract_latest_spd_snapshot` for the Region/Site, and running first would judge a fresh shipment
+against a stale discharge destination.
+
+**Known gaps, parked by agreement.** `vessel_hub_code` is the DataHub code JPS prefers and is
+`master_vessels.dhm_code`, which is empty on all 474 vessels until the DHM sync runs - the pilot
+falls back to `vessel_name`. There is no cancel endpoint, so an instruction for a shipment later
+cancelled in KLIP stands until a JPS operator removes it. `PATCH` works only while `Pending`, so a
+KLIP change after approval cannot be pushed; an email notification for that case is the agreed next
+step and is not built.
+
 ### Shipments: why a first visitor waited, and what it costs now
 
 Three separate reasons the startup warmers were not protecting the first visitor. All three were

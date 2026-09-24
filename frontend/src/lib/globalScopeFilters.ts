@@ -6,6 +6,12 @@ export type ToolbarMultiFilterState = {
   selectedSuppliers?: string[]
   selectedGroups?: string[]
   selectedGroupPlants: string[]
+  /**
+   * 'Planned' / 'Unplanned'. Planned means scheduled and still running - up to but not including
+   * completed, never cancelled - so a finished row belongs to neither value. Selecting both is
+   * therefore NOT "everything": only a single selection filters.
+   */
+  selectedPlanningStatuses?: string[]
 }
 
 type MultiColumnFilter = {
@@ -104,6 +110,22 @@ export function normalizeScopeGroupKey(value: unknown): string {
   return trimmed.length > 0 ? trimmed : 'Blank'
 }
 
+/**
+ * The distinct values of a field that may carry several, comma-joined.
+ *
+ * Shipping Performance groups by STO, and an STO can span contracts with different suppliers: 298
+ * of 10,477 have more than one. The API joins those into `"SUP A, SUP B"`, so an exact-match filter
+ * on `"SUP A"` misses the row entirely. No supplier or group name contains a comma, and the API
+ * builds the string by splitting on one, so splitting here is its exact inverse.
+ */
+export function scopeGroupKeyParts(value: unknown): string[] {
+  const parts = String(value ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  return parts.length > 0 ? parts : ['Blank']
+}
+
 export function rowMatchesToolbarMultiFilters(
   row: {
     incoterm?: unknown
@@ -112,6 +134,7 @@ export function rowMatchesToolbarMultiFilters(
     group_name?: unknown
     plant_site?: unknown
     group_plant?: unknown
+    status?: unknown
   },
   filters: Partial<ToolbarMultiFilterState>,
 ): boolean {
@@ -125,16 +148,28 @@ export function rowMatchesToolbarMultiFilters(
     const prod = normalizeScopeGroupKey(row.product)
     if (!filters.selectedProducts.includes(prod)) return false
   }
+  // A row that carries several groups or suppliers matches if ANY of them is selected - dropping a
+  // two-supplier STO because only one of its suppliers was ticked would hide real cargo.
   if (filters.selectedGroups && filters.selectedGroups.length > 0) {
-    const group = normalizeScopeGroupKey(row.group_name)
-    if (!filters.selectedGroups.includes(group)) return false
+    const groups = scopeGroupKeyParts(row.group_name)
+    if (!groups.some((group) => filters.selectedGroups!.includes(group))) return false
   }
   if (filters.selectedSuppliers && filters.selectedSuppliers.length > 0) {
-    const sup = normalizeScopeGroupKey(row.supplier)
-    if (!filters.selectedSuppliers.includes(sup)) return false
+    const suppliers = scopeGroupKeyParts(row.supplier)
+    if (!suppliers.some((supplier) => filters.selectedSuppliers!.includes(supplier))) return false
   }
   if (filters.selectedGroupPlants && filters.selectedGroupPlants.length > 0) {
     if (!valueInRegionSiteList(row.group_plant ?? row.plant_site, filters.selectedGroupPlants)) return false
+  }
+  if (filters.selectedPlanningStatuses && filters.selectedPlanningStatuses.length === 1) {
+    const st = String(row.status ?? '').trim().toUpperCase()
+    const wanted = filters.selectedPlanningStatuses[0].trim().toUpperCase()
+    // Trucking reports IN_PROGRESS where shipments report PLANNED/SAILED/ARRIVED_LP; both mean
+    // scheduled and under way, so both count here and the caller need not say which page it is.
+    const isPlanned =
+      st === 'PLANNED' || st === 'SAILED' || st === 'ARRIVED_LP' || st === 'IN_PROGRESS'
+    if (wanted === 'PLANNED' && !isPlanned) return false
+    if (wanted === 'UNPLANNED' && st !== 'UNPLANNED') return false
   }
   return true
 }

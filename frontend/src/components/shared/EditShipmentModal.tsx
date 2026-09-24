@@ -15,6 +15,12 @@ import {
 } from '@/components/ui/table'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import {
+  JettyStatusBadge,
+  formatJettySyncDates,
+  jettySyncDatesTooltip,
+  type JettyStatusFields,
+} from '@/lib/jettyStatus'
+import {
   ModalReadonlyDateInput,
   ModalReadonlyTextInput,
 } from '@/components/shared/ModalReadonlyControl'
@@ -841,6 +847,7 @@ export function EditShipmentModal({
   const [etaSectionEditing, setEtaSectionEditing] = useState(false)
   const [isMultiPortLoading, setIsMultiPortLoading] = useState(false)
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
+  const [jettyStatus, setJettyStatus] = useState<JettyStatusFields | null>(null)
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
@@ -1100,6 +1107,7 @@ export function EditShipmentModal({
     setShipmentRemarks([])
     setShipmentRemarksLoading(false)
     setShipmentInfo({})
+    setJettyStatus(null)
     setAtaFields(emptyAtaFields())
     setOriginalAtaFields(emptyAtaFields())
     setAtaSapReference(emptyAtaFields())
@@ -1221,6 +1229,7 @@ export function EditShipmentModal({
           ports?: LoadingPortRef[]
           shipmentInfo?: Record<string, unknown> | null
           contractDetails?: Array<Record<string, unknown>>
+          jettyStatus?: JettyStatusFields | null
         } | null
         if (!payload?.shipment) throw new Error('Failed to load shipment')
 
@@ -1244,6 +1253,7 @@ export function EditShipmentModal({
 
         setShipmentStatus(String(row.status ?? info.status ?? '').trim() || null)
         setLoadingPorts(ports)
+        setJettyStatus(payload.jettyStatus ?? null)
         setShipmentInfo(info)
         const loadedAta = ataFieldsFromShipmentInfo(info)
         setAtaFields(loadedAta)
@@ -2360,6 +2370,40 @@ export function EditShipmentModal({
                 {step2Done && <CheckCircle2 className="ml-auto h-4 w-4 text-green-500" />}
               </div>
               <div className="space-y-4 p-4">
+                {/*
+                  Status row. Both badges sit above the fields because they answer the first two
+                  questions a user opens this modal with: where is the shipment, and has a berth
+                  been arranged. Jetty Status reads "Not Sent" for anything not discharging at
+                  BONTANG, which is the correct answer rather than a gap.
+                */}
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-gray-600">Shipment Status</span>
+                    <Badge className={shipmentStatusBadgeClass(shipmentStatus)}>
+                      {formatShipmentStatusLabel(shipmentStatus)}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-gray-600">Jetty Status</span>
+                    <JettyStatusBadge row={jettyStatus} />
+                    {jettyStatus?.jetty_name && (
+                      <span className="text-xs text-gray-500">{jettyStatus.jetty_name}</span>
+                    )}
+                  </div>
+                  {jettyStatus?.jetty_status && (
+                    <span
+                      className="text-xs text-gray-500 tabular-nums"
+                      title={jettySyncDatesTooltip(jettyStatus)}
+                    >
+                      Synced {formatJettySyncDates(jettyStatus)}
+                    </span>
+                  )}
+                </div>
+                {jettyStatus?.jetty_rejection_reason && (
+                  <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    Jetty request rejected: {jettyStatus.jetty_rejection_reason}
+                  </div>
+                )}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <ReadOnlyInfoField
                     label="STO Number"
@@ -2369,16 +2413,6 @@ export function EditShipmentModal({
                     label="Operation ID"
                     value={formatSapDisplayValue(operationId)}
                   />
-                  {readOnly && (
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-gray-600">
-                        Shipment Status
-                      </label>
-                      <Badge className={shipmentStatusBadgeClass(shipmentStatus)}>
-                        {formatShipmentStatusLabel(shipmentStatus)}
-                      </Badge>
-                    </div>
-                  )}
                 </div>
 
                 {readOnly ? (
