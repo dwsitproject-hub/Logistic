@@ -22,6 +22,11 @@ import {
   sqlHasCycleCompletionDate,
 } from '../utils/contractsListCycleSql';
 import {
+  CONTRACT_FILTER_OPTION_KEYS,
+  buildContractFilterOptionsQuery,
+  type ContractFilterOptionSelections,
+} from '../utils/contractFilterOptionsSql';
+import {
   normalizePlanningStatusValues,
   sqlContractPlanningStatusFilter,
   sqlRepresentativeShipmentStatusExpr,
@@ -1209,6 +1214,58 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
  * Blank is dropped rather than offered as a value: it was already stripped on the frontend by
  * filterIncotermOptions, so sending it only to have it removed was noise.
  */
+/**
+ * GET /api/contracts/filter-options/available
+ *
+ * The values each Contract Performance filter can still offer, given the others. Answers "do not
+ * show me a value the table has none of" without ever emptying the list the user is standing in -
+ * each list is computed from the rows that pass every filter EXCEPT its own.
+ *
+ * Memoised for 60 seconds per exact filter combination. Toggling a value off and back on is the
+ * common move and it costs nothing; a combination nobody has asked for costs one scan.
+ */
+export const getContractFilterOptionsAvailable = async (req: AuthRequest, res: Response) => {
+  try {
+    const q = req.query as Record<string, unknown>;
+    const selections: ContractFilterOptionSelections = {
+      products: parseCommaSeparatedQuery(q.products),
+      incoterms: parseCommaSeparatedQuery(q.incoterms),
+      suppliers: parseCommaSeparatedQuery(q.suppliers),
+      supplierGroups: parseCommaSeparatedQuery(q.supplierGroups),
+      // The list endpoint takes Region/Site as a repeated `plant`, so this does too.
+      groupPlants: Array.isArray(q.plant)
+        ? (q.plant as unknown[]).map((v) => String(v))
+        : q.plant
+          ? [String(q.plant)]
+          : parseCommaSeparatedQuery(q.groupPlants),
+      sourceTypes: parseCommaSeparatedQuery(q.sourceTypes),
+    };
+    const dateFrom = typeof q.dateFrom === 'string' && q.dateFrom.trim() ? q.dateFrom.trim() : null;
+    const dateTo = typeof q.dateTo === 'string' && q.dateTo.trim() ? q.dateTo.trim() : null;
+
+    const built = buildContractFilterOptionsQuery(dateFrom, dateTo, selections);
+    const cacheKey = `contract-filter-options:${JSON.stringify([dateFrom, dateTo, built.params.slice(2)])}`;
+
+    const data = await ttlMemo(cacheKey, 60 * 1000, async () => {
+      const r = await query(built.text, built.params as never[]);
+      const row = (r.rows[0] ?? {}) as Record<string, unknown>;
+      const out: Record<string, string[]> = {};
+      for (const key of CONTRACT_FILTER_OPTION_KEYS) {
+        const value = row[key.toLowerCase()];
+        out[key] = Array.isArray(value) ? (value as string[]) : [];
+      }
+      return out;
+    });
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get contract available filter options error:', error);
+    return res
+      .status(500)
+      .json({ success: false, error: { message: 'Failed to fetch available filter options' } });
+  }
+};
+
 export const getContractFilterIncoterms = async (req: AuthRequest, res: Response) => {
   try {
     const scope = parseFilterOptionScope(req.query?.scope);

@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
 import {
   PLANNING_STATUS_OPTIONS,
   normalizePlanningStatusSelection,
@@ -1164,6 +1165,128 @@ function ContractsPageContent() {
       )
     },
     [supplierGroupPairs],
+  )
+
+  /*
+   * Which values each toolbar filter can still offer, given the others.
+   *
+   * Asked of the API rather than derived here: this page pages its rows server-side, so the
+   * browser only ever holds 20 of them and has no idea what the other 19,000 contain. Each list
+   * comes back computed from the rows that pass every filter EXCEPT its own, so picking one
+   * supplier never collapses the Supplier list to that one supplier.
+   */
+  const [availableFilterValues, setAvailableFilterValues] = useState<Record<
+    string,
+    string[]
+  > | null>(null)
+
+  const filterOptionsRequestKey = useMemo(() => {
+    if (!isContractPerformance) return ''
+    const params = new URLSearchParams()
+    if (dateFrom) params.set('dateFrom', dateFrom)
+    if (dateTo) params.set('dateTo', dateTo)
+    if (contractPerfSelectedProducts.length > 0)
+      params.set(
+        'products',
+        contractPerfSelectedProducts.map(contractPerfProductLabelToApiValue).join(','),
+      )
+    if (contractPerfSelectedIncoterms.length > 0)
+      params.set('incoterms', contractPerfSelectedIncoterms.join(','))
+    if (selectedSuppliers.length > 0) params.set('suppliers', selectedSuppliers.join(','))
+    if (selectedSupplierGroups.length > 0)
+      params.set('supplierGroups', selectedSupplierGroups.join(','))
+    if (contractPerfSelectedSources.length > 0)
+      params.set('sourceTypes', contractPerfSelectedSources.join(','))
+    contractPerfSelectedGroupPlants.forEach((plant) => params.append('plant', plant))
+    return params.toString()
+  }, [
+    isContractPerformance,
+    dateFrom,
+    dateTo,
+    contractPerfSelectedProducts,
+    contractPerfSelectedIncoterms,
+    selectedSuppliers,
+    selectedSupplierGroups,
+    contractPerfSelectedSources,
+    contractPerfSelectedGroupPlants,
+  ])
+
+  useEffect(() => {
+    if (!authReady || !isContractPerformance) return
+    let cancelled = false
+    // Debounced: ticking three values in a row should ask once, not three times.
+    const timer = setTimeout(() => {
+      api
+        .get(`/contracts/filter-options/available?${filterOptionsRequestKey}`)
+        .then((res) => {
+          if (cancelled) return
+          const data = (res.data as { data?: Record<string, string[]> })?.data
+          setAvailableFilterValues(data ?? null)
+        })
+        .catch(() => {
+          // Leave the last known lists in place: a failed refresh must not empty every dropdown.
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [authReady, isContractPerformance, filterOptionsRequestKey])
+
+  const narrowedProductOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+        availableFilterValues?.products,
+        contractPerfSelectedProducts,
+      ),
+    [availableFilterValues, contractPerfSelectedProducts],
+  )
+  const narrowedSourceOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
+        availableFilterValues?.sourceTypes,
+        contractPerfSelectedSources,
+      ),
+    [availableFilterValues, contractPerfSelectedSources],
+  )
+  const narrowedIncotermOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableIncoterms,
+        availableFilterValues?.incoterms,
+        contractPerfSelectedIncoterms,
+      ),
+    [availableIncoterms, availableFilterValues, contractPerfSelectedIncoterms],
+  )
+  const narrowedGroupPlantOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableGroupPlants,
+        availableFilterValues?.groupPlants,
+        contractPerfSelectedGroupPlants,
+      ),
+    [availableGroupPlants, availableFilterValues, contractPerfSelectedGroupPlants],
+  )
+  const narrowedSupplierGroupOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableSupplierGroups,
+        availableFilterValues?.supplierGroups,
+        selectedSupplierGroups,
+      ),
+    [availableSupplierGroups, availableFilterValues, selectedSupplierGroups],
+  )
+  /** Group Supplier narrows this list too; both narrowings apply. */
+  const narrowedSupplierOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        contractPerfSupplierOptions,
+        availableFilterValues?.suppliers,
+        selectedSuppliers,
+      ),
+    [contractPerfSupplierOptions, availableFilterValues, selectedSuppliers],
   )
   /**
    * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
@@ -3676,7 +3799,7 @@ function ContractsPageContent() {
               <div className="w-48">
                 <SearchableMultiSelect
                   label="Region/Plant"
-                  options={availableGroupPlants}
+                  options={narrowedGroupPlantOptions}
                   selected={contractPerfSelectedGroupPlants}
                   onChange={(values) => {
                     lockSection1FilterChange()
@@ -3691,7 +3814,7 @@ function ContractsPageContent() {
               <div className="w-48">
                 <SearchableMultiSelect
                   label="Source"
-                  options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                  options={narrowedSourceOptions}
                   selected={contractPerfSelectedSources}
                   onChange={(values) => {
                     lockSection1FilterChange()
@@ -3706,7 +3829,7 @@ function ContractsPageContent() {
               <div className="w-48">
                 <SearchableMultiSelect
                   label="Incoterm"
-                  options={availableIncoterms}
+                  options={narrowedIncotermOptions}
                   selected={contractPerfSelectedIncoterms}
                   onChange={(values) => {
                     lockSection1FilterChange()
@@ -3721,7 +3844,7 @@ function ContractsPageContent() {
               <div className="w-48">
                 <SearchableMultiSelect
                   label="Product"
-                  options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                  options={narrowedProductOptions}
                   selected={contractPerfSelectedProducts}
                   onChange={(values) => {
                     lockSection1FilterChange()
@@ -3736,7 +3859,7 @@ function ContractsPageContent() {
               <div className="w-48">
                 <SearchableMultiSelect
                   label="Group Supplier"
-                  options={availableSupplierGroups}
+                  options={narrowedSupplierGroupOptions}
                   selected={selectedSupplierGroups}
                   onChange={(values) => {
                     lockSection1FilterChange()
@@ -3755,7 +3878,7 @@ function ContractsPageContent() {
                 */}
                 <SearchableMultiSelect
                   label="Supplier"
-                  options={contractPerfSupplierOptions}
+                  options={narrowedSupplierOptions}
                   selected={selectedSuppliers}
                   onChange={(values) => {
                     lockSection1FilterChange()
