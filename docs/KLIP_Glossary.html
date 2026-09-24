@@ -42,12 +42,15 @@
     }
     @media (max-width: 900px) {
       .layout { grid-template-columns: 1fr; }
-      nav.toc { position: static; }
+      nav.toc { position: static; max-height: none; overflow: visible; }
     }
     nav.toc {
       position: sticky;
       top: 1rem;
       align-self: start;
+      max-height: calc(100vh - 2rem);
+      overflow-y: auto;
+      overscroll-behavior: contain;
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -85,6 +88,7 @@
       color: #1e293b;
     }
     main h4 { margin: 1rem 0 0.5rem; font-size: 0.95rem; }
+    main h5 { margin: 0.9rem 0 0.4rem; font-size: 0.9rem; color: #334155; }
     p { margin: 0.5rem 0; }
     table {
       width: 100%;
@@ -230,18 +234,22 @@
             <li><a href="#ai-klip-cache">Pattern cache</a></li>
           </ul>
         </li>
-        <li><a href="#jps">Jetty Planning System (JPS)</a>
+        <li><a href="#integration">Integration</a>
           <ul class="sub">
-            <li><a href="#jps-ringkasan">Ringkasan alur</a></li>
-            <li><a href="#jps-grain">Grain: per STO</a></li>
-            <li><a href="#jps-eligibility">Kapan STO dikirim</a></li>
-            <li><a href="#jps-payload">Isi payload</a></li>
-            <li><a href="#jps-vessel">Identitas vessel</a></li>
-            <li><a href="#jps-cargo">Cargo &amp; tonnage</a></li>
-            <li><a href="#jps-state">State &amp; revisi</a></li>
-            <li><a href="#jps-ui">Kolom UI &amp; status</a></li>
-            <li><a href="#jps-config">Konfigurasi &amp; saklar</a></li>
-            <li><a href="#jps-batas">Batasan yang diketahui</a></li>
+            <li><a href="#jps">Jetty Planning System (JPS)</a>
+              <ul class="sub">
+                <li><a href="#jps-ringkasan">Ringkasan alur</a></li>
+                <li><a href="#jps-grain">Grain: per STO</a></li>
+                <li><a href="#jps-eligibility">Kapan STO dikirim</a></li>
+                <li><a href="#jps-payload">Isi payload</a></li>
+                <li><a href="#jps-vessel">Identitas vessel</a></li>
+                <li><a href="#jps-cargo">Cargo &amp; tonnage</a></li>
+                <li><a href="#jps-state">State &amp; revisi</a></li>
+                <li><a href="#jps-ui">Kolom UI &amp; status</a></li>
+                <li><a href="#jps-config">Konfigurasi &amp; saklar</a></li>
+                <li><a href="#jps-batas">Batasan yang diketahui</a></li>
+              </ul>
+            </li>
           </ul>
         </li>
         <li><a href="#referensi">Referensi file</a></li>
@@ -1505,12 +1513,15 @@
         <p>Cache di-update setiap suggest sukses agar klik berikutnya untuk kombinasi sama lebih cepat.</p>
       </section>
 
-      <section id="jps">
-        <h2>Jetty Planning System (JPS) <span class="tag">Integrasi keluar · BONTANG</span></h2>
+      <section id="integration">
+        <h2>Integration <span class="tag">Sistem eksternal</span></h2>
+        <p>Integrasi KLIP dengan sistem di luar KLIP. Tiap integrasi dicatat dengan arah datanya, apa yang memicunya, dan batas yang diketahui — agar jelas mana yang dapat diperbaiki dari KLIP dan mana yang harus diselesaikan di sisi mitra.</p>
+
+        <h3 id="jps">Jetty Planning System (JPS) <span class="tag">keluar · BONTANG</span></h3>
         <p><strong>JPS</strong> adalah sistem perencanaan jetty milik KPN. KLIP mengirimkan <em>Shipping Instruction</em> agar kapal yang akan <strong>bongkar di BONTANG</strong> mendapat rencana sandar, lalu membaca kembali keputusan operator JPS.</p>
         <p>Arah integrasi <strong>satu arah keluar</strong>: KLIP mengirim, lalu menanyakan statusnya. JPS v4.2 tidak menyediakan webhook dan tidak menyediakan endpoint pembatalan, sehingga seluruh percakapan hanya terdiri dari <em>kirim sekali, tanya sampai selesai</em>.</p>
 
-        <h3 id="jps-ringkasan">Ringkasan alur</h3>
+        <h4 id="jps-ringkasan">Ringkasan alur</h4>
         <table>
           <thead>
             <tr><th>Tahap</th><th>Yang terjadi</th></tr>
@@ -1527,7 +1538,7 @@
           <strong>Kegagalan JPS tidak pernah menggagalkan pekerjaan KLIP.</strong> <code>runJpsSync</code> menelan errornya sendiri dan dipanggil secara <em>fire-and-forget</em>: SAP import harus tetap selesai dan Save shipment harus tetap sukses walaupun JPS tidak dapat dihubungi.
         </div>
 
-        <h3 id="jps-grain">Grain: satu instruction per STO, bukan per shipment</h3>
+        <h4 id="jps-grain">Grain: satu instruction per STO, bukan per shipment</h4>
         <p>Kunci pengiriman adalah <strong>STO</strong>, bukan baris <code>shipments</code>:</p>
         <p class="formula">sto_key = COALESCE(shipments.shipment_id, shipments.operation_id)</p>
         <ul>
@@ -1536,7 +1547,7 @@
         </ul>
         <p>Alasannya bukan kosmetik: <strong>470 dari 1.042 STO memiliki lebih dari satu baris <code>shipments</code></strong> (satu per PO). Mengirim per baris berarti meminta JPS menyandarkan kapal yang sama berkali-kali, dan karena <code>external_reference</code> wajib unik per API key, setiap pengulangan sesudah yang pertama dijawab <code>409</code>.</p>
 
-        <h3 id="jps-eligibility">Kapan sebuah STO dikirim</h3>
+        <h4 id="jps-eligibility">Kapan sebuah STO dikirim</h4>
         <p>Seluruh syarat berikut harus terpenuhi bersamaan:</p>
         <table>
           <thead>
@@ -1557,7 +1568,7 @@
           <strong>Dua penjaga terakhir sama-sama diperlukan.</strong> Diukur pada salinan produksi: syarat ATA saja meloloskan 58 STO yang 57 di antaranya sudah <code>COMPLETED</code>; syarat status saja meloloskan 3 STO yang sebetulnya sudah tiba tetapi statusnya belum diperbarui. Digabung: sisa 1.
         </div>
 
-        <h3 id="jps-payload">Isi payload</h3>
+        <h4 id="jps-payload">Isi payload</h4>
         <table>
           <thead>
             <tr><th>Field JPS</th><th>Asal di KLIP</th><th>Catatan</th></tr>
@@ -1575,18 +1586,18 @@
           </tbody>
         </table>
 
-        <h3 id="jps-vessel">Identitas vessel</h3>
+        <h4 id="jps-vessel">Identitas vessel</h4>
         <p>KLIP mengirim <strong><code>vessel_hub_code</code></strong>, yaitu <code>master_vessels.dhm_code</code> — kode DataHub yang disinkronkan DHM (format <code>VSL-0041</code>). Bila kode itu belum ada, KLIP jatuh ke <code>vessel_name</code>, yang hanya berhasil jika namanya persis unik di master JPS.</p>
         <p>Vessel dicari melalui <code>shipments.master_vessel_id</code>, atau melalui <code>master_vessel_code_aliases</code> bila shipment hanya membawa <em>vessel code SAP</em>.</p>
         <div class="note">
           <strong>KLIP tidak mengirim LOA, GT, maupun draft — dan memang tidak bisa.</strong> Dokumen partner menyatakan field-field itu bukan milik partner: JPS menyalinnya sendiri dari master vessel-nya begitu <code>vessel_hub_code</code> berhasil diresolusi. Karena itu penolakan <em>"Master vessel LOA is missing"</em> adalah <strong>kelengkapan data di sisi JPS</strong>, bukan sesuatu yang dapat diperbaiki dari KLIP.
         </div>
 
-        <h3 id="jps-cargo">Cargo &amp; tonnage</h3>
+        <h4 id="jps-cargo">Cargo &amp; tonnage</h4>
         <p><strong>Tonnage diambil dari <code>contract_stos.sto_quantity</code></strong> — kuantitas yang dialokasikan SAP untuk pelayaran ini — bukan dari kuantitas kontrak. KLIP menyimpan Kg, JPS meminta MT (dibagi 1.000, 2 desimal).</p>
         <p>Diukur pada salinan produksi: untuk 34% pasangan yang kontraknya tersebar ke beberapa STO, kuantitas kontrak melebih-lebihkan muatan sebesar 80%, dan 43 dari 209 STO akan melampaui kapasitas kapal pengangkutnya sendiri — dibanding 16 bila memakai <code>sto_quantity</code>.</p>
 
-        <h4>Pemetaan produk KLIP &rarr; <code>cargo_type</code> JPS</h4>
+        <h5>Pemetaan produk KLIP &rarr; <code>cargo_type</code> JPS</h5>
         <table>
           <thead>
             <tr><th>Produk KLIP</th><th>cargo_type JPS</th></tr>
@@ -1602,13 +1613,13 @@
           Daftar <code>cargo_type</code> yang sah dibaca dari <strong>API staging</strong> (<code>valid_cargo_types</code> pada respons 400), bukan dari tabel dokumen partner. Keduanya berbeda pada lima kode — dokumen menulis METHANOL untuk <code>MEOH</code>, RBD PO untuk <code>RPO</code>, INS POME FAD untuk <code>INS POMEFAD</code>, SPLIT CPKO FA untuk <code>SCPKOFA</code>, SPLIT RBD PKO FA untuk <code>SRPKFA</code> — sehingga memetakan dari dokumen akan menghasilkan lima kode yang ditolak JPS.
         </div>
 
-        <h4>Dua penjaga kuantitas</h4>
+        <h5>Dua penjaga kuantitas</h5>
         <ul>
           <li><strong>Fallback kuantitas kontrak.</strong> Shipment manual (<code>MNL-</code> / <code>OP-</code>) ada justru karena SAP belum menerbitkan STO, sehingga <code>contract_stos</code> kosong dan STO Quantity SAP terbaca 0. Untuk kasus ini kuantitas kontrak dipakai sebagai pengganti — <em>hanya</em> bila kontrak tersebut tidak punya baris <code>contract_stos</code> di mana pun. Jika ada pada STO lain, STO itulah yang sudah membawa kuantitasnya, dan mengirim seluruh kontrak di sini berarti memesan ruang sandar dua kali.</li>
           <li><strong>Penjaga kelebihan 10%.</strong> Bila total STO qty melebihi kuantitas kontraknya lebih dari 10%, baris itu ditahan. Ini cacat data SAP, bukan pembulatan — satu kontrak 5.000 MT pernah tersebar ke lima STO bertotal 10.000 MT. Mengirimnya berarti memesan ruang sandar untuk muatan yang tidak ada.</li>
         </ul>
 
-        <h3 id="jps-state">State &amp; revisi</h3>
+        <h4 id="jps-state">State &amp; revisi</h4>
         <p>Tabel <code>jps_shipping_instructions</code> adalah satu-satunya catatan percakapan ini — JPS tidak dapat ditanyai berdasarkan shipment, hanya berdasarkan referensi yang kita tentukan sendiri.</p>
         <table>
           <thead>
@@ -1628,7 +1639,7 @@
         <p><strong>Revisi.</strong> JPS tidak mengizinkan instruction yang sudah ditolak diperbaiki — partner harus mengirim yang <em>baru</em> dengan referensi <em>baru</em>. Karena itu referensinya <code>KLIP-&lt;sto&gt;-R&lt;n&gt;</code> dan <code>revision</code> naik satu setiap kali; nomor STO saja akan habis terpakai setelah satu penolakan.</p>
         <p><strong>Delta saja, tanpa backfill.</strong> Hanya STO yang menjadi layak <em>setelah</em> go-live yang dikirim. Migrasi <code>185</code> menuliskan satu baris <code>SKIPPED_PRE_EXISTING</code> untuk setiap STO yang sudah memenuhi syarat saat itu. Alternatifnya — watermark timestamp — ditolak karena SAP import memperbarui <code>updated_at</code> ribuan baris yang isinya tidak benar-benar berubah, sehingga &quot;berubah sejak deploy&quot; akan menyala oleh derau.</p>
 
-        <h3 id="jps-ui">Kolom UI &amp; status</h3>
+        <h4 id="jps-ui">Kolom UI &amp; status</h4>
         <table>
           <thead>
             <tr><th>Kolom</th><th>Isi</th></tr>
@@ -1639,7 +1650,7 @@
           </tbody>
         </table>
 
-        <h3 id="jps-config">Konfigurasi &amp; saklar</h3>
+        <h4 id="jps-config">Konfigurasi &amp; saklar</h4>
         <table>
           <thead>
             <tr><th>Variabel</th><th>Default</th><th>Keterangan</th></tr>
@@ -1657,7 +1668,7 @@
           </tbody>
         </table>
 
-        <h3 id="jps-batas">Batasan yang diketahui</h3>
+        <h4 id="jps-batas">Batasan yang diketahui</h4>
         <ul>
           <li><strong>Tidak ada pembatalan.</strong> JPS v4.2 tidak menyediakan endpoint cancel. Mematikan <code>JPS_ENABLED</code> tidak menarik kembali apa pun yang sudah terkirim.</li>
           <li><strong>Perubahan data KLIP setelah approval tidak diberitahukan.</strong> PATCH hanya diizinkan selama instruction masih <code>Pending</code>. Notifikasi email untuk kasus ini diparkir sebagai enhancement berikutnya.</li>
@@ -1728,7 +1739,7 @@
   </div>
 
   <footer>
-    KLIP Glossary — diperbarui 2026-09-24 · Jetty Planning System (JPS) · Operation Trucking (Planning vs Realisasi) · Contract Performance · Shipping Performance · Oil Loss · Commercial Documents · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
+    KLIP Glossary — diperbarui 2026-09-24 · Integration (Jetty Planning System) · Operation Trucking (Planning vs Realisasi) · Contract Performance · Shipping Performance · Oil Loss · Commercial Documents · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
   </footer>
 </body>
 </html>
