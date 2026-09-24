@@ -166,6 +166,7 @@
         </li>
         <li><a href="#contract-performance">Contract Performance</a>
           <ul class="sub">
+            <li><a href="#cp-filters">Filter toolbar</a></li>
             <li><a href="#cp-primitif">Hari kalender</a></li>
             <li><a href="#cp-outstanding">Outstanding Qty</a></li>
             <li><a href="#cp-trade">Trade Cycle</a></li>
@@ -457,6 +458,61 @@
         <h2>Contract Performance <span class="tag">/contract-performance</span></h2>
         <p>Halaman ini memakai komponen yang sama dengan daftar kontrak (<code>/contracts</code>) dengan mode performance. <strong>Semua cycle dihitung di backend</strong> (<code>GET /api/contracts</code> + <code>GET /api/contracts/late-performance/summary</code>); frontend hanya menampilkan.</p>
 
+        <h3 id="cp-filters">Filter toolbar</h3>
+        <p>Urutan pada toolbar: <strong>Contract Date &middot; Region/Plant &middot; Source &middot; Incoterm &middot; Product &middot; Group Supplier &middot; Supplier &middot; Planning Status</strong>. Seluruhnya multiselect, dan seluruhnya berlaku untuk Section 1, Section 2, dan View table sekaligus.</p>
+        <table>
+          <thead>
+            <tr><th>Filter</th><th>Sumber nilai</th><th>Catatan</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Group Supplier</strong></td>
+              <td><code>contracts.group_name</code> &mdash; Vendor Group dari SAP</td>
+              <td>353 grup. Dicocokkan persis (<code>ANY</code>), bukan ILIKE.</td>
+            </tr>
+            <tr>
+              <td><strong>Supplier</strong></td>
+              <td><code>contracts.supplier</code></td>
+              <td>566 supplier. Daftarnya <strong>menyempit mengikuti Group Supplier</strong> yang dipilih; lihat catatan di bawah.</td>
+            </tr>
+            <tr>
+              <td><strong>Planning Status</strong></td>
+              <td>turunan dari <code>shipments</code> dan <code>trucking_operations</code></td>
+              <td>Dua nilai saja, lihat <a href="#cp-planning-status">di bawah</a>.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note">
+          <strong>Supplier mengikuti Group Supplier.</strong> Begitu satu grup dicentang, daftar Supplier hanya menampilkan supplier di bawah grup itu, dan supplier yang sudah terpilih namun berada di luar grup tersebut <em>dikeluarkan dari pilihan</em>. Tanpa itu kedua filter akan ter-AND menjadi nol baris sementara kotak Supplier tetap menghitungnya &mdash; halaman kosong tanpa petunjuk sebabnya.
+          <br /><br />
+          Pemetaannya dibaca sekali dari <code>GET /api/dashboard/filter-options/supplier-groups</code>: 545 pasangan (grup, supplier), sekitar 20 KB, dimemo 5 menit. Dua bentuk data yang perlu diketahui &mdash; <strong>22 supplier tidak memiliki grup sama sekali</strong> (muncul saat tidak ada grup dipilih, dan di bawah grup mana pun tidak), dan <strong>satu supplier berada di dua grup</strong>, sehingga ini peta berisi daftar, bukan pencarian supplier &rarr; grup.
+        </div>
+
+        <h4 id="cp-planning-status">Planning Status</h4>
+        <table>
+          <thead>
+            <tr><th>Nilai</th><th>Arti</th><th>Dibaca dari</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Unplanned</strong></td>
+              <td>belum ada yang dijadwalkan</td>
+              <td>SEA: tidak ada baris <code>shipments</code> sama sekali. LAND: ada operasi berstatus <code>UNPLANNED</code>, <em>atau</em> tidak ada operasi sama sekali.</td>
+            </tr>
+            <tr>
+              <td><strong>Planned</strong></td>
+              <td>sudah dijadwalkan dan masih berjalan &mdash; sampai sebelum completed, dan tidak pernah cancelled</td>
+              <td>SEA: ada shipment berstatus <code>PLANNED</code> / <code>SAILED</code> / <code>ARRIVED_LP</code>. LAND: ada trucking berstatus <code>IN_PROGRESS</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Yang membaca mana ditentukan oleh <strong>incoterm</strong>, bukan <code>transport_mode</code> &mdash; itulah sebabnya MIX tidak perlu penanganan khusus. Diukur pada salinan produksi: 1.650 kontrak Planned dan 1.853 Unplanned; sisanya (~15.500) sudah selesai.</p>
+        <div class="note">
+          <strong>Kontrak yang sudah selesai tidak masuk keduanya.</strong> Itu disengaja &mdash; filter ini menjawab &quot;apa yang masih perlu diawasi&quot;. Konsekuensinya, <strong>memilih kedua nilai sama dengan tidak memfilter sama sekali</strong>, bukan &quot;semua kontrak&quot;: <code>Planned OR Unplanned</code> justru akan membuang setiap kontrak yang sudah completed.
+          <br /><br />
+          <strong>Kolom Shipment Status / Trucking Status pada View table menjawab pertanyaan lain.</strong> Satu PO bisa membawa beberapa STO; kolom itu menampilkan <em>satu</em> status yang mewakili kontrak, yaitu yang masih perlu perhatian (untuk trucking, <code>UNPLANNED</code> menang atas <code>IN_PROGRESS</code>). Filter Planning Status tidak dibangun dari kolom itu melainkan dari <code>EXISTS</code> yang sama dengan Section 1, karena kalau tidak, sebuah kontrak dengan satu operasi belum dijadwalkan dan satu lagi berjalan akan terbaca Unplanned di sini sementara Section 1 menghitungnya Planned.
+        </div>
+
         <h3 id="cp-primitif">Primitif hari kalender</h3>
         <p>Fungsi <code>diffCalendarDays(start, end)</code> = selisih hari kalender dari <em>start</em> ke <em>end</em>. Jika salah satu tanggal kosong → nilai <code>null</code> (tidak dihitung).</p>
         <p><strong>Due Date Delivery End</strong> — anchor trade cycle. Prioritas: <code>contracts.delivery_end_date</code> → SAP <code>Due Date Delivery (End)</code>. Tanpa due end → kontrak dikecualikan dari agregasi Section 1/2.</p>
@@ -509,7 +565,17 @@
           <li><strong>Late</strong> jika <code>tradeCycle ≥ 0</code> (hari ini sudah melewati atau sama dengan due end)</li>
           <li><strong>On Time</strong> jika <code>tradeCycle &lt; 0</code> — <em>0 hari = Late</em> di Condition B</li>
         </ul>
-        <p>Open tanpa transport valid → trade cycle dipaksa <code>-1</code> (On Time).</p>
+        <h4>Open &mdash; fallback terakhir: hari ini</h4>
+        <p>Bila tidak ada tanggal penyelesaian sama sekali &mdash; tidak ada ATA, tidak ada ETA, atau transport-nya tidak dikenali &mdash; Trade Cycle diukur terhadap <strong>hari ini</strong>:</p>
+        <p><span class="formula">Trade Cycle = diffCalendarDays(today, dueEnd)</span></p>
+        <p>Kontrak yang masih berjalan dan tanpa estimasi bukan berarti tidak terukur: setiap hari ia tetap terbuka, ia satu hari makin jauh dari due date-nya. Sebelumnya nilai itu dipaksa <code>-1</code> (On Time) atau ditampilkan <code>-</code>, sehingga baris tersebut keluar dari Late <em>dan</em> On Time &mdash; kedua filter tidak menutup seluruh halaman. Diukur pada salinan produksi: 730 kontrak berjalan, 85 di antaranya bertransport MIX yang memang tidak dikenali oleh resolver.</p>
+        <div class="note">
+          <strong>Hanya untuk kontrak Open, dan hanya Trade Cycle.</strong> Kontrak Close tidak pernah melewati jalur ini: memberi tanggal hari ini pada kontrak yang sudah selesai sama dengan mengklaim ia selesai hari ini, dan angkanya akan bertambah satu hari negatif setiap hari &mdash; 2.352 kontrak, dan laporan bulan lalu tidak akan bisa direproduksi. DP, Cash, dan Log Cycle tidak ikut berubah.
+          <br /><br />
+          Nilai tampilan (TypeScript) dan filter Late / On Time (SQL <code>tradeCycleSqlExpr</code>) memakai fallback yang sama, karena keduanya harus sepakat &mdash; kalau tidak, sebuah baris disaring oleh satu aturan dan ditampilkan oleh aturan lain.
+          <br /><br />
+          <strong>Outstanding Qty tidak berubah.</strong> Diverifikasi sebelum dan sesudah: kedelapan invariant lintas halaman identik (SEA 96.559,1 MT, LAND 54.471,2 MT) dan kartu Section 1 tidak bergeser. Yang berubah hanya komposisinya &mdash; Unscheduled 1.032 &rarr; 645, Late +110, On Time +277, dengan total ketiga pohon tetap 7.656.
+        </div>
 
         <h3 id="cp-dp-cash-log">DP Cycle, Cash Cycle, Log Cycle</h3>
         <p>Tanggal finansial hanya dari <strong>SAP</strong> (bukan tabel <code>payments</code>) untuk perhitungan cycle.</p>
@@ -614,10 +680,25 @@
         <h3 id="sp-scope">Scope &amp; filter</h3>
         <ul>
           <li>Transport: <code>SEA</code> atau <code>MIX</code> (default SEA jika kosong)</li>
-          <li>Status <code>UNPLANNED</code> selalu dikecualikan dari semua section</li>
-          <li>Filter global: incoterm, plant, product, vessel, status, contract date, search</li>
           <li>Shipments &amp; Shipping Performance: filter <strong>transport mode SEA/MIX</strong>. Trucking: filter <strong>transport mode LAND</strong> saja (tanpa filter STO Type).</li>
         </ul>
+        <p>Urutan toolbar: <strong>Contract Date &middot; Region/Plant &middot; Source &middot; Incoterm &middot; Group Supplier &middot; Supplier &middot; Planning Status &middot; Product</strong>. Halaman ini memuat seluruh datanya sekali lalu menyaring di browser, sehingga satu himpunan baris tersaring yang sama memberi makan kartu Section 1, pohon Section 2, dan tabel Section 3 &mdash; ketiganya tidak bisa berbeda.</p>
+        <div class="note">
+          <strong>Group Supplier dan Supplier bekerja seperti di Contract Performance</strong>, termasuk penyempitan daftar Supplier mengikuti grup yang dipilih &mdash; lihat <a href="#cp-filters">Filter toolbar</a>. Pemetaan grup &rarr; supplier diambil dari endpoint yang sama, bukan dari baris halaman ini: satu STO bisa mencakup beberapa kontrak dengan supplier <em>dan</em> grup berbeda, dan baris itu tidak menyimpan supplier mana milik grup mana.
+          <br /><br />
+          <strong>Satu baris dapat membawa beberapa supplier.</strong> Grain halaman ini adalah STO, dan 298 dari 10.477 STO mencakup kontrak dengan supplier berbeda; API menggabungkannya menjadi satu teks <code>&quot;SUP A, SUP B&quot;</code>. Baris seperti itu cocok bila <em>salah satu</em> supplier-nya dipilih &mdash; mencocokkan teks gabungannya secara utuh akan menyembunyikan muatan yang nyata.
+        </div>
+
+        <h4>Planning Status di halaman ini</h4>
+        <p>Dibaca dari <strong>status shipment saja</strong>. Halaman ini tidak punya sisi trucking, sehingga berbeda dengan Contract Performance yang membaca keduanya.</p>
+        <ul>
+          <li><strong>Planned</strong> &mdash; <code>PLANNED</code>, <code>SAILED</code>, atau <code>ARRIVED_LP</code></li>
+          <li><strong>Unplanned</strong> &mdash; <code>UNPLANNED</code>, yaitu baris dari <em>unplanned backlog</em>: kontrak yang masih punya outstanding tetapi belum memiliki shipment sama sekali</li>
+        </ul>
+        <div class="note">
+          Status <code>UNPLANNED</code> di sini <strong>bukan</strong> status sebuah shipment. Baris backlog ditandai <code>is_unplanned_backlog</code> oleh backend, dan ejaan statusnya kebetulan sama; jangan menyimpulkan yang satu dari yang lain. Pada salinan produksi tidak ada satu pun baris <code>shipments</code> berstatus <code>UNPLANNED</code> &mdash; 2.099 COMPLETED, 200 CANCELLED, 98 PLANNED, 29 SAILED, 2 ARRIVED_LP.
+        </div>
+        <p>Seperti di Contract Performance, memilih kedua nilai sama dengan tidak memfilter &mdash; shipment yang sudah <code>COMPLETED</code> tidak termasuk keduanya.</p>
 
         <h3 id="sp-dates">Resolusi tanggal ETA / ATA</h3>
         <p><strong>ETR (anchor loading):</strong> <code>contracts.cargo_readiness_date</code></p>

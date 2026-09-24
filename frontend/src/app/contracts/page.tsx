@@ -1108,8 +1108,59 @@ function ContractsPageContent() {
   const [availableGroups, setAvailableGroups] = useState<string[]>([])
   const [availableGroupPlants, setAvailableGroupPlants] = useState<string[]>([])
   const [availableSupplierGroups, setAvailableSupplierGroups] = useState<string[]>([])
+  /*
+   * Group Supplier -> its suppliers, loaded once. The Supplier list narrows to the ticked groups,
+   * so the two boxes cannot disagree; without it a user can hold a supplier from one group while
+   * filtering to another and get an empty page with no hint why.
+   */
+  const [supplierGroupPairs, setSupplierGroupPairs] = useState<Record<string, string[]>>({})
+
   const [selectedSupplierGroups, setSelectedSupplierGroups] = useState<string[]>([])
   const [selectedPlanningStatuses, setSelectedPlanningStatuses] = useState<string[]>([])
+  /** Uppercased suppliers of the ticked groups, or null when nothing is ticked (= no narrowing). */
+  const suppliersInSelectedGroups = useMemo<Set<string> | null>(() => {
+    if (selectedSupplierGroups.length === 0) return null
+    // The map has not arrived yet: narrowing to an empty set would blank the Supplier list and
+    // silently drop a selection the user made before it loaded.
+    if (Object.keys(supplierGroupPairs).length === 0) return null
+    const allowed = new Set<string>()
+    for (const group of selectedSupplierGroups) {
+      for (const supplier of supplierGroupPairs[group.trim().toUpperCase()] ?? []) {
+        allowed.add(supplier.trim().toUpperCase())
+      }
+    }
+    return allowed
+  }, [selectedSupplierGroups, supplierGroupPairs])
+
+  const contractPerfSupplierOptions = useMemo(() => {
+    if (!suppliersInSelectedGroups) return availableSuppliers
+    return availableSuppliers.filter((supplier) =>
+      suppliersInSelectedGroups.has(supplier.trim().toUpperCase()),
+    )
+  }, [availableSuppliers, suppliersInSelectedGroups])
+
+  /**
+   * Changing the groups drops any supplier that is no longer offered.
+   *
+   * Leaving it selected is the failure this is here to prevent: the Supplier box would keep
+   * counting it while the list no longer shows it, and the two filters would AND into nothing.
+   */
+  const handleContractPerfSupplierGroupsChange = useCallback(
+    (values: string[]) => {
+      setSelectedSupplierGroups(values)
+      if (values.length === 0 || Object.keys(supplierGroupPairs).length === 0) return
+      const allowed = new Set<string>()
+      for (const group of values) {
+        for (const supplier of supplierGroupPairs[group.trim().toUpperCase()] ?? []) {
+          allowed.add(supplier.trim().toUpperCase())
+        }
+      }
+      setSelectedSuppliers((prev) =>
+        prev.filter((supplier) => allowed.has(supplier.trim().toUpperCase())),
+      )
+    },
+    [supplierGroupPairs],
+  )
   /**
    * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
    * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
@@ -1604,6 +1655,8 @@ function ContractsPageContent() {
     setSummaryCardStatus('All')
     setStatusFilter('All Status')
     setSelectedSuppliers([])
+    setSelectedSupplierGroups([])
+    setSelectedPlanningStatuses([])
     resetContractPerfUserScopeFilters()
     resetUserScopeFilters()
     setPerfTransportMode('ALL')
@@ -2147,6 +2200,8 @@ function ContractsPageContent() {
     ]
     if (!isContractPerformance) {
       requests.push(api.get('/dashboard/filter-options/products'))
+    } else {
+      requests.push(api.get('/dashboard/filter-options/supplier-groups'))
     }
     Promise.all(requests)
       .then((results) => {
@@ -2166,6 +2221,12 @@ function ContractsPageContent() {
         setAvailableSupplierGroups(
           Array.isArray(supplierGroupPayload) ? (supplierGroupPayload as string[]) : [],
         )
+        if (isContractPerformance) {
+          const pairsRes = results[4] as {
+            data?: { data?: { byGroup?: Record<string, string[]> } }
+          }
+          setSupplierGroupPairs(pairsRes.data?.data?.byGroup ?? {})
+        }
         if (!isContractPerformance) {
           const productRes = results[4] as { data?: { data?: unknown } }
           const groupRes = results[3] as { data?: { data?: unknown } }
@@ -2187,6 +2248,7 @@ function ContractsPageContent() {
         setAvailableIncoterms([])
         setAvailableGroupPlants([])
         setAvailableSuppliers([])
+        setSupplierGroupPairs({})
         if (!isContractPerformance) {
           setAvailableProducts([])
           setAvailableGroups([])
@@ -3618,40 +3680,6 @@ function ContractsPageContent() {
               </div>
               <div className="w-48">
                 <SearchableMultiSelect
-                  label="Group Supplier"
-                  options={availableSupplierGroups}
-                  selected={selectedSupplierGroups}
-                  onChange={(values) => {
-                    lockSection1FilterChange()
-                    setSelectedSupplierGroups(values)
-                    setCurrentPage(1)
-                  }}
-                  placeholder="All groups"
-                  emptyMessage="No supplier groups"
-                  uppercaseOptionLabels
-                />
-              </div>
-              <div className="w-48">
-                {/*
-                  Planned means scheduled and still running - up to but not including completed,
-                  and never cancelled. A finished contract is in neither option, which is why
-                  selecting both is the same as selecting none.
-                */}
-                <SearchableMultiSelect
-                  label="Planning Status"
-                  options={[...PLANNING_STATUS_OPTIONS]}
-                  selected={selectedPlanningStatuses}
-                  onChange={(values) => {
-                    lockSection1FilterChange()
-                    setSelectedPlanningStatuses(values)
-                    setCurrentPage(1)
-                  }}
-                  placeholder="All planning statuses"
-                  emptyMessage="No planning statuses"
-                />
-              </div>
-              <div className="w-48">
-                <SearchableMultiSelect
                   label="Source"
                   options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
                   selected={contractPerfSelectedSources}
@@ -3693,6 +3721,59 @@ function ContractsPageContent() {
                   placeholder="All products"
                   emptyMessage="No products"
                   uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                <SearchableMultiSelect
+                  label="Group Supplier"
+                  options={availableSupplierGroups}
+                  selected={selectedSupplierGroups}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    handleContractPerfSupplierGroupsChange(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All groups"
+                  emptyMessage="No supplier groups"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                {/*
+                  Options narrow to the ticked groups, and a supplier outside them is dropped from
+                  the selection rather than left to AND the page down to nothing.
+                */}
+                <SearchableMultiSelect
+                  label="Supplier"
+                  options={contractPerfSupplierOptions}
+                  selected={selectedSuppliers}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setSelectedSuppliers(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All suppliers"
+                  emptyMessage="No suppliers"
+                  uppercaseOptionLabels
+                />
+              </div>
+              <div className="w-48">
+                {/*
+                  Planned means scheduled and still running - up to but not including completed,
+                  and never cancelled. A finished contract is in neither option, which is why
+                  selecting both is the same as selecting none.
+                */}
+                <SearchableMultiSelect
+                  label="Planning Status"
+                  options={[...PLANNING_STATUS_OPTIONS]}
+                  selected={selectedPlanningStatuses}
+                  onChange={(values) => {
+                    lockSection1FilterChange()
+                    setSelectedPlanningStatuses(values)
+                    setCurrentPage(1)
+                  }}
+                  placeholder="All planning statuses"
+                  emptyMessage="No planning statuses"
                 />
               </div>
               <button

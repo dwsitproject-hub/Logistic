@@ -4,6 +4,7 @@ import {
   filterRegionSiteOptions,
   isBlankFilterOption,
   rowMatchesToolbarMultiFilters,
+  scopeGroupKeyParts,
   valueInRegionSiteList,
 } from '@/lib/globalScopeFilters'
 
@@ -52,5 +53,47 @@ describe('isBlankFilterOption', () => {
     expect(isBlankFilterOption('Blank')).toBe(true)
     expect(isBlankFilterOption('  ')).toBe(true)
     expect(isBlankFilterOption('BONTANG')).toBe(false)
+  })
+})
+
+describe('scopeGroupKeyParts', () => {
+  it('splits a comma-joined value and keeps a single one whole', () => {
+    expect(scopeGroupKeyParts('SUP A, SUP B')).toEqual(['SUP A', 'SUP B'])
+    expect(scopeGroupKeyParts('SUP A')).toEqual(['SUP A'])
+  })
+
+  it('reports an empty value as Blank rather than as no values', () => {
+    expect(scopeGroupKeyParts('')).toEqual(['Blank'])
+    expect(scopeGroupKeyParts(null)).toEqual(['Blank'])
+    expect(scopeGroupKeyParts(' , ')).toEqual(['Blank'])
+  })
+})
+
+describe('rowMatchesToolbarMultiFilters — multi-valued supplier and group', () => {
+  /*
+   * Shipping Performance groups by STO, and 298 of 10,477 STOs span contracts with different
+   * suppliers; the API joins those into one string. Before this, ticking either supplier hid the
+   * row - real cargo disappearing from the cards and the table with no explanation.
+   */
+  it('keeps a two-supplier STO when either of its suppliers is selected', () => {
+    const row = { supplier: 'SUP A, SUP B' }
+    expect(rowMatchesToolbarMultiFilters(row, { selectedSuppliers: ['SUP A'] })).toBe(true)
+    expect(rowMatchesToolbarMultiFilters(row, { selectedSuppliers: ['SUP B'] })).toBe(true)
+    expect(rowMatchesToolbarMultiFilters(row, { selectedSuppliers: ['SUP C'] })).toBe(false)
+  })
+
+  it('applies the same rule to Group Supplier', () => {
+    const row = { group_name: 'GROUP ONE, GROUP TWO' }
+    expect(rowMatchesToolbarMultiFilters(row, { selectedGroups: ['GROUP TWO'] })).toBe(true)
+    expect(rowMatchesToolbarMultiFilters(row, { selectedGroups: ['GROUP THREE'] })).toBe(false)
+  })
+
+  it('still matches a single-valued supplier exactly', () => {
+    expect(
+      rowMatchesToolbarMultiFilters({ supplier: 'SUP A' }, { selectedSuppliers: ['SUP A'] }),
+    ).toBe(true)
+    expect(
+      rowMatchesToolbarMultiFilters({ supplier: 'SUP AB' }, { selectedSuppliers: ['SUP A'] }),
+    ).toBe(false)
   })
 })

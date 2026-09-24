@@ -3532,6 +3532,55 @@ export const getFilterSuppliers = async (_req: AuthRequest, res: Response) => {
   }
 };
 
+/**
+ * Which suppliers sit under which Group Supplier.
+ *
+ * Returned as one map rather than as a suppliers-for-these-groups query, because the pairing is
+ * small - 545 (group, supplier) pairs, about 20 KB - and the Contract Performance toolbar has to
+ * narrow its Supplier list the moment a group is ticked, with no round trip in between.
+ *
+ * Two shapes in the data are worth knowing before using this:
+ *   - 22 of the 566 suppliers have no group at all. They belong to the unnarrowed Supplier list and
+ *     to no group's list, which is correct: picking a group must not offer them.
+ *   - one supplier belongs to two groups, so this is a map of lists, not a supplier -> group
+ *     lookup.
+ *
+ * Same B2B-child exclusion as the plain supplier and group lists, or the narrowed list could offer
+ * a supplier the unnarrowed one does not.
+ */
+export const getFilterSupplierGroupPairs = async (_req: AuthRequest, res: Response) => {
+  try {
+    const data = await ttlMemo('filter-options:dashboard-supplier-group-pairs', 5 * 60 * 1000, async () => {
+      const result = await query(`
+      SELECT DISTINCT TRIM(group_name) AS group_name, TRIM(supplier) AS supplier
+      FROM contracts c
+      WHERE supplier IS NOT NULL AND supplier != ''
+        AND group_name IS NOT NULL AND group_name != ''
+      ${DASHBOARD_EXCLUDE_B2B_CHILD_CONTRACTS_SQL}
+      ORDER BY 1, 2
+    `);
+      const byGroup: Record<string, string[]> = {};
+      for (const row of result.rows as Array<{ group_name: string; supplier: string }>) {
+        const key = String(row.group_name).toUpperCase();
+        if (!byGroup[key]) byGroup[key] = [];
+        byGroup[key].push(String(row.supplier));
+      }
+      return { byGroup };
+    });
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    logger.error('Get filter supplier-group pairs error:', error);
+    return res.status(500).json({
+      success: false,
+      error: { message: 'Failed to fetch supplier/group pairs' },
+    });
+  }
+};
+
 // Get filter options for products
 export const getFilterProducts = async (_req: AuthRequest, res: Response) => {
   try {

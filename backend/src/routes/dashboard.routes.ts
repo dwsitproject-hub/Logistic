@@ -22,6 +22,7 @@ import {
   getFilterSuppliers,
   getFilterProducts,
   getFilterGroups,
+  getFilterSupplierGroupPairs,
   getFilteredContracts,
   getDashboardAiInsight,
   generateDashboardAiInsight,
@@ -72,6 +73,8 @@ router.get('/filter-options/plants', getFilterPlants);
 router.get('/filter-options/suppliers', getFilterSuppliers);
 router.get('/filter-options/products', getFilterProducts);
 router.get('/filter-options/groups', getFilterGroups);
+// Group -> suppliers, so a toolbar can narrow its Supplier list without a round trip per tick.
+router.get('/filter-options/supplier-groups', getFilterSupplierGroupPairs);
 
 export default router;
 

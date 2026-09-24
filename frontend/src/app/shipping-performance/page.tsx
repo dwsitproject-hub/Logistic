@@ -27,6 +27,7 @@ import {
   normalizeScopeGroupKey,
   rowMatchesGlobalSearch,
   rowMatchesToolbarMultiFilters,
+  scopeGroupKeyParts,
 } from '@/lib/globalScopeFilters'
 import {
   formatAvgDays,
@@ -1628,17 +1629,88 @@ function ShippingPerformancePageContent() {
    */
   const availableSuppliers = useMemo(
     () =>
-      [...new Set(rows.map((r) => String(r.supplier ?? '').trim()).filter(Boolean))].sort((a, b) =>
-        a.localeCompare(b),
-      ),
+      [
+        ...new Set(
+          rows.flatMap((r) => (r.supplier ? scopeGroupKeyParts(r.supplier) : [])),
+        ),
+      ].sort((a, b) => a.localeCompare(b)),
     [rows],
   )
   const availableSupplierGroups = useMemo(
     () =>
-      [...new Set(rows.map((r) => String(r.group_name ?? '').trim()).filter(Boolean))].sort((a, b) =>
-        a.localeCompare(b),
-      ),
+      [
+        ...new Set(
+          rows.flatMap((r) => (r.group_name ? scopeGroupKeyParts(r.group_name) : [])),
+        ),
+      ].sort((a, b) => a.localeCompare(b)),
     [rows],
+  )
+
+  /*
+   * Group Supplier -> its suppliers, from the shared filter-options endpoint rather than from the
+   * rows. An STO can span contracts with different suppliers AND different groups, and the row
+   * carries both as comma-joined lists with no way to say which supplier sits in which group -
+   * pairing off the rows would quietly widen the narrowed list. The endpoint pairs them exactly.
+   */
+  const [supplierGroupPairs, setSupplierGroupPairs] = useState<Record<string, string[]>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .get('/dashboard/filter-options/supplier-groups')
+      .then((res) => {
+        if (cancelled) return
+        const byGroup = (res.data as { data?: { byGroup?: Record<string, string[]> } })?.data
+          ?.byGroup
+        setSupplierGroupPairs(byGroup ?? {})
+      })
+      .catch(() => {
+        if (!cancelled) setSupplierGroupPairs({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const suppliersInSelectedGroups = useMemo<Set<string> | null>(() => {
+    if (selectedSupplierGroups.length === 0) return null
+    // Not loaded yet: narrowing to an empty set would blank the Supplier list.
+    if (Object.keys(supplierGroupPairs).length === 0) return null
+    const allowed = new Set<string>()
+    for (const group of selectedSupplierGroups) {
+      for (const supplier of supplierGroupPairs[group.trim().toUpperCase()] ?? []) {
+        allowed.add(supplier.trim().toUpperCase())
+      }
+    }
+    return allowed
+  }, [selectedSupplierGroups, supplierGroupPairs])
+
+  const supplierOptions = useMemo(() => {
+    if (!suppliersInSelectedGroups) return availableSuppliers
+    return availableSuppliers.filter((supplier) =>
+      suppliersInSelectedGroups.has(supplier.trim().toUpperCase()),
+    )
+  }, [availableSuppliers, suppliersInSelectedGroups])
+
+  /**
+   * Changing the groups drops any supplier the narrowed list no longer offers, so the Supplier box
+   * can never keep filtering by something it does not show.
+   */
+  const handleSupplierGroupsChange = useCallback(
+    (values: string[]) => {
+      setSelectedSupplierGroups(values)
+      if (values.length === 0 || Object.keys(supplierGroupPairs).length === 0) return
+      const allowed = new Set<string>()
+      for (const group of values) {
+        for (const supplier of supplierGroupPairs[group.trim().toUpperCase()] ?? []) {
+          allowed.add(supplier.trim().toUpperCase())
+        }
+      }
+      setSelectedSuppliers((prev) =>
+        prev.filter((supplier) => allowed.has(supplier.trim().toUpperCase())),
+      )
+    },
+    [supplierGroupPairs],
   )
 
   const availableGroupPlants = useMemo(
@@ -1680,9 +1752,18 @@ function ShippingPerformancePageContent() {
         searchTerm,
       })
     }
+    /*
+     * Every toolbar filter that can narrow the rows has to be named here. Supplier, Group Supplier
+     * and Planning Status were added after this shortcut was written and were not, so picking any
+     * one of them ALONE returned the unfiltered set: the cards, the tree and the table all stayed
+     * put while the box read "1 selected".
+     */
     if (
       selectedIncoterms.length === 0 &&
-      selectedGroupPlants.length === 0
+      selectedGroupPlants.length === 0 &&
+      selectedSuppliers.length === 0 &&
+      selectedSupplierGroups.length === 0 &&
+      selectedPlanningStatuses.length === 0
     ) {
       return scopeFilteredRows
     }
@@ -1968,6 +2049,9 @@ function ShippingPerformancePageContent() {
     setSelectedSources([])
     resetUserScopeFilters()
     setSelectedIncoterms([])
+    setSelectedSuppliers([])
+    setSelectedSupplierGroups([])
+    setSelectedPlanningStatuses([])
     setDrilldownFilters(EMPTY_DRILLDOWN_FILTERS)
     setCurrentPage(1)
   }, [resetUserScopeFilters])
@@ -2284,52 +2368,6 @@ function ShippingPerformancePageContent() {
             </div>
             <div className="w-48">
               <SearchableMultiSelect
-                label="Supplier"
-                options={availableSuppliers}
-                selected={selectedSuppliers}
-                onChange={(values) => {
-                  setSelectedSuppliers(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All suppliers"
-                emptyMessage="No suppliers"
-                uppercaseOptionLabels
-              />
-            </div>
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Group Supplier"
-                options={availableSupplierGroups}
-                selected={selectedSupplierGroups}
-                onChange={(values) => {
-                  setSelectedSupplierGroups(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All groups"
-                emptyMessage="No supplier groups"
-                uppercaseOptionLabels
-              />
-            </div>
-            <div className="w-48">
-              {/*
-                Planned means scheduled and still running, up to but not including completed. A
-                finished shipment is in neither option, so selecting both is the same as selecting
-                none. Shipping Performance reads the shipment status only - it has no trucking arm.
-              */}
-              <SearchableMultiSelect
-                label="Planning Status"
-                options={[...PLANNING_STATUS_OPTIONS]}
-                selected={selectedPlanningStatuses}
-                onChange={(values) => {
-                  setSelectedPlanningStatuses(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All planning statuses"
-                emptyMessage="No planning statuses"
-              />
-            </div>
-            <div className="w-48">
-              <SearchableMultiSelect
                 label="Source"
                 options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
                 selected={selectedSources}
@@ -2351,6 +2389,56 @@ function ShippingPerformancePageContent() {
                 placeholder="All incoterms"
                 emptyMessage="No incoterms"
                 uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
+                label="Group Supplier"
+                options={availableSupplierGroups}
+                selected={selectedSupplierGroups}
+                onChange={(values) => {
+                  handleSupplierGroupsChange(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All groups"
+                emptyMessage="No supplier groups"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              {/*
+                Options narrow to the ticked groups, and a supplier outside them is dropped from the
+                selection rather than left to AND the page down to nothing.
+              */}
+              <SearchableMultiSelect
+                label="Supplier"
+                options={supplierOptions}
+                selected={selectedSuppliers}
+                onChange={(values) => {
+                  setSelectedSuppliers(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All suppliers"
+                emptyMessage="No suppliers"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              {/*
+                Planned means scheduled and still running, up to but not including completed. A
+                finished shipment is in neither option, so selecting both is the same as selecting
+                none. Shipping Performance reads the shipment status only - it has no trucking arm.
+              */}
+              <SearchableMultiSelect
+                label="Planning Status"
+                options={[...PLANNING_STATUS_OPTIONS]}
+                selected={selectedPlanningStatuses}
+                onChange={(values) => {
+                  setSelectedPlanningStatuses(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All planning statuses"
+                emptyMessage="No planning statuses"
               />
             </div>
             <div className="w-48">
