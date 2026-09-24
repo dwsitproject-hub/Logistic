@@ -85,6 +85,10 @@ set_var JPS_API_BASE_URL "${JPS_API_BASE_URL:-$JPS_BASE_DEFAULT}"
 set_var JPS_API_KEY "$JPS_KEY"
 set_var JPS_PORT_ID "${JPS_PORT_ID:-1}"
 set_var JPS_REGION_SITE "${JPS_REGION_SITE:-BONTANG}"
+# Testing only: resend submissions JPS rejected outright, once they have gone cold for 5 minutes.
+# Normally a 400 is permanent and retrying it just burns the rate limit - this is for the case the
+# fix is on JPS's side, such as a master vessel missing its LOA. Switch it back to false afterwards.
+set_var JPS_RETRY_FAILED "${JPS_RETRY_FAILED:-false}"
 # The frontend flag is separate on purpose: JPS_ENABLED only means anything alongside a base URL
 # and a key, and neither may reach the browser. This one only decides whether the two Jetty columns
 # appear on the Shipments table.
@@ -109,4 +113,11 @@ cat <<'NEXT'
 
   To switch it off again, set JPS_ENABLED=false and redeploy the backend. Nothing already sent to
   JPS is withdrawn by that - the partner API has no cancel endpoint.
+
+  While JPS is still fixing its own master data, rejected submissions can be retried automatically:
+
+    JPS_RETRY_FAILED=true bash docs/scripts/setup-jps-env.sh
+
+  The backend logs a warning on every boot while that is on. Set it back to false once testing is
+  done, or every permanently-bad payload will be resent every sweep, forever.
 NEXT

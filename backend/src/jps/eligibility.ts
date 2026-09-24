@@ -50,9 +50,17 @@ export interface EligibleSto extends JpsShipmentSource {
  * several times, and `external_reference` being unique per key means every repeat after the first
  * comes back 409.
  */
+export interface FindEligibleOptions {
+  /** Offer STOs whose last submission JPS rejected, once they have gone cold. See jpsRetryFailed(). */
+  retryFailed?: boolean;
+  /** How long a rejection is left alone before it is offered again. */
+  retryFailedAfterMs?: number;
+}
+
 export async function findEligibleStos(
   regionSite: string,
   limit: number,
+  options: FindEligibleOptions = {},
 ): Promise<EligibleSto[]> {
   const result = await query(
     `
@@ -175,16 +183,32 @@ export async function findEligibleStos(
     --
     -- SKIPPED_NO_CARGO is deliberately missing from this list. An STO held back because a product
     -- had no JPS cargo_type, or because its STO quantity looked wrong, must be picked up again
-    -- once the data is corrected. The other three states are settled and must not be re-sent.
+    -- once the data is corrected.
+    --
+    -- SUBMITTED and SKIPPED_PRE_EXISTING are settled for good: both name an instruction JPS
+    -- already holds, so re-sending is a duplicate rather than a retry.
+    --
+    -- FAILED normally blocks too, because a 400 is permanent. $3 lifts that while the fix is on
+    -- JPS's side; $4 keeps a rejection cold for a while first, so the sweep firing on every
+    -- shipment edit cannot resend the same rejected payload once per save.
     WHERE NOT EXISTS (
       SELECT 1 FROM jps_shipping_instructions j
       WHERE j.sto_key = e.sto_key
-        AND j.state IN ('SUBMITTED', 'SKIPPED_PRE_EXISTING', 'FAILED')
+        AND (
+          j.state IN ('SUBMITTED', 'SKIPPED_PRE_EXISTING')
+          OR (
+            j.state = 'FAILED'
+            AND (
+              $3::boolean IS NOT TRUE
+              OR j.updated_at > NOW() - ($4::bigint || ' milliseconds')::interval
+            )
+          )
+        )
     )
     ORDER BY e.eta_discharge_arrival, e.sto_key
     LIMIT $2
     `,
-    [regionSite, limit],
+    [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)],
   );
 
   return result.rows.map((row: Record<string, unknown>) => ({

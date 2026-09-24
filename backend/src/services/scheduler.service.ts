@@ -118,7 +118,7 @@ export class SchedulerService {
    * discharge ETA should not wait for the next tick to see a jetty status.
    */
   private static startJpsSyncCron(): void {
-    void import('../jps').then(({ isJpsEnabled, jpsSweepCron, runJpsSync }) => {
+    void import('../jps').then(({ isJpsEnabled, jpsRetryFailed, jpsSweepCron, runJpsSync }) => {
       if (!isJpsEnabled()) {
         logger.info('JPS sync cron is disabled (JPS_ENABLED is not true)');
         return;
@@ -132,6 +132,11 @@ export class SchedulerService {
         { timezone: 'Asia/Jakarta' },
       );
       logger.info(`JPS sync cron scheduled: ${schedule} (Asia/Jakarta)`);
+      // Loud on purpose: retrying rejected submissions is a temporary testing mode, and the one
+      // way it goes wrong is being left on and forgotten.
+      if (jpsRetryFailed()) {
+        logger.warn('JPS retry of REJECTED submissions is ON (JPS_RETRY_FAILED=true) - testing only');
+      }
     }).catch((error) => {
       logger.warn('JPS sync cron not started', { error });
     });

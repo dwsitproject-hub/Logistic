@@ -5,7 +5,7 @@
  * the operator's decision. JPS has no webhook in v1 and no way to cancel an instruction, so the
  * whole conversation is: submit once, poll until it settles.
  */
-export { isJpsEnabled, jpsRegionSite, jpsSweepCron } from './config';
+export { isJpsEnabled, jpsRegionSite, jpsRetryFailed, jpsSweepCron } from './config';
 export { submitEligibleStos, type JpsSubmitSummary } from './submit';
 export { pollSubmittedInstructions, type JpsPollSummary } from './poll';
 export { findEligibleStos, type EligibleSto } from './eligibility';

@@ -43,6 +43,32 @@ export function jpsMinPollIntervalMs(): number {
   return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
 }
 
+/**
+ * Retry submissions JPS rejected outright, instead of leaving them settled.
+ *
+ * OFF by default, and meant to stay off. A 400 is permanent by definition, so retrying it on a
+ * schedule normally just burns the rate limit and delays the real fix. It exists for the case the
+ * fix is on the PARTNER's side - a master vessel missing its LOA, say - where the payload was
+ * right all along and there is nothing in KLIP to change. Switch it on while that is being sorted
+ * out, then off again.
+ *
+ * Never retries a SUBMITTED or SKIPPED_PRE_EXISTING instruction: those exist at JPS, and sending
+ * them again is a duplicate, not a retry.
+ */
+export function jpsRetryFailed(): boolean {
+  return String(process.env.JPS_RETRY_FAILED || '').toLowerCase() === 'true';
+}
+
+/**
+ * How long a failure is left alone before it is retried. The sweep runs every 15 minutes anyway,
+ * but it also fires on every shipment edit and SAP import, and without this a busy afternoon of
+ * edits would resend the same rejected payload once per save.
+ */
+export function jpsRetryFailedAfterMs(): number {
+  const n = Number(process.env.JPS_RETRY_FAILED_AFTER_MS);
+  return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
+}
+
 export function jpsSweepCron(): string {
   return process.env.JPS_SWEEP_CRON || '*/15 * * * *';
 }

@@ -2,7 +2,13 @@
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
-import { jpsMaxSubmitsPerSweep, jpsPortId, jpsRegionSite } from './config';
+import {
+  jpsMaxSubmitsPerSweep,
+  jpsPortId,
+  jpsRegionSite,
+  jpsRetryFailed,
+  jpsRetryFailedAfterMs,
+} from './config';
 import { findEligibleStos } from './eligibility';
 import { buildJpsExternalReference, buildJpsSubmitPayload } from './mapper';
 import type { JpsInstruction, JpsSubmitPayload } from './types';
@@ -21,13 +27,28 @@ export interface JpsSubmitSummary {
   failed: number;
 }
 
-/** Next revision for an STO. Rejected instructions cannot be amended - only replaced. */
+/**
+ * The revision to submit under.
+ *
+ * Normally one past the highest: an instruction JPS already holds cannot be amended, so a
+ * replacement needs a reference JPS has not seen.
+ *
+ * A FAILED row is the exception, and reusing its revision is the point. FAILED means the POST was
+ * rejected - a 400, a 401, a 404 - so JPS created nothing and `KLIP-<sto>-R<n>` is still an unused
+ * reference. Incrementing would leave a trail of abandoned numbers, and with retries switched on
+ * the reference would climb one per sweep while nothing about the payload had changed.
+ */
 async function nextRevision(stoKey: string): Promise<number> {
   const res = await query(
-    `SELECT COALESCE(MAX(revision), 0) + 1 AS next FROM jps_shipping_instructions WHERE sto_key = $1`,
+    `SELECT COALESCE(MAX(revision), 0) AS highest,
+            COALESCE(MAX(revision) FILTER (WHERE state = 'FAILED'), 0) AS highest_failed
+       FROM jps_shipping_instructions WHERE sto_key = $1`,
     [stoKey],
   );
-  return Number(res.rows[0]?.next ?? 1);
+  const highest = Number(res.rows[0]?.highest ?? 0);
+  const highestFailed = Number(res.rows[0]?.highest_failed ?? 0);
+  if (highestFailed > 0 && highestFailed === highest) return highestFailed;
+  return highest + 1;
 }
 
 async function recordHeld(stoKey: string, revision: number, problems: string[]): Promise<void> {
@@ -102,7 +123,10 @@ async function recordFailed(
  */
 export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
   const summary: JpsSubmitSummary = { considered: 0, submitted: 0, recovered: 0, held: 0, failed: 0 };
-  const eligible = await findEligibleStos(jpsRegionSite(), jpsMaxSubmitsPerSweep());
+  const eligible = await findEligibleStos(jpsRegionSite(), jpsMaxSubmitsPerSweep(), {
+    retryFailed: jpsRetryFailed(),
+    retryFailedAfterMs: jpsRetryFailedAfterMs(),
+  });
   summary.considered = eligible.length;
 
   for (const sto of eligible) {
