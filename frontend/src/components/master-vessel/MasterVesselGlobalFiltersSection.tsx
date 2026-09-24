@@ -33,7 +33,7 @@ export interface MasterVesselGlobalFiltersSectionProps {
 }
 
 const HEATING_FILTER_OPTIONS = ['Yes', 'No', '(Blank)'] as const
-const TERMS_FILTER_OPTIONS = ['V/C', 'T/C', '(Blank)'] as const
+const TERMS_FILTER_OPTIONS = ['T/C', 'V/C', 'CIF', '(Blank)'] as const
 
 export function MasterVesselGlobalFiltersSection({
   searchDraft,
@@ -125,7 +125,7 @@ export function MasterVesselGlobalFiltersSection({
           />
           <SearchableMultiSelect
             label="Term / Charter"
-            options={[...TERMS_FILTER_OPTIONS, ...filterOptions.terms.filter((t) => t !== 'V/C' && t !== 'T/C')]}
+            options={[...TERMS_FILTER_OPTIONS, ...filterOptions.terms.filter((t) => t !== 'T/C' && t !== 'V/C' && t !== 'CIF')]}
             selected={selectedTerms}
             onChange={onTermsChange}
             placeholder="All terms"

@@ -64,7 +64,7 @@ function parseCapacity(value: unknown): number | null {
 
 function normalizeTerms(value: unknown): string | null {
   const s = String(value ?? '').trim().toUpperCase();
-  return s === 'V/C' || s === 'T/C' ? s : null;
+  return s === 'T/C' || s === 'V/C' || s === 'CIF' ? s : null;
 }
 
 function readSheetRows(wb: XLSX.WorkBook, sheetName: string): Record<string, unknown>[] {

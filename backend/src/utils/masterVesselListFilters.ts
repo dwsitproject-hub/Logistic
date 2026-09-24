@@ -29,7 +29,7 @@ export function parseMultiQueryParam(raw: unknown): string[] {
 
 export const MASTER_VESSEL_TYPE_OPTIONS = ['BARGE', 'TANKER', 'SPOB'] as const;
 export const MASTER_VESSEL_LAMBUNG_OPTIONS = ['DHDB', 'SHSB', 'SHDB'] as const;
-export const MASTER_VESSEL_TERMS_OPTIONS = ['V/C', 'T/C'] as const;
+export const MASTER_VESSEL_TERMS_OPTIONS = ['T/C', 'V/C', 'CIF'] as const;
 
 export type MasterVesselListFilterParams = {
   search?: string;
@@ -95,7 +95,7 @@ export function buildMasterVesselListWhere(
   if (filters.terms && filters.terms.length > 0) {
     const normalized = filters.terms.map((t) => t.toUpperCase());
     const wantsBlank = normalized.includes('BLANK');
-    const valueTerms = normalized.filter((t) => t === 'V/C' || t === 'T/C');
+    const valueTerms = normalized.filter((t) => t === 'T/C' || t === 'V/C' || t === 'CIF');
     const clauses: string[] = [];
     if (valueTerms.length > 0) {
       params.push(valueTerms);
