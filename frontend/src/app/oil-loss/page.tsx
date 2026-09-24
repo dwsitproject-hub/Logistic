@@ -160,29 +160,25 @@ type ViewColumnPrefs = {
   sortDir: 'asc' | 'desc'
 }
 
-const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; mtLabel: string; formula: string }> = [
+const R_OIL_LOSS_CARDS: Array<{ key: ROilLossKey; label: string; formula: string }> = [
   {
     key: 'r1',
     label: 'R1',
-    mtLabel: 'R1 (MT)',
     formula: '(Quantity SFAL − Quantity Delivery) / Quantity Delivery × 100%',
   },
   {
     key: 'r2',
     label: 'R2',
-    mtLabel: 'R2 (MT)',
     formula: '(Quantity SFBD − Quantity SFAL) / Quantity SFAL × 100%',
   },
   {
     key: 'r3',
     label: 'R3',
-    mtLabel: 'R3 (MT)',
     formula: '(Quantity Receive − Quantity SFBD) / Quantity SFBD × 100%',
   },
   {
     key: 'r4',
     label: 'Loss',
-    mtLabel: 'Loss (MT)',
     formula: '(Quantity Receive − Quantity Delivery) / Quantity Delivery × 100%',
   },
 ]
@@ -236,7 +232,7 @@ function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
 function renderROilLossCell(kg: number | null): ReactNode {
   if (kg == null) return <span className="text-sm text-gray-400">-</span>
   const tone = kg < 0 ? 'text-red-600' : kg > 0 ? 'text-green-600' : 'text-gray-900'
-  return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)}</span>
+  return <span className={`text-sm tabular-nums ${tone}`}>{formatOilLossMtFromKg(kg)} MT</span>
 }
 
 /** Loss % on an aggregated row: (Qty Receive − Qty Delivery) / Qty Delivery × 100. */
@@ -270,7 +266,7 @@ function buildROilLossCompactColumns(): CompactColumn[] {
   const lossFormula = R_OIL_LOSS_CARDS.find((card) => card.key === 'r4')?.formula ?? ''
   const mtColumns: CompactColumn[] = R_OIL_LOSS_CARDS.map((card) => ({
     id: card.key,
-    label: card.mtLabel,
+    label: card.label,
     formulaHelp: `Formula: ${card.formula}`,
     defaultVisible: true,
     sortable: true,
