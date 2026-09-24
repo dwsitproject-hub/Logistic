@@ -150,6 +150,7 @@ import {
   shipmentDefaultVisibleColumnIdsForStage,
   shipmentTableColumnWidthPx,
 } from '@/lib/shipmentColumns'
+import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
 import {
   JettyStatusBadge,
   formatJettySyncDates,
@@ -4596,7 +4597,7 @@ function ShipmentsPageContent() {
       // reads "Not Sent" - that is the correct answer, not a gap.
       id: 'jetty_status',
       label: 'Jetty Status',
-      defaultVisible: true,
+      defaultVisible: JETTY_COLUMNS_ENABLED,
       sortable: true,
       getSortValue: (s) => jettyStatusLabel(s as JettyStatusFields),
       render: (s) => <JettyStatusBadge row={s as JettyStatusFields} />,
@@ -4605,7 +4606,7 @@ function ShipmentsPageContent() {
     {
       id: 'jetty_sync_dates',
       label: 'Jetty Sync Dates',
-      defaultVisible: true,
+      defaultVisible: JETTY_COLUMNS_ENABLED,
       sortable: false,
       render: (s) => (
         <span

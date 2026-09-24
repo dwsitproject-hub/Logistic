@@ -21,6 +21,7 @@ import {
   type CompactTableColumnWidthInput,
 
 } from '@/lib/compactTableUi'
+import { JETTY_COLUMNS_ENABLED } from '@/lib/jettyFeature'
 
 
 
@@ -102,12 +103,11 @@ export const SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS: readonly string[] = [
 
   'ata_vessel_complete_discharge',
 
-  // Jetty Planning System. Visible by default because the whole point of the integration is that
-  // an operator can see, without leaving KLIP, whether a berth has been asked for and granted.
+  // Jetty Planning System — only where the integration is live (NEXT_PUBLIC_JPS_ENABLED=true).
+  // Everywhere else the two would read "Not Sent" and "-" on every row, which is accurate and
+  // useless; an operator who wants them anyway can still turn them on from the column settings.
 
-  'jetty_status',
-
-  'jetty_sync_dates',
+  ...(JETTY_COLUMNS_ENABLED ? ['jetty_status', 'jetty_sync_dates'] : []),
 
 ] as const
 

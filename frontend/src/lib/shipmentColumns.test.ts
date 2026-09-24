@@ -42,7 +42,7 @@ import {
 
 describe('shipmentColumns', () => {
 
-  it('uses v12 default visible order (status then grouping; Trade Cycle; Jetty columns; no OS Plan)', () => {
+  it('uses v12 default visible order (status then grouping; Trade Cycle; Jetty columns off; no OS Plan)', () => {
 
     expect(SHIPMENT_COLUMN_LAYOUT_VERSION).toBe('shipments-columns-v12')
 
@@ -62,12 +62,12 @@ describe('shipmentColumns', () => {
 
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain('contract_qty')
 
-    // Bumped to v12 so the Jetty columns reach users who already have a saved layout; without the
-    // bump the two would exist but stay hidden for everyone who has ever reordered the table.
+    // The Jetty columns exist but stay off until JPS_ENABLED is set - otherwise every row would
+    // read "Not Sent", which is accurate and useless. Operators can turn them on per column.
 
-    expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain('jetty_status')
+    expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('jetty_status')
 
-    expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain('jetty_sync_dates')
+    expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).not.toContain('jetty_sync_dates')
 
     expect(SHIPMENT_DEFAULT_VISIBLE_COLUMN_IDS).toContain(SHIPMENT_TRADE_CYCLE_COLUMN_ID)
 
