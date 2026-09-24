@@ -65,7 +65,7 @@ import api from '@/lib/api'
 import { cn, formatQtyMtFromKg } from '@/lib/utils'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { resolveKlipPortInputValue, resolveKlipPortNameFromRow, resolveSapPortNameFromRow } from '@/lib/loadingPortDisplay'
-import { hasVesselPortsQuantityUserEdits } from '@/lib/vesselPortsQuantityEdits'
+import { hasVesselPortsQuantityUserEdits, quantityKgValuesEqual } from '@/lib/vesselPortsQuantityEdits'
 import {
   DECIMAL_DOT_HINT,
   blockCommaDecimalKeyDown,
@@ -1066,9 +1066,11 @@ export function EditShipmentModal({
     [originalQualityByPortKey, currentQualityByPortKey],
   )
 
-  const hasLimitedEdits = hasAtaEdits || hasQualityEdits
+  const hasSfalSfbdEdits =
+    !quantityKgValuesEqual(sfalQty, originalSfalQty) || !quantityKgValuesEqual(sfbdQty, originalSfbdQty)
+  const hasLimitedEdits = hasAtaEdits || hasQualityEdits || hasSfalSfbdEdits
 
-  const requiresEditRemark = hasEtaEdits || hasQtyEdits || hasAtaEdits || hasQualityEdits
+  const requiresEditRemark = hasEtaEdits || hasQtyEdits || hasAtaEdits || hasQualityEdits || hasSfalSfbdEdits
   const editRemarkMissing = requiresEditRemark && !editRemark.trim()
   const showSaveButton = canModifyCoreSections || (canEditAtaQuality && hasLimitedEdits)
   const showRemarkField =
@@ -1683,7 +1685,7 @@ export function EditShipmentModal({
     const isLimitedViewSave = readOnly && enableAtaQualityEditInView
 
     if (isLimitedViewSave && !hasLimitedEdits) {
-      setNotification({ type: 'error', message: 'No ATA or Quality changes to save.' })
+      setNotification({ type: 'error', message: 'No ATA, Quality, or SFAL/SFBD changes to save.' })
       return
     }
 
@@ -1796,7 +1798,13 @@ export function EditShipmentModal({
       }
 
       if (isLimitedViewSave) {
-        setNotification({ type: 'success', message: 'ATA and Quality updated successfully.' })
+        const message =
+          hasSfalSfbdEdits && !hasAtaEdits && !hasQualityEdits
+            ? 'SFAL and SFBD updated successfully.'
+            : hasSfalSfbdEdits
+              ? 'Shipment updated successfully.'
+              : 'ATA and Quality updated successfully.'
+        setNotification({ type: 'success', message })
         setAtaIsEditing(false)
         setQualityIsEditing(false)
         setEditRemark('')
@@ -2737,7 +2745,7 @@ export function EditShipmentModal({
                 )}
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {canModifyCoreSections ? (
+                  {canEditAtaQuality ? (
                     <>
                       <div>
                         <label className="mb-1 block text-xs font-medium text-gray-600">SFAL Qty (MT)</label>

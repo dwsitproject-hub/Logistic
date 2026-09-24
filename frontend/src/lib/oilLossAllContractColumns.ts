@@ -163,6 +163,24 @@ export function mergeOilLossAllContractColumnOrder(saved: string[], allIds: stri
   return mergePreservedColumnOrder(saved, allIds, oilLossAllContractCompactColumnFallbackOrder(allIds))
 }
 
+/** Trucking Oil Loss is Loss only. R1–R3 and SFAL/SFBD stay on Vessel. */
+export const OIL_LOSS_TRUCK_HIDDEN_COLUMN_IDS = [
+  'r1',
+  'r2',
+  'r3',
+  'quantity_sfal',
+  'quantity_sfbd',
+] as const
+
+export function filterOilLossColumnsForTransport<T extends { id: string }>(
+  columns: readonly T[],
+  transport: 'Vessel' | 'Truck',
+): T[] {
+  if (transport === 'Vessel') return [...columns]
+  const hidden = new Set<string>(OIL_LOSS_TRUCK_HIDDEN_COLUMN_IDS)
+  return columns.filter((column) => !hidden.has(column.id))
+}
+
 export function buildOilLossAllContractVisibleColumns<T extends { id: string }>(
   columns: T[],
   visibleIds: ReadonlySet<string>,

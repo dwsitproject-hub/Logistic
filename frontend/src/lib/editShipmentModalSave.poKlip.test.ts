@@ -157,6 +157,31 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
     expect(body.shortage).toBe(-3.5)
   })
 
+  it('persists SFAL and SFBD from View Shipment without KLIP delivery or receive', async () => {
+    await saveEditShipmentChanges(
+      baseInput({
+        ataQualityOnly: true,
+        sfalQty: 4_953_348,
+        originalSfalQty: 4_953_348_000,
+        sfbdQty: 4_938_215,
+        originalSfbdQty: null,
+      }),
+    )
+
+    const shipmentPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && /\/shipments\/[^/]+$/.test(String(c[0])),
+    )
+    expect(shipmentPuts).toHaveLength(1)
+    expect(shipmentPuts[0][1]).toEqual({
+      sfal_qty: 4_953_348,
+      sfbd_qty: 4_938_215,
+    })
+    const klipPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && String(c[0]).includes('/po-klip-qty'),
+    )
+    expect(klipPuts).toHaveLength(0)
+  })
+
   it('does not persist shortage when auto-computed value matches original', async () => {
     await saveEditShipmentChanges(
       baseInput({ autoPersistShortageMt: -3.5, originalShortage: -3.5 }),

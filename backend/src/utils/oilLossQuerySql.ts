@@ -13,8 +13,6 @@ import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { resolveUnplannedContractBacklogLatestSpdCte } from './shipmentUnplannedHybridSql';
 import {
-  OIL_LOSS_SFAL_QTY_EXPR,
-  OIL_LOSS_SFBD_QTY_EXPR,
   SAP_OIL_LOSS_IMPORT_STATUS_EXPR,
   SAP_OIL_LOSS_QTY_CONTRACT_NUMERIC,
   SAP_OIL_LOSS_QTY_DELIVERY_LEGACY_NUMERIC,
@@ -299,8 +297,8 @@ export async function buildOilLossMainSql(): Promise<string> {
         status,
         qty_delivery_resolved,
         qty_receive_resolved,
-        ${OIL_LOSS_SFAL_QTY_EXPR} AS quantity_sfal,
-        ${OIL_LOSS_SFBD_QTY_EXPR} AS quantity_sfbd
+        NULL::numeric AS quantity_sfal,
+        NULL::numeric AS quantity_sfbd
       FROM with_qty
       WHERE ${OIL_LOSS_TRUCK_ELIGIBILITY_WHERE_SQL}
         AND qty_receive_resolved < qty_delivery_resolved

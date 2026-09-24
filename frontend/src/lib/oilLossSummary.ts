@@ -88,13 +88,15 @@ function sampleFromContractAgg(
   let lossKg: number | null = null
   let baseKg: number | null = null
 
+  if (!(delivery > 0) || !(receive > 0)) return null
+
   if (kind === 'r1' && agg.has_sfal && agg.has_sent && delivery > 0) {
     lossKg = sfal - delivery
     baseKg = delivery
   } else if (kind === 'r2' && agg.has_sfbd && agg.has_sfal && sfal > 0) {
     lossKg = sfbd - sfal
     baseKg = sfal
-  } else if (kind === 'r3' && agg.has_received && agg.has_sfbd && sfbd > 0) {
+  } else if (kind === 'r3' && agg.has_received && agg.has_sfbd && sfbd > 0 && receive > 0) {
     lossKg = receive - sfbd
     baseKg = sfbd
   } else if (kind === 'r4' && agg.has_received && agg.has_sent && delivery > 0) {
