@@ -22,6 +22,10 @@ import {
   sqlHasCycleCompletionDate,
 } from '../utils/contractsListCycleSql';
 import {
+  sqlRepresentativeShipmentStatusExpr,
+  sqlRepresentativeTruckingStatusExpr,
+} from '../utils/contractPlanningStatusSql';
+import {
   compareContractsListSortRows,
   resolveContractsListSort,
 } from '../utils/contractsListSort';
@@ -415,6 +419,15 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
           ${sqlB2bEndingBuyerAgg()} AS buyer,
           MAX(c.supplier) AS supplier,
           MAX(c.group_name) AS group_name,
+          /*
+           * One PO can carry several STOs, and the live one represents the contract: a PO with one
+           * STO Planned and another Completed reads Planned, because that is the half still needing
+           * attention. The per-STO breakdown is on the contract detail modal. CANCELLED sorts last
+           * so it only wins when it is all there is - 35 of the 47 contracts with mixed shipment
+           * statuses are CANCELLED + COMPLETED, and calling those Cancelled would hide finished work.
+           */
+          MAX(${sqlRepresentativeShipmentStatusExpr('c')}) AS shipment_status,
+          MAX(${sqlRepresentativeTruckingStatusExpr('c')}) AS trucking_status,
           MAX(c.product) AS product,
           ${sqlB2bEndingCompanyAgg()} AS company_name,
           MAX(c.quantity_ordered) AS quantity_ordered,

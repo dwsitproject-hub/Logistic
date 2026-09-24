@@ -47,6 +47,7 @@ import { sqlRegionSiteDisplayForContract,
 } from '../utils/regionSiteSql';
 import { sqlB2bOriginEndingChildLateralJoin } from '../utils/b2bOriginEndingSql';
 import { isContractLatestSpdSnapshotFresh } from './contractLatestSpdSnapshot.service';
+import { normalizePlanningStatusValues } from '../utils/contractPlanningStatusSql';
 
 export type ShippingPerformancePart = 'summary' | 'tree' | 'rows';
 
@@ -56,6 +57,11 @@ export interface ShippingPerformanceFilters {
   dateTo: string;
   incoterms: string[];
   plants: string[];
+  /** Multi-select Supplier / Group Supplier; Group Supplier is SAP's Vendor Group. */
+  suppliers: string[];
+  supplierGroups: string[];
+  /** PLANNED / UNPLANNED, from the shipment status alone - Shipping Performance has no trucking. */
+  planningStatuses: string[];
   cacheKey: string;
 }
 
@@ -749,7 +755,7 @@ export async function buildShippingPerformanceBacklogSql(): Promise<string> {
       c.supplier,
       c.contract_date,
       NULL::text                                AS vessel_name,
-      NULL::text                                AS group_name,
+      c.group_name                              AS group_name,
       'UNPLANNED'::text                         AS status,
       'PRESENT'::text                           AS sap_presence,
       c.quantity_ordered::numeric               AS contract_qty,
@@ -923,6 +929,7 @@ export async function buildShippingPerformanceSql(): Promise<string> {
         c.product,
         c.source_type,
         c.supplier,
+        c.group_name,
         pss.import_status AS import_status,
         /*
          * sto_metrics is keyed by STO, and a row can have no STO of its own - a B2B PARENT is the
@@ -1119,9 +1126,22 @@ export function parseShippingPerformanceFilters(req: AuthRequest): ShippingPerfo
   const incoterms = parseStringArray((req.query as any).incoterm ?? (req.query as any).incoterms);
   const plants = parseStringArray((req.query as any).plant ?? (req.query as any).plants);
 
-  const cacheKey = JSON.stringify({ scope, dateFrom, dateTo, incoterms: [...incoterms].sort(), plants: [...plants].sort() });
+  const suppliers = parseStringArray((req.query as any).suppliers);
+  const supplierGroups = parseStringArray((req.query as any).supplierGroups);
+  const planningStatuses = normalizePlanningStatusValues(
+    parseStringArray((req.query as any).planningStatuses),
+  );
 
-  return { scope, dateFrom, dateTo, incoterms, plants, cacheKey };
+  const cacheKey = JSON.stringify({
+    scope, dateFrom, dateTo,
+    incoterms: [...incoterms].sort(),
+    plants: [...plants].sort(),
+    suppliers: [...suppliers].sort(),
+    supplierGroups: [...supplierGroups].sort(),
+    planningStatuses: [...planningStatuses].sort(),
+  });
+
+  return { scope, dateFrom, dateTo, incoterms, plants, suppliers, supplierGroups, planningStatuses, cacheKey };
 }
 
 function filterGlobalRows(rows: Record<string, unknown>[], filters: ShippingPerformanceFilters): Record<string, unknown>[] {
@@ -1130,6 +1150,27 @@ function filterGlobalRows(rows: Record<string, unknown>[], filters: ShippingPerf
     if (filters.incoterms.length > 0 && !filters.incoterms.includes(inc)) return false;
     const plant = String(row.plant_site || '').trim() || 'Blank';
     if (filters.plants.length > 0 && !filters.plants.includes(plant)) return false;
+    if (filters.suppliers.length > 0) {
+      const sup = String(row.supplier || '').trim().toUpperCase();
+      if (!filters.suppliers.some((v) => v.trim().toUpperCase() === sup)) return false;
+    }
+    if (filters.supplierGroups.length > 0) {
+      const grp = String(row.group_name || '').trim().toUpperCase();
+      if (!filters.supplierGroups.some((v) => v.trim().toUpperCase() === grp)) return false;
+    }
+    /*
+     * Planned / Unplanned from the shipment status alone - this page has no trucking arm, which is
+     * why Contract Performance reads both and this one does not. Selecting both values, or
+     * neither, is no filter: a completed shipment belongs to neither bucket, so `(A OR B)` would
+     * quietly drop every finished row.
+     */
+    if (filters.planningStatuses.length === 1) {
+      const st = String(row.status || '').trim().toUpperCase();
+      const isPlanned = st === 'PLANNED' || st === 'SAILED' || st === 'ARRIVED_LP';
+      const isUnplanned = st === 'UNPLANNED';
+      if (filters.planningStatuses[0] === 'PLANNED' && !isPlanned) return false;
+      if (filters.planningStatuses[0] === 'UNPLANNED' && !isUnplanned) return false;
+    }
     if (!shippingPerfRowMatchesContractDateRange(row.contract_date, filters.dateFrom, filters.dateTo)) {
       return false;
     }

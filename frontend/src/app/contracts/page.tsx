@@ -20,6 +20,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import { planningStatusBadgeClass } from '@/lib/planningStatus'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -309,6 +310,9 @@ interface Contract {
   contract_perf_on_time?: boolean | null
   contract_perf_in_tree?: boolean | null
   payment_status?: string
+  /** Representative status across the PO's STOs: the live one wins over a completed one. */
+  shipment_status?: string | null
+  trucking_status?: string | null
   company_name?: string
   vessel_name?: string | null
   eta_vessel_completed_loading?: string | null
@@ -2642,6 +2646,38 @@ function ContractsPageContent() {
           </Badge>
         )
       }
+    },
+    {
+      /*
+       * The live STO represents the contract. A PO with one STO Planned and another Completed
+       * reads Planned - that is the half still needing attention, and the per-STO breakdown is in
+       * the contract detail modal. Blank means no shipment at all, which for a LAND contract is
+       * normal rather than missing.
+       */
+      id: 'shipment_status',
+      label: 'Shipment Status',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (c) => String(c.shipment_status || ''),
+      render: (c) =>
+        c.shipment_status ? (
+          <Badge className={planningStatusBadgeClass(c.shipment_status)}>{c.shipment_status}</Badge>
+        ) : (
+          <span className="text-sm text-gray-400">—</span>
+        ),
+    },
+    {
+      id: 'trucking_status',
+      label: 'Trucking Status',
+      defaultVisible: false,
+      sortable: true,
+      getSortValue: (c) => String(c.trucking_status || ''),
+      render: (c) =>
+        c.trucking_status ? (
+          <Badge className={planningStatusBadgeClass(c.trucking_status)}>{c.trucking_status}</Badge>
+        ) : (
+          <span className="text-sm text-gray-400">—</span>
+        ),
     },
     {
       id: 'contract_qty',

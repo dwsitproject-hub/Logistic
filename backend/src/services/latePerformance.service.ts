@@ -49,6 +49,10 @@ import {
 import { sqlActiveSeaStoSiblingContractIdsCte } from '../utils/seaStoSiblingSql';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
+  normalizePlanningStatusValues,
+  sqlContractPlanningStatusFilter,
+} from '../utils/contractPlanningStatusSql';
+import {
   B2B_ENDING_CHILD_SNAPSHOT_TABLE,
   sqlB2bEndingCompanyAgg,
   sqlB2bEndingPlantCodeAgg,
@@ -80,6 +84,11 @@ export interface LatePerformanceFilters {
   productFilters: string[];
   sourceTypeFilter: string | undefined;
   sourceTypeFilters: string[];
+  /** Multi-select Supplier / Group Supplier, read from the stored snapshot columns. */
+  supplierFilters: string[];
+  supplierGroupFilters: string[];
+  /** PLANNED / UNPLANNED. Both selected, or neither, means no filter. */
+  planningStatusFilters: string[];
   /** Open/Close tab filter for tree aggregation (in-memory when part=all). */
   statusNorm: string;
   /** Status filter pushed into SQL — empty for part=all/summary so one row load serves both cards + tree. */
@@ -141,6 +150,9 @@ function buildCacheKey(f: Omit<LatePerformanceFilters, 'cacheKey'>): string {
     productFilters: [...f.productFilters].sort(),
     sourceTypeFilter: f.sourceTypeFilter ?? '',
     sourceTypeFilters: [...f.sourceTypeFilters].sort(),
+    supplierFilters: [...f.supplierFilters].sort(),
+    supplierGroupFilters: [...f.supplierGroupFilters].sort(),
+    planningStatusFilters: [...f.planningStatusFilters].sort(),
   };
   return JSON.stringify(norm);
 }
@@ -185,6 +197,11 @@ export function parseLatePerformanceFilters(
       : sourceTypeFilter?.trim()
         ? [sourceTypeFilter.trim()]
         : [];
+  const supplierFilters = parseCommaSeparatedQuery((req.query as any).suppliers);
+  const supplierGroupFilters = parseCommaSeparatedQuery((req.query as any).supplierGroups);
+  const planningStatusFilters = normalizePlanningStatusValues(
+    parseCommaSeparatedQuery((req.query as any).planningStatuses),
+  );
 
   const now = new Date();
   const y = now.getFullYear();
@@ -225,6 +242,9 @@ export function parseLatePerformanceFilters(
     productFilters,
     sourceTypeFilter,
     sourceTypeFilters,
+    supplierFilters,
+    supplierGroupFilters,
+    planningStatusFilters,
     statusNorm,
     sqlStatusNorm,
     plants,
@@ -455,6 +475,9 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     productFilters,
     sourceTypeFilter,
     sourceTypeFilters,
+    supplierFilters,
+    supplierGroupFilters,
+    planningStatusFilters,
   } = filters;
 
   const queryParams: any[] = [];
@@ -678,6 +701,35 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     queryParams.push(`%${supplier}%`);
     paramIndex++;
   }
+  /*
+   * Supplier and Group Supplier read the STORED snapshot columns, not latest_spd_data. The single
+   * free-text `supplier` filter above still goes through the jsonb, which detoasts the whole blob
+   * per row; `base.supplier` and `base.group_name` carry the same values - group_name was verified
+   * row for row against the SAP `Vendor Group` field - at a fraction of the cost. 566 suppliers and
+   * 354 groups, so an exact ANY() match is right rather than ILIKE.
+   */
+  if (supplierFilters.length > 0) {
+    queryText += ` AND UPPER(TRIM(COALESCE(base.supplier, ''))) = ANY($${paramIndex}::text[])`;
+    queryParams.push(supplierFilters.map((v) => v.trim().toUpperCase()));
+    paramIndex++;
+  }
+  if (supplierGroupFilters.length > 0) {
+    queryText += ` AND UPPER(TRIM(COALESCE(base.group_name, ''))) = ANY($${paramIndex}::text[])`;
+    queryParams.push(supplierGroupFilters.map((v) => v.trim().toUpperCase()));
+    paramIndex++;
+  }
+  /*
+   * Planning Status reads shipments AND trucking, chosen by incoterm. Scoping it to shipments
+   * alone would call 16,121 LAND contracts Unplanned while their trucks were running.
+   */
+  {
+    const planningSql = sqlContractPlanningStatusFilter(
+      planningStatusFilters as Parameters<typeof sqlContractPlanningStatusFilter>[0],
+      { contractAlias: 'base', incotermExpr: 'base.incoterm', includeTrucking: true },
+    );
+    if (planningSql) queryText += ` AND ${planningSql}`;
+  }
+
   if (scope === 'filtered' && buyer) {
     queryText += ` AND (base.latest_spd_data->'raw'->>'Buyer' ILIKE $${paramIndex} OR base.latest_spd_data->>'Buyer' ILIKE $${paramIndex} OR $${paramIndex}::text IS NULL)`;
     queryParams.push(`%${buyer}%`);
