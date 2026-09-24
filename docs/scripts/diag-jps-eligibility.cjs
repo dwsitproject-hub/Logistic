@@ -65,6 +65,18 @@ const yn = (ok) => (ok ? 'YA ' : 'TIDAK');
                 WHERE UPPER(TRIM(cs.sto_number)) =
                       UPPER(COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), '')))
               ) AS cargo_lines,
+              -- The contract-quantity fallback: it applies only when this STO has no
+              -- contract_stos row AND the contract has none anywhere, because a row on another STO
+              -- already carries the quantity and sending the whole contract would book twice.
+              (SELECT COUNT(*)::int FROM contracts c2
+                WHERE c2.id = s.contract_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM contract_stos csa
+                     WHERE UPPER(TRIM(csa.sto_number)) =
+                           UPPER(COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), '')))
+                  )
+                  AND NOT EXISTS (SELECT 1 FROM contract_stos csb WHERE csb.contract_id = c2.id)
+              ) AS cargo_fallback_lines,
               (SELECT j.state || ' / ' || COALESCE(j.jps_status, '-') || COALESCE(' / ' || j.last_error, '')
                  FROM jps_shipping_instructions j
                 WHERE j.sto_key = COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), ''))
@@ -92,7 +104,15 @@ const yn = (ok) => (ok ? 'YA ' : 'TIDAK');
           [r.ata_arrival, r.ata_berthed, r.ata_start, r.ata_complete].filter(Boolean).join(', ') || '(semua kosong)'],
         ['status bukan COMPLETED/CANCELLED', !['COMPLETED', 'CANCELLED'].includes(String(r.status || '').toUpperCase()), r.status || '(kosong)'],
         ['ETA discharge arrival terisi', r.eta_discharge_arrival != null, r.eta_discharge_arrival || '(kosong)'],
-        ['punya baris cargo (contract_stos)', Number(r.cargo_lines) > 0, `${r.cargo_lines} baris`],
+        [
+          'punya baris cargo',
+          Number(r.cargo_lines) > 0 || Number(r.cargo_fallback_lines) > 0,
+          Number(r.cargo_lines) > 0
+            ? `${r.cargo_lines} baris dari contract_stos`
+            : Number(r.cargo_fallback_lines) > 0
+              ? `${r.cargo_fallback_lines} baris dari qty kontrak (fallback, SAP belum terbitkan STO)`
+              : '0 - dan fallback tidak berlaku: kontraknya punya STO lain yang sudah membawa qty',
+        ],
         ['belum ada di pelacak', !r.tracker, r.tracker || '(belum ada)'],
       ];
       console.log(`   shipment ${r.id}  STO=${r.shipment_id || '-'}  OP=${r.operation_id || '-'}`);
