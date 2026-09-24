@@ -1,3 +1,4 @@
+import fs from 'fs';
 import * as cron from 'node-cron';
 import { ExcelImportService } from './excelImport.service';
 import logger from '../utils/logger';
@@ -84,6 +85,33 @@ export class SchedulerService {
       { timezone: 'Asia/Jakarta' },
     );
     logger.info(`SAP folder auto-import cron scheduled: ${schedule} (Asia/Jakarta)`);
+
+    /*
+     * Prove the share is actually reachable NOW, not at 06:00 tomorrow.
+     *
+     * On 2026-09-24 production ran for hours with no daily import because the backend had been
+     * recreated without `-f docker-compose.backend.sap-share.yml`, so /mnt/sap-import did not
+     * exist - and separately because .env still pointed at a host path that had been renamed.
+     * Neither produced any output at all: the only signal was a log line the next morning, long
+     * after anyone was looking. A deploy that drops the mount now says so within seconds.
+     *
+     * Deliberately a read, not ensureSapAutoImportFolders(): the share is mounted read-only, and
+     * a scheduler must not try to create anything on someone else's folder at boot.
+     */
+    void import('../utils/sapAutoImportPaths').then(({ sapAutoImportOriginalDir }) => {
+      const original = sapAutoImportOriginalDir();
+      if (fs.existsSync(original)) {
+        logger.info('SAP folder auto-import source folder is reachable', { original });
+        return;
+      }
+      logger.error('SAP folder auto-import source folder is NOT reachable - nothing will import', {
+        original,
+        root: process.env.SAP_AUTO_IMPORT_ROOT || '(default)',
+        hint: 'Is the backend running with -f docker-compose.backend.sap-share.yml, and does KLIP_SAP_IMPORT_MOUNT point at a path that exists on the host?',
+      });
+    }).catch(() => {
+      // A failed check must never stop the scheduler; the cron still runs and logs its own scan.
+    });
   }
 
   /**
