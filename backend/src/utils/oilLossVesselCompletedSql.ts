@@ -1,64 +1,64 @@
 /**
- * Vessel Oil Loss rows: the same STO grain and Completed status as the Shipments view table.
+ * Vessel Oil Loss rows: one STO, several POs, same key as the Shipments list.
  *
- * One row per `shipmentListStoKeyExpr`. Status is `shipmentEffectiveStatusExpr = 'COMPLETED'`
- * (GR Close, ATA complete discharge, or outstanding qty within tolerance). Cancelled and
- * COMPLETED_LOADING stay out. A completed STO with missing R1–Loss quantities is still a row.
+ * Only shipments whose stored status is COMPLETED are members. Planned, Cancelled,
+ * and every other status stay out of the group, the quantities, and R1–Loss.
+ * A STO with no Completed shipment is not a row. A Completed STO with missing
+ * R1–Loss quantities is still a row.
  * Qty Delivery and Qty Receive are the same STO-scoped SAP kilograms View Shipment
- * shows as Delivered Qty (SAP) and Receive Qty (SAP). SFAL and SFBD are the
- * shipment fields that modal edits, stored in kilograms.
+ * shows as Delivered Qty (SAP) and Receive Qty (SAP), summed across the STO's POs.
+ * SFAL and SFBD are the opened shipment's fields, including when that row is null.
+ * A sibling PO that has a value must not fill the blank. The modal stores kilograms.
  */
 
-import { sqlIsContractSapClosedForStoExpr } from './contractDeliveryStatus';
 import {
   sqlStoScopedDeliveredKgSql,
   sqlStoScopedReceiveKgSql,
 } from './contractLogisticsStoDetailSql';
 import { latestSpdDerivedSelectList } from './contractLatestSpdDerivedSql';
 import { sqlRegionSiteRawForContract } from './regionSiteSql';
-import { buildShipmentListAtaSelectSql, SHIPMENT_ATA_OVERRIDES_JOIN } from './shipmentAtaOverrideSql';
 import {
-  shipmentEffectiveStatusExpr,
-  shipmentListContractOsWithinBandExpr,
-} from './shipmentListFilters';
-import { sqlShipmentListPrimaryFieldAgg, sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
+  sqlShipmentListPrimaryFieldAgg,
+  sqlShipmentListPrimaryIdAgg,
+  sqlShipmentListPrimaryOrderBy,
+} from './shipmentListPrimaryShipmentSql';
 import { shipmentPageExcludeB2bChildCond } from './shipmentPagePipelineSql';
 import {
   sqlShipmentListB2bOriginContractJoins,
   sqlShipmentListExecutionCsStoJoin,
 } from './shipmentB2bOriginSql';
-import { buildShipmentPageSeaRowScopeSql, shipmentListStoKeyExpr } from './shipmentStoTypeSql';
-import { sqlGroupedMaybeCopiedQty } from './shipmentListQtySql';
+import { buildShipmentPageSeaRowScopeSql, shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
 
-const LIST_STO_KEY_SQL = shipmentListStoKeyExpr('c', 'l', 's');
+const LIST_STO_KEY_SQL = shipmentListSeaStoKeyExpr('c', 'l', 's');
 
-/** Same Completed predicate the Shipments list and status cards use. */
+/** SFAL/SFBD of the same row View Shipment opens. Null stays null. */
+function sqlOpenedShipmentQty(fieldExpr: string): string {
+  const orderBy = sqlShipmentListPrimaryOrderBy(LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto');
+  return `(array_agg(${fieldExpr} ORDER BY ${orderBy}) FILTER (WHERE s.id IS NOT NULL))[1]`;
+}
+
+/** Stored shipment status. This is the View Shipment badge, not the effective pipeline status. */
 export function sqlOilLossVesselCompletedStatus(alias: string): string {
-  return `${shipmentEffectiveStatusExpr(alias)} = 'COMPLETED'`;
+  return `UPPER(TRIM(COALESCE(${alias}.status, ''))) = 'COMPLETED'`;
 }
 
 function vesselFromSql(extraJoins = ''): string {
   return `
         FROM shipments s
         ${sqlShipmentListB2bOriginContractJoins()}
-        -- Same snapshot the Shipments Completed status reads. Displayed qty does not use it.
-        LEFT JOIN contract_qty_move_snapshot qms ON qms.contract_number = c.contract_id
         ${sqlShipmentListExecutionCsStoJoin(LIST_STO_KEY_SQL)}
-        LEFT JOIN vlp_load_first vlp_l ON vlp_l.shipment_id = s.id
-        LEFT JOIN vlp_disc_first vlp_d ON vlp_d.shipment_id = s.id
-        ${SHIPMENT_ATA_OVERRIDES_JOIN}
         ${extraJoins}
         WHERE ${buildShipmentPageSeaRowScopeSql('c', 'l', 's')}
-          AND ${shipmentPageExcludeB2bChildCond('l')}`;
+          AND ${shipmentPageExcludeB2bChildCond('l')}
+          AND ${sqlOilLossVesselCompletedStatus('s')}`;
 }
 
 /**
- * CTEs from the shared SPD/port prelude through `vessel_rows`.
+ * CTEs from the shared SPD prelude through `vessel_rows`.
  * No leading WITH and no trailing comma — append after the trucking CTEs.
  */
 export function buildOilLossVesselCompletedCtes(): string {
   const plantExpr = sqlRegionSiteRawForContract('c.contract_id', 'c.po_number');
-  const ataSelect = buildShipmentListAtaSelectSql();
   const stoQtyOpts = {
     contractNumberExpr: 'c.contract_id',
     contractQtyExpr: 'COALESCE(c.quantity_ordered, 0)',
@@ -72,29 +72,6 @@ export function buildOilLossVesselCompletedCtes(): string {
   const sapReceivedKg = `NULLIF(${sqlStoScopedReceiveKgSql(stoQtyOpts)}, 0)`;
 
   return `
-      vlp_load_first AS (
-        SELECT DISTINCT ON (shipment_id)
-          shipment_id,
-          ata_vessel_arrival::date AS vlp_load_ata_va,
-          ata_vessel_berthed::date AS vlp_load_ata_vb,
-          ata_loading_start::date AS vlp_load_ata_ls,
-          ata_loading_completed::date AS vlp_load_ata_lc,
-          ata_vessel_sailed::date AS vlp_load_ata_vs
-        FROM vessel_loading_ports
-        WHERE COALESCE(is_discharge_port, false) = false AND port_sequence = 1
-        ORDER BY shipment_id, id
-      ),
-      vlp_disc_first AS (
-        SELECT DISTINCT ON (shipment_id)
-          shipment_id,
-          ata_vessel_arrival::date AS vlp_disc_ata_va,
-          ata_vessel_berthed::date AS vlp_disc_ata_vb,
-          ata_loading_start::date AS vlp_disc_ata_ls,
-          ata_loading_completed::date AS vlp_disc_ata_lc
-        FROM vessel_loading_ports
-        WHERE COALESCE(is_discharge_port, false) = true
-        ORDER BY shipment_id, port_sequence NULLS LAST, id
-      ),
       latest_spd_contract AS (
         SELECT DISTINCT ON (spd.contract_number)
           spd.contract_number,
@@ -110,7 +87,6 @@ export function buildOilLossVesselCompletedCtes(): string {
           ${sqlShipmentListPrimaryIdAgg(LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto')} AS id,
           ${sqlShipmentListPrimaryFieldAgg('s.operation_id', LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto')} AS operation_id,
           ${sqlShipmentListPrimaryFieldAgg('s.vessel_name', LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto')} AS vessel_name,
-          MAX(s.status) AS status,
           MIN(COALESCE(c.sap_presence, 'PRESENT')) AS sap_presence,
           STRING_AGG(DISTINCT NULLIF(TRIM(c.contract_id), ''), ', ' ORDER BY NULLIF(TRIM(c.contract_id), '')) AS contract_number,
           STRING_AGG(DISTINCT NULLIF(TRIM(c.po_number), ''), ', ' ORDER BY NULLIF(TRIM(c.po_number), '')) AS po_number,
@@ -124,22 +100,8 @@ export function buildOilLossVesselCompletedCtes(): string {
           COALESCE(MAX(${plantExpr}), 'Blank') AS plant_site,
           MAX(s.port_of_loading) AS loading_location,
           MAX(s.port_of_discharge) AS unloading_location,
-          MAX(s.eta_arrival) AS eta_arrival,
-          MAX(s.eta_berthed) AS eta_berthed,
-          MAX(s.eta_loading_start) AS eta_loading_start,
-          MAX(s.eta_loading_complete) AS eta_loading_complete,
-          MAX(s.eta_sailed) AS eta_sailed,
-          MAX(s.eta_discharge_arrival) AS eta_discharge_arrival,
-          MAX(s.eta_discharge_berthed) AS eta_discharge_berthed,
-          MAX(s.eta_discharge_start) AS eta_discharge_start,
-          MAX(s.eta_discharge_complete) AS eta_vessel_complete_discharge,
-          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered')}, 0) AS quantity_delivered,
-          COALESCE(${sqlGroupedMaybeCopiedQty('s.quantity_delivered_klip')}, 0) AS quantity_delivered_klip,
-          MAX(NULLIF(s.sfal_qty, 0)) AS shipment_sfal_kg,
-          MAX(NULLIF(s.sfbd_qty, 0)) AS shipment_sfbd_kg,
-          BOOL_AND(${sqlIsContractSapClosedForStoExpr('c', LIST_STO_KEY_SQL)}) AS is_contract_sap_closed,
-          BOOL_AND(${shipmentListContractOsWithinBandExpr()}) AS is_contract_os_within_band,
-          ${ataSelect.replace(/,\s*$/, '')}
+          ${sqlOpenedShipmentQty('NULLIF(s.sfal_qty, 0)')} AS shipment_sfal_kg,
+          ${sqlOpenedShipmentQty('NULLIF(s.sfbd_qty, 0)')} AS shipment_sfbd_kg
         ${vesselFromSql()}
         GROUP BY ${LIST_STO_KEY_SQL}
       ),
@@ -148,7 +110,6 @@ export function buildOilLossVesselCompletedCtes(): string {
         FROM vessel_base f
         WHERE COALESCE(f.sap_presence, 'PRESENT') = 'PRESENT'
           AND f.id IS NOT NULL
-          AND ${sqlOilLossVesselCompletedStatus('f')}
       ),
       vessel_contract_qty AS (
         SELECT DISTINCT ON (sto_key, contract_id)
@@ -156,8 +117,6 @@ export function buildOilLossVesselCompletedCtes(): string {
           contract_id,
           quantity_delivery,
           quantity_received,
-          quantity_sfal,
-          quantity_sfbd,
           quantity_contract
         FROM (
           SELECT
@@ -165,8 +124,6 @@ export function buildOilLossVesselCompletedCtes(): string {
             NULLIF(TRIM(c.contract_id), '') AS contract_id,
             ${sapDeliveredKg} AS quantity_delivery,
             ${sapReceivedKg} AS quantity_received,
-            NULLIF(s.sfal_qty, 0) AS quantity_sfal,
-            NULLIF(s.sfbd_qty, 0) AS quantity_sfbd,
             c.quantity_ordered AS quantity_contract,
             s.updated_at
           ${vesselFromSql()}
@@ -179,8 +136,6 @@ export function buildOilLossVesselCompletedCtes(): string {
           sto_key,
           SUM(quantity_delivery) AS quantity_delivery,
           SUM(quantity_received) AS quantity_received,
-          SUM(quantity_sfal) AS quantity_sfal,
-          SUM(quantity_sfbd) AS quantity_sfbd,
           SUM(quantity_contract) AS quantity_contract
         FROM vessel_contract_qty
         GROUP BY sto_key
@@ -213,8 +168,8 @@ export function buildOilLossVesselCompletedCtes(): string {
           vq.quantity_delivery AS quantity_delivery,
           vq.quantity_received AS quantity_received,
           vq.quantity_delivery AS quantity_sent,
-          COALESCE(vq.quantity_sfal, g.shipment_sfal_kg) AS quantity_sfal,
-          COALESCE(vq.quantity_sfbd, g.shipment_sfbd_kg) AS quantity_sfbd,
+          g.shipment_sfal_kg AS quantity_sfal,
+          g.shipment_sfbd_kg AS quantity_sfbd,
           CASE
             WHEN vq.quantity_delivery IS NOT NULL
              AND vq.quantity_received IS NOT NULL

@@ -24,8 +24,8 @@ describe('oilLossSnapshotNeedsRebuild', () => {
     expect(oilLossSnapshotNeedsRebuild(built)).toBe(false);
   });
 
-  it('rebuilds a snapshot built before vessel qty matched View Shipment', () => {
-    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBe(6);
-    expect(oilLossSnapshotNeedsRebuild({ ...built, logicVersion: 5 })).toBe(true);
+  it('rebuilds a snapshot that filled a blank SFAL from a sibling PO', () => {
+    expect(OIL_LOSS_SNAPSHOT_LOGIC_VERSION).toBe(9);
+    expect(oilLossSnapshotNeedsRebuild({ ...built, logicVersion: 8 })).toBe(true);
   });
 });

@@ -248,6 +248,8 @@ export type OilLossMergedRow = {
   transporter: string | null
   transport_mode: string | null
   operation_id: string | null
+  /** Completed shipment opened by View Shipment. Group `id` is the STO key, not this UUID. */
+  shipment_id: string | null
   status: string | null
   quantity_contract: number | null
   quantity_delivery: number
@@ -259,6 +261,11 @@ export type OilLossMergedRow = {
   row_count: number
   /** Distinct contracts/POs merged into this group (>1 only for a multi-PO SEA voyage). */
   contract_count: number
+}
+
+function shipmentUuidOrNull(id: string | null | undefined): string | null {
+  const value = String(id ?? '').trim()
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null
 }
 
 function computeGainLoss(delivery: number, received: number): { amount: number; pct: number } {
@@ -288,6 +295,7 @@ function mergedRowFromFirst(row: OilLossSourceRow, key: string): OilLossMergedRo
     transporter: String(row.transporter ?? '').trim() || null,
     transport_mode: String(row.transport_mode ?? '').trim() || null,
     operation_id: String(row.operation_id ?? '').trim() || null,
+    shipment_id: shipmentUuidOrNull(row.id),
     status: String(row.status ?? '').trim() || null,
     quantity_contract: parseNum(row.quantity_contract),
     quantity_delivery: delivery,
@@ -320,6 +328,7 @@ function mergeSameContractRowInto(existing: OilLossMergedRow, row: OilLossSource
     const op = String(row.operation_id ?? '').trim()
     if (op) existing.operation_id = op
   }
+  if (!existing.shipment_id) existing.shipment_id = shipmentUuidOrNull(row.id)
 
   const contractQty = parseNum(row.quantity_contract)
   if (contractQty != null) {
@@ -368,6 +377,7 @@ function mergeOuterGroupInto(existing: OilLossMergedRow, incoming: OilLossMerged
   if (!existing.buyer) existing.buyer = incoming.buyer
   if (!existing.transporter) existing.transporter = incoming.transporter
   if (!existing.operation_id) existing.operation_id = incoming.operation_id
+  if (!existing.shipment_id) existing.shipment_id = incoming.shipment_id
 
   if (incoming.quantity_contract != null) {
     existing.quantity_contract =

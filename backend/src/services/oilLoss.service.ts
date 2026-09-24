@@ -18,29 +18,44 @@ import {
 export type OilLossPayload = {
   rows: Record<string, unknown>[];
   gainRow: { total_gain_kg: unknown; gain_count: unknown };
+  /** True while a snapshot rebuild is still in flight. The rows are the last committed set. */
+  snapshotStale?: boolean;
+  snapshotRefreshedAt?: string | null;
 };
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const KEEP_WARM_CHECK_MS = 60 * 1000;
 const KEEP_WARM_REFRESH_AFTER_MS = 25 * 60 * 1000;
 
-let cached: { payload: OilLossPayload; expiresAt: number } | null = null;
+let cached: { payload: OilLossPayload; expiresAt: number; refreshedAtMs: number | null } | null = null;
 let keepWarmTimer: NodeJS.Timeout | null = null;
 
 function emptyPayload(): OilLossPayload {
   return { rows: [], gainRow: { total_gain_kg: 0, gain_count: 0 } };
 }
 
-function storePayload(payload: OilLossPayload): OilLossPayload {
-  cached = { payload, expiresAt: Date.now() + CACHE_TTL_MS };
+function storePayload(payload: OilLossPayload, refreshedAtMs: number | null): OilLossPayload {
+  cached = { payload, expiresAt: Date.now() + CACHE_TTL_MS, refreshedAtMs };
   return payload;
+}
+
+function withSnapshotFreshness(
+  payload: OilLossPayload,
+  meta: { isStale: boolean; refreshedAt: Date | null } | null,
+): OilLossPayload {
+  return {
+    ...payload,
+    snapshotStale: meta?.isStale ?? true,
+    snapshotRefreshedAt: meta?.refreshedAt ? meta.refreshedAt.toISOString() : null,
+  };
 }
 
 /** Fill memory from the snapshot table. No-op until the snapshot has been built once. */
 export async function rememberOilLossPayloadFromSnapshot(): Promise<OilLossPayload | null> {
   const payload = await loadOilLossPayloadFromSnapshot();
   if (!payload) return null;
-  return storePayload(payload);
+  const meta = await readOilLossSnapshotMeta();
+  return storePayload(payload, meta?.refreshedAt ? meta.refreshedAt.getTime() : null);
 }
 
 /**
@@ -49,10 +64,6 @@ export async function rememberOilLossPayloadFromSnapshot(): Promise<OilLossPaylo
  * refreshed_at yet) is the only case that waits.
  */
 export async function loadOilLossPayload(): Promise<OilLossPayload> {
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.payload;
-  }
-
   let meta: Awaited<ReturnType<typeof readOilLossSnapshotMeta>> = null;
   try {
     meta = await readOilLossSnapshotMeta();
@@ -61,14 +72,25 @@ export async function loadOilLossPayload(): Promise<OilLossPayload> {
     return cached?.payload ?? emptyPayload();
   }
 
+  const refreshedAtMs = meta?.refreshedAt ? meta.refreshedAt.getTime() : null;
+  // Same committed snapshot already in memory. A newer refreshed_at means the rebuild committed.
+  if (
+    cached
+    && cached.expiresAt > Date.now()
+    && cached.refreshedAtMs === refreshedAtMs
+  ) {
+    return withSnapshotFreshness(cached.payload, meta);
+  }
+
   if (!meta?.refreshedAt) {
     try {
       await refreshOilLossSnapshot();
     } catch (err) {
       logger.warn('Oil loss initial snapshot build failed', { err });
-      return cached?.payload ?? emptyPayload();
+      return withSnapshotFreshness(cached?.payload ?? emptyPayload(), meta);
     }
-    return (await rememberOilLossPayloadFromSnapshot()) ?? emptyPayload();
+    const built = await rememberOilLossPayloadFromSnapshot();
+    return withSnapshotFreshness(built ?? cached?.payload ?? emptyPayload(), await readOilLossSnapshotMeta());
   }
 
   if (oilLossSnapshotNeedsRebuild(meta)) {
@@ -78,10 +100,11 @@ export async function loadOilLossPayload(): Promise<OilLossPayload> {
   }
 
   try {
-    return (await rememberOilLossPayloadFromSnapshot()) ?? cached?.payload ?? emptyPayload();
+    const loaded = await rememberOilLossPayloadFromSnapshot();
+    return withSnapshotFreshness(loaded ?? cached?.payload ?? emptyPayload(), meta);
   } catch (err) {
     logger.warn('Oil loss snapshot read failed', { err });
-    return cached?.payload ?? emptyPayload();
+    return withSnapshotFreshness(cached?.payload ?? emptyPayload(), meta);
   }
 }
 

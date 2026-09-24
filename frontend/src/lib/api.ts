@@ -109,7 +109,7 @@ api.interceptors.response.use(
           message: data?.error?.message || data?.message || 'Unknown error',
           data: data,
         });
-      } else {
+      } else if (error.code !== 'ERR_CANCELED' && error.message !== 'canceled') {
         console.error('❌ Request Error:', error.message);
       }
     }

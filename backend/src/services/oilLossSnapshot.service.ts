@@ -4,7 +4,7 @@ import { buildOilLossGainSql, buildOilLossMainSql } from '../utils/oilLossQueryS
 import type { OilLossPayload } from './oilLoss.service';
 
 export const OIL_LOSS_SNAPSHOT_TABLE = 'oil_loss_snapshot';
-export const OIL_LOSS_SNAPSHOT_LOGIC_VERSION = 6;
+export const OIL_LOSS_SNAPSHOT_LOGIC_VERSION = 9;
 
 const STALE_REFRESH_DEBOUNCE_MS = 60_000;
 
