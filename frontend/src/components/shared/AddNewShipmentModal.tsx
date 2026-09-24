@@ -1935,7 +1935,7 @@ export function AddNewShipmentModal({
         errors.vesselName = 'Select a vessel from Master Vessel'
       }
       if (!newShipment.charterType) {
-        errors.charterType = 'Master Vessel has no Terms (V/C or T/C)'
+        errors.charterType = 'Master Vessel has no Charter Type (T/C, V/C, or CIF)'
       }
       if (!allSelectedPoCif && !newShipment.portOfDischarge.trim()) {
         errors.portOfDischarge = 'SAP Vessel Discharge Port is empty for the selected PO'

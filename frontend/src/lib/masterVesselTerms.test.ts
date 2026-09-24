@@ -11,6 +11,7 @@ describe('charterTypeFromMasterTerms', () => {
   it('returns empty for missing or invalid terms', () => {
     expect(charterTypeFromMasterTerms(null)).toBe('')
     expect(charterTypeFromMasterTerms('')).toBe('')
-    expect(charterTypeFromMasterTerms('CIF')).toBe('')
+    expect(charterTypeFromMasterTerms('CIF')).toBe('CIF')
+    expect(charterTypeFromMasterTerms('other')).toBe('')
   })
 })

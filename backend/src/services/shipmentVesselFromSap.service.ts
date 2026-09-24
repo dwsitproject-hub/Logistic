@@ -131,7 +131,7 @@ export function mergeShipmentVesselFromSapRow(
     }
     if (masterTerms) {
       const t = masterTerms.toUpperCase();
-      if (t === 'V/C' || t === 'T/C') {
+      if (t === 'T/C' || t === 'V/C' || t === 'CIF') {
         if (!nameOverride || !trimOrNull(row.charter_type)) row.charter_type = t;
       }
     }

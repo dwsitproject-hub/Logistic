@@ -21,10 +21,10 @@ import {
 import { pushMasterVesselToDhm } from '../dhm';
 import type { KlipVesselForDhm } from '../dhm/types';
 
-/** Charter terms accept only V/C or T/C (case-insensitive); anything else stores NULL. */
+/** Charter type accepts T/C, V/C, or CIF (case-insensitive); anything else stores NULL. */
 const normalizeTerms = (value: unknown): string | null => {
   const s = String(value ?? '').trim().toUpperCase();
-  return s === 'V/C' || s === 'T/C' ? s : null;
+  return s === 'T/C' || s === 'V/C' || s === 'CIF' ? s : null;
 };
 
 /** Coerce heating from boolean or "Yes"/"YES" string; anything else is false. */

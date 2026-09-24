@@ -34,7 +34,7 @@ export interface MasterVesselFormData {
   vessel_codes_sap?: string | null
 }
 
-const TERMS_OPTIONS = ['V/C', 'T/C'] as const
+const TERMS_OPTIONS = ['T/C', 'V/C', 'CIF'] as const
 const VESSEL_TYPE_OPTIONS = ['BARGE', 'TANKER', 'SPOB'] as const
 const LAMBUNG_OPTIONS = ['DHDB', 'SHSB', 'SHDB'] as const
 
@@ -314,7 +314,7 @@ export function EditVesselModal({
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Terms</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Charter Type</label>
               <select
                 className="border rounded-md px-3 py-2 w-full text-sm disabled:bg-gray-50 disabled:cursor-not-allowed"
                 value={form.terms || ''}

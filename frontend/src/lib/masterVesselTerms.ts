@@ -1,5 +1,5 @@
-/** Map master vessel terms (V/C | T/C) to Add Shipment charter type value. */
+/** Map master vessel charter type (T/C, V/C, CIF) onto a shipment charter type. */
 export function charterTypeFromMasterTerms(terms?: string | null): string {
   const t = String(terms ?? '').trim().toUpperCase()
-  return t === 'V/C' || t === 'T/C' ? t : ''
+  return t === 'T/C' || t === 'V/C' || t === 'CIF' ? t : ''
 }

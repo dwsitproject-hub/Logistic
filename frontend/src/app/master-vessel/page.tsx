@@ -67,7 +67,7 @@ const EMPTY_FILTER_OPTIONS: MasterVesselFilterOptions = {
   owners: [],
   vesselTypes: ['BARGE', 'TANKER', 'SPOB'],
   lambungTypes: ['DHDB', 'SHSB', 'SHDB'],
-  terms: ['V/C', 'T/C'],
+  terms: ['T/C', 'V/C', 'CIF'],
 }
 
 export default function MasterVesselPage() {
