@@ -7,8 +7,8 @@
  * R1–Loss quantities is still a row.
  * Qty Delivery and Qty Receive are the same STO-scoped SAP kilograms View Shipment
  * shows as Delivered Qty (SAP) and Receive Qty (SAP), summed across the STO's POs.
- * SFAL and SFBD are the opened shipment's fields (the primary row), not a sum of
- * every PO copy. The modal stores one vessel quantity in kilograms.
+ * SFAL and SFBD are the opened shipment's fields, including when that row is null.
+ * A sibling PO that has a value must not fill the blank. The modal stores kilograms.
  */
 
 import {
@@ -17,7 +17,11 @@ import {
 } from './contractLogisticsStoDetailSql';
 import { latestSpdDerivedSelectList } from './contractLatestSpdDerivedSql';
 import { sqlRegionSiteRawForContract } from './regionSiteSql';
-import { sqlShipmentListPrimaryFieldAgg, sqlShipmentListPrimaryIdAgg } from './shipmentListPrimaryShipmentSql';
+import {
+  sqlShipmentListPrimaryFieldAgg,
+  sqlShipmentListPrimaryIdAgg,
+  sqlShipmentListPrimaryOrderBy,
+} from './shipmentListPrimaryShipmentSql';
 import { shipmentPageExcludeB2bChildCond } from './shipmentPagePipelineSql';
 import {
   sqlShipmentListB2bOriginContractJoins,
@@ -26,6 +30,12 @@ import {
 import { buildShipmentPageSeaRowScopeSql, shipmentListSeaStoKeyExpr } from './shipmentStoTypeSql';
 
 const LIST_STO_KEY_SQL = shipmentListSeaStoKeyExpr('c', 'l', 's');
+
+/** SFAL/SFBD of the same row View Shipment opens. Null stays null. */
+function sqlOpenedShipmentQty(fieldExpr: string): string {
+  const orderBy = sqlShipmentListPrimaryOrderBy(LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto');
+  return `(array_agg(${fieldExpr} ORDER BY ${orderBy}) FILTER (WHERE s.id IS NOT NULL))[1]`;
+}
 
 /** Stored shipment status. This is the View Shipment badge, not the effective pipeline status. */
 export function sqlOilLossVesselCompletedStatus(alias: string): string {
@@ -90,8 +100,8 @@ export function buildOilLossVesselCompletedCtes(): string {
           COALESCE(MAX(${plantExpr}), 'Blank') AS plant_site,
           MAX(s.port_of_loading) AS loading_location,
           MAX(s.port_of_discharge) AS unloading_location,
-          ${sqlShipmentListPrimaryFieldAgg('NULLIF(s.sfal_qty, 0)', LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto')} AS shipment_sfal_kg,
-          ${sqlShipmentListPrimaryFieldAgg('NULLIF(s.sfbd_qty, 0)', LIST_STO_KEY_SQL, 'c', 'l', 's', 'cs_sto')} AS shipment_sfbd_kg
+          ${sqlOpenedShipmentQty('NULLIF(s.sfal_qty, 0)')} AS shipment_sfal_kg,
+          ${sqlOpenedShipmentQty('NULLIF(s.sfbd_qty, 0)')} AS shipment_sfbd_kg
         ${vesselFromSql()}
         GROUP BY ${LIST_STO_KEY_SQL}
       ),

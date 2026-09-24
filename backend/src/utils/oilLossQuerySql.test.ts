@@ -62,6 +62,8 @@ describe('vessel completed population', () => {
     expect(sql).toContain('NULLIF(s.sfal_qty, 0)');
     expect(sql).toContain('NULLIF(s.sfbd_qty, 0)');
     expect(sql).toContain('g.shipment_sfal_kg AS quantity_sfal');
+    expect(sql).not.toContain("NULLIF(TRIM((NULLIF(s.sfal_qty, 0))::text), '') IS NOT NULL");
+    expect(sql).not.toContain("NULLIF(TRIM((NULLIF(s.sfbd_qty, 0))::text), '') IS NOT NULL");
     expect(sql).not.toContain('SUM(quantity_sfal)');
     expect(sql).not.toContain('SUM(quantity_sfbd)');
     expect(sql).toContain('/ 100');
