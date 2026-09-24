@@ -229,6 +229,24 @@ function formatOilLossSfalSfbdCell(kg: number | null | undefined): ReactNode {
   return <span className="text-sm tabular-nums">{formatQtyMtFromKg(kg)}</span>
 }
 
+const OIL_LOSS_SFAL_REFRESH_COLUMN_IDS = new Set(['quantity_sfal', 'quantity_sfbd', 'r1', 'r2', 'r3'])
+
+function oilLossRowIncludesSto(row: OilLossTableRow, sto: string): boolean {
+  if (row.id === `sto:${sto}`) return true
+  const stoNumber = 'sto_number' in row ? row.sto_number : null
+  return String(stoNumber ?? '')
+    .split(',')
+    .some((token) => token.trim() === sto)
+}
+
+function OilLossQtyRefreshPlaceholder() {
+  return (
+    <span className="inline-flex items-center text-gray-400" title="Updating">
+      <Loader2 className="h-4 w-4 animate-spin" aria-label="Updating" />
+    </span>
+  )
+}
+
 function renderROilLossCell(kg: number | null): ReactNode {
   if (kg == null) return <span className="text-sm text-gray-400">-</span>
   const tone = kg < 0 ? 'text-red-600' : kg > 0 ? 'text-green-600' : 'text-gray-900'
@@ -1264,46 +1282,54 @@ export default function OilLossPage() {
   }, [globalPeriodMeta.dateFrom, globalPeriodMeta.dateTo])
 
   const oilLossReloadRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const oilLossSnapshotAtRef = useRef<string | null>(null)
+  const [pendingSfalSto, setPendingSfalSto] = useState<string | null>(null)
 
-  const reloadOilLoss = useCallback(async (options?: { force?: boolean }) => {
+  const reloadOilLoss = useCallback(async (options?: { force?: boolean; quiet?: boolean }) => {
+    const quiet = options?.quiet === true
     const cacheKey = buildCacheKey('GET', '/oil-loss')
     if (options?.force) invalidateClientCacheByPathPrefix('/oil-loss')
     const cached = !options?.force ? peekCache<OilLossApiEnvelope>(cacheKey) : null
-    if (cached) {
-      setRows(filterOilLossEligibleRows(Array.isArray(cached.data) ? cached.data : []))
-      setLoading(false)
-    }
     const applyOilLossEnvelope = (envelope: OilLossApiEnvelope) => {
+      oilLossSnapshotAtRef.current = envelope.snapshotRefreshedAt ?? null
       setRows(filterOilLossEligibleRows(Array.isArray(envelope?.data) ? envelope.data : []))
     }
+    if (!quiet && cached) {
+      applyOilLossEnvelope(cached)
+      setLoading(false)
+    }
     try {
-      if (!cached) setLoading(true)
-      setDataFetching(true)
+      if (!quiet && !cached) setLoading(true)
+      if (!quiet) setDataFetching(true)
       const { data, revalidating } = await cachedGet(
         cacheKey,
         (signal) => api.get('/oil-loss', { signal }).then((r) => r.data as OilLossApiEnvelope),
         {
           force: options?.force,
-          onRevalidate: (fresh) => {
-            applyOilLossEnvelope(fresh)
-            setDataFetching(false)
-          },
+          onRevalidate: quiet
+            ? undefined
+            : (fresh) => {
+                applyOilLossEnvelope(fresh)
+                setDataFetching(false)
+              },
         },
       )
-      applyOilLossEnvelope(data)
-      if (!revalidating) setDataFetching(false)
+      if (!quiet) {
+        applyOilLossEnvelope(data)
+        if (!revalidating) setDataFetching(false)
+      }
       return data
     } catch (err) {
       const canceled = (err as { code?: string; message?: string })?.code === 'ERR_CANCELED'
         || (err as { message?: string })?.message === 'canceled'
-      if (!canceled) {
+      if (!canceled && !quiet) {
         console.error('Oil loss load error:', err)
         if (!cached) setRows([])
       }
-      setDataFetching(false)
+      if (!quiet) setDataFetching(false)
       return null
     } finally {
-      setLoading(false)
+      if (!quiet) setLoading(false)
     }
   }, [])
 
@@ -1315,37 +1341,40 @@ export default function OilLossPage() {
   }, [reloadOilLoss])
 
   const reloadOilLossAfterShipmentEdit = useCallback(() => {
+    const sto = viewShipmentModal?.editStoNumber?.trim() || null
+    setPendingSfalSto(sto)
+    setViewShipmentModal(null)
     if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
-    let seenRefreshedAt: string | null | undefined
+    const baseline = oilLossSnapshotAtRef.current
     let tries = 0
     let pulling = false
+    const stop = () => {
+      if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
+      oilLossReloadRef.current = null
+      setPendingSfalSto(null)
+    }
     const pull = async () => {
       if (pulling) return
       pulling = true
       tries += 1
-      const envelope = await reloadOilLoss({ force: true })
+      const envelope = await reloadOilLoss({ force: true, quiet: true })
       pulling = false
       if (!envelope) return
-      if (seenRefreshedAt === undefined) {
-        seenRefreshedAt = envelope.snapshotRefreshedAt ?? null
-        if (envelope.snapshotStale !== true) {
-          if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
-          oilLossReloadRef.current = null
-          return
-        }
+      const refreshedAt = envelope.snapshotRefreshedAt ?? null
+      const rebuilt = envelope.snapshotStale !== true && refreshedAt !== baseline
+      if (rebuilt) {
+        oilLossSnapshotAtRef.current = refreshedAt
+        setRows(filterOilLossEligibleRows(Array.isArray(envelope.data) ? envelope.data : []))
+        stop()
+        return
       }
-      const rebuilt = envelope.snapshotStale !== true
-        && envelope.snapshotRefreshedAt !== seenRefreshedAt
-      if (rebuilt || tries >= 90) {
-        if (oilLossReloadRef.current) clearInterval(oilLossReloadRef.current)
-        oilLossReloadRef.current = null
-      }
+      if (tries >= 90) stop()
     }
     void pull()
     oilLossReloadRef.current = setInterval(() => {
       void pull()
-    }, 4000)
-  }, [reloadOilLoss])
+    }, 8000)
+  }, [reloadOilLoss, viewShipmentModal?.editStoNumber])
 
   useEffect(() => {
     let cancelled = false
@@ -2404,7 +2433,12 @@ export default function OilLossPage() {
                                         row as unknown as Record<string, unknown>,
                                       )
                                     : null
-                                  const cellContent = col.render(row)
+                                  const cellContent =
+                                    pendingSfalSto &&
+                                    OIL_LOSS_SFAL_REFRESH_COLUMN_IDS.has(col.id) &&
+                                    oilLossRowIncludesSto(row, pendingSfalSto)
+                                      ? <OilLossQtyRefreshPlaceholder />
+                                      : col.render(row)
                                   return (
                                     <td
                                       key={col.id}
