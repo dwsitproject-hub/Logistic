@@ -55,6 +55,15 @@ export interface FindEligibleOptions {
   retryFailed?: boolean;
   /** How long a rejection is left alone before it is offered again. */
   retryFailedAfterMs?: number;
+  /**
+   * Load these STOs by name instead of asking which ones are owed an instruction.
+   *
+   * For amending: an instruction JPS already holds is by definition excluded from the normal
+   * answer, and rebuilding its payload needs the same source data the submission was built from.
+   * The eligibility conditions still apply - an STO whose vessel has since arrived drops out, and
+   * amending it would be pointless anyway.
+   */
+  stoKeys?: string[];
 }
 
 export async function findEligibleStos(
@@ -62,6 +71,42 @@ export async function findEligibleStos(
   limit: number,
   options: FindEligibleOptions = {},
 ): Promise<EligibleSto[]> {
+  /*
+   * Which STOs the query answers for. By name when amending; otherwise "those not already spoken
+   * for", where:
+   *
+   *   SKIPPED_NO_CARGO is deliberately absent. An STO held back because a product had no JPS
+   *   cargo_type, or because its STO quantity looked wrong, must be picked up once the data is
+   *   corrected.
+   *
+   *   SUBMITTED and SKIPPED_PRE_EXISTING are settled for good: both name an instruction JPS
+   *   already holds, so re-sending is a duplicate rather than a retry.
+   *
+   *   FAILED normally blocks too, because a 400 is permanent. $3 lifts that while the fix is on
+   *   JPS's side; $4 keeps a rejection cold for a while first, so the sweep firing on every
+   *   shipment edit cannot resend the same rejected payload once per save.
+   */
+  const byKeys = Array.isArray(options.stoKeys);
+  const tailWhere = byKeys
+    ? `WHERE e.sto_key = ANY($3::text[])`
+    : `WHERE NOT EXISTS (
+      SELECT 1 FROM jps_shipping_instructions j
+      WHERE j.sto_key = e.sto_key
+        AND (
+          j.state IN ('SUBMITTED', 'SKIPPED_PRE_EXISTING')
+          OR (
+            j.state = 'FAILED'
+            AND (
+              $3::boolean IS NOT TRUE
+              OR j.updated_at > NOW() - ($4::bigint || ' milliseconds')::interval
+            )
+          )
+        )
+    )`;
+  const params: unknown[] = byKeys
+    ? [regionSite, limit, options.stoKeys]
+    : [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)];
+
   const result = await query(
     `
     WITH eligible AS (
@@ -181,34 +226,11 @@ export async function findEligibleStos(
     -- Filtered here rather than in the CTE's HAVING: the STO key is a grouped EXPRESSION, and a
     -- subquery referencing it inside HAVING cannot see it (42803, "ungrouped column").
     --
-    -- SKIPPED_NO_CARGO is deliberately missing from this list. An STO held back because a product
-    -- had no JPS cargo_type, or because its STO quantity looked wrong, must be picked up again
-    -- once the data is corrected.
-    --
-    -- SUBMITTED and SKIPPED_PRE_EXISTING are settled for good: both name an instruction JPS
-    -- already holds, so re-sending is a duplicate rather than a retry.
-    --
-    -- FAILED normally blocks too, because a 400 is permanent. $3 lifts that while the fix is on
-    -- JPS's side; $4 keeps a rejection cold for a while first, so the sweep firing on every
-    -- shipment edit cannot resend the same rejected payload once per save.
-    WHERE NOT EXISTS (
-      SELECT 1 FROM jps_shipping_instructions j
-      WHERE j.sto_key = e.sto_key
-        AND (
-          j.state IN ('SUBMITTED', 'SKIPPED_PRE_EXISTING')
-          OR (
-            j.state = 'FAILED'
-            AND (
-              $3::boolean IS NOT TRUE
-              OR j.updated_at > NOW() - ($4::bigint || ' milliseconds')::interval
-            )
-          )
-        )
-    )
+    ${tailWhere}
     ORDER BY e.eta_discharge_arrival, e.sto_key
     LIMIT $2
     `,
-    [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)],
+    params,
   );
 
   return result.rows.map((row: Record<string, unknown>) => ({
