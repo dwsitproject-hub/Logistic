@@ -20,7 +20,11 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
-import { PLANNING_STATUS_OPTIONS, planningStatusBadgeClass } from '@/lib/planningStatus'
+import {
+  PLANNING_STATUS_OPTIONS,
+  normalizePlanningStatusSelection,
+  planningStatusBadgeClass,
+} from '@/lib/planningStatus'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -1281,6 +1285,12 @@ function ContractsPageContent() {
       contractPerfSelectedProducts,
       contractPerfSelectedIncoterms,
       selectedSuppliers,
+      // Group Supplier and Planning Status were read inside the memo but missing from this list,
+      // so changing either one alone left `cardSummaryApiParams` byte-identical and Section 1 never
+      // refetched. The table below it uses `contractPerfGlobal`, whose deps are complete - which is
+      // exactly what it looked like: the rows moved and the cards did not.
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       contractPerfSelectedGroupPlants,
       lateOnTimeFilter,
       perfDashMode,
@@ -3769,7 +3779,7 @@ function ContractsPageContent() {
                   selected={selectedPlanningStatuses}
                   onChange={(values) => {
                     lockSection1FilterChange()
-                    setSelectedPlanningStatuses(values)
+                    setSelectedPlanningStatuses(normalizePlanningStatusSelection(values))
                     setCurrentPage(1)
                   }}
                   placeholder="All planning statuses"

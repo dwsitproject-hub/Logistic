@@ -18,7 +18,7 @@ import { PerformanceScopeFilters } from '@/components/performance/PerformanceSco
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
+import { PLANNING_STATUS_OPTIONS, normalizePlanningStatusSelection } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
@@ -2434,7 +2434,7 @@ function ShippingPerformancePageContent() {
                 options={[...PLANNING_STATUS_OPTIONS]}
                 selected={selectedPlanningStatuses}
                 onChange={(values) => {
-                  setSelectedPlanningStatuses(values)
+                  setSelectedPlanningStatuses(normalizePlanningStatusSelection(values))
                   setCurrentPage(1)
                 }}
                 placeholder="All planning statuses"

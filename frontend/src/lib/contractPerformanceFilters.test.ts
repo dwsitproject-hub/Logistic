@@ -415,6 +415,111 @@ describe('AC2 — Global Filter Propagation', () => {
     expect(p1.get('status')).toBeNull()
   })
 
+  /*
+   * Section 1 must refetch when Group Supplier or Planning Status changes.
+   *
+   * The page memoises the toolbar globals and keys the card-summary request off these params, so a
+   * filter that does not change the key never reaches the API. Group Supplier and Planning Status
+   * were read inside that memo but left out of its dependency array, and Section 1 sat still while
+   * the View table below it moved - which reads exactly like "the filter does not work".
+   */
+  it('Section 1 card params change when only Group Supplier changes', () => {
+    const base = buildContractPerfToolbarGlobal({
+      dateFrom: '2026-01-01',
+      dateTo: '2026-06-03',
+      selectedSources: [],
+      selectedIncoterms: [],
+      selectedSuppliers: [],
+      selectedSupplierGroups: [],
+      selectedPlanningStatuses: [],
+      selectedGroupPlants: [],
+      selectedProducts: [],
+      lateOnTimeFilter: 'ALL',
+      perfDashMode: 'late',
+      perfTransportMode: 'ALL',
+      b2bFlagFilter: 'ALL',
+      search: '',
+    })
+    const withGroup = { ...base, selectedSupplierGroups: ['WILMAR'] }
+    expect(buildLatePerformanceCardSummaryApiParams(withGroup).get('supplierGroups')).toBe('WILMAR')
+    expect(stableContractPerfApiParamsKey(buildLatePerformanceCardSummaryApiParams(withGroup))).not.toBe(
+      stableContractPerfApiParamsKey(buildLatePerformanceCardSummaryApiParams(base)),
+    )
+  })
+
+  it('Section 1 card params change when only Planning Status changes', () => {
+    const base = buildContractPerfToolbarGlobal({
+      dateFrom: '2026-01-01',
+      dateTo: '2026-06-03',
+      selectedSources: [],
+      selectedIncoterms: [],
+      selectedSuppliers: [],
+      selectedSupplierGroups: [],
+      selectedPlanningStatuses: [],
+      selectedGroupPlants: [],
+      selectedProducts: [],
+      lateOnTimeFilter: 'ALL',
+      perfDashMode: 'late',
+      perfTransportMode: 'ALL',
+      b2bFlagFilter: 'ALL',
+      search: '',
+    })
+    const planned = { ...base, selectedPlanningStatuses: ['Planned'] }
+    const unplanned = { ...base, selectedPlanningStatuses: ['Unplanned'] }
+
+    expect(buildLatePerformanceCardSummaryApiParams(planned).get('planningStatuses')).toBe('PLANNED')
+    expect(buildLatePerformanceCardSummaryApiParams(unplanned).get('planningStatuses')).toBe('UNPLANNED')
+
+    const keyOf = (g: typeof base) =>
+      stableContractPerfApiParamsKey(buildLatePerformanceCardSummaryApiParams(g))
+    expect(keyOf(planned)).not.toBe(keyOf(base))
+    expect(keyOf(unplanned)).not.toBe(keyOf(base))
+    expect(keyOf(planned)).not.toBe(keyOf(unplanned))
+  })
+
+  it('selecting both Planning Status values is the same as selecting none', () => {
+    // Deliberate: a completed contract is in neither bucket, so `Planned OR Unplanned` would drop
+    // every finished row rather than mean "everything".
+    const base = buildContractPerfToolbarGlobal({
+      dateFrom: '2026-01-01',
+      dateTo: '2026-06-03',
+      selectedSources: [],
+      selectedIncoterms: [],
+      selectedSuppliers: [],
+      selectedSupplierGroups: [],
+      selectedPlanningStatuses: ['Planned', 'Unplanned'],
+      selectedGroupPlants: [],
+      selectedProducts: [],
+      lateOnTimeFilter: 'ALL',
+      perfDashMode: 'late',
+      perfTransportMode: 'ALL',
+      b2bFlagFilter: 'ALL',
+      search: '',
+    })
+    expect(buildLatePerformanceCardSummaryApiParams(base).get('planningStatuses')).toBeNull()
+  })
+
+  it('the Section 3 table sends the same three filters as Section 1', () => {
+    const global = {
+      ...BASE_GLOBAL,
+      selectedSuppliers: ['SUP A'],
+      selectedSupplierGroups: ['GROUP ONE'],
+      selectedPlanningStatuses: ['Planned'],
+    }
+    const { scope } = resolveSection3Scope(global, EMPTY_CONTRACT_PERF_DRILLDOWN)
+    const tableParams = buildContractPerfTableListParams({
+      scope,
+      section3Mode: 'linked',
+      columnFilters: {},
+      lateOnTimeFilter: 'ALL',
+      perfDashMode: 'late',
+    })
+    const cardParams = buildLatePerformanceCardSummaryApiParams(global)
+    for (const key of ['suppliers', 'supplierGroups', 'planningStatuses']) {
+      expect(tableParams.get(key)).toBe(cardParams.get(key))
+    }
+  })
+
   it('resolveEffectiveLateOnTimeFilter passes ALL through for unified drilldown', () => {
     expect(resolveEffectiveLateOnTimeFilter('ALL', 'late')).toBe('ALL')
     expect(resolveEffectiveLateOnTimeFilter('ALL', 'ontrack')).toBe('ALL')
