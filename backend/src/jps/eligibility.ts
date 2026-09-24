@@ -60,7 +60,8 @@ export async function findEligibleStos(
       SELECT ${STO_KEY_SQL} AS sto_key,
              MAX(s.eta_discharge_arrival) AS eta_discharge_arrival,
              MAX(s.eta_discharge_complete) AS eta_discharge_complete,
-             ARRAY_AGG(DISTINCT s.id::text) AS shipment_ids
+             ARRAY_AGG(DISTINCT s.id::text) AS shipment_ids,
+             ARRAY_AGG(DISTINCT s.contract_id::text) FILTER (WHERE s.contract_id IS NOT NULL) AS contract_ids
       FROM shipments s
       LEFT JOIN shipment_ata_overrides sao ON sao.shipment_id = s.id
       INNER JOIN contracts c ON c.id = s.contract_id
@@ -126,6 +127,34 @@ export async function findEligibleStos(
         INNER JOIN contracts c ON c.id = cs.contract_id
         WHERE UPPER(TRIM(cs.sto_number)) = UPPER(e.sto_key)
         GROUP BY c.contract_id, c.po_number, c.product
+
+        UNION ALL
+
+        /*
+         * Manual shipments (MNL- / OP- keys) exist precisely because SAP has not issued an STO
+         * yet, so contract_stos holds nothing for them and SAP's own STO Quantity reads 0 - not a
+         * field KLIP failed to ingest, simply a quantity that does not exist yet. 35 of 684
+         * BONTANG shipments are in this state.
+         *
+         * Ryan chose the contract quantity as the stand-in. The guard is the NOT EXISTS below:
+         * the fallback applies only when the contract has NO contract_stos row anywhere. If it has
+         * one on another STO, that STO already carries the quantity, and sending the whole
+         * contract here would book berth space twice. 30 of the 35 qualify; the other 5 wait for
+         * SAP, and resolve on their own once the STO is issued.
+         */
+        SELECT c.contract_id AS contract_no,
+               c.po_number AS po_no,
+               c.product AS product,
+               c.quantity_ordered AS sto_quantity_kg,
+               c.quantity_ordered AS contract_quantity_kg
+        FROM contracts c
+        WHERE c.id::text = ANY(COALESCE(e.contract_ids, ARRAY[]::text[]))
+          AND NOT EXISTS (
+            SELECT 1 FROM contract_stos cs2 WHERE UPPER(TRIM(cs2.sto_number)) = UPPER(e.sto_key)
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM contract_stos cs3 WHERE cs3.contract_id = c.id
+          )
       ) x ON TRUE
       GROUP BY e.sto_key
     )
