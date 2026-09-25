@@ -2422,99 +2422,6 @@ export function EditShipmentModal({
                   />
                 </div>
 
-                {readOnly ? (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
-                    <div className="mb-3 flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-gray-600" />
-                      <h5 className="text-sm font-semibold text-gray-800">Uploaded Documents</h5>
-                    </div>
-                    {docsLoading ? (
-                      <div className="flex items-center gap-2 text-sm text-gray-500">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading documents…
-                      </div>
-                    ) : shipmentDocuments.length === 0 ? (
-                      <p className="text-sm text-gray-500">No documents uploaded for this shipment.</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {shipmentDocuments.map((doc) => (
-                          <li
-                            key={doc.id}
-                            className="flex flex-col gap-2 rounded-md border border-gray-100 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="outline" className="text-[10px]">
-                                  {doc.document_type || 'DOC'}
-                                </Badge>
-                                <span className="truncate text-sm font-medium text-gray-800">
-                                  {doc.file_name}
-                                </span>
-                              </div>
-                              {doc.created_at && (
-                                <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
-                                  Uploaded {formatDateTimeDMY(doc.created_at)}
-                                </p>
-                              )}
-                            </div>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8 shrink-0 text-xs"
-                              onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
-                            >
-                              <Download className="mr-1 h-3.5 w-3.5" />
-                              Download
-                            </Button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
-                    const uploaded = uploadedDocTypes.has(type)
-                    const busy = uploadingDocType === type
-                    const inputId = `edit-shipment-doc-${type.toLowerCase()}`
-                    return (
-                      <div key={type} className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
-                        <p className="text-xs font-medium text-gray-800">{label}</p>
-                        <p className="mt-0.5 text-[11px] text-gray-500">PDF, optional.</p>
-                        <input
-                          id={inputId}
-                          type="file"
-                          accept=".pdf,application/pdf"
-                          className="hidden"
-                          onChange={(e) => handleQtyDocUpload(type, e)}
-                          disabled={!canModifyCoreSections || busy || uploaded}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="mt-2 h-8 text-xs"
-                          disabled={!canModifyCoreSections || busy || uploaded}
-                          onClick={() => document.getElementById(inputId)?.click()}
-                        >
-                          {busy ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : uploaded ? (
-                            <>
-                              <Check className="h-3.5 w-3.5 mr-1 text-green-600" /> Uploaded
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="h-3.5 w-3.5 mr-1" /> Upload
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    )
-                  })}
-                </div>
-                )}
                 {canModifyCoreSections && (
                   <p className="text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
                 )}
@@ -2754,6 +2661,99 @@ export function EditShipmentModal({
                     </>
                   )}
                 </div>
+                {readOnly ? (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-gray-600" />
+                      <h5 className="text-sm font-semibold text-gray-800">Uploaded Documents</h5>
+                    </div>
+                    {docsLoading ? (
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading documents…
+                      </div>
+                    ) : shipmentDocuments.length === 0 ? (
+                      <p className="text-sm text-gray-500">No documents uploaded for this shipment.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {shipmentDocuments.map((doc) => (
+                          <li
+                            key={doc.id}
+                            className="flex flex-col gap-2 rounded-md border border-gray-100 bg-white px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className="text-[10px]">
+                                  {doc.document_type || 'DOC'}
+                                </Badge>
+                                <span className="truncate text-sm font-medium text-gray-800">
+                                  {doc.file_name}
+                                </span>
+                              </div>
+                              {doc.created_at && (
+                                <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+                                  Uploaded {formatDateTimeDMY(doc.created_at)}
+                                </p>
+                              )}
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 shrink-0 text-xs"
+                              onClick={() => void handleDownloadDocument(doc.id, doc.file_name)}
+                            >
+                              <Download className="mr-1 h-3.5 w-3.5" />
+                              Download
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
+                    const uploaded = uploadedDocTypes.has(type)
+                    const busy = uploadingDocType === type
+                    const inputId = `edit-shipment-doc-${type.toLowerCase()}`
+                    return (
+                      <div key={type} className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                        <p className="text-xs font-medium text-gray-800">{label}</p>
+                        <p className="mt-0.5 text-[11px] text-gray-500">PDF, optional.</p>
+                        <input
+                          id={inputId}
+                          type="file"
+                          accept=".pdf,application/pdf"
+                          className="hidden"
+                          onChange={(e) => handleQtyDocUpload(type, e)}
+                          disabled={!canModifyCoreSections || busy || uploaded}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 h-8 text-xs"
+                          disabled={!canModifyCoreSections || busy || uploaded}
+                          onClick={() => document.getElementById(inputId)?.click()}
+                        >
+                          {busy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : uploaded ? (
+                            <>
+                              <Check className="h-3.5 w-3.5 mr-1 text-green-600" /> Uploaded
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="h-3.5 w-3.5 mr-1" /> Upload
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+                )}
               </div>
             </div>
 
