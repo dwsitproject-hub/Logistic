@@ -1,3 +1,9 @@
+import {
+  sqlContractEffectivelyDoneExpr,
+  sqlContractImportStatusIsCancelledExpr,
+  sqlContractImportStatusIsClosedExpr,
+} from './contractDeliveryStatus';
+
 /**
  * Planning Status: has this contract's cargo been scheduled, and is that schedule still live?
  *
@@ -92,12 +98,52 @@ function sqlIsSeaContract(contractAlias: string, incotermExpr?: string): string 
   return `UPPER(TRIM(COALESCE(${inc}, ''))) IN ${SEA_INCOTERM_LIST}`;
 }
 
+/**
+ * The contracts Planning Status can meaningfully describe: the ones still running.
+ *
+ * Without this, "Unplanned" means only "has no shipment row", which a finished contract can easily
+ * satisfy - the goods moved, GR closed, and KLIP simply never recorded a shipment. Measured on a
+ * copy of production: 1,054 of 15,354 CLOSE contracts were counted Unplanned, which is what made
+ * the Close card move when the filter was meant to describe work still ahead.
+ *
+ * A contract with no GR PO and no GR STO status at all counts as running, not finished. There are
+ * 315 of them; 294 are ACTIVE in SAP and 280 have moved nothing, so the absence is SAP not having
+ * said yet, rather than evidence of completion. Ryan's decision, 2026-09-25.
+ *
+ * Built from the page's own Close and Cancelled expressions so the filter and the Open/Close cards
+ * cannot disagree about what "finished" means.
+ */
+export function sqlContractStillRunningExpr(
+  options: { alias?: string; effectivelyDone?: boolean } = {},
+): string {
+  const alias = options.alias ?? 'base';
+  const closed = sqlContractImportStatusIsClosedExpr(
+    `${alias}.import_status`,
+    `${alias}.import_status IS NULL AND UPPER(${alias}.status) IN ('CLOSE', 'COMPLETED', 'CLOSED')`,
+    options.effectivelyDone
+      ? sqlContractEffectivelyDoneExpr({
+          outstandingKgExpr: `${alias}.outstanding_quantity`,
+          atcExpr: `${alias}.last_ata_vessel_complete_discharge`,
+          stoCountExpr: `${alias}.sto_count`,
+        })
+      : undefined,
+  );
+  return `NOT (${closed}) AND NOT (${sqlContractImportStatusIsCancelledExpr(`${alias}.import_status`)})`;
+}
+
 export interface PlanningStatusSqlOptions {
   contractAlias?: string;
   /** Override for the incoterm expression when the caller has it under another name. */
   incotermExpr?: string;
   /** Shipping Performance reads shipments only; Contract Performance reads both. */
   includeTrucking?: boolean;
+  /**
+   * Restrict both buckets to contracts that are still running - see sqlContractStillRunningExpr.
+   * Omitted by the contract_scope pushdown, which runs on raw `contracts` where Open/Close is not
+   * a column. That leaves the pushdown a superset of this filter, which is exactly what a
+   * narrowing pre-filter must be.
+   */
+  runningGuardSql?: string;
 }
 
 /**
@@ -115,20 +161,21 @@ export function sqlContractPlanningStatusFilter(
   const alias = options.contractAlias ?? 'c';
   const includeTrucking = options.includeTrucking !== false;
   const isSea = sqlIsSeaContract(alias, options.incotermExpr);
+  const guard = options.runningGuardSql ? ` AND (${options.runningGuardSql})` : '';
 
   if (wanted[0] === 'PLANNED') {
     const sea = sqlContractHasPlannedShipmentExpr(alias);
-    if (!includeTrucking) return `(${sea})`;
-    return `(
+    if (!includeTrucking) return `((${sea})${guard})`;
+    return `((
       CASE WHEN ${isSea} THEN ${sea} ELSE ${sqlContractHasPlannedTruckingExpr(alias)} END
-    )`;
+    )${guard})`;
   }
 
   const seaUnplanned = sqlContractHasNoShipmentExpr(alias);
-  if (!includeTrucking) return `(${seaUnplanned})`;
-  return `(
+  if (!includeTrucking) return `((${seaUnplanned})${guard})`;
+  return `((
     CASE WHEN ${isSea} THEN ${seaUnplanned} ELSE ${sqlContractTruckingUnplannedExpr(alias)} END
-  )`;
+  )${guard})`;
 }
 
 /**

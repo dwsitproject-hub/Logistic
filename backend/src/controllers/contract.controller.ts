@@ -29,6 +29,7 @@ import {
 import {
   normalizePlanningStatusValues,
   sqlContractPlanningStatusFilter,
+  sqlContractStillRunningExpr,
   sqlRepresentativeShipmentStatusExpr,
   sqlRepresentativeTruckingStatusExpr,
 } from '../utils/contractPlanningStatusSql';
@@ -606,6 +607,8 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         contractAlias: 'base',
         incotermExpr: 'base.incoterm',
         includeTrucking: true,
+        // Matches the two-argument Close expression this list already uses further up.
+        runningGuardSql: sqlContractStillRunningExpr(),
       });
       if (planningSql) queryText += ` AND ${planningSql}`;
     }

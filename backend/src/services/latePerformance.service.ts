@@ -51,6 +51,7 @@ import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
   normalizePlanningStatusValues,
   sqlContractPlanningStatusFilter,
+  sqlContractStillRunningExpr,
 } from '../utils/contractPlanningStatusSql';
 import {
   B2B_ENDING_CHILD_SNAPSHOT_TABLE,
@@ -753,7 +754,14 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   {
     const planningSql = sqlContractPlanningStatusFilter(
       planningStatusFilters as Parameters<typeof sqlContractPlanningStatusFilter>[0],
-      { contractAlias: 'base', incotermExpr: 'base.incoterm', includeTrucking: true },
+      {
+        contractAlias: 'base',
+        incotermExpr: 'base.incoterm',
+        includeTrucking: true,
+        // Same Close/Cancelled definition the Open/Close cards use, so the filter cannot disagree
+        // with them about which contracts are finished.
+        runningGuardSql: sqlContractStillRunningExpr({ effectivelyDone: true }),
+      },
     );
     if (planningSql) queryText += ` AND ${planningSql}`;
   }
