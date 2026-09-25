@@ -3,7 +3,6 @@ import {
   sqlContractImportStatusIsCancelledExpr,
   sqlContractImportStatusIsClosedExpr,
 } from './contractDeliveryStatus';
-import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
 import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
 /**
@@ -42,12 +41,46 @@ export function normalizePlanningStatusValues(values: unknown): ContractPlanning
   return [...out];
 }
 
+/** Every ETA a shipment or its ports can carry - the same list the Shipments page checks. */
+const SHIPMENT_ETA_FIELDS = `(
+        s_pl.eta_arrival IS NOT NULL
+        OR s_pl.eta_berthed IS NOT NULL
+        OR s_pl.eta_loading_start IS NOT NULL
+        OR s_pl.eta_loading_complete IS NOT NULL
+        OR s_pl.eta_sailed IS NOT NULL
+        OR s_pl.eta_discharge_arrival IS NOT NULL
+        OR s_pl.eta_discharge_berthed IS NOT NULL
+        OR s_pl.eta_discharge_start IS NOT NULL
+        OR s_pl.eta_discharge_complete IS NOT NULL
+        OR vlp_pl.eta_vessel_arrival IS NOT NULL
+        OR vlp_pl.eta_vessel_berthed IS NOT NULL
+        OR vlp_pl.eta_loading_start IS NOT NULL
+        OR vlp_pl.eta_loading_completed IS NOT NULL
+        OR vlp_pl.eta_vessel_sailed IS NOT NULL
+        OR vlp_pl.eta_vessel_complete_discharge IS NOT NULL
+      )`;
+
 /**
- * SEA: planned means a registered ETA exists - the exact complement of the Shipments page's own
- * Unplanned backlog, reusing its expression rather than restating it.
+ * SEA: planned means a shipment that is STILL RUNNING carries a registered ETA.
+ *
+ * Deliberately one step stricter than the Shipments page's Unplanned card, which counts any
+ * registered ETA including a completed shipment's. Ryan's rule: a completed shipment is not a plan
+ * for the quantity still outstanding. Without the exclusion, a contract whose shipments had all
+ * finished read as Planned forever - 2,980 of 3,494 running contracts, which made the filter say
+ * almost nothing.
+ *
+ * A cancelled shipment's ETA is not a plan either, for the same reason the Shipments page excludes
+ * it: the voyage is not going to happen.
  */
 export function sqlContractHasPlannedShipmentExpr(contractAlias = 'c'): string {
-  return `NOT (${sqlContractHasNoRegisteredEtaExpr(contractAlias)})`;
+  return `EXISTS (
+    SELECT 1
+    FROM shipments s_pl
+    LEFT JOIN vessel_loading_ports vlp_pl ON vlp_pl.shipment_id = s_pl.id
+    WHERE s_pl.contract_id = ${contractAlias}.id
+      AND UPPER(TRIM(COALESCE(s_pl.status, ''))) NOT IN ('CANCELLED', 'COMPLETED')
+      AND ${SHIPMENT_ETA_FIELDS}
+  )`;
 }
 
 /**
@@ -61,16 +94,21 @@ export function sqlContractHasPlannedShipmentExpr(contractAlias = 'c'): string {
  * are exactly the ones the filter exists to surface.
  */
 export function sqlContractHasNoShipmentExpr(contractAlias = 'c'): string {
-  return sqlContractHasNoRegisteredEtaExpr(contractAlias);
+  return `NOT (${sqlContractHasPlannedShipmentExpr(contractAlias)})`;
 }
 
 /** SQL: a trucking operation that is under way. Trucking never reports PLANNED - it goes straight
  *  to IN_PROGRESS, which is the state the Trucking page itself labels as planned. */
+/**
+ * LAND: planned means an operation that is still running - active for matching, and not completed.
+ * Same reasoning as the sea side; a finished haul does not plan what is still outstanding.
+ */
 export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
   return `EXISTS (
     SELECT 1 FROM trucking_operations t_pl
     WHERE t_pl.contract_id = ${contractAlias}.id
       AND ${sqlTruckingOpIsActiveForMatchingSql('t_pl')}
+      AND UPPER(TRIM(COALESCE(t_pl.status, ''))) <> 'COMPLETED'
   )`;
 }
 
@@ -82,11 +120,7 @@ export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
  * neither bucket, while the sea side already reads "no shipment row" as Unplanned.
  */
 export function sqlContractTruckingUnplannedExpr(contractAlias = 'c'): string {
-  return `NOT EXISTS (
-    SELECT 1 FROM trucking_operations t_un
-    WHERE t_un.contract_id = ${contractAlias}.id
-      AND ${sqlTruckingOpIsActiveForMatchingSql('t_un')}
-  )`;
+  return `NOT (${sqlContractHasPlannedTruckingExpr(contractAlias)})`;
 }
 
 function sqlIsSeaContract(contractAlias: string, incotermExpr?: string): string {
