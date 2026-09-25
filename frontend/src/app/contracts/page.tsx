@@ -1740,11 +1740,33 @@ function ContractsPageContent() {
     }
   }, [isContractPerformance])
 
-  /** Immediate skeleton lock when Section 1/2 filters change, before async fetches begin. */
+  /**
+   * Immediate skeleton lock when Section 1/2 filters change, before async fetches begin.
+   *
+   * The lock is released by finishContractPerfTableLoad, which only runs if a fetch actually
+   * started. When a filter was missing from the refetch effect's hand-maintained dependency list,
+   * none did - and the table greyed out and stayed grey with nothing left to clear it.
+   *
+   * That root cause is fixed, but the list is still maintained by hand and will drift again. The
+   * watchdog turns "stuck forever" into "stale for a moment", which is a failure a user can see
+   * past. It only fires when no load is in flight, so a slow request is never cut short.
+   */
+  const lockWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lockSection1FilterChange = useCallback(() => {
     if (!isContractPerformance) return
     setIsTableLoading(true)
+    if (lockWatchdogRef.current) clearTimeout(lockWatchdogRef.current)
+    lockWatchdogRef.current = setTimeout(() => {
+      if (contractPerfPendingLoadsRef.current === 0) setIsTableLoading(false)
+    }, 4000)
   }, [isContractPerformance])
+
+  useEffect(
+    () => () => {
+      if (lockWatchdogRef.current) clearTimeout(lockWatchdogRef.current)
+    },
+    [],
+  )
 
   /** Commits drilldown path to Section 3 fetch scope (instant — no staging step). */
   const applyDrilldownSelection = useCallback(
@@ -1946,6 +1968,13 @@ function ContractsPageContent() {
     fetchContracts(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    /*
+     * This list is maintained by hand - the exhaustive-deps rule is disabled above - so a filter
+     * added to the toolbar has to be added here too. Group Supplier and Planning Status were not,
+     * and the failure was worse than a stale table: `lockSection1FilterChange` had already set the
+     * loading flag, this effect never ran, `fetchContracts` never started, and nothing was left to
+     * clear the flag. The table greyed out and stayed that way.
+     */
     authReady,
     userScopeReady,
     searchParams,
@@ -1954,6 +1983,8 @@ function ContractsPageContent() {
     selectedProducts,
     selectedGroups,
     selectedSuppliers,
+    selectedSupplierGroups,
+    selectedPlanningStatuses,
     selectedGroupPlants,
     selectedIncoterms,
     dateFrom,
