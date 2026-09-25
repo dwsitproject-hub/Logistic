@@ -18,6 +18,7 @@
  * already arrived but whose status was never updated. Together: 1.
  */
 import { query } from '../database/connection';
+import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
 
 /**
@@ -32,11 +33,20 @@ const EFFECTIVE_ATA_SQL = `
   COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete) AS ata_disch_complete`;
 
 /**
- * The STO key. `shipment_id` carries the STO for 97.7% of shipments; `operation_id` covers manual
- * planning rows that never got one - 31 of the 35 BONTANG shipments absent from contract_stos are
- * reachable only that way.
+ * The STO key - THE SAME ONE THE SHIPMENTS PAGE GROUPS BY.
+ *
+ * This used to be `COALESCE(shipment_id, operation_id)`, which is a reasonable key and the wrong
+ * one: the Shipments list derives its own key differently, and for a manual shipment the two never
+ * agree. `shipment_id` is `MNL-…`, which is not numeric, so the list falls through to the
+ * contract's `sto_number`, then `effective_sto`, then `operation_id`. KLIP submitted under `MNL-…`
+ * and the list looked for something else, so every instruction JPS had accepted still read
+ * "Not Sent" on the page.
+ *
+ * Using the list's own expression removes the second key rather than teaching the two to agree.
+ * It also improves the cargo and trade-term lookups, which match `contract_stos.sto_number`: the
+ * key is now a real STO number wherever one exists.
  */
-const STO_KEY_SQL = `COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), ''))`;
+const STO_KEY_SQL = shipmentListStoKeyExpr('c', 'l', 's');
 
 export interface EligibleSto extends JpsShipmentSource {
   shipment_ids: string[];
@@ -140,10 +150,13 @@ export async function findEligibleStos(
              (ARRAY_AGG(COALESCE(mv.vessel_name, s.vessel_name) ORDER BY s.updated_at DESC)
                 FILTER (WHERE COALESCE(mv.vessel_name, s.vessel_name) IS NOT NULL))[1] AS vessel_name
       FROM eligible e
-      INNER JOIN shipments s ON ${STO_KEY_SQL} = e.sto_key
+      INNER JOIN shipments s ON TRUE
+      INNER JOIN contracts c ON c.id = s.contract_id
+      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       LEFT JOIN master_vessel_code_aliases a
         ON UPPER(TRIM(a.vessel_code)) = UPPER(TRIM(s.vessel_code))
       LEFT JOIN master_vessels mv ON mv.id = COALESCE(s.master_vessel_id, a.master_vessel_id)
+      WHERE ${STO_KEY_SQL} = e.sto_key
       GROUP BY e.sto_key
     ),
     terms AS (

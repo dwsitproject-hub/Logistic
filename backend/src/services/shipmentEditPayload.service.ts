@@ -2,6 +2,7 @@
  * Combined payload for Edit / View Shipment modal — one round-trip instead of 4–5 sequential calls.
  */
 
+import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import { query } from '../database/connection';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
@@ -465,14 +466,20 @@ async function resolveShipmentEditPayloadUncached(
  * Keyed on the STO rather than the shipment row, because that is the grain KLIP submits at, and
  * newest revision first - a rejected instruction is replaced, never amended, so an STO can carry
  * several and only the latest says where it stands.
+ *
+ * The key is `shipmentListStoKeyExpr`, the same one the Shipments list groups by and the same one
+ * JPS is now submitted under. It used to be COALESCE(shipment_id, operation_id) here, which agreed
+ * with the submission but not with the list, so the badge and the column could disagree about the
+ * same shipment.
  */
 async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<string, unknown> | null> {
   const res = await query(
     `SELECT j.jps_status, j.jetty_name, j.planned_berthing_time, j.rejection_reason,
             j.submitted_at, j.last_polled_at, j.external_reference, j.revision
      FROM shipments s
-     INNER JOIN jps_shipping_instructions j
-       ON j.sto_key = COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), ''))
+     INNER JOIN contracts c ON c.id = s.contract_id
+     LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
+     INNER JOIN jps_shipping_instructions j ON j.sto_key = ${shipmentListStoKeyExpr('c', 'l', 's')}
      WHERE s.id = $1 AND j.state = 'SUBMITTED'
      ORDER BY j.revision DESC
      LIMIT 1`,
