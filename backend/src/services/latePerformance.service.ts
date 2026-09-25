@@ -21,6 +21,7 @@ import {
 } from '../services/contractLatestSpdSnapshot.service';
 import { appendContractPerfSourceTypeFilter, appendContractPerfSourceTypesFilter, B2B_CHILD_EXCLUSION_SQL, PO_PLACEHOLDER_EXCLUSION_SQL } from '../controllers/contractSqlFragments';
 import { appendContractPerfProductSubstringSql, appendContractPerfProductsMultiSql } from '../utils/contractPerfProductFilterSql';
+import { sqlContractEveryStoDischargedExpr } from '../utils/contractsListCycleSql';
 import {
   sqlContractImportStatusIsClosedExpr,
   sqlContractEffectivelyDoneExpr,
@@ -338,6 +339,15 @@ ${extraBaseColumns}          (array_agg(c.id ORDER BY c.created_at DESC))[1] AS 
           (array_agg(l.data ORDER BY l.created_at DESC NULLS LAST))[1] AS latest_spd_data,
           (array_agg(s.total_sto_quantity ORDER BY s.total_sto_quantity DESC NULLS LAST))[1] AS total_sto_quantity,
           (array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1] AS sto_count,
+          /*
+           * The direct form of the question sto_count has been approximating: are ALL of this
+           * contract's STOs discharged? Computed once here, beside the count it overrides, so the
+           * Open and Close predicates both read one column instead of restating the rule.
+           */
+          ${sqlContractEveryStoDischargedExpr(
+            'c.contract_id',
+            '(array_agg(s.sto_count ORDER BY s.sto_count DESC NULLS LAST))[1]',
+          )} AS all_stos_discharged,
           MAX(${sqlIncotermQuantityDeliveryCase(
             contractEffectiveIncotermExpr('c'),
             'qm.quantity_delivery_trucking',
@@ -690,6 +700,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           outstandingKgExpr: 'base.outstanding_quantity',
           atcExpr: 'base.last_ata_vessel_complete_discharge',
           stoCountExpr: 'base.sto_count',
+          everyStoDischargedExpr: 'base.all_stos_discharged',
         }),
       )}`;
     } else if (sqlStatusNorm === 'Close' || sqlStatusNorm === 'CLOSE') {
@@ -700,6 +711,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
           outstandingKgExpr: 'base.outstanding_quantity',
           atcExpr: 'base.last_ata_vessel_complete_discharge',
           stoCountExpr: 'base.sto_count',
+          everyStoDischargedExpr: 'base.all_stos_discharged',
         }),
       )}`;
     } else {
@@ -744,7 +756,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         includeTrucking: true,
         // Finished contracts pass through untouched, so the Close card keeps its full value while
         // the Open card narrows. Same Close/Cancelled definition the cards themselves use.
-        finishedExprSql: sqlContractFinishedExpr({ effectivelyDone: true }),
+        finishedExprSql: sqlContractFinishedExpr({ effectivelyDone: true, everyStoDischarged: true }),
       },
     );
     if (planningSql) queryText += ` AND ${planningSql}`;

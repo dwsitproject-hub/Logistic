@@ -146,7 +146,7 @@ function sqlIsSeaContract(contractAlias: string, incotermExpr?: string): string 
  * cannot disagree about which contracts are finished.
  */
 export function sqlContractFinishedExpr(
-  options: { alias?: string; effectivelyDone?: boolean } = {},
+  options: { alias?: string; effectivelyDone?: boolean; everyStoDischarged?: boolean } = {},
 ): string {
   const alias = options.alias ?? 'base';
   const closed = sqlContractImportStatusIsClosedExpr(
@@ -157,6 +157,14 @@ export function sqlContractFinishedExpr(
           outstandingKgExpr: `${alias}.outstanding_quantity`,
           atcExpr: `${alias}.last_ata_vessel_complete_discharge`,
           stoCountExpr: `${alias}.sto_count`,
+          /*
+           * Opt-in, not automatic: the column only exists on row sets that compute it, and a
+           * caller that referenced it without having it would fail at runtime while every
+           * string assertion in the tests still passed.
+           */
+          ...(options.everyStoDischarged
+            ? { everyStoDischargedExpr: `${alias}.all_stos_discharged` }
+            : {}),
         })
       : undefined,
   );
