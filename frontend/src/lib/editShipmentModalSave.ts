@@ -178,8 +178,6 @@ export type SaveEditShipmentInput = {
   qtyEdits: VesselPortsQuantityEdits
   originalDeliveredKg: number | null
   originalReceiveKg: number | null
-  quantityUnlocked: boolean
-  hasSldOrSddDoc: boolean
   loadingPorts: LoadingPortRef[]
   ataFields?: ShipmentAtaFields
   originalAtaFields?: ShipmentAtaFields
@@ -244,12 +242,12 @@ export async function saveEditShipmentChanges(input: SaveEditShipmentInput): Pro
     'quantity_receive',
   )
 
-  if (receiveUserEdited && !input.quantityUnlocked) {
-    throw new Error('Please upload an SLD or SDD document before editing Received Qty (Klip).')
-  }
-  if (receiveUserEdited && !input.hasSldOrSddDoc) {
-    throw new Error('An SLD or SDD document must be attached before saving Received Qty (Klip) changes.')
-  }
+  /*
+   * Received Qty used to require an SLD or SDD document before it could be edited or saved. Ryan
+   * removed that on 2026-09-25 along with those two document types: a quantity the user already
+   * knows should not wait for a PDF to arrive. Contract, SI and BL documents replaced them and none
+   * of the three gates anything.
+   */
 
   const effectiveEta =
     input.isMultiPortLoading && input.loadingPortEtas?.length && input.dischargeEta

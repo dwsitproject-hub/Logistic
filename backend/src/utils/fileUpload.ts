@@ -49,9 +49,20 @@ export function toRelativeUploadPath(absolutePath: string): string {
   return rel.split(path.sep).join('/');
 }
 
-export type ShipmentStructuredDocKind = 'sld' | 'sdd';
+/**
+ * The folder a shipment document lands in under the upload root, which is the Synology share in
+ * production. `sld` and `sdd` remain so files uploaded before 2026-09-25 stay reachable; nothing
+ * writes to them any more.
+ */
+export type ShipmentStructuredDocKind = 'contract' | 'si' | 'bl' | 'sld' | 'sdd';
 
-const SHIPMENT_STRUCTURED_DOC_KINDS = new Set<ShipmentStructuredDocKind>(['sld', 'sdd']);
+const SHIPMENT_STRUCTURED_DOC_KINDS = new Set<ShipmentStructuredDocKind>([
+  'contract',
+  'si',
+  'bl',
+  'sld',
+  'sdd',
+]);
 
 /** Relative subdir under upload root for Synology-ready shipment document layout. */
 export function buildShipmentDocumentUploadSubdir(
@@ -71,11 +82,20 @@ export function buildShipmentDocumentUploadSubdir(
   return path.posix.join('shipments', safeId, kind);
 }
 
-/** Map API document_type to structured shipment subfolder (SLD/SDD only). */
+/**
+ * Map API document_type to its structured shipment subfolder.
+ *
+ * A type that is not listed returns null and the file lands in the flat upload root - which is what
+ * happened to Contract, SI and BL documents until they were added here, so they never reached the
+ * shipments/<id>/<kind> layout the Synology share expects.
+ */
 export function shipmentStructuredDocKindFromType(
   documentType: string,
 ): ShipmentStructuredDocKind | null {
   const normalized = String(documentType ?? '').trim().toUpperCase();
+  if (normalized === 'CONTRACT') return 'contract';
+  if (normalized === 'SI') return 'si';
+  if (normalized === 'BL') return 'bl';
   if (normalized === 'SLD') return 'sld';
   if (normalized === 'SDD') return 'sdd';
   return null;

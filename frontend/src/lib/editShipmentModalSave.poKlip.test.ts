@@ -69,8 +69,6 @@ function baseInput(over: Partial<SaveEditShipmentInput> = {}): SaveEditShipmentI
     },
     originalDeliveredKg: 300_000,
     originalReceiveKg: 270_000,
-    quantityUnlocked: true,
-    hasSldOrSddDoc: true,
     loadingPorts: [],
     ...over,
   }
@@ -118,13 +116,8 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
     })
   })
 
-  it('saves Delivered Qty (Klip) without SLD/SDD', async () => {
-    await saveEditShipmentChanges(
-      baseInput({
-        quantityUnlocked: false,
-        hasSldOrSddDoc: false,
-      }),
-    )
+  it('saves Delivered Qty (Klip) with no document attached', async () => {
+    await saveEditShipmentChanges(baseInput({}))
 
     const klipPuts = putMock.mock.calls.filter(
       (c) => typeof c[0] === 'string' && String(c[0]).includes('/po-klip-qty'),
@@ -132,17 +125,21 @@ describe('saveEditShipmentChanges po-klip-qty', () => {
     expect(klipPuts).toHaveLength(1)
   })
 
-  it('rejects Received Qty (Klip) edits without SLD/SDD', async () => {
-    await expect(
-      saveEditShipmentChanges(
-        baseInput({
-          qtyEdits: { a: { quantity_receive: 91_000 } },
-          quantityUnlocked: false,
-          hasSldOrSddDoc: false,
-        }),
-      ),
-    ).rejects.toThrow('Please upload an SLD or SDD document before editing Received Qty (Klip).')
-    expect(putMock).not.toHaveBeenCalled()
+  /*
+   * This used to assert the opposite: Received Qty was refused until an SLD or SDD was attached.
+   * Ryan removed that gate on 2026-09-25 along with those two document types - a quantity the user
+   * already knows should not wait for a PDF. The test is kept, inverted, so the gate cannot come
+   * back by accident.
+   */
+  it('saves Received Qty (Klip) with no document attached', async () => {
+    await saveEditShipmentChanges(
+      baseInput({ qtyEdits: { a: { quantity_receive: 91_000 } } }),
+    )
+
+    const klipPuts = putMock.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && String(c[0]).includes('/po-klip-qty'),
+    )
+    expect(klipPuts).toHaveLength(1)
   })
 
   it('persists auto-computed R4 shortage MT when it differs from original', async () => {

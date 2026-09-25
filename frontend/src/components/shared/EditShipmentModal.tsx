@@ -174,8 +174,22 @@ import {
   normalizeShipmentStatusKey,
   shipmentStatusBadgeClass,
 } from '@/lib/shipmentStatusDisplay'
-const SHIPMENT_SLD_DOC_TYPE = 'SLD'
-const SHIPMENT_SDD_DOC_TYPE = 'SDD'
+/**
+ * The documents a shipment carries, in the order they appear on the modal.
+ *
+ * SLD and SDD were here and are gone: they gated Received Qty, which meant a user could not record
+ * a quantity they already knew until a PDF arrived. Ryan replaced them with these three on
+ * 2026-09-25, and removed the gate with them - uploading is now something you may do, not something
+ * you must do first.
+ *
+ * The types are also what JPS will be sent once its API can accept document URLs; today it has no
+ * field for them, so nothing is sent yet.
+ */
+const SHIPMENT_DOC_TYPES = [
+  { type: 'CONTRACT', label: 'Contract Document' },
+  { type: 'SI', label: 'SI Document' },
+  { type: 'BL', label: 'BL Document' },
+] as const
 
 interface ShipmentDocumentItem {
   id: string
@@ -831,10 +845,8 @@ export function EditShipmentModal({
   const [originalDeliveredKg, setOriginalDeliveredKg] = useState<number | null>(null)
   const [originalReceiveKg, setOriginalReceiveKg] = useState<number | null>(null)
 
-  const [hasUploadedSld, setHasUploadedSld] = useState(false)
-  const [hasUploadedSdd, setHasUploadedSdd] = useState(false)
-  const [sldDocUploading, setSldDocUploading] = useState(false)
-  const [sddDocUploading, setSddDocUploading] = useState(false)
+  const [uploadedDocTypes, setUploadedDocTypes] = useState<Set<string>>(new Set())
+  const [uploadingDocType, setUploadingDocType] = useState<string | null>(null)
   const [shipmentStatus, setShipmentStatus] = useState<string | null>(null)
   const [shipmentDocuments, setShipmentDocuments] = useState<ShipmentDocumentItem[]>([])
   const [docsLoading, setDocsLoading] = useState(false)
@@ -879,7 +891,6 @@ export function EditShipmentModal({
 
   const initSessionRef = useRef<string | null>(null)
 
-  const isQuantityUnlocked = hasUploadedSld || hasUploadedSdd
   const isCancelledShipment = normalizeShipmentStatusKey(shipmentStatus) === 'CANCELLED'
   const canModifyCoreSections = canEditShipment && !readOnly
   const canEditAtaQuality =
@@ -1118,8 +1129,8 @@ export function EditShipmentModal({
     setShowQualityDifferencesOnly(false)
     setQualityEditsByPortKey({})
     setOriginalQualityByPortKey({})
-    setHasUploadedSld(false)
-    setHasUploadedSdd(false)
+    setUploadedDocTypes(new Set())
+    setUploadingDocType(null)
     setShipmentStatus(null)
     setShipmentDocuments([])
     setDocsLoading(false)
@@ -1138,8 +1149,9 @@ export function EditShipmentModal({
       params.append('shipmentId', sid)
       const res = await api.get(`/documents?${params.toString()}`)
       const docs: Array<{ document_type?: string }> = res.data?.data ?? []
-      setHasUploadedSld(docs.some((d) => d.document_type === SHIPMENT_SLD_DOC_TYPE))
-      setHasUploadedSdd(docs.some((d) => d.document_type === SHIPMENT_SDD_DOC_TYPE))
+      setUploadedDocTypes(
+        new Set(docs.map((d) => String(d.document_type ?? '')).filter(Boolean)),
+      )
     } catch {
       // non-blocking
     }
@@ -1630,7 +1642,7 @@ export function EditShipmentModal({
   }, [open, editContractId, editShipmentIdProp, editStoNumber, editContractNumbers, loadShipment, resetState])
 
   const handleQtyDocUpload = async (
-    kind: typeof SHIPMENT_SLD_DOC_TYPE | typeof SHIPMENT_SDD_DOC_TYPE,
+    kind: (typeof SHIPMENT_DOC_TYPES)[number]['type'],
     e: React.ChangeEvent<HTMLInputElement>,
   ) => {
     const file = e.target.files?.[0]
@@ -1641,27 +1653,24 @@ export function EditShipmentModal({
       e.target.value = ''
       return
     }
-    const isSld = kind === SHIPMENT_SLD_DOC_TYPE
-    if ((isSld && hasUploadedSld) || (!isSld && hasUploadedSdd)) return
-    const setUploading = isSld ? setSldDocUploading : setSddDocUploading
-    const setUploaded = isSld ? setHasUploadedSld : setHasUploadedSdd
-    setUploading(true)
+    if (uploadedDocTypes.has(kind) || uploadingDocType) return
+    setUploadingDocType(kind)
     try {
       const form = new FormData()
       form.append('file', file)
       form.append('document_type', kind)
       form.append('shipment_id', shipmentId)
-      form.append('description', `${kind} document for quantity authorization`)
+      form.append('description', `${kind} document for shipment ${shipmentId}`)
       const res = await api.post('/documents/upload', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
-      if (res.data?.success) setUploaded(true)
+      if (res.data?.success) setUploadedDocTypes((prev) => new Set(prev).add(kind))
       else alert(res.data?.error?.message || 'Upload failed')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Upload failed'
       alert(msg)
     } finally {
-      setUploading(false)
+      setUploadingDocType(null)
       e.target.value = ''
     }
   }
@@ -1766,8 +1775,6 @@ export function EditShipmentModal({
         qtyEdits,
         originalDeliveredKg,
         originalReceiveKg,
-        quantityUnlocked: isQuantityUnlocked,
-        hasSldOrSddDoc: hasUploadedSld || hasUploadedSdd,
         loadingPorts,
         ataFields,
         originalAtaFields,
@@ -2466,77 +2473,47 @@ export function EditShipmentModal({
                     )}
                   </div>
                 ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                    <p className="text-xs font-medium text-amber-900">Upload SLD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Received Qty (Klip).</p>
-                    <input
-                      id="edit-shipment-sld"
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      className="hidden"
-                      onChange={(e) => handleQtyDocUpload(SHIPMENT_SLD_DOC_TYPE, e)}
-                      disabled={!canModifyCoreSections || sldDocUploading || hasUploadedSld}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="mt-2 h-8 text-xs border-amber-300"
-                      disabled={!canModifyCoreSections || sldDocUploading || hasUploadedSld}
-                      onClick={() => document.getElementById('edit-shipment-sld')?.click()}
-                    >
-                      {sldDocUploading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : hasUploadedSld ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 mr-1 text-green-600" /> SLD uploaded
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="h-3.5 w-3.5 mr-1" /> Upload SLD
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                  <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
-                    <p className="text-xs font-medium text-amber-900">Upload SDD</p>
-                    <p className="mt-0.5 text-[11px] text-amber-800/80">Required to unlock Received Qty (Klip).</p>
-                    <input
-                      id="edit-shipment-sdd"
-                      type="file"
-                      accept=".pdf,application/pdf"
-                      className="hidden"
-                      onChange={(e) => handleQtyDocUpload(SHIPMENT_SDD_DOC_TYPE, e)}
-                      disabled={!canModifyCoreSections || sddDocUploading || hasUploadedSdd}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="mt-2 h-8 text-xs border-amber-300"
-                      disabled={!canModifyCoreSections || sddDocUploading || hasUploadedSdd}
-                      onClick={() => document.getElementById('edit-shipment-sdd')?.click()}
-                    >
-                      {sddDocUploading ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : hasUploadedSdd ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 mr-1 text-green-600" /> SDD uploaded
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="h-3.5 w-3.5 mr-1" /> Upload SDD
-                        </>
-                      )}
-                    </Button>
-                  </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {SHIPMENT_DOC_TYPES.map(({ type, label }) => {
+                    const uploaded = uploadedDocTypes.has(type)
+                    const busy = uploadingDocType === type
+                    const inputId = `edit-shipment-doc-${type.toLowerCase()}`
+                    return (
+                      <div key={type} className="rounded-lg border border-gray-200 bg-gray-50/60 p-3">
+                        <p className="text-xs font-medium text-gray-800">{label}</p>
+                        <p className="mt-0.5 text-[11px] text-gray-500">PDF, optional.</p>
+                        <input
+                          id={inputId}
+                          type="file"
+                          accept=".pdf,application/pdf"
+                          className="hidden"
+                          onChange={(e) => handleQtyDocUpload(type, e)}
+                          disabled={!canModifyCoreSections || busy || uploaded}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 h-8 text-xs"
+                          disabled={!canModifyCoreSections || busy || uploaded}
+                          onClick={() => document.getElementById(inputId)?.click()}
+                        >
+                          {busy ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : uploaded ? (
+                            <>
+                              <Check className="h-3.5 w-3.5 mr-1 text-green-600" /> Uploaded
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="h-3.5 w-3.5 mr-1" /> Upload
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )
+                  })}
                 </div>
-                )}
-                {!readOnly && !isQuantityUnlocked && (
-                  <p className="text-[11px] text-amber-800/80">
-                    Received Qty (Klip) stays locked until at least one of SLD or SDD is uploaded.
-                  </p>
                 )}
                 {canModifyCoreSections && (
                   <p className="text-[11px] text-gray-500">{DECIMAL_DOT_HINT}</p>
@@ -2681,7 +2658,7 @@ export function EditShipmentModal({
                               ) : (
                                 <MtQtyInput
                                   valueKg={receiveKlipKg}
-                                  disabled={!canModifyCoreSections || !isQuantityUnlocked}
+                                  disabled={!canModifyCoreSections}
                                   onChange={(kg) =>
                                     setQtyEdits((p) => ({
                                       ...p,
