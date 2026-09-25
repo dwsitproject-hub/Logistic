@@ -628,6 +628,13 @@
         </ul>
         <p>Jika DP Date / Payoff / Cargo Readiness / completion tidak lengkap → cycle = <code>null</code> (UI: <em>- days</em>).</p>
 
+        <h4>Qty pada pohon drilldown menggabungkan dua ukuran</h4>
+        <p>Section 1 memakai <strong>Outstanding Qty</strong> pada kartu Open dan <strong>Contract Qty</strong> pada kartu Close. Pohon drilldown menjumlahkan pilihan yang sama per baris &mdash; Outstanding untuk kontrak Open, Contract Qty untuk yang Close &mdash; sehingga totalnya persis sama dengan kedua kartu itu dijumlahkan.</p>
+        <p>Terlihat di lapangan: Open 10.101 MT dan Close 98.090 MT, sementara pohon menulis 108.191 MT. Aritmetikanya benar; labelnya yang diam soal apa yang dijumlahkan.</p>
+        <div class="note">
+          Pilih kartu <strong>Open</strong> atau <strong>Close</strong> dan pohon hanya membawa satu ukuran, yang namanya disebutkan pada tooltip. Tanpa kartu terpilih, halaman menampilkan peringatan kecil di bawah judul Section 2 &mdash; karena dari angkanya saja tidak ada cara mengetahui bahwa dua besaran berbeda sudah dijumlahkan.
+        </div>
+
         <h3 id="cp-avg">Avg Trade, Avg DP, Avg Log (Section 1)</h3>
         <p>Dari <code>GET /contracts/late-performance/summary</code>. Hanya kontrak dengan <strong>Due Date Delivery End</strong> ter-resolve. Terpisah untuk kartu <strong>Open</strong> dan <strong>Close</strong>.</p>
         <table>

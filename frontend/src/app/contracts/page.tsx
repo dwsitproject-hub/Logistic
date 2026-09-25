@@ -20,6 +20,10 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
+import {
+  contractPerfQtyMeasureIsMixed,
+  contractPerfQtyMeasureLabel,
+} from '@/lib/contractPerfQtyMeasure'
 import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
 import {
   PLANNING_STATUS_OPTIONS,
@@ -981,6 +985,12 @@ function ContractPerfDrilldownSectionHelp({
           <span className="font-medium">On Time</span> (Trade Cycle ≤ 0), and{' '}
           <span className="font-medium">Late</span> (Trade Cycle &gt; 0) as qty (MT). Hover a segment for
           total contracts and avg trade days. Click a segment to filter Section 3 instantly.
+        </p>
+        <p className="text-gray-500">
+          <span className="font-medium">{contractPerfQtyMeasureLabel(summaryCardStatus)}</span>. An Open
+          contract contributes its outstanding quantity and a Close one its contract quantity - the
+          same split the two Section 1 cards use, which is why the tree equals them added together.
+          With neither card selected the figure therefore combines two different measures.
         </p>
         {summaryCardStatus === 'Open' ? (
           <p className="text-gray-500">
@@ -4094,6 +4104,17 @@ function ContractsPageContent() {
                     )}
                   </div>
                   <PerformanceDrilldownScopeLine segments={contractPerfDrilldownScopeSegments} />
+                  {/*
+                    Shown only when it is ambiguous. With Open or Close selected the tree carries one
+                    measure and the tooltip names it; with neither, the figure adds Outstanding Qty to
+                    Contract Qty, and a reader has no way to tell from the number alone.
+                  */}
+                  {contractPerfQtyMeasureIsMixed(summaryCardStatus) ? (
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {contractPerfQtyMeasureLabel(summaryCardStatus)} &mdash; pick Open or Close for a
+                      single measure
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </CardHeader>
