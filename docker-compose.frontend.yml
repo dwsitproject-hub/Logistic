@@ -14,6 +14,9 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
         BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
+        # Attention Insights panel. frontend/Dockerfile already declares the ARG; without this line
+        # compose never passes it, so .env could not switch the panel on here.
+        NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED: ${NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED:-false}
         # Jetty columns on the Shipments table. Set true only where JPS is live.
         NEXT_PUBLIC_JPS_ENABLED: ${NEXT_PUBLIC_JPS_ENABLED:-false}
     container_name: klip-frontend
