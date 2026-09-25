@@ -22,7 +22,6 @@ import {
   prepareAuthoritativePlanningMerge,
   normalizeAndValidateDailyDeliverables,
   parseDailyDeliverableQuantity,
-  sumDailyDeliverablesKg,
 } from '../utils/truckingDailyDeliverables';
 import {
   appendTruckingColumnFilters,
@@ -99,10 +98,7 @@ import {
   unplannedUploadCellToString,
 } from '../utils/truckingUnplannedPlanningUpload';
 import {
-  fetchContractOutstandingQtyKg,
-  fetchTruckingOperationOutstandingQtyKg,
   resolveTruckingPlanningMaxQtyKg,
-  validatePlanningTotalAgainstOutstandingKg,
 } from '../utils/truckingUnplannedPlanningOsQty';
 import {
   sqlContractMatchesStoParam,
@@ -2310,28 +2306,21 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
           continue;
         }
 
-        const outstandingKgPlanned = await fetchTruckingOperationOutstandingQtyKg(plannedOp.id);
-        const osValidationPlanned = validatePlanningTotalAgainstOutstandingKg(
-          sumDailyDeliverablesKg(mergedDailyPlanned),
-          outstandingKgPlanned,
-          { allowLess: clearDatesPlanned.length > 0 },
-        );
-        if (!osValidationPlanned.ok) {
-          operationFailures.push({
-            contract_ext_no: label,
-            rowNumbers: [parsed.rowNumber],
-            reason: osValidationPlanned.reason,
-            operation_ids: [String(plannedOp.operation_id)],
-          });
-          failedRetemplateRows.push({
-            rowNumber: parsed.rowNumber,
-            po_number: parsed.po_number,
-            contract_ext_no: parsed.contract_ext_no,
-            cells: parsed.rawCells.map((cell) => unplannedUploadCellToString(cell)),
-            reason: osValidationPlanned.reason,
-          });
-          continue;
-        }
+        /*
+         * The Planning-equals-Outstanding check is gone, and it was wrong rather than merely strict.
+         *
+         * It compared the operation's WHOLE plan against what is still outstanding, and outstanding
+         * shrinks as trucks are received: contract qty minus received for FRC, minus delivered for
+         * LCO. So the moment a job starts moving the two can never agree again unless the user
+         * deletes planning for dates already executed.
+         *
+         * Measured on a copy of production: of 851 operations carrying daily planning, 506 would be
+         * refused - and 453 of those solely because deliveries had begun.
+         *
+         * If a limit is wanted back, the right anchor is the contract quantity, not the outstanding
+         * one: a plan may legitimately cover what has already moved. Removed on Ryan's instruction,
+         * 2026-09-25.
+         */
 
         const planningDatesPlanned = resolvePlanningStartEndFromDeliverables(mergedDailyPlanned);
         // Allow clearing all editable days (empty deliverables) on an existing Planned op.
@@ -2514,16 +2503,6 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         continue;
       }
 
-      const contractUuid =
-        contractForCreate?.id ??
-        (
-          await resolveContractForUnplannedPlanningUpload({
-            poNumber: parsed.po_number,
-            contractExtNo: parsed.contract_ext_no,
-          })
-        )?.id ??
-        null;
-
       const existingDailyForMerge =
         op && Array.isArray(op.daily_deliverables) ? op.daily_deliverables : [];
       const clearDates = collectEffectivePlanningClearDates(inWindowEntries, existingDailyForMerge);
@@ -2547,28 +2526,7 @@ export const bulkUploadUnplannedPlanning = async (req: AuthRequest, res: Respons
         continue;
       }
 
-      const outstandingKg = contractUuid ? await fetchContractOutstandingQtyKg(contractUuid) : null;
-      const osValidation = validatePlanningTotalAgainstOutstandingKg(
-        sumDailyDeliverablesKg(mergedDaily),
-        outstandingKg,
-        { allowLess: clearDates.length > 0 },
-      );
-      if (!osValidation.ok) {
-        operationFailures.push({
-          contract_ext_no: label,
-          rowNumbers: [parsed.rowNumber],
-          reason: osValidation.reason,
-          operation_ids: op?.operation_id ? [String(op.operation_id)] : undefined,
-        });
-        failedRetemplateRows.push({
-          rowNumber: parsed.rowNumber,
-          po_number: parsed.po_number,
-          contract_ext_no: parsed.contract_ext_no,
-          cells: parsed.rawCells.map((cell) => unplannedUploadCellToString(cell)),
-          reason: osValidation.reason,
-        });
-        continue;
-      }
+      // Planning-vs-Outstanding check removed - see the note at the first upload branch.
 
       const planningDates = resolvePlanningStartEndFromDeliverables(mergedDaily);
       const canClearAllExisting =
