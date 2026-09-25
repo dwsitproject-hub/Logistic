@@ -14,6 +14,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { ViewShipmentModal } from '@/components/shared/ViewShipmentModal'
 import { ViewTruckingOperationModal } from '@/components/trucking/ViewTruckingOperationModal'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
+import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { FieldHelp } from '@/components/FieldHelp'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { formatDateDMY } from '@/lib/dateFormat'
@@ -28,6 +35,7 @@ import {
 import { StyledNativeSelect } from '@/components/shared/StyledNativeSelect'
 import {
   formatContractDateScopeLabel,
+  periodRangeMatchesDates,
   PerformanceContractDateControl,
 } from '@/components/performance/PerformanceContractDateControl'
 import {
@@ -58,7 +66,6 @@ import { ContractPerfTableSortHeader } from '@/components/performance/ContractPe
 import { TableInitialLoadPlaceholder } from '@/components/performance/TableInitialLoadPlaceholder'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
 import {
@@ -1931,8 +1938,9 @@ export default function OilLossPage() {
     <Layout>
       <div className="space-y-6">
         <div className="space-y-3">
-          <div className="flex items-end gap-6 flex-wrap">
+          <HeaderFilterSlot>
             <PerformanceContractDateControl
+              header
               period={globalPeriod}
               options={globalPeriodOptions}
               dateFrom={dateFrom}
@@ -1942,45 +1950,85 @@ export default function OilLossPage() {
               onDateToChange={setDateTo}
               resolvePeriodRange={resolveOilLossPeriodDateRange}
             />
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Region/Plant"
-                options={availableGroupPlants}
-                selected={selectedGroupPlants}
-                onChange={handleGroupPlantsChange}
-                placeholder="All region/plants"
-                emptyMessage="No region/plant values"
-                uppercaseOptionLabels
-              />
-            </div>
-            <div className="w-48">
-              <StyledNativeSelect
-                label="Transport"
-                inlineLabel={false}
-                value={globalTransport}
-                onChange={setGlobalTransport}
-                options={globalTransportOptions}
-              />
-            </div>
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Product"
-                options={[...OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS]}
-                selected={selectedProducts}
-                onChange={handleProductsChange}
-                placeholder="All products"
-                emptyMessage="No products"
-                uppercaseOptionLabels
-              />
-            </div>
-            <button
-              type="button"
-              onClick={resetGlobalBarFilters}
-              className="text-sm text-blue-700 hover:underline shrink-0 pb-2.5"
-            >
-              Reset
-            </button>
+            <SearchableMultiSelect
+              label="Region/Plant"
+              hideLabel
+              portalMenu
+              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+              options={availableGroupPlants}
+              selected={selectedGroupPlants}
+              onChange={handleGroupPlantsChange}
+              placeholder="Region/Plant"
+              emptyMessage="No region/plant values"
+              uppercaseOptionLabels
+            />
+          </HeaderFilterSlot>
+          <ListFilterPanel
+            onReset={resetGlobalBarFilters}
+            showReset={
+              globalPeriod !== 'YTD' ||
+              !periodRangeMatchesDates(resolveOilLossPeriodDateRange('YTD'), dateFrom, dateTo) ||
+              selectedGroupPlants.length > 0 ||
+              globalTransport !== OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT ||
+              selectedProducts.length > 0
+            }
+            chips={[
+              ...(globalPeriod !== 'YTD' ||
+              !periodRangeMatchesDates(resolveOilLossPeriodDateRange('YTD'), dateFrom, dateTo)
+                ? [
+                    {
+                      id: 'contract-date',
+                      label: formatContractDateScopeLabel(
+                        globalPeriod,
+                        dateFrom,
+                        dateTo,
+                        (p) => resolveOilLossPeriodDateRange(p as OilLossGlobalPeriodKey),
+                        { prefix: true },
+                      ),
+                      onRemove: () => {
+                        const ytd = resolveOilLossPeriodDateRange('YTD')
+                        setGlobalPeriod('YTD')
+                        setDateFrom(ytd.dateFrom)
+                        setDateTo(ytd.dateTo)
+                      },
+                    },
+                  ]
+                : []),
+              ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
+              ...(globalTransport !== OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT
+                ? [
+                    {
+                      id: 'transport',
+                      label: `Transport: ${oilLossGlobalTransportLabel(globalTransport)}`,
+                      onRemove: () => setGlobalTransport(OIL_LOSS_GLOBAL_TRANSPORT_DEFAULT),
+                    },
+                  ]
+                : []),
+              ...selectionChips('Product', selectedProducts, handleProductsChange),
+            ]}
+          >
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StyledNativeSelect
+              label="Transport"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              inlineLabel={false}
+              minWidthClassName="w-full"
+              value={globalTransport}
+              onChange={setGlobalTransport}
+              options={globalTransportOptions}
+            />
+            <SearchableMultiSelect
+              label="Product"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              options={[...OIL_LOSS_GLOBAL_PRODUCT_MULTI_OPTIONS]}
+              selected={selectedProducts}
+              onChange={handleProductsChange}
+              placeholder="All"
+              emptyMessage="No products"
+              uppercaseOptionLabels
+            />
           </div>
+          </ListFilterPanel>
 
           <div
             className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 transition-opacity duration-200 ${
@@ -2341,7 +2389,7 @@ export default function OilLossPage() {
                         <col style={{ width: compactTableColWidthCss(OIL_LOSS_ACTIONS_COL_WIDTH_PX) }} />
                       </colgroup>
                       <thead>
-                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
+                        <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
                           {visibleColumns.map((col) => {
                             const active = sortKey === col.id
                             const opColClass = operationalTableColumnClass(

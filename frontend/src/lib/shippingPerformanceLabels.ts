@@ -26,9 +26,9 @@ export function shippingPerfCardTitleLines(
 ): { main: string; sub?: string } {
   switch (card) {
     case 'ongoing':
-      return { main: 'On Going' }
+      return { main: 'ON GOING' }
     case 'close':
-      return { main: 'Completed' }
+      return { main: 'COMPLETED' }
     case 'all':
       return { main: 'All' }
   }

@@ -88,9 +88,11 @@ export function ShipmentsGlobalFiltersSection({
   const globalStatusValue = mapShipmentPipelineStageToGlobalStatusBucket(pipelineStage)
 
   return (
-    <Card aria-label="Global filters">
+    <Card aria-label="Global filters" className="rounded-xl border-slate-200 shadow-sm">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base font-semibold">Global Filters</CardTitle>
+        <CardTitle className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+          Filters
+        </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
         <div className="space-y-4">
@@ -141,6 +143,7 @@ export function ShipmentsGlobalFiltersSection({
           </div>
 
           <PerformanceScopeFilters
+            microLabels
             hideGroupPlantFilter={false}
             incotermOptions={availableIncoterms}
             selectedIncoterms={selectedIncoterms}

@@ -27,6 +27,8 @@ import {
 } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { LIST_FILTER_FIELD_LABEL_CLASS } from '@/components/shared/ListFilterPanel'
+import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { markUserScopeFiltersCleared } from '@/lib/userScopeFilters'
@@ -40,7 +42,6 @@ import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
 import {
@@ -478,9 +479,11 @@ function CommercialDocumentsPageContent() {
       <p className="text-sm text-gray-600">Document completeness checking for commercial contracts</p>
 
       {/* Section 2 */}
-      <Card>
+      <Card className="rounded-xl border-slate-200 shadow-sm">
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Filters</CardTitle>
+          <CardTitle className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+            Filters
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -517,6 +520,7 @@ function CommercialDocumentsPageContent() {
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
             <SearchableMultiSelect
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               label="Incoterm"
               placeholder="All incoterms"
               options={availableIncoterms}
@@ -524,6 +528,7 @@ function CommercialDocumentsPageContent() {
               onChange={setSelectedIncoterms}
             />
             <SearchableMultiSelect
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               label="Product"
               placeholder="All products"
               options={availableProducts}
@@ -532,6 +537,7 @@ function CommercialDocumentsPageContent() {
               pinSelectedToTop
             />
             <SearchableMultiSelect
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               label="Supplier"
               placeholder="All suppliers"
               options={availableSuppliers}
@@ -540,6 +546,7 @@ function CommercialDocumentsPageContent() {
               pinSelectedToTop
             />
             <SearchableMultiSelect
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               label="Region/Plant"
               placeholder="Select region/plant(s)"
               emptyMessage="No region/plant values"
@@ -768,7 +775,7 @@ function CommercialDocumentsPageContent() {
                   <col style={{ width: COMMERCIAL_DOCS_ACTIONS_COL_WIDTH_PX }} />
                 </colgroup>
                 <thead>
-                  <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
+                  <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
                     {visibleColumns.map((col) => {
                       const columnLayout = getOperationalColumnLayout('commercial_documents', col.id)
                       const opColClass = operationalTableColumnClass(columnLayout)

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { isBlankFilterOption, sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
@@ -18,6 +19,11 @@ export function SearchableMultiSelect({
   pinSelectedToTop = false,
   /** Display-only: uppercase the option labels (underlying value/filtering stays unchanged). */
   uppercaseOptionLabels = false,
+  labelClassName,
+  hideLabel = false,
+  buttonClassName,
+  portalMenu: _portalMenu = false,
+  className,
 }: {
   label: string
   options: string[]
@@ -27,10 +33,17 @@ export function SearchableMultiSelect({
   emptyMessage?: string
   pinSelectedToTop?: boolean
   uppercaseOptionLabels?: boolean
+  labelClassName?: string
+  hideLabel?: boolean
+  buttonClassName?: string
+  /** Kept for callers. Menus always render above clipping parents. */
+  portalMenu?: boolean
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const containerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const orderedOptions = useMemo(() => {
     const withoutBlank = options.filter((option) => !isBlankFilterOption(option))
@@ -44,7 +57,9 @@ export function SearchableMultiSelect({
   useEffect(() => {
     if (!open) return
     const onMouseDown = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
@@ -62,62 +77,83 @@ export function SearchableMultiSelect({
 
   const displayLabel = selected.length === 0 ? placeholder : `${selected.length} selected (OR)`
 
+  const menuBody = (
+    <>
+      <div className="p-2 border-b border-gray-100">
+        <Input
+          type="text"
+          placeholder="Type to search..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-9 text-sm"
+          autoFocus
+        />
+      </div>
+      <div className="max-h-56 overflow-y-auto p-1">
+        {options.length === 0 ? (
+          <div className="py-4 text-center text-sm text-gray-500">{emptyMessage}</div>
+        ) : filtered.length === 0 ? (
+          <div className="py-4 text-center text-sm text-gray-500">No matches</div>
+        ) : (
+          filtered.map((option) => (
+            <label
+              key={option}
+              className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-gray-100 text-sm"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(option)}
+                onChange={() => toggle(option)}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className={`truncate${uppercaseOptionLabels ? ' uppercase' : ''}`}>{option}</span>
+            </label>
+          ))
+        )}
+      </div>
+      {selected.length > 0 && (
+        <div className="p-2 border-t border-gray-100">
+          <button type="button" onClick={clearSelection} className="text-xs text-blue-600 hover:underline">
+            Clear selection
+          </button>
+        </div>
+      )}
+    </>
+  )
+
   return (
-    <div ref={containerRef} className="relative w-full">
-      {label ? (
-        <label className="text-sm font-medium text-gray-700 mb-1 block">{label}</label>
+    <div ref={containerRef} className={`${_portalMenu ? 'relative w-44 shrink-0' : 'relative min-w-0 w-full'} ${className ?? ''}`.trim()}>
+      {!hideLabel && label ? (
+        <label className={labelClassName ?? 'text-sm font-medium text-gray-700 mb-1 block'}>{label}</label>
       ) : null}
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+        aria-label={label}
+        className={
+          buttonClassName ??
+          'w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+        }
       >
-        <span className={selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}>{displayLabel}</span>
+        <span className={`truncate ${selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}`}>{displayLabel}</span>
         <ChevronDown className={`h-4 w-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full min-w-[200px] rounded-md border border-gray-200 bg-white shadow-lg">
-          <div className="p-2 border-b border-gray-100">
-            <Input
-              type="text"
-              placeholder="Type to search..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-9 text-sm"
-              autoFocus
-            />
-          </div>
-          <div className="max-h-56 overflow-y-auto p-1">
-            {options.length === 0 ? (
-              <div className="py-4 text-center text-sm text-gray-500">{emptyMessage}</div>
-            ) : filtered.length === 0 ? (
-              <div className="py-4 text-center text-sm text-gray-500">No matches</div>
-            ) : (
-              filtered.map((option) => (
-                <label
-                  key={option}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-gray-100 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(option)}
-                    onChange={() => toggle(option)}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className={`truncate${uppercaseOptionLabels ? ' uppercase' : ''}`}>{option}</span>
-                </label>
-              ))
-            )}
-          </div>
-          {selected.length > 0 && (
-            <div className="p-2 border-t border-gray-100">
-              <button type="button" onClick={clearSelection} className="text-xs text-blue-600 hover:underline">
-                Clear selection
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {open
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="fixed z-[80] rounded-md border border-gray-200 bg-white shadow-lg"
+              style={{
+                top: (containerRef.current?.getBoundingClientRect().bottom ?? 0) + 4,
+                left: containerRef.current?.getBoundingClientRect().left ?? 0,
+                width: Math.max(containerRef.current?.getBoundingClientRect().width ?? 0, 220),
+              }}
+            >
+              {menuBody}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   )
 }

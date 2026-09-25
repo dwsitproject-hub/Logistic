@@ -18,9 +18,17 @@ import { PerformanceScopeFilters } from '@/components/performance/PerformanceSco
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
+import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
 import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
-import { PLANNING_STATUS_OPTIONS, normalizePlanningStatusSelection } from '@/lib/planningStatus'
+import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
 } from '@/components/shipping-performance/VesselHistoryModal'
@@ -68,7 +76,6 @@ import {
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   SHIPPING_PERF_TABLE_BODY_CLASS,
   SHIPPING_PERF_TABLE_CELL_PAD,
-  SHIPPING_PERF_TABLE_HEADER_ROW_CLASS,
   SHIPPING_PERF_TABLE_ROW_MIN_H,
   SHIPPING_PERF_TRUNCATE_TOOLTIP_COLUMN_IDS,
   buildAllShipmentsPresetVisibleColumns,
@@ -118,6 +125,7 @@ import {
 import { resolveShipmentApiLookupKey } from '@/lib/shipmentStoDisplay'
 import {
   formatContractDateScopeLabel,
+  periodRangeMatchesDates,
   PerformanceContractDateControl,
 } from '@/components/performance/PerformanceContractDateControl'
 import {
@@ -2405,139 +2413,192 @@ function ShippingPerformancePageContent() {
   return (
     <div className="space-y-6">
         {/* Header + Source / Product scope toggles (client-side only) */}
-        <div className="space-y-3">
-          <div className="flex items-end gap-6 flex-wrap">
-            <PerformanceContractDateControl
-              period={performancePeriod}
-              options={buildPerformancePeriodOptions()}
-              dateFrom={dateFrom}
-              dateTo={dateTo}
-              onPeriodChange={(value) => {
-                setPerformancePeriod(value)
-                setCurrentPage(1)
-              }}
-              onDateFromChange={(iso) => {
-                setDateFrom(iso)
-                setCurrentPage(1)
-              }}
-              onDateToChange={(iso) => {
-                setDateTo(iso)
-                setCurrentPage(1)
-              }}
-              resolvePeriodRange={resolvePerformancePeriodDateRange}
-            />
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Region/Plant"
-                options={narrowedGroupPlantOptions}
-                selected={selectedGroupPlants}
-                onChange={(values) => {
-                  handleGroupPlantsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All region/plants"
-                emptyMessage="No region/plant values"
-                uppercaseOptionLabels
-              />
-            </div>
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Source"
-                options={narrowedSourceOptions}
-                selected={selectedSources}
-                onChange={(values) => {
-                  setSelectedSources(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All sources"
-                emptyMessage="No sources"
-                uppercaseOptionLabels
-              />
-            </div>
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Incoterm"
-                options={narrowedIncotermOptions}
-                selected={selectedIncoterms}
-                onChange={setSelectedIncoterms}
-                placeholder="All incoterms"
-                emptyMessage="No incoterms"
-                uppercaseOptionLabels
-              />
-            </div>
-            <div className="w-48">
+        <HeaderFilterSlot>
+          <PerformanceContractDateControl
+            header
+            period={performancePeriod}
+            options={buildPerformancePeriodOptions()}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onPeriodChange={(value) => {
+              setPerformancePeriod(value)
+              setCurrentPage(1)
+            }}
+            onDateFromChange={(iso) => {
+              setDateFrom(iso)
+              setCurrentPage(1)
+            }}
+            onDateToChange={(iso) => {
+              setDateTo(iso)
+              setCurrentPage(1)
+            }}
+            resolvePeriodRange={resolvePerformancePeriodDateRange}
+          />
+          <SearchableMultiSelect
+            label="Region/Plant"
+            hideLabel
+            portalMenu
+            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            options={narrowedGroupPlantOptions}
+            selected={selectedGroupPlants}
+            onChange={(values) => {
+              handleGroupPlantsChange(values)
+              setCurrentPage(1)
+            }}
+            placeholder="Region/Plant"
+            emptyMessage="No region/plant values"
+            uppercaseOptionLabels
+          />
+        </HeaderFilterSlot>
+        <ListFilterPanel
+          onReset={resetPerfSelections}
+          showReset={
+            performancePeriod !== 'YTD' ||
+            !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo) ||
+            selectedGroupPlants.length > 0 ||
+            selectedSources.length > 0 ||
+            selectedIncoterms.length > 0 ||
+            selectedSupplierGroups.length > 0 ||
+            selectedSuppliers.length > 0 ||
+            selectedPlanningStatuses.length > 0 ||
+            selectedProducts.length > 0
+          }
+          chips={[
+            ...(performancePeriod !== 'YTD' ||
+            !periodRangeMatchesDates(resolvePerformancePeriodDateRange('YTD'), dateFrom, dateTo)
+              ? [
+                  {
+                    id: 'contract-date',
+                    label: formatContractDateScopeLabel(
+                      performancePeriod,
+                      dateFrom,
+                      dateTo,
+                      (p) => resolvePerformancePeriodDateRange(p as PerformancePeriodKey),
+                      { prefix: true },
+                    ),
+                    onRemove: () => {
+                      setPerformancePeriod('YTD')
+                      const ytd = resolvePerformancePeriodDateRange('YTD')
+                      setDateFrom(ytd.dateFrom)
+                      setDateTo(ytd.dateTo)
+                      setCurrentPage(1)
+                    },
+                  },
+                ]
+              : []),
+            ...selectionChips('Region/Plant', selectedGroupPlants, (values) => {
+              handleGroupPlantsChange(values)
+              setCurrentPage(1)
+            }),
+            ...selectionChips('Source', selectedSources, (values) => {
+              setSelectedSources(values)
+              setCurrentPage(1)
+            }),
+            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
+            ...selectionChips('Group', selectedSupplierGroups, (values) => {
+              handleSupplierGroupsChange(values)
+              setCurrentPage(1)
+            }),
+            ...selectionChips('Supplier', selectedSuppliers, (values) => {
+              setSelectedSuppliers(values)
+              setCurrentPage(1)
+            }),
+            ...selectionChips('Planning', selectedPlanningStatuses, (values) => {
+              setSelectedPlanningStatuses(values)
+              setCurrentPage(1)
+            }),
+            ...selectionChips('Product', selectedProducts, (values) => {
+              handleProductsChange(values)
+              setCurrentPage(1)
+            }),
+          ]}
+        >
+          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
               <SearchableMultiSelect
                 label="Product"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
                 options={narrowedProductOptions}
                 selected={selectedProducts}
                 onChange={(values) => {
                   handleProductsChange(values)
                   setCurrentPage(1)
                 }}
-                placeholder="All products"
+                placeholder="All"
                 emptyMessage="No products"
                 uppercaseOptionLabels
               />
-            </div>
-            <div className="w-48">
+              <SearchableMultiSelect
+                label="Incoterm"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={narrowedIncotermOptions}
+                selected={selectedIncoterms}
+                onChange={setSelectedIncoterms}
+                placeholder="All"
+                emptyMessage="No incoterms"
+                uppercaseOptionLabels
+              />
+              <SearchableMultiSelect
+                label="Source"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={narrowedSourceOptions}
+                selected={selectedSources}
+                onChange={(values) => {
+                  setSelectedSources(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All"
+                emptyMessage="No sources"
+                uppercaseOptionLabels
+              />
               <SearchableMultiSelect
                 label="Group Supplier"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
                 options={narrowedSupplierGroupOptions}
                 selected={selectedSupplierGroups}
                 onChange={(values) => {
                   handleSupplierGroupsChange(values)
                   setCurrentPage(1)
                 }}
-                placeholder="All groups"
+                placeholder="All"
                 emptyMessage="No supplier groups"
                 uppercaseOptionLabels
               />
-            </div>
-            <div className="w-48">
-              {/*
-                Options narrow to the ticked groups, and a supplier outside them is dropped from the
-                selection rather than left to AND the page down to nothing.
-              */}
               <SearchableMultiSelect
                 label="Supplier"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
                 options={narrowedSupplierOptions}
                 selected={selectedSuppliers}
                 onChange={(values) => {
                   setSelectedSuppliers(values)
                   setCurrentPage(1)
                 }}
-                placeholder="All suppliers"
+                placeholder="All"
                 emptyMessage="No suppliers"
                 uppercaseOptionLabels
               />
-            </div>
-            <div className="w-48">
-              {/*
-                Planned means scheduled and still running, up to but not including completed. A
-                finished shipment is in neither option, so selecting both is the same as selecting
-                none. Shipping Performance reads the shipment status only - it has no trucking arm.
-              */}
-              <SearchableMultiSelect
-                label="Planning Status"
-                options={[...PLANNING_STATUS_OPTIONS]}
-                selected={selectedPlanningStatuses}
-                onChange={(values) => {
-                  setSelectedPlanningStatuses(normalizePlanningStatusSelection(values))
-                  setCurrentPage(1)
-                }}
-                placeholder="All planning statuses"
-                emptyMessage="No planning statuses"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={resetPerfSelections}
-              className="text-sm text-blue-700 hover:underline shrink-0 pb-2.5"
-            >
-              Reset
-            </button>
+              <div className="min-w-[7.5rem] flex-1">
+                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Planning Status</label>
+                <FilterSingleSelect
+                  value={selectedPlanningStatuses[0] ?? 'ALL'}
+                  onChange={(value) => {
+                    setSelectedPlanningStatuses(value === 'ALL' ? [] : [value])
+                    setCurrentPage(1)
+                  }}
+                  options={[
+                    { value: 'ALL', label: 'All' },
+                    ...PLANNING_STATUS_OPTIONS.map((value) => ({ value, label: value })),
+                  ]}
+                  ariaLabel="Planning Status"
+                  className="w-full min-w-0"
+                />
+              </div>
           </div>
-        </div>
+        </ListFilterPanel>
 
         {/* Section 1: Summary Cards */}
         {(() => {
@@ -2550,10 +2611,10 @@ function ShippingPerformancePageContent() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <PerformanceSection1CardShell
                   variant="ongoing"
-                  title={SHIPPING_PERF_CARD_TITLES.ongoing}
+                  title="ON GOING"
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
-                  className="min-w-0 flex-1"
+                  className="min-w-0 flex-1 border-2 shadow-sm"
                   headerEnd={<ShippingPerfContractsBadge count={ongoingPerformanceSummary.contractCount} />}
                 >
                   {renderShippingSummaryCardBody('ongoing', ongoingPerformanceSummary)}
@@ -2561,10 +2622,10 @@ function ShippingPerformancePageContent() {
 
                 <PerformanceSection1CardShell
                   variant="completed"
-                  title={SHIPPING_PERF_CARD_TITLES.close}
+                  title="COMPLETED"
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
-                  className="min-w-0 flex-1"
+                  className="min-w-0 flex-1 border-2 shadow-sm"
                   headerEnd={<ShippingPerfContractsBadge count={closePerformanceSummary.contractCount} />}
                 >
                   {renderShippingSummaryCardBody('close', closePerformanceSummary)}
@@ -3050,7 +3111,7 @@ function ShippingPerformancePageContent() {
                     ) : null}
                   </colgroup>
                   <thead>
-                    <tr className={SHIPPING_PERF_TABLE_HEADER_ROW_CLASS}>
+                    <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
                       {showTopRankColumn ? (
                         <th
                           scope="col"

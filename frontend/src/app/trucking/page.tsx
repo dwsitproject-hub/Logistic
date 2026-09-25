@@ -58,9 +58,9 @@ import { QtyLoadingDots } from '@/components/shared/QtyLoadingDots'
 import {
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
+import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -3906,9 +3906,11 @@ function TruckingPageContent() {
         </div>
 
         {/* Section 1: Global Filters */}
-        <Card>
+        <Card className="rounded-xl border-slate-200 shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Global Filters</CardTitle>
+            <CardTitle className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
+              Filters
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
@@ -3957,6 +3959,7 @@ function TruckingPageContent() {
               </div>
 
               <PerformanceScopeFilters
+                microLabels
                 hideGroupPlantFilter={false}
                 incotermOptions={availableIncoterms}
                 selectedIncoterms={selectedIncoterms}
@@ -4854,7 +4857,7 @@ function TruckingPageContent() {
                         <col style={{ width: TRUCKING_ACTIONS_COL_WIDTH }} />
                       </colgroup>
                       <thead>
-                      <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
+                      <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
                         {visibleColumns.map(col => {
                           const active = sortKey === col.id
                           const opColClass = operationalTableColumnClass(

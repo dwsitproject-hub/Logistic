@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { CalendarDays, ChevronDown } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { formatDateDMY } from '@/lib/dateFormat'
@@ -68,6 +69,9 @@ export type PerformanceContractDateControlProps<T extends string = string> = {
   trailingAction?: ReactNode
   dateLabel?: string
   className?: string
+  labelClassName?: string
+  /** Header slot: hide the label and use a short trigger. */
+  header?: boolean
 }
 
 /**
@@ -86,9 +90,13 @@ export function PerformanceContractDateControl<T extends string>({
   trailingAction,
   dateLabel = 'Contract Date',
   className,
+  labelClassName,
+  header = false,
 }: PerformanceContractDateControlProps<T>) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const stretch = Boolean(className?.includes('w-full'))
 
   const resolved = resolvePeriodRange(period)
   const presetActive = periodRangeMatchesDates(resolved, dateFrom, dateTo)
@@ -99,9 +107,9 @@ export function PerformanceContractDateControl<T extends string>({
   useEffect(() => {
     if (!open) return
     const onMouseDown = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
+      const target = e.target as Node
+      if (containerRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setOpen(false)
     }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false)
@@ -116,15 +124,24 @@ export function PerformanceContractDateControl<T extends string>({
 
   return (
     <div className={`flex items-end gap-3 flex-wrap ${className ?? ''}`.trim()}>
-      <div className="min-w-0">
-        <label className="text-sm font-medium text-gray-700 mb-1 block">{dateLabel}</label>
+      <div className={header ? 'w-44 shrink-0' : stretch ? 'min-w-0 w-full' : 'min-w-0'}>
+        {header ? null : (
+          <label className={labelClassName ?? 'text-sm font-medium text-gray-700 mb-1 block'}>{dateLabel}</label>
+        )}
         <div ref={containerRef} className="relative">
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
             aria-expanded={open}
             aria-haspopup="dialog"
-            className="flex h-10 min-w-[11rem] max-w-[18rem] items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            aria-label={dateLabel}
+            className={
+              header
+                ? 'flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+                : stretch
+                  ? 'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+                  : 'flex h-10 min-w-[11rem] max-w-[18rem] items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
+            }
           >
             <span className="flex min-w-0 items-center gap-2">
               <CalendarDays className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />
@@ -135,12 +152,18 @@ export function PerformanceContractDateControl<T extends string>({
               aria-hidden
             />
           </button>
-          {open ? (
-            <div
-              role="dialog"
-              aria-label="Contract date presets and range"
-              className="absolute left-0 z-50 mt-1 w-[22rem] max-w-[calc(100vw-2rem)] rounded-md border border-gray-200 bg-white p-3 shadow-lg"
-            >
+          {open
+            ? createPortal(
+                <div
+                  ref={menuRef}
+                  role="dialog"
+                  aria-label="Contract date presets and range"
+                  className="fixed z-[80] w-[22rem] max-w-[calc(100vw-2rem)] rounded-md border border-gray-200 bg-white p-3 shadow-lg"
+                  style={{
+                    top: (containerRef.current?.getBoundingClientRect().bottom ?? 0) + 4,
+                    left: containerRef.current?.getBoundingClientRect().left ?? 0,
+                  }}
+                >
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
                 Presets
               </div>
@@ -182,8 +205,10 @@ export function PerformanceContractDateControl<T extends string>({
                   className="w-[9.5rem]"
                 />
               </div>
-            </div>
-          ) : null}
+            </div>,
+                document.body,
+              )
+            : null}
         </div>
       </div>
       {trailingAction}

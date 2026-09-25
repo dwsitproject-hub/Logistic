@@ -11,6 +11,7 @@ import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
@@ -687,8 +688,9 @@ export default function ClaimSusutPage() {
           </div>
         )}
 
-        <div className="flex items-end gap-6 flex-wrap">
+        <HeaderFilterSlot>
           <PerformanceContractDateControl
+            header
             period={period}
             options={periodOptions}
             dateFrom={dateFrom}
@@ -699,18 +701,21 @@ export default function ClaimSusutPage() {
             onDateToChange={setDateTo}
             resolvePeriodRange={resolveClaimSusutPeriodRange}
           />
-          <div className="w-48">
-            <SearchableMultiSelect
-              label="Region/Plant"
-              options={plantOptions}
-              selected={selectedPlants}
-              onChange={setSelectedPlants}
-              placeholder="All region/plants"
-              emptyMessage="No region/plant values"
-              uppercaseOptionLabels
-              pinSelectedToTop
-            />
-          </div>
+          <SearchableMultiSelect
+            label="Region/Plant"
+            hideLabel
+            portalMenu
+            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            options={plantOptions}
+            selected={selectedPlants}
+            onChange={setSelectedPlants}
+            placeholder="Region/Plant"
+            emptyMessage="No region/plant values"
+            uppercaseOptionLabels
+            pinSelectedToTop
+          />
+        </HeaderFilterSlot>
+        <div className="flex items-end gap-6 flex-wrap">
           <div className="w-48">
             <SearchableMultiSelect
               label="Source"
