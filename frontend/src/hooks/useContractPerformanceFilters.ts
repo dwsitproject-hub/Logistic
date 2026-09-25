@@ -179,38 +179,28 @@ export function useContractPerformanceFilters(
     [columnFilters, section3Scope],
   )
 
+  /*
+   * Both of these pass the WHOLE `global` to their builder, so `global` is the dependency.
+   *
+   * They used to list its fields one by one, and the list fell behind: Supplier, Group Supplier and
+   * Planning Status were added to the filters but never to these arrays. The params then stayed
+   * byte-identical when those filters changed, `fetchLatePerformanceData` never re-ran, and
+   * Section 1 and the Section 2 tree kept showing pre-filter numbers while the View table below
+   * them had already moved. Toggling the Open card appeared to fix it only because
+   * `summaryCardStatus` WAS in the tree's list.
+   *
+   * `global` is itself memoised by the page with a complete dependency list, so depending on the
+   * object is both correct and immune to that drift - which enumerating its fields here is not.
+   */
+
   /** Card totals API — toolbar globals only; stable when Open/Close tab toggles. */
   const summaryApiParams = useMemo(
     () => buildLatePerformanceCardSummaryApiParams(global),
-    [
-      global.dateFrom,
-      global.dateTo,
-      global.selectedSources,
-      global.selectedProducts,
-      global.selectedIncoterms,
-      global.selectedGroupPlants,
-      global.perfTransportMode,
-      global.b2bFlagFilter,
-      global.search,
-    ],
+    [global],
   )
 
   /** Section 2 tree fetch — never includes applied drilldown; card counts stay at global totals. */
-  const treeApiParams = useMemo(
-    () => buildLatePerformanceTreeApiParams(global),
-    [
-      global.dateFrom,
-      global.dateTo,
-      global.selectedSources,
-      global.selectedProducts,
-      global.selectedIncoterms,
-      global.selectedGroupPlants,
-      global.summaryCardStatus,
-      global.perfTransportMode,
-      global.b2bFlagFilter,
-      global.search,
-    ],
-  )
+  const treeApiParams = useMemo(() => buildLatePerformanceTreeApiParams(global), [global])
 
   const effectiveLateOnTimeFilter = useMemo(
     () => resolveEffectiveLateOnTimeFilter(global.lateOnTimeFilter, global.perfDashMode),
