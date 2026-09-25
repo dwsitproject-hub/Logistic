@@ -3,6 +3,8 @@ import {
   sqlContractImportStatusIsCancelledExpr,
   sqlContractImportStatusIsClosedExpr,
 } from './contractDeliveryStatus';
+import { sqlContractHasNoRegisteredEtaExpr } from './shipmentPagePipelineSql';
+import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
 
 /**
  * Planning Status: has this contract's cargo been scheduled, and is that schedule still live?
@@ -28,15 +30,6 @@ import {
 /** Incoterms whose cargo moves by vessel, matching SHIPMENT_PAGE_SEA_INCOTERMS plus CNF. */
 const SEA_INCOTERM_LIST = `('CIF', 'FOB', 'CFR', 'CNF')`;
 
-/**
- * Shipment statuses that mean "scheduled and still under way".
- *
- * COMPLETED and CANCELLED are absent by definition. `shipments` has no UNPLANNED status of its own
- * - the Shipments page synthesises one for contracts with no shipment row at all - so Unplanned is
- * the absence of a row, not a value.
- */
-const SHIPMENT_PLANNED_STATUSES = `('PLANNED', 'SAILED', 'ARRIVED_LP')`;
-
 export type ContractPlanningStatus = 'PLANNED' | 'UNPLANNED';
 
 export function normalizePlanningStatusValues(values: unknown): ContractPlanningStatus[] {
@@ -49,18 +42,26 @@ export function normalizePlanningStatusValues(values: unknown): ContractPlanning
   return [...out];
 }
 
-/** SQL: this contract has a shipment that is scheduled and not yet finished. */
+/**
+ * SEA: planned means a registered ETA exists - the exact complement of the Shipments page's own
+ * Unplanned backlog, reusing its expression rather than restating it.
+ */
 export function sqlContractHasPlannedShipmentExpr(contractAlias = 'c'): string {
-  return `EXISTS (
-    SELECT 1 FROM shipments s_pl
-    WHERE s_pl.contract_id = ${contractAlias}.id
-      AND UPPER(TRIM(COALESCE(s_pl.status, ''))) IN ${SHIPMENT_PLANNED_STATUSES}
-  )`;
+  return `NOT (${sqlContractHasNoRegisteredEtaExpr(contractAlias)})`;
 }
 
-/** SQL: no shipment row at all - the Shipments page's own definition of Unplanned. */
+/**
+ * SEA unplanned, as the Shipments page defines it: no shipment-level or port-level ETA registered,
+ * with a cancelled shipment's ETA not counting as a plan.
+ *
+ * This used to read "no shipment row at all", which is a different and much narrower question. A
+ * contract whose shipments had all completed while outstanding quantity remained had a row, so it
+ * was not Unplanned - and no live shipment, so it was not Planned either. 1,128 running contracts
+ * sat in neither bucket, 781 of them carrying 11,107 MT with nothing scheduled to move it. Those
+ * are exactly the ones the filter exists to surface.
+ */
 export function sqlContractHasNoShipmentExpr(contractAlias = 'c'): string {
-  return `NOT EXISTS (SELECT 1 FROM shipments s_un WHERE s_un.contract_id = ${contractAlias}.id)`;
+  return sqlContractHasNoRegisteredEtaExpr(contractAlias);
 }
 
 /** SQL: a trucking operation that is under way. Trucking never reports PLANNED - it goes straight
@@ -69,7 +70,7 @@ export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
   return `EXISTS (
     SELECT 1 FROM trucking_operations t_pl
     WHERE t_pl.contract_id = ${contractAlias}.id
-      AND UPPER(TRIM(COALESCE(t_pl.status, ''))) = 'IN_PROGRESS'
+      AND ${sqlTruckingOpIsActiveForMatchingSql('t_pl')}
   )`;
 }
 
@@ -81,15 +82,10 @@ export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
  * neither bucket, while the sea side already reads "no shipment row" as Unplanned.
  */
 export function sqlContractTruckingUnplannedExpr(contractAlias = 'c'): string {
-  return `(
-    EXISTS (
-      SELECT 1 FROM trucking_operations t_un
-      WHERE t_un.contract_id = ${contractAlias}.id
-        AND UPPER(TRIM(COALESCE(t_un.status, ''))) = 'UNPLANNED'
-    )
-    OR NOT EXISTS (
-      SELECT 1 FROM trucking_operations t_any WHERE t_any.contract_id = ${contractAlias}.id
-    )
+  return `NOT EXISTS (
+    SELECT 1 FROM trucking_operations t_un
+    WHERE t_un.contract_id = ${contractAlias}.id
+      AND ${sqlTruckingOpIsActiveForMatchingSql('t_un')}
   )`;
 }
 
