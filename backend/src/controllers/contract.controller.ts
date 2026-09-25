@@ -29,7 +29,7 @@ import {
 import {
   normalizePlanningStatusValues,
   sqlContractPlanningStatusFilter,
-  sqlContractStillRunningExpr,
+  sqlContractFinishedExpr,
   sqlRepresentativeShipmentStatusExpr,
   sqlRepresentativeTruckingStatusExpr,
 } from '../utils/contractPlanningStatusSql';
@@ -354,21 +354,9 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
     }
 
     /*
-     * Planning Status pushdown, mirroring latePerformance.service. Narrows `contract_scope` so the
-     * qty_move / latest_spd / sto_agg CTEs hanging off it run over the contracts that can survive
-     * rather than every contract in the date range - about a tenth of them. The authoritative
-     * filter still runs on `base` further down and is what decides.
-     *
-     * Costs nothing when no Planning Status is selected: the helper returns null and this is a
-     * no-op, so the plain Contracts page is untouched.
+     * NO Planning Status pushdown into contract_scope - see latePerformance.service for why.
+     * Finished contracts have to survive this filter, and `contracts` cannot say which they are.
      */
-    {
-      const scopePlanning = sqlContractPlanningStatusFilter(
-        normalizePlanningStatusValues(parseCommaSeparatedQuery((req.query as any).planningStatuses)),
-        { contractAlias: 'c', incotermExpr: 'c.incoterm', includeTrucking: true },
-      );
-      if (scopePlanning) contractScopeWhere += ` AND ${scopePlanning}`;
-    }
 
     const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, cpSnapshotFresh] =
       await Promise.all([
@@ -607,8 +595,9 @@ const getContractsUncached = async (req: AuthRequest, res: Response) => {
         contractAlias: 'base',
         incotermExpr: 'base.incoterm',
         includeTrucking: true,
-        // Matches the two-argument Close expression this list already uses further up.
-        runningGuardSql: sqlContractStillRunningExpr(),
+        // Finished contracts pass through, matching the two-argument Close expression this list
+        // already uses further up, so the table agrees with the Close card above it.
+        finishedExprSql: sqlContractFinishedExpr(),
       });
       if (planningSql) queryText += ` AND ${planningSql}`;
     }

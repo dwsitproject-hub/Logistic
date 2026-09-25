@@ -164,6 +164,15 @@ export function rowMatchesToolbarMultiFilters(
   if (filters.selectedPlanningStatuses && filters.selectedPlanningStatuses.length === 1) {
     const st = String(row.status ?? '').trim().toUpperCase()
     const wanted = filters.selectedPlanningStatuses[0].trim().toUpperCase()
+    /*
+     * A finished row passes untouched rather than being dropped.
+     *
+     * Planned and Unplanned describe work still ahead, so a completed shipment is outside the
+     * question rather than an answer to it. Excluding it would empty the Completed card the moment
+     * either value was picked, which is not what the filter is saying. Contract Performance treats
+     * its Close card the same way.
+     */
+    if (st === 'COMPLETED' || st === 'CANCELLED') return true
     // Trucking reports IN_PROGRESS where shipments report PLANNED/SAILED/ARRIVED_LP; both mean
     // scheduled and under way, so both count here and the caller need not say which page it is.
     const isPlanned =

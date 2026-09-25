@@ -46,10 +46,12 @@ describe('shippingPerfAvailableValues', () => {
     expect(v.suppliers).toEqual(['SUP B', 'SUP C', 'SUP D'])
   })
 
-  it('applies Planning Status like every other filter', () => {
+  it('lets a finished row through the Planning Status filter', () => {
     const v = shippingPerfAvailableValues(ROWS, { ...NONE, selectedPlanningStatuses: ['Planned'] })
-    // PLANNED and SAILED both count as planned; the COMPLETED row drops out with its PK and G2.
-    expect(v.products).toEqual(['CPO'])
+    // PLANNED and SAILED count as planned, and the COMPLETED row passes untouched rather than
+    // being dropped - Planned and Unplanned describe work still ahead, so a finished shipment is
+    // outside the question. Its PK therefore stays on offer.
+    expect(v.products).toEqual(['CPO', 'PK'])
     expect(v.supplierGroups).toEqual(['G1', 'G2'])
   })
 

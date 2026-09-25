@@ -51,7 +51,7 @@ import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
   normalizePlanningStatusValues,
   sqlContractPlanningStatusFilter,
-  sqlContractStillRunningExpr,
+  sqlContractFinishedExpr,
 } from '../utils/contractPlanningStatusSql';
 import {
   B2B_ENDING_CHILD_SNAPSHOT_TABLE,
@@ -573,32 +573,16 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   }
 
   /*
-   * Planning Status pushdown - the same narrowing idea as the product pushdown above, and the
-   * reason this filter felt slow rather than fast.
+   * NO Planning Status pushdown into contract_scope, deliberately.
    *
-   * Applied only at the end, on `base`, it decided nothing until every expensive CTE had already
-   * run over all ~19,000 contracts in the date range, and then threw away nine rows in ten. Here it
-   * cuts `contract_scope` to the contracts that can survive - measured on a copy of production,
-   * 1,650 of 19,053 for Planned and 1,853 for Unplanned, so qty_move, latest_spd, sto_agg and the
-   * sibling set do roughly a tenth of the work.
+   * It was there, and it cut the scope roughly tenfold. It cannot stay: finished contracts must
+   * survive this filter untouched so the Close card holds still, and `contracts` has no
+   * import_status column - Open/Close is computed per query from SAP rows - so a pushdown on the
+   * raw table would drop every Close contract before the authoritative filter could pass it back.
    *
-   * Safe by construction, like the others: a narrowing pre-filter, never the deciding one. It is
-   * built by the same helper as the authoritative filter on `base`, `contracts.contract_id` is
-   * unique so scope-to-contract is 1:1, and the post-base filter still decides.
-   *
-   * No parameters: the helper embeds its own status literals.
+   * A pre-filter may only ever be a superset of the filter that decides. This one no longer can be,
+   * so it is gone rather than quietly wrong.
    */
-  {
-    const scopePlanning = sqlContractPlanningStatusFilter(
-      planningStatusFilters as Parameters<typeof sqlContractPlanningStatusFilter>[0],
-      {
-      contractAlias: 'c',
-      incotermExpr: 'c.incoterm',
-      includeTrucking: true,
-      },
-    );
-    if (scopePlanning) contractScopeWhere += ` AND ${scopePlanning}`;
-  }
 
   const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, latestSpdSnapshotFresh] =
     await Promise.all([
@@ -758,9 +742,9 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
         contractAlias: 'base',
         incotermExpr: 'base.incoterm',
         includeTrucking: true,
-        // Same Close/Cancelled definition the Open/Close cards use, so the filter cannot disagree
-        // with them about which contracts are finished.
-        runningGuardSql: sqlContractStillRunningExpr({ effectivelyDone: true }),
+        // Finished contracts pass through untouched, so the Close card keeps its full value while
+        // the Open card narrows. Same Close/Cancelled definition the cards themselves use.
+        finishedExprSql: sqlContractFinishedExpr({ effectivelyDone: true }),
       },
     );
     if (planningSql) queryText += ` AND ${planningSql}`;

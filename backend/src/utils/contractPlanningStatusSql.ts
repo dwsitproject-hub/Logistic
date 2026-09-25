@@ -99,21 +99,23 @@ function sqlIsSeaContract(contractAlias: string, incotermExpr?: string): string 
 }
 
 /**
- * The contracts Planning Status can meaningfully describe: the ones still running.
+ * Contracts Planning Status cannot describe: the ones already finished.
  *
- * Without this, "Unplanned" means only "has no shipment row", which a finished contract can easily
- * satisfy - the goods moved, GR closed, and KLIP simply never recorded a shipment. Measured on a
- * copy of production: 1,054 of 15,354 CLOSE contracts were counted Unplanned, which is what made
- * the Close card move when the filter was meant to describe work still ahead.
+ * Planned and Unplanned describe work still ahead, so a finished contract is outside the question
+ * rather than an answer to it. Rows matching this expression PASS the filter untouched, which is
+ * what keeps the Close card still while the Open card narrows - Ryan's requirement, and the
+ * behaviour the numbers argue for too: "Unplanned" used to include 1,054 of 15,354 CLOSE contracts,
+ * measured on a copy of production, purely because they had no shipment row. The goods had moved
+ * and GR had closed; KLIP had simply never recorded a shipment.
  *
- * A contract with no GR PO and no GR STO status at all counts as running, not finished. There are
- * 315 of them; 294 are ACTIVE in SAP and 280 have moved nothing, so the absence is SAP not having
- * said yet, rather than evidence of completion. Ryan's decision, 2026-09-25.
+ * A contract with no GR PO and no GR STO status at all is NOT finished. There are 315; 294 are
+ * ACTIVE in SAP and 280 have moved nothing, so the blank is SAP not having said yet rather than
+ * evidence of completion - Ryan's decision, 2026-09-25.
  *
- * Built from the page's own Close and Cancelled expressions so the filter and the Open/Close cards
- * cannot disagree about what "finished" means.
+ * Built from the page's own Close and Cancelled expressions, so the filter and the Open/Close cards
+ * cannot disagree about which contracts are finished.
  */
-export function sqlContractStillRunningExpr(
+export function sqlContractFinishedExpr(
   options: { alias?: string; effectivelyDone?: boolean } = {},
 ): string {
   const alias = options.alias ?? 'base';
@@ -128,7 +130,7 @@ export function sqlContractStillRunningExpr(
         })
       : undefined,
   );
-  return `NOT (${closed}) AND NOT (${sqlContractImportStatusIsCancelledExpr(`${alias}.import_status`)})`;
+  return `(${closed}) OR (${sqlContractImportStatusIsCancelledExpr(`${alias}.import_status`)})`;
 }
 
 export interface PlanningStatusSqlOptions {
@@ -138,12 +140,10 @@ export interface PlanningStatusSqlOptions {
   /** Shipping Performance reads shipments only; Contract Performance reads both. */
   includeTrucking?: boolean;
   /**
-   * Restrict both buckets to contracts that are still running - see sqlContractStillRunningExpr.
-   * Omitted by the contract_scope pushdown, which runs on raw `contracts` where Open/Close is not
-   * a column. That leaves the pushdown a superset of this filter, which is exactly what a
-   * narrowing pre-filter must be.
+   * Contracts this filter does not apply to - see sqlContractFinishedExpr. They pass through
+   * rather than being excluded, so the Close card keeps its full value while the Open card narrows.
    */
-  runningGuardSql?: string;
+  finishedExprSql?: string;
 }
 
 /**
@@ -161,21 +161,21 @@ export function sqlContractPlanningStatusFilter(
   const alias = options.contractAlias ?? 'c';
   const includeTrucking = options.includeTrucking !== false;
   const isSea = sqlIsSeaContract(alias, options.incotermExpr);
-  const guard = options.runningGuardSql ? ` AND (${options.runningGuardSql})` : '';
+  const passThrough = options.finishedExprSql ? `(${options.finishedExprSql}) OR ` : '';
 
   if (wanted[0] === 'PLANNED') {
     const sea = sqlContractHasPlannedShipmentExpr(alias);
-    if (!includeTrucking) return `((${sea})${guard})`;
-    return `((
+    if (!includeTrucking) return `(${passThrough}(${sea}))`;
+    return `(${passThrough}(
       CASE WHEN ${isSea} THEN ${sea} ELSE ${sqlContractHasPlannedTruckingExpr(alias)} END
-    )${guard})`;
+    ))`;
   }
 
   const seaUnplanned = sqlContractHasNoShipmentExpr(alias);
-  if (!includeTrucking) return `((${seaUnplanned})${guard})`;
-  return `((
+  if (!includeTrucking) return `(${passThrough}(${seaUnplanned}))`;
+  return `(${passThrough}(
     CASE WHEN ${isSea} THEN ${seaUnplanned} ELSE ${sqlContractTruckingUnplannedExpr(alias)} END
-  )${guard})`;
+  ))`;
 }
 
 /**
