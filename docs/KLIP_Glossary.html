@@ -488,29 +488,46 @@
           Pemetaannya dibaca sekali dari <code>GET /api/dashboard/filter-options/supplier-groups</code>: 545 pasangan (grup, supplier), sekitar 20 KB, dimemo 5 menit. Dua bentuk data yang perlu diketahui &mdash; <strong>22 supplier tidak memiliki grup sama sekali</strong> (muncul saat tidak ada grup dipilih, dan di bawah grup mana pun tidak), dan <strong>satu supplier berada di dua grup</strong>, sehingga ini peta berisi daftar, bukan pencarian supplier &rarr; grup.
         </div>
 
+        <h4>Daftar opsi hanya menampilkan nilai yang ada di data</h4>
+        <p>Setiap dropdown hanya menawarkan nilai yang benar-benar dimiliki baris dalam lingkup filter lain yang sedang aktif &mdash; memilihnya tidak akan pernah menghasilkan halaman kosong.</p>
+        <p><strong>Setiap daftar mengabaikan filternya sendiri.</strong> Kalau semua daftar dihitung dari baris yang sudah tersaring penuh, memilih satu supplier akan membuat daftar Supplier menyusut menjadi supplier itu saja, dan supplier kedua tidak akan pernah bisa ditambahkan. Diverifikasi pada salinan produksi: dengan Product = CPO dipilih, daftar Product tetap menawarkan 32 nilai sementara Incoterm menyempit 6 &rarr; 5 dan Supplier 566 &rarr; 334.</p>
+        <div class="note">
+          <strong>Nilai yang sedang dipilih selalu dipertahankan</strong>, bahkan ketika filter lain membuatnya tidak punya baris sama sekali. Tanpa itu, sebuah nilai hilang dari daftarnya sendiri padahal masih menyaring &mdash; dan tidak ada lagi cara melepasnya.
+          <br /><br />
+          Contract Performance menanyakannya ke <code>GET /api/contracts/filter-options/available</code>, karena halaman itu memaginasi barisnya di server dan browser hanya memegang 20 baris. Satu pemindaian atas <code>contract_performance_snapshot</code> dengan enam agregasi bersyarat &mdash; 161 ms, dimemo 60 detik per kombinasi. Shipping Performance menghitungnya sendiri di browser, karena ia memang memegang seluruh datanya.
+        </div>
+
         <h4 id="cp-planning-status">Planning Status</h4>
+        <p>Menjawab satu pertanyaan: <strong>apakah ada rencana yang sedang berjalan untuk kuantitas yang masih tersisa?</strong> Bukan "apakah pernah ada rencana", dan bukan "apakah ada barisnya".</p>
         <table>
           <thead>
             <tr><th>Nilai</th><th>Arti</th><th>Dibaca dari</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td><strong>Unplanned</strong></td>
-              <td>belum ada yang dijadwalkan</td>
-              <td>SEA: tidak ada baris <code>shipments</code> sama sekali. LAND: ada operasi berstatus <code>UNPLANNED</code>, <em>atau</em> tidak ada operasi sama sekali.</td>
+              <td><strong>Planned</strong></td>
+              <td>ada rencana yang masih berjalan</td>
+              <td>SEA: ada shipment yang <em>belum</em> <code>COMPLETED</code> dan bukan <code>CANCELLED</code>, dan membawa ETA terdaftar &mdash; di level shipment maupun port. LAND: ada operasi trucking yang aktif dan belum <code>COMPLETED</code>.</td>
             </tr>
             <tr>
-              <td><strong>Planned</strong></td>
-              <td>sudah dijadwalkan dan masih berjalan &mdash; sampai sebelum completed, dan tidak pernah cancelled</td>
-              <td>SEA: ada shipment berstatus <code>PLANNED</code> / <code>SAILED</code> / <code>ARRIVED_LP</code>. LAND: ada trucking berstatus <code>IN_PROGRESS</code>.</td>
+              <td><strong>Unplanned</strong></td>
+              <td>tidak ada rencana yang sedang berjalan</td>
+              <td>Kebalikan persis dari Planned. Keduanya saling melengkapi &mdash; tidak ada kontrak berjalan yang jatuh di antara keduanya.</td>
             </tr>
           </tbody>
         </table>
-        <p>Yang membaca mana ditentukan oleh <strong>incoterm</strong>, bukan <code>transport_mode</code> &mdash; itulah sebabnya MIX tidak perlu penanganan khusus. Diukur pada salinan produksi: 1.650 kontrak Planned dan 1.853 Unplanned; sisanya (~15.500) sudah selesai.</p>
+        <p>Yang membaca mana ditentukan oleh <strong>incoterm</strong>, bukan <code>transport_mode</code> &mdash; itulah sebabnya MIX tidak perlu penanganan khusus. Diukur pada salinan produksi: dari 3.494 kontrak yang masih berjalan, <strong>2.110 Planned</strong> dan <strong>1.384 Unplanned</strong>, dan sisi Unplanned membawa <strong>291.737 MT</strong> outstanding tanpa apa pun yang dijadwalkan memindahkannya.</p>
         <div class="note">
-          <strong>Kontrak yang sudah selesai tidak masuk keduanya.</strong> Itu disengaja &mdash; filter ini menjawab &quot;apa yang masih perlu diawasi&quot;. Konsekuensinya, <strong>memilih kedua nilai sama dengan tidak memfilter sama sekali</strong>, bukan &quot;semua kontrak&quot;: <code>Planned OR Unplanned</code> justru akan membuang setiap kontrak yang sudah completed.
+          <strong>Kenapa shipment yang sudah selesai tidak dihitung sebagai rencana.</strong> Ia memang pernah menjadi rencana, tetapi bukan untuk kuantitas yang masih tersisa. Definisi sebelumnya menghitungnya, dan hasilnya 2.980 dari 3.494 kontrak terbaca Planned &mdash; filter yang hampir tidak mengatakan apa pun.
           <br /><br />
-          <strong>Kolom Shipment Status / Trucking Status pada View table menjawab pertanyaan lain.</strong> Satu PO bisa membawa beberapa STO; kolom itu menampilkan <em>satu</em> status yang mewakili kontrak, yaitu yang masih perlu perhatian (untuk trucking, <code>UNPLANNED</code> menang atas <code>IN_PROGRESS</code>). Filter Planning Status tidak dibangun dari kolom itu melainkan dari <code>EXISTS</code> yang sama dengan Section 1, karena kalau tidak, sebuah kontrak dengan satu operasi belum dijadwalkan dan satu lagi berjalan akan terbaca Unplanned di sini sementara Section 1 menghitungnya Planned.
+          Definisi yang lebih awal lagi bertanya <em>"apakah ada baris shipment"</em>, pertanyaan yang jauh lebih sempit. Kontrak yang shipment-nya sudah selesai sementara outstanding-nya belum: punya baris (jadi bukan Unplanned), tidak ada yang hidup (jadi bukan Planned juga). <strong>1.128 kontrak berjalan jatuh di antara keduanya</strong>, 781 di antaranya membawa 11.107 MT &mdash; justru yang paling perlu dilihat.
+        </div>
+        <div class="note">
+          <strong>Kartu Open/Close tidak bergerak saat filter ini dipilih.</strong> Kontrak yang sudah selesai <em>melewati</em> filter ini apa adanya, bukan dikeluarkan darinya: Planned dan Unplanned menggambarkan pekerjaan yang masih di depan, sehingga kontrak yang sudah tutup berada di luar pertanyaannya. Hal yang sama berlaku untuk kartu Completed di Shipping Performance.
+          <br /><br />
+          <strong>Memilih kedua nilai sama dengan tidak memfilter.</strong> Karena keduanya saling melengkapi, mencentang dua-duanya tidak menyaring apa pun &mdash; dan kotaknya otomatis kembali ke <em>All planning statuses</em> agar tidak mengaku sedang menyaring.
+          <br /><br />
+          <strong>Kolom Shipment Status / Trucking Status pada View table menjawab pertanyaan lain.</strong> Satu PO bisa membawa beberapa STO; kolom itu menampilkan <em>satu</em> status yang mewakili kontrak, yaitu yang masih perlu perhatian. Filter ini tidak dibangun dari kolom itu, melainkan dari ekspresi yang sama dengan Section 1 &mdash; kalau tidak, sebuah kontrak bisa terbaca berbeda antara kartu dan tabelnya.
         </div>
 
         <h3 id="cp-primitif">Primitif hari kalender</h3>
@@ -696,9 +713,16 @@
           <li><strong>Unplanned</strong> &mdash; <code>UNPLANNED</code>, yaitu baris dari <em>unplanned backlog</em>: kontrak yang masih punya outstanding tetapi belum memiliki shipment sama sekali</li>
         </ul>
         <div class="note">
+          <strong>Kartu Completed tidak bergerak saat filter ini dipilih.</strong> Shipment yang sudah selesai melewati filter apa adanya, bukan dikeluarkan darinya &mdash; Planned dan Unplanned menggambarkan pekerjaan yang masih di depan, jadi shipment yang sudah tuntas berada di luar pertanyaannya. Aturan yang sama dipakai kartu Open/Close di Contract Performance.
+          <br /><br />
+          Karena itu, memilih kedua nilai sama dengan tidak memfilter, dan kotaknya kembali ke <em>All planning statuses</em>.
+          <br /><br />
           Status <code>UNPLANNED</code> di sini <strong>bukan</strong> status sebuah shipment. Baris backlog ditandai <code>is_unplanned_backlog</code> oleh backend, dan ejaan statusnya kebetulan sama; jangan menyimpulkan yang satu dari yang lain. Pada salinan produksi tidak ada satu pun baris <code>shipments</code> berstatus <code>UNPLANNED</code> &mdash; 2.099 COMPLETED, 200 CANCELLED, 98 PLANNED, 29 SAILED, 2 ARRIVED_LP.
         </div>
-        <p>Seperti di Contract Performance, memilih kedua nilai sama dengan tidak memfilter &mdash; shipment yang sudah <code>COMPLETED</code> tidak termasuk keduanya.</p>
+
+        <h4>Daftar opsi menyempit mengikuti data</h4>
+        <p>Sama seperti Contract Performance, tiap dropdown hanya menawarkan nilai yang dimiliki baris yang lolos filter <em>lain</em>. Dihitung di browser, karena halaman ini memegang seluruh datanya.</p>
+        <p>Berguna justru saat kombinasi filter menyisakan nol baris: daftar-daftarnya <strong>tidak</strong> ikut kosong semua &mdash; masing-masing tetap menunjukkan apa yang bisa dicapai kalau filter itu saja yang diubah, sehingga selalu ada jalan keluar.</p>
 
         <h3 id="sp-dates">Resolusi tanggal ETA / ATA</h3>
         <p><strong>ETR (anchor loading):</strong> <code>contracts.cargo_readiness_date</code></p>
@@ -1820,7 +1844,7 @@
   </div>
 
   <footer>
-    KLIP Glossary — diperbarui 2026-09-24 · Integration (Jetty Planning System) · Operation Trucking (Planning vs Realisasi) · Contract Performance · Shipping Performance · Oil Loss · Commercial Documents · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
+    KLIP Glossary — diperbarui 2026-09-25 · Integration (Jetty Planning System) · Operation Trucking (Planning vs Realisasi) · Contract Performance · Shipping Performance · Oil Loss · Commercial Documents · AI Klip Agent · Operation ID &amp; Shipment ID · SAP Upload &amp; Input KLIP · Buka: <code>docs/KLIP_Glossary.html</code>
   </footer>
 </body>
 </html>
