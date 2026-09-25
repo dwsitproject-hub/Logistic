@@ -26,6 +26,8 @@ import {
 } from '@/components/shared/ListFilterPanel'
 import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
+import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
 import { PLANNING_STATUS_OPTIONS } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
@@ -1721,6 +1723,7 @@ function ShippingPerformancePageContent() {
     [supplierGroupPairs],
   )
 
+
   const availableGroupPlants = useMemo(
     () => filterRegionSiteOptions(distinctScopeOptions('plant_site')),
     [distinctScopeOptions],
@@ -1735,6 +1738,77 @@ function ShippingPerformancePageContent() {
     alignGroupPlantsToOptions(availableGroupPlants)
   }, [availableGroupPlants, alignGroupPlantsToOptions])
   const availableProducts = useMemo(() => distinctScopeOptions('product'), [distinctScopeOptions])
+  /*
+   * Which values each toolbar filter can still offer, given the others.
+   *
+   * Computed from `periodFilteredRows` - the date-scoped set, before any toolbar filter - because
+   * narrowing from an already-filtered set would apply the same filters twice. Each list ignores
+   * its own filter, so picking one value never hides the rest of that list.
+   */
+  const spAvailableValues = useMemo(
+    () =>
+      shippingPerfAvailableValues(periodFilteredRows, {
+        selectedSources,
+        selectedProducts,
+        selectedIncoterms,
+        selectedGroupPlants,
+        selectedSuppliers,
+        selectedSupplierGroups,
+        selectedPlanningStatuses,
+      }),
+    [
+      periodFilteredRows,
+      selectedSources,
+      selectedProducts,
+      selectedIncoterms,
+      selectedGroupPlants,
+      selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
+    ],
+  )
+
+  const narrowedSourceOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
+        spAvailableValues.sources,
+        selectedSources,
+      ),
+    [spAvailableValues, selectedSources],
+  )
+  const narrowedProductOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+        spAvailableValues.products,
+        selectedProducts,
+      ),
+    [spAvailableValues, selectedProducts],
+  )
+  const narrowedIncotermOptions = useMemo(
+    () => narrowFilterOptions(availableIncoterms, spAvailableValues.incoterms, selectedIncoterms),
+    [availableIncoterms, spAvailableValues, selectedIncoterms],
+  )
+  const narrowedGroupPlantOptions = useMemo(
+    () =>
+      narrowFilterOptions(availableGroupPlants, spAvailableValues.groupPlants, selectedGroupPlants),
+    [availableGroupPlants, spAvailableValues, selectedGroupPlants],
+  )
+  const narrowedSupplierGroupOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableSupplierGroups,
+        spAvailableValues.supplierGroups,
+        selectedSupplierGroups,
+      ),
+    [availableSupplierGroups, spAvailableValues, selectedSupplierGroups],
+  )
+  /** Group Supplier narrows this list too, through supplierOptions; both narrowings apply. */
+  const narrowedSupplierOptions = useMemo(
+    () => narrowFilterOptions(supplierOptions, spAvailableValues.suppliers, selectedSuppliers),
+    [supplierOptions, spAvailableValues, selectedSuppliers],
+  )
   const availableVessels = useMemo(
     () =>
       SHIPPING_PERF_GLOBAL_FILTERS_ENABLED ? distinctVesselNames(scopeFilteredRows) : [],
@@ -2365,7 +2439,7 @@ function ShippingPerformancePageContent() {
             hideLabel
             portalMenu
             buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-            options={availableGroupPlants}
+            options={narrowedGroupPlantOptions}
             selected={selectedGroupPlants}
             onChange={(values) => {
               handleGroupPlantsChange(values)
@@ -2444,7 +2518,7 @@ function ShippingPerformancePageContent() {
                 label="Product"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                options={narrowedProductOptions}
                 selected={selectedProducts}
                 onChange={(values) => {
                   handleProductsChange(values)
@@ -2458,7 +2532,7 @@ function ShippingPerformancePageContent() {
                 label="Incoterm"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={availableIncoterms}
+                options={narrowedIncotermOptions}
                 selected={selectedIncoterms}
                 onChange={setSelectedIncoterms}
                 placeholder="All"
@@ -2469,7 +2543,7 @@ function ShippingPerformancePageContent() {
                 label="Source"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                options={narrowedSourceOptions}
                 selected={selectedSources}
                 onChange={(values) => {
                   setSelectedSources(values)
@@ -2483,7 +2557,7 @@ function ShippingPerformancePageContent() {
                 label="Group Supplier"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={availableSupplierGroups}
+                options={narrowedSupplierGroupOptions}
                 selected={selectedSupplierGroups}
                 onChange={(values) => {
                   handleSupplierGroupsChange(values)
@@ -2497,7 +2571,7 @@ function ShippingPerformancePageContent() {
                 label="Supplier"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={supplierOptions}
+                options={narrowedSupplierOptions}
                 selected={selectedSuppliers}
                 onChange={(values) => {
                   setSelectedSuppliers(values)

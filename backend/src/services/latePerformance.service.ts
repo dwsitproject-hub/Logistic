@@ -51,6 +51,7 @@ import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
   normalizePlanningStatusValues,
   sqlContractPlanningStatusFilter,
+  sqlContractFinishedExpr,
 } from '../utils/contractPlanningStatusSql';
 import {
   B2B_ENDING_CHILD_SNAPSHOT_TABLE,
@@ -571,6 +572,18 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
     }
   }
 
+  /*
+   * NO Planning Status pushdown into contract_scope, deliberately.
+   *
+   * It was there, and it cut the scope roughly tenfold. It cannot stay: finished contracts must
+   * survive this filter untouched so the Close card holds still, and `contracts` has no
+   * import_status column - Open/Close is computed per query from SAP rows - so a pushdown on the
+   * raw table would drop every Close contract before the authoritative filter could pass it back.
+   *
+   * A pre-filter may only ever be a superset of the filter that decides. This one no longer can be,
+   * so it is gone rather than quietly wrong.
+   */
+
   const [contractsQtyMoveCte, contractsStoAggCte, contractsLatestSpdCte, latestSpdSnapshotFresh] =
     await Promise.all([
       resolveContractsQtyMoveCte('contract_scope'),
@@ -725,7 +738,14 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
   {
     const planningSql = sqlContractPlanningStatusFilter(
       planningStatusFilters as Parameters<typeof sqlContractPlanningStatusFilter>[0],
-      { contractAlias: 'base', incotermExpr: 'base.incoterm', includeTrucking: true },
+      {
+        contractAlias: 'base',
+        incotermExpr: 'base.incoterm',
+        includeTrucking: true,
+        // Finished contracts pass through untouched, so the Close card keeps its full value while
+        // the Open card narrows. Same Close/Cancelled definition the cards themselves use.
+        finishedExprSql: sqlContractFinishedExpr({ effectivelyDone: true }),
+      },
     );
     if (planningSql) queryText += ` AND ${planningSql}`;
   }

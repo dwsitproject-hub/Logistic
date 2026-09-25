@@ -1,3 +1,10 @@
+import {
+  sqlContractEffectivelyDoneExpr,
+  sqlContractImportStatusIsCancelledExpr,
+  sqlContractImportStatusIsClosedExpr,
+} from './contractDeliveryStatus';
+import { sqlTruckingOpIsActiveForMatchingSql } from './truckingOperationUniqueness';
+
 /**
  * Planning Status: has this contract's cargo been scheduled, and is that schedule still live?
  *
@@ -22,15 +29,6 @@
 /** Incoterms whose cargo moves by vessel, matching SHIPMENT_PAGE_SEA_INCOTERMS plus CNF. */
 const SEA_INCOTERM_LIST = `('CIF', 'FOB', 'CFR', 'CNF')`;
 
-/**
- * Shipment statuses that mean "scheduled and still under way".
- *
- * COMPLETED and CANCELLED are absent by definition. `shipments` has no UNPLANNED status of its own
- * - the Shipments page synthesises one for contracts with no shipment row at all - so Unplanned is
- * the absence of a row, not a value.
- */
-const SHIPMENT_PLANNED_STATUSES = `('PLANNED', 'SAILED', 'ARRIVED_LP')`;
-
 export type ContractPlanningStatus = 'PLANNED' | 'UNPLANNED';
 
 export function normalizePlanningStatusValues(values: unknown): ContractPlanningStatus[] {
@@ -43,27 +41,74 @@ export function normalizePlanningStatusValues(values: unknown): ContractPlanning
   return [...out];
 }
 
-/** SQL: this contract has a shipment that is scheduled and not yet finished. */
+/** Every ETA a shipment or its ports can carry - the same list the Shipments page checks. */
+const SHIPMENT_ETA_FIELDS = `(
+        s_pl.eta_arrival IS NOT NULL
+        OR s_pl.eta_berthed IS NOT NULL
+        OR s_pl.eta_loading_start IS NOT NULL
+        OR s_pl.eta_loading_complete IS NOT NULL
+        OR s_pl.eta_sailed IS NOT NULL
+        OR s_pl.eta_discharge_arrival IS NOT NULL
+        OR s_pl.eta_discharge_berthed IS NOT NULL
+        OR s_pl.eta_discharge_start IS NOT NULL
+        OR s_pl.eta_discharge_complete IS NOT NULL
+        OR vlp_pl.eta_vessel_arrival IS NOT NULL
+        OR vlp_pl.eta_vessel_berthed IS NOT NULL
+        OR vlp_pl.eta_loading_start IS NOT NULL
+        OR vlp_pl.eta_loading_completed IS NOT NULL
+        OR vlp_pl.eta_vessel_sailed IS NOT NULL
+        OR vlp_pl.eta_vessel_complete_discharge IS NOT NULL
+      )`;
+
+/**
+ * SEA: planned means a shipment that is STILL RUNNING carries a registered ETA.
+ *
+ * Deliberately one step stricter than the Shipments page's Unplanned card, which counts any
+ * registered ETA including a completed shipment's. Ryan's rule: a completed shipment is not a plan
+ * for the quantity still outstanding. Without the exclusion, a contract whose shipments had all
+ * finished read as Planned forever - 2,980 of 3,494 running contracts, which made the filter say
+ * almost nothing.
+ *
+ * A cancelled shipment's ETA is not a plan either, for the same reason the Shipments page excludes
+ * it: the voyage is not going to happen.
+ */
 export function sqlContractHasPlannedShipmentExpr(contractAlias = 'c'): string {
   return `EXISTS (
-    SELECT 1 FROM shipments s_pl
+    SELECT 1
+    FROM shipments s_pl
+    LEFT JOIN vessel_loading_ports vlp_pl ON vlp_pl.shipment_id = s_pl.id
     WHERE s_pl.contract_id = ${contractAlias}.id
-      AND UPPER(TRIM(COALESCE(s_pl.status, ''))) IN ${SHIPMENT_PLANNED_STATUSES}
+      AND UPPER(TRIM(COALESCE(s_pl.status, ''))) NOT IN ('CANCELLED', 'COMPLETED')
+      AND ${SHIPMENT_ETA_FIELDS}
   )`;
 }
 
-/** SQL: no shipment row at all - the Shipments page's own definition of Unplanned. */
+/**
+ * SEA unplanned, as the Shipments page defines it: no shipment-level or port-level ETA registered,
+ * with a cancelled shipment's ETA not counting as a plan.
+ *
+ * This used to read "no shipment row at all", which is a different and much narrower question. A
+ * contract whose shipments had all completed while outstanding quantity remained had a row, so it
+ * was not Unplanned - and no live shipment, so it was not Planned either. 1,128 running contracts
+ * sat in neither bucket, 781 of them carrying 11,107 MT with nothing scheduled to move it. Those
+ * are exactly the ones the filter exists to surface.
+ */
 export function sqlContractHasNoShipmentExpr(contractAlias = 'c'): string {
-  return `NOT EXISTS (SELECT 1 FROM shipments s_un WHERE s_un.contract_id = ${contractAlias}.id)`;
+  return `NOT (${sqlContractHasPlannedShipmentExpr(contractAlias)})`;
 }
 
 /** SQL: a trucking operation that is under way. Trucking never reports PLANNED - it goes straight
  *  to IN_PROGRESS, which is the state the Trucking page itself labels as planned. */
+/**
+ * LAND: planned means an operation that is still running - active for matching, and not completed.
+ * Same reasoning as the sea side; a finished haul does not plan what is still outstanding.
+ */
 export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
   return `EXISTS (
     SELECT 1 FROM trucking_operations t_pl
     WHERE t_pl.contract_id = ${contractAlias}.id
-      AND UPPER(TRIM(COALESCE(t_pl.status, ''))) = 'IN_PROGRESS'
+      AND ${sqlTruckingOpIsActiveForMatchingSql('t_pl')}
+      AND UPPER(TRIM(COALESCE(t_pl.status, ''))) <> 'COMPLETED'
   )`;
 }
 
@@ -75,21 +120,47 @@ export function sqlContractHasPlannedTruckingExpr(contractAlias = 'c'): string {
  * neither bucket, while the sea side already reads "no shipment row" as Unplanned.
  */
 export function sqlContractTruckingUnplannedExpr(contractAlias = 'c'): string {
-  return `(
-    EXISTS (
-      SELECT 1 FROM trucking_operations t_un
-      WHERE t_un.contract_id = ${contractAlias}.id
-        AND UPPER(TRIM(COALESCE(t_un.status, ''))) = 'UNPLANNED'
-    )
-    OR NOT EXISTS (
-      SELECT 1 FROM trucking_operations t_any WHERE t_any.contract_id = ${contractAlias}.id
-    )
-  )`;
+  return `NOT (${sqlContractHasPlannedTruckingExpr(contractAlias)})`;
 }
 
 function sqlIsSeaContract(contractAlias: string, incotermExpr?: string): string {
   const inc = incotermExpr ?? `${contractAlias}.incoterm`;
   return `UPPER(TRIM(COALESCE(${inc}, ''))) IN ${SEA_INCOTERM_LIST}`;
+}
+
+/**
+ * Contracts Planning Status cannot describe: the ones already finished.
+ *
+ * Planned and Unplanned describe work still ahead, so a finished contract is outside the question
+ * rather than an answer to it. Rows matching this expression PASS the filter untouched, which is
+ * what keeps the Close card still while the Open card narrows - Ryan's requirement, and the
+ * behaviour the numbers argue for too: "Unplanned" used to include 1,054 of 15,354 CLOSE contracts,
+ * measured on a copy of production, purely because they had no shipment row. The goods had moved
+ * and GR had closed; KLIP had simply never recorded a shipment.
+ *
+ * A contract with no GR PO and no GR STO status at all is NOT finished. There are 315; 294 are
+ * ACTIVE in SAP and 280 have moved nothing, so the blank is SAP not having said yet rather than
+ * evidence of completion - Ryan's decision, 2026-09-25.
+ *
+ * Built from the page's own Close and Cancelled expressions, so the filter and the Open/Close cards
+ * cannot disagree about which contracts are finished.
+ */
+export function sqlContractFinishedExpr(
+  options: { alias?: string; effectivelyDone?: boolean } = {},
+): string {
+  const alias = options.alias ?? 'base';
+  const closed = sqlContractImportStatusIsClosedExpr(
+    `${alias}.import_status`,
+    `${alias}.import_status IS NULL AND UPPER(${alias}.status) IN ('CLOSE', 'COMPLETED', 'CLOSED')`,
+    options.effectivelyDone
+      ? sqlContractEffectivelyDoneExpr({
+          outstandingKgExpr: `${alias}.outstanding_quantity`,
+          atcExpr: `${alias}.last_ata_vessel_complete_discharge`,
+          stoCountExpr: `${alias}.sto_count`,
+        })
+      : undefined,
+  );
+  return `(${closed}) OR (${sqlContractImportStatusIsCancelledExpr(`${alias}.import_status`)})`;
 }
 
 export interface PlanningStatusSqlOptions {
@@ -98,6 +169,11 @@ export interface PlanningStatusSqlOptions {
   incotermExpr?: string;
   /** Shipping Performance reads shipments only; Contract Performance reads both. */
   includeTrucking?: boolean;
+  /**
+   * Contracts this filter does not apply to - see sqlContractFinishedExpr. They pass through
+   * rather than being excluded, so the Close card keeps its full value while the Open card narrows.
+   */
+  finishedExprSql?: string;
 }
 
 /**
@@ -115,20 +191,21 @@ export function sqlContractPlanningStatusFilter(
   const alias = options.contractAlias ?? 'c';
   const includeTrucking = options.includeTrucking !== false;
   const isSea = sqlIsSeaContract(alias, options.incotermExpr);
+  const passThrough = options.finishedExprSql ? `(${options.finishedExprSql}) OR ` : '';
 
   if (wanted[0] === 'PLANNED') {
     const sea = sqlContractHasPlannedShipmentExpr(alias);
-    if (!includeTrucking) return `(${sea})`;
-    return `(
+    if (!includeTrucking) return `(${passThrough}(${sea}))`;
+    return `(${passThrough}(
       CASE WHEN ${isSea} THEN ${sea} ELSE ${sqlContractHasPlannedTruckingExpr(alias)} END
-    )`;
+    ))`;
   }
 
   const seaUnplanned = sqlContractHasNoShipmentExpr(alias);
-  if (!includeTrucking) return `(${seaUnplanned})`;
-  return `(
+  if (!includeTrucking) return `(${passThrough}(${seaUnplanned}))`;
+  return `(${passThrough}(
     CASE WHEN ${isSea} THEN ${seaUnplanned} ELSE ${sqlContractTruckingUnplannedExpr(alias)} END
-  )`;
+  ))`;
 }
 
 /**

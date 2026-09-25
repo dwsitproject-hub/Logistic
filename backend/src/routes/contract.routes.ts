@@ -8,6 +8,7 @@ import {
   getContractActivityLog,
   getB2bPartiesForContract,
   getContractFilterIncoterms,
+  getContractFilterOptionsAvailable,
   getContractFilterGroupPlants,
   getContractFilterMasterGroupPlants,
   getContractFilterB2bFlags,
@@ -77,6 +78,9 @@ router.get('/late-performance/summary', getLatePerformanceSummary);
 router.get('/late-performance/tree', getLatePerformanceTree);
 router.get('/late-performance/data', getLatePerformanceData);
 router.get('/late-performance', getLatePerformance);
+// Values each filter can still offer, given the others - so a dropdown never lists something
+// the table has none of, and never collapses to the one value already picked.
+router.get('/filter-options/available', getContractFilterOptionsAvailable);
 router.get('/filter-options/incoterms', getContractFilterIncoterms);
 router.get('/filter-options/group-plants', getContractFilterGroupPlants);
 router.get('/filter-options/master-group-plants', getContractFilterMasterGroupPlants);

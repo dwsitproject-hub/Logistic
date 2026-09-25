@@ -16,6 +16,32 @@ verifikasi → amankan akun default**.
 
 ---
 
+## Deploy rutin (setelah deployment pertama)
+
+Pakai skripnya, bukan perintah yang diketik dari ingatan:
+
+```bash
+cd /opt/klip && bash docs/scripts/deploy-prod.sh backend
+cd /opt/klip && bash docs/scripts/deploy-prod.sh frontend
+```
+
+Ia menarik perubahan, membangun, dan memeriksa hasilnya — dan yang terpenting, ia menyusun sendiri
+daftar file compose-nya.
+
+**Backend produksi butuh TIGA file compose.** Menjalankannya dengan lebih sedikit tidak
+menghasilkan galat apa pun:
+
+| File | Kalau hilang |
+|---|---|
+| `docker-compose.backend.yml` | — (dasar) |
+| `docker-compose.backend.remote-db.yml` | `depends_on: postgres` tidak direset, sehingga container postgres lokal ikut menyala di server produksi, dan `DB_HOST` jatuh ke default `klip-postgres` |
+| `docker-compose.backend.sap-share.yml` | `/mnt/sap-import` tidak terpasang dan **import SAP harian mati** — satu-satunya tanda adalah satu baris log pukul 06:00 keesokan harinya |
+
+Pada 2026-09-24 produksi di-deploy hanya dengan file dasar dan import SAP berhenti selama berjam-jam
+tanpa ada yang menyadarinya.
+
+---
+
 ## ⚠️ Tiga hal yang harus dibaca sebelum menyentuh server
 
 ### 1. `DB_HOST` wajib diisi eksplisit — kalau tidak, produksi menulis ke database SIT
@@ -244,7 +270,7 @@ chmod 600 /opt/klip/.env
 cd /opt/klip
 git pull origin main
 
-docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
+docker compose -f docker-compose.backend.yml \n               -f docker-compose.backend.remote-db.yml \n               -f docker-compose.backend.sap-share.yml up -d --build
 ```
 
 ### Verifikasi wajib — jangan lanjut sebelum ketiganya benar
@@ -690,7 +716,7 @@ git log --oneline -5
 git checkout <commit-sebelumnya>
 
 # backend
-docker compose -f docker-compose.backend.yml -f docker-compose.backend.remote-db.yml up -d --build
+docker compose -f docker-compose.backend.yml \n               -f docker-compose.backend.remote-db.yml \n               -f docker-compose.backend.sap-share.yml up -d --build
 # frontend
 docker compose -f docker-compose.frontend.yml up -d --build
 ```

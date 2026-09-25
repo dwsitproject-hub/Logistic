@@ -20,7 +20,15 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { cn, formatOutstandingQtyMtFromKg, formatQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
-import { PLANNING_STATUS_OPTIONS, planningStatusBadgeClass } from '@/lib/planningStatus'
+import {
+  contractPerfQtyMeasureIsMixed,
+  contractPerfQtyMeasureLabel,
+} from '@/lib/contractPerfQtyMeasure'
+import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
+import {
+  PLANNING_STATUS_OPTIONS,
+  planningStatusBadgeClass,
+} from '@/lib/planningStatus'
 import {
   contextPerformanceClass,
   formatAvgDays,
@@ -982,6 +990,12 @@ function ContractPerfDrilldownSectionHelp({
           <span className="font-medium">Late</span> (Trade Cycle &gt; 0) as qty (MT). Hover a segment for
           total contracts and avg trade days. Click a segment to filter Section 3 instantly.
         </p>
+        <p className="text-gray-500">
+          <span className="font-medium">{contractPerfQtyMeasureLabel(summaryCardStatus)}</span>. An Open
+          contract contributes its outstanding quantity and a Close one its contract quantity - the
+          same split the two Section 1 cards use, which is why the tree equals them added together.
+          With neither card selected the figure therefore combines two different measures.
+        </p>
         {summaryCardStatus === 'Open' ? (
           <p className="text-gray-500">
             With <span className="font-medium">Open</span> selected: standard ETA → Trade Cycle vs due date.
@@ -1166,6 +1180,128 @@ function ContractsPageContent() {
     },
     [supplierGroupPairs],
   )
+
+  /*
+   * Which values each toolbar filter can still offer, given the others.
+   *
+   * Asked of the API rather than derived here: this page pages its rows server-side, so the
+   * browser only ever holds 20 of them and has no idea what the other 19,000 contain. Each list
+   * comes back computed from the rows that pass every filter EXCEPT its own, so picking one
+   * supplier never collapses the Supplier list to that one supplier.
+   */
+  const [availableFilterValues, setAvailableFilterValues] = useState<Record<
+    string,
+    string[]
+  > | null>(null)
+
+  const filterOptionsRequestKey = useMemo(() => {
+    if (!isContractPerformance) return ''
+    const params = new URLSearchParams()
+    if (dateFrom) params.set('dateFrom', dateFrom)
+    if (dateTo) params.set('dateTo', dateTo)
+    if (contractPerfSelectedProducts.length > 0)
+      params.set(
+        'products',
+        contractPerfSelectedProducts.map(contractPerfProductLabelToApiValue).join(','),
+      )
+    if (contractPerfSelectedIncoterms.length > 0)
+      params.set('incoterms', contractPerfSelectedIncoterms.join(','))
+    if (selectedSuppliers.length > 0) params.set('suppliers', selectedSuppliers.join(','))
+    if (selectedSupplierGroups.length > 0)
+      params.set('supplierGroups', selectedSupplierGroups.join(','))
+    if (contractPerfSelectedSources.length > 0)
+      params.set('sourceTypes', contractPerfSelectedSources.join(','))
+    contractPerfSelectedGroupPlants.forEach((plant) => params.append('plant', plant))
+    return params.toString()
+  }, [
+    isContractPerformance,
+    dateFrom,
+    dateTo,
+    contractPerfSelectedProducts,
+    contractPerfSelectedIncoterms,
+    selectedSuppliers,
+    selectedSupplierGroups,
+    contractPerfSelectedSources,
+    contractPerfSelectedGroupPlants,
+  ])
+
+  useEffect(() => {
+    if (!authReady || !isContractPerformance) return
+    let cancelled = false
+    // Debounced: ticking three values in a row should ask once, not three times.
+    const timer = setTimeout(() => {
+      api
+        .get(`/contracts/filter-options/available?${filterOptionsRequestKey}`)
+        .then((res) => {
+          if (cancelled) return
+          const data = (res.data as { data?: Record<string, string[]> })?.data
+          setAvailableFilterValues(data ?? null)
+        })
+        .catch(() => {
+          // Leave the last known lists in place: a failed refresh must not empty every dropdown.
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [authReady, isContractPerformance, filterOptionsRequestKey])
+
+  const narrowedProductOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+        availableFilterValues?.products,
+        contractPerfSelectedProducts,
+      ),
+    [availableFilterValues, contractPerfSelectedProducts],
+  )
+  const narrowedSourceOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
+        availableFilterValues?.sourceTypes,
+        contractPerfSelectedSources,
+      ),
+    [availableFilterValues, contractPerfSelectedSources],
+  )
+  const narrowedIncotermOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableIncoterms,
+        availableFilterValues?.incoterms,
+        contractPerfSelectedIncoterms,
+      ),
+    [availableIncoterms, availableFilterValues, contractPerfSelectedIncoterms],
+  )
+  const narrowedGroupPlantOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableGroupPlants,
+        availableFilterValues?.groupPlants,
+        contractPerfSelectedGroupPlants,
+      ),
+    [availableGroupPlants, availableFilterValues, contractPerfSelectedGroupPlants],
+  )
+  const narrowedSupplierGroupOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableSupplierGroups,
+        availableFilterValues?.supplierGroups,
+        selectedSupplierGroups,
+      ),
+    [availableSupplierGroups, availableFilterValues, selectedSupplierGroups],
+  )
+  /** Group Supplier narrows this list too; both narrowings apply. */
+  const narrowedSupplierOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        contractPerfSupplierOptions,
+        availableFilterValues?.suppliers,
+        selectedSuppliers,
+      ),
+    [contractPerfSupplierOptions, availableFilterValues, selectedSuppliers],
+  )
   /**
    * The user's scoped Region/Plant arrives spelled as `master_plants` spells it (`Bontang`) while
    * the dropdown options are SAP Discharge Destination (`BONTANG`). Re-spell the selection as the
@@ -1286,6 +1422,12 @@ function ContractsPageContent() {
       contractPerfSelectedProducts,
       contractPerfSelectedIncoterms,
       selectedSuppliers,
+      // Group Supplier and Planning Status were read inside the memo but missing from this list,
+      // so changing either one alone left `cardSummaryApiParams` byte-identical and Section 1 never
+      // refetched. The table below it uses `contractPerfGlobal`, whose deps are complete - which is
+      // exactly what it looked like: the rows moved and the cards did not.
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
       contractPerfSelectedGroupPlants,
       lateOnTimeFilter,
       perfDashMode,
@@ -1612,11 +1754,33 @@ function ContractsPageContent() {
     }
   }, [isContractPerformance])
 
-  /** Immediate skeleton lock when Section 1/2 filters change, before async fetches begin. */
+  /**
+   * Immediate skeleton lock when Section 1/2 filters change, before async fetches begin.
+   *
+   * The lock is released by finishContractPerfTableLoad, which only runs if a fetch actually
+   * started. When a filter was missing from the refetch effect's hand-maintained dependency list,
+   * none did - and the table greyed out and stayed grey with nothing left to clear it.
+   *
+   * That root cause is fixed, but the list is still maintained by hand and will drift again. The
+   * watchdog turns "stuck forever" into "stale for a moment", which is a failure a user can see
+   * past. It only fires when no load is in flight, so a slow request is never cut short.
+   */
+  const lockWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lockSection1FilterChange = useCallback(() => {
     if (!isContractPerformance) return
     setIsTableLoading(true)
+    if (lockWatchdogRef.current) clearTimeout(lockWatchdogRef.current)
+    lockWatchdogRef.current = setTimeout(() => {
+      if (contractPerfPendingLoadsRef.current === 0) setIsTableLoading(false)
+    }, 4000)
   }, [isContractPerformance])
+
+  useEffect(
+    () => () => {
+      if (lockWatchdogRef.current) clearTimeout(lockWatchdogRef.current)
+    },
+    [],
+  )
 
   /** Commits drilldown path to Section 3 fetch scope (instant — no staging step). */
   const applyDrilldownSelection = useCallback(
@@ -1818,6 +1982,13 @@ function ContractsPageContent() {
     fetchContracts(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    /*
+     * This list is maintained by hand - the exhaustive-deps rule is disabled above - so a filter
+     * added to the toolbar has to be added here too. Group Supplier and Planning Status were not,
+     * and the failure was worse than a stale table: `lockSection1FilterChange` had already set the
+     * loading flag, this effect never ran, `fetchContracts` never started, and nothing was left to
+     * clear the flag. The table greyed out and stayed that way.
+     */
     authReady,
     userScopeReady,
     searchParams,
@@ -1826,6 +1997,8 @@ function ContractsPageContent() {
     selectedProducts,
     selectedGroups,
     selectedSuppliers,
+    selectedSupplierGroups,
+    selectedPlanningStatuses,
     selectedGroupPlants,
     selectedIncoterms,
     dateFrom,
@@ -3674,7 +3847,7 @@ function ContractsPageContent() {
               hideLabel
               portalMenu
               buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
-              options={availableGroupPlants}
+              options={narrowedGroupPlantOptions}
               selected={contractPerfSelectedGroupPlants}
               onChange={(values) => {
                 lockSection1FilterChange()
@@ -3765,7 +3938,7 @@ function ContractsPageContent() {
                 label="Product"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
+                options={narrowedProductOptions}
                 selected={contractPerfSelectedProducts}
                 onChange={(values) => {
                   lockSection1FilterChange()
@@ -3780,7 +3953,7 @@ function ContractsPageContent() {
                 label="Incoterm"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={availableIncoterms}
+                options={narrowedIncotermOptions}
                 selected={contractPerfSelectedIncoterms}
                 onChange={(values) => {
                   lockSection1FilterChange()
@@ -3795,7 +3968,7 @@ function ContractsPageContent() {
                 label="Source"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                options={narrowedSourceOptions}
                 selected={contractPerfSelectedSources}
                 onChange={(values) => {
                   lockSection1FilterChange()
@@ -3810,7 +3983,7 @@ function ContractsPageContent() {
                 label="Group Supplier"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={availableSupplierGroups}
+                options={narrowedSupplierGroupOptions}
                 selected={selectedSupplierGroups}
                 onChange={(values) => {
                   lockSection1FilterChange()
@@ -3825,7 +3998,7 @@ function ContractsPageContent() {
                 label="Supplier"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-                options={contractPerfSupplierOptions}
+                options={narrowedSupplierOptions}
                 selected={selectedSuppliers}
                 onChange={(values) => {
                   lockSection1FilterChange()
@@ -4003,6 +4176,17 @@ function ContractsPageContent() {
                     )}
                   </div>
                   <PerformanceDrilldownScopeLine segments={contractPerfDrilldownScopeSegments} />
+                  {/*
+                    Shown only when it is ambiguous. With Open or Close selected the tree carries one
+                    measure and the tooltip names it; with neither, the figure adds Outstanding Qty to
+                    Contract Qty, and a reader has no way to tell from the number alone.
+                  */}
+                  {contractPerfQtyMeasureIsMixed(summaryCardStatus) ? (
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {contractPerfQtyMeasureLabel(summaryCardStatus)} &mdash; pick Open or Close for a
+                      single measure
+                    </p>
+                  ) : null}
                 </div>
               </div>
             </CardHeader>

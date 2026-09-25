@@ -31,6 +31,22 @@ export function planningStatusParamValue(selected: string[]): string {
   return norm.length === 1 ? norm[0] : ''
 }
 
+/**
+ * What to store when the user ticks a set of Planning Status values.
+ *
+ * Ticking both means "no filter", because a completed contract is in neither bucket. Keeping both
+ * ticked would leave the box reading "2 selected (OR)" while nothing was being filtered - the
+ * control claiming to do something the page is not doing. Collapsing to an empty selection says
+ * the same thing honestly: "All planning statuses".
+ */
+export function normalizePlanningStatusSelection(selected: string[]): string[] {
+  const norm = [...new Set(selected.map(planningStatusToParam))].filter(
+    (v) => v === 'PLANNED' || v === 'UNPLANNED',
+  )
+  if (norm.length !== 1) return []
+  return PLANNING_STATUS_OPTIONS.filter((option) => planningStatusToParam(option) === norm[0])
+}
+
 const BADGE_CLASS: Record<string, string> = {
   PLANNED: 'bg-blue-100 text-blue-800',
   IN_PROGRESS: 'bg-blue-100 text-blue-800',

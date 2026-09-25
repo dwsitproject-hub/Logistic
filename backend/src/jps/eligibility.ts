@@ -18,6 +18,7 @@
  * already arrived but whose status was never updated. Together: 1.
  */
 import { query } from '../database/connection';
+import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
 
 /**
@@ -32,11 +33,20 @@ const EFFECTIVE_ATA_SQL = `
   COALESCE(sao.ata_discharge_complete, s.ata_discharge_complete) AS ata_disch_complete`;
 
 /**
- * The STO key. `shipment_id` carries the STO for 97.7% of shipments; `operation_id` covers manual
- * planning rows that never got one - 31 of the 35 BONTANG shipments absent from contract_stos are
- * reachable only that way.
+ * The STO key - THE SAME ONE THE SHIPMENTS PAGE GROUPS BY.
+ *
+ * This used to be `COALESCE(shipment_id, operation_id)`, which is a reasonable key and the wrong
+ * one: the Shipments list derives its own key differently, and for a manual shipment the two never
+ * agree. `shipment_id` is `MNL-…`, which is not numeric, so the list falls through to the
+ * contract's `sto_number`, then `effective_sto`, then `operation_id`. KLIP submitted under `MNL-…`
+ * and the list looked for something else, so every instruction JPS had accepted still read
+ * "Not Sent" on the page.
+ *
+ * Using the list's own expression removes the second key rather than teaching the two to agree.
+ * It also improves the cargo and trade-term lookups, which match `contract_stos.sto_number`: the
+ * key is now a real STO number wherever one exists.
  */
-const STO_KEY_SQL = `COALESCE(NULLIF(TRIM(s.shipment_id), ''), NULLIF(TRIM(s.operation_id), ''))`;
+const STO_KEY_SQL = shipmentListStoKeyExpr('c', 'l', 's');
 
 export interface EligibleSto extends JpsShipmentSource {
   shipment_ids: string[];
@@ -55,6 +65,15 @@ export interface FindEligibleOptions {
   retryFailed?: boolean;
   /** How long a rejection is left alone before it is offered again. */
   retryFailedAfterMs?: number;
+  /**
+   * Load these STOs by name instead of asking which ones are owed an instruction.
+   *
+   * For amending: an instruction JPS already holds is by definition excluded from the normal
+   * answer, and rebuilding its payload needs the same source data the submission was built from.
+   * The eligibility conditions still apply - an STO whose vessel has since arrived drops out, and
+   * amending it would be pointless anyway.
+   */
+  stoKeys?: string[];
 }
 
 export async function findEligibleStos(
@@ -62,6 +81,42 @@ export async function findEligibleStos(
   limit: number,
   options: FindEligibleOptions = {},
 ): Promise<EligibleSto[]> {
+  /*
+   * Which STOs the query answers for. By name when amending; otherwise "those not already spoken
+   * for", where:
+   *
+   *   SKIPPED_NO_CARGO is deliberately absent. An STO held back because a product had no JPS
+   *   cargo_type, or because its STO quantity looked wrong, must be picked up once the data is
+   *   corrected.
+   *
+   *   SUBMITTED and SKIPPED_PRE_EXISTING are settled for good: both name an instruction JPS
+   *   already holds, so re-sending is a duplicate rather than a retry.
+   *
+   *   FAILED normally blocks too, because a 400 is permanent. $3 lifts that while the fix is on
+   *   JPS's side; $4 keeps a rejection cold for a while first, so the sweep firing on every
+   *   shipment edit cannot resend the same rejected payload once per save.
+   */
+  const byKeys = Array.isArray(options.stoKeys);
+  const tailWhere = byKeys
+    ? `WHERE e.sto_key = ANY($3::text[])`
+    : `WHERE NOT EXISTS (
+      SELECT 1 FROM jps_shipping_instructions j
+      WHERE j.sto_key = e.sto_key
+        AND (
+          j.state IN ('SUBMITTED', 'SKIPPED_PRE_EXISTING')
+          OR (
+            j.state = 'FAILED'
+            AND (
+              $3::boolean IS NOT TRUE
+              OR j.updated_at > NOW() - ($4::bigint || ' milliseconds')::interval
+            )
+          )
+        )
+    )`;
+  const params: unknown[] = byKeys
+    ? [regionSite, limit, options.stoKeys]
+    : [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)];
+
   const result = await query(
     `
     WITH eligible AS (
@@ -95,10 +150,13 @@ export async function findEligibleStos(
              (ARRAY_AGG(COALESCE(mv.vessel_name, s.vessel_name) ORDER BY s.updated_at DESC)
                 FILTER (WHERE COALESCE(mv.vessel_name, s.vessel_name) IS NOT NULL))[1] AS vessel_name
       FROM eligible e
-      INNER JOIN shipments s ON ${STO_KEY_SQL} = e.sto_key
+      INNER JOIN shipments s ON TRUE
+      INNER JOIN contracts c ON c.id = s.contract_id
+      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       LEFT JOIN master_vessel_code_aliases a
         ON UPPER(TRIM(a.vessel_code)) = UPPER(TRIM(s.vessel_code))
       LEFT JOIN master_vessels mv ON mv.id = COALESCE(s.master_vessel_id, a.master_vessel_id)
+      WHERE ${STO_KEY_SQL} = e.sto_key
       GROUP BY e.sto_key
     ),
     terms AS (
@@ -181,34 +239,11 @@ export async function findEligibleStos(
     -- Filtered here rather than in the CTE's HAVING: the STO key is a grouped EXPRESSION, and a
     -- subquery referencing it inside HAVING cannot see it (42803, "ungrouped column").
     --
-    -- SKIPPED_NO_CARGO is deliberately missing from this list. An STO held back because a product
-    -- had no JPS cargo_type, or because its STO quantity looked wrong, must be picked up again
-    -- once the data is corrected.
-    --
-    -- SUBMITTED and SKIPPED_PRE_EXISTING are settled for good: both name an instruction JPS
-    -- already holds, so re-sending is a duplicate rather than a retry.
-    --
-    -- FAILED normally blocks too, because a 400 is permanent. $3 lifts that while the fix is on
-    -- JPS's side; $4 keeps a rejection cold for a while first, so the sweep firing on every
-    -- shipment edit cannot resend the same rejected payload once per save.
-    WHERE NOT EXISTS (
-      SELECT 1 FROM jps_shipping_instructions j
-      WHERE j.sto_key = e.sto_key
-        AND (
-          j.state IN ('SUBMITTED', 'SKIPPED_PRE_EXISTING')
-          OR (
-            j.state = 'FAILED'
-            AND (
-              $3::boolean IS NOT TRUE
-              OR j.updated_at > NOW() - ($4::bigint || ' milliseconds')::interval
-            )
-          )
-        )
-    )
+    ${tailWhere}
     ORDER BY e.eta_discharge_arrival, e.sto_key
     LIMIT $2
     `,
-    [regionSite, limit, options.retryFailed === true, Math.trunc(options.retryFailedAfterMs ?? 0)],
+    params,
   );
 
   return result.rows.map((row: Record<string, unknown>) => ({
