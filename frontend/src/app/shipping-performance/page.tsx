@@ -18,6 +18,8 @@ import { PerformanceScopeFilters } from '@/components/performance/PerformanceSco
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { narrowFilterOptions } from '@/lib/filterOptionNarrowing'
+import { shippingPerfAvailableValues } from '@/lib/shippingPerfFilterOptions'
 import { PLANNING_STATUS_OPTIONS, normalizePlanningStatusSelection } from '@/lib/planningStatus'
 import VesselHistoryModal, {
   type VesselHistoryModalSelection,
@@ -1713,6 +1715,7 @@ function ShippingPerformancePageContent() {
     [supplierGroupPairs],
   )
 
+
   const availableGroupPlants = useMemo(
     () => filterRegionSiteOptions(distinctScopeOptions('plant_site')),
     [distinctScopeOptions],
@@ -1727,6 +1730,77 @@ function ShippingPerformancePageContent() {
     alignGroupPlantsToOptions(availableGroupPlants)
   }, [availableGroupPlants, alignGroupPlantsToOptions])
   const availableProducts = useMemo(() => distinctScopeOptions('product'), [distinctScopeOptions])
+  /*
+   * Which values each toolbar filter can still offer, given the others.
+   *
+   * Computed from `periodFilteredRows` - the date-scoped set, before any toolbar filter - because
+   * narrowing from an already-filtered set would apply the same filters twice. Each list ignores
+   * its own filter, so picking one value never hides the rest of that list.
+   */
+  const spAvailableValues = useMemo(
+    () =>
+      shippingPerfAvailableValues(periodFilteredRows, {
+        selectedSources,
+        selectedProducts,
+        selectedIncoterms,
+        selectedGroupPlants,
+        selectedSuppliers,
+        selectedSupplierGroups,
+        selectedPlanningStatuses,
+      }),
+    [
+      periodFilteredRows,
+      selectedSources,
+      selectedProducts,
+      selectedIncoterms,
+      selectedGroupPlants,
+      selectedSuppliers,
+      selectedSupplierGroups,
+      selectedPlanningStatuses,
+    ],
+  )
+
+  const narrowedSourceOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_SOURCE_MULTI_OPTIONS,
+        spAvailableValues.sources,
+        selectedSources,
+      ),
+    [spAvailableValues, selectedSources],
+  )
+  const narrowedProductOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        CONTRACT_PERF_PRODUCT_MULTI_OPTIONS,
+        spAvailableValues.products,
+        selectedProducts,
+      ),
+    [spAvailableValues, selectedProducts],
+  )
+  const narrowedIncotermOptions = useMemo(
+    () => narrowFilterOptions(availableIncoterms, spAvailableValues.incoterms, selectedIncoterms),
+    [availableIncoterms, spAvailableValues, selectedIncoterms],
+  )
+  const narrowedGroupPlantOptions = useMemo(
+    () =>
+      narrowFilterOptions(availableGroupPlants, spAvailableValues.groupPlants, selectedGroupPlants),
+    [availableGroupPlants, spAvailableValues, selectedGroupPlants],
+  )
+  const narrowedSupplierGroupOptions = useMemo(
+    () =>
+      narrowFilterOptions(
+        availableSupplierGroups,
+        spAvailableValues.supplierGroups,
+        selectedSupplierGroups,
+      ),
+    [availableSupplierGroups, spAvailableValues, selectedSupplierGroups],
+  )
+  /** Group Supplier narrows this list too, through supplierOptions; both narrowings apply. */
+  const narrowedSupplierOptions = useMemo(
+    () => narrowFilterOptions(supplierOptions, spAvailableValues.suppliers, selectedSuppliers),
+    [supplierOptions, spAvailableValues, selectedSuppliers],
+  )
   const availableVessels = useMemo(
     () =>
       SHIPPING_PERF_GLOBAL_FILTERS_ENABLED ? distinctVesselNames(scopeFilteredRows) : [],
@@ -2355,7 +2429,7 @@ function ShippingPerformancePageContent() {
             <div className="w-48">
               <SearchableMultiSelect
                 label="Region/Plant"
-                options={availableGroupPlants}
+                options={narrowedGroupPlantOptions}
                 selected={selectedGroupPlants}
                 onChange={(values) => {
                   handleGroupPlantsChange(values)
@@ -2369,7 +2443,7 @@ function ShippingPerformancePageContent() {
             <div className="w-48">
               <SearchableMultiSelect
                 label="Source"
-                options={[...CONTRACT_PERF_SOURCE_MULTI_OPTIONS]}
+                options={narrowedSourceOptions}
                 selected={selectedSources}
                 onChange={(values) => {
                   setSelectedSources(values)
@@ -2383,7 +2457,7 @@ function ShippingPerformancePageContent() {
             <div className="w-48">
               <SearchableMultiSelect
                 label="Incoterm"
-                options={availableIncoterms}
+                options={narrowedIncotermOptions}
                 selected={selectedIncoterms}
                 onChange={setSelectedIncoterms}
                 placeholder="All incoterms"
@@ -2393,8 +2467,22 @@ function ShippingPerformancePageContent() {
             </div>
             <div className="w-48">
               <SearchableMultiSelect
+                label="Product"
+                options={narrowedProductOptions}
+                selected={selectedProducts}
+                onChange={(values) => {
+                  handleProductsChange(values)
+                  setCurrentPage(1)
+                }}
+                placeholder="All products"
+                emptyMessage="No products"
+                uppercaseOptionLabels
+              />
+            </div>
+            <div className="w-48">
+              <SearchableMultiSelect
                 label="Group Supplier"
-                options={availableSupplierGroups}
+                options={narrowedSupplierGroupOptions}
                 selected={selectedSupplierGroups}
                 onChange={(values) => {
                   handleSupplierGroupsChange(values)
@@ -2412,7 +2500,7 @@ function ShippingPerformancePageContent() {
               */}
               <SearchableMultiSelect
                 label="Supplier"
-                options={supplierOptions}
+                options={narrowedSupplierOptions}
                 selected={selectedSuppliers}
                 onChange={(values) => {
                   setSelectedSuppliers(values)
@@ -2439,20 +2527,6 @@ function ShippingPerformancePageContent() {
                 }}
                 placeholder="All planning statuses"
                 emptyMessage="No planning statuses"
-              />
-            </div>
-            <div className="w-48">
-              <SearchableMultiSelect
-                label="Product"
-                options={[...CONTRACT_PERF_PRODUCT_MULTI_OPTIONS]}
-                selected={selectedProducts}
-                onChange={(values) => {
-                  handleProductsChange(values)
-                  setCurrentPage(1)
-                }}
-                placeholder="All products"
-                emptyMessage="No products"
-                uppercaseOptionLabels
               />
             </div>
             <button
