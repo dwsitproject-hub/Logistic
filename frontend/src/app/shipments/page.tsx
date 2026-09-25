@@ -114,9 +114,9 @@ import { QtyLoadingDots } from '@/components/shared/QtyLoadingDots'
 import {
   COMPACT_TABLE_ACTIONS_HEADER_STICKY_CLASS,
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
+import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -7427,7 +7427,7 @@ function ShipmentsPageContent() {
                           <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} />
                         </colgroup>
                         <thead>
-                        <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
+                        <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
                           {showStoExpandColumn ? (
                             <th
                               scope="col"

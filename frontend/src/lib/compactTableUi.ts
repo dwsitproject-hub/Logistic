@@ -13,6 +13,10 @@ export const COMPACT_TABLE_HEADER_ROW_CLASS =
 export const COMPACT_TABLE_HEADER_ROW_PERF_CLASS =
   'text-xs font-semibold text-gray-600 bg-gray-50 border-b klip-compact-table-header-row'
 
+/** List pages that share the Stitch table chrome. Master tables keep the class above. */
+export const LIST_PAGE_TABLE_HEADER_ROW_CLASS =
+  'text-[11px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-50 border-b border-slate-200 klip-compact-table-header-row'
+
 export const COMPACT_TABLE_HEADER_ROW_OPERATIONAL_CLASS = COMPACT_TABLE_HEADER_ROW_PERF_CLASS
 
 /** Actions <th> only — sticky right + top corner cell (body <td> unchanged). */

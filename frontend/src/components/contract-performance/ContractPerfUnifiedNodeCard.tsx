@@ -17,20 +17,20 @@ const LEVEL_CARD_BORDER: Record<
   { idle: string; selected: string }
 > = {
   product: {
-    idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-amber-200/90 ring-1 ring-amber-100/80',
+    idle: 'border-amber-200 hover:border-amber-300',
+    selected: 'border-amber-400 ring-1 ring-amber-100',
   },
   plant: {
-    idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-emerald-200/90 ring-1 ring-emerald-100/80',
+    idle: 'border-emerald-200 hover:border-emerald-300',
+    selected: 'border-emerald-400 ring-1 ring-emerald-100',
   },
   incoterm: {
-    idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-violet-200/90 ring-1 ring-violet-100/80',
+    idle: 'border-violet-200 hover:border-violet-300',
+    selected: 'border-violet-400 ring-1 ring-violet-100',
   },
   supplier: {
-    idle: 'border-gray-200 hover:border-gray-300',
-    selected: 'border-rose-200/90 ring-1 ring-rose-100/80',
+    idle: 'border-rose-200 hover:border-rose-300',
+    selected: 'border-rose-400 ring-1 ring-rose-100',
   },
 }
 

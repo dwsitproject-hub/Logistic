@@ -19,6 +19,7 @@ export type StyledNativeSelectProps<T extends string = string> = {
   inlineLabel?: boolean
   /** Display-only: uppercase option labels in the closed select and dropdown. */
   uppercaseLabels?: boolean
+  labelClassName?: string
 }
 
 export const STYLED_NATIVE_SELECT_TRIGGER_CLASS =
@@ -34,6 +35,7 @@ export function StyledNativeSelect<T extends string = string>({
   minWidthClassName = 'min-w-[160px]',
   inlineLabel = true,
   uppercaseLabels = false,
+  labelClassName,
 }: StyledNativeSelectProps<T>) {
   const control = (
     <div className={cn('relative', minWidthClassName, className)}>
@@ -60,7 +62,7 @@ export function StyledNativeSelect<T extends string = string>({
   if (inlineLabel) {
     return (
       <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-gray-700 shrink-0">{label}</span>
+        <span className={cn(labelClassName ?? 'text-sm font-medium text-gray-700 shrink-0')}>{label}</span>
         {control}
       </div>
     )
@@ -68,7 +70,7 @@ export function StyledNativeSelect<T extends string = string>({
 
   return (
     <div>
-      <span className="text-sm font-medium text-gray-700 mb-1 block">{label}</span>
+      <span className={labelClassName ?? 'text-sm font-medium text-gray-700 mb-1 block'}>{label}</span>
       {control}
     </div>
   )

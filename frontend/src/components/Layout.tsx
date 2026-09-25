@@ -23,6 +23,7 @@ import { clearClientDataCache } from '@/lib/clientDataCache'
 import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
 import { prefetchNavigationPage } from '@/lib/pagePrefetch'
 import { HeaderMissingEtaAlertBell } from '@/components/HeaderMissingEtaAlertBell'
+import { HeaderFilterSlotProvider, HeaderFilterSlotTarget } from '@/components/HeaderFilterSlot'
 import { SapImportInFlightBanner } from '@/components/SapImportInFlightBanner'
 import { cn } from '@/lib/utils'
 
@@ -58,6 +59,7 @@ function LayoutChrome({
   const { busy } = usePageHeaderBusyState()
 
   return (
+    <HeaderFilterSlotProvider>
     <div className="flex h-screen bg-gray-100">
       <aside
         data-tour="tour-sidebar"
@@ -120,6 +122,7 @@ function LayoutChrome({
             </div>
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
               {!isAdminRole(user.role) && <HeaderMissingEtaAlertBell />}
+              <HeaderFilterSlotTarget className="flex items-center gap-2" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -172,6 +175,7 @@ function LayoutChrome({
         <UserActivityTracker />
       </div>
     </div>
+    </HeaderFilterSlotProvider>
   )
 }
 

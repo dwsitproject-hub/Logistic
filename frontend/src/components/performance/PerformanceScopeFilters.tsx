@@ -1,6 +1,7 @@
 'use client'
 
 import { Button } from '@/components/ui/button'
+import { LIST_FILTER_FIELD_LABEL_CLASS } from '@/components/shared/ListFilterPanel'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { filterIncotermOptions, filterRegionSiteOptions } from '@/lib/globalScopeFilters'
@@ -63,6 +64,7 @@ export type PerformanceScopeFiltersProps = {
   incotermEmptyMessage?: string
   groupPlantPlaceholder?: string
   groupPlantEmptyMessage?: string
+  microLabels?: boolean
 }
 
 export function PerformanceScopeFilters({
@@ -117,7 +119,9 @@ export function PerformanceScopeFilters({
   incotermEmptyMessage = 'No incoterms',
   groupPlantPlaceholder = 'Select region/plant(s)',
   groupPlantEmptyMessage = 'No region/plant values',
+  microLabels = false,
 }: PerformanceScopeFiltersProps) {
+  const fieldLabelClass = microLabels ? LIST_FILTER_FIELD_LABEL_CLASS : undefined
   const showGroupPlant = !hideGroupPlantFilter
   const selectorCount =
     (showIncoterm ? 1 : 0) +
@@ -158,6 +162,7 @@ export function PerformanceScopeFilters({
         <div className={`${gridClass} [&>*]:min-w-0`}>
           {showIncoterm && (
             <SearchableMultiSelect
+              labelClassName={fieldLabelClass}
               label="Incoterm"
               options={filterIncotermOptions(incotermOptions)}
               selected={selectedIncoterms}
@@ -169,6 +174,7 @@ export function PerformanceScopeFilters({
 
           {showProductFilter && onProductsChange && (
             <SearchableMultiSelect
+              labelClassName={fieldLabelClass}
               label={productLabel}
               options={productOptions}
               selected={selectedProducts}
@@ -181,6 +187,7 @@ export function PerformanceScopeFilters({
 
           {showGroupFilter && onGroupsChange && (
             <SearchableMultiSelect
+              labelClassName={fieldLabelClass}
               label={groupLabel}
               options={groupOptions}
               selected={selectedGroups}
@@ -193,6 +200,7 @@ export function PerformanceScopeFilters({
 
           {showSupplierFilter && onSuppliersChange && (
             <SearchableMultiSelect
+              labelClassName={fieldLabelClass}
               label={supplierLabel}
               options={supplierOptions}
               selected={selectedSuppliers}
@@ -205,6 +213,7 @@ export function PerformanceScopeFilters({
 
           {showGroupPlant && (
             <SearchableMultiSelect
+              labelClassName={fieldLabelClass}
               label={groupPlantLabel}
               options={filterRegionSiteOptions(groupPlantOptions)}
               selected={selectedGroupPlants}
@@ -218,6 +227,7 @@ export function PerformanceScopeFilters({
 
           {showVesselFilter && onVesselsChange && (
             <SearchableMultiSelect
+              labelClassName={fieldLabelClass}
               label="Vessel"
               options={vesselOptions}
               selected={selectedVessels}
@@ -229,7 +239,7 @@ export function PerformanceScopeFilters({
 
           {showStatusFilter && onStatusFilterChange && (
             <div className="space-y-1.5">
-              <label htmlFor="performance-status-filter" className="text-sm font-medium text-gray-700">
+              <label htmlFor="performance-status-filter" className={fieldLabelClass ?? 'text-sm font-medium text-gray-700'}>
                 Status
               </label>
               <select
