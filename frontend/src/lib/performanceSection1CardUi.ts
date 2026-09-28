@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { Ship } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
 
 export type PerformanceSection1CardVariant = 'open' | 'close' | 'ongoing' | 'completed'
@@ -48,7 +49,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
   },
   ongoing: {
-    icon: StitchNavIcons.masterVessel,
+    icon: Ship,
     surface: 'border-blue-400 bg-white',
     chip: 'bg-blue-50 text-blue-700',
     selected:

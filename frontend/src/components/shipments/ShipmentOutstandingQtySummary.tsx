@@ -1,8 +1,8 @@
 'use client'
 
 import { useMemo } from 'react'
-import { Loader2 } from 'lucide-react'
-import { StitchAlertIcon, StitchNavIcons } from '@/components/shared/stitchIcons'
+import { Loader2, Ship } from 'lucide-react'
+import { StitchAlertIcon } from '@/components/shared/stitchIcons'
 import { Card, CardContent } from '@/components/ui/card'
 import { FieldHelp } from '@/components/FieldHelp'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
@@ -238,7 +238,7 @@ export function ShipmentOutstandingQtySummary({
 
           <div className="flex h-full min-w-0 items-start gap-3 rounded-xl border border-blue-200 bg-gradient-to-br from-white to-blue-50/30 p-4">
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-blue-100/80 text-blue-600">
-              <StitchNavIcons.masterVessel className="h-6 w-6" />
+              <Ship className="h-6 w-6" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">

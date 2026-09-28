@@ -6,6 +6,7 @@ import {
   Users,
   Bot,
   Plug,
+  Ship,
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
 
@@ -49,7 +50,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     name: 'Shipping Performance',
     href: '/shipping-performance',
-    icon: StitchNavIcons.masterVessel,
+    icon: Ship,
     roles: ['ALL'],
     permissionKey: 'page.shipping_performance',
     group: 'performance',
@@ -58,7 +59,7 @@ export const NAV_ITEMS: NavItem[] = [
   { name: 'Claim Susut', href: '/claim-susut', icon: StitchNavIcons.claimSusut, roles: ['ALL'], permissionKey: 'page.claim_susut', group: 'performance' },
   { name: 'Claim Mutu', href: '/claim-mutu', icon: StitchNavIcons.claimMutu, roles: ['ALL'], permissionKey: 'page.claim_mutu', group: 'performance' },
   { name: 'Contracts', href: '/contracts', icon: StitchNavIcons.contracts, roles: ['ALL'], permissionKey: 'page.contracts', group: 'operations' },
-  { name: 'Shipments', href: '/shipments', icon: StitchNavIcons.masterVessel, roles: ['ALL'], permissionKey: 'page.shipments', group: 'operations' },
+  { name: 'Shipments', href: '/shipments', icon: Ship, roles: ['ALL'], permissionKey: 'page.shipments', group: 'operations' },
   { name: 'Trucking', href: '/trucking', icon: StitchNavIcons.trucking, roles: ['ALL'], permissionKey: 'page.trucking', group: 'operations' },
   {
     name: 'Commercial Documents',
@@ -68,7 +69,7 @@ export const NAV_ITEMS: NavItem[] = [
     permissionKey: 'page.commercial_documents',
     group: 'operations',
   },
-  { name: 'Master Vessel', href: '/master-vessel', icon: StitchNavIcons.masterVessel, roles: ['ALL'], permissionKey: 'page.master_vessels', group: 'master' },
+  { name: 'Master Vessel', href: '/master-vessel', icon: Ship, roles: ['ALL'], permissionKey: 'page.master_vessels', group: 'master' },
   {
     name: 'Master Product Configuration',
     href: '/master-product-configuration',
