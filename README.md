@@ -4239,6 +4239,54 @@ Checked against the 31 Aug 2026 workbook through the real controller on a produc
 rows and Rp 28,338,440,606 (the sheet's X4); every GROUP and aging figure equal to the PIVOT sheet;
 5 realised claims, 16,850 kg and Rp 253,351,530 (its GRANDTOTAL).
 
+### Claim Mutu: OS_Claim and Real_Claim are the data, stored once with a B2B mark
+
+The claim team's monthly workbook has eight sheets. The upload finds them **by name**
+(`backend/src/utils/claimMutuWorkbook.ts`); only the four claim-row sheets are read:
+
+| Sheet | Role |
+| --- | --- |
+| `OS_Claim_Inc_B2B`, `OS_Claim_Exc_B2B` | **Mandatory** (at least one). Outstanding claims - the data every section and the view table run on |
+| `Real_Claim_Inc_B2B`, `Real_Claim_Exc_B2B` | Optional. Claims realised in the period. A workbook without them still imports its OS |
+| `Pivot (Exc B2B)`, `Summary Per Komoditi`, `Rekap Klaim Per Lokasi`, `Summary Per Unit` | Ignored. They are summaries of the four sheets above; KLIP recomputes each one |
+
+A file with no OS sheet is refused, naming the sheets it does have. The previous single-sheet layout
+(`OS Claim All Region`) is still accepted, without B2B information.
+
+**B2B: store Include, mark from Exclude.** Every Exclude row is also in Include (August 2026: OS 307 of
+321, Real 212 of 216), and nothing in the rows themselves says B2B - no column, and SAP's b2b flag does
+not match. So KLIP stores the Include rows and marks as B2B each one the Exclude sheet does not hold,
+matched as a multiset on CR No + PO + amount (Real adds CM No)
+(`claim_mutu_rows.is_b2b`, `claim_mutu_real_rows.is_b2b`, migration 192). An Exclude row missing from
+Include is reported as a warning and not imported.
+
+**Exclude / Include B2B filter.** Every endpoint takes `b2b=exclude|include`, default `exclude`, and the
+page always opens on Exclude. Exclude is the scope of the Pivot, Summary Per Komoditi and Rekap Per
+Lokasi sheets; Include is the scope of Summary Per Unit. The Dashboard Claim Mutu KPI, its drilldown
+list, and the claim qty per PO on the contract-quantity charts all exclude B2B.
+
+**Section 1**, recomputed from the rows and following every filter:
+
+- Outstanding, outstanding > 90 days and realisation cards.
+- *Rekap Outstanding Claim - Aging* (Pivot): amount per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, the
+  sheet's VLOOKUP thresholds. Clicking a group filters the page.
+- *Rekap Klaim Per Lokasi*: OS and Real qty / value per DEST code, with shares of the total.
+- *Summary Per Komoditi*: OS and Real per commodity x unit, sub totals and grand total. The unit is
+  DEST mapped through `CLAIM_MUTU_DEST_UNITS` (KRG and KRW are both KARAWANG). SAP cuts
+  `WASTE OIL (POME` short; it is normalised to `WASTE OIL (POME)`, or every POME cell compares as zero.
+- *Summary Per Unit*: one row per month - the latest import of that month - OS and Real per unit. It
+  is **built from KLIP's own imports**, so it starts with the first imported month and grows by one row
+  per monthly upload; it ignores the CR date period.
+
+GROUP and METODE PAYMENT exist on the OS sheets only, so those two filters narrow the OS side and leave
+Real whole; the page labels them "OS only" and says so on the realisation card.
+
+Checked against the August 2026 workbook through the real controllers on a production copy, every
+expected value read from the workbook's own sheets: Exclude OS Rp 34,460,622,316.34 (Pivot I13) and
+Real Rp 29,674,507,104.39 (Pivot L10); all 20 Pivot cells, 96 Summary Per Komoditi cells and 56 Rekap
+Per Lokasi cells equal; Include OS Rp 36,522,168,304.34 (Summary Per Unit D55) and the 72 August cells of
+Summary Per Unit equal; filtering to CPO gives the sheet's SUB TOTAL CPO.
+
 ### Trucking: scope the STO-line CTE to the page, not the whole database
 
 `contract_sto_lines` (`backend/src/utils/truckingListStoExpandSql.ts`) resolves which STO lines

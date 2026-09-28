@@ -6,9 +6,11 @@ import { ensureUploadDir } from '../utils/fileUpload';
 import {
   uploadClaimMutuExcel,
   listClaimMutuImports,
+  getClaimMutuImportById,
   listClaimMutuRows,
-  listClaimMutuDistinctValues,
-  listClaimMutuByGroup,
+  getClaimMutuDashboard,
+  getClaimMutuTrend,
+  getClaimMutuFilterOptions,
 } from '../controllers/claimMutu.controller';
 
 const router = express.Router();
@@ -43,15 +45,19 @@ router.post('/upload', upload.single('file'), auditLog('CREATE', 'CLAIM_MUTU_IMP
 
 // List imports
 router.get('/imports', listClaimMutuImports);
+router.get('/imports/:id', getClaimMutuImportById);
 
 // List rows (defaults to latest import if importId not provided)
 router.get('/rows', listClaimMutuRows);
 
-// Aggregate by group name (selected or latest import)
-router.get('/by-group', listClaimMutuByGroup);
+// Section 1: the Pivot, Summary Per Komoditi and Rekap Per Lokasi, recomputed from the claim rows
+router.get('/dashboard', getClaimMutuDashboard);
 
-// Distinct values for multi-select filters
-router.get('/distinct-values', listClaimMutuDistinctValues);
+// Summary Per Unit: one point per monthly import
+router.get('/trend', getClaimMutuTrend);
+
+// Values each header filter can take in the active import
+router.get('/filter-options', getClaimMutuFilterOptions);
 
 export default router;
 

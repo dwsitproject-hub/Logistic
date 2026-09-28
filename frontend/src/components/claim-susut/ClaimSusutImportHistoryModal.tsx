@@ -49,9 +49,13 @@ function statusBadge(status: ReturnType<typeof claimSusutImportStatus>) {
 function ClaimSusutImportDetailOverlay({
   importId,
   onClose,
+  apiBase,
+  kindLabel,
 }: {
   importId: string
   onClose: () => void
+  apiBase: string
+  kindLabel: string
 }) {
   const [loading, setLoading] = useState(true)
   const [detail, setDetail] = useState<{
@@ -73,7 +77,7 @@ function ClaimSusutImportDetailOverlay({
     ;(async () => {
       setLoading(true)
       try {
-        const res = await api.get(`/claim-susut/imports/${importId}`)
+        const res = await api.get(`${apiBase}/imports/${importId}`)
         const data = res.data?.data
         if (cancelled) return
         if (!data) {
@@ -105,7 +109,7 @@ function ClaimSusutImportDetailOverlay({
     return () => {
       cancelled = true
     }
-  }, [importId])
+  }, [importId, apiBase])
 
   const status = detail
     ? claimSusutImportStatus(detail.inserted_rows, detail.failedRows)
@@ -205,7 +209,7 @@ function ClaimSusutImportDetailOverlay({
                 <Card>
                   <CardHeader>
                     <CardTitle>Failed Records ({detail.errors.length})</CardTitle>
-                    <CardDescription>Excel rows that failed during this Claim Susut import</CardDescription>
+                    <CardDescription>Excel rows that failed during this {kindLabel} import</CardDescription>
                   </CardHeader>
                   <CardContent>
                     <div className="overflow-x-auto max-h-96 overflow-y-auto">
@@ -278,12 +282,17 @@ export function ClaimSusutImportHistoryModal({
   imports,
   loading,
   onSelectImport,
+  apiBase = '/claim-susut',
+  kindLabel = 'Claim Susut',
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   imports: ClaimSusutImportListItem[]
   loading?: boolean
   onSelectImport: (id: string) => void
+  /** Shared with Claim Mutu, whose imports have the same shape under /claim-mutu. */
+  apiBase?: string
+  kindLabel?: string
 }) {
   const [detailImportId, setDetailImportId] = useState<string | null>(null)
 
@@ -309,7 +318,7 @@ export function ClaimSusutImportHistoryModal({
               Loading imports...
             </div>
           ) : imports.length === 0 ? (
-            <div className="py-10 text-center text-sm text-gray-500">No Claim Susut Excel imports yet.</div>
+            <div className="py-10 text-center text-sm text-gray-500">No {kindLabel} Excel imports yet.</div>
           ) : (
             <div className="overflow-x-auto min-h-0 flex-1">
               <table className="w-full">
@@ -371,7 +380,12 @@ export function ClaimSusutImportHistoryModal({
         </DialogContent>
       </Dialog>
       {detailImportId ? (
-        <ClaimSusutImportDetailOverlay importId={detailImportId} onClose={() => setDetailImportId(null)} />
+        <ClaimSusutImportDetailOverlay
+          importId={detailImportId}
+          onClose={() => setDetailImportId(null)}
+          apiBase={apiBase}
+          kindLabel={kindLabel}
+        />
       ) : null}
     </>
   )

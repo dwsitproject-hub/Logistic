@@ -417,6 +417,9 @@ export const getDashboardStats = async (req: AuthRequest, res: Response) => {
         WHERE r.import_id = (SELECT id FROM latest_mutu)
           AND r.os_days IS NOT NULL
           AND r.os_days >= 0
+          -- Exclude B2B, the scope of the claim team's own "Total OS Claim" (migration 192 stores
+          -- the Include rows and marks B2B; without this the KPI would silently rise by the B2B share).
+          AND NOT r.is_b2b
       ),
       susut AS (
         SELECT
@@ -758,7 +761,8 @@ export const getClaimMutuOutstandingRows = async (req: AuthRequest, res: Respons
       JOIN filtered_pos p ON p.po_number = NULLIF(TRIM(r.po_number), '')
       WHERE r.import_id = (SELECT id FROM latest_mutu)
         AND r.os_days IS NOT NULL
-        AND r.os_days >= 0`,
+        AND r.os_days >= 0
+        AND NOT r.is_b2b`,
       []
     );
 
@@ -784,6 +788,7 @@ export const getClaimMutuOutstandingRows = async (req: AuthRequest, res: Respons
       WHERE r.import_id = (SELECT id FROM latest_mutu)
         AND r.os_days IS NOT NULL
         AND r.os_days >= 0
+        AND NOT r.is_b2b
       ORDER BY r.amount_after_tax_idr DESC NULLS LAST, r.po_number NULLS LAST
       LIMIT $1 OFFSET $2`,
       [limit, offset]
@@ -2529,6 +2534,7 @@ export const getContractQuantityByProductIncoterm = async (req: AuthRequest, res
         WHERE import_id = (SELECT id FROM latest_mutu)
           AND os_days IS NOT NULL
           AND os_days >= 0
+          AND NOT is_b2b
           AND NULLIF(TRIM(po_number), '') IS NOT NULL
         GROUP BY 1
       ),
@@ -3139,6 +3145,7 @@ export const getContractQuantityByPlantIncoterm = async (req: AuthRequest, res: 
         WHERE import_id = (SELECT id FROM latest_mutu)
           AND os_days IS NOT NULL
           AND os_days >= 0
+          AND NOT is_b2b
           AND NULLIF(TRIM(po_number), '') IS NOT NULL
         GROUP BY 1
       ),

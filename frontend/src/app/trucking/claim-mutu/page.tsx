@@ -1,422 +1,209 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
+import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Upload, ArrowLeft, RefreshCw, ArrowUp, ArrowDown, Filter as FilterIcon } from 'lucide-react'
+import { Upload, Loader2, History, SlidersHorizontal, GripVertical, X } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
+import { cn } from '@/lib/utils'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { CONTRACT_PERF_TABLE_CELL_PAD } from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  LIST_PAGE_TABLE_HEADER_ROW_CLASS,
+  compactTableColWidthCss,
+  compactTableHeaderMinWidthPx,
+} from '@/lib/compactTableUi'
+import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import api from '@/lib/api'
-import { formatDateDMY, formatDateTimeDMY } from '@/lib/dateFormat'
+import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import {
+  formatContractDateScopeLabel,
+  PerformanceContractDateControl,
+  periodRangeMatchesDates,
+} from '@/components/performance/PerformanceContractDateControl'
+import {
+  ClaimMutuSection1Dashboard,
+  sortUnitOptions,
+  type ClaimMutuDashboard,
+  type ClaimMutuTrend,
+} from '@/components/claim-mutu/ClaimMutuSection1Dashboard'
+import {
+  ClaimMutuUploadResultDialog,
+  type ClaimMutuUploadResult,
+} from '@/components/claim-mutu/ClaimMutuUploadResultDialog'
+import {
+  ClaimSusutImportHistoryModal,
+  type ClaimSusutImportListItem,
+} from '@/components/claim-susut/ClaimSusutImportHistoryModal'
+import {
+  buildClaimSusutPeriodOptions,
+  resolveClaimSusutPeriodRange,
+  type ClaimSusutPeriodKey,
+} from '@/lib/claimSusutView'
+import {
+  appendClaimMutuFilterParams,
+  CLAIM_MUTU_COLUMN_ORDER_KEY,
+  CLAIM_MUTU_COLUMNS,
+  CLAIM_MUTU_DEFAULT_B2B,
+  CLAIM_MUTU_DEFAULT_VISIBLE_IDS,
+  CLAIM_MUTU_NUMERIC_SORT_KEYS,
+  CLAIM_MUTU_VIEW_PREF_KEY,
+  compareCommodity,
+  formatClaimMutuIdr,
+  formatClaimMutuKg,
+  type ClaimMutuApiFilters,
+  type ClaimMutuB2bScope,
+} from '@/lib/claimMutuView'
 
-type ClaimMutuImport = {
-  id: string
-  file_name: string
-  sheet_name?: string
-  uploaded_at: string
-  total_rows: number
-  inserted_rows: number
-  errors?: any
-  uploaded_by_name?: string | null
-  uploaded_by_username?: string | null
+type ClaimMutuRow = Record<string, unknown> & { id: string; is_b2b?: boolean }
+
+const columns = CLAIM_MUTU_COLUMNS
+const pageSize = 20
+
+function apiErrorMessage(e: unknown, fallback: string): string {
+  const err = e as { response?: { data?: { error?: { message?: string } } }; message?: string }
+  return err?.response?.data?.error?.message || err?.message || fallback
 }
 
-type ClaimMutuGroupRow = {
-  group_name: string
-  row_count: number
-  total_amount_after_tax_idr: number
-  total_qty_claim_kg: number
-  a_lt_30: number
-  a_30_60: number
-  a_61_90: number
-  a_gt_90: number
+function formatCell(kind: string | undefined, v: unknown): string {
+  if (v == null || v === '') return '-'
+  switch (kind) {
+    case 'date':
+      return formatDateDMY(String(v))
+    case 'idr':
+      return Number(v) ? formatClaimMutuIdr(Number(v)) : '-'
+    case 'kg':
+      return formatClaimMutuKg(Number(v))
+    case 'number':
+      return Number.isFinite(Number(v)) ? Number(v).toLocaleString('id-ID', { maximumFractionDigits: 3 }) : String(v)
+    case 'b2b':
+      return v ? 'B2B' : '-'
+    default:
+      return formatSapDisplayValue(v)
+  }
 }
 
-type ClaimMutuRow = {
-  id: string
-  vendor_code?: string
-  vendor_name?: string
-  group_name?: string
-  cargo_source?: string
-  created_by?: string
-  sta?: string
-  crno?: string
-  cr_date?: string
-  os_days?: number
-  dest?: string
-  po_number?: string
-  contract_ext_no?: string
-  comm?: string
-  product?: string
-  uom?: string
-  currency?: string
-  company_code?: string
-  mutu_klaim_ffa?: number
-  mutu_klaim_mi?: number
-  mutu_klaim_dns?: number
-  mutu_klaim_dobi?: number
-  mutu_klaim_stone?: number
-  qty_claim_kg?: number
-  amount_after_tax_idr?: number
-}
-
-function money(n: number | undefined | null) {
-  const v = Number(n || 0)
-  return v.toLocaleString('id-ID', { maximumFractionDigits: 0 })
-}
-
-function moneyIdr(n: number | undefined | null) {
-  return `${money(n)} IDR`
-}
-
-/** Excel qty is stored in kg; table header is Claim Qty (MT). */
-function qtyClaimMt(n: number | undefined | null) {
-  const v = Number(n || 0) / 1000
-  return v.toLocaleString('id-ID', { maximumFractionDigits: 3 })
-}
-function formatDate(d?: string) {
-  if (!d) return '-'
-  return formatDateDMY(d)
+/** Two-way Exclude / Include B2B switch. Exclude is where every visit starts. */
+function B2bScopeToggle({ value, onChange }: { value: ClaimMutuB2bScope; onChange: (v: ClaimMutuB2bScope) => void }) {
+  const opts: Array<{ v: ClaimMutuB2bScope; label: string }> = [
+    { v: 'exclude', label: 'Exclude B2B' },
+    { v: 'include', label: 'Include B2B' },
+  ]
+  return (
+    <div role="radiogroup" aria-label="B2B" className="inline-flex h-9 overflow-hidden rounded-md border border-gray-300 bg-white">
+      {opts.map((o) => (
+        <button
+          key={o.v}
+          type="button"
+          role="radio"
+          aria-checked={value === o.v}
+          onClick={() => onChange(o.v)}
+          className={cn(
+            'px-3 text-sm whitespace-nowrap transition-colors',
+            value === o.v ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-50',
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 export default function ClaimMutuPage() {
-  const [imports, setImports] = useState<ClaimMutuImport[]>([])
+  const [imports, setImports] = useState<ClaimSusutImportListItem[]>([])
   const [selectedImportId, setSelectedImportId] = useState<string>('')
   const [rows, setRows] = useState<ClaimMutuRow[]>([])
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [dashboard, setDashboard] = useState<ClaimMutuDashboard | null>(null)
+  const [dashboardLoading, setDashboardLoading] = useState(false)
+  const [trend, setTrend] = useState<ClaimMutuTrend | null>(null)
+  const [trendLoading, setTrendLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [file, setFile] = useState<File | null>(null)
-  const [uploadSummary, setUploadSummary] = useState<{
-    totalRows: number
-    insertedRows: number
-    failedRows: number
-    errors: { rowIndex: number; message: string }[]
-  } | null>(null)
+  const [uploadSummary, setUploadSummary] = useState<ClaimMutuUploadResult | null>(null)
+  const [uploadResultOpen, setUploadResultOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
-  const pageSize = 20
+  const [b2b, setB2b] = useState<ClaimMutuB2bScope>(CLAIM_MUTU_DEFAULT_B2B)
+  const [period, setPeriod] = useState<ClaimSusutPeriodKey>('ALL')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [selectedCommodities, setSelectedCommodities] = useState<string[]>([])
+  const [selectedUnits, setSelectedUnits] = useState<string[]>([])
+  const [selectedVendorTypes, setSelectedVendorTypes] = useState<string[]>([])
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([])
+  const [selectedMetodes, setSelectedMetodes] = useState<string[]>([])
+  const [commodityOptions, setCommodityOptions] = useState<string[]>([])
+  const [unitOptions, setUnitOptions] = useState<string[]>([])
+  const [vendorTypeOptions, setVendorTypeOptions] = useState<string[]>([])
+  const [groupOptions, setGroupOptions] = useState<string[]>([])
+  const [metodeOptions, setMetodeOptions] = useState<string[]>([])
+
   const [page, setPage] = useState(1)
   const [sortKey, setSortKey] = useState<string>('os_days')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(new Set())
-  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => [])
+
+  const [visibleColumnIds, setVisibleColumnIds] = useState<Set<string>>(() => new Set(CLAIM_MUTU_DEFAULT_VISIBLE_IDS))
+  const [columnOrderIds, setColumnOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = localStorage.getItem(CLAIM_MUTU_COLUMN_ORDER_KEY)
+      if (!raw) return []
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  })
   const [dragColId, setDragColId] = useState<string | null>(null)
-  const userViewPrefKey = 'claim_mutu.view.v1'
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const columnsRef = useRef<HTMLDivElement>(null)
-  const [columnFilters, setColumnFilters] = useState<Record<string, any>>({})
-  const [filterOpenKey, setFilterOpenKey] = useState<string | null>(null)
-  const filterRef = useRef<HTMLDivElement>(null)
-  const [filterSearch, setFilterSearch] = useState('')
-  const [distinctLoading, setDistinctLoading] = useState(false)
-  const [distinctOptions, setDistinctOptions] = useState<Record<string, Array<{ value: string; count: number }>>>({})
+  const topScrollRef = useRef<HTMLDivElement>(null)
+  const bottomScrollRef = useRef<HTMLDivElement>(null)
+  const isSyncingScroll = useRef(false)
+  const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
-  const [mainTab, setMainTab] = useState<'all' | 'group'>('all')
-  const [groupRows, setGroupRows] = useState<ClaimMutuGroupRow[]>([])
-  const [groupLoading, setGroupLoading] = useState(false)
-
-  const selectedImport = useMemo(
-    () => imports.find((i) => i.id === selectedImportId),
-    [imports, selectedImportId],
+  const scopeFilters: ClaimMutuApiFilters = useMemo(
+    () => ({
+      importId: selectedImportId || undefined,
+      b2b,
+      dateFrom,
+      dateTo,
+      commodities: selectedCommodities,
+      units: selectedUnits,
+      vendorTypes: selectedVendorTypes,
+      claimGroups: selectedGroups,
+      metodePayments: selectedMetodes,
+    }),
+    [selectedImportId, b2b, dateFrom, dateTo, selectedCommodities, selectedUnits, selectedVendorTypes, selectedGroups, selectedMetodes],
   )
 
-  const loadImports = async () => {
-    const res = await api.get('/claim-mutu/imports')
-    setImports(res.data.data || [])
-    const first = (res.data.data || [])?.[0]?.id
-    if (!selectedImportId && first) setSelectedImportId(first)
-  }
-
-  const loadRows = async (opts?: { importId?: string; page?: number }) => {
-    setLoading(true)
-    setError(null)
-    try {
-      const importId = opts?.importId ?? selectedImportId
-      const p = opts?.page ?? page
-      const params = new URLSearchParams()
-      if (importId) params.set('importId', importId)
-      params.set('limit', String(pageSize))
-      params.set('offset', String((p - 1) * pageSize))
-      params.set('sortKey', sortKey)
-      params.set('sortDir', sortDir)
-      if (Object.keys(columnFilters || {}).length > 0) {
-        params.set('columnFilters', JSON.stringify(columnFilters))
-      }
-      const res = await api.get(`/claim-mutu/rows?${params.toString()}`)
-      setRows(res.data.data || [])
-      setTotalCount(Number(res.data.meta?.totalCount) || 0)
-    } catch (e: any) {
-      const msg = e?.response?.data?.error?.message || e?.message || 'Failed to load Claim Mutu data'
-      setError(msg)
-      setRows([])
-      setTotalCount(0)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const loadByGroup = async (opts?: { importId?: string }) => {
-    const importId = opts?.importId ?? selectedImportId
-    if (!importId) {
-      setGroupRows([])
-      return
-    }
-    setGroupLoading(true)
-    try {
-      const params = new URLSearchParams()
-      params.set('importId', importId)
-      const res = await api.get(`/claim-mutu/by-group?${params.toString()}`)
-      setGroupRows((res.data?.data || []) as ClaimMutuGroupRow[])
-    } catch (e: any) {
-      const msg = e?.response?.data?.error?.message || e?.message || 'Failed to load group summary'
-      setError(msg)
-      setGroupRows([])
-    } finally {
-      setGroupLoading(false)
-    }
-  }
+  useEffect(() => {
+    const { dateFrom: from, dateTo: to } = resolveClaimSusutPeriodRange(period)
+    setDateFrom(from)
+    setDateTo(to)
+  }, [period])
 
   useEffect(() => {
-    loadImports().catch((e) => setError(String(e?.message || e)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    if (!selectedImportId) return
-    setPage(1)
-    loadRows({ importId: selectedImportId, page: 1 }).catch(() => null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedImportId])
-
-  // Reload on sort change (server-side sort)
-  useEffect(() => {
-    if (!selectedImportId) return
-    setPage(1)
-    loadRows({ importId: selectedImportId, page: 1 }).catch(() => null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortKey, sortDir])
-
-  // Reload on filter change
-  useEffect(() => {
-    if (!selectedImportId) return
-    setPage(1)
-    loadRows({ importId: selectedImportId, page: 1 }).catch(() => null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columnFilters])
-
-  useEffect(() => {
-    if (mainTab !== 'group' || !selectedImportId) return
-    loadByGroup({ importId: selectedImportId }).catch(() => null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mainTab, selectedImportId])
-
-  const onUpload = async () => {
-    if (!file) return
-    setUploading(true)
-    setError(null)
-    setUploadSummary(null)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const res = await api.post('/claim-mutu/upload', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      const importId = res.data?.data?.importId
-      const totalRows = Number(res.data?.data?.totalRows) || 0
-      const insertedRows = Number(res.data?.data?.insertedRows) || 0
-      const errors = (res.data?.data?.errors || []) as { rowIndex: number; message: string }[]
-      const failedRows = Number(res.data?.data?.failedRows) || Math.max(0, totalRows - insertedRows)
-      setUploadSummary({ totalRows, insertedRows, failedRows, errors })
-      await loadImports()
-      if (importId) setSelectedImportId(importId)
-      setFile(null)
-    } catch (e: any) {
-      const msg = e?.response?.data?.error?.message || e?.message || 'Upload failed'
-      setError(msg)
-    } finally {
-      setUploading(false)
-    }
-  }
-
-  const toggleSort = (key: string) => {
-    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    else {
-      setSortKey(key)
-      const numeric = new Set([
-        'os_days',
-        'qty_claim_kg',
-        'amount_after_tax_idr',
-        'mutu_klaim_ffa',
-        'mutu_klaim_mi',
-        'mutu_klaim_dns',
-        'mutu_klaim_dobi',
-        'mutu_klaim_stone',
-        'a_lt_30',
-        'a_30_60',
-        'a_61_90',
-        'a_gt_90',
-      ])
-      setSortDir(numeric.has(key) ? 'desc' : 'asc')
-    }
-  }
-
-  const SortIcon = ({ active }: { active: boolean }) => {
-    if (!active) return null
-    return sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-  }
-
-  const columns = useMemo(() => {
-    const col = (id: string, label: string, key: string, align: 'left' | 'right' = 'left', defaultVisible = true) => ({
-      id,
-      label,
-      sortKey: key,
-      align,
-      defaultVisible,
-    })
-    return [
-      col('vendor', 'Vendor', 'vendor', 'left', true),
-      col('group_name', 'Group Name', 'group_name', 'left', true),
-      col('cargo_source', 'Cargo Source', 'cargo_source', 'left', true),
-      col('created_by', 'Created By', 'created_by', 'left', false),
-      col('sta', 'STA', 'sta', 'left', false),
-      col('crno', 'CRNO', 'crno', 'left', false),
-      col('cr_date', 'CR Date', 'cr_date', 'left', true),
-      col('os_days', 'Aging', 'os_days', 'right', true),
-      col('dest', 'Destination', 'dest', 'left', true),
-      col('po_number', 'PO Number', 'po_number', 'left', true),
-      col('contract_ext_no', 'Contract Ext No', 'contract_ext_no', 'left', true),
-      col('comm', 'COMM', 'comm', 'left', false),
-      col('product', 'Product', 'product', 'left', true),
-      col('uom', 'UOM', 'uom', 'left', false),
-      col('currency', 'Currency', 'currency', 'left', false),
-      col('company_code', 'Company Code', 'company_code', 'left', false),
-      col('mutu_klaim_ffa', 'FFA', 'mutu_klaim_ffa', 'right', false),
-      col('mutu_klaim_mi', 'M&I', 'mutu_klaim_mi', 'right', false),
-      col('mutu_klaim_dns', 'DNS', 'mutu_klaim_dns', 'right', false),
-      col('mutu_klaim_dobi', 'DOBI', 'mutu_klaim_dobi', 'right', false),
-      col('mutu_klaim_stone', 'STONE', 'mutu_klaim_stone', 'right', false),
-      col('qty_claim_kg', 'Claim Qty (MT)', 'qty_claim_kg', 'right', true),
-      col('amount_after_tax_idr', 'Amount (IDR)', 'amount_after_tax_idr', 'right', true),
-      col('a_lt_30', 'Aging < 30', 'a_lt_30', 'right', true),
-      col('a_30_60', 'Aging 30–60', 'a_30_60', 'right', true),
-      col('a_61_90', 'Aging 61–90', 'a_61_90', 'right', true),
-      col('a_gt_90', 'Aging > 90', 'a_gt_90', 'right', true),
-    ]
-  }, [])
-
-  const defaultVisibleIds = useMemo(() => columns.filter((c) => c.defaultVisible).map((c) => c.id), [columns])
-
-  useEffect(() => {
-    const key = 'claimMutu.visibleColumns.v1'
-    const orderKey = 'claimMutu.columnOrder.v1'
-    try {
-      const raw = localStorage.getItem(key)
-      if (raw) {
-        const parsed = JSON.parse(raw) as string[]
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setVisibleColumnIds(new Set(parsed))
-        }
-      }
-      const rawOrder = localStorage.getItem(orderKey)
-      if (rawOrder) {
-        const parsed = JSON.parse(rawOrder) as string[]
-        if (Array.isArray(parsed) && parsed.length > 0) setColumnOrderIds(parsed.map((x: any) => String(x)))
-      }
-    } catch {}
-    // Seed with defaults while we fetch server preference
-    setVisibleColumnIds((prev) => (prev.size > 0 ? prev : new Set(defaultVisibleIds)))
-
-    // Load per-user preference from server (falls back to existing localStorage/defaults)
-    ;(async () => {
-      try {
-        // Prefer combined view key first.
-        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(userViewPrefKey)}`)
-        const value = res.data?.data?.value
-        const cols = Array.isArray(value?.visibleColumnIds) ? value.visibleColumnIds : Array.isArray(value?.visible) ? value.visible : null
-        const order = Array.isArray(value?.columnOrderIds) ? value.columnOrderIds : Array.isArray(value?.order) ? value.order : null
-        if (Array.isArray(cols) && cols.length > 0) setVisibleColumnIds(new Set(cols.map((x: any) => String(x))))
-        if (Array.isArray(order) && order.length > 0) setColumnOrderIds(order.map((x: any) => String(x)))
-        // Legacy fallback
-        if (!cols) {
-          const legacy = await api.get(`/user-preferences/me?key=${encodeURIComponent('claim_mutu.visible_columns')}`)
-          const legacyValue = legacy.data?.data?.value
-          const arr = Array.isArray(legacyValue)
-            ? legacyValue
-            : Array.isArray(legacyValue?.columns)
-              ? legacyValue.columns
-              : null
-          if (Array.isArray(arr) && arr.length > 0) setVisibleColumnIds(new Set(arr.map((x: any) => String(x))))
-        }
-      } catch {
-        // ignore; localStorage/defaults already applied
-      }
-    })()
-  }, [defaultVisibleIds])
-
-  useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
-      if (!columnsOpen) return
-      if (columnsRef.current && !columnsRef.current.contains(e.target as Node)) setColumnsOpen(false)
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [columnsOpen])
-
-  useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
-      if (!filterOpenKey) return
-      if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpenKey(null)
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    return () => document.removeEventListener('mousedown', onMouseDown)
-  }, [filterOpenKey])
-
-  useEffect(() => {
-    if (!filterOpenKey) setFilterSearch('')
-  }, [filterOpenKey])
-
-  const isMultiFilterColumn = (k: string) =>
-    new Set(['group_name', 'product', 'company_code', 'dest', 'vendor', 'cargo_source']).has(k)
-
-  useEffect(() => {
-    const key = filterOpenKey
-    if (!key) return
-    if (!isMultiFilterColumn(key)) return
-    if (!selectedImportId) return
-
-    let cancelled = false
-    const run = async () => {
-      try {
-        setDistinctLoading(true)
-        const params = new URLSearchParams()
-        params.set('importId', selectedImportId)
-        params.set('column', key)
-        if (filterSearch.trim()) params.set('q', filterSearch.trim())
-        params.set('limit', '250')
-        const res = await api.get(`/claim-mutu/distinct-values?${params.toString()}`)
-        if (cancelled) return
-        const values = (res.data?.data?.values || []) as Array<{ value: string; count: number }>
-        setDistinctOptions((prev) => ({ ...(prev || {}), [key]: values }))
-      } catch {
-        if (cancelled) return
-        setDistinctOptions((prev) => ({ ...(prev || {}), [key]: [] }))
-      } finally {
-        if (!cancelled) setDistinctLoading(false)
-      }
-    }
-    run()
-    return () => {
-      cancelled = true
-    }
-  }, [filterOpenKey, filterSearch, selectedImportId])
-
-  useEffect(() => {
-    // Initialize / heal order with any missing ids.
     const allIds = columns.map((c) => c.id)
     setColumnOrderIds((prev) => {
       const base = prev.length > 0 ? prev : allIds
@@ -424,30 +211,63 @@ export default function ClaimMutuPage() {
       const missing = allIds.filter((id) => !deduped.includes(id))
       return [...deduped, ...missing].filter((id) => allIds.includes(id))
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [columns])
+  }, [])
 
   const visibleColumns = useMemo(() => {
     const byId = new Map(columns.map((c) => [c.id, c] as const))
     const orderedIds = (columnOrderIds.length > 0 ? columnOrderIds : columns.map((c) => c.id)).filter((id) => byId.has(id))
-    const orderedAll = orderedIds.map((id) => byId.get(id)!).filter(Boolean)
-    return orderedAll.filter((c) => visibleColumnIds.has(c.id))
-  }, [columnOrderIds, columns, visibleColumnIds])
+    return orderedIds.map((id) => byId.get(id)!).filter((c) => visibleColumnIds.has(c.id))
+  }, [columnOrderIds, visibleColumnIds])
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
 
   useEffect(() => {
-    const orderKey = 'claimMutu.columnOrder.v1'
+    const calc = () => {
+      const el = bottomScrollRef.current
+      if (el) setTableScrollWidth(el.scrollWidth)
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [visibleColumns, rows.length, loading])
+
+  useEffect(() => {
     try {
-      if (columnOrderIds.length > 0) localStorage.setItem(orderKey, JSON.stringify(columnOrderIds))
-    } catch {}
+      if (columnOrderIds.length > 0) localStorage.setItem(CLAIM_MUTU_COLUMN_ORDER_KEY, JSON.stringify(columnOrderIds))
+    } catch {
+      /* ignore */
+    }
   }, [columnOrderIds])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/user-preferences/me?key=${encodeURIComponent(CLAIM_MUTU_VIEW_PREF_KEY)}`)
+        const value = res.data?.data?.value
+        if (cancelled) return
+        const known = new Set(columns.map((c) => c.id))
+        if (Array.isArray(value?.visibleColumnIds) && value.visibleColumnIds.length > 0) {
+          setVisibleColumnIds(new Set(value.visibleColumnIds.map(String).filter((id: string) => known.has(id))))
+        }
+        if (Array.isArray(value?.columnOrderIds) && value.columnOrderIds.length > 0) {
+          setColumnOrderIds(value.columnOrderIds.map(String))
+        }
+      } catch {
+        /* ignore */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (saveViewTimerRef.current) clearTimeout(saveViewTimerRef.current)
     saveViewTimerRef.current = setTimeout(() => {
       void api
         .post('/user-preferences/me', {
-          key: userViewPrefKey,
+          key: CLAIM_MUTU_VIEW_PREF_KEY,
           value: { visibleColumnIds: Array.from(visibleColumnIds), columnOrderIds },
         })
         .catch(() => null)
@@ -470,633 +290,638 @@ export default function ClaimMutuPage() {
     })
   }
 
-  const toggleColumn = (id: string) => {
-    setVisibleColumnIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      const key = 'claimMutu.visibleColumns.v1'
-      try {
-        localStorage.setItem(key, JSON.stringify(Array.from(next)))
-      } catch {}
-      return next
-    })
+  const loadImports = async () => {
+    const res = await api.get('/claim-mutu/imports')
+    setImports(res.data.data || [])
+    const first = (res.data.data || [])?.[0]?.id
+    if (!selectedImportId && first) setSelectedImportId(first)
   }
 
-  const setFilter = (key: string, value: any) => {
-    setColumnFilters((prev) => {
-      const next = { ...(prev || {}) }
-      if (!value || (typeof value === 'object' && Object.values(value).every((v) => v == null || String(v).trim() === ''))) {
-        delete next[key]
-      } else {
-        next[key] = value
-      }
-      return next
-    })
-  }
+  const loadFilterOptions = useCallback(async (filters: ClaimMutuApiFilters) => {
+    const res = await api.get(`/claim-mutu/filter-options?${appendClaimMutuFilterParams(new URLSearchParams(), filters)}`)
+    const data = res.data?.data || {}
+    setCommodityOptions([...(data.commodities || []).map(String)].sort(compareCommodity))
+    setUnitOptions(sortUnitOptions((data.units || []).map(String)))
+    setVendorTypeOptions((data.vendorTypes || []).map(String))
+    setGroupOptions((data.claimGroups || []).map(String))
+    setMetodeOptions((data.metodePayments || []).map(String))
+  }, [])
 
-  const clearAllFilters = () => setColumnFilters({})
-
-  const toggleMultiValue = (key: string, v: string) => {
-    const cur = columnFilters?.[key] || {}
-    const values = new Set<string>((cur.values || []) as string[])
-    if (values.has(v)) values.delete(v)
-    else values.add(v)
-    setFilter(key, { type: 'multi', values: Array.from(values), includeBlank: Boolean(cur.includeBlank) })
-  }
-
-  const setMultiAllDisplayed = (key: string, checked: boolean) => {
-    const opts = distinctOptions?.[key] || []
-    const cur = columnFilters?.[key] || {}
-    if (!checked) {
-      setFilter(key, { type: 'multi', values: [], includeBlank: Boolean(cur.includeBlank) })
-      return
+  const loadDashboard = useCallback(async (filters: ClaimMutuApiFilters) => {
+    setDashboardLoading(true)
+    try {
+      const res = await api.get(`/claim-mutu/dashboard?${appendClaimMutuFilterParams(new URLSearchParams(), filters)}`)
+      setDashboard((res.data?.data ?? null) as ClaimMutuDashboard | null)
+    } finally {
+      setDashboardLoading(false)
     }
-    setFilter(key, { type: 'multi', values: opts.map((o) => o.value), includeBlank: Boolean(cur.includeBlank) })
+  }, [])
+
+  /** Spans every monthly import, so it takes neither the import nor the CR date period. */
+  const loadTrend = useCallback(async (filters: ClaimMutuApiFilters) => {
+    setTrendLoading(true)
+    try {
+      const params = appendClaimMutuFilterParams(new URLSearchParams(), { ...filters, dateFrom: '', dateTo: '' }, { omitImport: true })
+      const res = await api.get(`/claim-mutu/trend?${params}`)
+      setTrend((res.data?.data ?? null) as ClaimMutuTrend | null)
+    } finally {
+      setTrendLoading(false)
+    }
+  }, [])
+
+  const loadRows = useCallback(
+    async (filters: ClaimMutuApiFilters, opts: { page: number; sortKey: string; sortDir: 'asc' | 'desc' }) => {
+      setLoading(true)
+      try {
+        const params = appendClaimMutuFilterParams(new URLSearchParams(), filters)
+        params.set('limit', String(pageSize))
+        params.set('offset', String((opts.page - 1) * pageSize))
+        params.set('sortKey', opts.sortKey)
+        params.set('sortDir', opts.sortDir)
+        const res = await api.get(`/claim-mutu/rows?${params}`)
+        setRows(res.data.data || [])
+        setTotalCount(Number(res.data.meta?.totalCount) || 0)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    loadImports().catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Mutu imports')))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    setPage(1)
+  }, [scopeFilters, sortKey, sortDir])
+
+  useEffect(() => {
+    if (!selectedImportId) return
+    loadFilterOptions(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Mutu filters')))
+  }, [selectedImportId, loadFilterOptions, scopeFilters])
+
+  useEffect(() => {
+    if (!selectedImportId) return
+    loadDashboard(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Mutu summary')))
+  }, [selectedImportId, loadDashboard, scopeFilters])
+
+  useEffect(() => {
+    if (!selectedImportId) return
+    loadTrend(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Summary Per Unit')))
+    // The trend ignores the import and the period; `imports` reloads it after an upload.
+  }, [selectedImportId, loadTrend, scopeFilters, imports])
+
+  useEffect(() => {
+    if (!selectedImportId) return
+    loadRows(scopeFilters, { page, sortKey, sortDir }).catch((e) =>
+      setError(apiErrorMessage(e, 'Failed to load Claim Mutu rows')),
+    )
+  }, [selectedImportId, loadRows, scopeFilters, page, sortKey, sortDir])
+
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (!columnsOpen) return
+      if (columnsRef.current && !columnsRef.current.contains(e.target as Node)) setColumnsOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [columnsOpen])
+
+  usePageHeaderBusy(loading || dashboardLoading || trendLoading || uploading)
+
+  const onUploadFile = async (uploadFile: File) => {
+    setUploading(true)
+    setError(null)
+    setUploadSummary(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', uploadFile)
+      const res = await api.post('/claim-mutu/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const d = res.data?.data ?? {}
+      const totalRows = Number(d.totalRows) || 0
+      const insertedRows = Number(d.insertedRows) || 0
+      setUploadSummary({
+        totalRows,
+        insertedRows,
+        failedRows: Number(d.failedRows) || Math.max(0, totalRows - insertedRows),
+        b2bRows: Number(d.b2bRows) || 0,
+        errors: (d.errors || []) as ClaimMutuUploadResult['errors'],
+        sheetName: d.sheetName ?? null,
+        periodLabel: d.periodLabel ?? null,
+        b2bSource: d.b2bSource ?? null,
+        realSheetName: d.realSheetName ?? null,
+        realPeriodLabel: d.realPeriodLabel ?? null,
+        realTotalRows: Number(d.realTotalRows) || 0,
+        realInsertedRows: Number(d.realInsertedRows) || 0,
+        realB2bRows: Number(d.realB2bRows) || 0,
+        warnings: Array.isArray(d.warnings) ? d.warnings.map(String) : [],
+      })
+      setUploadResultOpen(true)
+      await loadImports()
+      if (d.importId) setSelectedImportId(String(d.importId))
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Upload failed'))
+    } finally {
+      setUploading(false)
+    }
   }
 
-  const toggleIncludeBlank = (key: string) => {
-    const cur = columnFilters?.[key] || {}
-    setFilter(key, { type: 'multi', values: (cur.values || []) as string[], includeBlank: !Boolean(cur.includeBlank) })
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const uploadFile = e.target.files?.[0]
+    e.target.value = ''
+    if (!uploadFile) return
+    void onUploadFile(uploadFile)
   }
+
+  const toggleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    else {
+      setSortKey(key)
+      setSortDir(CLAIM_MUTU_NUMERIC_SORT_KEYS.has(key) ? 'desc' : 'asc')
+    }
+  }
+
+  const periodFiltered = period !== 'ALL' || !periodRangeMatchesDates(resolveClaimSusutPeriodRange('ALL'), dateFrom, dateTo)
+  const anyFilter =
+    periodFiltered ||
+    b2b !== CLAIM_MUTU_DEFAULT_B2B ||
+    selectedCommodities.length > 0 ||
+    selectedUnits.length > 0 ||
+    selectedVendorTypes.length > 0 ||
+    selectedGroups.length > 0 ||
+    selectedMetodes.length > 0
+
+  const resetFilters = () => {
+    setB2b(CLAIM_MUTU_DEFAULT_B2B)
+    setPeriod('ALL')
+    setDateFrom('')
+    setDateTo('')
+    setSelectedCommodities([])
+    setSelectedUnits([])
+    setSelectedVendorTypes([])
+    setSelectedGroups([])
+    setSelectedMetodes([])
+    setPage(1)
+  }
+
+  const periodOptions = useMemo(() => buildClaimSusutPeriodOptions(), [])
+  const selectedImport = imports.find((i) => i.id === selectedImportId)
 
   return (
     <Layout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-3">
-              <Link href="/trucking" className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1">
-                <ArrowLeft className="h-4 w-4" />
-                Back to Trucking
-              </Link>
-              <Badge variant="outline">SAP Excel</Badge>
+      <StitchFields>
+        <div className="space-y-6">
+          <div className="flex items-center justify-end gap-4">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                id="claim-mutu-excel-upload-input"
+                onChange={handleFileChange}
+                disabled={uploading}
+              />
+              <Button size="sm" variant="outline" onClick={() => setHistoryOpen(true)} disabled={uploading}>
+                <History className="h-4 w-4 mr-2" />
+                Import History
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
+                onClick={() => document.getElementById('claim-mutu-excel-upload-input')?.click()}
+                disabled={uploading}
+                title="Upload Claim Mutu Excel (.xlsx) - sheet OS_Claim wajib, Real_Claim opsional"
+              >
+                {uploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Uploading...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4 mr-2" />
+                    Import Claim Mutu Excel
+                  </>
+                )}
+              </Button>
             </div>
-            <p className="text-sm text-gray-600 mt-2">
-              Upload the SAP OSCLAIM excel and view outstanding claim quality rows.
-            </p>
           </div>
-          <Button
-            variant="outline"
-            onClick={() => {
-              loadImports().catch(() => null)
-              if (mainTab === 'group') loadByGroup().catch(() => null)
-              else loadRows().catch(() => null)
-            }}
-            disabled={loading || groupLoading}
+
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
+              {error}
+            </div>
+          )}
+
+          {(dashboard?.warnings ?? []).length > 0 ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 space-y-1">
+              {dashboard!.warnings.map((w, i) => (
+                <div key={i}>{w}</div>
+              ))}
+            </div>
+          ) : null}
+
+          <HeaderFilterSlot>
+            <PerformanceContractDateControl
+              header
+              period={period}
+              options={periodOptions}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              dateLabel="CR Date"
+              onPeriodChange={setPeriod}
+              onDateFromChange={setDateFrom}
+              onDateToChange={setDateTo}
+              resolvePeriodRange={resolveClaimSusutPeriodRange}
+            />
+            <B2bScopeToggle value={b2b} onChange={setB2b} />
+            <SearchableMultiSelect
+              label="Unit"
+              hideLabel
+              portalMenu
+              buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+              options={unitOptions}
+              selected={selectedUnits}
+              onChange={setSelectedUnits}
+              placeholder="Unit"
+              emptyMessage="No units"
+              uppercaseOptionLabels
+              pinSelectedToTop
+            />
+          </HeaderFilterSlot>
+          <ListFilterPanel
+            onReset={resetFilters}
+            showReset={anyFilter}
+            chips={[
+              ...(periodFiltered
+                ? [
+                    {
+                      id: 'cr-date',
+                      label: formatContractDateScopeLabel(
+                        period,
+                        dateFrom,
+                        dateTo,
+                        (p) => resolveClaimSusutPeriodRange(p as ClaimSusutPeriodKey),
+                        { prefix: true },
+                      ).replace(/^Contract date:/, 'CR date:'),
+                      onRemove: () => {
+                        setPeriod('ALL')
+                        setDateFrom('')
+                        setDateTo('')
+                      },
+                    },
+                  ]
+                : []),
+              ...(b2b !== CLAIM_MUTU_DEFAULT_B2B
+                ? [{ id: 'b2b', label: 'Include B2B', onRemove: () => setB2b(CLAIM_MUTU_DEFAULT_B2B) }]
+                : []),
+              ...selectionChips('Unit', selectedUnits, setSelectedUnits),
+              ...selectionChips('Commodity', selectedCommodities, setSelectedCommodities),
+              ...selectionChips('Vendor Type', selectedVendorTypes, setSelectedVendorTypes),
+              ...selectionChips('Group', selectedGroups, setSelectedGroups),
+              ...selectionChips('Metode Payment', selectedMetodes, setSelectedMetodes),
+            ]}
           >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
-        </div>
+            <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+              <SearchableMultiSelect
+                label="Commodity"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={commodityOptions}
+                selected={selectedCommodities}
+                onChange={setSelectedCommodities}
+                placeholder="All"
+                emptyMessage="No commodities"
+                uppercaseOptionLabels
+                pinSelectedToTop
+              />
+              <SearchableMultiSelect
+                label="Vendor Type"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={vendorTypeOptions}
+                selected={selectedVendorTypes}
+                onChange={setSelectedVendorTypes}
+                placeholder="All"
+                emptyMessage="No vendor types"
+                uppercaseOptionLabels
+                pinSelectedToTop
+              />
+              <SearchableMultiSelect
+                label="Group (OS only)"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={groupOptions}
+                selected={selectedGroups}
+                onChange={setSelectedGroups}
+                placeholder="All"
+                emptyMessage="No groups"
+                uppercaseOptionLabels
+                pinSelectedToTop
+              />
+              <SearchableMultiSelect
+                label="Metode Payment (OS only)"
+                className="min-w-[7.5rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={metodeOptions}
+                selected={selectedMetodes}
+                onChange={setSelectedMetodes}
+                placeholder="All"
+                emptyMessage="No payment methods"
+                uppercaseOptionLabels
+                pinSelectedToTop
+              />
+            </div>
+          </ListFilterPanel>
 
-        {error && (
-          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800" role="alert">
-            {error}
-          </div>
-        )}
+          <ClaimMutuSection1Dashboard
+            dashboard={dashboard}
+            loading={dashboardLoading}
+            trend={trend}
+            trendLoading={trendLoading}
+            b2b={b2b}
+            hasImport={Boolean(selectedImportId)}
+            osOnlyFilterActive={selectedGroups.length > 0 || selectedMetodes.length > 0}
+            selectedGroups={selectedGroups}
+            onToggleGroup={(group) => setSelectedGroups((prev) => (prev.length === 1 && prev[0] === group ? [] : [group]))}
+          />
 
-        {uploadSummary && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Upload result</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                <div className="rounded-md border bg-white p-3">
-                  <div className="text-xs text-gray-500">Processed</div>
-                  <div className="text-lg font-semibold tabular-nums">{uploadSummary.totalRows.toLocaleString()}</div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                    <span>All Outstanding Claim Mutu</span>
+                    {loading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
+                  </CardTitle>
+                  <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                    <span className="whitespace-nowrap tabular-nums text-gray-700">
+                      <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> rows
+                    </span>
+                    <span className="text-gray-400" aria-hidden>·</span>
+                    <span className="whitespace-nowrap font-medium text-gray-600">
+                      {b2b === 'include' ? 'Include B2B' : 'Exclude B2B'} · {anyFilter ? 'Filtered' : 'All'}
+                    </span>
+                    {selectedImport?.file_name ? (
+                      <>
+                        <span className="text-gray-400" aria-hidden>·</span>
+                        <span className="truncate max-w-[18rem]" title={selectedImport.file_name}>
+                          {selectedImport.file_name}
+                        </span>
+                      </>
+                    ) : null}
+                    <span className="text-gray-400" aria-hidden>·</span>
+                    <span className="whitespace-nowrap tabular-nums">
+                      Page {page}/{totalPages} · {rows.length} rows
+                    </span>
+                  </p>
                 </div>
-                <div className="rounded-md border bg-green-50 p-3">
-                  <div className="text-xs text-gray-600">Succeeded</div>
-                  <div className="text-lg font-semibold tabular-nums text-green-700">
-                    {uploadSummary.insertedRows.toLocaleString()}
+                <div className="flex items-center gap-2">
+                  <div className="relative" ref={columnsRef}>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setColumnsOpen((o) => !o)} disabled={loading}>
+                      <SlidersHorizontal className="h-4 w-4 mr-2" />
+                      Columns
+                    </Button>
+                    {columnsOpen && (
+                      <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setColumnsOpen(false)}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <div className="flex items-center gap-1 mb-2">
+                          <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(columns.map((c) => c.id)))}>
+                            Select All
+                          </Button>
+                          <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set())}>
+                            Unselect All
+                          </Button>
+                          <Button variant="ghost" size="sm" className="flex-1 text-xs h-7" onClick={() => setVisibleColumnIds(new Set(CLAIM_MUTU_DEFAULT_VISIBLE_IDS))}>
+                            Reset
+                          </Button>
+                        </div>
+                        <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                          {[
+                            ...visibleColumns,
+                            ...columns.filter((c) => !visibleColumnIds.has(c.id)).sort((a, b) => a.label.localeCompare(b.label)),
+                          ].map((c) => (
+                            <div
+                              key={c.id}
+                              draggable
+                              onDragStart={() => setDragColId(c.id)}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={() => {
+                                if (dragColId && dragColId !== c.id) reorderColumnByDrag(dragColId, c.id)
+                              }}
+                              className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === c.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                            >
+                              <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                              <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                                <Checkbox
+                                  checked={visibleColumnIds.has(c.id)}
+                                  onCheckedChange={() =>
+                                    setVisibleColumnIds((prev) => {
+                                      const next = new Set(prev)
+                                      if (next.has(c.id)) next.delete(c.id)
+                                      else next.add(c.id)
+                                      return next
+                                    })
+                                  }
+                                />
+                                <span className="truncate">{c.label}</span>
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-                <div className="rounded-md border bg-red-50 p-3">
-                  <div className="text-xs text-gray-600">Failed</div>
-                  <div className="text-lg font-semibold tabular-nums text-red-700">
-                    {uploadSummary.failedRows.toLocaleString()}
-                  </div>
-                </div>
-              </div>
-
-              {uploadSummary.errors.length > 0 && (
-                <div className="mt-2">
-                  <div className="text-sm font-medium text-gray-800 mb-2">Failed rows</div>
-                  <div className="overflow-x-auto border rounded-md">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-100">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium text-gray-600">Excel Row</th>
-                          <th className="px-3 py-2 text-left font-medium text-gray-600">Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {uploadSummary.errors.slice(0, 200).map((e, idx) => (
-                          <tr key={`${e.rowIndex}-${idx}`} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 tabular-nums">{e.rowIndex}</td>
-                            <td className="px-3 py-2">{e.message}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  {uploadSummary.errors.length > 200 && (
-                    <div className="text-[11px] text-gray-500 mt-1">
-                      Showing first 200 errors.
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                      <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>
+                        Previous
+                      </Button>
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum: number
+                          if (totalPages <= 5) pageNum = i + 1
+                          else if (page <= 3) pageNum = i + 1
+                          else if (page >= totalPages - 2) pageNum = totalPages - 4 + i
+                          else pageNum = page - 2 + i
+                          return (
+                            <Button
+                              key={pageNum}
+                              variant={page === pageNum ? 'default' : 'outline'}
+                              size="sm"
+                              onClick={() => setPage(pageNum)}
+                              disabled={loading}
+                              className="min-w-[40px]"
+                            >
+                              {pageNum}
+                            </Button>
+                          )
+                        })}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={page >= totalPages || loading}
+                      >
+                        Next
+                      </Button>
                     </div>
                   )}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-base">Upload & Select Import</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex flex-col md:flex-row gap-3 items-start md:items-end">
-              <div className="w-full md:w-[420px]">
-                <label className="text-sm font-medium text-gray-700 mb-1 block">Excel file (.xlsx)</label>
-                <Input
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                />
               </div>
-              <Button onClick={onUpload} disabled={!file || uploading}>
-                <Upload className="h-4 w-4 mr-2" />
-                {uploading ? 'Uploading…' : 'Upload'}
-              </Button>
-              <div className="flex-1" />
-              <div className="w-full md:w-[420px]">
-                {selectedImport && (
-                  <div className="mb-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                    <div className="font-semibold text-slate-900">Data for selected import</div>
-                    <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                      <span className="tabular-nums">
-                        {formatDateTimeDMY(selectedImport.uploaded_at)}
-                      </span>
-                      <span className="text-slate-400">·</span>
-                      <span className="font-medium text-slate-900">
-                        {String(selectedImport.uploaded_by_name || '').trim() ||
-                          String(selectedImport.uploaded_by_username || '').trim() ||
-                          'Unknown user'}
-                      </span>
-                    </div>
-                  </div>
-                )}
-                <label className="text-sm font-medium text-gray-700 mb-1 block">Import</label>
-                <select
-                  value={selectedImportId}
-                  onChange={(e) => setSelectedImportId(e.target.value)}
-                  className="w-full h-10 border border-gray-300 rounded-md px-3 text-sm bg-white"
+            </CardHeader>
+            <CardContent>
+              <div className="border rounded-lg overflow-hidden">
+                <div
+                  ref={topScrollRef}
+                  className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
+                  onScroll={() => {
+                    if (isSyncingScroll.current) return
+                    const top = topScrollRef.current
+                    const bottom = bottomScrollRef.current
+                    if (!top || !bottom) return
+                    isSyncingScroll.current = true
+                    bottom.scrollLeft = top.scrollLeft
+                    window.requestAnimationFrame(() => {
+                      isSyncingScroll.current = false
+                    })
+                  }}
                 >
-                  {imports.map((imp) => (
-                    <option key={imp.id} value={imp.id}>
-                      {new Date(imp.uploaded_at).toLocaleString('id-ID')} — {imp.file_name} ({imp.inserted_rows}/{imp.total_rows})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-col gap-2 min-w-0">
-              <div className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5 w-fit">
-                <button
-                  type="button"
-                  onClick={() => setMainTab('all')}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    mainTab === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  All rows
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMainTab('group')}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    mainTab === 'group' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  By Group Name
-                </button>
-              </div>
-              <CardTitle className="text-base">
-                {mainTab === 'all' ? (
-                  <>
-                    Rows{' '}
-                    <span className="text-xs font-normal text-gray-500">
-                      {loading ? 'Loading…' : `${totalCount.toLocaleString()} total`}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Summary by Group Name{' '}
-                    <span className="text-xs font-normal text-gray-500">
-                      {groupLoading ? 'Loading…' : `${groupRows.length.toLocaleString()} groups`}
-                    </span>
-                  </>
-                )}
-              </CardTitle>
-            </div>
-            <div className="relative" ref={columnsRef}>
-              <div className="flex items-center gap-2">
-                {mainTab === 'all' && (
-                  <>
-                    <Button type="button" variant="outline" size="sm" onClick={clearAllFilters} disabled={Object.keys(columnFilters).length === 0}>
-                      Clear Filters
-                    </Button>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setColumnsOpen((o) => !o)}>
-                      Columns
-                    </Button>
-                  </>
-                )}
-              </div>
-              {columnsOpen && (
-                <div className="absolute right-0 mt-2 w-[280px] rounded-md border bg-white shadow-lg z-50">
-                  <div className="p-2 border-b text-xs text-gray-600">
-                    Toggle columns (saved in browser)
-                  </div>
-                  <div className="max-h-64 overflow-auto p-2 space-y-1">
-                    {columns.map((c) => (
-                      <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={visibleColumnIds.has(c.id)}
-                          onChange={() => toggleColumn(c.id)}
-                        />
-                        <span className="truncate">{c.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="p-2 border-t flex items-center justify-between">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setVisibleColumnIds(new Set(defaultVisibleIds))}
-                    >
-                      Reset
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setColumnsOpen(false)}>
-                      Close
-                    </Button>
-                  </div>
+                  <div style={{ width: tableScrollWidth || 0, height: 1 }} />
                 </div>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {mainTab === 'group' ? (
-              <div className="overflow-x-auto">
-                {groupLoading ? (
-                  <div className="text-center py-10 text-gray-500">Loading…</div>
-                ) : groupRows.length === 0 ? (
-                  <div className="text-center py-10 text-gray-500">No data for this import</div>
-                ) : (
-                  <table className="w-full min-w-[960px] text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium text-gray-600">Group Name</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Rows</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Claim Qty (MT)</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Amount After Tax (IDR)</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Aging &lt; 30 Days</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Aging 30 – 60 Days</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Aging 61 – 90 Days</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Aging &gt; 90 Days</th>
+                <div
+                  ref={bottomScrollRef}
+                  className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
+                  onScroll={() => {
+                    if (isSyncingScroll.current) return
+                    const top = topScrollRef.current
+                    const bottom = bottomScrollRef.current
+                    if (!top || !bottom) return
+                    isSyncingScroll.current = true
+                    top.scrollLeft = bottom.scrollLeft
+                    window.requestAnimationFrame(() => {
+                      isSyncingScroll.current = false
+                    })
+                  }}
+                >
+                  <table className={cn(COMPACT_OPERATIONAL_TABLE_CLASS, COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS, 'klip-compact-table--perf-narrow-cols')}>
+                    <colgroup>
+                      {visibleColumns.map((c) => (
+                        <col key={c.id} style={{ width: compactTableColWidthCss(compactTableHeaderMinWidthPx(c.label, { hasSort: true })) }} />
+                      ))}
+                    </colgroup>
+                    <thead>
+                      <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
+                        {visibleColumns.map((c) => {
+                          const layout = c.align === 'right' ? 'short' : 'truncate'
+                          return (
+                            <th
+                              key={c.id}
+                              scope="col"
+                              className={cn(
+                                'relative cursor-move select-none text-left font-semibold align-top sticky top-0 z-20 bg-slate-50',
+                                CONTRACT_PERF_TABLE_CELL_PAD,
+                                operationalTableColumnClass(layout),
+                                dragColId === c.id && 'opacity-60',
+                              )}
+                              draggable
+                              onDragStart={(e) => {
+                                setDragColId(c.id)
+                                e.dataTransfer.setData('text/plain', c.id)
+                                e.dataTransfer.effectAllowed = 'move'
+                              }}
+                              onDragEnd={() => setDragColId(null)}
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                e.dataTransfer.dropEffect = 'move'
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                const dragged = e.dataTransfer.getData('text/plain')
+                                if (dragged) reorderColumnByDrag(dragged, c.id)
+                                setDragColId(null)
+                              }}
+                            >
+                              <ContractPerfTableSortHeader
+                                label={c.label}
+                                activeSort={sortKey === c.sortKey}
+                                sortDir={sortDir}
+                                onSortClick={() => toggleSort(c.sortKey)}
+                              />
+                            </th>
+                          )
+                        })}
                       </tr>
                     </thead>
-                    <tbody className="divide-y">
-                      {groupRows.map((g) => (
-                        <tr key={g.group_name} className="hover:bg-gray-50">
-                          <td className="px-3 py-2 font-medium">{g.group_name}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{Number(g.row_count).toLocaleString('id-ID')}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{qtyClaimMt(g.total_qty_claim_kg)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{moneyIdr(g.total_amount_after_tax_idr)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{money(g.a_lt_30)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{money(g.a_30_60)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{money(g.a_61_90)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{money(g.a_gt_90)}</td>
+                    <tbody className="divide-y divide-gray-200">
+                      {loading ? (
+                        <tr className="bg-white">
+                          <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
+                            Loading…
+                          </td>
                         </tr>
-                      ))}
+                      ) : rows.length === 0 ? (
+                        <tr className="bg-white">
+                          <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
+                            {selectedImportId ? 'No rows' : 'Upload file Claim Mutu untuk mulai.'}
+                          </td>
+                        </tr>
+                      ) : (
+                        rows.map((r, idx) => {
+                          const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                          return (
+                            <tr key={r.id} className={stripeClass}>
+                              {visibleColumns.map((c) => {
+                                const layout = c.align === 'right' ? 'short' : 'truncate'
+                                return (
+                                  <td
+                                    key={c.id}
+                                    className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${operationalTableColumnClass(layout)} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass} ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
+                                  >
+                                    <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, 'text-sm')}>
+                                      {c.kind === 'b2b' && r.is_b2b ? (
+                                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700">B2B</span>
+                                      ) : (
+                                        formatCell(c.kind, r[c.id])
+                                      )}
+                                    </div>
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          )
+                        })
+                      )}
                     </tbody>
                   </table>
-                )}
-              </div>
-            ) : (
-            <>
-            <div className="overflow-x-auto">
-              {loading ? (
-                <div className="text-center py-10 text-gray-500">Loading…</div>
-              ) : rows.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">No rows</div>
-              ) : (
-                <table className="w-full min-w-[1400px] text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      {visibleColumns.map((c) => (
-                        <th
-                          key={c.id}
-                          className={`relative px-3 py-2 font-medium text-gray-600 cursor-move ${c.align === 'right' ? 'text-right' : 'text-left'} ${dragColId === c.id ? 'opacity-60' : ''}`}
-                          draggable
-                          onDragStart={(e) => {
-                            setDragColId(c.id)
-                            e.dataTransfer.setData('text/plain', c.id)
-                            e.dataTransfer.effectAllowed = 'move'
-                          }}
-                          onDragEnd={() => setDragColId(null)}
-                          onDragOver={(e) => {
-                            e.preventDefault()
-                            e.dataTransfer.dropEffect = 'move'
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault()
-                            const dragged = e.dataTransfer.getData('text/plain')
-                            if (dragged) reorderColumnByDrag(dragged, c.id)
-                            setDragColId(null)
-                          }}
-                        >
-                          <div className={`flex items-center gap-2 ${c.align === 'right' ? 'justify-end' : 'justify-start'}`}>
-                            <button
-                              type="button"
-                              className={`inline-flex items-center gap-1 hover:underline ${c.align === 'right' ? 'justify-end' : ''}`}
-                              onClick={() => toggleSort(c.sortKey)}
-                            >
-                              {c.label} <SortIcon active={sortKey === c.sortKey} />
-                            </button>
-                            <button
-                              type="button"
-                              className={`p-1 rounded hover:bg-gray-200 ${columnFilters?.[c.sortKey] ? 'bg-blue-100 text-blue-700' : 'text-gray-500'}`}
-                              onClick={() => setFilterOpenKey((k) => (k === c.sortKey ? null : c.sortKey))}
-                              title="Filter"
-                            >
-                              <FilterIcon className="h-3 w-3" />
-                            </button>
-                            {filterOpenKey === c.sortKey && (
-                              <div ref={filterRef} className="absolute z-50 mt-2 rounded-md border bg-white shadow-lg p-3 w-[260px]">
-                                {(() => {
-                                  const f = columnFilters?.[c.sortKey] || {}
-                                  if (isMultiFilterColumn(c.sortKey)) {
-                                    const opts = distinctOptions?.[c.sortKey] || []
-                                    const selected = new Set<string>((f.values || []) as string[])
-                                    const allDisplayedSelected = opts.length > 0 && opts.every((o) => selected.has(o.value))
-                                    return (
-                                      <div className="space-y-2">
-                                        <div className="text-xs font-medium text-gray-700">Filter values</div>
-                                        <Input
-                                          placeholder="Search..."
-                                          value={filterSearch}
-                                          onChange={(e) => setFilterSearch(e.target.value)}
-                                        />
-                                        <label className="flex items-center gap-2 text-xs text-gray-700 select-none">
-                                          <input type="checkbox" checked={Boolean(f.includeBlank)} onChange={() => toggleIncludeBlank(c.sortKey)} />
-                                          Include blanks
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs text-gray-700 select-none">
-                                          <input
-                                            type="checkbox"
-                                            checked={allDisplayedSelected}
-                                            onChange={(e) => setMultiAllDisplayed(c.sortKey, e.target.checked)}
-                                          />
-                                          Select all (shown)
-                                        </label>
-                                        <div className="max-h-48 overflow-auto rounded border">
-                                          {distinctLoading ? (
-                                            <div className="p-2 text-xs text-gray-500">Loading…</div>
-                                          ) : opts.length === 0 ? (
-                                            <div className="p-2 text-xs text-gray-500">No values</div>
-                                          ) : (
-                                            <div className="p-1 space-y-1">
-                                              {opts.map((o) => (
-                                                <label
-                                                  key={o.value}
-                                                  className="flex items-center justify-between gap-2 text-xs px-2 py-1 rounded hover:bg-gray-50 cursor-pointer select-none"
-                                                >
-                                                  <span className="flex items-center gap-2 min-w-0">
-                                                    <input
-                                                      type="checkbox"
-                                                      checked={selected.has(o.value)}
-                                                      onChange={() => toggleMultiValue(c.sortKey, o.value)}
-                                                    />
-                                                    <span className="truncate">{o.value}</span>
-                                                  </span>
-                                                  <span className="tabular-nums text-gray-500">{o.count.toLocaleString()}</span>
-                                                </label>
-                                              ))}
-                                            </div>
-                                          )}
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <Button variant="ghost" size="sm" onClick={() => setFilter(c.sortKey, null)}>
-                                            Clear
-                                          </Button>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => {
-                                              setFilterSearch('')
-                                              setFilterOpenKey(null)
-                                            }}
-                                          >
-                                            Done
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    )
-                                  }
-                                  if (c.sortKey === 'cr_date') {
-                                    return (
-                                      <div className="space-y-2">
-                                        <div className="text-xs font-medium text-gray-700">Date filter</div>
-                                        <Input
-                                          type="date"
-                                          value={String(f.from || '')}
-                                          onChange={(e) => setFilter(c.sortKey, { type: 'date', from: e.target.value, to: f.to || '' })}
-                                        />
-                                        <Input
-                                          type="date"
-                                          value={String(f.to || '')}
-                                          onChange={(e) => setFilter(c.sortKey, { type: 'date', from: f.from || '', to: e.target.value })}
-                                        />
-                                        <div className="flex items-center justify-between">
-                                          <Button variant="ghost" size="sm" onClick={() => setFilter(c.sortKey, null)}>
-                                            Clear
-                                          </Button>
-                                          <Button variant="outline" size="sm" onClick={() => setFilterOpenKey(null)}>
-                                            Done
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    )
-                                  }
-                                  const numericKeys = new Set([
-                                    'os_days',
-                                    'qty_claim_kg',
-                                    'amount_after_tax_idr',
-                                    'mutu_klaim_ffa',
-                                    'mutu_klaim_mi',
-                                    'mutu_klaim_dns',
-                                    'mutu_klaim_dobi',
-                                    'mutu_klaim_stone',
-                                    'a_lt_30',
-                                    'a_30_60',
-                                    'a_61_90',
-                                    'a_gt_90',
-                                  ])
-                                  if (numericKeys.has(c.sortKey)) {
-                                    return (
-                                      <div className="space-y-2">
-                                        <div className="text-xs font-medium text-gray-700">Number filter</div>
-                                        <Input
-                                          placeholder="Min"
-                                          value={String(f.min || '')}
-                                          onChange={(e) => setFilter(c.sortKey, { type: 'number', min: e.target.value, max: f.max || '' })}
-                                        />
-                                        <Input
-                                          placeholder="Max"
-                                          value={String(f.max || '')}
-                                          onChange={(e) => setFilter(c.sortKey, { type: 'number', min: f.min || '', max: e.target.value })}
-                                        />
-                                        <div className="flex items-center justify-between">
-                                          <Button variant="ghost" size="sm" onClick={() => setFilter(c.sortKey, null)}>
-                                            Clear
-                                          </Button>
-                                          <Button variant="outline" size="sm" onClick={() => setFilterOpenKey(null)}>
-                                            Done
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    )
-                                  }
-                                  return (
-                                    <div className="space-y-2">
-                                      <div className="text-xs font-medium text-gray-700">Text filter</div>
-                                      <Input
-                                        placeholder="Contains..."
-                                        value={String(f.value || '')}
-                                        onChange={(e) => setFilter(c.sortKey, { type: 'text', value: e.target.value })}
-                                      />
-                                      <div className="flex items-center justify-between">
-                                        <Button variant="ghost" size="sm" onClick={() => setFilter(c.sortKey, null)}>
-                                          Clear
-                                        </Button>
-                                        <Button variant="outline" size="sm" onClick={() => setFilterOpenKey(null)}>
-                                          Done
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  )
-                                })()}
-                              </div>
-                            )}
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {rows.map((r: any) => {
-                      return (
-                        <tr key={r.id} className="hover:bg-gray-50">
-                          {visibleColumns.map((c) => {
-                            const cell = (() => {
-                              switch (c.id) {
-                                case 'vendor':
-                                  return (
-                                    <div>
-                                      <div className="font-medium">{formatSapDisplayValue(r.vendor_name)}</div>
-                                      <div className="text-[11px] text-gray-500">{formatSapDisplayValue(r.vendor_code)}</div>
-                                    </div>
-                                  )
-                                case 'cr_date':
-                                  return formatDate(r.cr_date)
-                                case 'os_days':
-                                  return r.os_days ?? '-'
-                                case 'qty_claim_kg':
-                                  return qtyClaimMt(r.qty_claim_kg)
-                                case 'amount_after_tax_idr':
-                                  return moneyIdr(r.amount_after_tax_idr)
-                                case 'a_lt_30':
-                                case 'a_30_60':
-                                case 'a_61_90':
-                                case 'a_gt_90':
-                                  return r[c.id] ? money(r[c.id]) : '-'
-                                case 'mutu_klaim_ffa':
-                                case 'mutu_klaim_mi':
-                                case 'mutu_klaim_dns':
-                                case 'mutu_klaim_dobi':
-                                case 'mutu_klaim_stone':
-                                  return r[c.id] ?? '-'
-                                default:
-                                  return formatSapDisplayValue(r[c.id])
-                              }
-                            })()
-
-                            return (
-                              <td
-                                key={c.id}
-                                className={`px-3 py-2 ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
-                              >
-                                {cell}
-                              </td>
-                            )
-                          })}
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            {!loading && totalCount > pageSize && (
-              <div className="flex items-center justify-between mt-3">
-                <div className="text-xs text-gray-600">
-                  Page {page} of {Math.max(1, Math.ceil(totalCount / pageSize))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1}
-                    onClick={async () => {
-                      const next = Math.max(1, page - 1)
-                      setPage(next)
-                      await loadRows({ importId: selectedImportId, page: next })
-                    }}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= Math.ceil(totalCount / pageSize)}
-                    onClick={async () => {
-                      const next = Math.min(Math.ceil(totalCount / pageSize), page + 1)
-                      setPage(next)
-                      await loadRows({ importId: selectedImportId, page: next })
-                    }}
-                  >
-                    Next
-                  </Button>
                 </div>
               </div>
-            )}
-            </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
+          <ClaimMutuUploadResultDialog open={uploadResultOpen} onOpenChange={setUploadResultOpen} result={uploadSummary} />
+          <ClaimSusutImportHistoryModal
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            imports={imports}
+            apiBase="/claim-mutu"
+            kindLabel="Claim Mutu"
+            onSelectImport={(id) => {
+              setSelectedImportId(id)
+              setPage(1)
+            }}
+          />
+        </div>
+      </StitchFields>
     </Layout>
   )
 }
-
