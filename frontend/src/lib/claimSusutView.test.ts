@@ -11,7 +11,6 @@ import {
   claimSusutImportSuccessRate,
   claimSusutImportStatus,
   resolveClaimSusutPeriodRange,
-  SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT,
 } from './claimSusutView'
 
 describe('Claim Susut view helpers', () => {
@@ -65,10 +64,6 @@ describe('Claim Susut view helpers', () => {
     )
     expect(summaryParams.get('ddProduct')).toBeNull()
     expect(summaryParams.get('groupOfTransport')).toBeNull()
-  })
-
-  it('keeps the Group of Transport aging card hidden but restorable', () => {
-    expect(SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT).toBe(false)
   })
 
   it('treats a previous all-columns preference as the compact default', () => {

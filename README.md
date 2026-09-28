@@ -4204,6 +4204,41 @@ jsonb reads.
 > Wall-clock on the 1 GiB dev container swings about 2x run to run, so buffer counts are the
 > metric used for anything below a few seconds. SIT has 4 GB and production 8 GB.
 
+### Claim Susut: OS_CLAIM is the data, REAL_CLAIM the realisation
+
+The SAP export is one workbook with three sheets. The upload finds them **by name**
+(`backend/src/utils/claimSusutWorkbook.ts`):
+
+| Sheet | Role |
+| --- | --- |
+| `OS_CLAIM` | **Mandatory.** Outstanding claims - the data the page runs on: view table, filters, and the Section 1 outstanding x aging recap. `OSClaim_Susut`, the name the previous export used, is accepted too |
+| `REAL_CLAIM` | Optional. Claims approved in the period, for the Section 1 realisation recap. A workbook without it still imports its OS_CLAIM |
+| `PIVOT` | Ignored. It is the OS_CLAIM aggregate already summed; KLIP recomputes it |
+
+**Why by name.** The upload used to read `SheetNames[0]`, which in this export is PIVOT - a summary
+table, not claim rows. It also required VENDOR TYPE, CREATED BY and METODE PAYMENT, which the current
+export dropped, and looked for GROUP OF TRANSPORT / OS DAYS / DIAJUKAN where it now says GROUP /
+OS + DAYS / QUANTITY. Both layouts' names are recognised; only the columns they share are required.
+
+**Why REAL_CLAIM is imported rather than derived.** An approved claim leaves the outstanding list. In
+the 31 Aug 2026 file none of the 5 realised CRs appears in OS_CLAIM, and two were opened and approved
+inside August - no month-end OS snapshot ever held them, so comparing successive imports cannot find
+them either.
+
+**Section 1** (the drilldown section was removed):
+
+- Outstanding, outstanding > 90 days and realisation cards.
+- *Rekap Outstanding Claim - Aging*: amount after tax per GROUP x 0-30 / 31-60 / 61-90 / > 90 days,
+  groups A-Z like the PIVOT sheet. Built from OS_CLAIM rows, so it follows the page filters; clicking
+  a group filters the view table. KLIP's aging buckets are the sheet's VLOOKUP thresholds exactly.
+- *Rekap Realisasi Claim*: REAL_CLAIM per vendor with its CR numbers. Shown whole and **not** narrowed
+  by the filters, which resolve through SAP contract data only the outstanding rows carry. Quantities
+  in kg, as the sheet has them - whole MT would show a 100 kg claim as 0 MT.
+
+Checked against the 31 Aug 2026 workbook through the real controller on a production copy: 167 OS
+rows and Rp 28,338,440,606 (the sheet's X4); every GROUP and aging figure equal to the PIVOT sheet;
+5 realised claims, 16,850 kg and Rp 253,351,530 (its GRANDTOTAL).
+
 ### Trucking: scope the STO-line CTE to the page, not the whole database
 
 `contract_sto_lines` (`backend/src/utils/truckingListStoExpandSql.ts`) resolves which STO lines

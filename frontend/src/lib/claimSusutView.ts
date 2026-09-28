@@ -8,11 +8,6 @@ export const CLAIM_SUSUT_VIEW_PREF_KEY = 'claim_susut.view.v1'
 export const CLAIM_SUSUT_COLUMN_ORDER_KEY = 'claimSusut.columnOrder.v1'
 export const CLAIM_SUSUT_BLANK = '(Blank)'
 
-/**
- * Aging-by-transport card. Keep the UI/API wiring; set true to restore the section.
- */
-export const SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT = false
-
 /** CR Date preset: All = entire import (Claim Susut register is multi-year). */
 export type ClaimSusutPeriodKey = PerformancePeriodKey | 'ALL'
 

@@ -10,6 +10,7 @@ import {
   listClaimSusutByGroupOfTransport,
   getClaimSusutFilterOptions,
   getClaimSusutSummary,
+  getClaimSusutRealized,
   getClaimSusutTree,
   getClaimSusutImportById,
 } from '../controllers/claimSusut.controller';
@@ -50,6 +51,7 @@ router.get('/imports/:id', getClaimSusutImportById);
 
 router.get('/filter-options', getClaimSusutFilterOptions);
 router.get('/summary', getClaimSusutSummary);
+router.get('/realized', getClaimSusutRealized);
 router.get('/tree', getClaimSusutTree);
 
 // List rows (defaults to latest import if importId not provided)

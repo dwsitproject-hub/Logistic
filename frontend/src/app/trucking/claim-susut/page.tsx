@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import Layout from '@/components/Layout'
 import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
@@ -25,7 +25,6 @@ import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import api from '@/lib/api'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
-import { formatQtyMtFromKg } from '@/lib/utils'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
@@ -38,34 +37,30 @@ import {
   formatContractDateScopeLabel,
   PerformanceContractDateControl,
 } from '@/components/performance/PerformanceContractDateControl'
-import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
-import { ClaimSusutUploadResultDialog } from '@/components/claim-susut/ClaimSusutUploadResultDialog'
+import {
+  ClaimSusutSection1Dashboard,
+  type ClaimSusutRealized,
+} from '@/components/claim-susut/ClaimSusutSection1Dashboard'
+import {
+  ClaimSusutUploadResultDialog,
+  type ClaimSusutUploadResult,
+} from '@/components/claim-susut/ClaimSusutUploadResultDialog'
 import { ClaimSusutImportHistoryModal } from '@/components/claim-susut/ClaimSusutImportHistoryModal'
 import {
   appendClaimSusutFilterParams,
   buildClaimSusutPeriodOptions,
-  buildNextClaimSusutDrilldownSelection,
   CLAIM_SUSUT_COLUMN_ORDER_KEY,
   CLAIM_SUSUT_COLUMNS,
   CLAIM_SUSUT_DEFAULT_VISIBLE_IDS,
-  CLAIM_SUSUT_DRILLDOWN_CATEGORIES,
-  CLAIM_SUSUT_DRILLDOWN_LEVEL_STYLES,
   CLAIM_SUSUT_NUMERIC_SORT_KEYS,
   CLAIM_SUSUT_VIEW_PREF_KEY,
-  claimSusutDrilldownColumnSubtitle,
-  claimSusutTreeNodesForLevel,
   EMPTY_CLAIM_SUSUT_DRILLDOWN,
   formatClaimSusutIdr,
   looksLikeLegacyAllVisibleClaimSusutColumns,
   resolveClaimSusutPeriodRange,
-  SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT,
   type ClaimSusutApiFilters,
   type ClaimSusutColumnDef,
-  type ClaimSusutDrilldownFilters,
-  type ClaimSusutDrilldownLevel,
   type ClaimSusutPeriodKey,
-  type ClaimSusutTreeNode,
 } from '@/lib/claimSusutView'
 
 type ClaimSusutImport = {
@@ -147,16 +142,11 @@ export default function ClaimSusutPage() {
   const [totalCount, setTotalCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [summaryLoading, setSummaryLoading] = useState(false)
-  const [treeLoading, setTreeLoading] = useState(false)
+  const [realizedLoading, setRealizedLoading] = useState(false)
   const [groupTransportLoading, setGroupTransportLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [uploadSummary, setUploadSummary] = useState<{
-    totalRows: number
-    insertedRows: number
-    failedRows: number
-    errors: { rowIndex: number; message: string }[]
-  } | null>(null)
+  const [uploadSummary, setUploadSummary] = useState<ClaimSusutUploadResult | null>(null)
   const [uploadResultOpen, setUploadResultOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
 
@@ -173,8 +163,7 @@ export default function ClaimSusutPage() {
   const [incotermOptions, setIncotermOptions] = useState<string[]>([])
   const [productOptions, setProductOptions] = useState<string[]>([])
   const [transportOptions, setTransportOptions] = useState<string[]>([])
-  const [drilldown, setDrilldown] = useState<ClaimSusutDrilldownFilters>(EMPTY_CLAIM_SUSUT_DRILLDOWN)
-  const [tree, setTree] = useState<ClaimSusutTreeNode[]>([])
+  const [realized, setRealized] = useState<ClaimSusutRealized | null>(null)
   const [summary, setSummary] = useState({ qtyClaim: 0, amountAfterTax: 0, rowCount: 0 })
   const [groupTransportRows, setGroupTransportRows] = useState<ClaimSusutGroupTransportRow[]>([])
 
@@ -215,7 +204,7 @@ export default function ClaimSusutPage() {
       incoterms: selectedIncoterms,
       products: selectedProducts,
       groupsOfTransport: selectedGroupsOfTransport,
-      drilldown,
+      drilldown: EMPTY_CLAIM_SUSUT_DRILLDOWN,
     }),
     [
       selectedImportId,
@@ -226,7 +215,6 @@ export default function ClaimSusutPage() {
       selectedIncoterms,
       selectedProducts,
       selectedGroupsOfTransport,
-      drilldown,
     ],
   )
 
@@ -370,10 +358,9 @@ export default function ClaimSusutPage() {
     setTransportOptions((data.groupsOfTransport || []).map(String))
   }, [])
 
-  const loadSummaryAndTree = useCallback(async (filters: ClaimSusutApiFilters) => {
+  const loadSummary = useCallback(async (filters: ClaimSusutApiFilters) => {
     if (!filters.importId) {
       setSummary({ qtyClaim: 0, amountAfterTax: 0, rowCount: 0 })
-      setTree([])
       return
     }
     const params = appendClaimSusutFilterParams(new URLSearchParams(), filters, {
@@ -381,21 +368,30 @@ export default function ClaimSusutPage() {
       includeGroup: true,
     })
     setSummaryLoading(true)
-    setTreeLoading(true)
     try {
-      const [summaryRes, treeRes] = await Promise.all([
-        api.get(`/claim-susut/summary?${params.toString()}`),
-        api.get(`/claim-susut/tree?${params.toString()}`),
-      ])
+      const summaryRes = await api.get(`/claim-susut/summary?${params.toString()}`)
       setSummary({
         qtyClaim: Number(summaryRes.data?.data?.qtyClaim) || 0,
         amountAfterTax: Number(summaryRes.data?.data?.amountAfterTax) || 0,
         rowCount: Number(summaryRes.data?.data?.rowCount) || 0,
       })
-      setTree((treeRes.data?.data || []) as ClaimSusutTreeNode[])
     } finally {
       setSummaryLoading(false)
-      setTreeLoading(false)
+    }
+  }, [])
+
+  /** The REAL_CLAIM half of Section 1: one list per import, not narrowed by the page filters. */
+  const loadRealized = useCallback(async (importId: string) => {
+    if (!importId) {
+      setRealized(null)
+      return
+    }
+    setRealizedLoading(true)
+    try {
+      const res = await api.get(`/claim-susut/realized?importId=${encodeURIComponent(importId)}`)
+      setRealized((res.data?.data ?? null) as ClaimSusutRealized | null)
+    } finally {
+      setRealizedLoading(false)
     }
   }, [])
 
@@ -457,9 +453,15 @@ export default function ClaimSusutPage() {
   }, [selectedImportId])
 
   useEffect(() => {
+    loadRealized(selectedImportId).catch((e) =>
+      setError(apiErrorMessage(e, 'Failed to load Claim Susut realisation')),
+    )
+  }, [selectedImportId, loadRealized])
+
+  useEffect(() => {
     if (!selectedImportId) return
     setPage(1)
-  }, [dateFrom, dateTo, selectedPlants, selectedSources, selectedIncoterms, selectedProducts, selectedGroupsOfTransport, drilldown, sortKey, sortDir])
+  }, [dateFrom, dateTo, selectedPlants, selectedSources, selectedIncoterms, selectedProducts, selectedGroupsOfTransport, sortKey, sortDir])
 
   useEffect(() => {
     if (!selectedImportId) return
@@ -469,7 +471,7 @@ export default function ClaimSusutPage() {
 
   useEffect(() => {
     if (!selectedImportId) return
-    loadSummaryAndTree(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Susut summary')))
+    loadSummary(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Susut summary')))
   }, [
     selectedImportId,
     dateFrom,
@@ -479,16 +481,15 @@ export default function ClaimSusutPage() {
     selectedIncoterms,
     selectedProducts,
     selectedGroupsOfTransport,
-    loadSummaryAndTree,
+    loadSummary,
     scopeFilters,
   ])
 
   useEffect(() => {
-    if (!SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT) {
+    if (!selectedImportId) {
       setGroupTransportRows([])
       return
     }
-    if (!selectedImportId) return
     loadByGroupOfTransport(scopeFilters).catch((e) =>
       setError(apiErrorMessage(e, 'Failed to load group of transport summary')),
     )
@@ -500,7 +501,6 @@ export default function ClaimSusutPage() {
     selectedSources,
     selectedIncoterms,
     selectedProducts,
-    drilldown,
     loadByGroupOfTransport,
     scopeFilters,
   ])
@@ -517,7 +517,6 @@ export default function ClaimSusutPage() {
     selectedIncoterms,
     selectedProducts,
     selectedGroupsOfTransport,
-    drilldown,
     page,
     sortKey,
     sortDir,
@@ -537,9 +536,9 @@ export default function ClaimSusutPage() {
   const busy =
     loading ||
     summaryLoading ||
-    treeLoading ||
+    realizedLoading ||
     uploading ||
-    (SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT && groupTransportLoading)
+    groupTransportLoading
   usePageHeaderBusy(busy)
 
   const onUploadFile = async (uploadFile: File) => {
@@ -555,9 +554,22 @@ export default function ClaimSusutPage() {
       const importId = res.data?.data?.importId
       const totalRows = Number(res.data?.data?.totalRows) || 0
       const insertedRows = Number(res.data?.data?.insertedRows) || 0
-      const errors = (res.data?.data?.errors || []) as { rowIndex: number; message: string }[]
-      const failedRows = Number(res.data?.data?.failedRows) || Math.max(0, totalRows - insertedRows)
-      setUploadSummary({ totalRows, insertedRows, failedRows, errors })
+      const d = res.data?.data ?? {}
+      const errors = (d.errors || []) as { rowIndex: number; message: string; sheet?: string }[]
+      const failedRows = Number(d.failedRows) || Math.max(0, totalRows - insertedRows)
+      setUploadSummary({
+        totalRows,
+        insertedRows,
+        failedRows,
+        errors,
+        sheetName: d.sheetName ?? null,
+        periodLabel: d.periodLabel ?? null,
+        realSheetName: d.realSheetName ?? null,
+        realPeriodLabel: d.realPeriodLabel ?? null,
+        realTotalRows: Number(d.realTotalRows) || 0,
+        realInsertedRows: Number(d.realInsertedRows) || 0,
+        realWarning: d.realWarning ?? null,
+      })
       setUploadResultOpen(true)
       await loadImports()
       if (importId) setSelectedImportId(importId)
@@ -592,83 +604,10 @@ export default function ClaimSusutPage() {
     setSelectedIncoterms([])
     setSelectedProducts([])
     setSelectedGroupsOfTransport([])
-    setDrilldown(EMPTY_CLAIM_SUSUT_DRILLDOWN)
     setPage(1)
   }
 
-  const applyDrilldown = (level: ClaimSusutDrilldownLevel, label: string) => {
-    setDrilldown((prev) => buildNextClaimSusutDrilldownSelection(prev, level, label))
-    setPage(1)
-  }
-
-  const drilldownScopeSegments = useMemo(() => {
-    const parts: string[] = [
-      formatContractDateScopeLabel(period, dateFrom, dateTo, (p) =>
-        resolveClaimSusutPeriodRange(p as ClaimSusutPeriodKey),
-      ),
-    ]
-    if (selectedPlants.length > 0) parts.push(selectedPlants.join(', '))
-    if (selectedSources.length > 0) parts.push(selectedSources.join(', '))
-    if (selectedIncoterms.length > 0) parts.push(selectedIncoterms.join(', '))
-    if (selectedProducts.length > 0) parts.push(selectedProducts.join(', '))
-    if (selectedGroupsOfTransport.length > 0) parts.push(selectedGroupsOfTransport.join(', '))
-    if (drilldown.product) parts.push(drilldown.product)
-    if (drilldown.plant) parts.push(drilldown.plant)
-    if (drilldown.incoterm) parts.push(drilldown.incoterm)
-    if (drilldown.company) parts.push(drilldown.company)
-    return parts
-  }, [
-    period,
-    dateFrom,
-    dateTo,
-    selectedPlants,
-    selectedSources,
-    selectedIncoterms,
-    selectedProducts,
-    selectedGroupsOfTransport,
-    drilldown,
-  ])
-
-  const denomAmount = Math.abs(summary.amountAfterTax) > 0 ? Math.abs(summary.amountAfterTax) : 1
   const periodOptions = useMemo(() => buildClaimSusutPeriodOptions(), [])
-
-  const renderTreeCard = (
-    node: ClaimSusutTreeNode,
-    level: ClaimSusutDrilldownLevel,
-    selected: boolean,
-  ) => {
-    const style = CLAIM_SUSUT_DRILLDOWN_LEVEL_STYLES[level]
-    const pct = Math.max(1, Math.round((Math.abs(node.amountAfterTax) / denomAmount) * 100))
-    const itemClass = `w-full text-left rounded-lg border px-3 py-2 hover:bg-gray-50 focus:outline-none ${
-      selected ? `bg-white border-2 ${style.selectedBorder}` : 'bg-white border-gray-200'
-    }`
-    return (
-      <button key={node.key} type="button" className={itemClass} onClick={() => applyDrilldown(level, node.key)}>
-        <div className="text-sm font-semibold text-gray-900 truncate" title={node.label}>
-          {node.label}
-        </div>
-        <div className="mt-1 h-1 rounded bg-gray-100 overflow-hidden">
-          <div className={`h-full ${style.bar}`} style={{ width: `${pct}%` }} />
-        </div>
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] leading-tight">
-          <span className="text-gray-600 shrink-0">
-            Qty:{' '}
-            <span className="font-semibold text-gray-900 tabular-nums">{formatQtyMtFromKg(node.qtyClaim)}</span>
-          </span>
-          <span className="font-semibold tabular-nums text-gray-900 shrink-0">
-            {formatClaimSusutIdr(node.amountAfterTax)}
-          </span>
-        </div>
-      </button>
-    )
-  }
-
-  const isSelectedAtLevel = (level: ClaimSusutDrilldownLevel, key: string) => {
-    if (level === 'product') return drilldown.product === key
-    if (level === 'plant') return drilldown.plant === key
-    if (level === 'incoterm') return drilldown.incoterm === key
-    return drilldown.company === key
-  }
 
   return (
     <Layout>
@@ -841,137 +780,19 @@ export default function ClaimSusutPage() {
           </div>
         </ListFilterPanel>
 
-        <div className={`transition-opacity duration-200 ${summaryLoading ? 'opacity-65' : 'opacity-100'}`}>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
-            <PerformanceSection1CardShell
-              variant="open"
-              title="Outstanding Claim Susut"
-              selected
-              onClick={() => undefined}
-            >
-              <div className="text-sm text-gray-500 mb-1">Qty Klaim</div>
-              <div className="text-xl font-bold text-gray-900 mb-3">{formatQtyMtFromKg(summary.qtyClaim)}</div>
-              <div className="text-xs text-gray-500">
-                Amount:{' '}
-                <span className="font-semibold text-gray-900 tabular-nums">{formatClaimSusutIdr(summary.amountAfterTax)}</span>
-              </div>
-            </PerformanceSection1CardShell>
-          </div>
-        </div>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-              <span>Claim Susut Drilldown</span>
-              {treeLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
-            </CardTitle>
-            <PerformanceDrilldownScopeLine segments={drilldownScopeSegments} />
-          </CardHeader>
-          <CardContent className="pt-2">
-            {!selectedImportId ? (
-              <div className="text-sm text-gray-500">Upload or select an import to see the drilldown.</div>
-            ) : tree.length === 0 && !treeLoading ? (
-              <div className="text-sm text-gray-500">No Claim Susut rows for the current filters.</div>
-            ) : (
-              <div className={`grid grid-cols-1 lg:grid-cols-4 gap-3 ${treeLoading ? 'opacity-65' : 'opacity-100'}`}>
-                {CLAIM_SUSUT_DRILLDOWN_CATEGORIES.map(({ level, title }) => {
-                  const style = CLAIM_SUSUT_DRILLDOWN_LEVEL_STYLES[level]
-                  const subtitle = claimSusutDrilldownColumnSubtitle(level, drilldown)
-                  const nodes = claimSusutTreeNodesForLevel(tree, drilldown, level)
-                  let body: ReactNode
-                  if (level === 'plant' && !drilldown.product) {
-                    body = <div className="text-sm text-gray-500">Select a product to see plants.</div>
-                  } else if (level === 'incoterm' && !drilldown.plant) {
-                    body = <div className="text-sm text-gray-500">Select a plant to see incoterms.</div>
-                  } else if (level === 'company' && !drilldown.incoterm) {
-                    body = <div className="text-sm text-gray-500">Select an incoterm to see companies.</div>
-                  } else {
-                    body = (
-                      <div className="space-y-2">
-                        {nodes.slice(0, 30).map((node) => renderTreeCard(node, level, isSelectedAtLevel(level, node.key)))}
-                      </div>
-                    )
-                  }
-                  return (
-                    <div key={level} className={`rounded-lg border ${style.border} overflow-hidden`}>
-                      <div className={`${style.headerBg} px-3 py-2 border-b ${style.border}`}>
-                        <div className="text-sm font-semibold text-gray-800">{title}</div>
-                        <div className="text-[11px] text-gray-500">{subtitle}</div>
-                      </div>
-                      <div className="p-2 max-h-80 overflow-y-auto">{body}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {SHOW_CLAIM_SUSUT_GROUP_OF_TRANSPORT ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              Group of Transport{' '}
-              <span className="text-xs font-normal text-gray-500">
-                {groupTransportLoading ? 'Loading…' : `${groupTransportRows.length.toLocaleString()} groups`}
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              {groupTransportLoading ? (
-                <div className="text-center py-10 text-gray-500">Loading…</div>
-              ) : groupTransportRows.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">No data for this import</div>
-              ) : (
-                <table className="w-full min-w-[1080px] text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium text-gray-600">Group of Transport</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">Qty Klaim</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">Aging 0-30 Days</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">Aging 31-60 Days</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">Aging 61-90 Days</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-600">Aging &gt; 90 Days</th>
-                      <th className="px-3 py-2 text-right font-medium text-gray-800">Grand Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {groupTransportRows.map((g) => {
-                      const selected =
-                        selectedGroupsOfTransport.length === 1 &&
-                        selectedGroupsOfTransport[0] === g.group_of_transport
-                      return (
-                        <tr
-                          key={g.group_of_transport}
-                          className={`cursor-pointer ${selected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
-                          onClick={() =>
-                            setSelectedGroupsOfTransport((prev) =>
-                              prev.length === 1 && prev[0] === g.group_of_transport
-                                ? []
-                                : [g.group_of_transport],
-                            )
-                          }
-                        >
-                          <td className="px-3 py-2 font-medium">{g.group_of_transport}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{formatQtyMtFromKg(g.qty_claim)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{formatClaimSusutIdr(g.a_0_30)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{formatClaimSusutIdr(g.a_31_60)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{formatClaimSusutIdr(g.a_61_90)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{formatClaimSusutIdr(g.a_gt_90)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums font-semibold">
-                            {formatClaimSusutIdr(g.grand_total)}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-        ) : null}
+        <ClaimSusutSection1Dashboard
+          summary={summary}
+          summaryLoading={summaryLoading}
+          groupRows={groupTransportRows}
+          groupLoading={groupTransportLoading}
+          realized={realized}
+          realizedLoading={realizedLoading}
+          selectedGroups={selectedGroupsOfTransport}
+          hasImport={Boolean(selectedImportId)}
+          onToggleGroup={(group) =>
+            setSelectedGroupsOfTransport((prev) => (prev.length === 1 && prev[0] === group ? [] : [group]))
+          }
+        />
 
         <Card>
           <CardHeader>
@@ -994,8 +815,7 @@ export default function ClaimSusutPage() {
                     selectedSources.length > 0 ||
                     selectedIncoterms.length > 0 ||
                     selectedProducts.length > 0 ||
-                    selectedGroupsOfTransport.length > 0 ||
-                    Boolean(drilldown.product || drilldown.plant || drilldown.incoterm || drilldown.company)
+                    selectedGroupsOfTransport.length > 0
                       ? 'Global · Filtered'
                       : 'Global · All'}
                   </span>

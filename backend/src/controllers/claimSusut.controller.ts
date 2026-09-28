@@ -5,6 +5,7 @@ import logger from '../utils/logger';
 import * as XLSX from 'xlsx';
 import {
   buildClaimSusutFilteredCte,
+  CLAIM_SUSUT_BLANK,
   CLAIM_SUSUT_AGING_SUM_SQL,
   CLAIM_SUSUT_ROW_AGING_SQL,
   nestClaimSusutTree,
@@ -15,86 +16,21 @@ import {
   type ClaimSusutQueryFilters,
   type ClaimSusutTreeLeaf,
 } from '../utils/claimSusutQuerySql';
-import { parseFlexibleIsoDate } from '../utils/parseFlexibleIsoDate';
+import {
+  findOsClaimSheet,
+  findRealClaimSheet,
+  parseOsClaimSheet,
+  parseRealClaimSheet,
+} from '../utils/claimSusutWorkbook';
 
-type HeaderRow = (string | number | null | undefined)[];
-
-function normHeader(v: unknown): string {
-  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
-  return s.toUpperCase();
-}
-
-function parseFlexibleDateToIsoDate(v: unknown): string | null {
-  return parseFlexibleIsoDate(v);
-}
-
-function toNumberOrNull(v: unknown): number | null {
-  if (v == null || v === '') return null;
-  if (typeof v === 'number' && Number.isFinite(v)) return v;
-  const s = String(v).replace(/,/g, '').trim();
-  if (!s) return null;
-  const n = Number(s);
-  return Number.isFinite(n) ? n : null;
-}
-
-function findHeaderRowIndex(rows: any[][]): number {
-  // Template says row 5-7 are header. We scan first 40 rows for a row containing key fields.
-  for (let i = 0; i < Math.min(rows.length, 40); i++) {
-    const r = rows[i] || [];
-    const set = new Set(r.map(normHeader).filter(Boolean));
-    const hasVendor = set.has('VENDOR CODE') || set.has('VENDORCODE');
-    const hasCr = set.has('CR NO') || set.has('CRNO') || set.has('CR DATE');
-    const hasOs = set.has('OS DAYS') || set.has('OUTSTANDING');
-    const hasPoOrContract = set.has('NO PO') || set.has('NOPO') || set.has('NO KONTRAK');
-    if (!hasVendor) continue;
-    if (!hasCr) continue;
-    if (hasOs && hasPoOrContract) return i;
-  }
-  // Fallback: first row that has VENDORCODE
-  for (let i = 0; i < Math.min(rows.length, 40); i++) {
-    const r = rows[i] || [];
-    const set = new Set(r.map(normHeader).filter(Boolean));
-    if (set.has('VENDOR CODE') || set.has('VENDORCODE')) return i;
-  }
-  return 0;
-}
-
-function buildHeaders3(rows: any[][], headerRowIndex: number): string[] {
-  const row1 = (rows[headerRowIndex] || []) as HeaderRow;
-  const row2 = (rows[headerRowIndex + 1] || []) as HeaderRow;
-  const row3 = (rows[headerRowIndex + 2] || []) as HeaderRow;
-  const maxLen = Math.max(row1.length, row2.length, row3.length);
-  const headers: string[] = [];
-
-  // Prefer the deepest header cell when present. Some SAP files repeat headers on row 6-7,
-  // but row3 (headerRowIndex+2) is often already the first DATA row; detect that and ignore.
-  const row3Set = new Set(row3.map(normHeader).filter(Boolean));
-  const row3LooksLikeHeader =
-    (row3Set.has('VENDOR CODE') || row3Set.has('VENDORCODE')) &&
-    (row3Set.has('CR DATE') || row3Set.has('CR NO') || row3Set.has('CRNO'));
-
-  for (let c = 0; c < maxLen; c++) {
-    const h3 = row3LooksLikeHeader ? normHeader(row3[c]) : '';
-    const h2 = normHeader(row2[c]);
-    const h1 = normHeader(row1[c]);
-    const h = h3 || h2 || h1 || '';
-    headers.push(h);
-  }
-  return headers;
-}
-
-function rowToObject(headers: string[], row: any[]): Record<string, any> {
-  const obj: Record<string, any> = {};
-  for (let i = 0; i < Math.min(headers.length, row.length); i++) {
-    const h = headers[i];
-    if (!h) continue;
-    const v = row[i];
-    if (v == null || v === '') continue;
-    obj[h] = v;
-  }
-  return obj;
-}
-
+/**
+ * Upload one SAP Claim Susut workbook.
+ *
+ * OS_CLAIM is mandatory - it is the data the page runs on. REAL_CLAIM is read too when the workbook
+ * has it, for the Section 1 realisation dashboard; a problem with it never blocks the outstanding
+ * import, it comes back as a warning. Every other sheet (PIVOT included) is ignored: reading
+ * `SheetNames[0]` is what used to import the PIVOT summary as if it were claim rows.
+ */
 export const uploadClaimSusutExcel = async (req: AuthRequest, res: Response) => {
   try {
     const file = (req as any).file as Express.Multer.File | undefined;
@@ -104,126 +40,56 @@ export const uploadClaimSusutExcel = async (req: AuthRequest, res: Response) => 
     }
 
     const wb = XLSX.readFile(file.path, { cellDates: true });
-    const preferred = sheetNameReq || wb.SheetNames[0];
-    const ws = wb.Sheets[preferred];
-    if (!ws) {
-      return res.status(400).json({ success: false, error: { message: `Sheet not found: ${preferred}` } });
-    }
-
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false }) as any[][];
-    const headerRowIndex = findHeaderRowIndex(rows);
-    const headers = buildHeaders3(rows, headerRowIndex);
-    const headerSet = new Set(headers.map((h) => normHeader(h)).filter(Boolean));
-
-    // NOTE: SAP exports often use spaced headers (e.g. "VENDOR CODE", "CR NO").
-    // Validate against the template's real headers (row 7) but keep fallbacks.
-    const requiredAnyOf: Array<{ label: string; keys: string[] }> = [
-      { label: 'VENDOR CODE', keys: ['VENDOR CODE', 'VENDORCODE'] },
-      { label: 'VENDOR NAME', keys: ['VENDOR NAME'] },
-      { label: 'VENDOR TYPE', keys: ['VENDOR TYPE'] },
-      { label: 'CREATED BY', keys: ['CREATED BY', 'CREATEDBY'] },
-      { label: 'STA', keys: ['STA'] },
-      { label: 'CR NO', keys: ['CR NO', 'CRNO'] },
-      { label: 'CR DATE', keys: ['CR DATE'] },
-      { label: 'OS DAYS', keys: ['OS DAYS', 'OUTSTANDING'] },
-      { label: 'GROUP OF TRANSPORT', keys: ['GROUP OF TRANSPORT'] },
-      { label: 'METODE PAYMENT', keys: ['METODE PAYMENT'] },
-      { label: 'DEST', keys: ['DEST'] },
-      { label: 'NO PO', keys: ['NO PO', 'NOPO'] },
-      { label: 'NO KONTRAK', keys: ['NO KONTRAK', 'NO KONTRAK '] },
-      { label: 'COMM', keys: ['COMM'] },
-      { label: 'COMMODITY', keys: ['COMMODITY'] },
-      { label: 'UOM', keys: ['UOM'] },
-      { label: 'CURRE', keys: ['CURRE'] },
-      { label: 'CODE', keys: ['CODE', 'COMPANY CODE'] },
-      { label: 'KETERANGAN', keys: ['KETERANGAN', 'REMARKS'] },
-      { label: 'TYPE', keys: ['TYPE'] },
-      { label: 'DIAJUKAN', keys: ['DIAJUKAN'] },
-    ];
-    const missing = requiredAnyOf
-      .filter((r) => !r.keys.some((k) => headerSet.has(normHeader(k))))
-      .map((r) => r.label);
-    // Amount columns are sometimes quirky in SAP exports, validate loosely.
-    const hasAmtBefore = headerSet.has('AMOUNT BEFORE TAX(IDR)') || headerSet.has('AMOUNT BEFORE TAX (IDR)');
-    const hasTax = headerSet.has('TAX');
-    const hasAmtAfter = headerSet.has('(IDR)') || headerSet.has('AMOUNT AFTER TAX(IDR)') || headerSet.has('AMOUNT AFTER TAX (IDR)');
-    if (missing.length > 0 || !hasAmtBefore || !hasTax || !hasAmtAfter) {
-      const extraMissing: string[] = [];
-      if (!hasAmtBefore) extraMissing.push('AMOUNT BEFORE TAX(IDR)');
-      if (!hasTax) extraMissing.push('TAX');
-      if (!hasAmtAfter) extraMissing.push('AMOUNT AFTER TAX (IDR)');
-      const allMissing = [...missing, ...extraMissing];
+    const osSheet = findOsClaimSheet(wb.SheetNames, sheetNameReq || null);
+    if (!osSheet) {
       return res.status(400).json({
         success: false,
-        error: { message: `Missing required columns: ${allMissing.join(', ')}` },
+        error: {
+          message: `Sheet OS_CLAIM not found. Sheets in this file: ${wb.SheetNames.join(', ') || '(none)'}`,
+        },
       });
     }
 
-    const dataRows = rows.slice(headerRowIndex + 3);
+    const os = parseOsClaimSheet(wb.Sheets[osSheet]);
+    if (os.missing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { message: `Missing required columns in ${osSheet}: ${os.missing.join(', ')}` },
+      });
+    }
+
+    const realSheet = findRealClaimSheet(wb.SheetNames);
+    const real = realSheet ? parseRealClaimSheet(wb.Sheets[realSheet]) : null;
+    const realWarning =
+      real && real.missing.length > 0
+        ? `${realSheet} was not imported - missing columns: ${real.missing.join(', ')}`
+        : null;
+    const realRows = real && real.missing.length === 0 ? real.rows : [];
 
     const importIns = await query(
       `
-      INSERT INTO claim_susut_imports (file_name, sheet_name, uploaded_by, total_rows, inserted_rows, errors)
-      VALUES ($1, $2, $3, 0, 0, '[]'::jsonb)
+      INSERT INTO claim_susut_imports
+        (file_name, sheet_name, uploaded_by, total_rows, inserted_rows, errors,
+         os_period_label, real_sheet_name, real_period_label)
+      VALUES ($1, $2, $3, 0, 0, '[]'::jsonb, $4, $5, $6)
       RETURNING id
       `,
-      [file.originalname, preferred, req.user?.id ?? null],
+      [
+        file.originalname,
+        osSheet,
+        req.user?.id ?? null,
+        os.periodLabel,
+        realRows.length > 0 ? realSheet : null,
+        realRows.length > 0 ? real?.periodLabel ?? null : null,
+      ],
     );
     const importId = importIns.rows?.[0]?.id;
 
-    let total = 0;
     let inserted = 0;
-    const errors: any[] = [];
+    const errors: Array<{ rowIndex: number; message: string; sheet?: string }> = [];
 
-    for (let idx = 0; idx < dataRows.length; idx++) {
-      const row = dataRows[idx];
-      if (!row || row.every((c) => c == null || String(c).trim() === '')) continue;
-      total++;
+    for (const r of os.rows) {
       try {
-        const obj = rowToObject(headers, row);
-        const get = (k: string) => obj[normHeader(k)];
-        const getAny = (keys: string[]) => {
-          for (const k of keys) {
-            const v = get(k);
-            if (v != null && v !== '') return v;
-          }
-          return null;
-        };
-
-        const vendorCode = String(getAny(['VENDOR CODE', 'VENDORCODE']) ?? '').trim() || null;
-        const vendorName = String(getAny(['VENDOR NAME']) ?? '').trim() || null;
-        const vendorType = String(getAny(['VENDOR TYPE']) ?? '').trim() || null;
-        const createdBy = String(getAny(['CREATED BY', 'CREATEDBY']) ?? '').trim() || null;
-        const sta = String(get('STA') ?? '').trim() || null;
-        const crno = String(getAny(['CR NO', 'CRNO']) ?? '').trim() || null;
-        const crDateIso = parseFlexibleDateToIsoDate(get('CR DATE'));
-        const osDays = toNumberOrNull(getAny(['OS DAYS', 'OUTSTANDING']));
-        const groupOfTransport = String(get('GROUP OF TRANSPORT') ?? '').trim() || null;
-        const paymentMethod = String(get('METODE PAYMENT') ?? '').trim() || null;
-        const dest = String(get('DEST') ?? '').trim() || null;
-        const poNumber = String(getAny(['NO PO', 'NOPO']) ?? '').trim() || null;
-        const contractExtNo = String(get('NO KONTRAK') ?? '').trim() || null;
-        const comm = String(get('COMM') ?? '').trim() || null;
-        const commodity = String(get('COMMODITY') ?? '').trim() || null;
-        const uom = String(get('UOM') ?? '').trim() || null;
-        const currency = String(get('CURRE') ?? '').trim() || null;
-        const companyCode = String(get('CODE') ?? '').trim() || null;
-        const remarks = String(get('KETERANGAN') ?? '').trim() || null;
-        const type = String(get('TYPE') ?? '').trim() || null;
-        const qtyClaim = toNumberOrNull(get('DIAJUKAN'));
-
-        const amountBeforeTax =
-          toNumberOrNull(get('AMOUNT BEFORE TAX(IDR)')) ?? toNumberOrNull(get('AMOUNT BEFORE TAX (IDR)')) ?? null;
-        const tax = toNumberOrNull(get('TAX'));
-        const amountAfterTax =
-          toNumberOrNull(get('(IDR)')) ??
-          toNumberOrNull(get('AMOUNT AFTER TAX(IDR)')) ??
-          toNumberOrNull(get('AMOUNT AFTER TAX (IDR)')) ??
-          null;
-
-        // Skip rows that clearly aren't data
-        if (!vendorCode && !contractExtNo && !poNumber) continue;
-
         await query(
           `
           INSERT INTO claim_susut_rows (
@@ -232,7 +98,7 @@ export const uploadClaimSusutExcel = async (req: AuthRequest, res: Response) => 
             group_of_transport, payment_method, dest, po_number, contract_ext_no,
             comm, commodity, uom, currency, company_code, remarks, type,
             qty_claim, amount_before_tax_idr, tax, amount_after_tax_idr,
-            raw
+            material_description, raw
           )
           VALUES (
             $1,
@@ -240,61 +106,82 @@ export const uploadClaimSusutExcel = async (req: AuthRequest, res: Response) => 
             $10,$11,$12,$13,$14,
             $15,$16,$17,$18,$19,$20,$21,
             $22,$23,$24,$25,
-            $26::jsonb
+            $26,$27::jsonb
           )
           `,
           [
             importId,
-            vendorCode,
-            vendorName,
-            vendorType,
-            createdBy,
-            sta,
-            crno,
-            crDateIso,
-            osDays != null ? Math.trunc(osDays) : null,
-            groupOfTransport,
-            paymentMethod,
-            dest,
-            poNumber,
-            contractExtNo,
-            comm,
-            commodity,
-            uom,
-            currency,
-            companyCode,
-            remarks,
-            type,
-            qtyClaim,
-            amountBeforeTax,
-            tax,
-            amountAfterTax,
-            JSON.stringify(obj),
+            r.vendorCode, r.vendorName, r.vendorType, r.createdBy, r.sta, r.crno, r.crDate, r.osDays,
+            r.groupOfTransport, r.paymentMethod, r.dest, r.poNumber, r.contractExtNo,
+            r.comm, r.commodity, r.uom, r.currency, r.companyCode, r.remarks, r.type,
+            r.qtyClaim, r.amountBeforeTax, r.tax, r.amountAfterTax,
+            r.materialDescription, JSON.stringify(r.raw),
           ],
         );
         inserted++;
       } catch (e: any) {
-        errors.push({ rowIndex: headerRowIndex + 4 + idx, message: String(e?.message || e) });
+        errors.push({ rowIndex: r.sheetRow, sheet: osSheet, message: String(e?.message || e) });
       }
     }
 
-    await query(`UPDATE claim_susut_imports SET total_rows=$2, inserted_rows=$3, errors=$4::jsonb WHERE id=$1`, [
-      importId,
-      total,
-      inserted,
-      JSON.stringify(errors),
-    ]);
+    let realInserted = 0;
+    for (const r of realRows) {
+      try {
+        await query(
+          `
+          INSERT INTO claim_susut_real_rows (
+            import_id,
+            vendor_code, vendor_name, cargo_source, cr_no, claim_date, cm_date, po_cn_date,
+            po_number, comm, commodity, material_description, dest, status_claim, company_code,
+            type_of_claim, currency, qty_approved, uom, amount_before_tax_idr, tax, amount_after_tax_idr,
+            remarks, transport_group, raw
+          )
+          VALUES (
+            $1,
+            $2,$3,$4,$5,$6,$7,$8,
+            $9,$10,$11,$12,$13,$14,$15,
+            $16,$17,$18,$19,$20,$21,$22,
+            $23,$24,$25::jsonb
+          )
+          `,
+          [
+            importId,
+            r.vendorCode, r.vendorName, r.cargoSource, r.crNo, r.claimDate, r.cmDate, r.poCnDate,
+            r.poNumber, r.comm, r.commodity, r.materialDescription, r.dest, r.statusClaim, r.companyCode,
+            r.typeOfClaim, r.currency, r.qtyApproved, r.uom, r.amountBeforeTax, r.tax, r.amountAfterTax,
+            r.remarks, r.transportGroup, JSON.stringify(r.raw),
+          ],
+        );
+        realInserted++;
+      } catch (e: any) {
+        errors.push({ rowIndex: r.sheetRow, sheet: realSheet ?? undefined, message: String(e?.message || e) });
+      }
+    }
+
+    await query(
+      `UPDATE claim_susut_imports
+          SET total_rows = $2, inserted_rows = $3, errors = $4::jsonb,
+              real_total_rows = $5, real_inserted_rows = $6
+        WHERE id = $1`,
+      [importId, os.rows.length, inserted, JSON.stringify(errors), realRows.length, realInserted],
+    );
 
     return res.json({
       success: true,
       data: {
         importId,
-        sheetName: preferred,
-        totalRows: total,
+        sheetName: osSheet,
+        periodLabel: os.periodLabel,
+        totalRows: os.rows.length,
         insertedRows: inserted,
         failedRows: errors.length,
         errorCount: errors.length,
         errors,
+        realSheetName: realRows.length > 0 ? realSheet : null,
+        realPeriodLabel: realRows.length > 0 ? real?.periodLabel ?? null : null,
+        realTotalRows: realRows.length,
+        realInsertedRows: realInserted,
+        realWarning,
       },
     });
   } catch (error) {
@@ -315,6 +202,11 @@ export const listClaimSusutImports = async (_req: AuthRequest, res: Response) =>
         i.total_rows,
         i.inserted_rows,
         i.errors,
+        i.os_period_label,
+        i.real_sheet_name,
+        i.real_period_label,
+        i.real_total_rows,
+        i.real_inserted_rows,
         u.full_name AS uploaded_by_name,
         u.username AS uploaded_by_username
       FROM claim_susut_imports i
@@ -453,6 +345,85 @@ export const getClaimSusutSummary = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     logger.error('Claim Susut summary failed:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut summary' } });
+  }
+};
+
+/**
+ * Section 1 realisation dashboard: the REAL_CLAIM rows of the active import.
+ *
+ * "Active" is chosen exactly as for the outstanding data - the requested import, else the latest -
+ * so the two halves of Section 1 always come from the same file. Not narrowed by the page filters:
+ * those are resolved through SAP contract data on the outstanding rows, and REAL_CLAIM is a short
+ * period list shown whole, as the sheet shows it.
+ */
+export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => {
+  try {
+    const importId = parseOptionalUuid((req.query as Record<string, unknown>)?.importId);
+    const imp = await query(
+      `SELECT id, real_sheet_name, real_period_label, os_period_label
+         FROM claim_susut_imports
+        WHERE ($1::uuid IS NULL OR id = $1::uuid)
+        ORDER BY CASE WHEN $1::uuid IS NOT NULL THEN 0 ELSE 1 END, uploaded_at DESC NULLS LAST
+        LIMIT 1`,
+      [importId],
+    );
+    const active = imp.rows[0];
+    if (!active) {
+      return res.json({ success: true, data: { importId: null, available: false, rows: [] } });
+    }
+    const rowsRes = await query(
+      `SELECT vendor_code, vendor_name, cargo_source, cr_no,
+              claim_date::text, cm_date::text, po_number, commodity, material_description, dest,
+              status_claim, company_code, type_of_claim,
+              COALESCE(qty_approved, 0)::float8 AS qty_approved, uom,
+              COALESCE(amount_after_tax_idr, 0)::float8 AS amount_after_tax_idr,
+              remarks,
+              COALESCE(NULLIF(TRIM(transport_group), ''), '${CLAIM_SUSUT_BLANK}') AS transport_group
+         FROM claim_susut_real_rows
+        WHERE import_id = $1
+        ORDER BY vendor_name NULLS LAST, cm_date NULLS LAST, cr_no`,
+      [active.id],
+    );
+    const rows = rowsRes.rows as Array<Record<string, any>>;
+
+    type Agg = { claims: number; qty: number; amount: number };
+    const add = (m: Map<string, Agg & Record<string, unknown>>, key: string, extra: Record<string, unknown>, r: Record<string, any>) => {
+      const cur = m.get(key) ?? { claims: 0, qty: 0, amount: 0, ...extra };
+      cur.claims += 1;
+      cur.qty += Number(r.qty_approved) || 0;
+      cur.amount += Number(r.amount_after_tax_idr) || 0;
+      m.set(key, cur);
+    };
+    const byTransport = new Map<string, Agg & Record<string, unknown>>();
+    const byVendor = new Map<string, Agg & Record<string, unknown>>();
+    for (const r of rows) {
+      add(byTransport, r.transport_group, { transport_group: r.transport_group }, r);
+      const vk = r.vendor_code || r.vendor_name || CLAIM_SUSUT_BLANK;
+      add(byVendor, vk, { vendor_code: r.vendor_code, vendor_name: r.vendor_name }, r);
+    }
+    const byAmount = (a: Agg, b: Agg) => b.amount - a.amount;
+
+    return res.json({
+      success: true,
+      data: {
+        importId: active.id,
+        available: Boolean(active.real_sheet_name) || rows.length > 0,
+        sheetName: active.real_sheet_name,
+        periodLabel: active.real_period_label,
+        osPeriodLabel: active.os_period_label,
+        totals: {
+          claims: rows.length,
+          qty: rows.reduce((s, r) => s + (Number(r.qty_approved) || 0), 0),
+          amount: rows.reduce((s, r) => s + (Number(r.amount_after_tax_idr) || 0), 0),
+        },
+        byTransport: [...byTransport.values()].sort(byAmount),
+        byVendor: [...byVendor.values()].sort(byAmount),
+        rows,
+      },
+    });
+  } catch (error) {
+    logger.error('Claim Susut realized summary failed:', error);
+    return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Susut realisation' } });
   }
 };
 
