@@ -8,6 +8,7 @@ import {
   hasKlipSapValue,
   klipSapValuesEqual,
   resolveKlipSapProvenance,
+  shouldShowJpsReferenceFooter,
   shouldShowKlipSapFooter,
 } from './klipSapCompare'
 
@@ -118,5 +119,81 @@ describe('resolveKlipSapProvenance', () => {
       }),
     ).toBe('klip')
     expect(shouldShowKlipSapFooter('klip', '', 'text')).toBe(false)
+  })
+})
+
+describe('three doors: SAP, KLIP and JPS', () => {
+  const d = 'date' as const
+
+  it('is unchanged for every caller that knows nothing of JPS', () => {
+    // The no-regression guarantee: no jpsValue, no source, same answers as before.
+    expect(resolveKlipSapProvenance({ klipValue: '2026-09-01', sapValue: '2026-09-01', format: d })).toBe('sap')
+    expect(resolveKlipSapProvenance({ klipValue: '2026-09-02', sapValue: '2026-09-01', format: d })).toBe('klip')
+    expect(resolveKlipSapProvenance({ klipValue: '2026-09-02', sapValue: null, format: d })).toBe('klip')
+    expect(resolveKlipSapProvenance({ klipValue: null, sapValue: '2026-09-01', format: d })).toBe('none')
+  })
+
+  it('says JPS when the value is what JPS reported and not what SAP did', () => {
+    expect(
+      resolveKlipSapProvenance({ klipValue: '2026-09-03', sapValue: '2026-09-01', jpsValue: '2026-09-03', format: d }),
+    ).toBe('jps')
+  })
+
+  it('says JPS when SAP has not reported the field at all', () => {
+    // The usual case for discharge actuals: the jetty knows before SAP does.
+    expect(
+      resolveKlipSapProvenance({ klipValue: '2026-09-03', sapValue: null, jpsValue: '2026-09-03', format: d }),
+    ).toBe('jps')
+  })
+
+  it('says SAP when SAP and JPS agree - SAP is the system of record', () => {
+    expect(
+      resolveKlipSapProvenance({ klipValue: '2026-09-03', sapValue: '2026-09-03', jpsValue: '2026-09-03', format: d }),
+    ).toBe('sap')
+  })
+
+  it('says KLIP when the value matches neither SAP nor JPS', () => {
+    expect(
+      resolveKlipSapProvenance({ klipValue: '2026-09-05', sapValue: '2026-09-01', jpsValue: '2026-09-03', format: d }),
+    ).toBe('klip')
+  })
+
+  it('lets a recorded KLIP edit win even when it happens to equal the JPS value', () => {
+    // Recorded fact beats inference: a user typed it, whoever else agrees.
+    expect(
+      resolveKlipSapProvenance({
+        klipValue: '2026-09-03', sapValue: '2026-09-01', jpsValue: '2026-09-03', format: d, klipEdited: true,
+      }),
+    ).toBe('klip')
+  })
+
+  it('trusts a source the data records over any comparison', () => {
+    expect(
+      resolveKlipSapProvenance({ klipValue: '2026-09-01', sapValue: '2026-09-01', format: d, source: 'jps' }),
+    ).toBe('jps')
+    expect(
+      resolveKlipSapProvenance({ klipValue: '2026-09-03', sapValue: '2026-09-01', jpsValue: '2026-09-03', format: d, source: 'klip' }),
+    ).toBe('klip')
+  })
+
+  it('still says none for an empty field, whatever the recorded source', () => {
+    expect(resolveKlipSapProvenance({ klipValue: '', sapValue: null, format: d, source: 'jps' })).toBe('none')
+  })
+
+  it('shows SAP underneath a JPS value that disagrees with it', () => {
+    expect(shouldShowKlipSapFooter('jps', '2026-09-01', d)).toBe(true)
+    expect(shouldShowKlipSapFooter('jps', null, d)).toBe(false)
+    expect(shouldShowKlipSapFooter('sap', '2026-09-01', d)).toBe(false)
+  })
+
+  it('shows JPS underneath only when JPS disagrees with the value on screen', () => {
+    expect(shouldShowJpsReferenceFooter('klip', '2026-09-05', '2026-09-03', d)).toBe(true)
+    expect(shouldShowJpsReferenceFooter('sap', '2026-09-01', '2026-09-03', d)).toBe(true)
+    expect(shouldShowJpsReferenceFooter('sap', '2026-09-03', '2026-09-03', d)).toBe(false)
+    expect(shouldShowJpsReferenceFooter('jps', '2026-09-03', '2026-09-03', d)).toBe(false)
+    expect(shouldShowJpsReferenceFooter('klip', '2026-09-05', null, d)).toBe(false)
+    // Blank field, jetty already logged it: the case the footer is mainly for.
+    expect(shouldShowJpsReferenceFooter('none', '', '2026-09-03', d)).toBe(true)
+    expect(shouldShowJpsReferenceFooter('none', '', null, d)).toBe(false)
   })
 })

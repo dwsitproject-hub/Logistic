@@ -3885,6 +3885,42 @@ cancelled in KLIP stands until a JPS operator removes it. `PATCH` works only whi
 KLIP change after approval cannot be pushed; an email notification for that case is the agreed next
 step and is not built.
 
+#### ATA-ATC values have three doors: SAP, KLIP and JPS
+
+Every ATA-ATC field in the shipment modal carries a badge saying where its value came from, and a
+readonly line underneath when another source disagrees. JPS is the third source, next to the SAP
+import and a KLIP user.
+
+**What JPS reports, and where it lands** (`backend/src/jps/scheduleAtaSql.ts`). KLIP submits
+inbound instructions for BONTANG, so every JPS actual describes the discharge port:
+
+| JPS v5.0 | Meaning | KLIP field |
+| --- | --- | --- |
+| `ta` | Time of Arrival | ATA at Discharge Port |
+| `tb` | Time of Berthing (actual) | ATB at Discharge Port |
+| `tc` | Operations completed (sign-off) | ATC Discharge |
+
+Not mapped, on purpose: *Start Discharging* (JPS has no such event), `cast_off_at` / `sailed_at`
+(departure *from* Bontang - KLIP has no discharge-side sailed field, and the loading-side one is the
+other end of the voyage), and every estimate (this is the actuals badge).
+
+JPS sends UTC. The date is taken **after** converting to Asia/Jakarta, in SQL: cutting it off the UTC
+string would put anything between 00:00 and 07:00 WIB on the previous day.
+
+**How the badge decides** (`resolveKlipSapProvenance`, strongest evidence first): a source the data
+records; a recorded KLIP edit; **JPS** when the value equals JPS's and not SAP's; **KLIP** when it
+differs from SAP and JPS cannot account for it; **SAP** when it matches SAP. When SAP and JPS agree
+the badge says SAP - the system of record, and a second system agreeing is not a different origin.
+
+**What a user sees today.** JPS does not yet write into the ATA fields - that door is separate work
+still to come. Until it does, the value on screen is SAP's or KLIP's, and JPS appears as the
+readonly line underneath whenever it reports something different. That includes a **blank** field:
+the jetty logs arrival days before SAP reports it, which is the case the line mainly exists for.
+The JPS legend entry appears only on shipments JPS has actually reported on.
+
+**Open question for when the door is built:** if a KLIP user has entered a date and JPS later
+reports a different one, which wins? Today nothing is overwritten, so it has not had to be decided.
+
 ### Shipments: why a first visitor waited, and what it costs now
 
 Three separate reasons the startup warmers were not protecting the first visitor. All three were

@@ -860,6 +860,8 @@ export function EditShipmentModal({
   const [isMultiPortLoading, setIsMultiPortLoading] = useState(false)
   const [shipmentInfo, setShipmentInfo] = useState<Record<string, unknown>>({})
   const [jettyStatus, setJettyStatus] = useState<JettyStatusFields | null>(null)
+  /** Show the JPS legend entry only when JPS has actually reported an actual for this shipment. */
+  const jpsCoversShipment = Object.values(jettyStatus?.jps_ata ?? {}).some((v) => Boolean(v))
   const [ataFields, setAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [originalAtaFields, setOriginalAtaFields] = useState<ShipmentAtaFields>(emptyAtaFields)
   const [ataSapReference, setAtaSapReference] = useState<ShipmentAtaFields>(emptyAtaFields)
@@ -2982,7 +2984,7 @@ export function EditShipmentModal({
                 </div>
                 {canEditAtaQuality && (
                   <SectionActionGroup>
-                    <KlipSapCompareLegend />
+                    <KlipSapCompareLegend showJps={jpsCoversShipment} />
                     <Button
                       type="button"
                       variant="outline"
@@ -2999,7 +3001,7 @@ export function EditShipmentModal({
                     )}
                   </SectionActionGroup>
                 )}
-                {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" /> : null}
+                {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" showJps={jpsCoversShipment} /> : null}
               </div>
               <div className="space-y-4 p-4">
                 {isMultiPortLoading ? (
@@ -3050,6 +3052,7 @@ export function EditShipmentModal({
                                     ataPortColumnForField(key),
                                   )}
                                   format="date"
+                                  jpsValue={jettyStatus?.jps_ata?.[key]}
                                   compact
                                   showOverrideBadge={Boolean(klipVal && klipVal !== (sapVal || ''))}
                                   hidden={
@@ -3107,6 +3110,7 @@ export function EditShipmentModal({
                                 ataPortColumnForField(key),
                               )}
                               format="date"
+                              jpsValue={jettyStatus?.jps_ata?.[key]}
                               compact
                               showOverrideBadge={hasOverride}
                               hidden={
@@ -3144,6 +3148,7 @@ export function EditShipmentModal({
                           klipValue={klipVal}
                           sapValue={sapRef}
                           format="date"
+                          jpsValue={jettyStatus?.jps_ata?.[key]}
                           compact
                           showOverrideBadge={hasOverride}
                           hidden={

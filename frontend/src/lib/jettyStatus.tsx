@@ -1,3 +1,4 @@
+import type { ShipmentAtaApiField } from '@/lib/shipmentAtaFields'
 import type { ReactNode } from 'react'
 
 /**
@@ -25,6 +26,11 @@ export interface JettyStatusFields {
   jetty_rejection_reason?: string | null
   jetty_submitted_at?: string | null
   jetty_last_synced_at?: string | null
+  /**
+   * JPS actuals, keyed by the KLIP ATA field each corresponds to and already dated in WIB
+   * (backend/src/jps/scheduleAtaSql.ts). Only the discharge fields JPS reports are present.
+   */
+  jps_ata?: Partial<Record<ShipmentAtaApiField, string | null>> | null
 }
 
 const BADGE_CLASS: Record<string, string> = {
