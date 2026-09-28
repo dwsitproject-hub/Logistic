@@ -1,3 +1,4 @@
+import { sqlCanonicalIncotermExpr } from './incotermAlias';
 /**
  * Trucking page + contract "without trucking" scope — Incoterm FRC / LCO only.
  * More reliable than SAP Sea/Land for land-truck contracts (aligned with Oil Loss truck segment).
@@ -42,7 +43,11 @@ export function resolveTruckingIncotermFromParsedData(
 
 /** Effective incoterm from contract row with latest SAP fallback. */
 export function contractEffectiveIncotermExpr(contractAlias = 'c'): string {
-  return `UPPER(TRIM(COALESCE(
+  /*
+   * CNF -> CFR here as well as at import: this is the fallback path, where the value can still come
+   * from raw SAP JSON that import never rewrites. See utils/incotermAlias.ts.
+   */
+  return sqlCanonicalIncotermExpr(`UPPER(TRIM(COALESCE(
     NULLIF(TRIM(${contractAlias}.incoterm), ''),
     (
       SELECT COALESCE(
@@ -56,7 +61,7 @@ export function contractEffectiveIncotermExpr(contractAlias = 'c'): string {
       LIMIT 1
     ),
     ''
-  )))`;
+  )))`);
 }
 
 /** Trucking page scope: FRC or LCO incoterm only. */

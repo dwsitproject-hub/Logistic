@@ -1507,6 +1507,43 @@ in question, nothing else. And with that, the two pages agree:
 | CIF | 104,609 MT | 104,609 MT | **0** |
 | CFR | 5,000 MT | 5,000 MT | **0** |
 
+### Incoterm spellings: CNF and C&F are CFR
+
+SAP sent contract **1624000075** - 6,900 MT CPO, SEA, nothing delivered, already past its delivery
+window - with incoterm **CNF**, an older name for CFR (Cost and Freight). Every page that scopes by
+incoterm lists `CIF / FOB / CFR` (`SHIPMENT_PAGE_SEA_INCOTERMS`), so the contract was on Contract
+Performance and on **no execution page**: not Shipments, not Shipping Performance. The cross-page
+invariants script missed it too, because it filters both sides of its comparison with the same list.
+
+KLIP now canonicalises the spelling where the value enters, from one alias map
+(`backend/src/utils/incotermAlias.ts`):
+
+| Where | How |
+| --- | --- |
+| SAP import | `parseDataRow` maps `parsed.contract.incoterm`; both writers read it. `parsed.raw` keeps what SAP sent |
+| Manual contract form | create and update pass the value through `canonicalIncoterm` |
+| Effective incoterm (SQL) | `contractEffectiveIncotermExpr` wraps its result in `regexp_replace(..., '^(CNF|C&F)$', 'CFR')` - for the fallback to raw SAP JSON |
+| JS classifier | `normalizeShipmentSeaIncoterm` uses `normalizeIncoterm` |
+| Stored rows | migration 190 rewrites `contracts`, `sap_processed_data` (flat column and `data.contract`) and `contract_performance_snapshot`, and supersedes a SUGGESTED pre-planned group keyed on CNF |
+
+Why at the door rather than adding CNF to each list: dozens of queries compare an incoterm against a
+literal list (the Dashboard alone has more than twenty), and one alias applied on the way in fixes all
+of them. Why `regexp_replace` and not `CASE`: the effective-incoterm expression carries a correlated
+`sap_processed_data` subquery and is spliced into 27 call sites; a CASE would evaluate it twice.
+
+Measured on a production copy with migration 190 applied - exactly the contract, and nothing else:
+
+| | Before | After |
+| --- | --- | --- |
+| Shipping Performance | 247,727 MT | 254,627 MT (+6,900) |
+| Contract Performance, sea incoterms | 381,886 MT | 388,786 MT (+6,900) |
+| Backlog, SP = Shipments Unplanned + Preplanned | 173,227 MT | 180,127 MT (+6,900), Invariant 1 still 0 |
+| Unplanned rows | 77 | 78 |
+| Drift SP vs CP | -134,159 MT | -134,159 MT |
+
+The unchanged drift is the point: the contract entered both sides at once, so it was never part of
+the old -134,159 MT.
+
 ### The same shape, twice more: incoterm and GR read from the group
 
 Production kept a gap after all of the above, and listing every sea contract on both pages reduced

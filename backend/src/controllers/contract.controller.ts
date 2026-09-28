@@ -1,3 +1,4 @@
+import { canonicalIncoterm } from '../utils/incotermAlias';
 import { Response } from 'express';
 import { query } from '../database/connection';
 import {
@@ -3314,7 +3315,7 @@ export const createContract = async (req: AuthRequest, res: Response) => {
         product,
         quantity_ordered,
         unit,
-        incoterm,
+        canonicalIncoterm(incoterm),
         loading_site,
         unloading_site,
         contract_date,
@@ -3357,6 +3358,8 @@ export const updateContract = async (req: AuthRequest, res: Response) => {
       });
     }
     const updates = applyCargoReadinessKlipEditFlag(filtered.updates);
+    // Same spelling as SAP import writes (CNF -> CFR), or the pages that list CFR miss the contract.
+    if (typeof updates.incoterm === 'string') updates.incoterm = canonicalIncoterm(updates.incoterm);
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
