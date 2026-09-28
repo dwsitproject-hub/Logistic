@@ -67,16 +67,16 @@ type RecapTab = 'aging' | 'lokasi' | 'komoditi' | 'unit'
 
 const TABS: Array<{ id: RecapTab; label: string }> = [
   { id: 'aging', label: 'Aging' },
-  { id: 'lokasi', label: 'Per Lokasi' },
-  { id: 'komoditi', label: 'Per Komoditi' },
-  { id: 'unit', label: 'Per Unit' },
+  { id: 'lokasi', label: 'By Location' },
+  { id: 'komoditi', label: 'By Commodity' },
+  { id: 'unit', label: 'By Unit' },
 ]
 
 const AGING_COLUMNS: Array<{ key: keyof ClaimMutuAgingGroupRow; label: string }> = [
   { key: 'a_0_30', label: '0-30' },
   { key: 'a_31_60', label: '31-60' },
   { key: 'a_61_90', label: '61-90' },
-  { key: 'a_gt_90', label: '> 90 Hari' },
+  { key: 'a_gt_90', label: '> 90 Days' },
 ]
 
 const TH = 'px-3 py-2 font-medium text-gray-600 whitespace-nowrap'
@@ -154,7 +154,7 @@ function Sparkline({ values }: { values: number[] }) {
 function Empty({ hasImport }: { hasImport: boolean }) {
   return (
     <div className="py-8 text-center text-sm text-gray-500">
-      {hasImport ? 'Tidak ada data untuk filter ini.' : 'Upload file untuk melihat rekap.'}
+      {hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.'}
     </div>
   )
 }
@@ -164,9 +164,9 @@ function SideHeader({ m }: { m: ClaimMutuMeasure }) {
   return (
     <>
       <th className={`${TH} text-right`}>OS {unit}</th>
-      <th className={`${TH} text-left`}>Porsi OS</th>
+      <th className={`${TH} text-left`}>OS Share</th>
       <th className={`${TH} text-right`}>Real {unit}</th>
-      <th className={`${TH} text-left`}>Porsi Real</th>
+      <th className={`${TH} text-left`}>Real Share</th>
     </>
   )
 }
@@ -269,18 +269,18 @@ export function ClaimMutuSection1Dashboard({
 
   const os = dashboard?.os ?? { claims: 0, qty: 0, amount: 0, over90: 0 }
   const real = dashboard?.real ?? { claims: 0, qty: 0, amount: 0 }
-  const period = dashboard?.periodLabel ? `Periode ${dashboard.periodLabel}` : ''
+  const period = dashboard?.periodLabel ? `Period ${dashboard.periodLabel}` : ''
   const scope = scopeLabel(b2b)
 
   const tabNote: Record<RecapTab, string> = {
-    aging: 'Nilai klaim after tax per group (sheet Pivot). Klik group untuk memfilter halaman.',
-    lokasi: 'OS dan realisasi per kode DEST (sheet Rekap Klaim Per Lokasi).',
-    komoditi: 'OS dan realisasi per komoditi; buka komoditi untuk melihat unitnya (sheet Summary Per Komoditi).',
-    unit: `OS dan realisasi per unit untuk satu bulan - import terakhir bulan itu, tidak mengikuti filter periode (sheet Summary Per Unit${
-      b2b === 'exclude' ? ', yang di workbook memakai Include B2B' : ''
+    aging: 'Claim value after tax per group (Pivot sheet). Click a group to filter the page.',
+    lokasi: 'OS and realised claims per DEST code (Rekap Klaim Per Lokasi sheet).',
+    komoditi: 'OS and realised claims per commodity; open a commodity to see its units (Summary Per Komoditi sheet).',
+    unit: `OS and realised claims per unit for one month - that month's latest import, not narrowed by the CR date period (Summary Per Unit sheet${
+      b2b === 'exclude' ? ', which the workbook builds as Include B2B' : ''
     }).`,
   }
-  const realNote = osOnlyFilterActive && tab !== 'aging' ? ' Filter Group / Metode Payment hanya berlaku untuk OS.' : ''
+  const realNote = osOnlyFilterActive && tab !== 'aging' ? ' The Group and Payment Method filters apply to OS only.' : ''
   const tabLoading = tab === 'unit' ? trendLoading : loading
 
   return (
@@ -291,49 +291,49 @@ export function ClaimMutuSection1Dashboard({
         }`}
       >
         <PerformanceSection1CardShell variant="open" title="Outstanding Claim Mutu" selected onClick={() => undefined}>
-          <div className="mb-1 text-sm text-gray-500">Nilai Klaim (IDR)</div>
+          <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
           <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(os.amount)}</div>
           <div className="text-xs text-gray-500">
             Qty: <span className="font-semibold tabular-nums text-gray-900">{formatClaimMutuKg(os.qty)} kg</span>
           </div>
           <div className="mt-0.5 text-xs text-gray-500">
-            <span className="font-semibold tabular-nums text-gray-900">{os.claims.toLocaleString('en-US')}</span> klaim ·{' '}
+            <span className="font-semibold tabular-nums text-gray-900">{os.claims.toLocaleString('en-US')}</span> claims ·{' '}
             {scope}
           </div>
         </PerformanceSection1CardShell>
 
-        <PerformanceSection1CardShell variant="ongoing" title="Outstanding > 90 Hari" selected onClick={() => undefined}>
-          <div className="mb-1 text-sm text-gray-500">Nilai Klaim (IDR)</div>
+        <PerformanceSection1CardShell variant="ongoing" title="Outstanding > 90 Days" selected onClick={() => undefined}>
+          <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
           <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(os.over90)}</div>
           <div className="text-xs text-gray-500">
-            <span className="font-semibold tabular-nums text-gray-900">{formatShare(os.over90, os.amount)}</span> dari total
+            <span className="font-semibold tabular-nums text-gray-900">{formatShare(os.over90, os.amount)}</span> of total
             outstanding
           </div>
         </PerformanceSection1CardShell>
 
-        <PerformanceSection1CardShell variant="completed" title="Realisasi Claim" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="completed" title="Realised Claims" selected onClick={() => undefined}>
           {dashboard?.realAvailable ? (
             <>
-              <div className="mb-1 text-sm text-gray-500">Nilai Klaim (IDR)</div>
+              <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
               <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(real.amount)}</div>
               <div className="text-xs text-gray-500">
                 Qty: <span className="font-semibold tabular-nums text-gray-900">{formatClaimMutuKg(real.qty)} kg</span>
               </div>
               <div className="mt-0.5 text-xs text-gray-500">
-                <span className="font-semibold tabular-nums text-gray-900">{real.claims.toLocaleString('en-US')}</span> klaim
-                {dashboard.realPeriodLabel ? <> · Periode {dashboard.realPeriodLabel}</> : null}
+                <span className="font-semibold tabular-nums text-gray-900">{real.claims.toLocaleString('en-US')}</span> claims
+                {dashboard.realPeriodLabel ? <> · Period {dashboard.realPeriodLabel}</> : null}
               </div>
               {osOnlyFilterActive ? (
-                <div className="mt-1 text-[11px] text-amber-700">Tidak dipersempit filter Group / Metode Payment.</div>
+                <div className="mt-1 text-[11px] text-amber-700">Not narrowed by the Group / Payment Method filters.</div>
               ) : null}
             </>
           ) : (
             <div className="text-xs text-gray-500">
               {loading
-                ? 'Memuat…'
+                ? 'Loading…'
                 : hasImport
-                  ? 'File import ini tidak menyertakan sheet Real_Claim.'
-                  : 'Upload file untuk melihat realisasi.'}
+                  ? 'This import has no Real_Claim sheet.'
+                  : 'Upload a file to see realised claims.'}
             </div>
           )}
         </PerformanceSection1CardShell>
@@ -343,27 +343,27 @@ export function ClaimMutuSection1Dashboard({
         <CardHeader className="pb-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex items-center gap-2 text-base">
-              <span>Rekap Claim Mutu</span>
+              <span>Claim Mutu Summary</span>
               {tabLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
-              <Segmented value={tab} options={TABS} onChange={setTab} ariaLabel="Rekap" />
+              <Segmented value={tab} options={TABS} onChange={setTab} ariaLabel="Summary" />
               {tab !== 'aging' ? (
                 <Segmented
                   value={measure}
                   options={[
-                    { id: 'amount', label: 'Nilai' },
+                    { id: 'amount', label: 'Value' },
                     { id: 'qty', label: 'Qty' },
                   ]}
                   onChange={setMeasure}
-                  ariaLabel="Ukuran"
+                  ariaLabel="Measure"
                 />
               ) : null}
             </div>
           </div>
           <p className="text-xs text-gray-500">
             {[scope, tab === 'unit' ? '' : period].filter(Boolean).join(' · ')} · {tabNote[tab]}
-            {realNote} Arahkan kursor ke angka untuk nilai penuh.
+            {realNote} Hover a number for the full value.
           </p>
         </CardHeader>
         <CardContent className="pt-2">
@@ -432,7 +432,7 @@ function AgingTab({
             </th>
           ))}
           <th className={`${TH} text-right text-gray-800`}>Grand Total</th>
-          <th className={`${TH} text-left`}>Porsi</th>
+          <th className={`${TH} text-left`}>Share</th>
         </tr>
       </thead>
       <tbody className="divide-y">
@@ -486,7 +486,7 @@ function LokasiTab({ dashboard, hasImport, m }: { dashboard: ClaimMutuDashboard 
     <TableShell>
       <thead className="bg-gray-100">
         <tr>
-          <th className={`${TH} text-left`}>Lokasi</th>
+          <th className={`${TH} text-left`}>Location</th>
           <SideHeader m={m} />
         </tr>
       </thead>
@@ -534,13 +534,13 @@ function KomoditiTab({
           className="text-xs text-indigo-700 hover:underline"
           onClick={() => onSetAll(allOpen ? [] : groups.map((g) => g.commodity))}
         >
-          {allOpen ? 'Tutup semua' : 'Buka semua'}
+          {allOpen ? 'Collapse all' : 'Expand all'}
         </button>
       </div>
       <TableShell>
         <thead className="bg-gray-100">
           <tr>
-            <th className={`${TH} text-left`}>Komoditi / Unit</th>
+            <th className={`${TH} text-left`}>Commodity / Unit</th>
             <SideHeader m={m} />
           </tr>
         </thead>
@@ -572,7 +572,7 @@ function KomoditiTab({
           })}
         </tbody>
         <tfoot>
-          <TotalRow label="Grand Total Semua Komoditi" total={total} m={m} />
+          <TotalRow label="Grand Total All Commodities" total={total} m={m} />
         </tfoot>
       </TableShell>
     </>
@@ -604,7 +604,7 @@ function UnitTab({
   return (
     <>
       <div className="mb-2 flex items-center justify-end gap-2 text-xs text-gray-600">
-        <label htmlFor="claim-mutu-unit-month">Bulan</label>
+        <label htmlFor="claim-mutu-unit-month">Month</label>
         <select
           id="claim-mutu-unit-month"
           className="h-7 rounded-md border border-gray-300 bg-white px-2 text-xs"
@@ -617,14 +617,14 @@ function UnitTab({
             </option>
           ))}
         </select>
-        <span className="text-gray-400">{months.length} bulan diimpor</span>
+        <span className="text-gray-400">{months.length} month(s) imported</span>
       </div>
       <TableShell>
         <thead className="bg-gray-100">
           <tr>
             <th className={`${TH} text-left`}>Unit</th>
             <SideHeader m={m} />
-            <th className={`${TH} text-left`}>Tren OS</th>
+            <th className={`${TH} text-left`}>OS Trend</th>
           </tr>
         </thead>
         <tbody className="divide-y">

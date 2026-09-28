@@ -40,8 +40,8 @@ export function ClaimMutuUploadResultDialog({
           <div className="space-y-4 text-sm">
             {result.sheetName ? (
               <p className="text-xs text-gray-500">
-                Outstanding dari sheet <span className="font-medium text-gray-700">{result.sheetName}</span>
-                {result.periodLabel ? <> · Periode {result.periodLabel}</> : null}
+                Outstanding from sheet <span className="font-medium text-gray-700">{result.sheetName}</span>
+                {result.periodLabel ? <> · Period {result.periodLabel}</> : null}
               </p>
             ) : null}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -56,7 +56,7 @@ export function ClaimMutuUploadResultDialog({
                 </div>
               </div>
               <div className="rounded-md border bg-indigo-50 px-3 py-2">
-                <div className="text-xs text-muted-foreground">Ditandai B2B</div>
+                <div className="text-xs text-muted-foreground">Marked B2B</div>
                 <div className="text-lg font-semibold tabular-nums text-indigo-800">{result.b2bRows.toLocaleString()}</div>
               </div>
               <div className="rounded-md border bg-red-50 px-3 py-2">
@@ -68,21 +68,21 @@ export function ClaimMutuUploadResultDialog({
             </div>
             {result.b2bSource === 'inc+exc' ? (
               <p className="text-xs text-gray-500">
-                Semua baris Include B2B disimpan; baris yang tidak ada di sheet Exclude B2B ditandai B2B. Halaman
-                menampilkan Exclude B2B secara default.
+                Every Include B2B row is stored; rows missing from the Exclude B2B sheet are marked B2B. The page
+                shows Exclude B2B by default.
               </p>
             ) : null}
             {result.realSheetName ? (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                Realisasi dari sheet <span className="font-medium">{result.realSheetName}</span>:{' '}
-                <span className="font-semibold tabular-nums">{(result.realInsertedRows ?? 0).toLocaleString()}</span> dari{' '}
-                <span className="tabular-nums">{(result.realTotalRows ?? 0).toLocaleString()}</span> klaim
-                {result.realB2bRows ? <>, {result.realB2bRows.toLocaleString()} ditandai B2B</> : null}
-                {result.realPeriodLabel ? <> · Periode {result.realPeriodLabel}</> : null}
+                Realised claims from sheet <span className="font-medium">{result.realSheetName}</span>:{' '}
+                <span className="font-semibold tabular-nums">{(result.realInsertedRows ?? 0).toLocaleString()}</span> of{' '}
+                <span className="tabular-nums">{(result.realTotalRows ?? 0).toLocaleString()}</span> claims
+                {result.realB2bRows ? <>, {result.realB2bRows.toLocaleString()} marked B2B</> : null}
+                {result.realPeriodLabel ? <> · Period {result.realPeriodLabel}</> : null}
               </div>
             ) : result.sheetName ? (
               <div className="rounded-md border bg-slate-50 px-3 py-2 text-xs text-gray-600">
-                File ini tidak menyertakan sheet Real_Claim - hanya data outstanding yang diimpor.
+                This file has no Real_Claim sheet - only the outstanding data was imported.
               </div>
             ) : null}
             {result.warnings.length > 0 ? (

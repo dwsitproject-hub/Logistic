@@ -80,16 +80,16 @@ describe('Claim Mutu view', () => {
   })
 
   it('formats months and shares the way the workbook reads', () => {
-    expect(formatClaimMutuMonth('2026-08-01')).toBe('Agustus 2026')
+    expect(formatClaimMutuMonth('2026-08-01')).toBe('August 2026')
     expect(formatShare(25, 100)).toBe('25%')
     expect(formatShare(1, 0)).toBe('-')
     expect(formatShare(2_224_129, 34_460_622_316)).toBe('<0.1%')
   })
 
-  it('shortens Section 1 numbers the Indonesian way, whole under a million', () => {
-    expect(formatClaimMutuCompact(34_460_622_316.34)).toBe('34,46 M')
-    expect(formatClaimMutuCompact(5_869_557_763)).toBe('5,87 M')
-    expect(formatClaimMutuCompact(7_494_607)).toBe('7,49 jt')
+  it('shortens Section 1 numbers to B / M, whole under a million', () => {
+    expect(formatClaimMutuCompact(34_460_622_316.34)).toBe('34,46 B')
+    expect(formatClaimMutuCompact(5_869_557_763)).toBe('5,87 B')
+    expect(formatClaimMutuCompact(7_494_607)).toBe('7,49 M')
     expect(formatClaimMutuCompact(175.64)).toBe('176')
     expect(formatClaimMutuCompact(0)).toBe('-')
   })

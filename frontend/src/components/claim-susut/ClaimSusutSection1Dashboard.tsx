@@ -59,7 +59,7 @@ const AGING_COLUMNS: Array<{ key: keyof ClaimSusutAgingGroupRow; label: string }
   { key: 'a_0_30', label: '0-30' },
   { key: 'a_31_60', label: '31-60' },
   { key: 'a_61_90', label: '61-90' },
-  { key: 'a_gt_90', label: '> 90 Hari' },
+  { key: 'a_gt_90', label: '> 90 Days' },
 ]
 
 /** Kilograms, as REAL_CLAIM reports them. Whole MT would show a 100 kg claim as "0 MT". */
@@ -119,32 +119,32 @@ export function ClaimSusutSection1Dashboard({
         }`}
       >
         <PerformanceSection1CardShell variant="open" title="Outstanding Claim Susut" selected onClick={() => undefined}>
-          <div className="mb-1 text-sm text-gray-500">Qty Klaim</div>
+          <div className="mb-1 text-sm text-gray-500">Claim Qty</div>
           <div className="mb-3 text-xl font-bold text-gray-900">{formatQtyMtFromKg(summary.qtyClaim)}</div>
           <div className="text-xs text-gray-500">
             Amount:{' '}
             <span className="font-semibold tabular-nums text-gray-900">{formatClaimSusutIdr(summary.amountAfterTax)}</span>
           </div>
           <div className="mt-0.5 text-xs text-gray-500">
-            <span className="font-semibold tabular-nums text-gray-900">{summary.rowCount.toLocaleString('en-US')}</span> klaim
+            <span className="font-semibold tabular-nums text-gray-900">{summary.rowCount.toLocaleString('en-US')}</span> claims
           </div>
         </PerformanceSection1CardShell>
 
-        <PerformanceSection1CardShell variant="ongoing" title="Outstanding > 90 Hari" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="ongoing" title="Outstanding > 90 Days" selected onClick={() => undefined}>
           <div className="mb-1 text-sm text-gray-500">Amount</div>
           <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimSusutIdr(over90)}</div>
           <div className="text-xs text-gray-500">
             <span className="font-semibold tabular-nums text-gray-900">
               {(over90Share * 100).toLocaleString('en-US', { maximumFractionDigits: 1 })}%
             </span>{' '}
-            dari total outstanding
+            of total outstanding
           </div>
         </PerformanceSection1CardShell>
 
-        <PerformanceSection1CardShell variant="completed" title="Realisasi Claim" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="completed" title="Realised Claims" selected onClick={() => undefined}>
           {realizedAvailable ? (
             <>
-              <div className="mb-1 text-sm text-gray-500">Qty Disetujui</div>
+              <div className="mb-1 text-sm text-gray-500">Approved Qty</div>
               <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">
                 {formatKg(realized?.totals?.qty ?? 0)}
               </div>
@@ -155,17 +155,17 @@ export function ClaimSusutSection1Dashboard({
                 </span>
               </div>
               <div className="mt-0.5 text-xs text-gray-500">
-                <span className="font-semibold tabular-nums text-gray-900">{realized?.totals?.claims ?? 0}</span> klaim
-                {realized?.periodLabel ? <> · Periode {realized.periodLabel}</> : null}
+                <span className="font-semibold tabular-nums text-gray-900">{realized?.totals?.claims ?? 0}</span> claims
+                {realized?.periodLabel ? <> · Period {realized.periodLabel}</> : null}
               </div>
             </>
           ) : (
             <div className="text-xs text-gray-500">
               {realizedLoading
-                ? 'Memuat…'
+                ? 'Loading…'
                 : hasImport
-                  ? 'File import ini tidak menyertakan sheet REAL_CLAIM.'
-                  : 'Upload file untuk melihat realisasi.'}
+                  ? 'This import has no REAL_CLAIM sheet.'
+                  : 'Upload a file to see realised claims.'}
             </div>
           )}
         </PerformanceSection1CardShell>
@@ -175,18 +175,18 @@ export function ClaimSusutSection1Dashboard({
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-              <span>Rekap Outstanding Claim · Aging</span>
+              <span>Outstanding Claims by Aging</span>
               {groupLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
             </CardTitle>
             <p className="text-xs text-gray-500">
-              Amount after tax (IDR) per group{realized?.osPeriodLabel ? ` · Periode ${realized.osPeriodLabel}` : ''} ·
-              mengikuti filter. Klik group untuk memfilter tabel di bawah.
+              Amount after tax (IDR) per group{realized?.osPeriodLabel ? ` · Period ${realized.osPeriodLabel}` : ''} ·
+              follows the filters. Click a group to filter the table below.
             </p>
           </CardHeader>
           <CardContent className="pt-2">
             {groups.length === 0 ? (
               <div className="py-8 text-center text-sm text-gray-500">
-                {hasImport ? 'Tidak ada data untuk filter ini.' : 'Upload file untuk melihat rekap.'}
+                {hasImport ? 'No data for these filters.' : 'Upload a file to see the summary.'}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -244,18 +244,18 @@ export function ClaimSusutSection1Dashboard({
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex flex-wrap items-center gap-2 text-base">
-              <span>Rekap Realisasi Claim</span>
+              <span>Realised Claims</span>
               {realizedLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
             </CardTitle>
             <p className="text-xs text-gray-500">
-              Klaim yang disetujui{realized?.periodLabel ? ` · Periode ${realized.periodLabel}` : ''} · isi lengkap
-              sheet REAL_CLAIM, tidak mengikuti filter.
+              Approved claims{realized?.periodLabel ? ` · Period ${realized.periodLabel}` : ''} · the whole
+              REAL_CLAIM sheet, not narrowed by the filters.
             </p>
           </CardHeader>
           <CardContent className="pt-2">
             {!realizedAvailable || vendors.length === 0 ? (
               <div className="py-8 text-center text-sm text-gray-500">
-                {hasImport ? 'File import ini tidak menyertakan sheet REAL_CLAIM.' : 'Upload file untuk melihat realisasi.'}
+                {hasImport ? 'This import has no REAL_CLAIM sheet.' : 'Upload a file to see realised claims.'}
               </div>
             ) : (
               <>
@@ -264,8 +264,8 @@ export function ClaimSusutSection1Dashboard({
                     <thead className="bg-gray-100">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-gray-600">Vendor</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Klaim</th>
-                        <th className="px-3 py-2 text-right font-medium text-gray-600">Qty Disetujui</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Claims</th>
+                        <th className="px-3 py-2 text-right font-medium text-gray-600">Approved Qty</th>
                         <th className="px-3 py-2 text-right font-medium text-gray-800">Amount (IDR)</th>
                       </tr>
                     </thead>
@@ -307,7 +307,7 @@ export function ClaimSusutSection1Dashboard({
                       <span key={t.transport_group}>
                         {i > 0 ? ' · ' : ''}
                         <span className="font-medium text-gray-700">{t.transport_group}</span>{' '}
-                        {t.claims} klaim, {formatClaimSusutIdr(t.amount)}
+                        {t.claims} claims, {formatClaimSusutIdr(t.amount)}
                       </span>
                     ))}
                   </p>

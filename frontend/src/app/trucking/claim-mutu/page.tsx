@@ -493,7 +493,7 @@ export default function ClaimMutuPage() {
                 className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
                 onClick={() => document.getElementById('claim-mutu-excel-upload-input')?.click()}
                 disabled={uploading}
-                title="Upload Claim Mutu Excel (.xlsx) - sheet OS_Claim wajib, Real_Claim opsional"
+                title="Upload Claim Mutu Excel (.xlsx) - OS_Claim sheet required, Real_Claim optional"
               >
                 {uploading ? (
                   <>
@@ -582,7 +582,7 @@ export default function ClaimMutuPage() {
               ...selectionChips('Commodity', selectedCommodities, setSelectedCommodities),
               ...selectionChips('Vendor Type', selectedVendorTypes, setSelectedVendorTypes),
               ...selectionChips('Group', selectedGroups, setSelectedGroups),
-              ...selectionChips('Metode Payment', selectedMetodes, setSelectedMetodes),
+              ...selectionChips('Payment Method', selectedMetodes, setSelectedMetodes),
             ]}
           >
             <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
@@ -623,7 +623,7 @@ export default function ClaimMutuPage() {
                 pinSelectedToTop
               />
               <SearchableMultiSelect
-                label="Metode Payment (OS only)"
+                label="Payment Method (OS only)"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
                 options={metodeOptions}
@@ -873,7 +873,7 @@ export default function ClaimMutuPage() {
                       ) : rows.length === 0 ? (
                         <tr className="bg-white">
                           <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
-                            {selectedImportId ? 'No rows' : 'Upload file Claim Mutu untuk mulai.'}
+                            {selectedImportId ? 'No rows' : 'Upload a Claim Mutu file to start.'}
                           </td>
                         </tr>
                       ) : (

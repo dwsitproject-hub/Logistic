@@ -151,13 +151,13 @@ export function trendUnits(rows: ClaimMutuTrendRow[]): string[] {
   return [...units].sort(compareUnit)
 }
 
-const MONTHS_ID = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
-/** "2026-08-01" -> "Agustus 2026". */
+/** "2026-08-01" -> "August 2026". */
 export function formatClaimMutuMonth(iso: string): string {
   const m = /^(\d{4})-(\d{2})/.exec(iso || '')
   if (!m) return iso || '-'
-  return `${MONTHS_ID[Number(m[2]) - 1] ?? m[2]} ${m[1]}`
+  return `${MONTHS[Number(m[2]) - 1] ?? m[2]} ${m[1]}`
 }
 
 export function formatClaimMutuIdr(n: number | undefined | null): string {
@@ -173,7 +173,7 @@ export function formatClaimMutuKg(n: number | undefined | null): string {
 
 /**
  * Short form for the Section 1 recap, where a full "34.460.622.316" per cell makes the table too
- * wide: 34,46 M (miliar), 5,87 jt (juta). Under a million the number is shown whole. The full
+ * wide: 34,46 B (billion), 5,87 M (million). Under a million the number is shown whole. The full
  * figure goes in the cell's tooltip, and the view table below keeps full numbers.
  */
 export function formatClaimMutuCompact(n: number | undefined | null): string {
@@ -182,8 +182,8 @@ export function formatClaimMutuCompact(n: number | undefined | null): string {
   const abs = Math.abs(v)
   const fmt = (x: number) => x.toLocaleString('id-ID', { maximumFractionDigits: 2 })
   if (abs >= 1e12) return `${fmt(v / 1e12)} T`
-  if (abs >= 1e9) return `${fmt(v / 1e9)} M`
-  if (abs >= 1e6) return `${fmt(v / 1e6)} jt`
+  if (abs >= 1e9) return `${fmt(v / 1e9)} B`
+  if (abs >= 1e6) return `${fmt(v / 1e6)} M`
   return Math.round(v).toLocaleString('id-ID')
 }
 
@@ -222,13 +222,13 @@ export const CLAIM_MUTU_COLUMNS: ClaimMutuColumnDef[] = [
   { id: 'amount_after_tax_idr', label: 'Amount After Tax (IDR)', sortKey: 'amount_after_tax_idr', align: 'right', kind: 'idr' },
   { id: 'os_days', label: 'OS Days', sortKey: 'os_days', align: 'right', kind: 'number' },
   { id: 'aging', label: 'Aging', sortKey: 'os_days' },
-  { id: 'metode_payment', label: 'Metode Payment', sortKey: 'metode_payment' },
+  { id: 'metode_payment', label: 'Payment Method', sortKey: 'metode_payment' },
   { id: 'is_b2b', label: 'B2B', sortKey: 'is_b2b', kind: 'b2b' },
   { id: 'vendor_code', label: 'Vendor Code', sortKey: 'vendor_code' },
   { id: 'vendor_type', label: 'Vendor Type', sortKey: 'vendor_type' },
   { id: 'group_of_vendor', label: 'Group of Vendor', sortKey: 'group_of_vendor' },
   { id: 'cargo_source', label: 'Cargo Source', sortKey: 'cargo_source' },
-  { id: 'keterangan', label: 'Keterangan', sortKey: 'keterangan' },
+  { id: 'keterangan', label: 'Remarks', sortKey: 'keterangan' },
   { id: 'type_of_comp', label: 'Type of Comp', sortKey: 'type_of_comp' },
   { id: 'traders', label: 'Traders', sortKey: 'traders' },
   { id: 'created_by', label: 'Created By', sortKey: 'created_by' },
@@ -238,14 +238,14 @@ export const CLAIM_MUTU_COLUMNS: ClaimMutuColumnDef[] = [
   { id: 'material_description', label: 'Material Description', sortKey: 'material_description' },
   { id: 'company_code', label: 'Company Code', sortKey: 'company_code' },
   { id: 'claim_type', label: 'Claim Type', sortKey: 'claim_type' },
-  { id: 'mutu_kontrak_ffa', label: 'Kontrak FFA', sortKey: 'mutu_kontrak_ffa', align: 'right', kind: 'number' },
-  { id: 'mutu_kontrak_mi', label: 'Kontrak M&I', sortKey: 'mutu_kontrak_mi', align: 'right', kind: 'number' },
-  { id: 'mutu_kontrak_dns', label: 'Kontrak DNS', sortKey: 'mutu_kontrak_dns', align: 'right', kind: 'number' },
-  { id: 'mutu_kontrak_dobi', label: 'Kontrak DOBI', sortKey: 'mutu_kontrak_dobi', align: 'right', kind: 'number' },
-  { id: 'mutu_klaim_ffa', label: 'Klaim FFA', sortKey: 'mutu_klaim_ffa', align: 'right', kind: 'number' },
-  { id: 'mutu_klaim_mi', label: 'Klaim M&I', sortKey: 'mutu_klaim_mi', align: 'right', kind: 'number' },
-  { id: 'mutu_klaim_dns', label: 'Klaim DNS', sortKey: 'mutu_klaim_dns', align: 'right', kind: 'number' },
-  { id: 'mutu_klaim_dobi', label: 'Klaim DOBI', sortKey: 'mutu_klaim_dobi', align: 'right', kind: 'number' },
+  { id: 'mutu_kontrak_ffa', label: 'Contract FFA', sortKey: 'mutu_kontrak_ffa', align: 'right', kind: 'number' },
+  { id: 'mutu_kontrak_mi', label: 'Contract M&I', sortKey: 'mutu_kontrak_mi', align: 'right', kind: 'number' },
+  { id: 'mutu_kontrak_dns', label: 'Contract DNS', sortKey: 'mutu_kontrak_dns', align: 'right', kind: 'number' },
+  { id: 'mutu_kontrak_dobi', label: 'Contract DOBI', sortKey: 'mutu_kontrak_dobi', align: 'right', kind: 'number' },
+  { id: 'mutu_klaim_ffa', label: 'Claim FFA', sortKey: 'mutu_klaim_ffa', align: 'right', kind: 'number' },
+  { id: 'mutu_klaim_mi', label: 'Claim M&I', sortKey: 'mutu_klaim_mi', align: 'right', kind: 'number' },
+  { id: 'mutu_klaim_dns', label: 'Claim DNS', sortKey: 'mutu_klaim_dns', align: 'right', kind: 'number' },
+  { id: 'mutu_klaim_dobi', label: 'Claim DOBI', sortKey: 'mutu_klaim_dobi', align: 'right', kind: 'number' },
   { id: 'uom', label: 'UOM', sortKey: 'uom' },
   { id: 'amount_before_tax_idr', label: 'Amount Before Tax (IDR)', sortKey: 'amount_before_tax_idr', align: 'right', kind: 'idr' },
   { id: 'tax', label: 'Tax', sortKey: 'tax', align: 'right', kind: 'idr' },

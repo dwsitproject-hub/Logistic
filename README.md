@@ -4266,19 +4266,20 @@ Lokasi sheets; Include is the scope of Summary Per Unit. The Dashboard Claim Mut
 list, and the claim qty per PO on the contract-quantity charts all exclude B2B.
 
 **Section 1**, recomputed from the rows and following every filter, is three cards (outstanding,
-outstanding > 90 days, realisation) and **one** *Rekap Claim Mutu* card whose tabs are the four summary
-sheets, so the whole section fits on a screen. Numbers there are short (34,46 M, 5,87 jt) with the full
-figure on hover; shares are a bar with the percentage, `<0.1%` for a real but tiny share. Lokasi, Komoditi
-and Unit switch between Nilai (Rp, default) and Qty (kg).
+outstanding > 90 days, realisation) and **one** *Claim Mutu Summary* card whose tabs are the four summary
+sheets, so the whole section fits on a screen. Numbers there are short (34,46 B, 5,87 M) with the full
+figure on hover; shares are a bar with the percentage, `<0.1%` for a real but tiny share. By Location, By
+Commodity and By Unit switch between Value (Rp, default) and Qty (kg). Both Claim pages are in English;
+only the workbook's own sheet names and period labels keep their Indonesian.
 
 - *Aging* (Pivot, the default tab): amount per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, the sheet's
   VLOOKUP thresholds. Clicking a group filters the page.
-- *Per Lokasi* (Rekap Klaim Per Lokasi): OS and Real per DEST code, with each one's share.
-- *Per Komoditi* (Summary Per Komoditi): one sub total row per commodity, collapsed by default; open a
+- *By Location* (Rekap Klaim Per Lokasi): OS and Real per DEST code, with each one's share.
+- *By Commodity* (Summary Per Komoditi): one sub total row per commodity, collapsed by default; open a
   commodity for its units. The unit is DEST mapped through `CLAIM_MUTU_DEST_UNITS` (KRG and KRW are both
   KARAWANG). SAP cuts `WASTE OIL (POME` short; it is normalised to `WASTE OIL (POME)`, or every POME cell
   compares as zero.
-- *Per Unit* (Summary Per Unit): units as rows for the month picked (latest by default), plus an OS
+- *By Unit* (Summary Per Unit): units as rows for the month picked (latest by default), plus an OS
   sparkline across months. A month is the latest import of that month. It is **built from KLIP's own
   imports**, so it starts with the first imported month and grows by one month per upload; it ignores the
   CR date period. The sheet lays months as rows and units as 72 columns; KLIP transposes it so the table

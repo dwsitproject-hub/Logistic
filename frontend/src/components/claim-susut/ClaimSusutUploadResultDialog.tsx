@@ -42,8 +42,8 @@ export function ClaimSusutUploadResultDialog({
           <div className="space-y-4 text-sm">
             {result.sheetName ? (
               <p className="text-xs text-gray-500">
-                Outstanding dari sheet <span className="font-medium text-gray-700">{result.sheetName}</span>
-                {result.periodLabel ? <> · Periode {result.periodLabel}</> : null}
+                Outstanding from sheet <span className="font-medium text-gray-700">{result.sheetName}</span>
+                {result.periodLabel ? <> · Period {result.periodLabel}</> : null}
               </p>
             ) : null}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -66,18 +66,18 @@ export function ClaimSusutUploadResultDialog({
             </div>
             {result.realSheetName ? (
               <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                Realisasi dari sheet <span className="font-medium">{result.realSheetName}</span>:{' '}
-                <span className="font-semibold tabular-nums">{(result.realInsertedRows ?? 0).toLocaleString()}</span> dari{' '}
-                <span className="tabular-nums">{(result.realTotalRows ?? 0).toLocaleString()}</span> klaim
-                {result.realPeriodLabel ? <> · Periode {result.realPeriodLabel}</> : null}
+                Realised claims from sheet <span className="font-medium">{result.realSheetName}</span>:{' '}
+                <span className="font-semibold tabular-nums">{(result.realInsertedRows ?? 0).toLocaleString()}</span> of{' '}
+                <span className="tabular-nums">{(result.realTotalRows ?? 0).toLocaleString()}</span> claims
+                {result.realPeriodLabel ? <> · Period {result.realPeriodLabel}</> : null}
               </div>
             ) : result.realWarning ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                {result.realWarning}. Data outstanding tetap diimpor.
+                {result.realWarning}. The outstanding data was still imported.
               </div>
             ) : result.sheetName ? (
               <div className="rounded-md border bg-slate-50 px-3 py-2 text-xs text-gray-600">
-                File ini tidak menyertakan sheet REAL_CLAIM - hanya data outstanding yang diimpor.
+                This file has no REAL_CLAIM sheet - only the outstanding data was imported.
               </div>
             ) : null}
             {result.errors.length > 0 ? (
