@@ -349,7 +349,7 @@ export default function ClaimMutuPage() {
   )
 
   useEffect(() => {
-    loadImports().catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Mutu imports')))
+    loadImports().catch((e) => setError(apiErrorMessage(e, 'Failed to load Quality Claim imports')))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -359,12 +359,12 @@ export default function ClaimMutuPage() {
 
   useEffect(() => {
     if (!selectedImportId) return
-    loadFilterOptions(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Mutu filters')))
+    loadFilterOptions(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Quality Claim filters')))
   }, [selectedImportId, loadFilterOptions, scopeFilters])
 
   useEffect(() => {
     if (!selectedImportId) return
-    loadDashboard(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Mutu summary')))
+    loadDashboard(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Quality Claim summary')))
   }, [selectedImportId, loadDashboard, scopeFilters])
 
   useEffect(() => {
@@ -376,7 +376,7 @@ export default function ClaimMutuPage() {
   useEffect(() => {
     if (!selectedImportId) return
     loadRows(scopeFilters, { page, sortKey, sortDir }).catch((e) =>
-      setError(apiErrorMessage(e, 'Failed to load Claim Mutu rows')),
+      setError(apiErrorMessage(e, 'Failed to load Quality Claim rows')),
     )
   }, [selectedImportId, loadRows, scopeFilters, page, sortKey, sortDir])
 
@@ -493,7 +493,7 @@ export default function ClaimMutuPage() {
                 className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
                 onClick={() => document.getElementById('claim-mutu-excel-upload-input')?.click()}
                 disabled={uploading}
-                title="Upload Claim Mutu Excel (.xlsx) - OS_Claim sheet required, Real_Claim optional"
+                title="Upload Quality Claim Excel (.xlsx) - OS_Claim sheet required, Real_Claim optional"
               >
                 {uploading ? (
                   <>
@@ -503,7 +503,7 @@ export default function ClaimMutuPage() {
                 ) : (
                   <>
                     <Upload className="h-4 w-4 mr-2" />
-                    Import Claim Mutu Excel
+                    Import Quality Claim Excel
                   </>
                 )}
               </Button>
@@ -654,7 +654,7 @@ export default function ClaimMutuPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                    <span>All Outstanding Claim Mutu</span>
+                    <span>All Outstanding Quality Claim</span>
                     {loading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
                   </CardTitle>
                   <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
@@ -873,7 +873,7 @@ export default function ClaimMutuPage() {
                       ) : rows.length === 0 ? (
                         <tr className="bg-white">
                           <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
-                            {selectedImportId ? 'No rows' : 'Upload a Claim Mutu file to start.'}
+                            {selectedImportId ? 'No rows' : 'Upload a Quality Claim file to start.'}
                           </td>
                         </tr>
                       ) : (
@@ -914,7 +914,7 @@ export default function ClaimMutuPage() {
             onOpenChange={setHistoryOpen}
             imports={imports}
             apiBase="/claim-mutu"
-            kindLabel="Claim Mutu"
+            kindLabel="Quality Claim"
             onSelectImport={(id) => {
               setSelectedImportId(id)
               setPage(1)

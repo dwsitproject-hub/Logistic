@@ -56,8 +56,8 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'performance',
   },
   { name: 'Oil Loss', href: '/oil-loss', icon: StitchNavIcons.oilLoss, roles: ['ALL'], permissionKey: 'page.oil_loss', group: 'performance' },
-  { name: 'Claim Susut', href: '/claim-susut', icon: StitchNavIcons.claimSusut, roles: ['ALL'], permissionKey: 'page.claim_susut', group: 'performance' },
-  { name: 'Claim Mutu', href: '/claim-mutu', icon: StitchNavIcons.claimMutu, roles: ['ALL'], permissionKey: 'page.claim_mutu', group: 'performance' },
+  { name: 'Shortage Claim', href: '/claim-susut', icon: StitchNavIcons.claimSusut, roles: ['ALL'], permissionKey: 'page.claim_susut', group: 'performance' },
+  { name: 'Quality Claim', href: '/claim-mutu', icon: StitchNavIcons.claimMutu, roles: ['ALL'], permissionKey: 'page.claim_mutu', group: 'performance' },
   { name: 'Contracts', href: '/contracts', icon: StitchNavIcons.contracts, roles: ['ALL'], permissionKey: 'page.contracts', group: 'operations' },
   { name: 'Shipments', href: '/shipments', icon: Ship, roles: ['ALL'], permissionKey: 'page.shipments', group: 'operations' },
   { name: 'Trucking', href: '/trucking', icon: StitchNavIcons.trucking, roles: ['ALL'], permissionKey: 'page.trucking', group: 'operations' },
@@ -71,7 +71,7 @@ export const NAV_ITEMS: NavItem[] = [
   },
   { name: 'Master Vessel', href: '/master-vessel', icon: Ship, roles: ['ALL'], permissionKey: 'page.master_vessels', group: 'master' },
   {
-    name: 'Master Product Configuration',
+    name: 'Master Product',
     href: '/master-product-configuration',
     icon: StitchNavIcons.masterData,
     roles: ['ALL'],
@@ -87,7 +87,8 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'master',
   },
   { name: 'Master Plant', href: '/master-plant', icon: StitchNavIcons.masterPlant, roles: ['ALL'], permissionKey: 'page.master_plants', group: 'master' },
-  { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
+  { name: 'Master Supplier', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
+  { name: 'SAP Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
   { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360', group: 'system' },
   {
     name: 'Customer 360',
@@ -115,7 +116,6 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'system',
   },
   { name: 'Documents', href: '/documents', icon: StitchNavIcons.documents, roles: ['ALL'], permissionKey: 'page.documents', group: 'system' },
-  { name: 'SAP Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
   { name: 'Users', href: '/users', icon: StitchNavIcons.users, roles: ['ALL'], permissionKey: 'page.users', group: 'system' },
   {
     name: 'Audit Logs',

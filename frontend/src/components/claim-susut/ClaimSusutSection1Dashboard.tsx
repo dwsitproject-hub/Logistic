@@ -118,7 +118,7 @@ export function ClaimSusutSection1Dashboard({
           summaryLoading || groupLoading ? 'opacity-65' : 'opacity-100'
         }`}
       >
-        <PerformanceSection1CardShell variant="open" title="Outstanding Claim Susut" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="open" title="Outstanding Shortage Claim" selected onClick={() => undefined}>
           <div className="mb-1 text-sm text-gray-500">Claim Qty</div>
           <div className="mb-3 text-xl font-bold text-gray-900">{formatQtyMtFromKg(summary.qtyClaim)}</div>
           <div className="text-xs text-gray-500">

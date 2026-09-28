@@ -290,7 +290,7 @@ export function ClaimMutuSection1Dashboard({
           loading ? 'opacity-65' : 'opacity-100'
         }`}
       >
-        <PerformanceSection1CardShell variant="open" title="Outstanding Claim Mutu" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="open" title="Outstanding Quality Claim" selected onClick={() => undefined}>
           <div className="mb-1 text-sm text-gray-500">Claim Value (IDR)</div>
           <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(os.amount)}</div>
           <div className="text-xs text-gray-500">
@@ -343,7 +343,7 @@ export function ClaimMutuSection1Dashboard({
         <CardHeader className="pb-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle className="flex items-center gap-2 text-base">
-              <span>Claim Mutu Summary</span>
+              <span>Quality Claim Summary</span>
               {tabLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">

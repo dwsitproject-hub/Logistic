@@ -1,20 +1,29 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import Layout from '@/components/Layout'
 import {
   BulkUploadStatusModal,
   type BulkUploadStatusResult,
 } from '@/components/BulkUploadStatusModal'
-import { Plus, SlidersHorizontal, Upload, Download, Edit2, Trash2, X, Eye, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown, Loader2 } from 'lucide-react'
+import { Plus, Upload, Download, X, Eye, Loader2 } from 'lucide-react'
+import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
+import { StitchFields } from '@/components/shared/stitchField'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
+import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
+import { useListColumnLayout } from '@/lib/listColumnLayout'
 
 interface Supplier {
   id: string
@@ -59,19 +68,29 @@ interface Supplier {
   remarks: string | null
 }
 
-const COLUMN_DEFS = [
-  { key: 'mill_code',           label: 'Mill Code',      defaultVisible: true  },
-  { key: 'mills',               label: 'Mills',          defaultVisible: true  },
-  { key: 'group_id',            label: 'Group',          defaultVisible: true  },
-  { key: 'province',            label: 'Province',       defaultVisible: true  },
-  { key: 'island',              label: 'Island',         defaultVisible: true  },
-  { key: 'group_type',          label: 'Group Type',     defaultVisible: true  },
-  { key: 'cap',                 label: 'CAP (tph)',      defaultVisible: false },
-  { key: 'cpo_prod_est_month',  label: 'CPO / Month',   defaultVisible: false },
-  { key: 'pk_prod_est_month',   label: 'PK / Month',    defaultVisible: false },
-  { key: 'pome_prod_est_month', label: 'POME / Month',  defaultVisible: false },
-  { key: 'shell_prod_est_month',label: 'SHELL / Month', defaultVisible: false },
-] as const
+function supplierText(value: string | null | undefined): string {
+  return value && String(value).trim() ? String(value) : '-'
+}
+
+function supplierNumber(value: string | number | null | undefined): string {
+  if (value == null || value === '') return '-'
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed.toLocaleString('en-US', { maximumFractionDigits: 0 }) : String(value)
+}
+
+const SUPPLIER_TABLE_COLUMNS: MasterListTableColumn<Supplier>[] = [
+  { id: 'mill_code', label: 'Mill Code', defaultVisible: true, getText: (row) => supplierText(row.mill_code) },
+  { id: 'mills', label: 'Mills', defaultVisible: true, getText: (row) => supplierText(row.mills) },
+  { id: 'group_id', label: 'Group', defaultVisible: true, getText: (row) => supplierText(row.group_id) },
+  { id: 'province', label: 'Province', defaultVisible: true, getText: (row) => supplierText(row.province) },
+  { id: 'island', label: 'Island', defaultVisible: true, getText: (row) => supplierText(row.island) },
+  { id: 'group_type', label: 'Group Type', defaultVisible: true, getText: (row) => supplierText(row.group_type) },
+  { id: 'cap', label: 'CAP (tph)', defaultVisible: false, getText: (row) => supplierNumber(row.cap) },
+  { id: 'cpo_prod_est_month', label: 'CPO / Month', defaultVisible: false, getText: (row) => supplierNumber(row.cpo_prod_est_month) },
+  { id: 'pk_prod_est_month', label: 'PK / Month', defaultVisible: false, getText: (row) => supplierNumber(row.pk_prod_est_month) },
+  { id: 'pome_prod_est_month', label: 'POME / Month', defaultVisible: false, getText: (row) => supplierNumber(row.pome_prod_est_month) },
+  { id: 'shell_prod_est_month', label: 'SHELL / Month', defaultVisible: false, getText: (row) => supplierNumber(row.shell_prod_est_month) },
+]
 
 const headersOrder = [
   'PLANT CODE','PROV CODE','PROV #','MILL NO','MILL CODE','MILLS','GROUP ID','GROUP TYPE','Group Scale','Integrated Status',
@@ -123,29 +142,21 @@ export default function SupplierPage() {
   const [form, setForm] = useState<any>(emptyForm)
 
   const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set())
-  const [groupDropdownOpen, setGroupDropdownOpen] = useState(false)
-  const [groupSearch, setGroupSearch] = useState('')
-  const groupDropdownRef = useRef<HTMLDivElement>(null)
 
   const groupOptions = useMemo(() => {
     const ids = new Set(allItems.map(s => s.group_id).filter(Boolean) as string[])
     return Array.from(ids).sort()
   }, [allItems])
 
-  const filteredGroupOptions = useMemo(() => {
-    const q = groupSearch.trim().toLowerCase()
+  const groupSelectOptions = useMemo(() => {
     const available = new Set(groupOptions)
-    const pinnedAvailable = PINNED_GROUPS.filter(g => available.has(g) && (!q || g.toLowerCase().includes(q)))
-    const rest = groupOptions.filter(g => !PINNED_GROUPS.includes(g) && (!q || g.toLowerCase().includes(q)))
-    return { pinned: pinnedAvailable, rest }
-  }, [groupOptions, groupSearch])
+    const pinned = PINNED_GROUPS.filter((g) => available.has(g))
+    const rest = groupOptions.filter((g) => !PINNED_GROUPS.includes(g))
+    return [...pinned, ...rest]
+  }, [groupOptions])
 
-  const toggleGroup = (id: string) => {
-    setSelectedGroups(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
+  const setGroupFilter = (values: string[]) => {
+    setSelectedGroups(new Set(values))
     setPage(1)
   }
 
@@ -186,32 +197,7 @@ export default function SupplierPage() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const items = useMemo(() => sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [sorted, page])
 
-  const [visibleColumns, setVisibleColumns] = useState<Record<string, boolean>>(
-    Object.fromEntries(COLUMN_DEFS.map((c) => [c.key, c.defaultVisible]))
-  )
-  const [showColumnManager, setShowColumnManager] = useState(false)
-  const columnsMenuRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (columnsMenuRef.current && !columnsMenuRef.current.contains(e.target as Node)) {
-        setShowColumnManager(false)
-      }
-      if (groupDropdownRef.current && !groupDropdownRef.current.contains(e.target as Node)) {
-        setGroupDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  const onToggleColumn = (key: string) => {
-    setVisibleColumns((prev) => {
-      const next = { ...prev, [key]: !prev[key] }
-      if (Object.values(next).filter(Boolean).length === 0) return prev
-      return next
-    })
-  }
+  const supplierColumns = useListColumnLayout('master-suppliers.visibleColumns.v1', SUPPLIER_TABLE_COLUMNS)
 
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) setPage(newPage)
@@ -225,13 +211,6 @@ export default function SupplierPage() {
       setSortDir('asc')
     }
     setPage(1)
-  }
-
-  const SortIcon = ({ col }: { col: string }) => {
-    if (sortBy !== col) return <ArrowUpDown className="inline h-3 w-3 ml-1 text-gray-400" />
-    return sortDir === 'asc'
-      ? <ArrowUp className="inline h-3 w-3 ml-1 text-blue-600" />
-      : <ArrowDown className="inline h-3 w-3 ml-1 text-blue-600" />
   }
 
   const fetchProductConfigs = async () => {
@@ -389,6 +368,7 @@ export default function SupplierPage() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -442,138 +422,77 @@ export default function SupplierPage() {
         {error && <div className="text-red-600 text-sm">{error}</div>}
         {success && <div className="text-green-600 text-sm">{success}</div>}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Filter</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-3 items-start">
-              <Input
-                placeholder="Search by Mill Code, Mills, or Group ID..."
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-                className="max-w-sm"
-              />
-
-              {/* Group ID multi-select */}
-              <div ref={groupDropdownRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setGroupDropdownOpen(v => !v)}
-                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border border-input bg-white text-sm hover:bg-gray-50 min-w-[180px] justify-between"
-                >
-                  <span className="truncate text-left">
-                    {selectedGroups.size === 0
-                      ? 'Filter by Group ID'
-                      : selectedGroups.size === 1
-                        ? Array.from(selectedGroups)[0]
-                        : `${selectedGroups.size} groups selected`}
-                  </span>
-                  <ChevronDown className="h-4 w-4 text-gray-400 shrink-0" />
-                </button>
-
-                {groupDropdownOpen && (
-                  <div className="absolute left-0 top-full mt-1 z-50 w-64 bg-white border rounded-md shadow-lg flex flex-col max-h-72">
-                    <div className="p-2 border-b">
-                      <Input
-                        placeholder="Search group..."
-                        value={groupSearch}
-                        onChange={e => setGroupSearch(e.target.value)}
-                        className="h-7 text-xs"
-                        autoFocus
-                      />
-                    </div>
-                    {selectedGroups.size > 0 && (
-                      <button
-                        className="text-xs text-red-500 hover:text-red-700 px-3 py-1.5 text-left border-b hover:bg-red-50"
-                        onClick={() => { setSelectedGroups(new Set()); setPage(1) }}
-                      >
-                        Clear all ({selectedGroups.size} selected)
-                      </button>
-                    )}
-                    <div className="overflow-y-auto flex-1">
-                      {filteredGroupOptions.pinned.length === 0 && filteredGroupOptions.rest.length === 0 ? (
-                        <div className="px-3 py-2 text-xs text-gray-400">No groups found</div>
-                      ) : (
-                        <>
-                          {filteredGroupOptions.pinned.length > 0 && (
-                            <>
-                              <div className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide bg-gray-50 border-b">
-                                Top Groups
-                              </div>
-                              {filteredGroupOptions.pinned.map(g => (
-                                <label key={g} className="flex items-center gap-2 px-3 py-1.5 hover:bg-blue-50 cursor-pointer text-sm">
-                                  <Checkbox checked={selectedGroups.has(g)} onCheckedChange={() => toggleGroup(g)} />
-                                  <span className="truncate font-medium">{g}</span>
-                                </label>
-                              ))}
-                              {filteredGroupOptions.rest.length > 0 && (
-                                <div className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide bg-gray-50 border-y">
-                                  All Groups
-                                </div>
-                              )}
-                            </>
-                          )}
-                          {filteredGroupOptions.rest.map(g => (
-                            <label key={g} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm">
-                              <Checkbox checked={selectedGroups.has(g)} onCheckedChange={() => toggleGroup(g)} />
-                              <span className="truncate">{g}</span>
-                            </label>
-                          ))}
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
+        <ListFilterPanel
+          onReset={() => {
+            setSearch('')
+            setSelectedGroups(new Set())
+            setPage(1)
+          }}
+          showReset={search.trim().length > 0 || selectedGroups.size > 0}
+          chips={[
+            ...(search.trim()
+              ? [{ id: 'search', label: `Search: ${search.trim()}`, onRemove: () => { setSearch(''); setPage(1) } }]
+              : []),
+            ...selectionChips('Group', Array.from(selectedGroups), setGroupFilter),
+          ]}
+        >
+          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+            <div className="min-w-[12rem] flex-[1.4]">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+              <div className="relative">
+                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Mill Code, Mills, or Group ID"
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+                />
               </div>
-
-              {/* Active group chips */}
-              {selectedGroups.size > 0 && (
-                <div className="flex flex-wrap gap-1.5 items-center">
-                  {Array.from(selectedGroups).map(g => (
-                    <span key={g} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
-                      {g}
-                      <button onClick={() => toggleGroup(g)} className="hover:text-red-500 ml-0.5">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
-          </CardContent>
-        </Card>
+            <SearchableMultiSelect
+              className="min-w-[7.5rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              label="Group"
+              options={groupSelectOptions}
+              selected={Array.from(selectedGroups)}
+              onChange={setGroupFilter}
+              placeholder="All"
+              emptyMessage="No groups"
+              pinSelectedToTop
+            />
+          </div>
+        </ListFilterPanel>
 
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <CardTitle>Supplier List</CardTitle>
-                <Badge variant="outline" className="hidden md:inline-flex">Default view: Compact</Badge>
+              <div>
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                  <span>All Suppliers</span>
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{total.toLocaleString('en-US')}</span> suppliers
+                  </span>
+                  <span className="text-gray-400" aria-hidden>·</span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {page}/{totalPages} · {items.length} rows
+                  </span>
+                </p>
               </div>
               <div className="flex items-center gap-2">
-                <div ref={columnsMenuRef} className="relative">
-                  <Button variant="outline" size="sm" onClick={() => setShowColumnManager((v) => !v)}>
-                    <SlidersHorizontal className="h-4 w-4 mr-2" />
-                    Columns
-                  </Button>
-                  {showColumnManager && (
-                    <div className="absolute right-0 mt-2 w-56 rounded-md border bg-white shadow-md z-50 p-3">
-                      <p className="text-xs font-medium text-gray-500 mb-2">Toggle Columns</p>
-                      {COLUMN_DEFS.map((col) => (
-                        <label key={col.key} className="flex items-center gap-2 text-sm cursor-pointer select-none py-1">
-                          <Checkbox
-                            checked={Boolean(visibleColumns[col.key])}
-                            onCheckedChange={() => onToggleColumn(col.key)}
-                          />
-                          <span>{col.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <ListPageColumnsMenu
+                  columns={supplierColumns.menuColumns}
+                  visibleIds={supplierColumns.visibleIds}
+                  disabled={loading}
+                  onToggle={supplierColumns.toggle}
+                  onSelectAll={supplierColumns.selectAll}
+                  onUnselectAll={supplierColumns.unselectAll}
+                  onReset={supplierColumns.reset}
+                  onReorder={supplierColumns.reorder}
+                />
                 {totalPages > 1 && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
                     <Button variant="outline" size="sm" onClick={() => handlePageChange(page - 1)} disabled={page <= 1}>Previous</Button>
                     {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                       let pageNum: number
@@ -594,79 +513,32 @@ export default function SupplierPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
-              <div className="py-8 text-center text-gray-500">Loading...</div>
-            ) : items.length === 0 ? (
-              <div className="py-8 text-center text-gray-500">No suppliers found</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 border-b">
-                      {visibleColumns['mill_code']           && <th className="text-left px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('mill_code')}>Mill Code<SortIcon col="mill_code" /></th>}
-                      {visibleColumns['mills']               && <th className="text-left px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('mills')}>Mills<SortIcon col="mills" /></th>}
-                      {visibleColumns['group_id']            && <th className="text-left px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('group_id')}>Group<SortIcon col="group_id" /></th>}
-                      {visibleColumns['province']            && <th className="text-left px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('province')}>Province<SortIcon col="province" /></th>}
-                      {visibleColumns['island']              && <th className="text-left px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('island')}>Island<SortIcon col="island" /></th>}
-                      {visibleColumns['group_type']          && <th className="text-left px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('group_type')}>Group Type<SortIcon col="group_type" /></th>}
-                      {visibleColumns['cap']                 && <th className="text-right px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('cap')}>CAP (tph)<SortIcon col="cap" /></th>}
-                      {visibleColumns['cpo_prod_est_month']  && <th className="text-right px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('cpo_prod_est_month')}>CPO / Month<SortIcon col="cpo_prod_est_month" /></th>}
-                      {visibleColumns['pk_prod_est_month']   && <th className="text-right px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('pk_prod_est_month')}>PK / Month<SortIcon col="pk_prod_est_month" /></th>}
-                      {visibleColumns['pome_prod_est_month'] && <th className="text-right px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('pome_prod_est_month')}>POME / Month<SortIcon col="pome_prod_est_month" /></th>}
-                      {visibleColumns['shell_prod_est_month']&& <th className="text-right px-3 py-2 font-medium whitespace-nowrap cursor-pointer select-none hover:bg-gray-100" onClick={() => handleSort('shell_prod_est_month')}>SHELL / Month<SortIcon col="shell_prod_est_month" /></th>}
-                      <th className="text-right px-3 py-2 font-medium whitespace-nowrap">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((s, idx) => (
-                      <tr key={s.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        {visibleColumns['mill_code']           && <td className="px-3 py-2 whitespace-nowrap">{s.mill_code || '-'}</td>}
-                        {visibleColumns['mills']               && <td className="px-3 py-2">{s.mills || '-'}</td>}
-                        {visibleColumns['group_id']            && <td className="px-3 py-2 whitespace-nowrap">{s.group_id || '-'}</td>}
-                        {visibleColumns['province']            && <td className="px-3 py-2 whitespace-nowrap">{s.province || '-'}</td>}
-                        {visibleColumns['island']              && <td className="px-3 py-2 whitespace-nowrap">{s.island || '-'}</td>}
-                        {visibleColumns['group_type']          && <td className="px-3 py-2">{s.group_type || '-'}</td>}
-                        {visibleColumns['cap']                 && <td className="px-3 py-2 text-right">{s.cap ? Number(s.cap).toLocaleString('en-US') : '-'}</td>}
-                        {visibleColumns['cpo_prod_est_month']  && <td className="px-3 py-2 text-right">{s.cpo_prod_est_month ? Number(s.cpo_prod_est_month).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-'}</td>}
-                        {visibleColumns['pk_prod_est_month']   && <td className="px-3 py-2 text-right">{s.pk_prod_est_month ? Number(s.pk_prod_est_month).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-'}</td>}
-                        {visibleColumns['pome_prod_est_month'] && <td className="px-3 py-2 text-right">{s.pome_prod_est_month ? Number(s.pome_prod_est_month).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-'}</td>}
-                        {visibleColumns['shell_prod_est_month']&& <td className="px-3 py-2 text-right">{s.shell_prod_est_month ? Number(s.shell_prod_est_month).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '-'}</td>}
-                        <td className="px-3 py-2">
-                          <div className="inline-flex gap-2 justify-end w-full">
-                            <Button variant="outline" size="sm" onClick={() => setViewingSupplier(s)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
-                              <Eye className="h-4 w-4 mr-1" />View
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between mt-4 border-t pt-4">
-                <div className="text-sm text-gray-700">
-                  Showing page {page} of {totalPages} ({total} suppliers)
+            <MasterListCompactTable
+              rows={items}
+              columns={SUPPLIER_TABLE_COLUMNS.filter((col) => supplierColumns.orderedVisibleIds.includes(col.id)).sort(
+                (a, b) => supplierColumns.orderedVisibleIds.indexOf(a.id) - supplierColumns.orderedVisibleIds.indexOf(b.id),
+              )}
+              getRowId={(row) => row.id}
+              sortKey={sortBy}
+              sortDir={sortDir}
+              dragColId={supplierColumns.dragColId}
+              loading={loading}
+              emptyLabel="No suppliers found"
+              onSort={handleSort}
+              onDragStart={supplierColumns.setDragColId}
+              onDragEnd={() => supplierColumns.setDragColId(null)}
+              onDrop={(id) => {
+                if (supplierColumns.dragColId) supplierColumns.reorder(supplierColumns.dragColId, id)
+                supplierColumns.setDragColId(null)
+              }}
+              renderActions={(row) => (
+                <div className="inline-flex items-center justify-center gap-1">
+                  <Button variant="outline" size="sm" onClick={() => setViewingSupplier(row)} className="bg-green-50 border-green-200 text-green-700 hover:bg-green-100">
+                    <Eye className="h-4 w-4 mr-1" />View
+                  </Button>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(page - 1)} disabled={page <= 1}>Previous</Button>
-                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                    let pageNum: number
-                    if (totalPages <= 5) { pageNum = i + 1 }
-                    else if (page <= 3) { pageNum = i + 1 }
-                    else if (page >= totalPages - 2) { pageNum = totalPages - 4 + i }
-                    else { pageNum = page - 2 + i }
-                    return (
-                      <Button key={pageNum} variant={page === pageNum ? 'default' : 'outline'} size="sm" onClick={() => handlePageChange(pageNum)} className="min-w-[36px]">
-                        {pageNum}
-                      </Button>
-                    )
-                  })}
-                  <Button variant="outline" size="sm" onClick={() => handlePageChange(page + 1)} disabled={page >= totalPages}>Next</Button>
-                </div>
-              </div>
-            )}
+              )}
+            />
           </CardContent>
         </Card>
 
@@ -858,6 +730,7 @@ export default function SupplierPage() {
           createdLabel="Inserted"
         />
       </div>
+      </StitchFields>
     </Layout>
   )
 }

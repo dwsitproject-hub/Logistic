@@ -454,7 +454,7 @@ export default function ClaimSusutPage() {
 
   useEffect(() => {
     loadRealized(selectedImportId).catch((e) =>
-      setError(apiErrorMessage(e, 'Failed to load Claim Susut realisation')),
+      setError(apiErrorMessage(e, 'Failed to load Shortage Claim realisation')),
     )
   }, [selectedImportId, loadRealized])
 
@@ -466,12 +466,12 @@ export default function ClaimSusutPage() {
   useEffect(() => {
     if (!selectedImportId) return
     setError(null)
-    loadFilterOptions(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Susut filters')))
+    loadFilterOptions(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Shortage Claim filters')))
   }, [selectedImportId, dateFrom, dateTo, loadFilterOptions, scopeFilters])
 
   useEffect(() => {
     if (!selectedImportId) return
-    loadSummary(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Susut summary')))
+    loadSummary(scopeFilters).catch((e) => setError(apiErrorMessage(e, 'Failed to load Shortage Claim summary')))
   }, [
     selectedImportId,
     dateFrom,
@@ -507,7 +507,7 @@ export default function ClaimSusutPage() {
 
   useEffect(() => {
     if (!selectedImportId) return
-    loadRows(scopeFilters, { page }).catch((e) => setError(apiErrorMessage(e, 'Failed to load Claim Susut rows')))
+    loadRows(scopeFilters, { page }).catch((e) => setError(apiErrorMessage(e, 'Failed to load Shortage Claim rows')))
   }, [
     selectedImportId,
     dateFrom,
@@ -638,7 +638,7 @@ export default function ClaimSusutPage() {
               className="border-indigo-600 text-indigo-700 hover:bg-indigo-50"
               onClick={() => document.getElementById('claim-susut-excel-upload-input')?.click()}
               disabled={uploading}
-              title="Upload Claim Susut Excel (.xlsx)"
+              title="Upload Shortage Claim Excel (.xlsx)"
             >
               {uploading ? (
                 <>
@@ -648,7 +648,7 @@ export default function ClaimSusutPage() {
               ) : (
                 <>
                   <Upload className="h-4 w-4 mr-2" />
-                  Import Claim Susut Excel
+                  Import Shortage Claim Excel
                 </>
               )}
             </Button>
@@ -799,7 +799,7 @@ export default function ClaimSusutPage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Claim Susut</span>
+                  <span>All Shortage Claim</span>
                   {loading ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
                   ) : null}
