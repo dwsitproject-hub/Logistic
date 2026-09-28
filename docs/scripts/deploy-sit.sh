@@ -36,6 +36,18 @@
 
 set -euo pipefail
 
+# The whole script is the body of main(), called on the LAST line together with `exit`.
+#
+# Bash reads a script from disk as it runs, not all at once. If the file is OVERWRITTEN IN PLACE
+# mid-run - `cp` over it, `cat >`, editing it with nano on the server - bash carries on from its
+# old byte offset in the new content and runs fragments of lines. Tested: an in-place overwrite
+# ran half a line and then the new file's commands. `git pull` is NOT that case - git writes a new
+# file and renames it, so bash keeps reading the old one to the end (also tested, and what the SIT
+# deploy of f05c662 showed). Wrapped in a function, bash must read the whole definition before
+# running any of it, and `exit` on the call's line stops it reading further. Deliberately not
+# re-indented, so the diff is the size of the change.
+main() {
+
 ROLE="${1:-}"
 BRANCH="${DEPLOY_BRANCH:-SIT}"
 
@@ -219,3 +231,6 @@ else
   printf '  ONE OR MORE CHECKS FAILED - read the lines above before walking away\n\n'
   exit 1
 fi
+}
+
+main "$@"; exit

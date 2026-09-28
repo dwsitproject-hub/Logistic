@@ -4,7 +4,7 @@ import pool from './connection';
 import logger from '../utils/logger';
 import { isTransientDbError, transientRetryDelayMs } from './transientDbError';
 
-const MIGRATIONS_TABLE = 'schema_migrations';
+import { MIGRATIONS_TABLE, applySqlFile, markApplied } from './applyMigration';
 
 const ensureMigrationsTable = async (): Promise<void> => {
   await pool.query(`
@@ -33,13 +33,6 @@ const getAppliedMigrationSet = async (): Promise<Set<string>> => {
   return new Set(res.rows.map((r) => r.filename));
 };
 
-const markApplied = async (filename: string): Promise<void> => {
-  await pool.query(
-    `INSERT INTO ${MIGRATIONS_TABLE} (filename) VALUES ($1) ON CONFLICT (filename) DO NOTHING;`,
-    [filename]
-  );
-};
-
 const readSqlFiles = (migrationsDir: string): string[] => {
   if (!fs.existsSync(migrationsDir)) return [];
 
@@ -47,21 +40,6 @@ const readSqlFiles = (migrationsDir: string): string[] => {
     .readdirSync(migrationsDir)
     .filter((f) => f.toLowerCase().endsWith('.sql'))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
-};
-
-const applySqlFile = async (filePath: string, filename: string): Promise<void> => {
-  const sql = fs.readFileSync(filePath, 'utf-8');
-  logger.info(`Applying migration: ${filename}`);
-
-  await pool.query('BEGIN');
-  try {
-    await pool.query(sql);
-    await markApplied(filename);
-    await pool.query('COMMIT');
-  } catch (error) {
-    await pool.query('ROLLBACK');
-    throw error;
-  }
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
