@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import api from '@/lib/api'
 import { buildCacheKey, cachedGet, invalidateClientCacheByPathPrefix, peekCache } from '@/lib/clientDataCache'
@@ -1936,6 +1937,7 @@ export default function OilLossPage() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         <div className="space-y-3">
           <HeaderFilterSlot>
@@ -2119,7 +2121,7 @@ export default function OilLossPage() {
         <Card>
           <CardHeader className="space-y-3">
             <div>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>
                   {viewMode === 'all_contract'
                     ? 'All Oil Loss'
@@ -2677,6 +2679,7 @@ export default function OilLossPage() {
           initialPoNumber={viewTruckingModal?.poNumber ?? null}
         />
       </div>
+      </StitchFields>
     </Layout>
   )
 }

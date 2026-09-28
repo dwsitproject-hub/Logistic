@@ -2,6 +2,7 @@
 
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
 
 export interface FilterSingleSelectOption {
   value: string
@@ -24,13 +25,17 @@ export function FilterSingleSelect({
   ariaLabel,
   className,
 }: FilterSingleSelectProps) {
+  const stitch = useStitchFields()
   return (
     <div className={cn('relative min-w-[10rem]', className)}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label={ariaLabel}
-        className="h-10 w-full appearance-none rounded-md border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+        className={stitchControlClass(
+          'h-10 w-full appearance-none rounded-md border border-gray-300 bg-white py-2 pl-3 pr-9 text-sm text-gray-900 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+          stitch,
+        )}
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>

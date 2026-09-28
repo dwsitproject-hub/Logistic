@@ -20,14 +20,27 @@ import {
   FileText,
   Loader2,
   Pencil,
-  Search,
   SlidersHorizontal,
   Upload,
   X,
 } from 'lucide-react'
-import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { LIST_FILTER_FIELD_LABEL_CLASS } from '@/components/shared/ListFilterPanel'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { PerformanceContractDateControl } from '@/components/performance/PerformanceContractDateControl'
+import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
+import { StitchFields } from '@/components/shared/stitchField'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
+import {
+  buildPerformancePeriodOptions,
+  resolvePerformancePeriodDateRange,
+  type PerformancePeriodKey,
+} from '@/lib/performancePeriodFilters'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
 import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
@@ -118,6 +131,7 @@ function CommercialDocumentsPageContent() {
   }, [canViewPage, perms.loaded, router])
 
   const ytdDefault = useMemo(() => defaultCommercialDocsYtdRange(), [])
+  const [docPeriod, setDocPeriod] = useState<PerformancePeriodKey>('YTD')
   const [rows, setRows] = useState<CommercialDocumentRow[]>([])
   const [loading, setLoading] = useState(true)
   const [fetching, setFetching] = useState(false)
@@ -399,6 +413,7 @@ function CommercialDocumentsPageContent() {
     setSelectedIncoterms([])
     setSelectedSuppliers([])
     resetUserScopeFilters()
+    setDocPeriod('YTD')
     setDateFrom(ytdDefault.dateFrom)
     setDateTo(ytdDefault.dateTo)
     setCurrentPage(1)
@@ -475,110 +490,163 @@ function CommercialDocumentsPageContent() {
   }
 
   return (
+    <StitchFields>
     <div className="space-y-6">
+      <HeaderFilterSlot>
+        <PerformanceContractDateControl
+          header
+          period={docPeriod}
+          options={buildPerformancePeriodOptions()}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onPeriodChange={(value) => {
+            setDocPeriod(value)
+            const range = resolvePerformancePeriodDateRange(value)
+            setDateFrom(range.dateFrom)
+            setDateTo(range.dateTo)
+            setCurrentPage(1)
+          }}
+          onDateFromChange={(iso) => {
+            setDateFrom(iso)
+            setCurrentPage(1)
+          }}
+          onDateToChange={(iso) => {
+            setDateTo(iso)
+            setCurrentPage(1)
+          }}
+          resolvePeriodRange={resolvePerformancePeriodDateRange}
+        />
+        <SearchableMultiSelect
+          label="Region/Plant"
+          hideLabel
+          portalMenu
+          buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+          options={availablePlants}
+          selected={selectedPlants}
+          onChange={handleGroupPlantsChange}
+          placeholder="Region/Plant"
+          emptyMessage="No region/plant values"
+          uppercaseOptionLabels
+        />
+      </HeaderFilterSlot>
       <p className="text-sm text-gray-600">Document completeness checking for commercial contracts</p>
 
-      {/* Section 2 */}
-      <Card className="rounded-xl border-slate-200 shadow-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-            Filters
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      <ListFilterPanel
+        onReset={clearFilters}
+        showReset={hasActiveFilters}
+        chips={[
+          ...(search.trim()
+            ? [{ id: 'search', label: `Search: ${search.trim()}`, onRemove: () => setSearch('') }]
+            : []),
+          ...(documentTypeFilter
+            ? [{
+                id: 'document-type',
+                label: `Document type: ${COMMERCIAL_DOCUMENT_LABELS[documentTypeFilter]}`,
+                onRemove: () => setDocumentTypeFilter(''),
+              }]
+            : []),
+          ...(documentStatusFilter
+            ? [{
+                id: 'document-status',
+                label: `Document status: ${documentStatusFilter === 'checked' ? 'Checked' : 'Unchecked'}`,
+                onRemove: () => setDocumentStatusFilter(''),
+              }]
+            : []),
+          ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
+          ...selectionChips('Product', selectedProducts, handleProductsChange),
+          ...selectionChips('Supplier', selectedSuppliers, setSelectedSuppliers),
+          ...selectionChips('Region/Plant', selectedPlants, handleGroupPlantsChange),
+          ...(dateFrom !== ytdDefault.dateFrom || dateTo !== ytdDefault.dateTo
+            ? [{
+                id: 'contract-date',
+                label: `Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`,
+                onRemove: () => {
+                  setDocPeriod('YTD')
+                  setDateFrom(ytdDefault.dateFrom)
+                  setDateTo(ytdDefault.dateTo)
+                },
+              }]
+            : []),
+        ]}
+      >
+        <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+          <div className="min-w-[12rem] flex-[1.4]">
+            <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <Input
-                className="pl-9"
-                placeholder="Search Contract Ext No, PO, Supplier..."
+                placeholder="Contract Ext No, PO, Supplier"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
               />
             </div>
-            <select
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          </div>
+          <div className="min-w-[7.5rem] flex-1">
+            <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Document Type</label>
+            <FilterSingleSelect
               value={documentTypeFilter}
-              onChange={(e) => setDocumentTypeFilter(e.target.value as CommercialDocumentType | '')}
-            >
-              <option value="">All document types</option>
-              {COMMERCIAL_DOCUMENT_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {COMMERCIAL_DOCUMENT_LABELS[t]}
-                </option>
-              ))}
-            </select>
-            <select
-              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              onChange={(value) => setDocumentTypeFilter(value as CommercialDocumentType | '')}
+              options={[
+                { value: '', label: 'All' },
+                ...COMMERCIAL_DOCUMENT_TYPES.map((type) => ({
+                  value: type,
+                  label: COMMERCIAL_DOCUMENT_LABELS[type],
+                })),
+              ]}
+              ariaLabel="Document type filter"
+              className="w-full min-w-0"
+            />
+          </div>
+          <div className="min-w-[7.5rem] flex-1">
+            <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Document Status</label>
+            <FilterSingleSelect
               value={documentStatusFilter}
-              onChange={(e) => setDocumentStatusFilter(e.target.value as DocumentStatusFilter)}
-            >
-              <option value="">All document statuses</option>
-              <option value="checked">Checked</option>
-              <option value="unchecked">Unchecked</option>
-            </select>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
-            <SearchableMultiSelect
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              label="Incoterm"
-              placeholder="All incoterms"
-              options={availableIncoterms}
-              selected={selectedIncoterms}
-              onChange={setSelectedIncoterms}
-            />
-            <SearchableMultiSelect
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              label="Product"
-              placeholder="All products"
-              options={availableProducts}
-              selected={selectedProducts}
-              onChange={handleProductsChange}
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              label="Supplier"
-              placeholder="All suppliers"
-              options={availableSuppliers}
-              selected={selectedSuppliers}
-              onChange={setSelectedSuppliers}
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              label="Region/Plant"
-              placeholder="Select region/plant(s)"
-              emptyMessage="No region/plant values"
-              options={availablePlants}
-              selected={selectedPlants}
-              onChange={handleGroupPlantsChange}
-              pinSelectedToTop
-              uppercaseOptionLabels
+              onChange={(value) => setDocumentStatusFilter(value as DocumentStatusFilter)}
+              options={[
+                { value: '', label: 'All' },
+                { value: 'checked', label: 'Checked' },
+                { value: 'unchecked', label: 'Unchecked' },
+              ]}
+              ariaLabel="Document status filter"
+              className="w-full min-w-0"
             />
           </div>
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-              <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
-              <span className="text-gray-500">to</span>
-              <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
-              {hasActiveFilters && (
-                <Button
-                  type="button"
-                  onClick={clearFilters}
-                  variant="ghost"
-                  size="sm"
-                  className="text-gray-500"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          <PerformanceScopeFilters
+            inlineRow
+            microLabels
+            hideGroupPlantFilter
+            incotermOptions={availableIncoterms}
+            selectedIncoterms={selectedIncoterms}
+            onIncotermsChange={setSelectedIncoterms}
+            showProductFilter
+            productOptions={availableProducts}
+            selectedProducts={selectedProducts}
+            onProductsChange={handleProductsChange}
+            showSupplierFilter
+            supplierOptions={availableSuppliers}
+            selectedSuppliers={selectedSuppliers}
+            onSuppliersChange={setSelectedSuppliers}
+            groupPlantOptions={availablePlants}
+            uppercaseGroupPlantLabels
+            selectedGroupPlants={selectedPlants}
+            onGroupPlantsChange={handleGroupPlantsChange}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onDateFromChange={setDateFrom}
+            onDateToChange={setDateTo}
+            showDateRange={false}
+            incotermPlaceholder="All"
+            productPlaceholder="All"
+            supplierPlaceholder="All"
+            incotermEmptyMessage="Loading incoterms..."
+            productEmptyMessage="Loading products..."
+            supplierEmptyMessage="Loading suppliers..."
+            groupPlantPlaceholder="All"
+            groupPlantEmptyMessage="No region/plant values"
+          />
+        </div>
+      </ListFilterPanel>
 
       {/* Section 3 */}
       <Card>
@@ -586,7 +654,7 @@ function CommercialDocumentsPageContent() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                   <span>All Contracts</span>
                   {fetching && rows.length > 0 ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
@@ -966,5 +1034,6 @@ function CommercialDocumentsPageContent() {
         onSaved={() => void fetchData()}
       />
     </div>
+    </StitchFields>
   )
 }

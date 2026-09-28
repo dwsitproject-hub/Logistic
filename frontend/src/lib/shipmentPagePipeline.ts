@@ -204,18 +204,18 @@ export const SHIPMENT_PAGE_PIPELINE_CARDS: readonly ShipmentPipelineCardConfig[]
   {
     status: 'COMPLETED',
     label: 'Completed',
-    color: 'bg-green-100',
-    textColor: 'text-green-800',
-    badgeColor: 'bg-green-600',
+    color: 'bg-emerald-100',
+    textColor: 'text-emerald-800',
+    badgeColor: 'bg-emerald-600',
     tooltip:
       'Shipment complete (cargo received at destination or SAP Close), or a PO with no shipment whose remaining outstanding qty is 1 MT or less.',
   },
   {
     status: 'CANCELLED',
     label: 'Cancelled',
-    color: 'bg-red-100',
-    textColor: 'text-red-800',
-    badgeColor: 'bg-red-600',
+    color: 'bg-rose-100',
+    textColor: 'text-rose-800',
+    badgeColor: 'bg-rose-600',
     tooltip: 'Shipment cancelled and will not continue.',
   },
 ] as const

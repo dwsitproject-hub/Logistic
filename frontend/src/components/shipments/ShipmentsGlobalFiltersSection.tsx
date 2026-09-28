@@ -1,12 +1,14 @@
 'use client'
 
-import { Search, X } from 'lucide-react'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
 import type { ShipmentsPipelineStageFilter } from '@/lib/shipmentsPageFilterState'
 import {
   mapShipmentPipelineStageToGlobalStatusBucket,
@@ -45,6 +47,8 @@ export interface ShipmentsGlobalFiltersSectionProps {
   onDateToChange: (iso: string) => void
   hasActiveFilters: boolean
   onClearFilters: () => void
+  dateRangeActive?: boolean
+  onResetDateRange?: () => void
 }
 
 const LATE_INDICATOR_OPTIONS = [
@@ -84,116 +88,151 @@ export function ShipmentsGlobalFiltersSection({
   onDateToChange,
   hasActiveFilters,
   onClearFilters,
+  dateRangeActive = false,
+  onResetDateRange,
 }: ShipmentsGlobalFiltersSectionProps) {
   const globalStatusValue = mapShipmentPipelineStageToGlobalStatusBucket(pipelineStage)
 
+  const statusLabel = SHIPMENT_GLOBAL_STATUS_OPTIONS.find((option) => option.value === globalStatusValue)?.label
+  const lateLabel = LATE_INDICATOR_OPTIONS.find((option) => option.value === lateIndicatorFilter)?.label
+  const charterLabel = SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS.find((option) => option.value === charterTypeFilter)?.label
+  const sourceLabel = LOGISTICS_SOURCE_FILTER_OPTIONS.find((option) => option.value === sourceTypeFilter)?.label
+
   return (
-    <Card aria-label="Global filters" className="rounded-xl border-slate-200 shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-          Filters
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0">
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="relative min-w-[12rem] flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
-              <Input
-                placeholder="Search by Contract Ext No, Contract No, PO No, STO No, or Vessel Name..."
-                value={searchDraft}
-                onChange={(e) => onSearchDraftChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    onSearchApply()
-                  }
-                }}
-                className="pl-10"
-              />
-            </div>
-            <FilterSingleSelect
-              value={globalStatusValue}
-              onChange={(value) => onPipelineStageChange(value as ShipmentsPipelineStageFilter)}
-              options={[...SHIPMENT_GLOBAL_STATUS_OPTIONS]}
-              ariaLabel="Pipeline status filter"
-              className="min-w-[11rem]"
+    <ListFilterPanel
+      onReset={onClearFilters}
+      showReset={hasActiveFilters}
+      chips={[
+        ...(globalStatusValue !== 'ALL' && statusLabel
+          ? [{ id: 'status', label: `Status: ${statusLabel}`, onRemove: () => onPipelineStageChange('ALL') }]
+          : []),
+        ...(lateIndicatorFilter !== 'ALL' && lateLabel
+          ? [{ id: 'late', label: `Late: ${lateLabel}`, onRemove: () => onLateIndicatorChange('ALL') }]
+          : []),
+        ...(charterTypeFilter !== 'ALL' && charterLabel
+          ? [{ id: 'charter', label: `Charter: ${charterLabel}`, onRemove: () => onCharterTypeChange('ALL') }]
+          : []),
+        ...(sourceTypeFilter !== 'ALL' && sourceLabel
+          ? [{ id: 'source', label: `Source: ${sourceLabel}`, onRemove: () => onSourceTypeChange('ALL') }]
+          : []),
+        ...selectionChips('Incoterm', selectedIncoterms, onIncotermsChange),
+        ...selectionChips('Product', selectedProducts, onProductsChange),
+        ...selectionChips('Supplier', selectedSuppliers, onSuppliersChange),
+        ...selectionChips('Region/Plant', selectedGroupPlants, onGroupPlantsChange),
+        ...(dateRangeActive && onResetDateRange
+          ? [{
+              id: 'contract-date',
+              label: `Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`,
+              onRemove: onResetDateRange,
+            }]
+          : []),
+      ]}
+    >
+      <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+        <div className="min-w-[12rem] flex-[1.4]">
+          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+          <div className="relative">
+            <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              placeholder="Contract, PO, STO, vessel"
+              value={searchDraft}
+              onChange={(e) => onSearchDraftChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  onSearchApply()
+                }
+              }}
+              className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
             />
-            <FilterSingleSelect
-              value={lateIndicatorFilter}
-              onChange={onLateIndicatorChange}
-              options={LATE_INDICATOR_OPTIONS}
-              ariaLabel="Late indicator filter"
-              className="min-w-[11rem]"
-            />
-            <FilterSingleSelect
-              value={charterTypeFilter}
-              onChange={onCharterTypeChange}
-              options={SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS}
-              ariaLabel="Charter type filter"
-              className="min-w-[11rem]"
-            />
-            <FilterSingleSelect
-              value={sourceTypeFilter}
-              onChange={onSourceTypeChange}
-              options={[...LOGISTICS_SOURCE_FILTER_OPTIONS]}
-              ariaLabel="Source filter"
-              className="min-w-[11rem]"
-            />
-          </div>
-
-          <PerformanceScopeFilters
-            microLabels
-            hideGroupPlantFilter={false}
-            incotermOptions={availableIncoterms}
-            selectedIncoterms={selectedIncoterms}
-            onIncotermsChange={onIncotermsChange}
-            showProductFilter
-            productOptions={availableProducts}
-            selectedProducts={selectedProducts}
-            onProductsChange={onProductsChange}
-            showSupplierFilter
-            supplierOptions={availableSuppliers}
-            selectedSuppliers={selectedSuppliers}
-            onSuppliersChange={onSuppliersChange}
-            groupPlantOptions={availableGroupPlants}
-            uppercaseGroupPlantLabels
-            selectedGroupPlants={selectedGroupPlants}
-            onGroupPlantsChange={onGroupPlantsChange}
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onDateFromChange={onDateFromChange}
-            onDateToChange={onDateToChange}
-            showDateRange={false}
-            incotermEmptyMessage="Loading incoterms..."
-            productEmptyMessage="Loading products..."
-            supplierEmptyMessage="Loading suppliers..."
-            groupPlantPlaceholder="Select region/plant(s)"
-            groupPlantEmptyMessage="No region/plant values"
-          />
-
-          <div className="flex flex-wrap gap-4 items-center">
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-              <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={onDateFromChange} className="w-40" />
-              <span className="text-gray-500">to</span>
-              <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={onDateToChange} className="w-40" />
-              {hasActiveFilters ? (
-                <Button
-                  type="button"
-                  onClick={onClearFilters}
-                  variant="ghost"
-                  size="sm"
-                  className="text-gray-500"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              ) : null}
-            </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+        <div className="min-w-[7.5rem] flex-1">
+          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
+          <FilterSingleSelect
+            value={globalStatusValue}
+            onChange={(value) => onPipelineStageChange(value as ShipmentsPipelineStageFilter)}
+            options={SHIPMENT_GLOBAL_STATUS_OPTIONS.map((option) => ({
+              value: option.value,
+              label: option.value === 'ALL' ? 'All' : option.label,
+            }))}
+            ariaLabel="Pipeline status filter"
+            className="w-full min-w-0"
+          />
+        </div>
+        <div className="min-w-[7.5rem] flex-1">
+          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Late Indicator</label>
+          <FilterSingleSelect
+            value={lateIndicatorFilter}
+            onChange={onLateIndicatorChange}
+            options={LATE_INDICATOR_OPTIONS.map((option) => ({
+              value: option.value,
+              label: option.value === 'ALL' ? 'All' : option.label,
+            }))}
+            ariaLabel="Late indicator filter"
+            className="w-full min-w-0"
+          />
+        </div>
+        <div className="min-w-[7.5rem] flex-1">
+          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Charter Type</label>
+          <FilterSingleSelect
+            value={charterTypeFilter}
+            onChange={onCharterTypeChange}
+            options={SHIPMENT_CHARTER_TYPE_FILTER_OPTIONS.map((option) => ({
+              value: option.value,
+              label: option.value === 'ALL' ? 'All' : option.label,
+            }))}
+            ariaLabel="Charter type filter"
+            className="w-full min-w-0"
+          />
+        </div>
+        <div className="min-w-[7.5rem] flex-1">
+          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Source</label>
+          <FilterSingleSelect
+            value={sourceTypeFilter}
+            onChange={onSourceTypeChange}
+            options={LOGISTICS_SOURCE_FILTER_OPTIONS.map((option) => ({
+              value: option.value,
+              label: option.value === 'ALL' ? 'All' : option.label,
+            }))}
+            ariaLabel="Source filter"
+            className="w-full min-w-0"
+          />
+        </div>
+        <PerformanceScopeFilters
+          inlineRow
+          microLabels
+          hideGroupPlantFilter
+          incotermOptions={availableIncoterms}
+          selectedIncoterms={selectedIncoterms}
+          onIncotermsChange={onIncotermsChange}
+          showProductFilter
+          productOptions={availableProducts}
+          selectedProducts={selectedProducts}
+          onProductsChange={onProductsChange}
+          showSupplierFilter
+          supplierOptions={availableSuppliers}
+          selectedSuppliers={selectedSuppliers}
+          onSuppliersChange={onSuppliersChange}
+          groupPlantOptions={availableGroupPlants}
+          uppercaseGroupPlantLabels
+          selectedGroupPlants={selectedGroupPlants}
+          onGroupPlantsChange={onGroupPlantsChange}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onDateFromChange={onDateFromChange}
+          onDateToChange={onDateToChange}
+          showDateRange={false}
+          incotermPlaceholder="All"
+          productPlaceholder="All"
+          supplierPlaceholder="All"
+          incotermEmptyMessage="Loading incoterms..."
+          productEmptyMessage="Loading products..."
+          supplierEmptyMessage="Loading suppliers..."
+          groupPlantPlaceholder="All"
+          groupPlantEmptyMessage="No region/plant values"
+        />
+      </div>
+    </ListFilterPanel>
   )
 }

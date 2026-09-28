@@ -2,15 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Upload, ArrowUp, ArrowDown, Loader2, History } from 'lucide-react'
+import { Upload, Loader2, History, SlidersHorizontal, GripVertical, X } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
+import { cn } from '@/lib/utils'
+import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
+import { CONTRACT_PERF_TABLE_CELL_PAD } from '@/lib/contractPerformanceColumns'
+import {
+  COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_CLASS,
+  COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
+  COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS,
+  LIST_PAGE_TABLE_HEADER_ROW_CLASS,
+  compactTableColWidthCss,
+  compactTableHeaderMinWidthPx,
+} from '@/lib/compactTableUi'
+import { operationalTableColumnClass } from '@/lib/operationalTableLayout'
 import api from '@/lib/api'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { formatQtyMtFromKg } from '@/lib/utils'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
+import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import {
   formatContractDateScopeLabel,
@@ -108,11 +130,6 @@ type ClaimSusutGroupTransportRow = {
 const columns: ClaimSusutColumnDef[] = CLAIM_SUSUT_COLUMNS
 const pageSize = 20
 
-function SortIcon({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
-  if (!active) return <span className="text-gray-400 inline-flex"><ArrowUp className="h-3 w-3 opacity-0" /></span>
-  return dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-}
-
 function formatDate(d?: string) {
   if (!d) return '-'
   return formatDateDMY(d)
@@ -183,6 +200,10 @@ export default function ClaimSusutPage() {
   const saveViewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [columnsOpen, setColumnsOpen] = useState(false)
   const columnsRef = useRef<HTMLDivElement>(null)
+  const topScrollRef = useRef<HTMLDivElement>(null)
+  const bottomScrollRef = useRef<HTMLDivElement>(null)
+  const isSyncingScroll = useRef(false)
+  const [tableScrollWidth, setTableScrollWidth] = useState(0)
 
   const scopeFilters: ClaimSusutApiFilters = useMemo(
     () => ({
@@ -232,6 +253,18 @@ export default function ClaimSusutPage() {
     )
     return orderedIds.map((id) => byId.get(id)!).filter((c) => visibleColumnIds.has(c.id))
   }, [columnOrderIds, visibleColumnIds])
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+
+  useEffect(() => {
+    const calc = () => {
+      const el = bottomScrollRef.current
+      if (el) setTableScrollWidth(el.scrollWidth)
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [visibleColumns, rows.length, loading])
 
   useEffect(() => {
     try {
@@ -639,6 +672,7 @@ export default function ClaimSusutPage() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         <div className="flex items-center justify-end gap-4">
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -715,59 +749,97 @@ export default function ClaimSusutPage() {
             pinSelectedToTop
           />
         </HeaderFilterSlot>
-        <div className="flex items-end gap-6 flex-wrap">
-          <div className="w-48">
+        <ListFilterPanel
+          onReset={resetFilters}
+          showReset={
+            period !== 'ALL' ||
+            !periodRangeMatchesDates(resolveClaimSusutPeriodRange('ALL'), dateFrom, dateTo) ||
+            selectedPlants.length > 0 ||
+            selectedSources.length > 0 ||
+            selectedIncoterms.length > 0 ||
+            selectedProducts.length > 0 ||
+            selectedGroupsOfTransport.length > 0
+          }
+          chips={[
+            ...(period !== 'ALL' ||
+            !periodRangeMatchesDates(resolveClaimSusutPeriodRange('ALL'), dateFrom, dateTo)
+              ? [
+                  {
+                    id: 'cr-date',
+                    label: formatContractDateScopeLabel(
+                      period,
+                      dateFrom,
+                      dateTo,
+                      (p) => resolveClaimSusutPeriodRange(p as ClaimSusutPeriodKey),
+                      { prefix: true },
+                    ).replace(/^Contract date:/, 'CR date:'),
+                    onRemove: () => {
+                      setPeriod('ALL')
+                      setDateFrom('')
+                      setDateTo('')
+                      setPage(1)
+                    },
+                  },
+                ]
+              : []),
+            ...selectionChips('Region/Plant', selectedPlants, setSelectedPlants),
+            ...selectionChips('Source', selectedSources, setSelectedSources),
+            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
+            ...selectionChips('Product', selectedProducts, setSelectedProducts),
+            ...selectionChips('Transport', selectedGroupsOfTransport, setSelectedGroupsOfTransport),
+          ]}
+        >
+          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
             <SearchableMultiSelect
               label="Source"
+              className="min-w-[7.5rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               options={sourceOptions}
               selected={selectedSources}
               onChange={setSelectedSources}
-              placeholder="All sources"
+              placeholder="All"
               emptyMessage="No sources"
               uppercaseOptionLabels
               pinSelectedToTop
             />
-          </div>
-          <div className="w-48">
             <SearchableMultiSelect
               label="Incoterm"
+              className="min-w-[7.5rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               options={incotermOptions}
               selected={selectedIncoterms}
               onChange={setSelectedIncoterms}
-              placeholder="All incoterms"
+              placeholder="All"
               emptyMessage="No incoterms"
               uppercaseOptionLabels
               pinSelectedToTop
             />
-          </div>
-          <div className="w-48">
             <SearchableMultiSelect
               label="Product"
+              className="min-w-[7.5rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               options={productOptions}
               selected={selectedProducts}
               onChange={setSelectedProducts}
-              placeholder="All products"
+              placeholder="All"
               emptyMessage="No products"
               uppercaseOptionLabels
               pinSelectedToTop
             />
-          </div>
-          <div className="w-56">
             <SearchableMultiSelect
               label="Filter by Transport"
+              className="min-w-[7.5rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
               options={transportOptions}
               selected={selectedGroupsOfTransport}
               onChange={setSelectedGroupsOfTransport}
-              placeholder="All transports"
+              placeholder="All"
               emptyMessage="No transport groups"
               uppercaseOptionLabels
               pinSelectedToTop
             />
           </div>
-          <button type="button" onClick={resetFilters} className="text-sm text-blue-700 hover:underline shrink-0 pb-2.5">
-            Reset
-          </button>
-        </div>
+        </ListFilterPanel>
 
         <div className={`transition-opacity duration-200 ${summaryLoading ? 'opacity-65' : 'opacity-100'}`}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl">
@@ -902,102 +974,274 @@ export default function ClaimSusutPage() {
         ) : null}
 
         <Card>
-          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <CardTitle className="text-base">
-              View Table{' '}
-              <span className="text-xs font-normal text-gray-500">
-                {loading ? 'Loading…' : `${totalCount.toLocaleString()} total`}
-              </span>
-            </CardTitle>
-            <div className="relative" ref={columnsRef}>
-              <Button type="button" variant="outline" size="sm" onClick={() => setColumnsOpen((o) => !o)}>
-                Columns
-              </Button>
-              {columnsOpen && (
-                <div className="absolute right-0 mt-2 w-[280px] rounded-md border bg-white shadow-lg z-50">
-                  <div className="p-2 border-b text-xs text-gray-600">Toggle columns</div>
-                  <div className="max-h-64 overflow-auto p-2 space-y-1">
-                    {columns.map((c) => (
-                      <label key={c.id} className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={visibleColumnIds.has(c.id)}
-                          onChange={() =>
-                            setVisibleColumnIds((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(c.id)) next.delete(c.id)
-                              else next.add(c.id)
-                              return next
-                            })
-                          }
-                        />
-                        <span className="truncate">{c.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="p-2 border-t flex items-center justify-between">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setVisibleColumnIds(new Set(CLAIM_SUSUT_DEFAULT_VISIBLE_IDS))}
-                    >
-                      Reset
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setColumnsOpen(false)}>
-                      Close
-                    </Button>
-                  </div>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                  <span>All Claim Susut</span>
+                  {loading ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
+                  ) : null}
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> rows
+                  </span>
+                  <span className="text-gray-400" aria-hidden>·</span>
+                  <span className="whitespace-nowrap font-medium text-gray-600">
+                    {period !== 'ALL' ||
+                    selectedPlants.length > 0 ||
+                    selectedSources.length > 0 ||
+                    selectedIncoterms.length > 0 ||
+                    selectedProducts.length > 0 ||
+                    selectedGroupsOfTransport.length > 0 ||
+                    Boolean(drilldown.product || drilldown.plant || drilldown.incoterm || drilldown.company)
+                      ? 'Global · Filtered'
+                      : 'Global · All'}
+                  </span>
+                  <span className="text-gray-400" aria-hidden>·</span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {page}/{totalPages} · {rows.length} rows
+                  </span>
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative" ref={columnsRef}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setColumnsOpen((o) => !o)}
+                    disabled={loading}
+                  >
+                    <SlidersHorizontal className="h-4 w-4 mr-2" />
+                    Columns
+                  </Button>
+                  {columnsOpen && (
+                    <div className="absolute right-0 mt-2 w-64 rounded-md border bg-white shadow-md z-50 p-3">
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="text-xs font-semibold text-gray-600">Visible columns</div>
+                        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setColumnsOpen(false)}>
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-1 mb-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(columns.map((c) => c.id)))}
+                        >
+                          Select All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set())}
+                        >
+                          Unselect All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 text-xs h-7"
+                          onClick={() => setVisibleColumnIds(new Set(CLAIM_SUSUT_DEFAULT_VISIBLE_IDS))}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                      <div className="border-t pt-2 space-y-2 max-h-72 overflow-auto pr-1">
+                        {[
+                          ...visibleColumns,
+                          ...columns
+                            .filter((c) => !visibleColumnIds.has(c.id))
+                            .sort((a, b) => a.label.localeCompare(b.label)),
+                        ].map((c) => (
+                          <div
+                            key={c.id}
+                            draggable
+                            onDragStart={() => setDragColId(c.id)}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={() => {
+                              if (dragColId && dragColId !== c.id) reorderColumnByDrag(dragColId, c.id)
+                            }}
+                            className={`flex items-center gap-2 text-sm cursor-grab select-none rounded px-1 py-0.5 ${dragColId === c.id ? 'opacity-40' : 'hover:bg-gray-50'}`}
+                          >
+                            <GripVertical className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                            <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                              <Checkbox
+                                checked={visibleColumnIds.has(c.id)}
+                                onCheckedChange={() =>
+                                  setVisibleColumnIds((prev) => {
+                                    const next = new Set(prev)
+                                    if (next.has(c.id)) next.delete(c.id)
+                                    else next.add(c.id)
+                                    return next
+                                  })
+                                }
+                              />
+                              <span className="truncate">{c.label}</span>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+                {totalPages > 1 && (
+                  <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                    <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>
+                      Previous
+                    </Button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        let pageNum: number
+                        if (totalPages <= 5) pageNum = i + 1
+                        else if (page <= 3) pageNum = i + 1
+                        else if (page >= totalPages - 2) pageNum = totalPages - 4 + i
+                        else pageNum = page - 2 + i
+                        return (
+                          <Button
+                            key={pageNum}
+                            variant={page === pageNum ? 'default' : 'outline'}
+                            size="sm"
+                            onClick={() => setPage(pageNum)}
+                            disabled={loading}
+                            className="min-w-[40px]"
+                          >
+                            {pageNum}
+                          </Button>
+                        )
+                      })}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={page >= totalPages || loading}
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              {loading ? (
-                <div className="text-center py-10 text-gray-500">Loading…</div>
-              ) : rows.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">No rows</div>
-              ) : (
-                <table className="w-full min-w-[1400px] text-sm">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      {visibleColumns.map((c) => (
-                        <th
-                          key={c.id}
-                          className={`px-3 py-2 font-medium text-gray-600 cursor-move ${c.align === 'right' ? 'text-right' : 'text-left'} ${dragColId === c.id ? 'opacity-60' : ''}`}
-                          draggable
-                          onDragStart={(e) => {
-                            setDragColId(c.id)
-                            e.dataTransfer.setData('text/plain', c.id)
-                            e.dataTransfer.effectAllowed = 'move'
-                          }}
-                          onDragEnd={() => setDragColId(null)}
-                          onDragOver={(e) => {
-                            e.preventDefault()
-                            e.dataTransfer.dropEffect = 'move'
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault()
-                            const dragged = e.dataTransfer.getData('text/plain')
-                            if (dragged) reorderColumnByDrag(dragged, c.id)
-                            setDragColId(null)
-                          }}
-                        >
-                          <button
-                            type="button"
-                            className={`inline-flex items-center gap-1 hover:underline ${c.align === 'right' ? 'justify-end w-full' : ''}`}
-                            onClick={() => toggleSort(c.sortKey)}
+            <div className="border rounded-lg overflow-hidden">
+              <div
+                ref={topScrollRef}
+                className={cn(COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS, 'border-b bg-white')}
+                onScroll={() => {
+                  if (isSyncingScroll.current) return
+                  const top = topScrollRef.current
+                  const bottom = bottomScrollRef.current
+                  if (!top || !bottom) return
+                  isSyncingScroll.current = true
+                  bottom.scrollLeft = top.scrollLeft
+                  window.requestAnimationFrame(() => {
+                    isSyncingScroll.current = false
+                  })
+                }}
+              >
+                <div style={{ width: tableScrollWidth || 0, height: 1 }} />
+              </div>
+              <div
+                ref={bottomScrollRef}
+                className={COMPACT_OPERATIONAL_TABLE_SCROLL_CLASS}
+                onScroll={() => {
+                  if (isSyncingScroll.current) return
+                  const top = topScrollRef.current
+                  const bottom = bottomScrollRef.current
+                  if (!top || !bottom) return
+                  isSyncingScroll.current = true
+                  top.scrollLeft = bottom.scrollLeft
+                  window.requestAnimationFrame(() => {
+                    isSyncingScroll.current = false
+                  })
+                }}
+              >
+                <table
+                  className={cn(
+                    COMPACT_OPERATIONAL_TABLE_CLASS,
+                    COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
+                    'klip-compact-table--perf-narrow-cols',
+                  )}
+                >
+                  <colgroup>
+                    {visibleColumns.map((c) => (
+                      <col
+                        key={c.id}
+                        style={{
+                          width: compactTableColWidthCss(
+                            compactTableHeaderMinWidthPx(c.label, { hasSort: true }),
+                          ),
+                        }}
+                      />
+                    ))}
+                  </colgroup>
+                  <thead>
+                    <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
+                      {visibleColumns.map((c) => {
+                        const layout = c.align === 'right' ? 'short' : 'truncate'
+                        return (
+                          <th
+                            key={c.id}
+                            scope="col"
+                            className={cn(
+                              'relative cursor-move select-none text-left font-semibold align-top sticky top-0 z-20 bg-slate-50',
+                              CONTRACT_PERF_TABLE_CELL_PAD,
+                              operationalTableColumnClass(layout),
+                              dragColId === c.id && 'opacity-60',
+                            )}
+                            draggable
+                            onDragStart={(e) => {
+                              setDragColId(c.id)
+                              e.dataTransfer.setData('text/plain', c.id)
+                              e.dataTransfer.effectAllowed = 'move'
+                            }}
+                            onDragEnd={() => setDragColId(null)}
+                            onDragOver={(e) => {
+                              e.preventDefault()
+                              e.dataTransfer.dropEffect = 'move'
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault()
+                              const dragged = e.dataTransfer.getData('text/plain')
+                              if (dragged) reorderColumnByDrag(dragged, c.id)
+                              setDragColId(null)
+                            }}
                           >
-                            {c.label} <SortIcon active={sortKey === c.sortKey} dir={sortDir} />
-                          </button>
-                        </th>
-                      ))}
+                            <ContractPerfTableSortHeader
+                              label={c.label}
+                              activeSort={sortKey === c.sortKey}
+                              sortDir={sortDir}
+                              onSortClick={() => toggleSort(c.sortKey)}
+                            />
+                          </th>
+                        )
+                      })}
                     </tr>
                   </thead>
-                  <tbody className="divide-y">
-                    {rows.map((r) => (
-                      <tr key={r.id} className="hover:bg-gray-50">
+                  <tbody className="divide-y divide-gray-200">
+                    {loading ? (
+                      <tr className="bg-white">
+                        <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
+                          Loading…
+                        </td>
+                      </tr>
+                    ) : rows.length === 0 ? (
+                      <tr className="bg-white">
+                        <td colSpan={Math.max(visibleColumns.length, 1)} className="px-4 py-10 text-center text-gray-500">
+                          No rows
+                        </td>
+                      </tr>
+                    ) : rows.map((r, idx) => {
+                      const stripeClass = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                      return (
+                      <tr key={r.id} className={stripeClass}>
                         {visibleColumns.map((c) => {
                           const val = (() => {
                             switch (c.id) {
@@ -1024,47 +1268,23 @@ export default function ClaimSusutPage() {
                                 return formatSapDisplayValue((r as Record<string, unknown>)[c.id])
                             }
                           })()
+                          const layout = c.align === 'right' ? 'short' : 'truncate'
                           return (
                             <td
                               key={c.id}
-                              className={`px-3 py-2 ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
+                              className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${operationalTableColumnClass(layout)} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass} ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
                             >
-                              {val}
+                              <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, 'text-sm')}>{val}</div>
                             </td>
                           )
                         })}
                       </tr>
-                    ))}
+                      )
+                    })}
                   </tbody>
                 </table>
-              )}
-            </div>
-
-            {!loading && totalCount > pageSize && (
-              <div className="flex items-center justify-between mt-3">
-                <div className="text-xs text-gray-600">
-                  Page {page} of {Math.max(1, Math.ceil(totalCount / pageSize))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={page >= Math.ceil(totalCount / pageSize)}
-                    onClick={() => setPage((p) => Math.min(Math.ceil(totalCount / pageSize), p + 1))}
-                  >
-                    Next
-                  </Button>
-                </div>
               </div>
-            )}
+            </div>
           </CardContent>
         </Card>
         <ClaimSusutUploadResultDialog
@@ -1082,6 +1302,7 @@ export default function ClaimSusutPage() {
           }}
         />
       </div>
+      </StitchFields>
     </Layout>
   )
 }

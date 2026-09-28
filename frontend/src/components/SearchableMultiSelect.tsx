@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
 import { isBlankFilterOption, sortFilterOptionsWithSelectedFirst } from '@/lib/globalScopeFilters'
 
 // Searchable multi-select dropdown (type to filter, multiple selection with OR).
@@ -42,6 +43,7 @@ export function SearchableMultiSelect({
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const stitch = useStitchFields()
   const containerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -130,10 +132,11 @@ export function SearchableMultiSelect({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label={label}
-        className={
+        className={stitchControlClass(
           buttonClassName ??
-          'w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
-        }
+            'w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+          stitch,
+        )}
       >
         <span className={`truncate ${selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}`}>{displayLabel}</span>
         <ChevronDown className={`h-4 w-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -142,7 +145,10 @@ export function SearchableMultiSelect({
         ? createPortal(
             <div
               ref={menuRef}
-              className="fixed z-[80] rounded-md border border-gray-200 bg-white shadow-lg"
+              className={stitchControlClass(
+                'fixed z-[80] rounded-md border border-gray-200 bg-white shadow-lg',
+                stitch,
+              )}
               style={{
                 top: (containerRef.current?.getBoundingClientRect().bottom ?? 0) + 4,
                 left: containerRef.current?.getBoundingClientRect().left ?? 0,

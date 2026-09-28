@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
 import { usePageHeaderBusy } from '@/components/PageHeaderBusyContext'
 import { canViewShippingPerformancePage, usePermissions } from '@/components/PermissionsContext'
 import api from '@/lib/api'
@@ -13,7 +14,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Eye, GripVertical, Loader2, MessageSquare, Package, Search, SlidersHorizontal, X } from 'lucide-react'
+import { Eye, GripVertical, Loader2, MessageSquare, Package, SlidersHorizontal, X } from 'lucide-react'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
 import PerformanceDrilldownScopeLine from '@/components/performance/PerformanceDrilldownScopeLine'
@@ -1424,7 +1426,9 @@ function ShippingPerfContractsBadge({ count }: { count: number }) {
 export default function ShippingPerformancePage() {
   return (
     <Layout>
-      <ShippingPerformancePageContent />
+      <StitchFields>
+        <ShippingPerformancePageContent />
+      </StitchFields>
     </Layout>
   )
 }
@@ -2714,8 +2718,8 @@ function ShippingPerformancePageContent() {
                       }
 
                       const panelHeader = (
-                        <div className={`rounded-lg border px-3 py-2 ${style.headerBg} ${style.border}`}>
-                          <div className="text-sm font-semibold text-gray-900">{col.title}</div>
+                        <div className={`${style.headerBg} px-3 py-2 border-b ${style.border}`}>
+                          <div className="text-sm font-semibold text-gray-800">{col.title}</div>
                           <div className="text-[11px] text-gray-500">{col.subtitle}</div>
                         </div>
                       )
@@ -2765,9 +2769,9 @@ function ShippingPerformancePageContent() {
                       })()
 
                       return (
-                        <div key={col.level} className="space-y-2">
+                        <div key={col.level} className={`rounded-lg border ${style.border} overflow-hidden`}>
                           {panelHeader}
-                          <div className="space-y-2 max-h-[420px] overflow-auto pr-1">{body}</div>
+                          <div className="p-2 max-h-80 overflow-y-auto">{body}</div>
                         </div>
                       )
                     })}
@@ -2795,7 +2799,7 @@ function ShippingPerformancePageContent() {
                   Search
                 </label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+                  <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     id="shipping-perf-search"
                     placeholder="Search by Contract, PO, STO, Vessel, Product, or Incoterm..."
@@ -2807,7 +2811,7 @@ function ShippingPerformancePageContent() {
                         setSearchTerm(searchDraft)
                       }
                     }}
-                    className="h-10 pl-10"
+                    className="h-10 rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
                   />
                 </div>
               </div>
@@ -2819,7 +2823,7 @@ function ShippingPerformancePageContent() {
                   id="shipping-perf-status-filter"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as TableStatusFilter)}
-                  className="flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 text-sm text-gray-900 shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                  className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
                 >
                   <option value="All">All</option>
                   <option value="Open">Open</option>
@@ -2878,7 +2882,7 @@ function ShippingPerformancePageContent() {
         <Card>
           <CardHeader className="space-y-3">
             <div>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                 <span>{tableViewMode === 'all' ? 'All Shipments' : 'By Vessel'}</span>
                 {summaryFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />

@@ -56,7 +56,7 @@ export function PerformanceSection1CardShell({
           >
             <Icon className="h-5 w-5" aria-hidden />
           </div>
-          <span className="text-base font-semibold text-gray-800">{title}</span>
+          <span className="text-sm font-semibold uppercase tracking-wide text-slate-800">{title}</span>
         </div>
         {headerEnd ? <div className="shrink-0">{headerEnd}</div> : null}
       </div>

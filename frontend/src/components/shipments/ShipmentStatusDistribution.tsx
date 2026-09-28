@@ -2,7 +2,8 @@
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2, Ship } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { StitchChevronIcon, StitchShipIcon } from '@/components/shared/stitchIcons'
 import {
   formatDischargePortBreakdownTooltip,
   formatLoadingPortBreakdownTooltip,
@@ -116,7 +117,7 @@ export function ShipmentStatusDistribution({
           className={`mt-1.5 flex min-h-[3.5rem] flex-1 flex-col border-t border-black/10 pt-1.5 text-[11px] font-medium ${card.textColor}`}
         >
           <div className="flex items-center gap-1 opacity-80">
-            <Ship className="h-3 w-3 shrink-0" aria-hidden />
+            <StitchShipIcon className="h-3 w-3 shrink-0" />
             <span>{stageVessels.length === 0 ? 'No vessels' : 'Vessels'}</span>
           </div>
           {preview.length > 0 ? (
@@ -152,8 +153,8 @@ export function ShipmentStatusDistribution({
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+      <CardHeader className="px-4 pb-1 pt-4 sm:px-6 sm:pt-5">
+        <CardTitle className="flex items-center gap-2 text-base font-semibold leading-tight text-slate-800">
           <span>Summary Shipment Status</span>
           {loading ? (
             <Loader2
@@ -169,7 +170,7 @@ export function ShipmentStatusDistribution({
           aria-label="Shipment pipeline status — scroll horizontally on small screens"
         >
           <div
-            className={`mx-auto flex w-max min-w-full items-stretch gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
+            className={`mx-auto flex w-max min-w-full items-stretch gap-3 px-4 pb-4 pt-2 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-2 ${
               loading ? 'opacity-65' : 'opacity-100'
             }`}
           >
@@ -178,23 +179,7 @@ export function ShipmentStatusDistribution({
                 {renderPipelineCard(card)}
                 {index < array.length - 1 && (
                   <div className="mx-2 flex flex-shrink-0 items-center self-center md:mx-3">
-                    <svg
-                      width="28"
-                      height="28"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="text-gray-400"
-                      aria-hidden
-                    >
-                      <path
-                        d="M9 18L15 12L9 6"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <StitchChevronIcon className="h-7 w-7 text-slate-300" />
                   </div>
                 )}
               </div>

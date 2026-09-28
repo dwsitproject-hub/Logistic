@@ -65,6 +65,8 @@ export type PerformanceScopeFiltersProps = {
   groupPlantPlaceholder?: string
   groupPlantEmptyMessage?: string
   microLabels?: boolean
+  /** Join a parent nowrap filter row instead of a wrapping grid. */
+  inlineRow?: boolean
 }
 
 export function PerformanceScopeFilters({
@@ -120,6 +122,7 @@ export function PerformanceScopeFilters({
   groupPlantPlaceholder = 'Select region/plant(s)',
   groupPlantEmptyMessage = 'No region/plant values',
   microLabels = false,
+  inlineRow = false,
 }: PerformanceScopeFiltersProps) {
   const fieldLabelClass = microLabels ? LIST_FILTER_FIELD_LABEL_CLASS : undefined
   const showGroupPlant = !hideGroupPlantFilter
@@ -132,8 +135,10 @@ export function PerformanceScopeFilters({
     (showVesselFilter ? 1 : 0) +
     (showStatusFilter ? 1 : 0)
 
-  const gridClass =
-    selectorCount <= 1
+  const fieldClass = inlineRow ? 'min-w-[7.5rem] flex-1' : undefined
+  const gridClass = inlineRow
+    ? 'contents'
+    : selectorCount <= 1
       ? 'grid grid-cols-1 gap-4'
       : selectorCount === 2
         ? 'grid grid-cols-1 md:grid-cols-2 gap-4'
@@ -157,11 +162,12 @@ export function PerformanceScopeFilters({
     Boolean(dateTo)
 
   return (
-    <div className="space-y-4">
+    <div className={inlineRow ? 'contents' : 'space-y-4'}>
       {selectorCount > 0 && (
-        <div className={`${gridClass} [&>*]:min-w-0`}>
+        <div className={inlineRow ? 'contents' : `${gridClass} [&>*]:min-w-0`}>
           {showIncoterm && (
             <SearchableMultiSelect
+              className={fieldClass}
               labelClassName={fieldLabelClass}
               label="Incoterm"
               options={filterIncotermOptions(incotermOptions)}
@@ -174,6 +180,7 @@ export function PerformanceScopeFilters({
 
           {showProductFilter && onProductsChange && (
             <SearchableMultiSelect
+              className={fieldClass}
               labelClassName={fieldLabelClass}
               label={productLabel}
               options={productOptions}
@@ -187,6 +194,7 @@ export function PerformanceScopeFilters({
 
           {showGroupFilter && onGroupsChange && (
             <SearchableMultiSelect
+              className={fieldClass}
               labelClassName={fieldLabelClass}
               label={groupLabel}
               options={groupOptions}
@@ -200,6 +208,7 @@ export function PerformanceScopeFilters({
 
           {showSupplierFilter && onSuppliersChange && (
             <SearchableMultiSelect
+              className={fieldClass}
               labelClassName={fieldLabelClass}
               label={supplierLabel}
               options={supplierOptions}
@@ -213,6 +222,7 @@ export function PerformanceScopeFilters({
 
           {showGroupPlant && (
             <SearchableMultiSelect
+              className={fieldClass}
               labelClassName={fieldLabelClass}
               label={groupPlantLabel}
               options={filterRegionSiteOptions(groupPlantOptions)}
@@ -227,6 +237,7 @@ export function PerformanceScopeFilters({
 
           {showVesselFilter && onVesselsChange && (
             <SearchableMultiSelect
+              className={fieldClass}
               labelClassName={fieldLabelClass}
               label="Vessel"
               options={vesselOptions}
@@ -238,7 +249,7 @@ export function PerformanceScopeFilters({
           )}
 
           {showStatusFilter && onStatusFilterChange && (
-            <div className="space-y-1.5">
+            <div className={inlineRow ? 'min-w-[7.5rem] flex-1 space-y-1' : 'space-y-1.5'}>
               <label htmlFor="performance-status-filter" className={fieldLabelClass ?? 'text-sm font-medium text-gray-700'}>
                 Status
               </label>
