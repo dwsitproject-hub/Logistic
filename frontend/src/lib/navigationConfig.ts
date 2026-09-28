@@ -16,6 +16,7 @@ import {
   Droplets,
   FileCheck,
   ScrollText,
+  Plug,
 } from 'lucide-react'
 
 export type NavItem = {
@@ -106,4 +107,6 @@ export const NAV_ITEMS: NavItem[] = [
   { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ALL'], permissionKey: 'page.sap' },
   { name: 'Users', href: '/users', icon: Users, roles: ['ALL'], permissionKey: 'page.users' },
   { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'], permissionKey: 'page.audit' },
+  // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
+  { name: 'Integrations', href: '/integrations', icon: Plug, roles: ['ADMIN'], permissionKey: 'page.integrations' },
 ]

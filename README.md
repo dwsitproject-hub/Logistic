@@ -3810,6 +3810,52 @@ What moves is the composition of the drilldown, and it balances exactly:
 387 contracts leave Unscheduled for Late (+110) or On Time (+277). Closed counts are untouched
 (2,859 / 3,052 either way), which is the check that the OPEN-only restriction held.
 
+### Integrations menu: DHM and JPS settings without SSH
+
+`/integrations`, **ADMIN only** (route guard `authorize('ADMIN')` on every endpoint, and the
+`page.integrations` permission granted only to ADMIN by migration 189). One card per integration,
+with every setting its config reads, a **Test connection** button, and who changed what when.
+
+**Where a value comes from.** A value saved here wins; otherwise `.env`, exactly as before. Every
+DHM and JPS setting is read through `integrationEnv()` (`backend/src/integrations/integrationEnv.ts`),
+so no caller changed - with nothing saved, it is a plain `process.env` read. *Revert to .env* deletes
+the saved row. Each field shows its source: **KLIP** (saved here), **.env**, or **Belum diisi**.
+
+**Secrets are write-only.** Private keys, the JPS API key and the webhook secret are encrypted with
+AES-256-GCM (`secretBox.ts`) and never returned by the API - the page shows a hint instead: the known
+prefix, the last four characters and the length (`dhm_sk_...72c1 (55)`). A secret field left blank
+keeps the current value. The ciphertext is bound to its row, so a value copied into another row does
+not decrypt. The audit trail records hints, never values.
+
+**The master key** is `INTEGRATION_SECRETS_KEY`, 32 bytes, and it lives in `backend/.env` **only** -
+`docker-compose.backend.yml` reads it from `env_file` on purpose. Listing it under `environment:` as
+`${INTEGRATION_SECRETS_KEY:-}` would let an unset `/opt/klip/.env` substitute an empty string over the
+real key, the same trap that silently emptied DHM and JPS settings before. Generate it straight into
+the file, never displayed:
+
+    openssl rand -hex 32 | sed 's/^/INTEGRATION_SECRETS_KEY=/' >> backend/.env
+
+Without it the page still works, but refuses to save secrets and says why. If it is lost or changed,
+each saved secret fails to decrypt, falls back to `.env`, and is flagged on the page - re-entering it
+fixes that. Nothing goes down.
+
+**Validation happens before anything is written**, and a failed save writes nothing - a half-applied
+key pair is exactly the state that breaks authentication. It rejects, among others, a DHM private key
+that does not begin with `dhm_sk_`, and a public and private key that are identical: on 2026-09-28 the
+public key was pasted into both fields, and each value was well-formed on its own.
+
+**A save takes effect on the next request.** The DHM client caches a bearer token for seven hours and
+both clients cache an axios instance with the base URL baked in; every save resets them, so a rotated
+key is used immediately rather than when the old token expires.
+
+**Except these, which need a backend restart** and are marked `restart` on the page: `DHM_ENABLED`,
+`JPS_ENABLED`, `DHM_SYNC_CRON`, `JPS_SWEEP_CRON`. SchedulerService reads them once at startup to decide
+which jobs to register. Saved values are loaded **before** it runs, so after a restart they apply.
+
+**Test connection** asks DHM for a fresh token (a cached one proves only that the old key once
+worked) and reads JPS's trade-terms list. Neither requires the integration to be enabled, so a new
+key can be checked before switching it on.
+
 ### Jetty Planning System: one instruction per STO, for BONTANG only
 
 KLIP submits a Shipping Instruction to the Jetty Planning System so a berth can be planned for a

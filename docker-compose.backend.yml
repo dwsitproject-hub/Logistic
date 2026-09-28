@@ -66,6 +66,11 @@ services:
       # /opt/klip/.env to repoint DB_NAME on SIT 2026-09-22 left the container on the old
       # database while the file read the new one, and `up -d` reported "Running" because no
       # part of the config had actually changed.
+      # INTEGRATION_SECRETS_KEY is the same: backend/.env ONLY, on purpose. It decrypts the DHM / JPS
+      # credentials saved from the Integrations menu. Listing it here as ${...:-} would let an unset
+      # /opt/klip/.env substitute an EMPTY string over the real key - every saved secret would then
+      # fail to decrypt and fall back to .env, silently. Generate once, never display it:
+      #   openssl rand -hex 32 | sed 's/^/INTEGRATION_SECRETS_KEY=/' >> backend/.env
       JWT_EXPIRES_IN: 7d
       # Shared upload root inside container (see backend_uploads volume below; Synology optional override)
       UPLOAD_DIR: /app/uploads

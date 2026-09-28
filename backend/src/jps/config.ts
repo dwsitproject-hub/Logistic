@@ -1,18 +1,19 @@
+import { integrationEnv } from '../integrations/integrationEnv';
 /** Jetty Planning System client config — the API key stays server-side. */
 
 export function isJpsEnabled(): boolean {
-  if (String(process.env.JPS_ENABLED || '').toLowerCase() !== 'true') return false;
+  if (String(integrationEnv('JPS_ENABLED') || '').toLowerCase() !== 'true') return false;
   return Boolean(jpsBaseUrl() && jpsApiKey());
 }
 
 export function jpsBaseUrl(): string {
-  return String(process.env.JPS_API_BASE_URL || '')
+  return String(integrationEnv('JPS_API_BASE_URL') || '')
     .trim()
     .replace(/\/+$/, '');
 }
 
 export function jpsApiKey(): string {
-  return String(process.env.JPS_API_KEY || '').trim();
+  return String(integrationEnv('JPS_API_KEY') || '').trim();
 }
 
 /**
@@ -20,7 +21,7 @@ export function jpsApiKey(): string {
  * so this is configuration rather than a constant.
  */
 export function jpsPortId(): number {
-  const n = Number(process.env.JPS_PORT_ID);
+  const n = Number(integrationEnv('JPS_PORT_ID'));
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
@@ -29,17 +30,17 @@ export function jpsPortId(): number {
  * jetty would need its own port id, so this is a single value rather than a list.
  */
 export function jpsRegionSite(): string {
-  return String(process.env.JPS_REGION_SITE || 'BONTANG').trim().toUpperCase();
+  return String(integrationEnv('JPS_REGION_SITE') || 'BONTANG').trim().toUpperCase();
 }
 
 export function jpsRequestTimeoutMs(): number {
-  const n = Number(process.env.JPS_TIMEOUT_MS);
+  const n = Number(integrationEnv('JPS_TIMEOUT_MS'));
   return Number.isFinite(n) && n > 0 ? n : 30_000;
 }
 
 /** JPS asks partners to poll an instruction at most once every 5 minutes. */
 export function jpsMinPollIntervalMs(): number {
-  const n = Number(process.env.JPS_MIN_POLL_INTERVAL_MS);
+  const n = Number(integrationEnv('JPS_MIN_POLL_INTERVAL_MS'));
   return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
 }
 
@@ -56,7 +57,7 @@ export function jpsMinPollIntervalMs(): number {
  * them again is a duplicate, not a retry.
  */
 export function jpsRetryFailed(): boolean {
-  return String(process.env.JPS_RETRY_FAILED || '').toLowerCase() === 'true';
+  return String(integrationEnv('JPS_RETRY_FAILED') || '').toLowerCase() === 'true';
 }
 
 /**
@@ -65,12 +66,12 @@ export function jpsRetryFailed(): boolean {
  * edits would resend the same rejected payload once per save.
  */
 export function jpsRetryFailedAfterMs(): number {
-  const n = Number(process.env.JPS_RETRY_FAILED_AFTER_MS);
+  const n = Number(integrationEnv('JPS_RETRY_FAILED_AFTER_MS'));
   return Number.isFinite(n) && n >= 60_000 ? n : 5 * 60_000;
 }
 
 export function jpsSweepCron(): string {
-  return process.env.JPS_SWEEP_CRON || '*/15 * * * *';
+  return integrationEnv('JPS_SWEEP_CRON') || '*/15 * * * *';
 }
 
 /**
@@ -78,6 +79,6 @@ export function jpsSweepCron(): string {
  * run after an outage) so one sweep cannot spend the whole budget.
  */
 export function jpsMaxSubmitsPerSweep(): number {
-  const n = Number(process.env.JPS_MAX_SUBMITS_PER_SWEEP);
+  const n = Number(integrationEnv('JPS_MAX_SUBMITS_PER_SWEEP'));
   return Number.isFinite(n) && n > 0 ? n : 25;
 }

@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import logger from '../utils/logger';
+import { onIntegrationSettingsChanged } from '../integrations/integrationEnv';
 import {
   dhmBaseUrl,
   dhmPrivateKey,
@@ -17,6 +18,12 @@ export function resetDhmHttpForTests(): void {
   cached = null;
   tokenCache = null;
 }
+
+/*
+ * A rotated key or a new base URL must take effect on the next request, not when the seven-hour
+ * token happens to expire. The Integrations menu publishes every save through integrationEnv.
+ */
+onIntegrationSettingsChanged(resetDhmHttpForTests);
 
 async function fetchDhmBearerToken(): Promise<string> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) {
@@ -37,6 +44,26 @@ async function fetchDhmBearerToken(): Promise<string> {
   }
   tokenCache = { token, expiresAt: Date.now() + TOKEN_REFRESH_MS };
   return token;
+}
+
+/**
+ * Can KLIP authenticate with DHM using the credentials it would use right now?
+ *
+ * Asks for a fresh token rather than reusing the cached one - a cached token proves only that
+ * the OLD credentials once worked. Does not require DHM_ENABLED, so an ADMIN can check a new key
+ * before switching the integration on. Never returns the token.
+ */
+export async function verifyDhmCredentials(): Promise<{ ok: boolean; message: string }> {
+  if (!dhmBaseUrl()) return { ok: false, message: 'Base URL is not set.' };
+  if (!dhmPublicKey() || !dhmPrivateKey()) return { ok: false, message: 'Public or private key is not set.' };
+  tokenCache = null;
+  try {
+    await fetchDhmBearerToken();
+    return { ok: true, message: 'Authenticated - DHM issued a token.' };
+  } catch (error) {
+    tokenCache = null;
+    return { ok: false, message: error instanceof Error ? error.message : 'DHM request failed.' };
+  }
 }
 
 export function dhmHttp(): AxiosInstance {
