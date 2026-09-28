@@ -3,14 +3,16 @@
  * Pair with truckingIncotermScope (FRC / LCO) for land trucking.
  */
 
+import { normalizeIncoterm } from './incotermAlias';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 
 export const SHIPMENT_PAGE_SEA_INCOTERMS = ['CIF', 'FOB', 'CFR'] as const;
 
 export type ShipmentPageSeaIncoterm = (typeof SHIPMENT_PAGE_SEA_INCOTERMS)[number];
 
+/** Trimmed, upper-cased and de-aliased (CNF -> CFR), matching contractEffectiveIncotermExpr. */
 export function normalizeShipmentSeaIncoterm(value: string | null | undefined): string {
-  return String(value ?? '').trim().toUpperCase();
+  return normalizeIncoterm(value);
 }
 
 export function isShipmentPageSeaIncoterm(value: string | null | undefined): boolean {

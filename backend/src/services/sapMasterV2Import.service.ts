@@ -1,3 +1,4 @@
+import { canonicalIncoterm } from '../utils/incotermAlias';
 import * as XLSX from 'xlsx';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -2117,6 +2118,14 @@ export class SapMasterV2ImportService {
       }
     }
     
+    /*
+     * CNF / C&F -> CFR, the one spelling every incoterm list in KLIP uses (utils/incotermAlias.ts).
+     * Only the parsed value: parsed.raw keeps exactly what SAP sent.
+     */
+    if (parsed.contract.incoterm !== undefined) {
+      parsed.contract.incoterm = canonicalIncoterm(parsed.contract.incoterm);
+    }
+
     return parsed;
   }
   
