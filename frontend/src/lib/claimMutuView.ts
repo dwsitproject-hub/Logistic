@@ -171,9 +171,33 @@ export function formatClaimMutuKg(n: number | undefined | null): string {
   return v.toLocaleString('id-ID', { maximumFractionDigits: 2 })
 }
 
+/**
+ * Short form for the Section 1 recap, where a full "34.460.622.316" per cell makes the table too
+ * wide: 34,46 M (miliar), 5,87 jt (juta). Under a million the number is shown whole. The full
+ * figure goes in the cell's tooltip, and the view table below keeps full numbers.
+ */
+export function formatClaimMutuCompact(n: number | undefined | null): string {
+  const v = Number(n || 0)
+  if (!v) return '-'
+  const abs = Math.abs(v)
+  const fmt = (x: number) => x.toLocaleString('id-ID', { maximumFractionDigits: 2 })
+  if (abs >= 1e12) return `${fmt(v / 1e12)} T`
+  if (abs >= 1e9) return `${fmt(v / 1e9)} M`
+  if (abs >= 1e6) return `${fmt(v / 1e6)} jt`
+  return Math.round(v).toLocaleString('id-ID')
+}
+
+/** Which side of a pair the recap shows: the value (default, as the Pivot sums it) or the quantity. */
+export type ClaimMutuMeasure = 'amount' | 'qty'
+
+export const pairValue = (p: ClaimMutuSidePair, side: 'os' | 'real', m: ClaimMutuMeasure): number =>
+  Number(side === 'os' ? (m === 'amount' ? p.os_amount : p.os_qty) : m === 'amount' ? p.real_amount : p.real_qty) || 0
+
 /** A value's share of a total, "56.2%"; a dash when either is zero, as the workbook shows it. */
 export function formatShare(part: number, total: number): string {
   if (!total || !part) return '-'
+  // A real but tiny share (Rp 2 jt of Rp 34 M) must not read as "0%", which looks like no claim.
+  if (Math.abs(part / total) < 0.001) return '<0.1%'
   return `${((part / total) * 100).toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
 }
 

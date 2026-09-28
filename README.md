@@ -4265,18 +4265,24 @@ page always opens on Exclude. Exclude is the scope of the Pivot, Summary Per Kom
 Lokasi sheets; Include is the scope of Summary Per Unit. The Dashboard Claim Mutu KPI, its drilldown
 list, and the claim qty per PO on the contract-quantity charts all exclude B2B.
 
-**Section 1**, recomputed from the rows and following every filter:
+**Section 1**, recomputed from the rows and following every filter, is three cards (outstanding,
+outstanding > 90 days, realisation) and **one** *Rekap Claim Mutu* card whose tabs are the four summary
+sheets, so the whole section fits on a screen. Numbers there are short (34,46 M, 5,87 jt) with the full
+figure on hover; shares are a bar with the percentage, `<0.1%` for a real but tiny share. Lokasi, Komoditi
+and Unit switch between Nilai (Rp, default) and Qty (kg).
 
-- Outstanding, outstanding > 90 days and realisation cards.
-- *Rekap Outstanding Claim - Aging* (Pivot): amount per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, the
-  sheet's VLOOKUP thresholds. Clicking a group filters the page.
-- *Rekap Klaim Per Lokasi*: OS and Real qty / value per DEST code, with shares of the total.
-- *Summary Per Komoditi*: OS and Real per commodity x unit, sub totals and grand total. The unit is
-  DEST mapped through `CLAIM_MUTU_DEST_UNITS` (KRG and KRW are both KARAWANG). SAP cuts
-  `WASTE OIL (POME` short; it is normalised to `WASTE OIL (POME)`, or every POME cell compares as zero.
-- *Summary Per Unit*: one row per month - the latest import of that month - OS and Real per unit. It
-  is **built from KLIP's own imports**, so it starts with the first imported month and grows by one row
-  per monthly upload; it ignores the CR date period.
+- *Aging* (Pivot, the default tab): amount per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, the sheet's
+  VLOOKUP thresholds. Clicking a group filters the page.
+- *Per Lokasi* (Rekap Klaim Per Lokasi): OS and Real per DEST code, with each one's share.
+- *Per Komoditi* (Summary Per Komoditi): one sub total row per commodity, collapsed by default; open a
+  commodity for its units. The unit is DEST mapped through `CLAIM_MUTU_DEST_UNITS` (KRG and KRW are both
+  KARAWANG). SAP cuts `WASTE OIL (POME` short; it is normalised to `WASTE OIL (POME)`, or every POME cell
+  compares as zero.
+- *Per Unit* (Summary Per Unit): units as rows for the month picked (latest by default), plus an OS
+  sparkline across months. A month is the latest import of that month. It is **built from KLIP's own
+  imports**, so it starts with the first imported month and grows by one month per upload; it ignores the
+  CR date period. The sheet lays months as rows and units as 72 columns; KLIP transposes it so the table
+  does not scroll sideways.
 
 GROUP and METODE PAYMENT exist on the OS sheets only, so those two filters narrow the OS side and leave
 Real whole; the page labels them "OS only" and says so on the realisation card.
