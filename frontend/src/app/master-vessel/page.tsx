@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import api from '@/lib/api'
@@ -19,8 +20,12 @@ import {
   type MasterVesselFilterOptions,
 } from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
 import { MasterVesselTable } from '@/components/master-vessel/MasterVesselTable'
-import type { MasterVesselColumnId } from '@/lib/masterVesselColumns'
+import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { MASTER_VESSEL_COLUMNS, type MasterVesselColumnId } from '@/lib/masterVesselColumns'
+import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Plus, Upload, Download } from 'lucide-react'
+
+const VESSEL_LAYOUT_COLUMNS = MASTER_VESSEL_COLUMNS.map((col) => ({ id: col.id, label: col.label }))
 
 interface MasterVessel extends MasterVesselFormData {
   id: string
@@ -95,6 +100,7 @@ export default function MasterVesselPage() {
   const [importSummary, setImportSummary] = useState<JovinImportSummary | null>(null)
   const [sortKey, setSortKey] = useState<MasterVesselColumnId>('vessel_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const vesselColumns = useListColumnLayout('master-vessel.visibleColumns.v1', VESSEL_LAYOUT_COLUMNS)
 
   const hasActiveFilters = useMemo(
     () =>
@@ -344,6 +350,7 @@ export default function MasterVesselPage() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -418,8 +425,13 @@ export default function MasterVesselPage() {
 
         <MasterVesselGlobalFiltersSection
           searchDraft={searchDraft}
+          searchTerm={searchTerm}
           onSearchDraftChange={setSearchDraft}
           onSearchApply={applySearch}
+          onSearchClear={() => {
+            setSearchDraft('')
+            setSearchTerm('')
+          }}
           filterOptions={filterOptions}
           selectedOwners={selectedOwners}
           onOwnersChange={setSelectedOwners}
@@ -439,12 +451,32 @@ export default function MasterVesselPage() {
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <CardTitle>All Vessel</CardTitle>
-                <p className="text-xs text-gray-500 mt-1">
-                  {total.toLocaleString('en-US')} vessels · Page {currentPage}/{totalPages} · {items.length} rows
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                  <span>All Vessel</span>
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{total.toLocaleString('en-US')}</span> vessels
+                  </span>
+                  <span className="text-gray-400" aria-hidden>·</span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {currentPage}/{totalPages} · {items.length} rows
+                  </span>
                 </p>
               </div>
-              {renderPagination()}
+              <div className="flex items-center gap-2">
+                <ListPageColumnsMenu
+                  columns={vesselColumns.menuColumns}
+                  visibleIds={vesselColumns.visibleIds}
+                  disabled={loading}
+                  onToggle={vesselColumns.toggle}
+                  onSelectAll={vesselColumns.selectAll}
+                  onUnselectAll={vesselColumns.unselectAll}
+                  onReset={vesselColumns.reset}
+                  onReorder={vesselColumns.reorder}
+                />
+                {renderPagination()}
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -457,10 +489,15 @@ export default function MasterVesselPage() {
               onSortChange={handleSortChange}
               onEdit={openEdit}
               onDelete={handleDelete}
+              columnIds={vesselColumns.orderedVisibleIds as MasterVesselColumnId[]}
+              dragColId={vesselColumns.dragColId}
+              onColumnDragStart={(id) => vesselColumns.setDragColId(id)}
+              onColumnDragEnd={() => vesselColumns.setDragColId(null)}
+              onColumnDrop={(id) => {
+                if (vesselColumns.dragColId) vesselColumns.reorder(vesselColumns.dragColId, id)
+                vesselColumns.setDragColId(null)
+              }}
             />
-            {totalPages > 1 && (
-              <div className="flex items-center justify-end mt-4">{renderPagination()}</div>
-            )}
           </CardContent>
         </Card>
 
@@ -476,6 +513,7 @@ export default function MasterVesselPage() {
           onSaved={() => void fetchVessels(currentPage)}
         />
       </div>
+      </StitchFields>
     </Layout>
   )
 }

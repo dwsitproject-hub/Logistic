@@ -34,7 +34,7 @@ export function ClaimMutuUploadResultDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>Claim Mutu upload result</DialogTitle>
+          <DialogTitle>Quality Claim upload result</DialogTitle>
         </DialogHeader>
         {result ? (
           <div className="space-y-4 text-sm">

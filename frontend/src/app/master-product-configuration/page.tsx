@@ -9,6 +9,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+} from '@/components/shared/ListFilterPanel'
+import { StitchFields } from '@/components/shared/stitchField'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
+import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
+import { useListColumnLayout } from '@/lib/listColumnLayout'
 
 interface Product {
   id: string
@@ -18,6 +27,18 @@ interface Product {
   working_days_per_month: number | null
   working_days_per_year: number | null
 }
+
+function productText(value: number | null): string {
+  return value == null || value === ('' as unknown as number) ? '-' : String(value)
+}
+
+const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
+  { id: 'product_name', label: 'Product Name', getText: (row) => row.product_name || '-' },
+  { id: 'percent_produce', label: '% Produce', getText: (row) => productText(row.percent_produce) },
+  { id: 'working_hours_per_day', label: 'Working Hours / Day', getText: (row) => productText(row.working_hours_per_day) },
+  { id: 'working_days_per_month', label: 'Working Days / Month', getText: (row) => productText(row.working_days_per_month) },
+  { id: 'working_days_per_year', label: 'Working Days / Year', getText: (row) => productText(row.working_days_per_year) },
+]
 
 export default function MasterProductConfigurationPage() {
   const router = useRouter()
@@ -33,6 +54,9 @@ export default function MasterProductConfigurationPage() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
   const [form, setForm] = useState<any>({ product_name: '', percent_produce: '', working_hours_per_day: '', working_days_per_month: '', working_days_per_year: '' })
+  const [sortKey, setSortKey] = useState('product_name')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const productColumns = useListColumnLayout('master-product.visibleColumns.v1', PRODUCT_COLUMNS)
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
 
@@ -105,60 +129,112 @@ export default function MasterProductConfigurationPage() {
 
   return (
     <Layout>
-    <div className="p-6 space-y-6">
+    <StitchFields>
+    <div className="space-y-6">
       <div className="flex items-center justify-end">
-        <div className="flex items-center gap-2">
-          <Input placeholder="Search products..." value={search} onChange={(e) => setSearch(e.target.value)} className="max-w-sm" />
-          <Button onClick={openAdd}>Add Product</Button>
-        </div>
+        <Button onClick={openAdd}>Add Product</Button>
       </div>
 
       {error && <div className="text-red-600 text-sm">{error}</div>}
       {success && <div className="text-green-600 text-sm">{success}</div>}
 
+      <ListFilterPanel
+        onReset={() => setSearch('')}
+        showReset={search.trim().length > 0}
+        chips={
+          search.trim()
+            ? [{ id: 'search', label: `Search: ${search.trim()}`, onRemove: () => setSearch('') }]
+            : []
+        }
+      >
+        <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+          <div className="min-w-[12rem] flex-[1.4]">
+            <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+            <div className="relative">
+              <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Input
+                placeholder="Product name"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+              />
+            </div>
+          </div>
+        </div>
+      </ListFilterPanel>
+
       <Card>
         <CardHeader>
-          <CardTitle>Products</CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                <span>All Products</span>
+              </CardTitle>
+              <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+                <span className="whitespace-nowrap tabular-nums text-gray-700">
+                  <span className="font-semibold">{total.toLocaleString('en-US')}</span> products
+                </span>
+                <span className="text-gray-400" aria-hidden>·</span>
+                <span className="whitespace-nowrap tabular-nums">
+                  Page {page}/{totalPages} · {items.length} rows
+                </span>
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <ListPageColumnsMenu
+                columns={productColumns.menuColumns}
+                visibleIds={productColumns.visibleIds}
+                disabled={loading}
+                onToggle={productColumns.toggle}
+                onSelectAll={productColumns.selectAll}
+                onUnselectAll={productColumns.unselectAll}
+                onReset={productColumns.reset}
+                onReorder={productColumns.reorder}
+              />
+            {totalPages > 1 ? (
+              <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Previous</Button>
+                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+              </div>
+            ) : null}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div>Loading...</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left">
-                    <th className="p-2">Product Name</th>
-                    <th className="p-2">% Produce</th>
-                    <th className="p-2">Working Hours / Day</th>
-                    <th className="p-2">Working Days / Month</th>
-                    <th className="p-2">Working Days / Year</th>
-                    <th className="p-2">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((p) => (
-                    <tr key={p.id} className="border-t">
-                      <td className="p-2 font-medium">{p.product_name}</td>
-                      <td className="p-2">{p.percent_produce ?? ''}</td>
-                      <td className="p-2">{p.working_hours_per_day ?? ''}</td>
-                      <td className="p-2">{p.working_days_per_month ?? ''}</td>
-                      <td className="p-2">{p.working_days_per_year ?? ''}</td>
-                      <td className="p-2 flex gap-2">
-                        <Button variant="outline" onClick={() => openEdit(p)}>Edit</Button>
-                        <Button variant="destructive" onClick={() => removeProduct(p)}>Delete</Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <div className="flex items-center justify-end gap-2 mt-4">
-            <Button variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</Button>
-            <span className="text-sm">Page {page} of {totalPages}</span>
-            <Button variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
-          </div>
+          <MasterListCompactTable
+            rows={[...items].sort((a, b) => {
+              const col = PRODUCT_COLUMNS.find((item) => item.id === sortKey)
+              const left = col?.getText(a) ?? ''
+              const right = col?.getText(b) ?? ''
+              const cmp = left.localeCompare(right, undefined, { numeric: true })
+              return sortDir === 'asc' ? cmp : -cmp
+            })}
+            columns={PRODUCT_COLUMNS.filter((col) => productColumns.orderedVisibleIds.includes(col.id)).sort(
+              (a, b) => productColumns.orderedVisibleIds.indexOf(a.id) - productColumns.orderedVisibleIds.indexOf(b.id),
+            )}
+            getRowId={(row) => row.id}
+            sortKey={sortKey}
+            sortDir={sortDir}
+            dragColId={productColumns.dragColId}
+            loading={loading}
+            emptyLabel="No products found"
+            onSort={(id) => {
+              setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+              setSortKey(id)
+            }}
+            onDragStart={productColumns.setDragColId}
+            onDragEnd={() => productColumns.setDragColId(null)}
+            onDrop={(id) => {
+              if (productColumns.dragColId) productColumns.reorder(productColumns.dragColId, id)
+              productColumns.setDragColId(null)
+            }}
+            renderActions={(row) => (
+              <div className="inline-flex items-center justify-center gap-1">
+                <Button variant="outline" size="sm" onClick={() => openEdit(row)}>Edit</Button>
+                <Button variant="destructive" size="sm" onClick={() => removeProduct(row)}>Delete</Button>
+              </div>
+            )}
+          />
         </CardContent>
       </Card>
 
@@ -193,6 +269,7 @@ export default function MasterProductConfigurationPage() {
         </div>
       )}
     </div>
+    </StitchFields>
     </Layout>
   )
 }

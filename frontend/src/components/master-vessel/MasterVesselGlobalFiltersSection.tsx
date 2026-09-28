@@ -1,10 +1,13 @@
 'use client'
 
-import { Search, X } from 'lucide-react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 
 export interface MasterVesselFilterOptions {
   owners: string[]
@@ -15,8 +18,10 @@ export interface MasterVesselFilterOptions {
 
 export interface MasterVesselGlobalFiltersSectionProps {
   searchDraft: string
+  searchTerm: string
   onSearchDraftChange: (value: string) => void
   onSearchApply: () => void
+  onSearchClear: () => void
   filterOptions: MasterVesselFilterOptions
   selectedOwners: string[]
   onOwnersChange: (values: string[]) => void
@@ -37,8 +42,10 @@ const TERMS_FILTER_OPTIONS = ['T/C', 'V/C', 'CIF', '(Blank)'] as const
 
 export function MasterVesselGlobalFiltersSection({
   searchDraft,
+  searchTerm,
   onSearchDraftChange,
   onSearchApply,
+  onSearchClear,
   filterOptions,
   selectedOwners,
   onOwnersChange,
@@ -53,17 +60,33 @@ export function MasterVesselGlobalFiltersSection({
   hasActiveFilters,
   onClearFilters,
 }: MasterVesselGlobalFiltersSectionProps) {
+  const termOptions = [
+    ...TERMS_FILTER_OPTIONS,
+    ...filterOptions.terms.filter((t) => t !== 'T/C' && t !== 'V/C' && t !== 'CIF'),
+  ]
+
   return (
-    <Card aria-label="Global filters">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base font-semibold">Global Filters</CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0 space-y-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative min-w-[12rem] flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
+    <ListFilterPanel
+      onReset={onClearFilters}
+      showReset={hasActiveFilters || searchDraft.trim().length > 0}
+      chips={[
+        ...(searchTerm.trim()
+          ? [{ id: 'search', label: `Search: ${searchTerm.trim()}`, onRemove: onSearchClear }]
+          : []),
+        ...selectionChips('Owner', selectedOwners, onOwnersChange),
+        ...selectionChips('Vessel type', selectedVesselTypes, onVesselTypesChange),
+        ...selectionChips('Heating', selectedHeating, onHeatingChange),
+        ...selectionChips('Lambung type', selectedLambungTypes, onLambungTypesChange),
+        ...selectionChips('Term', selectedTerms, onTermsChange),
+      ]}
+    >
+      <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+        <div className="min-w-[12rem] flex-[1.4]">
+          <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+          <div className="relative">
+            <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
-              placeholder="Search by Vessel Code or Name..."
+              placeholder="Vessel Code or Name"
               value={searchDraft}
               onChange={(e) => onSearchDraftChange(e.target.value)}
               onKeyDown={(e) => {
@@ -72,68 +95,63 @@ export function MasterVesselGlobalFiltersSection({
                   onSearchApply()
                 }
               }}
-              className="pl-10"
+              className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
             />
           </div>
-          {hasActiveFilters ? (
-            <Button
-              type="button"
-              onClick={onClearFilters}
-              variant="ghost"
-              size="sm"
-              className="text-gray-500"
-            >
-              <X className="h-4 w-4 mr-1" />
-              Clear filters
-            </Button>
-          ) : null}
         </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-          <SearchableMultiSelect
-            label="Owner"
-            options={filterOptions.owners}
-            selected={selectedOwners}
-            onChange={onOwnersChange}
-            placeholder="All owners"
-            emptyMessage="No owners"
-            uppercaseOptionLabels
-          />
-          <SearchableMultiSelect
-            label="Vessel Type"
-            options={filterOptions.vesselTypes}
-            selected={selectedVesselTypes}
-            onChange={onVesselTypesChange}
-            placeholder="All types"
-            emptyMessage="No types"
-          />
-          <SearchableMultiSelect
-            label="Heating"
-            options={[...HEATING_FILTER_OPTIONS]}
-            selected={selectedHeating}
-            onChange={onHeatingChange}
-            placeholder="All heating"
-            emptyMessage="No options"
-          />
-          <SearchableMultiSelect
-            label="Lambung Type"
-            options={filterOptions.lambungTypes}
-            selected={selectedLambungTypes}
-            onChange={onLambungTypesChange}
-            placeholder="All lambung types"
-            emptyMessage="No lambung types"
-          />
-          <SearchableMultiSelect
-            label="Term / Charter"
-            options={[...TERMS_FILTER_OPTIONS, ...filterOptions.terms.filter((t) => t !== 'T/C' && t !== 'V/C' && t !== 'CIF')]}
-            selected={selectedTerms}
-            onChange={onTermsChange}
-            placeholder="All terms"
-            emptyMessage="No terms"
-          />
-        </div>
-      </CardContent>
-    </Card>
+        <SearchableMultiSelect
+          className="min-w-[7.5rem] flex-1"
+          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+          label="Owner"
+          options={filterOptions.owners}
+          selected={selectedOwners}
+          onChange={onOwnersChange}
+          placeholder="All"
+          emptyMessage="No owners"
+          uppercaseOptionLabels
+        />
+        <SearchableMultiSelect
+          className="min-w-[7.5rem] flex-1"
+          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+          label="Vessel Type"
+          options={filterOptions.vesselTypes}
+          selected={selectedVesselTypes}
+          onChange={onVesselTypesChange}
+          placeholder="All"
+          emptyMessage="No types"
+        />
+        <SearchableMultiSelect
+          className="min-w-[7.5rem] flex-1"
+          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+          label="Heating"
+          options={[...HEATING_FILTER_OPTIONS]}
+          selected={selectedHeating}
+          onChange={onHeatingChange}
+          placeholder="All"
+          emptyMessage="No options"
+        />
+        <SearchableMultiSelect
+          className="min-w-[7.5rem] flex-1"
+          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+          label="Lambung Type"
+          options={filterOptions.lambungTypes}
+          selected={selectedLambungTypes}
+          onChange={onLambungTypesChange}
+          placeholder="All"
+          emptyMessage="No lambung types"
+        />
+        <SearchableMultiSelect
+          className="min-w-[7.5rem] flex-1"
+          labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+          label="Term / Charter"
+          options={termOptions}
+          selected={selectedTerms}
+          onChange={onTermsChange}
+          placeholder="All"
+          emptyMessage="No terms"
+        />
+      </div>
+    </ListFilterPanel>
   )
 }
 

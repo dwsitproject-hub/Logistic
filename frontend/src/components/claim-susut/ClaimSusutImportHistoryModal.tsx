@@ -283,7 +283,7 @@ export function ClaimSusutImportHistoryModal({
   loading,
   onSelectImport,
   apiBase = '/claim-susut',
-  kindLabel = 'Claim Susut',
+  kindLabel = 'Shortage Claim',
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void

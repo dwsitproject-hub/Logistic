@@ -4,6 +4,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+} from '@/components/shared/ListFilterPanel'
+import { StitchFields } from '@/components/shared/stitchField'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
+import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
+import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
@@ -38,11 +47,39 @@ interface MasterLoadingPort {
   shipper: string | null
 }
 
+function portCell(value: string | number | null | undefined): string {
+  if (value == null || value === '') return '-'
+  return String(value)
+}
+
+const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
+  { id: 'region', label: 'Region', getText: (row) => portCell(row.region) },
+  { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
+  { id: 'coordinate', label: 'Coordinate', getText: (row) => portCell(row.coordinate) },
+  { id: 'masuk_alur', label: 'Channel Access', getText: (row) => portCell(row.masuk_alur) },
+  { id: 'lebar_alur', label: 'Channel Width', getText: (row) => portCell(row.lebar_alur) },
+  { id: 'jumlah_jembatan', label: 'Bridge Count', getText: (row) => portCell(row.jumlah_jembatan) },
+  { id: 'jenis_port', label: 'Port Type', getText: (row) => portCell(row.jenis_port) },
+  { id: 'pemilik_port', label: 'Port Owner', getText: (row) => portCell(row.pemilik_port) },
+  { id: 'antri_muat_hari', label: 'Loading Queue (days)', getText: (row) => portCell(row.antri_muat_hari) },
+  { id: 'jumlah_demaraga', label: 'Berth Count', getText: (row) => portCell(row.jumlah_demaraga) },
+  { id: 'panjang_demaraga', label: 'Berth Length', getText: (row) => portCell(row.panjang_demaraga) },
+  { id: 'draft', label: 'Draft', getText: (row) => portCell(row.draft) },
+  { id: 'dwt', label: 'DWT', getText: (row) => portCell(row.dwt) },
+  { id: 'siklus_pasang', label: 'Tide Cycle', getText: (row) => portCell(row.siklus_pasang) },
+  { id: 'loading_method', label: 'Loading Method', getText: (row) => portCell(row.loading_method) },
+  { id: 'loading_rate_mt_per_hour', label: 'Loading Rate (Kg/hour)', getText: (row) => portCell(row.loading_rate_mt_per_hour) },
+  { id: 'shipper', label: 'Shipper', getText: (row) => portCell(row.shipper) },
+]
+
 export default function MasterLoadingPortPage() {
   const router = useRouter()
   const [items, setItems] = useState<MasterLoadingPort[]>([])
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState('port')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const portColumns = useListColumnLayout('master-port.visibleColumns.v1', PORT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -301,6 +338,7 @@ export default function MasterLoadingPortPage() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -327,21 +365,30 @@ export default function MasterLoadingPortPage() {
           </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Filter</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-3 items-center">
-              <Input
-                placeholder="Search by Region or Port..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="max-w-sm"
-              />
+        <ListFilterPanel
+          onReset={() => setSearch('')}
+          showReset={search.trim().length > 0}
+          chips={
+            debouncedSearch
+              ? [{ id: 'search', label: `Search: ${debouncedSearch}`, onRemove: () => setSearch('') }]
+              : []
+          }
+        >
+          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+            <div className="min-w-[12rem] flex-[1.4]">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+              <div className="relative">
+                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Region or Port"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+                />
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </ListFilterPanel>
 
         {isFormOpen && (
           <Card>
@@ -514,78 +561,74 @@ export default function MasterLoadingPortPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Master Port List</CardTitle>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                  <span>All Ports</span>
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{items.length.toLocaleString('en-US')}</span> ports
+                  </span>
+                  <span className="text-gray-400" aria-hidden>·</span>
+                  <span className="whitespace-nowrap font-medium text-gray-600">
+                    {debouncedSearch ? 'Filtered' : 'All'}
+                  </span>
+                </p>
+              </div>
+              <ListPageColumnsMenu
+                columns={portColumns.menuColumns}
+                visibleIds={portColumns.visibleIds}
+                disabled={loading}
+                onToggle={portColumns.toggle}
+                onSelectAll={portColumns.selectAll}
+                onUnselectAll={portColumns.unselectAll}
+                onReset={portColumns.reset}
+                onReorder={portColumns.reorder}
+              />
+            </div>
           </CardHeader>
           <CardContent>
-            {loading ? (
-              <div className="py-8 text-center text-gray-500">Loading...</div>
-            ) : items.length === 0 ? (
-              <div className="py-8 text-center text-gray-500">No ports found</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 border-b">
-                      <th className="text-left px-3 py-2 font-medium">Region</th>
-                      <th className="text-left px-3 py-2 font-medium">Port</th>
-                      <th className="text-left px-3 py-2 font-medium">Coordinate</th>
-                      <th className="text-left px-3 py-2 font-medium">Channel Access</th>
-                      <th className="text-left px-3 py-2 font-medium">Channel Width</th>
-                      <th className="text-left px-3 py-2 font-medium">Bridge Count</th>
-                      <th className="text-left px-3 py-2 font-medium">Port Type</th>
-                      <th className="text-left px-3 py-2 font-medium">Port Owner</th>
-                      <th className="text-left px-3 py-2 font-medium">Loading Queue (days)</th>
-                      <th className="text-left px-3 py-2 font-medium">Berth Count</th>
-                      <th className="text-left px-3 py-2 font-medium">Berth Length</th>
-                      <th className="text-left px-3 py-2 font-medium">Draft</th>
-                      <th className="text-left px-3 py-2 font-medium">DWT</th>
-                      <th className="text-left px-3 py-2 font-medium">Tide Cycle</th>
-                      <th className="text-left px-3 py-2 font-medium">Loading Method</th>
-                      <th className="text-left px-3 py-2 font-medium">Loading Rate (Kg/hour)</th>
-                      <th className="text-left px-3 py-2 font-medium">Shipper</th>
-                      <th className="text-right px-3 py-2 font-medium">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((p, idx) => (
-                      <tr key={p.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-3 py-2">{p.region || '-'}</td>
-                        <td className="px-3 py-2 font-medium">{p.port}</td>
-                        <td className="px-3 py-2">{p.coordinate || '-'}</td>
-                        <td className="px-3 py-2">{p.masuk_alur || '-'}</td>
-                        <td className="px-3 py-2">{p.lebar_alur || '-'}</td>
-                        <td className="px-3 py-2">{p.jumlah_jembatan ?? '-'}</td>
-                        <td className="px-3 py-2">{p.jenis_port || '-'}</td>
-                        <td className="px-3 py-2">{p.pemilik_port || '-'}</td>
-                        <td className="px-3 py-2">{p.antri_muat_hari ?? '-'}</td>
-                        <td className="px-3 py-2">{p.jumlah_demaraga ?? '-'}</td>
-                        <td className="px-3 py-2">{p.panjang_demaraga || '-'}</td>
-                        <td className="px-3 py-2">{p.draft || '-'}</td>
-                        <td className="px-3 py-2">{p.dwt || '-'}</td>
-                        <td className="px-3 py-2">{p.siklus_pasang || '-'}</td>
-                        <td className="px-3 py-2">{p.loading_method || '-'}</td>
-                        <td className="px-3 py-2">{p.loading_rate_mt_per_hour ?? '-'}</td>
-                        <td className="px-3 py-2">{p.shipper || '-'}</td>
-                        <td className="px-3 py-2 text-right">
-                          <div className="inline-flex gap-2">
-                            <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                              <Edit2 className="h-4 w-4 mr-1" />
-                              Edit
-                            </Button>
-                            {isAdmin && (
-                              <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
-                                <Trash2 className="h-4 w-4 mr-1" />
-                                Delete
-                              </Button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <MasterListCompactTable
+              rows={[...items].sort((a, b) => {
+                const col = PORT_COLUMNS.find((item) => item.id === sortKey)
+                const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
+                return sortDir === 'asc' ? cmp : -cmp
+              })}
+              columns={PORT_COLUMNS.filter((col) => portColumns.orderedVisibleIds.includes(col.id)).sort(
+                (a, b) => portColumns.orderedVisibleIds.indexOf(a.id) - portColumns.orderedVisibleIds.indexOf(b.id),
+              )}
+              getRowId={(row) => row.id}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              dragColId={portColumns.dragColId}
+              loading={loading}
+              emptyLabel="No ports found"
+              onSort={(id) => {
+                setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+                setSortKey(id)
+              }}
+              onDragStart={portColumns.setDragColId}
+              onDragEnd={() => portColumns.setDragColId(null)}
+              onDrop={(id) => {
+                if (portColumns.dragColId) portColumns.reorder(portColumns.dragColId, id)
+                portColumns.setDragColId(null)
+              }}
+              renderActions={(p) => (
+                <div className="inline-flex items-center justify-center gap-1">
+                  <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
+                    <Edit2 className="h-4 w-4 mr-1" />
+                    Edit
+                  </Button>
+                  {isAdmin ? (
+                    <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Delete
+                    </Button>
+                  ) : null}
+                </div>
+              )}
+            />
           </CardContent>
         </Card>
       </div>
@@ -637,6 +680,7 @@ export default function MasterLoadingPortPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </StitchFields>
     </Layout>
   )
 }

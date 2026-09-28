@@ -9,7 +9,6 @@ import { TableInitialLoadPlaceholder } from '@/components/performance/TableIniti
 import { ContractPerfTruncatedCell } from '@/components/performance/ContractPerfTruncatedCell'
 import {
   CONTRACT_PERF_TABLE_CELL_PAD,
-  CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
 } from '@/lib/contractPerformanceColumns'
 import {
@@ -21,6 +20,7 @@ import {
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
+  LIST_PAGE_TABLE_HEADER_ROW_CLASS,
   compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import {
@@ -43,6 +43,11 @@ export interface MasterVesselTableProps {
   onSortChange: (colId: MasterVesselColumnId) => void
   onEdit: (row: MasterVesselRow) => void
   onDelete: (row: MasterVesselRow) => void
+  columnIds: readonly MasterVesselColumnId[]
+  dragColId: string | null
+  onColumnDragStart: (columnId: MasterVesselColumnId) => void
+  onColumnDragEnd: () => void
+  onColumnDrop: (columnId: MasterVesselColumnId) => void
 }
 
 export function MasterVesselTable({
@@ -54,6 +59,11 @@ export function MasterVesselTable({
   onSortChange,
   onEdit,
   onDelete,
+  columnIds,
+  dragColId,
+  onColumnDragStart,
+  onColumnDragEnd,
+  onColumnDrop,
 }: MasterVesselTableProps) {
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -108,7 +118,10 @@ export function MasterVesselTable({
             className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}
           >
             <colgroup>
-              {MASTER_VESSEL_COLUMNS.map((col) => (
+              {columnIds.map((id) => {
+                const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
+                if (!col) return null
+                return (
                 <col
                   key={col.id}
                   style={{
@@ -117,22 +130,41 @@ export function MasterVesselTable({
                     ),
                   }}
                 />
-              ))}
+                )
+              })}
               <col style={{ width: MASTER_VESSEL_ACTIONS_COL_WIDTH_PX }} />
             </colgroup>
             <thead>
-              <tr className={CONTRACT_PERF_TABLE_HEADER_ROW_OPERATIONAL_CLASS}>
-                {MASTER_VESSEL_COLUMNS.map((col) => {
+              <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
+                {columnIds.map((id) => {
+                  const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
+                  if (!col) return null
                   const columnLayout = getOperationalColumnLayout('master_vessel', col.id)
                   const opColClass = operationalTableColumnClass(columnLayout)
                   return (
                     <th
                       key={col.id}
                       scope="col"
+                      draggable
+                      onDragStart={(event) => {
+                        onColumnDragStart(col.id)
+                        event.dataTransfer.setData('text/plain', col.id)
+                        event.dataTransfer.effectAllowed = 'move'
+                      }}
+                      onDragEnd={onColumnDragEnd}
+                      onDragOver={(event) => {
+                        event.preventDefault()
+                        event.dataTransfer.dropEffect = 'move'
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault()
+                        onColumnDrop(col.id)
+                      }}
                       className={cn(
-                        'relative text-left font-semibold align-top sticky top-0 z-20 bg-gray-50',
+                        'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                         CONTRACT_PERF_TABLE_CELL_PAD,
                         opColClass,
+                        dragColId === col.id && 'opacity-60',
                       )}
                     >
                       <ContractPerfTableSortHeader
@@ -155,11 +187,11 @@ export function MasterVesselTable({
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading && items.length === 0 ? (
-                <TableInitialLoadPlaceholder colSpan={MASTER_VESSEL_COLUMNS.length + 1} icon={Ship} />
+                <TableInitialLoadPlaceholder colSpan={columnIds.length + 1} icon={Ship} />
               ) : items.length === 0 ? (
                 <tr className="bg-white">
                   <td
-                    colSpan={MASTER_VESSEL_COLUMNS.length + 1}
+                    colSpan={columnIds.length + 1}
                     className="px-4 py-10 text-center text-gray-500"
                   >
                     <Ship className="h-16 w-16 text-gray-400 mx-auto mb-4" />
@@ -171,7 +203,9 @@ export function MasterVesselTable({
                   const stripe = idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                   return (
                     <tr key={row.id} className={stripe}>
-                      {MASTER_VESSEL_COLUMNS.map((col) => {
+                      {columnIds.map((id) => {
+                        const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
+                        if (!col) return null
                         const columnLayout = getOperationalColumnLayout('master_vessel', col.id)
                         const opColClass = operationalTableColumnClass(columnLayout)
                         const useTruncate = columnLayout === 'truncate' || columnLayout === 'token'

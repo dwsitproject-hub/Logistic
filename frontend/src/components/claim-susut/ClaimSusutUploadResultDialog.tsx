@@ -36,7 +36,7 @@ export function ClaimSusutUploadResultDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[88vh] overflow-y-auto" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>Claim Susut upload result</DialogTitle>
+          <DialogTitle>Shortage Claim upload result</DialogTitle>
         </DialogHeader>
         {result ? (
           <div className="space-y-4 text-sm">

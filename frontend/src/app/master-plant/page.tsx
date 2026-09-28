@@ -4,6 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import Layout from '@/components/Layout'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+} from '@/components/shared/ListFilterPanel'
+import { StitchFields } from '@/components/shared/stitchField'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
+import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
+import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
@@ -28,6 +37,20 @@ interface MasterPlant {
   group_plant: string | null
 }
 
+function plantCell(value: string | null | undefined): string {
+  return value && value.trim() ? value : '-'
+}
+
+const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
+  { id: 'company_name', label: 'Company Name', getText: (row) => plantCell(row.company_name) },
+  { id: 'plant_code', label: 'Plant Code', getText: (row) => plantCell(row.plant_code) },
+  { id: 'plant_name', label: 'Plant Name', getText: (row) => plantCell(row.plant_name) },
+  { id: 'postal_code', label: 'Postal Code', getText: (row) => plantCell(row.postal_code) },
+  { id: 'city', label: 'City', getText: (row) => plantCell(row.city) },
+  { id: 'plant_type', label: 'Plant Type', getText: (row) => plantCell(row.plant_type) },
+  { id: 'group_plant', label: 'Group Plant', getText: (row) => plantCell(row.group_plant) },
+]
+
 export default function MasterPlantPage() {
   const [items, setItems] = useState<MasterPlant[]>([])
   const [total, setTotal] = useState(0)
@@ -35,6 +58,9 @@ export default function MasterPlantPage() {
   const PAGE_SIZE = 20
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState('company_name')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v1', PLANT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [isAdmin, setIsAdmin] = useState(false)
   const [editing, setEditing] = useState<MasterPlant | null>(null)
@@ -277,6 +303,7 @@ export default function MasterPlantPage() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -301,88 +328,62 @@ export default function MasterPlantPage() {
           </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Filter</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-3 items-center">
-              <Input
-                placeholder="Search by Company / Plant Code / Plant Name / City / Type / Group..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="max-w-xl"
-              />
+        <ListFilterPanel
+          onReset={() => setSearch('')}
+          showReset={search.trim().length > 0}
+          chips={
+            debouncedSearch
+              ? [{ id: 'search', label: `Search: ${debouncedSearch}`, onRemove: () => setSearch('') }]
+              : []
+          }
+        >
+          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+            <div className="min-w-[12rem] flex-[1.4]">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+              <div className="relative">
+                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Company, Plant Code, Plant Name, City, Type, or Group"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
+                />
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </ListFilterPanel>
 
         <Card>
           <CardHeader>
-            <CardTitle>Master Plant List</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="py-8 text-center text-gray-500">Loading...</div>
-            ) : items.length === 0 ? (
-              <div className="py-8 text-center text-gray-500">No plants found</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-50 border-b">
-                      <th className="text-left px-3 py-2 font-medium">Company Name</th>
-                      <th className="text-left px-3 py-2 font-medium">Plant Code</th>
-                      <th className="text-left px-3 py-2 font-medium">Plant Name</th>
-                      <th className="text-left px-3 py-2 font-medium">Postal Code</th>
-                      <th className="text-left px-3 py-2 font-medium">City</th>
-                      <th className="text-left px-3 py-2 font-medium">Plant Type</th>
-                      <th className="text-left px-3 py-2 font-medium">Group Plant</th>
-                      <th className="text-right px-3 py-2 font-medium">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((p, idx) => (
-                      <tr key={p.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-                        <td className="px-3 py-2">{p.company_name}</td>
-                        <td className="px-3 py-2 font-medium">{p.plant_code}</td>
-                        <td className="px-3 py-2">{p.plant_name || '-'}</td>
-                        <td className="px-3 py-2">{p.postal_code || '-'}</td>
-                        <td className="px-3 py-2">{p.city || '-'}</td>
-                        <td className="px-3 py-2">{p.plant_type || '-'}</td>
-                        <td className="px-3 py-2">{p.group_plant || '-'}</td>
-                        <td className="px-3 py-2 text-right">
-                          <div className="inline-flex gap-2">
-                            <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                              <Edit2 className="h-4 w-4 mr-1" />
-                              Edit
-                            </Button>
-                            {isAdmin && (
-                              <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
-                                <Trash2 className="h-4 w-4 mr-1" />
-                                Delete
-                              </Button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                  <span>All Plants</span>
+                </CardTitle>
+                <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
+                  <span className="whitespace-nowrap tabular-nums text-gray-700">
+                    <span className="font-semibold">{total.toLocaleString('en-US')}</span> plants
+                  </span>
+                  <span className="text-gray-400" aria-hidden>·</span>
+                  <span className="whitespace-nowrap tabular-nums">
+                    Page {page}/{totalPages} · {items.length} rows
+                  </span>
+                </p>
               </div>
-            )}
-            {!loading && total > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t">
-                <span className="text-sm text-gray-600">
-                  Showing page {page} of {totalPages} ({total} plants)
-                </span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePageChange(page - 1)}
-                    disabled={page <= 1}
-                  >
+              <div className="flex items-center gap-2">
+                <ListPageColumnsMenu
+                  columns={plantColumns.menuColumns}
+                  visibleIds={plantColumns.visibleIds}
+                  disabled={loading}
+                  onToggle={plantColumns.toggle}
+                  onSelectAll={plantColumns.selectAll}
+                  onUnselectAll={plantColumns.unselectAll}
+                  onReset={plantColumns.reset}
+                  onReorder={plantColumns.reorder}
+                />
+              {totalPages > 1 ? (
+                <div className="flex items-center gap-2 border-l border-gray-200 pl-2 ml-1">
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(page - 1)} disabled={page <= 1}>
                     Previous
                   </Button>
                   {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
@@ -397,23 +398,61 @@ export default function MasterPlantPage() {
                         variant={page === pageNum ? 'default' : 'outline'}
                         size="sm"
                         onClick={() => handlePageChange(pageNum)}
-                        className="min-w-[36px]"
+                        className="min-w-[40px]"
                       >
                         {pageNum}
                       </Button>
                     )
                   })}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handlePageChange(page + 1)}
-                    disabled={page >= totalPages}
-                  >
+                  <Button variant="outline" size="sm" onClick={() => handlePageChange(page + 1)} disabled={page >= totalPages}>
                     Next
                   </Button>
                 </div>
+              ) : null}
               </div>
-            )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            <MasterListCompactTable
+              rows={[...items].sort((a, b) => {
+                const col = PLANT_COLUMNS.find((item) => item.id === sortKey)
+                const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
+                return sortDir === 'asc' ? cmp : -cmp
+              })}
+              columns={PLANT_COLUMNS.filter((col) => plantColumns.orderedVisibleIds.includes(col.id)).sort(
+                (a, b) => plantColumns.orderedVisibleIds.indexOf(a.id) - plantColumns.orderedVisibleIds.indexOf(b.id),
+              )}
+              getRowId={(row) => row.id}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              dragColId={plantColumns.dragColId}
+              loading={loading}
+              emptyLabel="No plants found"
+              onSort={(id) => {
+                setSortDir((dir) => (sortKey === id ? (dir === 'asc' ? 'desc' : 'asc') : 'asc'))
+                setSortKey(id)
+              }}
+              onDragStart={plantColumns.setDragColId}
+              onDragEnd={() => plantColumns.setDragColId(null)}
+              onDrop={(id) => {
+                if (plantColumns.dragColId) plantColumns.reorder(plantColumns.dragColId, id)
+                plantColumns.setDragColId(null)
+              }}
+              renderActions={(p) => (
+                <div className="inline-flex items-center justify-center gap-1">
+                  <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
+                    <Edit2 className="h-4 w-4 mr-1" />
+                    Edit
+                  </Button>
+                  {isAdmin ? (
+                    <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Delete
+                    </Button>
+                  ) : null}
+                </div>
+              )}
+            />
           </CardContent>
         </Card>
       </div>
@@ -522,6 +561,7 @@ export default function MasterPlantPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      </StitchFields>
     </Layout>
   )
 }

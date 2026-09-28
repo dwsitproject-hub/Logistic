@@ -150,7 +150,7 @@ export function ClaimMutuSection1Dashboard({
           loading ? 'opacity-65' : 'opacity-100'
         }`}
       >
-        <PerformanceSection1CardShell variant="open" title="Outstanding Claim Mutu" selected onClick={() => undefined}>
+        <PerformanceSection1CardShell variant="open" title="Outstanding Quality Claim" selected onClick={() => undefined}>
           <div className="mb-1 text-sm text-gray-500">Nilai Klaim (IDR)</div>
           <div className="mb-3 text-xl font-bold tabular-nums text-gray-900">{formatClaimMutuIdr(os.amount)}</div>
           <div className="text-xs text-gray-500">
