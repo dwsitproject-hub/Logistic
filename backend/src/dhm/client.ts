@@ -25,6 +25,36 @@ export function resetDhmHttpForTests(): void {
  */
 onIntegrationSettingsChanged(resetDhmHttpForTests);
 
+/**
+ * DHM's own reason for turning a token request down, for the error message.
+ *
+ * The status alone - "401" - says only that the pair was refused, which is where every cause looks
+ * the same. DHM's body says which: missing credentials, unknown key, inactive application. An HTML
+ * body is its own answer: the base URL reached the DHM PORTAL, not the API behind `/api`.
+ *
+ * Defensive about secrets even though DHM does not echo them: any dhm_sk_ token is masked, and the
+ * text is capped.
+ */
+export function describeDhmRejection(body: unknown): string {
+  if (typeof body === 'string') {
+    if (/<!doctype html|<html/i.test(body)) {
+      return ': the base URL answered with an HTML page - it looks like the DHM portal, not the API (the SIT base URL ends in /api)';
+    }
+    const text = body.trim();
+    return text ? `: ${mask(text)}` : '';
+  }
+  if (body && typeof body === 'object') {
+    const b = body as Record<string, unknown>;
+    const reason = b.error ?? b.message;
+    if (typeof reason === 'string' && reason.trim()) return `: ${mask(reason.trim())}`;
+  }
+  return '';
+}
+
+function mask(text: string): string {
+  return text.replace(/dhm_sk_[A-Za-z0-9]+/g, 'dhm_sk_***').slice(0, 200);
+}
+
 async function fetchDhmBearerToken(): Promise<string> {
   if (tokenCache && Date.now() < tokenCache.expiresAt) {
     return tokenCache.token;
@@ -40,7 +70,7 @@ async function fetchDhmBearerToken(): Promise<string> {
   );
   const token = res.status === 200 ? String(res.data?.token || '').trim() : '';
   if (!token) {
-    throw new Error(`DHM token failed (${res.status})`);
+    throw new Error(`DHM token failed (${res.status})${describeDhmRejection(res.data)}`);
   }
   tokenCache = { token, expiresAt: Date.now() + TOKEN_REFRESH_MS };
   return token;
@@ -57,12 +87,19 @@ export async function verifyDhmCredentials(): Promise<{ ok: boolean; message: st
   if (!dhmBaseUrl()) return { ok: false, message: 'Base URL is not set.' };
   if (!dhmPublicKey() || !dhmPrivateKey()) return { ok: false, message: 'Public or private key is not set.' };
   tokenCache = null;
+  /*
+   * Say exactly what was sent, so "is KLIP sending what I typed?" has an answer on the page. The
+   * public key is public; the private key appears only as its hint.
+   */
+  const pub = dhmPublicKey();
+  const priv = dhmPrivateKey();
+  const sent = ` [${dhmBaseUrl()}/auth/token - public ${pub.slice(0, 7)}...${pub.slice(-4)} (${pub.length}), private ${priv.slice(0, 7)}...${priv.slice(-4)} (${priv.length})]`;
   try {
     await fetchDhmBearerToken();
-    return { ok: true, message: 'Authenticated - DHM issued a token.' };
+    return { ok: true, message: `Authenticated - DHM issued a token.${sent}` };
   } catch (error) {
     tokenCache = null;
-    return { ok: false, message: error instanceof Error ? error.message : 'DHM request failed.' };
+    return { ok: false, message: `${error instanceof Error ? error.message : 'DHM request failed.'}${sent}` };
   }
 }
 

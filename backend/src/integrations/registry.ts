@@ -115,6 +115,14 @@ export function validateSettingValue(def: SettingDef, raw: string): string | nul
     case 'secret':
     case 'text':
       if (/\s/.test(value)) return `${def.label} must not contain spaces or line breaks.`;
+      /*
+       * Printable ASCII only. A key copied out of a chat app can carry a zero-width space or a
+       * similar invisible character: \s does not match it, the prefix still checks out, the field
+       * looks right - and the remote system rejects the key. Only the length gives it away.
+       */
+      if (/[^\x21-\x7E]/.test(value)) {
+        return `${def.label} contains an invisible or non-ASCII character, usually from copying out of a chat app. Retype it, or paste it as plain text.`;
+      }
       if (def.prefix && !value.startsWith(def.prefix)) {
         return `${def.label} must begin with ${def.prefix}.${def.help ? ` ${def.help}` : ''}`;
       }

@@ -123,6 +123,15 @@ describe('registry validation', () => {
     expect(validateSettingValue(def('jps', 'JPS_PORT_ID'), '1.5')).not.toBeNull();
   });
 
+  it('rejects a key carrying an invisible character from a chat app', () => {
+    // Zero-width space: not matched by \s, prefix still fine, length one longer - and DHM says 401.
+    const zeroWidth = `dhm_sk_abc${String.fromCharCode(0x200b)}def`;
+    expect(validateSettingValue(def('dhm', 'DHM_PRIVATE_KEY'), zeroWidth)).toContain('invisible');
+    const nbsp = `dhm_sk_abc${String.fromCharCode(0xa0)}def`;
+    expect(validateSettingValue(def('dhm', 'DHM_PRIVATE_KEY'), nbsp)).not.toBeNull();
+    expect(validateSettingValue(def('dhm', 'DHM_PRIVATE_KEY'), 'dhm_sk_abcdef0123')).toBeNull();
+  });
+
   it('rejects empty values and stray whitespace', () => {
     expect(validateSettingValue(def('jps', 'JPS_API_KEY'), '')).not.toBeNull();
     expect(validateSettingValue(def('jps', 'JPS_API_KEY'), ' abc')).not.toBeNull();
