@@ -206,8 +206,9 @@ else
   # Print the command rather than guessing a string here.
   printf '\n  To prove the new UI is really in the bundle, grep the build for a string only the\n'
   printf '  new code contains:\n'
-  printf '    docker compose -f docker-compose.frontend.yml exec -T frontend \\n'
-  printf '      sh -c "grep -rl '"'"'<a string only the new code has'"'"' .next/static | head -3"\n'
+  # One line, passed through %s: an escaped line break here once printed as a literal
+  # backslash-n and left a command that failed when copied.
+  printf '    %s\n' "docker compose -f docker-compose.frontend.yml exec -T frontend sh -c \"grep -rl '<a string only the new code has>' .next | head -3\""
 fi
 
 step "result"
