@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, Suspense, useCallback, type ReactNode } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,7 +29,13 @@ import {
   formatSignedCycleDaysCompact,
   signedCycleDaysClass,
 } from '@/lib/cycleDaysDisplay'
-import { resolvePerformancePeriodDateRange } from '@/lib/performancePeriodFilters'
+import {
+  buildPerformancePeriodOptions,
+  resolvePerformancePeriodDateRange,
+  type PerformancePeriodKey,
+} from '@/lib/performancePeriodFilters'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { PerformanceContractDateControl } from '@/components/performance/PerformanceContractDateControl'
 import { formatOperationalTableTextDisplay, formatSapDisplayValue, formatSapOutstandingQtyMtDisplay, formatSapQtyMtDisplay, formatVesselTableDisplay } from '@/lib/sapDisplayValue'
 import { downloadAoaXlsx } from '@/lib/downloadAoaXlsx'
 import {
@@ -1264,6 +1271,7 @@ function ShipmentsPageContent() {
   const [uploading, setUploading] = useState(false)
   const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadStatusResult | null>(null)
   const shipmentYtdRange = useMemo(() => resolvePerformancePeriodDateRange('YTD'), [])
+  const [shipmentPeriod, setShipmentPeriod] = useState<PerformancePeriodKey>('YTD')
   const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
   const [dateTo, setDateTo] = useState(() => resolvePerformancePeriodDateRange('YTD').dateTo)
   const [uploadingId, setUploadingId] = useState<string>('')
@@ -3545,6 +3553,7 @@ function ShipmentsPageContent() {
     resetUserScopeFilters()
     setSelectedIncoterms([])
     setSelectedSuppliers([])
+    setShipmentPeriod('YTD')
     setDateFrom(shipmentYtdRange.dateFrom)
     setDateTo(shipmentYtdRange.dateTo)
     setColumnFilters({})
@@ -6372,6 +6381,7 @@ function ShipmentsPageContent() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-end gap-4">
@@ -6452,6 +6462,37 @@ function ShipmentsPageContent() {
           </div>
         </div>
 
+        <HeaderFilterSlot>
+          <PerformanceContractDateControl
+            header
+            period={shipmentPeriod}
+            options={buildPerformancePeriodOptions()}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onPeriodChange={(value) => {
+              setShipmentPeriod(value)
+              const range = resolvePerformancePeriodDateRange(value)
+              setDateFrom(range.dateFrom)
+              setDateTo(range.dateTo)
+              setPage(1)
+            }}
+            onDateFromChange={onGlobalDateFromChange}
+            onDateToChange={onGlobalDateToChange}
+            resolvePeriodRange={resolvePerformancePeriodDateRange}
+          />
+          <SearchableMultiSelect
+            label="Region/Plant"
+            hideLabel
+            portalMenu
+            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            options={availableGroupPlants}
+            selected={selectedGroupPlants}
+            onChange={onGroupPlantsChangeWithPageReset}
+            placeholder="Region/Plant"
+            emptyMessage="No region/plant values"
+            uppercaseOptionLabels
+          />
+        </HeaderFilterSlot>
         <ShipmentsGlobalFiltersSection
           searchDraft={searchDraft}
           onSearchDraftChange={setSearchDraft}
@@ -6480,6 +6521,17 @@ function ShipmentsPageContent() {
           dateTo={dateTo}
           onDateFromChange={onGlobalDateFromChange}
           onDateToChange={onGlobalDateToChange}
+          dateRangeActive={
+            shipmentPeriod !== 'YTD' ||
+            dateFrom !== shipmentYtdRange.dateFrom ||
+            dateTo !== shipmentYtdRange.dateTo
+          }
+          onResetDateRange={() => {
+            setShipmentPeriod('YTD')
+            setDateFrom(shipmentYtdRange.dateFrom)
+            setDateTo(shipmentYtdRange.dateTo)
+            setPage(1)
+          }}
           hasActiveFilters={hasActiveShipmentFilters}
           onClearFilters={clearShipmentFilters}
         />
@@ -7075,7 +7127,7 @@ function ShipmentsPageContent() {
           <CardHeader>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
                   <span>All Shipments</span>
                   {listFetching || tableScopeLoading ? (
                     <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
@@ -9808,6 +9860,7 @@ function ShipmentsPageContent() {
         sourceRows={vesselHistorySourceRows}
       />
 
+      </StitchFields>
     </Layout>
   )
 }

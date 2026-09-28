@@ -1,10 +1,10 @@
-import type { LucideIcon } from 'lucide-react'
-import { BadgeCheck, CheckCircle2, FolderOpen, Ship } from 'lucide-react'
+import type { ComponentType } from 'react'
+import { StitchNavIcons } from '@/components/shared/stitchIcons'
 
 export type PerformanceSection1CardVariant = 'open' | 'close' | 'ongoing' | 'completed'
 
 export interface PerformanceSection1CardAccent {
-  icon: LucideIcon
+  icon: ComponentType<{ className?: string }>
   /** White surface + colored border (default / unselected). */
   surface: string
   /** Icon chip background + icon color. */
@@ -30,7 +30,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
   PerformanceSection1CardAccent
 > = {
   open: {
-    icon: FolderOpen,
+    icon: StitchNavIcons.contractPerformance,
     surface: 'border-blue-400 bg-white',
     chip: 'bg-blue-50 text-blue-700',
     selected:
@@ -39,7 +39,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
   },
   close: {
-    icon: CheckCircle2,
+    icon: StitchNavIcons.completed,
     surface: 'border-amber-400 bg-white',
     chip: 'bg-amber-50 text-amber-700',
     selected:
@@ -48,7 +48,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     focus: 'focus-visible:ring-2 focus-visible:ring-amber-200',
   },
   ongoing: {
-    icon: Ship,
+    icon: StitchNavIcons.masterVessel,
     surface: 'border-blue-400 bg-white',
     chip: 'bg-blue-50 text-blue-700',
     selected:
@@ -57,7 +57,7 @@ export const PERFORMANCE_SECTION1_CARD_ACCENTS: Record<
     focus: 'focus-visible:ring-2 focus-visible:ring-blue-200',
   },
   completed: {
-    icon: BadgeCheck,
+    icon: StitchNavIcons.completed,
     surface: 'border-amber-400 bg-white',
     chip: 'bg-amber-50 text-amber-700',
     selected:

@@ -206,14 +206,14 @@ export default function OilLossDrilldownSection({
                 })()
 
                 return (
-                  <div key={level} className="space-y-2 min-w-0">
-                    <div className={`rounded-lg border px-3 py-2 min-w-0 ${style.headerBg} ${style.border}`}>
-                      <div className="text-sm font-semibold text-gray-900">{title}</div>
+                  <div key={level} className={`min-w-0 rounded-lg border ${style.border} overflow-hidden`}>
+                    <div className={`${style.headerBg} px-3 py-2 border-b ${style.border}`}>
+                      <div className="text-sm font-semibold text-gray-800">{title}</div>
                       <div className="text-[11px] text-gray-500 truncate" title={subtitle}>
                         {subtitle}
                       </div>
                     </div>
-                    <div className="space-y-2 max-h-[360px] overflow-auto pr-1">{body}</div>
+                    <div className="p-2 max-h-80 overflow-y-auto">{body}</div>
                   </div>
                 )
               })}

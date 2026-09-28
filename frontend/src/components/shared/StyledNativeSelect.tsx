@@ -2,6 +2,7 @@
 
 import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
 
 export type StyledNativeSelectOption<T extends string = string> = {
   value: T
@@ -37,12 +38,17 @@ export function StyledNativeSelect<T extends string = string>({
   uppercaseLabels = false,
   labelClassName,
 }: StyledNativeSelectProps<T>) {
+  const stitch = useStitchFields()
   const control = (
     <div className={cn('relative', minWidthClassName, className)}>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
-        className={cn(STYLED_NATIVE_SELECT_TRIGGER_CLASS, uppercaseLabels && 'uppercase', selectClassName)}
+        className={cn(
+          stitchControlClass(STYLED_NATIVE_SELECT_TRIGGER_CLASS, stitch),
+          uppercaseLabels && 'uppercase',
+          selectClassName,
+        )}
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>

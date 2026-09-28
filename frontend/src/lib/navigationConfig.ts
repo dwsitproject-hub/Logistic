@@ -2,21 +2,13 @@ import type { ComponentType } from 'react'
 import {
   LayoutDashboard,
   Presentation,
-  FileText,
-  Ship,
-  Truck,
   DollarSign,
-  FolderOpen,
   Users,
-  Settings,
-  Database,
-  Layers,
-  BookOpen,
   Bot,
-  Droplets,
-  FileCheck,
-  ScrollText,
 } from 'lucide-react'
+import { StitchNavIcons } from '@/components/shared/stitchIcons'
+
+export type NavGroup = 'performance' | 'operations' | 'master' | 'system'
 
 export type NavItem = {
   name: string
@@ -24,7 +16,17 @@ export type NavItem = {
   icon: ComponentType<{ className?: string }>
   roles: string[]
   permissionKey: string
+  group?: NavGroup
 }
+
+export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
+  performance: 'Performance',
+  operations: 'Operations',
+  master: 'Master Data',
+  system: 'System & Admin',
+}
+
+export const NAV_GROUP_ORDER: NavGroup[] = ['performance', 'operations', 'master', 'system']
 
 export const NAV_ITEMS: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, roles: ['ALL'], permissionKey: 'page.dashboard' },
@@ -38,72 +40,87 @@ export const NAV_ITEMS: NavItem[] = [
   {
     name: 'Contract Performance',
     href: '/contract-performance',
-    icon: FileText,
+    icon: StitchNavIcons.contractPerformance,
     roles: ['ALL'],
     permissionKey: 'page.contract_performance',
+    group: 'performance',
   },
   {
     name: 'Shipping Performance',
     href: '/shipping-performance',
-    icon: Ship,
+    icon: StitchNavIcons.masterVessel,
     roles: ['ALL'],
     permissionKey: 'page.shipping_performance',
+    group: 'performance',
   },
-  { name: 'Oil Loss', href: '/oil-loss', icon: Droplets, roles: ['ALL'], permissionKey: 'page.oil_loss' },
-  { name: 'Claim Susut', href: '/claim-susut', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_susut' },
-  { name: 'Contracts', href: '/contracts', icon: FileText, roles: ['ALL'], permissionKey: 'page.contracts' },
-  { name: 'Shipments', href: '/shipments', icon: Ship, roles: ['ALL'], permissionKey: 'page.shipments' },
-  { name: 'Trucking', href: '/trucking', icon: Truck, roles: ['ALL'], permissionKey: 'page.trucking' },
+  { name: 'Oil Loss', href: '/oil-loss', icon: StitchNavIcons.oilLoss, roles: ['ALL'], permissionKey: 'page.oil_loss', group: 'performance' },
+  { name: 'Claim Susut', href: '/claim-susut', icon: StitchNavIcons.claimSusut, roles: ['ALL'], permissionKey: 'page.claim_susut', group: 'performance' },
+  { name: 'Claim Mutu', href: '/claim-mutu', icon: StitchNavIcons.claimMutu, roles: ['ALL'], permissionKey: 'page.claim_mutu', group: 'performance' },
+  { name: 'Contracts', href: '/contracts', icon: StitchNavIcons.contracts, roles: ['ALL'], permissionKey: 'page.contracts', group: 'operations' },
+  { name: 'Shipments', href: '/shipments', icon: StitchNavIcons.masterVessel, roles: ['ALL'], permissionKey: 'page.shipments', group: 'operations' },
+  { name: 'Trucking', href: '/trucking', icon: StitchNavIcons.trucking, roles: ['ALL'], permissionKey: 'page.trucking', group: 'operations' },
   {
     name: 'Commercial Documents',
     href: '/commercial-documents',
-    icon: FileCheck,
+    icon: StitchNavIcons.commercialDocuments,
     roles: ['ALL'],
     permissionKey: 'page.commercial_documents',
+    group: 'operations',
   },
-  { name: 'Claim Mutu', href: '/claim-mutu', icon: Truck, roles: ['ALL'], permissionKey: 'page.claim_mutu' },
-  { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360' },
-  { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers' },
+  { name: 'Master Vessel', href: '/master-vessel', icon: StitchNavIcons.masterVessel, roles: ['ALL'], permissionKey: 'page.master_vessels', group: 'master' },
+  {
+    name: 'Master Product Configuration',
+    href: '/master-product-configuration',
+    icon: StitchNavIcons.masterData,
+    roles: ['ALL'],
+    permissionKey: 'page.master_product_configuration',
+    group: 'master',
+  },
+  {
+    name: 'Master Port',
+    href: '/master-loading-port',
+    icon: StitchNavIcons.masterPort,
+    roles: ['ALL'],
+    permissionKey: 'page.master_loading_ports',
+    group: 'master',
+  },
+  { name: 'Master Plant', href: '/master-plant', icon: StitchNavIcons.masterPlant, roles: ['ALL'], permissionKey: 'page.master_plants', group: 'master' },
+  { name: 'Suppliers', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
+  { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360', group: 'system' },
   {
     name: 'Customer 360',
     href: '/customer-360-company',
     icon: Users,
     roles: ['ALL'],
     permissionKey: 'page.customer_360_company',
+    group: 'system',
   },
-  {
-    name: 'Master Product Configuration',
-    href: '/master-product-configuration',
-    icon: Layers,
-    roles: ['ALL'],
-    permissionKey: 'page.master_product_configuration',
-  },
-  { name: 'Master Vessel', href: '/master-vessel', icon: Layers, roles: ['ALL'], permissionKey: 'page.master_vessels' },
-  {
-    name: 'Master Port',
-    href: '/master-loading-port',
-    icon: Layers,
-    roles: ['ALL'],
-    permissionKey: 'page.master_loading_ports',
-  },
-  { name: 'Master Plant', href: '/master-plant', icon: Layers, roles: ['ALL'], permissionKey: 'page.master_plants' },
   {
     name: 'Finance',
     href: '/finance',
     icon: DollarSign,
     roles: ['FINANCE', 'MANAGEMENT', 'ADMIN'],
     permissionKey: 'page.finance',
+    group: 'system',
   },
-  { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai' },
+  { name: 'KLIP Agent AI', href: '/klip-agent-ai', icon: Bot, roles: ['ALL'], permissionKey: 'page.klip_agent_ai', group: 'system' },
   {
     name: 'AI Agent Activity Log',
     href: '/ai-klip-agent-activity',
-    icon: ScrollText,
+    icon: StitchNavIcons.activity,
     roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT', 'MANAGEMENT', 'LOGISTICS'],
     permissionKey: 'page.ai_klip_agent_activity',
+    group: 'system',
   },
-  { name: 'Documents', href: '/documents', icon: FolderOpen, roles: ['ALL'], permissionKey: 'page.documents' },
-  { name: 'SAP Data', href: '/sap-imports', icon: Database, roles: ['ALL'], permissionKey: 'page.sap' },
-  { name: 'Users', href: '/users', icon: Users, roles: ['ALL'], permissionKey: 'page.users' },
-  { name: 'Audit Logs', href: '/audit', icon: Settings, roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'], permissionKey: 'page.audit' },
+  { name: 'Documents', href: '/documents', icon: StitchNavIcons.documents, roles: ['ALL'], permissionKey: 'page.documents', group: 'system' },
+  { name: 'SAP Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
+  { name: 'Users', href: '/users', icon: StitchNavIcons.users, roles: ['ALL'], permissionKey: 'page.users', group: 'system' },
+  {
+    name: 'Audit Logs',
+    href: '/audit',
+    icon: StitchNavIcons.audit,
+    roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'],
+    permissionKey: 'page.audit',
+    group: 'system',
+  },
 ]

@@ -3,6 +3,7 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Loader2 } from 'lucide-react'
+import { StitchChevronIcon } from '@/components/shared/stitchIcons'
 import { FIELD_HELP } from '@/lib/fieldHelpText'
 import { formatQtyMtFromKg } from '@/lib/utils'
 
@@ -37,15 +38,15 @@ const TRUCKING_STATUS_CARDS: ReadonlyArray<{
   {
     status: 'COMPLETED',
     label: 'Completed',
-    color: 'bg-green-100',
-    textColor: 'text-green-800',
+    color: 'bg-emerald-100',
+    textColor: 'text-emerald-800',
     tooltip: FIELD_HELP.truckingStatusCompleted,
   },
   {
     status: 'CANCELLED',
     label: 'Cancelled',
-    color: 'bg-red-100',
-    textColor: 'text-red-800',
+    color: 'bg-rose-100',
+    textColor: 'text-rose-800',
     tooltip: FIELD_HELP.truckingStatusCancelled,
   },
 ]
@@ -141,8 +142,8 @@ export function TruckingStatusDistribution({
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
+      <CardHeader className="px-4 pb-1 pt-4 sm:px-6 sm:pt-5">
+        <CardTitle className="flex items-center gap-2 text-base font-semibold leading-tight text-slate-800">
           <span>Summary Trucking Status</span>
           {loading ? (
             <Loader2
@@ -158,7 +159,7 @@ export function TruckingStatusDistribution({
           aria-label="Trucking pipeline status — scroll horizontally on small screens"
         >
           <div
-            className={`mx-auto flex w-max min-w-full items-center gap-3 px-4 pb-4 pt-5 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-6 ${
+            className={`mx-auto flex w-max min-w-full items-center gap-3 px-4 pb-4 pt-2 transition-opacity duration-200 md:gap-6 md:px-6 md:pb-6 md:pt-2 ${
               loading ? 'opacity-65' : 'opacity-100'
             }`}
           >
@@ -167,23 +168,7 @@ export function TruckingStatusDistribution({
                 {renderCard(card)}
                 {index < array.length - 1 && (
                   <div className="mx-2 flex-shrink-0 md:mx-3">
-                    <svg
-                      width="28"
-                      height="28"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="text-gray-400"
-                      aria-hidden
-                    >
-                      <path
-                        d="M9 18L15 12L9 6"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <StitchChevronIcon className="h-7 w-7 text-slate-300" />
                   </div>
                 )}
               </div>

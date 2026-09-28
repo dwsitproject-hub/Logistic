@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { CalendarDays, ChevronDown } from 'lucide-react'
 import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
 import { formatDateDMY } from '@/lib/dateFormat'
+import { stitchControlClass, useStitchFields } from '@/components/shared/stitchField'
 
 export type PerformanceContractDateOption<T extends string = string> = {
   value: T
@@ -93,6 +94,7 @@ export function PerformanceContractDateControl<T extends string>({
   labelClassName,
   header = false,
 }: PerformanceContractDateControlProps<T>) {
+  const stitch = useStitchFields()
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -135,13 +137,14 @@ export function PerformanceContractDateControl<T extends string>({
             aria-expanded={open}
             aria-haspopup="dialog"
             aria-label={dateLabel}
-            className={
+            className={stitchControlClass(
               header
                 ? 'flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
                 : stretch
                   ? 'flex h-10 w-full items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
-                  : 'flex h-10 min-w-[11rem] max-w-[18rem] items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1'
-            }
+                  : 'flex h-10 min-w-[11rem] max-w-[18rem] items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1',
+              stitch,
+            )}
           >
             <span className="flex min-w-0 items-center gap-2">
               <CalendarDays className="h-4 w-4 shrink-0 text-gray-500" aria-hidden />

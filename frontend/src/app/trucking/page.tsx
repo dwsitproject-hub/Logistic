@@ -4,12 +4,18 @@ import { TRUCKING_STATUS_LABELS, formatTruckingStatusLabel } from '@/lib/truckin
 import { useEffect, useState, useMemo, useRef, useCallback, Suspense, memo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Layout from '@/components/Layout'
+import { StitchFields } from '@/components/shared/stitchField'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Search, Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
-import { DateInputDdMmYyyy } from '@/components/DateInputDdMmYyyy'
+import { Filter, X, Truck, Save, Loader2, Download, Upload, Plus, SlidersHorizontal, Check, ArrowLeft, ArrowRight, FileText, Pencil, GripVertical } from 'lucide-react'
+import { StitchSearchIcon } from '@/components/shared/stitchIcons'
+import {
+  LIST_FILTER_FIELD_LABEL_CLASS,
+  ListFilterPanel,
+  selectionChips,
+} from '@/components/shared/ListFilterPanel'
 import api from '@/lib/api'
 import { describeTruckingSummaryFreshness } from '@/lib/truckingSummaryFreshness'
 import { buildCacheKey, cachedGet, invalidateLogisticsListCaches, invalidateMissingEtaAlertCache, isCacheFresh, peekCache } from '@/lib/clientDataCache'
@@ -35,6 +41,13 @@ import { mapTruckingAttentionInsights } from '@/lib/truckingAttentionInsights'
 import { ATTENTION_INSIGHTS_SECTION_ENABLED } from '@/lib/attentionInsightsFeature'
 import { isContractRecordClosed } from '@/lib/contractDeliveryStatus'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
+import { PerformanceContractDateControl } from '@/components/performance/PerformanceContractDateControl'
+import {
+  buildPerformancePeriodOptions,
+  resolvePerformancePeriodDateRange,
+  type PerformancePeriodKey,
+} from '@/lib/performancePeriodFilters'
 import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import { PerformanceScopeFilters } from '@/components/performance/PerformanceScopeFilters'
 import { LOGISTICS_SOURCE_FILTER_OPTIONS } from '@/lib/logisticsSourceFilter'
@@ -1106,15 +1119,12 @@ function TruckingPageContent() {
   }, [])
 
   const defaultContractDateRange = useMemo(() => {
-    const now = new Date()
-    const yyyy = now.getFullYear()
-    return {
-      from: `${yyyy}-01-01`,
-      to: `${yyyy}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
-    }
+    const ytd = resolvePerformancePeriodDateRange('YTD')
+    return { from: ytd.dateFrom, to: ytd.dateTo }
   }, [])
-  const [dateFrom, setDateFrom] = useState(() => defaultContractDateRange.from)
-  const [dateTo, setDateTo] = useState(() => defaultContractDateRange.to)
+  const [truckingPeriod, setTruckingPeriod] = useState<PerformancePeriodKey>('YTD')
+  const [dateFrom, setDateFrom] = useState(() => resolvePerformancePeriodDateRange('YTD').dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolvePerformancePeriodDateRange('YTD').dateTo)
   const [uploadingId, setUploadingId] = useState<string>('')
   const [page, setPage] = useState<number>(1)
   const pageSize = 20
@@ -2802,6 +2812,7 @@ function TruckingPageContent() {
     setSelectedIncoterms([])
     setSelectedSuppliers([])
     setColumnFilters({})
+    setTruckingPeriod('YTD')
     setDateFrom(defaultContractDateRange.from)
     setDateTo(defaultContractDateRange.to)
     setPage(1)
@@ -3803,6 +3814,7 @@ function TruckingPageContent() {
 
   return (
     <Layout>
+      <StitchFields>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-end gap-4">
@@ -3906,111 +3918,167 @@ function TruckingPageContent() {
         </div>
 
         {/* Section 1: Global Filters */}
-        <Card className="rounded-xl border-slate-200 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-[11px] font-semibold uppercase tracking-widest text-slate-500">
-              Filters
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex flex-wrap gap-4">
-                <div className="relative min-w-[12rem] flex-1">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-gray-400" />
-                  <Input
-                    placeholder="Search by Contract Ext No, Contract No, PO No, or STO No..."
-                    value={searchDraft}
-                    onChange={(e) => setSearchDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        applySearch()
-                      }
-                    }}
-                    className="pl-10"
-                  />
-                </div>
-                <FilterSingleSelect
-                  value={mapTruckingStatusToGlobalBucket(statusFilter)}
-                  onChange={(value) => {
-                    beginTableScopeRefresh()
-                    setPage(1)
-                    setHasMore(true)
-                    setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
+        <HeaderFilterSlot>
+          <PerformanceContractDateControl
+            header
+            period={truckingPeriod}
+            options={buildPerformancePeriodOptions()}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onPeriodChange={(value) => {
+              setTruckingPeriod(value)
+              const range = resolvePerformancePeriodDateRange(value)
+              setDateFrom(range.dateFrom)
+              setDateTo(range.dateTo)
+              setPage(1)
+              setHasMore(true)
+            }}
+            onDateFromChange={(iso) => {
+              setDateFrom(iso)
+              setPage(1)
+            }}
+            onDateToChange={(iso) => {
+              setDateTo(iso)
+              setPage(1)
+            }}
+            resolvePeriodRange={resolvePerformancePeriodDateRange}
+          />
+          <SearchableMultiSelect
+            label="Region/Plant"
+            hideLabel
+            portalMenu
+            buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            options={availableGroupPlants}
+            selected={selectedGroupPlants}
+            onChange={handleGroupPlantsChange}
+            placeholder="Region/Plant"
+            emptyMessage="No region/plant values"
+            uppercaseOptionLabels
+          />
+        </HeaderFilterSlot>
+        <ListFilterPanel
+          onReset={clearTruckingFilters}
+          showReset={hasActiveTruckingFilters || searchDraft.trim().length > 0}
+          chips={[
+            ...(searchTerm.trim()
+              ? [{ id: 'search', label: `Search: ${searchTerm.trim()}`, onRemove: () => { setSearchDraft(''); setSearchTerm(''); setPage(1) } }]
+              : []),
+            ...(mapTruckingStatusToGlobalBucket(statusFilter) !== 'ALL'
+              ? [{ id: 'status', label: `Status: ${mapTruckingStatusToGlobalBucket(statusFilter) === 'OPEN' ? 'Open' : 'Close'}`, onRemove: () => { setStatusFilter('ALL'); setPage(1) } }]
+              : []),
+            ...(lateIndicatorFilter !== 'ALL'
+              ? [{ id: 'late', label: `Late: ${TRUCKING_LATE_INDICATOR_OPTIONS.find((o) => o.value === lateIndicatorFilter)?.label ?? lateIndicatorFilter}`, onRemove: () => setLateIndicatorFilter('ALL') }]
+              : []),
+            ...(sourceTypeFilter !== 'ALL'
+              ? [{ id: 'source', label: `Source: ${sourceTypeFilter}`, onRemove: () => setSourceTypeFilter('ALL') }]
+              : []),
+            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
+            ...selectionChips('Product', selectedProducts, handleProductsChange),
+            ...selectionChips('Supplier', selectedSuppliers, onSuppliersChange),
+            ...selectionChips('Region/Plant', selectedGroupPlants, handleGroupPlantsChange),
+            ...(dateFrom !== defaultContractDateRange.from || dateTo !== defaultContractDateRange.to
+              ? [{ id: 'contract-date', label: `Contract date: ${dateFrom || '…'} to ${dateTo || '…'}`, onRemove: () => { setTruckingPeriod('YTD'); setDateFrom(defaultContractDateRange.from); setDateTo(defaultContractDateRange.to) } }]
+              : []),
+          ]}
+        >
+          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+            <div className="min-w-[12rem] flex-[1.4]">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
+              <div className="relative">
+                <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <Input
+                  placeholder="Contract, PO, STO"
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      applySearch()
+                    }
                   }}
-                  options={[...TRUCKING_GLOBAL_STATUS_OPTIONS]}
-                  ariaLabel="Trucking status filter"
-                  className="min-w-[10rem]"
+                  className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
                 />
-                <FilterSingleSelect
-                  value={lateIndicatorFilter}
-                  onChange={setLateIndicatorFilter}
-                  options={[...TRUCKING_LATE_INDICATOR_OPTIONS]}
-                  ariaLabel="Late indicator filter"
-                  className="min-w-[11rem]"
-                />
-                <FilterSingleSelect
-                  value={sourceTypeFilter}
-                  onChange={setSourceTypeFilter}
-                  options={[...LOGISTICS_SOURCE_FILTER_OPTIONS]}
-                  ariaLabel="Source filter"
-                  className="min-w-[11rem]"
-                />
-              </div>
-
-              <PerformanceScopeFilters
-                microLabels
-                hideGroupPlantFilter={false}
-                incotermOptions={availableIncoterms}
-                selectedIncoterms={selectedIncoterms}
-                onIncotermsChange={setSelectedIncoterms}
-                showProductFilter
-                productOptions={availableProducts}
-                selectedProducts={selectedProducts}
-                onProductsChange={handleProductsChange}
-                showSupplierFilter
-                supplierOptions={availableSuppliers}
-                selectedSuppliers={selectedSuppliers}
-                onSuppliersChange={onSuppliersChange}
-                groupPlantOptions={availableGroupPlants}
-                uppercaseGroupPlantLabels
-                selectedGroupPlants={selectedGroupPlants}
-                onGroupPlantsChange={handleGroupPlantsChange}
-                dateFrom={dateFrom}
-                dateTo={dateTo}
-                onDateFromChange={setDateFrom}
-                onDateToChange={setDateTo}
-                showDateRange={false}
-                incotermEmptyMessage="Loading incoterms..."
-                productEmptyMessage="Loading products..."
-                supplierEmptyMessage="Loading suppliers..."
-                groupPlantPlaceholder="Select region/plant(s)"
-                groupPlantEmptyMessage="No region/plant values"
-              />
-
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">Contract Date:</label>
-                  <DateInputDdMmYyyy valueIso={dateFrom} onChangeIso={setDateFrom} className="w-40" />
-                  <span className="text-gray-500">to</span>
-                  <DateInputDdMmYyyy valueIso={dateTo} onChangeIso={setDateTo} className="w-40" />
-                  {hasActiveTruckingFilters ? (
-                    <Button
-                      type="button"
-                      onClick={clearTruckingFilters}
-                      variant="ghost"
-                      size="sm"
-                      className="text-gray-500"
-                    >
-                      <X className="h-4 w-4 mr-1" />
-                      Clear
-                    </Button>
-                  ) : null}
-                </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
+            <div className="min-w-[7.5rem] flex-1">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Status</label>
+              <FilterSingleSelect
+                value={mapTruckingStatusToGlobalBucket(statusFilter)}
+                onChange={(value) => {
+                  beginTableScopeRefresh()
+                  setPage(1)
+                  setHasMore(true)
+                  setStatusFilter(normalizeTruckingSummaryStatusFilter(value) || 'ALL')
+                }}
+                options={TRUCKING_GLOBAL_STATUS_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.value === 'ALL' ? 'All' : option.label,
+                }))}
+                ariaLabel="Trucking status filter"
+                className="w-full min-w-0"
+              />
+            </div>
+            <div className="min-w-[7.5rem] flex-1">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Late Indicator</label>
+              <FilterSingleSelect
+                value={lateIndicatorFilter}
+                onChange={setLateIndicatorFilter}
+                options={TRUCKING_LATE_INDICATOR_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.value === 'ALL' ? 'All' : option.label,
+                }))}
+                ariaLabel="Late indicator filter"
+                className="w-full min-w-0"
+              />
+            </div>
+            <div className="min-w-[7.5rem] flex-1">
+              <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Source</label>
+              <FilterSingleSelect
+                value={sourceTypeFilter}
+                onChange={setSourceTypeFilter}
+                options={LOGISTICS_SOURCE_FILTER_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.value === 'ALL' ? 'All' : option.label,
+                }))}
+                ariaLabel="Source filter"
+                className="w-full min-w-0"
+              />
+            </div>
+            <PerformanceScopeFilters
+              inlineRow
+              microLabels
+              hideGroupPlantFilter
+              incotermOptions={availableIncoterms}
+              selectedIncoterms={selectedIncoterms}
+              onIncotermsChange={setSelectedIncoterms}
+              showProductFilter
+              productOptions={availableProducts}
+              selectedProducts={selectedProducts}
+              onProductsChange={handleProductsChange}
+              showSupplierFilter
+              supplierOptions={availableSuppliers}
+              selectedSuppliers={selectedSuppliers}
+              onSuppliersChange={onSuppliersChange}
+              groupPlantOptions={availableGroupPlants}
+              uppercaseGroupPlantLabels
+              selectedGroupPlants={selectedGroupPlants}
+              onGroupPlantsChange={handleGroupPlantsChange}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onDateFromChange={setDateFrom}
+              onDateToChange={setDateTo}
+              showDateRange={false}
+              incotermPlaceholder="All"
+              productPlaceholder="All"
+              supplierPlaceholder="All"
+              incotermEmptyMessage="Loading incoterms..."
+              productEmptyMessage="Loading products..."
+              supplierEmptyMessage="Loading suppliers..."
+              groupPlantPlaceholder="All"
+              groupPlantEmptyMessage="No region/plant values"
+            />
+          </div>
+        </ListFilterPanel>
 
         {ATTENTION_INSIGHTS_SECTION_ENABLED ? (
         <TruckingAttentionInsightsSection
@@ -4589,7 +4657,7 @@ function TruckingPageContent() {
         <Card>
           <CardHeader className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-              <CardTitle className="flex items-center gap-2 shrink-0">
+              <CardTitle className="text-base flex items-center gap-2 flex-wrap shrink-0">
                 All Trucking
                 {listFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden />
@@ -5534,6 +5602,7 @@ function TruckingPageContent() {
         onClose={handleCloseTruckingModal}
         onCreated={handleCreated}
       />
+      </StitchFields>
     </Layout>
   )
 }

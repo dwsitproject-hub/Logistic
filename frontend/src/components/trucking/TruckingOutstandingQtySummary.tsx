@@ -1,7 +1,8 @@
 'use client'
 
 import { useMemo } from 'react'
-import { Loader2, Truck } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { StitchNavIcons } from '@/components/shared/stitchIcons'
 import { Card, CardContent } from '@/components/ui/card'
 import { FieldHelp } from '@/components/FieldHelp'
 import { cn, formatOutstandingQtyMtFromKg, outstandingQtyMtColorClass } from '@/lib/utils'
@@ -66,7 +67,7 @@ function BucketColumn({
 }) {
   return (
     <div className="min-w-0">
-      <div className="text-sm font-semibold text-gray-800">{title}</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
       <div className="mt-2 space-y-1 text-sm text-gray-600">
         <div className="flex items-baseline justify-between gap-3">
           <span>FRC</span>
@@ -112,12 +113,12 @@ export function TruckingOutstandingQtySummary({
             loading ? 'opacity-65' : 'opacity-100',
           )}
         >
-          <div className="flex min-w-0 items-start gap-3 rounded-xl border border-amber-100 bg-gradient-to-r from-amber-50/80 to-orange-50/40 p-4">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800">
-              <Truck className="h-5 w-5" aria-hidden />
+          <div className="flex min-w-0 items-start gap-3 rounded-xl border border-blue-200 bg-gradient-to-br from-white to-blue-50/30 p-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-blue-100/80 text-blue-600">
+              <StitchNavIcons.trucking className="h-6 w-6" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <span>Outstanding Qty</span>
                 <FieldHelp text={helpText} />
                 {loading ? (

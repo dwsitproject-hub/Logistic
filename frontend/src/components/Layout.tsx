@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from './ui/button'
@@ -17,7 +17,7 @@ import {
   isAdminRole,
   usePermissions,
 } from '@/components/PermissionsContext'
-import { NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
+import { NAV_GROUP_LABELS, NAV_GROUP_ORDER, NAV_ITEMS, type NavItem } from '@/lib/navigationConfig'
 import { filterNavigationItems, isPathAccessible } from '@/lib/navigationAccess'
 import { clearClientDataCache } from '@/lib/clientDataCache'
 import { fetchCurrentUser, logoutSession, clearLocalAuth, readUserLocally } from '@/lib/authSession'
@@ -31,6 +31,46 @@ type UserLite = {
   id?: string
   full_name?: string
   role?: string
+}
+
+function NavGroupList({
+  items,
+  pathname,
+  sidebarOpen,
+  onNavHover,
+}: {
+  items: NavItem[]
+  pathname: string
+  sidebarOpen: boolean
+  onNavHover: (href: string) => void
+}) {
+  return (
+    <div className="space-y-0.5">
+      {items.map((item) => {
+        const Icon = item.icon
+        const isActive = pathname === item.href
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            prefetch={true}
+            title={item.name}
+            onMouseEnter={() => onNavHover(item.href)}
+            className={`flex items-start gap-2.5 rounded-lg px-2.5 py-1.5 text-sm font-normal leading-tight transition-colors ${
+              isActive
+                ? 'bg-blue-600 text-white'
+                : 'text-black hover:bg-slate-100 hover:text-black'
+            } ${sidebarOpen ? '' : 'justify-center px-0'}`}
+          >
+            <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+            {sidebarOpen ? (
+              <span className="min-w-0 line-clamp-2">{item.name}</span>
+            ) : null}
+          </Link>
+        )
+      })}
+    </div>
+  )
 }
 
 function LayoutChrome({
@@ -47,7 +87,7 @@ function LayoutChrome({
   children: React.ReactNode
   user: UserLite
   pathname: string
-  filteredNavigation: { name: string; href: string; icon: ComponentType<{ className?: string }>; roles: string[] }[]
+  filteredNavigation: NavItem[]
   sidebarNavigationLoading?: boolean
   sidebarOpen: boolean
   setSidebarOpen: (v: boolean | ((p: boolean) => boolean)) => void
@@ -75,7 +115,7 @@ function LayoutChrome({
             {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </Button>
         </div>
-        <nav className="flex-1 overflow-y-auto p-2.5 space-y-1.5">
+        <nav className="flex-1 overflow-y-auto p-2.5 space-y-3">
           {sidebarNavigationLoading
             ? Array.from({ length: 8 }).map((_, index) => (
                 <div
@@ -84,26 +124,37 @@ function LayoutChrome({
                   aria-hidden
                 />
               ))
-            : filteredNavigation.map((item) => {
-            const Icon = item.icon
-            const isActive = pathname === item.href
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                prefetch={true}
-                onMouseEnter={() => onNavHover(item.href)}
-                className={`flex items-start gap-2 px-2.5 py-2 rounded-lg text-sm leading-snug transition-colors ${
-                  isActive ? 'bg-primary text-white' : 'text-gray-700 hover:bg-gray-100'
-                }`}
-              >
-                <Icon className="h-4 w-4 shrink-0 mt-0.5" />
-                {sidebarOpen && (
-                  <span className="min-w-0 whitespace-normal break-words">{item.name}</span>
-                )}
-              </Link>
-            )
-          })}
+            : (
+              <>
+                <NavGroupList
+                  items={filteredNavigation.filter((item) => !item.group)}
+                  pathname={pathname}
+                  sidebarOpen={sidebarOpen}
+                  onNavHover={onNavHover}
+                />
+                {NAV_GROUP_ORDER.map((group) => {
+                  const items = filteredNavigation.filter((item) => item.group === group)
+                  if (items.length === 0) return null
+                  return (
+                    <div key={group} className="space-y-0.5">
+                      {sidebarOpen ? (
+                        <div className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                          {NAV_GROUP_LABELS[group]}
+                        </div>
+                      ) : (
+                        <div className="mx-2 border-t border-slate-200" aria-hidden />
+                      )}
+                      <NavGroupList
+                        items={items}
+                        pathname={pathname}
+                        sidebarOpen={sidebarOpen}
+                        onNavHover={onNavHover}
+                      />
+                    </div>
+                  )
+                })}
+              </>
+            )}
         </nav>
       </aside>
 
