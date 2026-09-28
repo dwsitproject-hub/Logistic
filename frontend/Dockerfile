@@ -11,9 +11,6 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ARG BACKEND_INTERNAL_URL=
 ENV BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL}
 
-ARG NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED=false
-ENV NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED=${NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED}
-
 # Jetty Planning System columns on the Shipments table. NEXT_PUBLIC_* is read by Next.js at BUILD
 # time, so this has to be an ARG here and not only an entry in docker-compose: an arg the Dockerfile
 # does not declare is dropped silently, which also leaves the build cache valid and makes a rebuild

@@ -5,6 +5,7 @@ import {
   DollarSign,
   Users,
   Bot,
+  Plug,
 } from 'lucide-react'
 import { StitchNavIcons } from '@/components/shared/stitchIcons'
 
@@ -121,6 +122,15 @@ export const NAV_ITEMS: NavItem[] = [
     icon: StitchNavIcons.audit,
     roles: ['ADMIN', 'SUPPORT', 'ADMIN_SUPPORT'],
     permissionKey: 'page.audit',
+    group: 'system',
+  },
+  // Holds the credentials KLIP uses on other systems - ADMIN only, and no read-only tier (migration 189).
+  {
+    name: 'Integrations',
+    href: '/integrations',
+    icon: Plug,
+    roles: ['ADMIN'],
+    permissionKey: 'page.integrations',
     group: 'system',
   },
 ]

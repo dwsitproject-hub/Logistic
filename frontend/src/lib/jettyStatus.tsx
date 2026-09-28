@@ -1,3 +1,4 @@
+import type { ShipmentAtaApiField } from '@/lib/shipmentAtaFields'
 import type { ReactNode } from 'react'
 
 /**
@@ -5,10 +6,18 @@ import type { ReactNode } from 'react'
  * the two cannot drift apart.
  *
  * The values are JPS's own partner statuses, passed through untranslated: Pending (waiting for an
- * operator), Approved (accepted, no berth yet), Allocated (berth assigned), Rejected (declined,
- * with a reason). Anything else means KLIP has not submitted this STO.
+ * operator), Approved (accepted, no berth yet), Allocated (berth assigned), Sailed (vessel departed
+ * - terminal, added in JPS v5.0), Rejected (declined, with a reason). Anything else means KLIP has
+ * not submitted this STO.
  */
-export type JettyStatusValue = 'Pending' | 'Approved' | 'Allocated' | 'Rejected' | null | undefined
+export type JettyStatusValue =
+  | 'Pending'
+  | 'Approved'
+  | 'Allocated'
+  | 'Rejected'
+  | 'Sailed'
+  | null
+  | undefined
 
 export interface JettyStatusFields {
   jetty_status?: string | null
@@ -17,12 +26,19 @@ export interface JettyStatusFields {
   jetty_rejection_reason?: string | null
   jetty_submitted_at?: string | null
   jetty_last_synced_at?: string | null
+  /**
+   * JPS actuals, keyed by the KLIP ATA field each corresponds to and already dated in WIB
+   * (backend/src/jps/scheduleAtaSql.ts). Only the discharge fields JPS reports are present.
+   */
+  jps_ata?: Partial<Record<ShipmentAtaApiField, string | null>> | null
 }
 
 const BADGE_CLASS: Record<string, string> = {
   Pending: 'bg-amber-100 text-amber-800',
   Approved: 'bg-blue-100 text-blue-800',
   Allocated: 'bg-green-100 text-green-800',
+  // Terminal and uneventful: the voyage is done, so it reads quieter than Allocated.
+  Sailed: 'bg-slate-100 text-slate-700',
   Rejected: 'bg-red-100 text-red-800',
 }
 

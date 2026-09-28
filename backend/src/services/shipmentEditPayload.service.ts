@@ -3,6 +3,8 @@
  */
 
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
+import { SHIPMENT_LIST_JPS_SELECT_SQL } from '../utils/shipmentListStoJoinSql';
+import { sqlJpsAtaJsonExpr } from '../jps/scheduleAtaSql';
 import { query } from '../database/connection';
 import { loadKlipFieldHistory, type KlipFieldEdit } from './klipFieldHistory.service';
 import { ensureUserStoContractAssignmentsTable } from '../database/ensureUserStoContractAssignments';
@@ -473,15 +475,26 @@ async function resolveShipmentEditPayloadUncached(
  * same shipment.
  */
 async function loadJettyStatusForShipment(shipmentId: string): Promise<Record<string, unknown> | null> {
+  /*
+   * The column names come from SHIPMENT_LIST_JPS_SELECT_SQL, the same projection the Shipments list
+   * uses, because the modal renders them with the same JettyStatusBadge.
+   *
+   * This query used to select the raw names - jps_status, planned_berthing_time, submitted_at -
+   * while the badge reads jetty_status, jetty_planned_berthing_time, jetty_submitted_at. Only
+   * jetty_name happened to match. So the modal said "Not Sent" for every shipment, including ones
+   * the list showed as Pending or Approved, and its sync dates always read "-". One projection for
+   * both is what stops the two from drifting apart again.
+   */
   const res = await query(
-    `SELECT j.jps_status, j.jetty_name, j.planned_berthing_time, j.rejection_reason,
-            j.submitted_at, j.last_polled_at, j.external_reference, j.revision
+    `SELECT ${SHIPMENT_LIST_JPS_SELECT_SQL},
+            jps.external_reference, jps.revision,
+            ${sqlJpsAtaJsonExpr('jps')} AS jps_ata
      FROM shipments s
      INNER JOIN contracts c ON c.id = s.contract_id
      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
-     INNER JOIN jps_shipping_instructions j ON j.sto_key = ${shipmentListStoKeyExpr('c', 'l', 's')}
-     WHERE s.id = $1 AND j.state = 'SUBMITTED'
-     ORDER BY j.revision DESC
+     INNER JOIN jps_shipping_instructions jps ON jps.sto_key = ${shipmentListStoKeyExpr('c', 'l', 's')}
+     WHERE s.id = $1 AND jps.state = 'SUBMITTED'
+     ORDER BY jps.revision DESC
      LIMIT 1`,
     [shipmentId],
   );

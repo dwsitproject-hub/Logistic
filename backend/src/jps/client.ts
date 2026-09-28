@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import logger from '../utils/logger';
+import { onIntegrationSettingsChanged } from '../integrations/integrationEnv';
 import { isJpsEnabled, jpsApiKey, jpsBaseUrl, jpsRequestTimeoutMs } from './config';
 import type { JpsErrorDetail, JpsResult } from './types';
 
@@ -8,6 +9,9 @@ let cached: AxiosInstance | null = null;
 export function resetJpsHttpForTests(): void {
   cached = null;
 }
+
+// The cached instance carries the base URL and timeout; a saved change must reach the next call.
+onIntegrationSettingsChanged(resetJpsHttpForTests);
 
 function jpsHttp(): AxiosInstance {
   if (cached) return cached;
@@ -37,8 +41,25 @@ type Envelope<T> = {
   request_id?: string;
 };
 
-export async function jpsRequest<T>(config: AxiosRequestConfig): Promise<JpsResult<T>> {
-  if (!isJpsEnabled()) {
+/**
+ * `requireEnabled: false` is for the Integrations menu's connection test only: an ADMIN checks a
+ * new key before switching the integration on. Every sweep, submit and poll keeps the default.
+ */
+export async function jpsRequest<T>(
+  config: AxiosRequestConfig,
+  options: { requireEnabled?: boolean } = {},
+): Promise<JpsResult<T>> {
+  const requireEnabled = options.requireEnabled ?? true;
+  if (!requireEnabled && (!jpsBaseUrl() || !jpsApiKey())) {
+    return {
+      ok: false,
+      status: 0,
+      code: 'JPS_NOT_CONFIGURED',
+      message: 'JPS base URL or API key is not set',
+      retryable: false,
+    };
+  }
+  if (requireEnabled && !isJpsEnabled()) {
     return {
       ok: false,
       status: 0,

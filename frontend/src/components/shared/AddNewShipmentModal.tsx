@@ -1934,12 +1934,12 @@ export function AddNewShipmentModal({
       if (!newShipment.vesselName.trim() || !vesselPickedFromMaster) {
         errors.vesselName = 'Select a vessel from Master Vessel'
       }
-      if (!newShipment.charterType) {
-        errors.charterType = 'Master Vessel has no Charter Type (T/C, V/C, or CIF)'
-      }
-      if (!allSelectedPoCif && !newShipment.portOfDischarge.trim()) {
-        errors.portOfDischarge = 'SAP Vessel Discharge Port is empty for the selected PO'
-      }
+      /*
+       * Charter Type and Discharge Port are no longer required, by Ryan's decision on 2026-09-25.
+       * Neither is typed here - Charter Type comes from Master Vessel Terms and Discharge Port from
+       * SAP - so a missing value is upstream data that has not arrived yet, and blocking the save
+       * only stops the user recording what they do know.
+       */
     }
 
     const requiresCompleteEta =
@@ -2769,9 +2769,6 @@ export function AddNewShipmentModal({
                 <div className="relative z-0">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Charter Type
-                    {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
-                      <span className="text-red-500"> *</span>
-                    )}
                     <span className="ml-1 text-gray-500 text-xs">(from Master Vessel)</span>
                   </label>
                   <Input
@@ -2786,9 +2783,6 @@ export function AddNewShipmentModal({
                 <div className="relative z-0">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Discharge Port
-                    {(selectedTransportMode === 'sea' || selectedTransportMode === 'mixed') && (
-                      <span className="text-red-500"> *</span>
-                    )}
                     <span className="ml-1 text-gray-500 text-xs">(from SAP)</span>
                   </label>
                   <Input

@@ -121,35 +121,94 @@ export function hasKlipSapValue(value: unknown, format: KlipSapCompareFormat): b
   return formatKlipSapDisplayValue(value, format) !== '—'
 }
 
-export type KlipSapProvenance = 'none' | 'sap' | 'klip'
+export type KlipSapProvenance = 'none' | 'sap' | 'klip' | 'jps'
+
+/** The sources a displayed value can have come from, as the data records them. */
+export type KlipSapRecordedSource = 'sap' | 'klip' | 'jps'
 
 /**
- * SAP-only: value matches SAP (or is the only source with a SAP counterpart).
- * KLIP: recorded edit or value differs from SAP; also a filled value with no SAP reference.
- * none: field is empty.
+ * Where did the value on screen come from?
+ *
+ * Three doors can write an ATA-ATC date: the SAP import, a KLIP user, and now the Jetty Planning
+ * System. Decided in this order, strongest evidence first:
+ *
+ *   none    the field is empty.
+ *   source  the data RECORDS who wrote it. A recorded fact beats any inference below, so when the
+ *           backend can say, it is trusted as-is.
+ *   klip    a KLIP user is recorded as having edited it.
+ *   jps     it equals what JPS reported and NOT what SAP reported - or SAP reported nothing. When
+ *           JPS and SAP agree the badge says SAP: SAP is the system of record, and a second system
+ *           agreeing with it is not a different origin.
+ *   klip    it differs from SAP, and JPS did not supply it either, so KLIP is the only door left.
+ *   sap     it matches SAP.
+ *   klip    a filled value with no SAP or JPS counterpart at all.
+ *
+ * `jpsValue` and `source` are optional, so every caller written before JPS existed gets exactly the
+ * answer it got before.
  */
 export function resolveKlipSapProvenance({
   klipValue,
   sapValue,
   format,
   klipEdited = false,
+  jpsValue,
+  source,
 }: {
   klipValue: unknown
   sapValue: unknown
   format: KlipSapCompareFormat
   klipEdited?: boolean
+  jpsValue?: unknown
+  source?: KlipSapRecordedSource | null
 }): KlipSapProvenance {
   if (!hasKlipSapValue(klipValue, format)) return 'none'
-  const mismatch = hasKlipSapMismatch(klipValue, sapValue, format)
-  if (klipEdited || mismatch) return 'klip'
-  if (hasKlipSapValue(sapValue, format)) return 'sap'
+  if (source === 'sap' || source === 'klip' || source === 'jps') return source
+  if (klipEdited) return 'klip'
+  const sapHas = hasKlipSapValue(sapValue, format)
+  const matchesSap = sapHas && klipSapValuesEqual(klipValue, sapValue, format)
+  if (
+    !matchesSap &&
+    hasKlipSapValue(jpsValue, format) &&
+    klipSapValuesEqual(klipValue, jpsValue, format)
+  ) {
+    return 'jps'
+  }
+  if (hasKlipSapMismatch(klipValue, sapValue, format)) return 'klip'
+  if (sapHas) return 'sap'
   return 'klip'
 }
 
+/**
+ * Show SAP's own value underneath when the one on screen came from somewhere else.
+ *
+ * Covers JPS as well as KLIP: a JPS date that disagrees with SAP is exactly the case a reviewer
+ * needs both numbers for.
+ */
 export function shouldShowKlipSapFooter(
   provenance: KlipSapProvenance,
   sapValue: unknown,
   format: KlipSapCompareFormat,
 ): boolean {
-  return provenance === 'klip' && hasKlipSapValue(sapValue, format)
+  return (provenance === 'klip' || provenance === 'jps') && hasKlipSapValue(sapValue, format)
+}
+
+/**
+ * Show what JPS reported when it differs from the value on screen.
+ *
+ * The reverse of the SAP footer: the jetty has its own actuals, and when a KLIP user or SAP says
+ * something else, that disagreement is worth seeing rather than silently resolved by precedence.
+ *
+ * An EMPTY field is included on purpose. The jetty logs arrival and berthing as they happen, days
+ * before SAP reports them, so "the field is blank but JPS already knows" is the most common case
+ * this footer exists for, not an edge of it.
+ */
+export function shouldShowJpsReferenceFooter(
+  provenance: KlipSapProvenance,
+  displayedValue: unknown,
+  jpsValue: unknown,
+  format: KlipSapCompareFormat,
+): boolean {
+  if (provenance === 'jps') return false
+  if (!hasKlipSapValue(jpsValue, format)) return false
+  return !klipSapValuesEqual(displayedValue, jpsValue, format)
 }

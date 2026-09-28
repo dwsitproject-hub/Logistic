@@ -38,6 +38,45 @@ export function sqlLastAtaVesselCompleteDischargeForContract(contractIdExpr: str
 }
 
 /**
+ * Has EVERY STO of this contract finished discharging?
+ *
+ * The ATC arm of "effectively done" is guarded by sto_count <= 1, because
+ * last_ata_vessel_complete_discharge is a MAX across the contract: on a PO carrying several STOs
+ * one discharged STO would otherwise close a PO whose other STO was still loading. PO 1004030633
+ * is the worked case - STO 1006019438 discharged while STO 1006019958 still held 402,660 kg.
+ *
+ * But MAX is the wrong test, not the rule. What the guard protects is "all of them", and a
+ * multi-STO contract whose STOs have every one discharged is finished by the same argument that
+ * finishes a single-STO one. This is that test, so the guard can stop standing in for it.
+ *
+ * Two conditions, because either alone can be fooled:
+ *   - no STO row of this contract is without a discharge, and
+ *   - the STO rows actually checked cover what SAP says the contract has (sto_count). Without
+ *     this an STO that SAP knows but KLIP has no contracts row for would pass unexamined.
+ *
+ * Reuses sqlLastAtaVesselCompleteDischargeForContract rather than restating "has an ATC": the
+ * override / own column / discharge leg order is one rule, and a second spelling of it here is
+ * exactly how the two pages disagreed before.
+ */
+export function sqlContractEveryStoDischargedExpr(
+  contractNumberExpr: string,
+  stoCountExpr: string,
+): string {
+  return `(
+    NOT EXISTS (
+      SELECT 1 FROM contracts c_sto_open
+      WHERE c_sto_open.contract_id = ${contractNumberExpr}
+        AND (${sqlLastAtaVesselCompleteDischargeForContract('c_sto_open.id')}) IS NULL
+    )
+    AND (
+      SELECT COUNT(DISTINCT NULLIF(TRIM(COALESCE(c_sto_cnt.sto_number, '')), ''))
+      FROM contracts c_sto_cnt
+      WHERE c_sto_cnt.contract_id = ${contractNumberExpr}
+    ) >= COALESCE((${stoCountExpr})::numeric, 0)
+  )`;
+}
+
+/**
  * Cycle / milestone fields for contracts list.
  * Use inside base CTE (array_agg contract id) or outer page slice (base.id / base.contract_id).
  */

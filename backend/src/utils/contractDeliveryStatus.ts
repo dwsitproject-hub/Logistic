@@ -537,7 +537,11 @@ export function isContractEffectivelyDone(row: Record<string, unknown> | null | 
    * while GR still says Open still closes.
    */
   const stoCount = Number(row.sto_count);
-  if (Number.isFinite(stoCount) && stoCount > 1) return false;
+  /*
+   * ...unless every one of those STOs has discharged, which is the thing the count was standing
+   * in for. The column is optional: a row that does not carry it keeps the old, stricter answer.
+   */
+  if (Number.isFinite(stoCount) && stoCount > 1 && row.all_stos_discharged !== true) return false;
   return true;
 }
 
@@ -575,11 +579,20 @@ export function resolveContractEffectiveStatusText(
  * An ATC on a PO spanning several STOs does NOT finish it: the ATC is a MAX across them, so one
  * discharged STO must not close a PO whose other STO is still open. That is the stoCountExpr arm.
  */
-export function sqlContractAtcFinishesExpr(atcExpr: string, stoCountExpr?: string): string {
-  return stoCountExpr
-    ? `((${atcExpr}) IS NOT NULL
-      AND COALESCE((${stoCountExpr})::numeric, 1) <= 1)`
-    : `(${atcExpr}) IS NOT NULL`;
+export function sqlContractAtcFinishesExpr(
+  atcExpr: string,
+  stoCountExpr?: string,
+  everyStoDischargedExpr?: string,
+): string {
+  if (!stoCountExpr) return `(${atcExpr}) IS NOT NULL`;
+  /*
+   * `everyStoDischargedExpr` is the direct test the sto_count guard has been standing in for, so
+   * when a caller can supply it the guard stops rejecting a multi-STO contract that has genuinely
+   * finished. Callers that pass nothing keep the old behaviour exactly.
+   */
+  const oneSto = `COALESCE((${stoCountExpr})::numeric, 1) <= 1`;
+  const finished = everyStoDischargedExpr ? `(${oneSto} OR (${everyStoDischargedExpr}))` : oneSto;
+  return `((${atcExpr}) IS NOT NULL AND ${finished})`;
 }
 
 export function sqlContractEffectivelyDoneExpr(opts: {
@@ -587,8 +600,14 @@ export function sqlContractEffectivelyDoneExpr(opts: {
   atcExpr: string;
   /** PO-level STO count; when it is above 1 an ATC no longer finishes the PO (see the JS form). */
   stoCountExpr?: string;
+  /** Overrides that guard when every one of those STOs has in fact discharged. */
+  everyStoDischargedExpr?: string;
 }): string {
-  const atcArm = sqlContractAtcFinishesExpr(opts.atcExpr, opts.stoCountExpr);
+  const atcArm = sqlContractAtcFinishesExpr(
+    opts.atcExpr,
+    opts.stoCountExpr,
+    opts.everyStoDischargedExpr,
+  );
   return `(
     ((${opts.outstandingKgExpr}) IS NOT NULL
       AND (${opts.outstandingKgExpr})::numeric <= ${OUTSTANDING_QTY_ZERO_TOLERANCE_KG})

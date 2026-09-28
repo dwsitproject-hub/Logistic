@@ -44,6 +44,8 @@ services:
       DB_POOL_MAX: ${DB_POOL_MAX:-40}
       DB_POOL_CONNECTION_TIMEOUT_MS: ${DB_POOL_CONNECTION_TIMEOUT_MS:-10000}
       JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
+      # Decrypts credentials saved from the Integrations menu (32 bytes: openssl rand -hex 32).
+      INTEGRATION_SECRETS_KEY: ${INTEGRATION_SECRETS_KEY:-}
       JWT_EXPIRES_IN: 7d
       SSO_TOKEN_SECRET: ${SSO_TOKEN_SECRET:-}
       SSO_LEGACY_BRIDGE: ${SSO_LEGACY_BRIDGE:-false}
@@ -135,13 +137,11 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}
         BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
-        NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED: ${NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED:-false}
         NEXT_PUBLIC_JPS_ENABLED: ${NEXT_PUBLIC_JPS_ENABLED:-false}
     container_name: klip-frontend
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:5001/api}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-}
-      NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED: ${NEXT_PUBLIC_ATTENTION_INSIGHTS_ENABLED:-false}
       NEXT_PUBLIC_JPS_ENABLED: ${NEXT_PUBLIC_JPS_ENABLED:-false}
     ports:
       - "${FRONTEND_PORT:-3001}:3001"

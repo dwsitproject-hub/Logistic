@@ -7,6 +7,20 @@
 | URL aplikasi SIT | http://8.215.6.189 |
 | Repo di server | `/opt/klip` |
 
+> **Pakai `docs/scripts/deploy-sit.sh`.** SIT berjalan di **dua host** dan langkah manual di bawah ini menggambarkan satu host saja, jadi mudah tertukar:
+>
+> | Role | IP | Hostname | Compose |
+> |------|----|----------|---------|
+> | backend | 172.28.92.57 | `iZk1a4m0oobaw170notm7pZ` | `docker-compose.backend.yml` + `...remote-db.yml` |
+> | frontend | 172.28.92.56 | `iZk1a5ja5hi7ps6aa7x88rZ` | `docker-compose.frontend.yml` |
+>
+> ```bash
+> cd /opt/klip && bash docs/scripts/deploy-sit.sh backend    # di host backend
+> cd /opt/klip && bash docs/scripts/deploy-sit.sh frontend   # di host frontend
+> ```
+>
+> Script itu menolak deploy kalau ada perubahan tracked yang belum beres, kalau overlay remote-db hilang (backend akan menulis ke database kosong), atau kalau ada `NEXT_PUBLIC_*` di `.env` yang tidak bisa sampai ke build — kegagalan yang tidak memunculkan error apa pun.
+
 **Urutan:** push ke GitHub dulu → deploy backend → deploy frontend → verifikasi browser.
 
 ---

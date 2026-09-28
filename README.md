@@ -3810,6 +3810,52 @@ What moves is the composition of the drilldown, and it balances exactly:
 387 contracts leave Unscheduled for Late (+110) or On Time (+277). Closed counts are untouched
 (2,859 / 3,052 either way), which is the check that the OPEN-only restriction held.
 
+### Integrations menu: DHM and JPS settings without SSH
+
+`/integrations`, **ADMIN only** (route guard `authorize('ADMIN')` on every endpoint, and the
+`page.integrations` permission granted only to ADMIN by migration 189). One card per integration,
+with every setting its config reads, a **Test connection** button, and who changed what when.
+
+**Where a value comes from.** A value saved here wins; otherwise `.env`, exactly as before. Every
+DHM and JPS setting is read through `integrationEnv()` (`backend/src/integrations/integrationEnv.ts`),
+so no caller changed - with nothing saved, it is a plain `process.env` read. *Revert to .env* deletes
+the saved row. Each field shows its source: **KLIP** (saved here), **.env**, or **Belum diisi**.
+
+**Secrets are write-only.** Private keys, the JPS API key and the webhook secret are encrypted with
+AES-256-GCM (`secretBox.ts`) and never returned by the API - the page shows a hint instead: the known
+prefix, the last four characters and the length (`dhm_sk_...72c1 (55)`). A secret field left blank
+keeps the current value. The ciphertext is bound to its row, so a value copied into another row does
+not decrypt. The audit trail records hints, never values.
+
+**The master key** is `INTEGRATION_SECRETS_KEY`, 32 bytes, and it lives in `backend/.env` **only** -
+`docker-compose.backend.yml` reads it from `env_file` on purpose. Listing it under `environment:` as
+`${INTEGRATION_SECRETS_KEY:-}` would let an unset `/opt/klip/.env` substitute an empty string over the
+real key, the same trap that silently emptied DHM and JPS settings before. Generate it straight into
+the file, never displayed:
+
+    openssl rand -hex 32 | sed 's/^/INTEGRATION_SECRETS_KEY=/' >> backend/.env
+
+Without it the page still works, but refuses to save secrets and says why. If it is lost or changed,
+each saved secret fails to decrypt, falls back to `.env`, and is flagged on the page - re-entering it
+fixes that. Nothing goes down.
+
+**Validation happens before anything is written**, and a failed save writes nothing - a half-applied
+key pair is exactly the state that breaks authentication. It rejects, among others, a DHM private key
+that does not begin with `dhm_sk_`, and a public and private key that are identical: on 2026-09-28 the
+public key was pasted into both fields, and each value was well-formed on its own.
+
+**A save takes effect on the next request.** The DHM client caches a bearer token for seven hours and
+both clients cache an axios instance with the base URL baked in; every save resets them, so a rotated
+key is used immediately rather than when the old token expires.
+
+**Except these, which need a backend restart** and are marked `restart` on the page: `DHM_ENABLED`,
+`JPS_ENABLED`, `DHM_SYNC_CRON`, `JPS_SWEEP_CRON`. SchedulerService reads them once at startup to decide
+which jobs to register. Saved values are loaded **before** it runs, so after a restart they apply.
+
+**Test connection** asks DHM for a fresh token (a cached one proves only that the old key once
+worked) and reads JPS's trade-terms list. Neither requires the integration to be enabled, so a new
+key can be checked before switching it on.
+
 ### Jetty Planning System: one instruction per STO, for BONTANG only
 
 KLIP submits a Shipping Instruction to the Jetty Planning System so a berth can be planned for a
@@ -3884,6 +3930,42 @@ falls back to `vessel_name`. There is no cancel endpoint, so an instruction for 
 cancelled in KLIP stands until a JPS operator removes it. `PATCH` works only while `Pending`, so a
 KLIP change after approval cannot be pushed; an email notification for that case is the agreed next
 step and is not built.
+
+#### ATA-ATC values have three doors: SAP, KLIP and JPS
+
+Every ATA-ATC field in the shipment modal carries a badge saying where its value came from, and a
+readonly line underneath when another source disagrees. JPS is the third source, next to the SAP
+import and a KLIP user.
+
+**What JPS reports, and where it lands** (`backend/src/jps/scheduleAtaSql.ts`). KLIP submits
+inbound instructions for BONTANG, so every JPS actual describes the discharge port:
+
+| JPS v5.0 | Meaning | KLIP field |
+| --- | --- | --- |
+| `ta` | Time of Arrival | ATA at Discharge Port |
+| `tb` | Time of Berthing (actual) | ATB at Discharge Port |
+| `tc` | Operations completed (sign-off) | ATC Discharge |
+
+Not mapped, on purpose: *Start Discharging* (JPS has no such event), `cast_off_at` / `sailed_at`
+(departure *from* Bontang - KLIP has no discharge-side sailed field, and the loading-side one is the
+other end of the voyage), and every estimate (this is the actuals badge).
+
+JPS sends UTC. The date is taken **after** converting to Asia/Jakarta, in SQL: cutting it off the UTC
+string would put anything between 00:00 and 07:00 WIB on the previous day.
+
+**How the badge decides** (`resolveKlipSapProvenance`, strongest evidence first): a source the data
+records; a recorded KLIP edit; **JPS** when the value equals JPS's and not SAP's; **KLIP** when it
+differs from SAP and JPS cannot account for it; **SAP** when it matches SAP. When SAP and JPS agree
+the badge says SAP - the system of record, and a second system agreeing is not a different origin.
+
+**What a user sees today.** JPS does not yet write into the ATA fields - that door is separate work
+still to come. Until it does, the value on screen is SAP's or KLIP's, and JPS appears as the
+readonly line underneath whenever it reports something different. That includes a **blank** field:
+the jetty logs arrival days before SAP reports it, which is the case the line mainly exists for.
+The JPS legend entry appears only on shipments JPS has actually reported on.
+
+**Open question for when the door is built:** if a KLIP user has entered a date and JPS later
+reports a different one, which wins? Today nothing is overwritten, so it has not had to be decided.
 
 ### Shipments: why a first visitor waited, and what it costs now
 

@@ -69,6 +69,8 @@ import commercialDocumentsRoutes from './routes/commercialDocuments.routes';
 import aiKlipAgentActivityRoutes from './routes/aiKlipAgentActivity.routes';
 import userActivityLogRoutes from './routes/userActivityLog.routes';
 import prePlannedRoutes from './routes/prePlanned.routes';
+import integrationRoutes from './routes/integration.routes';
+import { loadIntegrationSettings } from './integrations/settingsStore';
 import { ssoHubHandler } from './controllers/sso.controller';
 import { oidcLoginHandler, oidcCallbackHandler, isOidcConfigured } from './controllers/oidc.controller';
 import { configureTrustProxy, createSessionMiddleware } from './middleware/session';
@@ -232,6 +234,7 @@ app.use('/api/commercial-documents', commercialDocumentsRoutes);
 app.use('/api/ai-klip-agent-activity', aiKlipAgentActivityRoutes);
 app.use('/api/user-activity', userActivityLogRoutes);
 app.use('/api/pre-planned', prePlannedRoutes);
+app.use('/api/integrations', integrationRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -247,6 +250,19 @@ if (process.env.NODE_ENV !== 'test') {
       await ensureUserStoContractAssignmentsTable();
     } catch (error) {
       logger.error('Failed to ensure user_sto_contract_assignments table:', error);
+    }
+
+    /*
+     * Saved integration settings must be in place BEFORE the scheduler runs: it decides from
+     * DHM_ENABLED / JPS_ENABLED and the cron expressions which jobs to register at all. On failure
+     * every integration simply keeps its .env configuration - the state before this feature.
+     */
+    try {
+      await loadIntegrationSettings();
+    } catch (error) {
+      logger.error('Failed to load integration settings; using .env values', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     try {
