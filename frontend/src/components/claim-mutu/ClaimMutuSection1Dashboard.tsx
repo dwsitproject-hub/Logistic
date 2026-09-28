@@ -4,12 +4,11 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import { cn } from '@/lib/utils'
+import { CompactNum, RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
 import {
   CLAIM_MUTU_BLANK,
   addPair,
   compareUnit,
-  formatClaimMutuCompact,
   formatClaimMutuIdr,
   formatClaimMutuKg,
   formatClaimMutuMonth,
@@ -114,27 +113,7 @@ const fullOf = (m: ClaimMutuMeasure, v: number) =>
 
 /** A short number with the full one on hover. */
 function Num({ v, m, strong }: { v: number; m: ClaimMutuMeasure; strong?: boolean }) {
-  return (
-    <span title={v ? fullOf(m, v) : undefined} className={strong ? 'font-semibold text-gray-900' : undefined}>
-      {formatClaimMutuCompact(v)}
-    </span>
-  )
-}
-
-/** The share of a total as a thin bar with its percentage, in place of a separate % column. */
-function ShareBar({ part, total, tone = 'indigo' }: { part: number; total: number; tone?: 'indigo' | 'emerald' }) {
-  const pct = total > 0 && part > 0 ? Math.min(100, (part / total) * 100) : 0
-  return (
-    <div className="flex items-center gap-2 min-w-[7rem]">
-      <div className="h-1.5 flex-1 rounded-full bg-gray-100">
-        <div
-          className={cn('h-1.5 rounded-full', tone === 'indigo' ? 'bg-indigo-400' : 'bg-emerald-400')}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="w-11 text-right text-[11px] tabular-nums text-gray-500">{formatShare(part, total)}</span>
-    </div>
-  )
+  return <CompactNum v={v} full={fullOf(m, v)} strong={strong} />
 }
 
 /** OS amount per month for one unit, oldest to newest; only drawn once there are two months. */
@@ -205,38 +184,6 @@ function TotalRow({ label, total, m, colSpan = 1 }: { label: string; total: Clai
       </td>
       <td />
     </tr>
-  )
-}
-
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-}: {
-  value: T
-  options: Array<{ id: T; label: string }>
-  onChange: (v: T) => void
-  ariaLabel: string
-}) {
-  return (
-    <div role="tablist" aria-label={ariaLabel} className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          role="tab"
-          aria-selected={value === o.id}
-          onClick={() => onChange(o.id)}
-          className={cn(
-            'px-3 py-1 text-xs whitespace-nowrap transition-colors',
-            value === o.id ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-50',
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }
 
@@ -347,9 +294,9 @@ export function ClaimMutuSection1Dashboard({
               {tabLoading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
             </CardTitle>
             <div className="flex flex-wrap items-center gap-2">
-              <Segmented value={tab} options={TABS} onChange={setTab} ariaLabel="Summary" />
+              <RecapSegmented value={tab} options={TABS} onChange={setTab} ariaLabel="Summary" />
               {tab !== 'aging' ? (
-                <Segmented
+                <RecapSegmented
                   value={measure}
                   options={[
                     { id: 'amount', label: 'Value' },

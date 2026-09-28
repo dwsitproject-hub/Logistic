@@ -31,7 +31,7 @@ describe('Claim Susut Section 1', () => {
   })
 
   it('shows realised quantities in kg, so a 100 kg claim is not rounded to "0 MT"', () => {
-    expect(formatKg(100)).toBe('100 kg')
-    expect(formatKg(16_850)).toBe('16,850 kg')
+    expect(formatKg(100)).toBe('100')
+    expect(formatKg(16_850)).toBe('16,850')
   })
 })

@@ -4225,15 +4225,17 @@ the 31 Aug 2026 file none of the 5 realised CRs appears in OS_CLAIM, and two wer
 inside August - no month-end OS snapshot ever held them, so comparing successive imports cannot find
 them either.
 
-**Section 1** (the drilldown section was removed):
+**Section 1** (the drilldown section was removed; the page is titled *Shortage Claim*) is three cards -
+outstanding, outstanding > 90 days, realised - and **one** *Shortage Claim Summary* card with two tabs,
+the same one-card layout as Quality Claim (shared parts in `components/claims/ClaimRecapParts.tsx`).
+Quantities are in kg everywhere, as both sheets have them - whole MT would show a 100 kg claim as 0 MT -
+with the unit in the label (`Claim Qty (Kg)`, `Amount (IDR)`) rather than on each value.
 
-- Outstanding, outstanding > 90 days and realisation cards.
-- *Rekap Outstanding Claim - Aging*: amount after tax per GROUP x 0-30 / 31-60 / 61-90 / > 90 days,
-  groups A-Z like the PIVOT sheet. Built from OS_CLAIM rows, so it follows the page filters; clicking
-  a group filters the view table. KLIP's aging buckets are the sheet's VLOOKUP thresholds exactly.
-- *Rekap Realisasi Claim*: REAL_CLAIM per vendor with its CR numbers. Shown whole and **not** narrowed
-  by the filters, which resolve through SAP contract data only the outstanding rows carry. Quantities
-  in kg, as the sheet has them - whole MT would show a 100 kg claim as 0 MT.
+- *Aging* (default): amount after tax per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, groups A-Z like the
+  PIVOT sheet. Built from OS_CLAIM rows, so it follows the page filters; clicking a group filters the
+  view table. KLIP's aging buckets are the sheet's VLOOKUP thresholds exactly.
+- *Realised Claims*: REAL_CLAIM per vendor with its CR numbers. Shown whole and **not** narrowed by the
+  filters, which resolve through SAP contract data only the outstanding rows carry.
 
 Checked against the 31 Aug 2026 workbook through the real controller on a production copy: 167 OS
 rows and Rp 28,338,440,606 (the sheet's X4); every GROUP and aging figure equal to the PIVOT sheet;
