@@ -38,6 +38,23 @@ describe('sapSeaStoLeg', () => {
     ).toBe(false);
   });
 
+  it('treats a Type T row that names a vessel as a sea leg (tug / barge typed T by SAP)', () => {
+    // STO 1006020352, POs 1001031897 / 1001032649: Type T with vessel As Marina 10 and no trucking data.
+    expect(
+      isSapSeaStoLeg({
+        raw: { 'STO Type': 'T', 'STO No.': '1006020352', 'Vessel Name': 'As Marina 10' },
+        shipment: { sto_no: '1006020352' },
+      }),
+    ).toBe(true);
+    // A vessel code alone does not promote a Type T truck leg.
+    expect(
+      isSapSeaStoLeg({
+        raw: { 'STO Type': 'T', 'Vessel Code': 'VSL-001' },
+        shipment: { sto_no: '1006020352' },
+      }),
+    ).toBe(false);
+  });
+
   it('uses vessel name when STO Type is blank', () => {
     expect(
       isSapSeaStoLeg({

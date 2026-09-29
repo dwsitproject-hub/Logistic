@@ -2864,6 +2864,55 @@ vessels), and only splitting the residue again, into "the STO is missing" versus
 but does not name this contract", exposed the clause above.
 
 
+### A FOB STO of Type T that names a vessel is a sea leg
+
+FOB STOs of Type T are trucking legs and are kept off the Shipments page. That rule hid real
+voyages. STO **1006020352** (POs 1001031897 / 1001032649, vessel AS MARINA 10, planned in KLIP) was
+not found by its STO number, while a search by either PO found it. The PO search found it only by
+accident: a PO number has no STO type, so the Type T check never ran.
+
+**Measured on the SAP export of 01 Jan – 29 Sep 2026:**
+
+```
+FOB rows with an STO                       1,579
+  Type V                                     807
+  Type T                                     772
+    no vessel name, all with trucking data   767   -> real trucking legs
+    vessel name, no trucking data              5   -> tug / barge sets typed T by SAP
+```
+
+The rule is now: **a FOB Type T STO stays off Shipments unless SAP names a vessel on that STO.**
+The check needs a vessel *name*; a vessel code alone does not count. The rule is implemented in:
+
+- SQL: `sqlSapStoHasVesselExpr` / `sapVesselNamePresentSql` (`utils/shipmentStoTypeSql.ts`). These
+  are used by the row scope (`buildShipmentPageSeaRowScopeSql`), by the search exclusion
+  (`sqlIsFobTypeTStoNumberExpr`) and by the SAP sea-row classifier (`sqlIsSapSeaStoRowExpr`).
+- TypeScript: `isSapSeaStoLeg` (`utils/sapSeaStoLeg.ts`). The auto-provisioning path
+  (`ensureSapStoShipment.service.ts`) and SAP distribution (`sapDataDistribution.service.ts`) read
+  this function instead of their own FOB-T guards.
+- `scripts/cleanFobTypeTShipmentOrphans.ts` no longer deletes the shipment of such an STO.
+
+`sapVesselNamePresentSql` tests each JSON field separately. The shared `sqlSapVesselNameFromSpdJsonb`
+could not be used here: SAP writes `shipment.vessel_name` as `''`, and the shared helper's COALESCE
+returns that `''` before it ever reaches `raw."Vessel Name"`. With the shared helper the fix was a
+no-op on the very STO it was written for.
+
+**Verified on a production copy** by calling `getShipments` before and after the change:
+
+```
+                                 before           after
+search STO 1006020352            0 rows           1 row (AS MARINA 10)
+search PO 1001031897 / 1001032649  1 row          1 row
+search vessel AS MARINA 10       row missing      row present
+STO column filter 1006020352     0 rows           1 row
+default list total               971              972
+```
+
+**Affected POs:** 1001030411, 1001031611, 1001031897, 1001032649 (each carried only by Type T) and
+1001029114. PO 1001029114 also has a Type V STO (Luminor 9), so it now shows **two rows**: one per
+vessel, the second for STO 1006019676. That is intended, because they are different voyages.
+
+
 ## SAP import
 
 ### SAP may now correct what SAP provably wrote

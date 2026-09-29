@@ -54,8 +54,11 @@ export function resolveSapStoTypeFromParsedData(parsedData: unknown): string {
 }
 
 /**
- * True when SAP row is a sea shipment leg (Type V, or unknown type with vessel name).
- * Type T rows are trucking legs and must not drive Shipments visibility/import status.
+ * True when SAP row is a sea shipment leg: Type V, a Type T row that names a vessel, or an unknown type
+ * with a vessel. A Type T row is otherwise a trucking leg and must not drive Shipments visibility or
+ * import status. The exception: SAP types some tug / barge sets T (29 Sep 2026 export - 5 of 772 FOB
+ * Type T rows name a vessel, none of them carries trucking data; the other 767 all do), and those are
+ * sea execution. Same rule as sqlSapStoHasVesselExpr on the SQL side.
  */
 export function isSapSeaStoLeg(parsedData: unknown): boolean {
   const p = parsedData as {
@@ -66,10 +69,13 @@ export function isSapSeaStoLeg(parsedData: unknown): boolean {
 
   const stoType = resolveSapStoTypeFromParsedData(p);
   if (stoType === 'V') return true;
-  if (stoType === 'T') return false;
 
   const raw = p.raw ?? {};
   const shipment = p.shipment ?? {};
+  if (stoType === 'T') {
+    // A vessel NAME only - the SQL rule reads the name, and a stray code alone should not promote a truck leg.
+    return hasMeaningfulVessel(shipment.vessel_name) || hasMeaningfulVessel(raw['Vessel Name']) || hasMeaningfulVessel(raw.Vessel);
+  }
   return (
     hasMeaningfulVessel(shipment.vessel_name) ||
     hasMeaningfulVessel(raw['Vessel Name']) ||

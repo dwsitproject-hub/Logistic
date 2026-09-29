@@ -488,10 +488,8 @@ export class SapDataDistributionService {
     const incotermLabel = resolveTruckingIncotermFromParsedData(parsedData);
     if (isTruckingPageIncoterm(incotermLabel)) return undefined;
     if (!isSeaSapRowEligibleForShipmentCreation(parsedData)) return undefined;
+    // FOB Type T without a vessel is refused here; with a vessel it is a tug / barge set typed T (isSapSeaStoLeg).
     if (!isSapSeaStoLegForIncoterm(parsedData, incotermLabel)) return undefined;
-    if (incotermLabel === 'FOB' && resolveSapStoTypeFromParsedData(parsedData) === 'T') {
-      return undefined;
-    }
     if (!this.hasShipmentData(parsedData.shipment)) return undefined;
 
     const seaLandRaw = await this.resolveTransportModeRaw(client, contractId, parsedData.contract);

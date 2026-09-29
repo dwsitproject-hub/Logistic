@@ -6,7 +6,6 @@
  * Oil Loss vessel segment: MIX + STO Type 'V' — see oilLossEligibility.ts.
  */
 
-import { sqlSapVesselNameFromSpdJsonb } from './sapVesselFields';
 import { buildShipmentPageSeaIncotermScopeSql } from './shipmentIncotermScope';
 import { contractEffectiveIncotermExpr } from './truckingIncotermScope';
 
@@ -223,6 +222,42 @@ export function buildShipmentExcludeStoTypeTSql(
   return `NOT (${shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias)} = 'T')`;
 }
 
+/**
+ * True when SAP names a vessel on this STO of this contract.
+ *
+ * A FOB STO of Type T is a trucking leg - EXCEPT when SAP writes a Vessel Name on it. Measured on the
+ * 29 Sep 2026 export: of 772 FOB Type T rows, 767 carry no vessel and every one of them carries trucking
+ * data (transporter / truck loading location / trucking qty); the other 5 name a vessel - all tug and
+ * barge sets (TB. AS MARINA 9 / BG. AS MARINA 12 ...) - and none carries trucking data. Those 5 are sea
+ * execution typed T in SAP, and without this exception they vanished from Shipments: STO 1006020352
+ * (POs 1001031897 / 1001032649, AS MARINA 10, planned in KLIP) was unfindable by its STO.
+ */
+export function sqlSapStoHasVesselExpr(contractAlias: string, stoNumberSql: string): string {
+  return `EXISTS (
+    SELECT 1
+    FROM sap_processed_data spd_tv
+    WHERE TRIM(spd_tv.contract_number) = TRIM(${contractAlias}.contract_id::text)
+      AND NULLIF(TRIM(${stoNumberSql}), '') IS NOT NULL
+      AND TRIM(${sapStoNumberKeyExpr('spd_tv')}) = TRIM(${stoNumberSql})
+      AND ${sapVesselNamePresentSql('spd_tv.data')}
+  )`;
+}
+
+/**
+ * True when ANY of the SAP vessel-name fields holds a name. Each field is tested on its own: the parser
+ * can leave shipment.vessel_name = '' while raw."Vessel Name" holds the name, and a COALESCE over the
+ * fields (sqlSapVesselNameFromSpdJsonb) stops at that empty string and reads "no vessel".
+ */
+export function sapVesselNamePresentSql(dataExpr: string): string {
+  return `COALESCE(
+    NULLIF(TRIM(${dataExpr}->'shipment'->>'vessel_name'), ''),
+    NULLIF(TRIM(${dataExpr}->'vessel'->>'vessel_name'), ''),
+    NULLIF(TRIM(${dataExpr}->'raw'->>'Vessel Name'), ''),
+    NULLIF(TRIM(${dataExpr}->'raw'->>'Vessel'), ''),
+    NULLIF(TRIM(${dataExpr}->'raw'->>'vessel name'), '')
+  ) IS NOT NULL`;
+}
+
 /** True when this STO number is a FOB trucking (Type T) leg — not a Shipments search hit. */
 export function sqlIsFobTypeTStoNumberExpr(
   contractAlias: string,
@@ -232,6 +267,7 @@ export function sqlIsFobTypeTStoNumberExpr(
   return `(
     (${inc}) = 'FOB'
     AND ${shipmentResolvedStoTypeForNumberExpr(contractAlias, stoNumberSql)} = 'T'
+    AND NOT ${sqlSapStoHasVesselExpr(contractAlias, stoNumberSql)}
   )`;
 }
 
@@ -242,7 +278,8 @@ export interface ShipmentPageSeaRowScopeOptions {
 
 /**
  * Shipments / Shipping Performance row scope: CIF/FOB/CFR incoterm.
- * FOB Type T is a trucking leg — never a Shipments row (mixed V+T POs keep Type V only).
+ * FOB Type T is a trucking leg — not a Shipments row (mixed V+T POs keep Type V only) - unless SAP
+ * names a vessel on that STO (sqlSapStoHasVesselExpr): tug / barge sets typed T.
  * CIF/CFR remain incoterm-only (Type T allowed).
  */
 export function buildShipmentPageSeaRowScopeSql(
@@ -253,31 +290,30 @@ export function buildShipmentPageSeaRowScopeSql(
 ): string {
   const incScope = buildShipmentPageSeaIncotermScopeSql(contractAlias);
   const inc = contractEffectiveIncotermExpr(contractAlias);
-  const resolvedTypeExpr =
+  const stoNumberSql =
     options?.selectedStoParamIndex != null
-      ? shipmentResolvedStoTypeForNumberExpr(
-          contractAlias,
-          `$${options.selectedStoParamIndex}::text`,
-        )
-      : shipmentResolvedStoTypeExpr(contractAlias, spdAlias, shipmentAlias);
+      ? `$${options.selectedStoParamIndex}::text`
+      : `(${shipmentListStoKeyExpr(contractAlias, spdAlias, shipmentAlias)})::text`;
+  const resolvedTypeExpr = shipmentResolvedStoTypeForNumberExpr(contractAlias, stoNumberSql);
+  // FOB Type T is a trucking leg unless SAP names a vessel on that STO (sqlSapStoHasVesselExpr).
+  // The EXISTS is last so it only runs for FOB Type T rows.
   const fobTypeT = `(
     (${inc}) = 'FOB'
     AND ${resolvedTypeExpr} = 'T'
+    AND NOT ${sqlSapStoHasVesselExpr(contractAlias, stoNumberSql)}
   )`;
   return `(${incScope}) AND NOT (${fobTypeT})`;
 }
 
-/** SQL: SAP row is FOB sea leg (Type V, or non-T with vessel name). */
+/**
+ * SQL: SAP row is FOB sea leg - Type V, or any row naming a vessel. A Type T row with a vessel counts:
+ * SAP types some tug / barge sets T (see sqlSapStoHasVesselExpr); a real trucking leg names no vessel.
+ */
 export function sqlIsSapSeaStoRowExpr(spdAlias = 'spd'): string {
   const stoType = sapStoTypeNormalizedExpr(spdAlias);
-  const vessel = sqlSapVesselNameFromSpdJsonb(`${spdAlias}.data`);
   return `(
     ${stoType} = 'V'
-    OR (
-      ${stoType} IS DISTINCT FROM 'T'
-      AND ${stoType} <> 'V'
-      AND ${vessel} IS NOT NULL
-    )
+    OR ${sapVesselNamePresentSql(`${spdAlias}.data`)}
   )`;
 }
 

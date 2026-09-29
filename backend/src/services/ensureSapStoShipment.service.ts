@@ -8,13 +8,14 @@ import logger from '../utils/logger';
 import { SapDataDistributionService } from './sapDataDistribution.service';
 import { invalidateAfterShipmentWrite } from './shipmentWriteInvalidation.service';
 import { isSeaSapRowEligibleForShipmentCreation } from '../utils/seaShipmentEligibility';
-import { isSapSeaStoLegForIncoterm, resolveSapStoTypeFromParsedData } from '../utils/sapSeaStoLeg';
+import { isSapSeaStoLegForIncoterm } from '../utils/sapSeaStoLeg';
 import { buildShipmentPageSeaIncotermScopeSql } from '../utils/shipmentIncotermScope';
 import { contractEffectiveIncotermExpr } from '../utils/truckingIncotermScope';
 import {
   sapStoNumberKeyExpr,
   sapStoTypeNormalizedExpr,
   sqlIsSapSeaStoRowForIncotermExpr,
+  sapVesselNamePresentSql,
 } from '../utils/shipmentStoTypeSql';
 import { buildUnplannedContractToolbarScope } from '../utils/shipmentUnplannedHybridSql';
 import { sqlShipmentMatchesSapStoExpr } from '../utils/klipLogisticsActivity';
@@ -45,7 +46,8 @@ export function isSapStoCandidateEligible(parsedData: unknown): boolean {
   )
     .trim()
     .toUpperCase();
-  if (inc === 'FOB' && resolveSapStoTypeFromParsedData(parsedData) === 'T') return false;
+  // FOB Type T without a vessel is refused inside isSapSeaStoLegForIncoterm; with a vessel it is a
+  // tug / barge set typed T and counts as a sea leg (see isSapSeaStoLeg).
   return isSapSeaStoLegForIncoterm(parsedData, inc || undefined);
 }
 
@@ -87,7 +89,8 @@ export function buildSapStoCandidateQuery(
     WHERE ${stoKey} IS NOT NULL
       AND ${buildShipmentPageSeaIncotermScopeSql('c')}
       AND ${sqlIsSapSeaStoRowForIncotermExpr('spd', 'c')}
-      AND ((${inc}) <> 'FOB' OR ${sapStoTypeNormalizedExpr('spd')} IS DISTINCT FROM 'T')
+      -- FOB Type T is a trucking leg unless SAP names a vessel on it (a tug / barge set typed T).
+      AND ((${inc}) <> 'FOB' OR ${sapStoTypeNormalizedExpr('spd')} IS DISTINCT FROM 'T' OR ${sapVesselNamePresentSql('spd.data')})
       AND NOT EXISTS (
         SELECT 1
         FROM shipments s

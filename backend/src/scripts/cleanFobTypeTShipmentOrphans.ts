@@ -15,6 +15,7 @@ import logger from '../utils/logger';
 import {
   shipmentListStoKeyExpr,
   shipmentResolvedStoTypeExpr,
+  sqlSapStoHasVesselExpr,
 } from '../utils/shipmentStoTypeSql';
 
 interface OrphanRow {
@@ -80,6 +81,8 @@ function buildOrphanSelectSql(stoFilter: string | null, includeManual: boolean):
     LEFT JOIN latest_spd_contract l ON l.contract_number = c.contract_id
     WHERE UPPER(TRIM(COALESCE(c.incoterm, ''))) = 'FOB'
       AND ${stoTypeExpr} = 'T'
+      -- a Type T STO that SAP carries by vessel (tug / barge) is sea execution - keep its shipment
+      AND NOT ${sqlSapStoHasVesselExpr('c', `COALESCE(NULLIF(TRIM(c.sto_number::text), ''), l.effective_sto, s.shipment_id)`)}
       ${manualExclude}
       ${stoScope}
     ORDER BY s.shipment_id, c.contract_id`;

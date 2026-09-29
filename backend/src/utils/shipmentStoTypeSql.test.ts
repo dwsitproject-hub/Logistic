@@ -18,6 +18,7 @@ import {
   sqlIsSapSeaStoRowExpr,
   sqlIsSapSeaStoRowForIncotermExpr,
   contractHasFobSeaEligibleStoExistsSql,
+  sqlSapStoHasVesselExpr,
 } from './shipmentStoTypeSql';
 
 describe('shipmentStoTypeSql', () => {
@@ -84,14 +85,23 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain('NOT (');
   });
 
-  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes all FOB Type T legs', () => {
+  it('buildShipmentPageSeaRowScopeSql is CIF/FOB/CFR incoterm and excludes FOB Type T legs that name no vessel', () => {
     const sql = buildShipmentPageSeaRowScopeSql('c', 'l', 's');
     expect(sql).toContain("IN ('CIF', 'FOB', 'CFR')");
     expect(sql).toContain("= 'FOB'");
     expect(sql).toContain("= 'T'");
     expect(sql).toContain('AND NOT');
-    expect(sql).not.toContain('vessel_name');
+    // A Type T STO stays a Shipments row when SAP names a vessel on it (tug / barge typed T).
+    expect(sql).toContain('spd_tv');
+    expect(sql).toContain("'Vessel Name'");
     expect(sql).not.toContain(contractHasSeaVesselStoOnContractSql('c'));
+  });
+
+  it('sqlSapStoHasVesselExpr looks for a vessel name on the same contract and STO only', () => {
+    const sql = sqlSapStoHasVesselExpr('c', '$3::text');
+    expect(sql).toContain('TRIM(spd_tv.contract_number) = TRIM(c.contract_id::text)');
+    expect(sql).toContain('= TRIM($3::text)');
+    expect(sql).toContain("'Vessel Name'");
   });
 
   it('buildShipmentPageSeaRowScopeSql uses selected STO param for FOB type when provided', () => {
@@ -123,11 +133,11 @@ describe('shipmentStoTypeSql', () => {
     expect(sql).toContain("= 'FOB'");
   });
 
-  it('sqlIsSapSeaStoRowExpr matches Type V or non-T rows with vessel name', () => {
+  it('sqlIsSapSeaStoRowExpr matches Type V or any row naming a vessel (a Type T tug / barge too)', () => {
     const sql = sqlIsSapSeaStoRowExpr('spd');
     expect(sql).toContain("= 'V'");
-    expect(sql).toContain("IS DISTINCT FROM 'T'");
     expect(sql).toContain('Vessel Name');
+    expect(sql).not.toContain("IS DISTINCT FROM 'T'");
   });
 
   it('sqlIsSapSeaStoRowForIncotermExpr passes CIF/CFR and gates FOB to sea leg', () => {
