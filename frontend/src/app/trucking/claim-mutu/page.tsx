@@ -26,6 +26,7 @@ import api from '@/lib/api'
 import { formatDateDMY } from '@/lib/dateFormat'
 import { formatSapDisplayValue } from '@/lib/sapDisplayValue'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
+import { FilterSingleSelect } from '@/components/FilterSingleSelect'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
   ListFilterPanel,
@@ -53,6 +54,7 @@ import {
 } from '@/components/claim-susut/ClaimSusutImportHistoryModal'
 import {
   buildClaimSusutPeriodOptions,
+  claimSusutAgingBucket,
   resolveClaimSusutPeriodRange,
   type ClaimSusutPeriodKey,
 } from '@/lib/claimSusutView'
@@ -99,31 +101,63 @@ function formatCell(kind: string | undefined, v: unknown): string {
   }
 }
 
-/** Two-way Exclude / Include B2B switch. Exclude is where every visit starts. */
-function B2bScopeToggle({ value, onChange }: { value: ClaimMutuB2bScope; onChange: (v: ClaimMutuB2bScope) => void }) {
-  const opts: Array<{ v: ClaimMutuB2bScope; label: string }> = [
-    { v: 'exclude', label: 'Exclude B2B' },
-    { v: 'include', label: 'Include B2B' },
-  ]
-  return (
-    <div role="radiogroup" aria-label="B2B" className="inline-flex h-9 overflow-hidden rounded-md border border-gray-300 bg-white">
-      {opts.map((o) => (
-        <button
-          key={o.v}
-          type="button"
-          role="radio"
-          aria-checked={value === o.v}
-          onClick={() => onChange(o.v)}
-          className={cn(
-            'px-3 text-sm whitespace-nowrap transition-colors',
-            value === o.v ? 'bg-indigo-600 text-white' : 'text-gray-700 hover:bg-gray-50',
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  )
+/** Claim Status filter: narrows the view table only; Section 1 already shows the two apart. */
+const CLAIM_MUTU_CLAIM_STATUS_OPTIONS = ['Claimed', 'Not Claimed']
+/** CR date opens on YTD, as on Shortage Claim. */
+const CLAIM_MUTU_DEFAULT_PERIOD: ClaimSusutPeriodKey = 'YTD'
+
+function renderCell(c: { id: string; kind?: string }, r: ClaimMutuRow) {
+  const kind = c.kind
+  if (kind === 'b2b') {
+    return r.is_b2b ? (
+      <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700">B2B</span>
+    ) : (
+      '-'
+    )
+  }
+  if (kind === 'status') {
+    const v = r.claim_status as string | undefined
+    if (!v) return '-'
+    return (
+      <span
+        className={cn(
+          'rounded px-1.5 py-0.5 text-xs font-medium',
+          v === 'Claimed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700',
+        )}
+      >
+        {v}
+      </span>
+    )
+  }
+  if (kind === 'aging') {
+    const days = r.os_days as number | null | undefined
+    if (days == null) return '-'
+    const bucket = claimSusutAgingBucket(days)
+    return (
+      <span className="inline-flex items-center justify-end gap-1.5">
+        <span>{Number(days).toLocaleString('en-US')}</span>
+        {bucket ? (
+          <span
+            className={cn(
+              'rounded px-1 text-[10px] font-medium',
+              bucket === '> 90' ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-600',
+            )}
+          >
+            {bucket}
+          </span>
+        ) : null}
+      </span>
+    )
+  }
+  return formatCell(kind, r[c.id])
+}
+
+/** A text cell the column width cuts short shows its whole value on hover. */
+function hoverTitle(kind: string | undefined, v: unknown): string | undefined {
+  if (kind && kind !== 'number') return undefined
+  if (v == null || v === '') return undefined
+  const text = formatCell(kind, v)
+  return text === '-' ? undefined : text
 }
 
 export default function ClaimMutuPage() {
@@ -143,14 +177,16 @@ export default function ClaimMutuPage() {
   const [historyOpen, setHistoryOpen] = useState(false)
 
   const [b2b, setB2b] = useState<ClaimMutuB2bScope>(CLAIM_MUTU_DEFAULT_B2B)
-  const [period, setPeriod] = useState<ClaimSusutPeriodKey>('ALL')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [period, setPeriod] = useState<ClaimSusutPeriodKey>(CLAIM_MUTU_DEFAULT_PERIOD)
+  const [dateFrom, setDateFrom] = useState(() => resolveClaimSusutPeriodRange(CLAIM_MUTU_DEFAULT_PERIOD).dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolveClaimSusutPeriodRange(CLAIM_MUTU_DEFAULT_PERIOD).dateTo)
   const [selectedCommodities, setSelectedCommodities] = useState<string[]>([])
   const [selectedUnits, setSelectedUnits] = useState<string[]>([])
   const [selectedVendorTypes, setSelectedVendorTypes] = useState<string[]>([])
   const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const [selectedMetodes, setSelectedMetodes] = useState<string[]>([])
+  const [selectedClaimStatuses, setSelectedClaimStatuses] = useState<string[]>([])
+  const [claimedCount, setClaimedCount] = useState(0)
   const [commodityOptions, setCommodityOptions] = useState<string[]>([])
   const [unitOptions, setUnitOptions] = useState<string[]>([])
   const [vendorTypeOptions, setVendorTypeOptions] = useState<string[]>([])
@@ -193,6 +229,7 @@ export default function ClaimMutuPage() {
       vendorTypes: selectedVendorTypes,
       claimGroups: selectedGroups,
       metodePayments: selectedMetodes,
+      claimStatuses: selectedClaimStatuses,
     }),
     [selectedImportId, b2b, dateFrom, dateTo, selectedCommodities, selectedUnits, selectedVendorTypes, selectedGroups, selectedMetodes],
   )
@@ -341,6 +378,7 @@ export default function ClaimMutuPage() {
         const res = await api.get(`/claim-mutu/rows?${params}`)
         setRows(res.data.data || [])
         setTotalCount(Number(res.data.meta?.totalCount) || 0)
+        setClaimedCount(Number(res.data.meta?.claimedCount) || 0)
       } finally {
         setLoading(false)
       }
@@ -444,29 +482,42 @@ export default function ClaimMutuPage() {
   }
 
   const periodFiltered = period !== 'ALL' || !periodRangeMatchesDates(resolveClaimSusutPeriodRange('ALL'), dateFrom, dateTo)
-  const anyFilter =
-    periodFiltered ||
+  const periodIsDefault =
+    period === CLAIM_MUTU_DEFAULT_PERIOD &&
+    periodRangeMatchesDates(resolveClaimSusutPeriodRange(CLAIM_MUTU_DEFAULT_PERIOD), dateFrom, dateTo)
+  const otherFilters =
     b2b !== CLAIM_MUTU_DEFAULT_B2B ||
     selectedCommodities.length > 0 ||
     selectedUnits.length > 0 ||
     selectedVendorTypes.length > 0 ||
     selectedGroups.length > 0 ||
-    selectedMetodes.length > 0
+    selectedMetodes.length > 0 ||
+    selectedClaimStatuses.length > 0
+  const anyFilter = periodFiltered || otherFilters
 
   const resetFilters = () => {
+    const { dateFrom: from, dateTo: to } = resolveClaimSusutPeriodRange(CLAIM_MUTU_DEFAULT_PERIOD)
     setB2b(CLAIM_MUTU_DEFAULT_B2B)
-    setPeriod('ALL')
-    setDateFrom('')
-    setDateTo('')
+    setPeriod(CLAIM_MUTU_DEFAULT_PERIOD)
+    setDateFrom(from)
+    setDateTo(to)
     setSelectedCommodities([])
     setSelectedUnits([])
     setSelectedVendorTypes([])
     setSelectedGroups([])
     setSelectedMetodes([])
+    setSelectedClaimStatuses([])
     setPage(1)
   }
 
   const periodOptions = useMemo(() => buildClaimSusutPeriodOptions(), [])
+  /** "YTD (01/01/2026 – 29/09/2026)", a custom "01/03/2026 – 31/03/2026", or "All". */
+  const crDateLabel = useMemo(() => {
+    if (!dateFrom && !dateTo) return 'All'
+    const range = `${dateFrom ? formatDateDMY(dateFrom) : '…'} – ${dateTo ? formatDateDMY(dateTo) : '…'}`
+    const preset = resolveClaimSusutPeriodRange(period)
+    return period !== 'ALL' && periodRangeMatchesDates(preset, dateFrom, dateTo) ? `${preset.label} (${range})` : range
+  }, [period, dateFrom, dateTo])
   const selectedImport = imports.find((i) => i.id === selectedImportId)
 
   return (
@@ -537,24 +588,23 @@ export default function ClaimMutuPage() {
               onDateToChange={setDateTo}
               resolvePeriodRange={resolveClaimSusutPeriodRange}
             />
-            <B2bScopeToggle value={b2b} onChange={setB2b} />
             <SearchableMultiSelect
-              label="Unit"
+              label="Region/Plant"
               hideLabel
               portalMenu
               buttonClassName="flex h-9 w-44 items-center justify-between gap-2 rounded-md border border-gray-300 bg-white px-3 text-left text-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
               options={unitOptions}
               selected={selectedUnits}
               onChange={setSelectedUnits}
-              placeholder="Unit"
-              emptyMessage="No units"
+              placeholder="Region/Plant"
+              emptyMessage="No region/plant values"
               uppercaseOptionLabels
               pinSelectedToTop
             />
           </HeaderFilterSlot>
           <ListFilterPanel
             onReset={resetFilters}
-            showReset={anyFilter}
+            showReset={!periodIsDefault || otherFilters}
             chips={[
               ...(periodFiltered
                 ? [
@@ -578,23 +628,37 @@ export default function ClaimMutuPage() {
               ...(b2b !== CLAIM_MUTU_DEFAULT_B2B
                 ? [{ id: 'b2b', label: 'Include B2B', onRemove: () => setB2b(CLAIM_MUTU_DEFAULT_B2B) }]
                 : []),
-              ...selectionChips('Unit', selectedUnits, setSelectedUnits),
-              ...selectionChips('Commodity', selectedCommodities, setSelectedCommodities),
+              ...selectionChips('Region/Plant', selectedUnits, setSelectedUnits),
+              ...selectionChips('Product', selectedCommodities, setSelectedCommodities),
               ...selectionChips('Vendor Type', selectedVendorTypes, setSelectedVendorTypes),
               ...selectionChips('Group', selectedGroups, setSelectedGroups),
               ...selectionChips('Payment Method', selectedMetodes, setSelectedMetodes),
+              ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
             ]}
           >
             <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+              <div className="min-w-[8.5rem] flex-1">
+                <label className={LIST_FILTER_FIELD_LABEL_CLASS}>B2B</label>
+                <FilterSingleSelect
+                  value={b2b}
+                  onChange={(v) => setB2b(v === 'include' ? 'include' : 'exclude')}
+                  options={[
+                    { value: 'exclude', label: 'Exclude B2B' },
+                    { value: 'include', label: 'Include B2B' },
+                  ]}
+                  ariaLabel="B2B"
+                  className="w-full min-w-0"
+                />
+              </div>
               <SearchableMultiSelect
-                label="Commodity"
+                label="Product"
                 className="min-w-[7.5rem] flex-1"
                 labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
                 options={commodityOptions}
                 selected={selectedCommodities}
                 onChange={setSelectedCommodities}
                 placeholder="All"
-                emptyMessage="No commodities"
+                emptyMessage="No products"
                 uppercaseOptionLabels
                 pinSelectedToTop
               />
@@ -634,10 +698,22 @@ export default function ClaimMutuPage() {
                 uppercaseOptionLabels
                 pinSelectedToTop
               />
+              <SearchableMultiSelect
+                label="Claim Status"
+                className="min-w-[8rem] flex-1"
+                labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+                options={CLAIM_MUTU_CLAIM_STATUS_OPTIONS}
+                selected={selectedClaimStatuses}
+                onChange={setSelectedClaimStatuses}
+                placeholder="All"
+                emptyMessage="No statuses"
+                pinSelectedToTop
+              />
             </div>
           </ListFilterPanel>
 
           <ClaimMutuSection1Dashboard
+            crDateLabel={crDateLabel}
             dashboard={dashboard}
             loading={dashboardLoading}
             trend={trend}
@@ -654,12 +730,17 @@ export default function ClaimMutuPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                    <span>All Outstanding Quality Claim</span>
+                    <span>All Quality Claim</span>
                     {loading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-hidden /> : null}
                   </CardTitle>
                   <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                     <span className="whitespace-nowrap tabular-nums text-gray-700">
                       <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> rows
+                      {claimedCount > 0 ? (
+                        <span className="text-gray-500">
+                          {' '}({(totalCount - claimedCount).toLocaleString('en-US')} not claimed, {claimedCount.toLocaleString('en-US')} claimed)
+                        </span>
+                      ) : null}
                     </span>
                     <span className="text-gray-400" aria-hidden>·</span>
                     <span className="whitespace-nowrap font-medium text-gray-600">
@@ -888,12 +969,11 @@ export default function ClaimMutuPage() {
                                     key={c.id}
                                     className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${operationalTableColumnClass(layout)} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass} ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
                                   >
-                                    <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, 'text-sm')}>
-                                      {c.kind === 'b2b' && r.is_b2b ? (
-                                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700">B2B</span>
-                                      ) : (
-                                        formatCell(c.kind, r[c.id])
-                                      )}
+                                    <div
+                                      className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, 'text-sm')}
+                                      title={hoverTitle(c.kind, r[c.id])}
+                                    >
+                                      {renderCell(c, r)}
                                     </div>
                                   </td>
                                 )

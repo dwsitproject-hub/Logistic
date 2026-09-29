@@ -4297,16 +4297,37 @@ matched as a multiset on CR No + PO + amount (Real adds CM No)
 Include is reported as a warning and not imported.
 
 **Exclude / Include B2B filter.** Every endpoint takes `b2b=exclude|include`, default `exclude`, and the
-page always opens on Exclude. Exclude is the scope of the Pivot, Summary Per Komoditi and Rekap Per
-Lokasi sheets; Include is the scope of Summary Per Unit. The Dashboard Claim Mutu KPI, its drilldown
-list, and the claim qty per PO on the contract-quantity charts all exclude B2B.
+page always opens on Exclude - a single-select *B2B* field, first in the Filters panel. Exclude is the
+scope of the Pivot, Summary Per Komoditi and Rekap Per Lokasi sheets; Include is the scope of Summary Per
+Unit. The Dashboard Claim Mutu KPI, its drilldown list, and the claim qty per PO on the contract-quantity
+charts all exclude B2B.
+
+**Filters (the page is titled *Quality Claim*).** The CR date period opens on **YTD**, as on Shortage
+Claim - pick *All* for the whole register the workbook sheets total. The header filter is *Region/Plant*
+(the DEST site, `units=`); the panel has B2B, *Product* (`commodities=`), Vendor Type, Group and Payment
+Method (both OS only), and **Claim Status** (`claimStatus=Claimed|Not Claimed`, view table only).
+
+**Realised claims follow the CR date range** (Real_Claim's CLAIM DATE) and are read from **every**
+import, not only the active one: each monthly file carries only that month's approvals. A row uploaded
+twice counts once, from the latest upload, matched on the B2B key (CR No + CM No + PO + amount). On the
+August file, YTD keeps 207 of the 212 Exclude realised claims - five were raised in 2025.
+
+**View table: Os_Claim and Real_Claim in one list.** *Status Claim* is Not Claimed for Os_Claim rows and
+Claimed for Real_Claim rows (`listClaimMutuRows`: a UNION of both sides); the two never share a claim.
+Claimed rows have *CM No / CM Date / Kebun* (optional columns) and no aging; a Group or Payment Method
+filter, which exist on Os_Claim only, leaves no claimed row. Only sheet columns are offered, checked on
+the August file (321 OS, 216 Real rows): Unit (DEST mapped, not a sheet column) and the Aging bucket
+column are gone - *OS Days* is the one *Aging (Days)* column with its bucket beside it; *Commodity* is
+*Product*. A cut-off value shows in full on hover. On the August file with All: 307 Not Claimed + 212
+Claimed (Exclude B2B), 321 + 216 (Include).
 
 **Section 1**, recomputed from the rows and following every filter, is three cards (outstanding,
-outstanding > 90 days, realisation) and **one** *Claim Mutu Summary* card whose tabs are the four summary
-sheets, so the whole section fits on a screen. Numbers there are short (34,46 B, 5,87 M) with the full
-figure on hover; shares are a bar with the percentage, `<0.1%` for a real but tiny share. By Location, By
-Commodity and By Unit switch between Value (Rp, default) and Qty (kg). Both Claim pages are in English;
-only the workbook's own sheet names and period labels keep their Indonesian.
+outstanding > 90 days, realisation - its label is the CR date range) and **one** *Quality Claim Summary*
+card whose tabs are the four summary sheets, so the whole section fits on a screen. Amounts and
+quantities there are shown in full, as on Shortage Claim; shares are a bar with the percentage, `<0.1%`
+for a real but tiny share. By Location, By Commodity and By Unit switch between Value (Rp, default) and
+Qty (kg). Card content is top-aligned. Both Claim pages are in English; only the workbook's own sheet
+names and period labels keep their Indonesian.
 
 - *Aging* (Pivot, the default tab): amount per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, the sheet's
   VLOOKUP thresholds. Clicking a group filters the page.

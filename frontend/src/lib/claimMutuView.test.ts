@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   appendClaimMutuFilterParams,
+  CLAIM_MUTU_COLUMNS,
   CLAIM_MUTU_DEFAULT_B2B,
+  CLAIM_MUTU_DEFAULT_VISIBLE_IDS,
   formatClaimMutuCompact,
   formatClaimMutuMonth,
   pairValue,
@@ -92,6 +94,18 @@ describe('Claim Mutu view', () => {
     expect(formatClaimMutuCompact(7_494_607)).toBe('7,49 M')
     expect(formatClaimMutuCompact(175.64)).toBe('176')
     expect(formatClaimMutuCompact(0)).toBe('-')
+  })
+
+  it('offers only sheet columns, with OS Days as Aging (Days) and Status Claim by default', () => {
+    const ids = CLAIM_MUTU_COLUMNS.map((c) => c.id)
+    expect(ids).not.toContain('unit')
+    expect(ids).not.toContain('aging')
+    expect(CLAIM_MUTU_COLUMNS.find((c) => c.id === 'os_days')?.label).toBe('Aging (Days)')
+    expect(CLAIM_MUTU_COLUMNS.find((c) => c.id === 'commodity')?.label).toBe('Product')
+    expect(CLAIM_MUTU_DEFAULT_VISIBLE_IDS).toContain('claim_status')
+    expect(CLAIM_MUTU_DEFAULT_VISIBLE_IDS.every((id) => ids.includes(id))).toBe(true)
+    const p = appendClaimMutuFilterParams(new URLSearchParams(), { b2b: 'exclude', claimStatuses: ['Claimed'] })
+    expect(p.getAll('claimStatus')).toEqual(['Claimed'])
   })
 
   it('picks value or quantity from a side pair', () => {

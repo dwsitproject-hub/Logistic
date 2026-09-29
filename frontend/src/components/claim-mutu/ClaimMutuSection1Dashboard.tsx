@@ -4,7 +4,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import { CompactNum, RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
+import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
 import {
   CLAIM_MUTU_BLANK,
   addPair,
@@ -108,12 +108,11 @@ function scopeLabel(b2b: ClaimMutuB2bScope) {
   return b2b === 'include' ? 'Include B2B' : 'Exclude B2B'
 }
 
-const fullOf = (m: ClaimMutuMeasure, v: number) =>
-  m === 'amount' ? `Rp ${formatClaimMutuIdr(v)}` : `${formatClaimMutuKg(v)} kg`
+const fullOf = (m: ClaimMutuMeasure, v: number) => (m === 'amount' ? formatClaimMutuIdr(v) : formatClaimMutuKg(v))
 
 /** A short number with the full one on hover. */
 function Num({ v, m, strong }: { v: number; m: ClaimMutuMeasure; strong?: boolean }) {
-  return <CompactNum v={v} full={fullOf(m, v)} strong={strong} />
+  return <span className={strong ? 'font-semibold text-gray-900' : undefined}>{v ? fullOf(m, v) : '-'}</span>
 }
 
 /** OS amount per month for one unit, oldest to newest; only drawn once there are two months. */
@@ -188,6 +187,7 @@ function TotalRow({ label, total, m, colSpan = 1 }: { label: string; total: Clai
 }
 
 export function ClaimMutuSection1Dashboard({
+  crDateLabel,
   dashboard,
   loading,
   trend,
@@ -198,6 +198,8 @@ export function ClaimMutuSection1Dashboard({
   selectedGroups,
   onToggleGroup,
 }: {
+  /** The page's CR date range in words - YTD by default. */
+  crDateLabel: string
   dashboard: ClaimMutuDashboard | null
   loading: boolean
   trend: ClaimMutuTrend | null
@@ -216,7 +218,7 @@ export function ClaimMutuSection1Dashboard({
 
   const os = dashboard?.os ?? { claims: 0, qty: 0, amount: 0, over90: 0 }
   const real = dashboard?.real ?? { claims: 0, qty: 0, amount: 0 }
-  const period = dashboard?.periodLabel ? `Period ${dashboard.periodLabel}` : ''
+  const period = `CR date ${crDateLabel}${dashboard?.periodLabel ? ` · outstanding as of ${dashboard.periodLabel}` : ''}`
   const scope = scopeLabel(b2b)
 
   const tabNote: Record<RecapTab, string> = {
@@ -268,7 +270,7 @@ export function ClaimMutuSection1Dashboard({
               </div>
               <div className="mt-0.5 text-xs text-gray-500">
                 <span className="font-semibold tabular-nums text-gray-900">{real.claims.toLocaleString('en-US')}</span> claims
-                {dashboard.realPeriodLabel ? <> · Period {dashboard.realPeriodLabel}</> : null}
+                {' '}· CR date {crDateLabel}
               </div>
               {osOnlyFilterActive ? (
                 <div className="mt-1 text-[11px] text-amber-700">Not narrowed by the Group / Payment Method filters.</div>
@@ -310,7 +312,7 @@ export function ClaimMutuSection1Dashboard({
           </div>
           <p className="text-xs text-gray-500">
             {[scope, tab === 'unit' ? '' : period].filter(Boolean).join(' · ')} · {tabNote[tab]}
-            {realNote} Hover a number for the full value.
+            {realNote}
           </p>
         </CardHeader>
         <CardContent className="pt-2">

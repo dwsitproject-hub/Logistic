@@ -463,29 +463,28 @@ export const getClaimMutuTrend = async (req: AuthRequest, res: Response) => {
 // ---------------------------------------------------------------------------------------------
 // View table and filters
 
-const ROW_SORT: Record<string, string> = {
-  os_days: 'os_days',
-  cr_date: 'cr_date',
-  vendor_name: 'vendor_name',
-  claim_group: 'claim_group',
-  commodity: 'commodity_norm',
-  unit: 'unit_norm',
-  dest: 'dest_norm',
-  qty_claim_kg: 'qty',
-  amount_after_tax_idr: 'amount',
-  metode_payment: 'metode_payment',
-  // The rest sort on their own column; the whitelist is what keeps sortKey out of the SQL.
-  ...Object.fromEntries(
-    [
-      'crno', 'po_number', 'is_b2b', 'vendor_code', 'vendor_type', 'group_of_vendor', 'cargo_source',
-      'keterangan', 'type_of_comp', 'traders', 'created_by', 'sta', 'contract_ext_no', 'comm',
-      'material_description', 'company_code', 'claim_type', 'uom', 'amount_before_tax_idr', 'tax',
-      'mutu_kontrak_ffa', 'mutu_kontrak_mi', 'mutu_kontrak_dns', 'mutu_kontrak_dobi',
-      'mutu_klaim_ffa', 'mutu_klaim_mi', 'mutu_klaim_dns', 'mutu_klaim_dobi',
-    ].map((c) => [c, c]),
-  ),
-};
+// Sort keys are the view columns themselves (the UNION's output names); the whitelist is what
+// keeps sortKey out of the SQL.
+const ROW_SORT_COLUMNS = [
+  'os_days', 'cr_date', 'vendor_name', 'claim_group', 'commodity', 'unit', 'dest', 'qty_claim_kg',
+  'amount_after_tax_idr', 'metode_payment', 'claim_status', 'cm_no', 'cm_date', 'kebun',
+  'crno', 'po_number', 'is_b2b', 'vendor_code', 'vendor_type', 'group_of_vendor', 'cargo_source',
+  'keterangan', 'type_of_comp', 'traders', 'created_by', 'sta', 'contract_ext_no', 'comm',
+  'material_description', 'company_code', 'claim_type', 'uom', 'amount_before_tax_idr', 'tax',
+  'mutu_kontrak_ffa', 'mutu_kontrak_mi', 'mutu_kontrak_dns', 'mutu_kontrak_dobi',
+  'mutu_klaim_ffa', 'mutu_klaim_mi', 'mutu_klaim_dns', 'mutu_klaim_dobi',
+];
+const ROW_SORT: Record<string, string> = Object.fromEntries(ROW_SORT_COLUMNS.map((c) => [c, c]));
 
+export const CLAIM_MUTU_CLAIM_STATUSES = ['Claimed', 'Not Claimed'] as const;
+
+/**
+ * The view table: Os_Claim rows (Status Claim "Not Claimed") and Real_Claim rows ("Claimed") in
+ * one list, like Shortage Claim. The two never share a claim - a realised claim has left the
+ * outstanding sheet. Claimed rows follow the same rule as the realised summary (every import,
+ * re-uploads once, CR date range on CLAIM DATE); GROUP and METODE PAYMENT exist on Os_Claim only,
+ * so filtering on either leaves no claimed row. Real_Claim's GROUP KEY is its vendor group.
+ */
 export const listClaimMutuRows = async (req: AuthRequest, res: Response) => {
   try {
     const f = filtersOf(req);
@@ -496,28 +495,70 @@ export const listClaimMutuRows = async (req: AuthRequest, res: Response) => {
     const offsetRaw = parseInt(String(q.offset ?? '0'), 10);
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 200;
     const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
+    const rawStatuses = Array.isArray(q.claimStatus) ? q.claimStatus : String(q.claimStatus ?? '').split(',');
+    const statuses = rawStatuses
+      .map((v) => CLAIM_MUTU_CLAIM_STATUSES.find((k) => k.toUpperCase() === String(v).trim().toUpperCase()))
+      .filter((v): v is (typeof CLAIM_MUTU_CLAIM_STATUSES)[number] => Boolean(v));
+
     const os = buildClaimMutuSideCte('os', f);
+    const real = buildClaimMutuSideCte('real', f, { params: os.params });
+    const params = [...real.params];
+    const osOnlyFilter = f.claimGroups.length > 0 || f.metodePayments.length > 0;
+    params.push(statuses.length > 0 ? statuses : null);
+    const statusParam = `$${params.length}`;
+    const combined = `
+      SELECT * FROM (
+        WITH ${os.sql}
+        SELECT id, is_b2b, 'Not Claimed'::text AS claim_status,
+               vendor_code, vendor_name, group_of_vendor, vendor_type, cargo_source, keterangan,
+               metode_payment, claim_group, type_of_comp, traders, created_by, sta, crno, cr_date::text AS cr_date,
+               NULL::text AS cm_no, NULL::text AS cm_date, NULL::text AS kebun, os_days,
+               dest, unit_norm AS unit, po_number, contract_ext_no, comm, commodity_norm AS commodity,
+               material_description, company_code,
+               mutu_kontrak_ffa, mutu_kontrak_mi, mutu_kontrak_dns, mutu_kontrak_dobi,
+               mutu_klaim_ffa, mutu_klaim_mi, mutu_klaim_dns, mutu_klaim_dobi,
+               claim_type, qty::float8 AS qty_claim_kg, uom,
+               amount_before_tax_idr::float8 AS amount_before_tax_idr, tax::float8 AS tax,
+               amount::float8 AS amount_after_tax_idr
+          FROM os
+      ) os_rows
+      UNION ALL
+      SELECT * FROM (
+        WITH ${real.sql}
+        SELECT id, is_b2b, 'Claimed'::text AS claim_status,
+               vendor_code, vendor_name, group_key AS group_of_vendor, vendor_type, cargo_source, NULL::text AS keterangan,
+               NULL::text AS metode_payment, NULL::text AS claim_group, NULL::text AS type_of_comp, traders,
+               NULL::text AS created_by, status_claim AS sta, cr_no AS crno, claim_date::text AS cr_date,
+               cm_no, cm_date::text AS cm_date, kebun, NULL::int AS os_days,
+               dest, unit_norm AS unit, po_number, contract_ext_no, comm, commodity_norm AS commodity,
+               material_description, company_code,
+               mutu_kontrak_ffa, mutu_kontrak_mi, mutu_kontrak_dns, mutu_kontrak_dobi,
+               mutu_klaim_ffa, mutu_klaim_mi, mutu_klaim_dns, mutu_klaim_dobi,
+               claim_type, qty::float8 AS qty_claim_kg, uom,
+               amount_before_tax_idr::float8 AS amount_before_tax_idr, tax::float8 AS tax,
+               amount::float8 AS amount_after_tax_idr
+          FROM real
+         WHERE ${osOnlyFilter ? 'FALSE' : 'TRUE'}
+      ) real_rows`;
+    const statusWhere = `WHERE (${statusParam}::text[] IS NULL OR claim_status = ANY(${statusParam}::text[]))`;
     const [count, rows] = await Promise.all([
-      query(`WITH ${os.sql} SELECT COUNT(*)::int AS n FROM os`, os.params),
       query(
-        `WITH ${os.sql}
-         SELECT id, is_b2b, vendor_code, vendor_name, group_of_vendor, vendor_type, cargo_source, keterangan,
-                metode_payment, claim_group, type_of_comp, traders, created_by, sta, crno, cr_date::text, os_days,
-                CASE WHEN os_days <= 30 THEN '0-30' WHEN os_days <= 60 THEN '31-60'
-                     WHEN os_days <= 90 THEN '61-90' ELSE '> 90' END AS aging,
-                dest, unit_norm AS unit, po_number, contract_ext_no, comm, commodity_norm AS commodity,
-                material_description, company_code,
-                mutu_kontrak_ffa, mutu_kontrak_mi, mutu_kontrak_dns, mutu_kontrak_dobi,
-                mutu_klaim_ffa, mutu_klaim_mi, mutu_klaim_dns, mutu_klaim_dobi,
-                claim_type, qty::float8 AS qty_claim_kg, uom,
-                amount_before_tax_idr::float8, tax::float8, amount::float8 AS amount_after_tax_idr
-           FROM os
+        `SELECT COUNT(*)::int AS n, COUNT(*) FILTER (WHERE claim_status = 'Claimed')::int AS claimed
+           FROM (${combined}) combined ${statusWhere}`,
+        params,
+      ),
+      query(
+        `SELECT * FROM (${combined}) combined ${statusWhere}
           ORDER BY ${ROW_SORT[sortKey]} ${sortDir} NULLS LAST, id DESC
-          LIMIT $${os.params.length + 1} OFFSET $${os.params.length + 2}`,
-        [...os.params, limit, offset],
+          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, limit, offset],
       ),
     ]);
-    return res.json({ success: true, data: rows.rows, meta: { totalCount: count.rows[0]?.n ?? 0, limit, offset } });
+    return res.json({
+      success: true,
+      data: rows.rows,
+      meta: { totalCount: count.rows[0]?.n ?? 0, claimedCount: count.rows[0]?.claimed ?? 0, limit, offset },
+    });
   } catch (error) {
     logger.error('List Claim Mutu rows failed:', error);
     return res.status(500).json({ success: false, error: { message: 'Failed to load Claim Mutu rows' } });
@@ -531,17 +572,21 @@ export const listClaimMutuRows = async (req: AuthRequest, res: Response) => {
 export const getClaimMutuFilterOptions = async (req: AuthRequest, res: Response) => {
   try {
     const f = filtersOf(req);
-    const option = async (key: keyof ClaimMutuFilters, expr: string) => {
+    const option = async (key: keyof ClaimMutuFilters, expr: string, withReal: boolean) => {
       const os = buildClaimMutuSideCte('os', f, { omit: key });
-      const r = await query(`WITH ${os.sql} SELECT DISTINCT ${expr} AS v FROM os ORDER BY 1`, os.params);
-      return r.rows.map((x) => x.v as string);
+      const values = new Set((await query(`WITH ${os.sql} SELECT DISTINCT ${expr} AS v FROM os`, os.params)).rows.map((x) => x.v as string));
+      if (withReal) {
+        const real = buildClaimMutuSideCte('real', f, { omit: key });
+        for (const x of (await query(`WITH ${real.sql} SELECT DISTINCT ${expr} AS v FROM real`, real.params)).rows) values.add(x.v as string);
+      }
+      return [...values].sort((x, y) => x.localeCompare(y));
     };
     const [commodities, units, vendorTypes, claimGroups, metodePayments] = await Promise.all([
-      option('commodities', 'commodity_norm'),
-      option('units', 'unit_norm'),
-      option('vendorTypes', `COALESCE(NULLIF(TRIM(vendor_type),''),'(Blank)')`),
-      option('claimGroups', `COALESCE(NULLIF(TRIM(claim_group),''),'(Blank)')`),
-      option('metodePayments', `COALESCE(NULLIF(TRIM(metode_payment),''),'(Blank)')`),
+      option('commodities', 'commodity_norm', true),
+      option('units', 'unit_norm', true),
+      option('vendorTypes', `COALESCE(NULLIF(TRIM(vendor_type),''),'(Blank)')`, true),
+      option('claimGroups', `COALESCE(NULLIF(TRIM(claim_group),''),'(Blank)')`, false),
+      option('metodePayments', `COALESCE(NULLIF(TRIM(metode_payment),''),'(Blank)')`, false),
     ]);
     return res.json({ success: true, data: { commodities, units, vendorTypes, claimGroups, metodePayments } });
   } catch (error) {

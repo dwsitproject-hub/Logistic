@@ -5,8 +5,10 @@
  * (backend/src/controllers/claimMutu.controller.ts); this file only shapes them for display.
  */
 
-export const CLAIM_MUTU_VIEW_PREF_KEY = 'claim_mutu.view.v2'
-export const CLAIM_MUTU_COLUMN_ORDER_KEY = 'claimMutu.columnOrder.v2'
+// v3: the column set changed (Unit / Aging dropped, Status Claim / CM columns added). A saved v2 list
+// would hide Status Claim - saved choices replace the defaults - so everyone starts from the new ones.
+export const CLAIM_MUTU_VIEW_PREF_KEY = 'claim_mutu.view.v3'
+export const CLAIM_MUTU_COLUMN_ORDER_KEY = 'claimMutu.columnOrder.v3'
 export const CLAIM_MUTU_BLANK = '(Blank)'
 
 /**
@@ -26,6 +28,8 @@ export type ClaimMutuApiFilters = {
   vendorTypes?: string[]
   claimGroups?: string[]
   metodePayments?: string[]
+  /** View table only: Claimed (Real_Claim) / Not Claimed (Os_Claim). */
+  claimStatuses?: string[]
 }
 
 export function appendClaimMutuFilterParams(
@@ -45,6 +49,7 @@ export function appendClaimMutuFilterParams(
   list('vendorTypes', f.vendorTypes)
   list('claimGroups', f.claimGroups)
   list('metodePayments', f.metodePayments)
+  list('claimStatus', f.claimStatuses)
   return params
 }
 
@@ -185,24 +190,34 @@ export type ClaimMutuColumnDef = {
   label: string
   sortKey: string
   align?: 'left' | 'right'
-  kind?: 'date' | 'idr' | 'kg' | 'number' | 'b2b'
+  kind?: 'date' | 'idr' | 'kg' | 'number' | 'b2b' | 'status' | 'aging'
 }
 
+/**
+ * Only columns the Os_Claim / Real_Claim sheets hold, checked on the August 2026 file (321 OS rows,
+ * 216 Real rows): Unit (DEST mapped to a site, not a sheet column) and the Aging bucket column were
+ * dropped - OS Days is the one Aging (Days) column, with its bucket beside it. The table lists Os_Claim
+ * rows (Status Claim "Not Claimed") and Real_Claim rows ("Claimed") together; CM No, CM Date and Kebun
+ * exist on Real_Claim only, GROUP, METODE PAYMENT, KETERANGAN, TYPE OF COMP and CREATED BY on
+ * Os_Claim only.
+ */
 export const CLAIM_MUTU_COLUMNS: ClaimMutuColumnDef[] = [
   { id: 'crno', label: 'CR No', sortKey: 'crno' },
   { id: 'cr_date', label: 'CR Date', sortKey: 'cr_date', kind: 'date' },
+  { id: 'claim_status', label: 'Status Claim', sortKey: 'claim_status', kind: 'status' },
   { id: 'claim_group', label: 'Group', sortKey: 'claim_group' },
   { id: 'vendor_name', label: 'Vendor Name', sortKey: 'vendor_name' },
-  { id: 'commodity', label: 'Commodity', sortKey: 'commodity' },
-  { id: 'unit', label: 'Unit', sortKey: 'unit' },
+  { id: 'commodity', label: 'Product', sortKey: 'commodity' },
   { id: 'dest', label: 'Dest', sortKey: 'dest' },
   { id: 'po_number', label: 'PO Number', sortKey: 'po_number' },
   { id: 'qty_claim_kg', label: 'Qty Claim (Kg)', sortKey: 'qty_claim_kg', align: 'right', kind: 'kg' },
   { id: 'amount_after_tax_idr', label: 'Amount After Tax (IDR)', sortKey: 'amount_after_tax_idr', align: 'right', kind: 'idr' },
-  { id: 'os_days', label: 'OS Days', sortKey: 'os_days', align: 'right', kind: 'number' },
-  { id: 'aging', label: 'Aging', sortKey: 'os_days' },
+  { id: 'os_days', label: 'Aging (Days)', sortKey: 'os_days', align: 'right', kind: 'aging' },
   { id: 'metode_payment', label: 'Payment Method', sortKey: 'metode_payment' },
   { id: 'is_b2b', label: 'B2B', sortKey: 'is_b2b', kind: 'b2b' },
+  { id: 'cm_no', label: 'CM No', sortKey: 'cm_no' },
+  { id: 'cm_date', label: 'CM Date', sortKey: 'cm_date', kind: 'date' },
+  { id: 'kebun', label: 'Kebun', sortKey: 'kebun' },
   { id: 'vendor_code', label: 'Vendor Code', sortKey: 'vendor_code' },
   { id: 'vendor_type', label: 'Vendor Type', sortKey: 'vendor_type' },
   { id: 'group_of_vendor', label: 'Group of Vendor', sortKey: 'group_of_vendor' },
@@ -233,15 +248,14 @@ export const CLAIM_MUTU_COLUMNS: ClaimMutuColumnDef[] = [
 export const CLAIM_MUTU_DEFAULT_VISIBLE_IDS: readonly string[] = [
   'crno',
   'cr_date',
+  'claim_status',
   'claim_group',
   'vendor_name',
   'commodity',
-  'unit',
   'po_number',
   'qty_claim_kg',
   'amount_after_tax_idr',
   'os_days',
-  'aging',
   'metode_payment',
 ]
 

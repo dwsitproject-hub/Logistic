@@ -126,6 +126,32 @@ active_import AS (
   ORDER BY CASE WHEN ${importParam}::uuid IS NOT NULL THEN 0 ELSE 1 END, uploaded_at DESC NULLS LAST
   LIMIT 1
 )`;
+  // Realised claims (outside the monthly trend) are read across EVERY import, like Shortage Claim:
+  // each monthly file carries only that month's approvals, so a YTD figure needs every month's
+  // Real_Claim. A row uploaded twice (the same month re-imported) counts once, from the latest
+  // upload that has it - matched on the key the B2B marking uses. The CR date filter above
+  // (claim_date) then cuts them to the page's range.
+  if (side === 'real' && !monthly) {
+    where.unshift('r.uploaded_at IS NOT DISTINCT FROM r.latest');
+    const sql = `${importCte},
+${name}_all AS (
+  SELECT x.*, i.period_month, i.uploaded_at,
+         MAX(i.uploaded_at) OVER (PARTITION BY x.cr_no, x.cm_no, x.po_number, x.amount_after_tax_idr) AS latest
+  FROM ${table} x
+  JOIN claim_mutu_imports i ON i.id = x.import_id
+),
+${name} AS (
+  SELECT r.*,
+         ${blankOr(commodity)} AS commodity_norm,
+         ${blankOr('r.unit')} AS unit_norm,
+         ${blankOr('r.dest')} AS dest_norm,
+         COALESCE(${qty}, 0)::numeric AS qty,
+         COALESCE(r.amount_after_tax_idr, 0)::numeric AS amount
+  FROM ${name}_all r
+  WHERE ${where.join(' AND ')}
+)`;
+    return { sql, params };
+  }
   const sql = `${importCte},
 ${name} AS (
   SELECT r.*,
