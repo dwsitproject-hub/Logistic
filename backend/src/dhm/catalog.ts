@@ -30,7 +30,11 @@ export function resetDhmCatalogCache(): void {
   catalogCache = null;
 }
 
-export async function dhmVesselIsAllowlisted(): Promise<boolean> {
+export async function dhmSlugIsAllowlisted(slug: string): Promise<boolean> {
   const entities = await fetchDhmCatalog();
-  return entities.some((e) => e.slug === 'vessel');
+  return entities.some((e) => e.slug === slug);
+}
+
+export async function dhmVesselIsAllowlisted(): Promise<boolean> {
+  return dhmSlugIsAllowlisted('vessel');
 }

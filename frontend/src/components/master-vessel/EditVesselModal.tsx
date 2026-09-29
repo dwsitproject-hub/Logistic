@@ -77,7 +77,7 @@ export function EditVesselModal({
     if (mode === 'edit' && vessel) {
       setForm({
         ...vessel,
-        vessel_code_input: vessel.vessel_code ?? '',
+        vessel_code_input: vessel.vessel_code_klip ?? '',
       })
     } else {
       setForm(emptyForm())
@@ -109,7 +109,8 @@ export function EditVesselModal({
         return
       }
       const payload = {
-        vessel_code: vesselCode || undefined,
+        // KLIP issues vessel_code_klip. Sending it as vessel_code would overwrite the stored code.
+        ...(mode === 'create' ? { vessel_code: vesselCode } : {}),
         vessel_name: vesselName.toUpperCase(),
         vessel_capacity_mt: form.vessel_capacity_mt,
         vessel_owner: form.vessel_owner ? String(form.vessel_owner).toUpperCase() : null,
@@ -198,12 +199,15 @@ export function EditVesselModal({
         <div className={VESSEL_MODAL_BODY_CLASS}>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                {mode === 'edit' ? 'Vessel Code (KLIP)' : 'Vessel Code'}
+              </label>
               <Input
-                value={form.vessel_code_input ?? ''}
-                placeholder={mode === 'edit' && !form.vessel_code_input ? '-' : ''}
+                value={mode === 'edit' ? form.vessel_code_klip || '' : form.vessel_code_input ?? ''}
+                placeholder={mode === 'edit' ? '-' : ''}
                 onChange={(e) => handleChange('vessel_code_input', e.target.value.toUpperCase())}
-                disabled={readOnly}
+                readOnly={mode === 'edit'}
+                disabled={readOnly || mode === 'edit'}
               />
             </div>
             <div>

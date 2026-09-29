@@ -1,10 +1,27 @@
 import { Request, Response } from 'express';
 import { query } from '../database/connection';
+import { pushNamedMasterToDhm } from '../dhm';
 import logger from '../utils/logger';
 
 interface AuthRequest extends Request { user?: { id: string; role: string } }
 
 const TABLE = 'products';
+
+function wantsDhmOverwrite(req: AuthRequest): boolean {
+  const q = String((req.query as { dhmOverwrite?: unknown }).dhmOverwrite ?? '').toLowerCase();
+  return q === 'true' || q === '1';
+}
+
+async function pushProduct(row: Record<string, unknown>, overwrite: boolean) {
+  return pushNamedMasterToDhm(
+    'products',
+    String(row.id),
+    'commodity',
+    String(row.product_name ?? ''),
+    row.code_dhm != null ? String(row.code_dhm) : null,
+    { overwrite },
+  );
+}
 
 export const listProducts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -17,7 +34,7 @@ export const listProducts = async (req: AuthRequest, res: Response): Promise<voi
     const params: any[] = [];
     if (search) {
       params.push(`%${search}%`);
-      where.push(`product_name ILIKE $${params.length}`);
+      where.push(`(product_name ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -50,7 +67,10 @@ export const createProduct = async (req: AuthRequest, res: Response): Promise<vo
       VALUES ($1,$2,$3,$4,$5) RETURNING *
     `;
     const result = await query(sql, [product_name, percent_produce, working_hours_per_day, working_days_per_month, working_days_per_year]);
-    res.status(201).json({ success: true, data: result.rows[0] });
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushProduct(saved, wantsDhmOverwrite(req));
+    const refreshed = await query(`SELECT * FROM ${TABLE} WHERE id = $1`, [saved.id]);
+    res.status(201).json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error: any) {
     const msg = error?.code === '23505' ? 'Product with this name already exists' : (error?.message || 'Failed to create product');
     logger.error('Error creating product:', error);
@@ -76,7 +96,10 @@ export const updateProduct = async (req: AuthRequest, res: Response): Promise<vo
     params.push(id);
     const result = await query(sql, params);
     if (result.rowCount === 0) { res.status(404).json({ success: false, error: { message: 'Product not found' } }); return; }
-    res.json({ success: true, data: result.rows[0] });
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushProduct(saved, wantsDhmOverwrite(req));
+    const refreshed = await query(`SELECT * FROM ${TABLE} WHERE id = $1`, [id]);
+    res.json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error) {
     logger.error('Error updating product:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to update product' } });

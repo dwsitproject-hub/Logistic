@@ -1,4 +1,6 @@
 import logger from '../utils/logger';
+import { applyDhmMasterRecord, DHM_MASTER_SLUGS } from './applyMaster';
+import { dhmSlugIsAllowlisted } from './catalog';
 import { dhmRequest } from './client';
 import { isDhmEnabled } from './config';
 import { applyDhmVesselRecord, getDhmSyncCursor, saveDhmSyncCursor } from './replica';
@@ -10,15 +12,12 @@ interface SyncPage {
   hasMore?: boolean;
 }
 
-export async function syncDhmVessels(options?: { snapshot?: boolean }): Promise<{
-  applied: number;
-  pages: number;
-}> {
-  if (!isDhmEnabled()) {
-    return { applied: 0, pages: 0 };
-  }
-
-  let cursor = options?.snapshot ? null : await getDhmSyncCursor('vessel');
+async function syncSlugPages(
+  slug: string,
+  apply: (record: DhmRecord) => Promise<void>,
+  options?: { snapshot?: boolean; continueOnError?: boolean },
+): Promise<{ applied: number; pages: number }> {
+  let cursor = options?.snapshot ? null : await getDhmSyncCursor(slug);
   let applied = 0;
   let pages = 0;
   let hasMore = true;
@@ -30,17 +29,22 @@ export async function syncDhmVessels(options?: { snapshot?: boolean }): Promise<
     if (cursor) params.set('cursor', cursor);
     const { status, data } = await dhmRequest<SyncPage>({
       method: 'GET',
-      url: `/v1/sync/vessel?${params.toString()}`,
+      url: `/v1/sync/${slug}?${params.toString()}`,
     });
     if (status !== 200) {
-      logger.warn('DHM vessel sync page failed', { status, cursor });
+      logger.warn('DHM sync page failed', { slug, status, cursor });
       break;
     }
     pages += 1;
     const records = Array.isArray(data?.records) ? data.records : [];
     for (const record of records) {
-      await applyDhmVesselRecord(record);
-      applied += 1;
+      try {
+        await apply(record);
+        applied += 1;
+      } catch (error) {
+        logger.warn('DHM sync record skipped', { slug, recordId: record.id, error });
+        if (!options?.continueOnError) throw error;
+      }
       if (record.updatedAt && (!newestUpdatedAt || record.updatedAt > newestUpdatedAt)) {
         newestUpdatedAt = record.updatedAt;
       }
@@ -48,15 +52,54 @@ export async function syncDhmVessels(options?: { snapshot?: boolean }): Promise<
     hasMore = Boolean(data?.hasMore && data.nextCursor);
     cursor = data?.nextCursor || null;
     if (cursor) {
-      await saveDhmSyncCursor('vessel', cursor, newestUpdatedAt);
+      await saveDhmSyncCursor(slug, cursor, newestUpdatedAt);
     }
     if (!hasMore) break;
     if (pages > 200) {
-      logger.warn('DHM vessel sync stopped after 200 pages');
+      logger.warn('DHM sync stopped after 200 pages', { slug });
       break;
     }
   }
 
-  logger.info('DHM vessel sync finished', { applied, pages });
+  logger.info('DHM sync finished', { slug, applied, pages });
+  return { applied, pages };
+}
+
+export async function syncDhmVessels(options?: { snapshot?: boolean }): Promise<{
+  applied: number;
+  pages: number;
+}> {
+  if (!isDhmEnabled()) {
+    return { applied: 0, pages: 0 };
+  }
+  return syncSlugPages('vessel', (record) => applyDhmVesselRecord(record).then(() => undefined), options);
+}
+
+export async function syncDhmMasters(options?: { snapshot?: boolean }): Promise<{
+  applied: number;
+  pages: number;
+}> {
+  if (!isDhmEnabled()) {
+    return { applied: 0, pages: 0 };
+  }
+  let applied = 0;
+  let pages = 0;
+  for (const slug of DHM_MASTER_SLUGS) {
+    try {
+      if (!(await dhmSlugIsAllowlisted(slug))) {
+        logger.info('DHM sync skipped; slug not allowlisted', { slug });
+        continue;
+      }
+    } catch (error) {
+      logger.warn('DHM catalog unavailable; remaining master sync skipped', { slug, error });
+      break;
+    }
+    const page = await syncSlugPages(slug, (record) => applyDhmMasterRecord(slug, record).then(() => undefined), {
+      ...options,
+      continueOnError: true,
+    });
+    applied += page.applied;
+    pages += page.pages;
+  }
   return { applied, pages };
 }

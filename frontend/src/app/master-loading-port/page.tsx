@@ -18,7 +18,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
+import { MasterRowActions } from '@/components/shared/MasterRowActions'
+import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import {
   Dialog,
   DialogContent,
@@ -29,6 +31,9 @@ import {
 
 interface MasterLoadingPort {
   id: string
+  code_klip?: string | null
+  code_dhm?: string | null
+  dhm_site_code?: string | null
   region: string | null
   port: string
   coordinate: string | null
@@ -54,23 +59,9 @@ function portCell(value: string | number | null | undefined): string {
 }
 
 const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
-  { id: 'region', label: 'Region', getText: (row) => portCell(row.region) },
+  { id: 'code_klip', label: 'Code (KLIP)', getText: (row) => portCell(row.code_klip) },
+  { id: 'code_dhm', label: 'Code (DHM)', getText: (row) => portCell(row.code_dhm) },
   { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
-  { id: 'coordinate', label: 'Coordinate', getText: (row) => portCell(row.coordinate) },
-  { id: 'masuk_alur', label: 'Channel Access', getText: (row) => portCell(row.masuk_alur) },
-  { id: 'lebar_alur', label: 'Channel Width', getText: (row) => portCell(row.lebar_alur) },
-  { id: 'jumlah_jembatan', label: 'Bridge Count', getText: (row) => portCell(row.jumlah_jembatan) },
-  { id: 'jenis_port', label: 'Port Type', getText: (row) => portCell(row.jenis_port) },
-  { id: 'pemilik_port', label: 'Port Owner', getText: (row) => portCell(row.pemilik_port) },
-  { id: 'antri_muat_hari', label: 'Loading Queue (days)', getText: (row) => portCell(row.antri_muat_hari) },
-  { id: 'jumlah_demaraga', label: 'Berth Count', getText: (row) => portCell(row.jumlah_demaraga) },
-  { id: 'panjang_demaraga', label: 'Berth Length', getText: (row) => portCell(row.panjang_demaraga) },
-  { id: 'draft', label: 'Draft', getText: (row) => portCell(row.draft) },
-  { id: 'dwt', label: 'DWT', getText: (row) => portCell(row.dwt) },
-  { id: 'siklus_pasang', label: 'Tide Cycle', getText: (row) => portCell(row.siklus_pasang) },
-  { id: 'loading_method', label: 'Loading Method', getText: (row) => portCell(row.loading_method) },
-  { id: 'loading_rate_mt_per_hour', label: 'Loading Rate (Kg/hour)', getText: (row) => portCell(row.loading_rate_mt_per_hour) },
-  { id: 'shipper', label: 'Shipper', getText: (row) => portCell(row.shipper) },
 ]
 
 export default function MasterLoadingPortPage() {
@@ -80,12 +71,13 @@ export default function MasterLoadingPortPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('port')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const portColumns = useListColumnLayout('master-port.visibleColumns.v1', PORT_COLUMNS)
+  const portColumns = useListColumnLayout('master-port.visibleColumns.v2', PORT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
   const [isAdmin, setIsAdmin] = useState(false)
+  const [dhmSites, setDhmSites] = useState<Array<{ code: string; label: string }>>([])
   const [uploadResult, setUploadResult] = useState<{
     total: number
     success: number
@@ -125,6 +117,36 @@ export default function MasterLoadingPortPage() {
     void fetchData(debouncedSearch)
   }, [debouncedSearch, fetchData])
 
+  useEffect(() => {
+    if (!isFormOpen) return
+    let cancelled = false
+    void api
+      .get('/master-plants', { params: { page: 1, limit: 500 } })
+      .then((res) => {
+        if (cancelled) return
+        const rows = (res.data?.data?.items || []) as Array<{
+          company_name?: string | null
+          plant_name?: string | null
+          plant_code?: string | null
+          code_dhm?: string | null
+        }>
+        setDhmSites(
+          rows
+            .filter((row) => String(row.code_dhm || '').trim())
+            .map((row) => ({
+              code: String(row.code_dhm),
+              label: `${row.plant_name || row.plant_code || 'Site'} — ${row.company_name || ''} (${row.code_dhm})`,
+            })),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setDhmSites([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isFormOpen])
+
   const openNew = () => {
     setEditing(null)
     setIsFormOpen(true)
@@ -146,6 +168,7 @@ export default function MasterLoadingPortPage() {
       loading_method: '',
       loading_rate_mt_per_hour: null,
       shipper: '',
+      dhm_site_code: '',
     })
   }
 
@@ -183,12 +206,14 @@ export default function MasterLoadingPortPage() {
         loading_method: form.loading_method,
         loading_rate_mt_per_hour: form.loading_rate_mt_per_hour,
         shipper: form.shipper,
+        dhm_site_code: form.dhm_site_code || null,
       }
-      if (editing) {
-        await api.put(`/master-loading-ports/${editing.id}`, payload)
-      } else {
-        await api.post('/master-loading-ports', payload)
+      const persist = (overwrite: boolean) => {
+        const qs = overwrite ? '?dhmOverwrite=true' : ''
+        if (editing) return api.put(`/master-loading-ports/${editing.id}${qs}`, payload)
+        return api.post(`/master-loading-ports${qs}`, payload)
       }
+      await saveWithDhmConfirm(persist, 'port')
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
@@ -348,21 +373,12 @@ export default function MasterLoadingPortPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => document.getElementById('master-loading-port-upload')?.click()}>
-              <Upload className="h-4 w-4 mr-2" />
-              Upload CSV
-            </Button>
-            <input
-              id="master-loading-port-upload"
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={handleUpload}
-            />
-            <Button size="sm" onClick={openNew}>
-              <Plus className="h-4 w-4 mr-2" />
-              New Port
-            </Button>
+            {isAdmin ? (
+              <Button size="sm" onClick={openNew}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Port
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -398,6 +414,33 @@ export default function MasterLoadingPortPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Code (KLIP)</label>
+                  <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Code (DHM)</label>
+                  <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Site (DHM)</label>
+                  <select
+                    className="border rounded-md px-3 py-2 w-full text-sm"
+                    value={form.dhm_site_code || ''}
+                    onChange={(e) => handleChange('dhm_site_code', e.target.value || null)}
+                  >
+                    <option value="">Select a Company (Int) site</option>
+                    {form.dhm_site_code && !dhmSites.some((site) => site.code === form.dhm_site_code) ? (
+                      <option value={form.dhm_site_code}>{form.dhm_site_code}</option>
+                    ) : null}
+                    {dhmSites.map((site) => (
+                      <option key={site.code} value={site.code}>
+                        {site.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">Required to link this port in DHM. Local save still succeeds without it.</p>
+                </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Region</label>
                   <Input
@@ -616,18 +659,13 @@ export default function MasterLoadingPortPage() {
                 portColumns.setDragColId(null)
               }}
               renderActions={(p) => (
-                <div className="inline-flex items-center justify-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                    <Edit2 className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
-                  {isAdmin ? (
-                    <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
-                      <Trash2 className="h-4 w-4 mr-1" />
-                      Delete
-                    </Button>
-                  ) : null}
-                </div>
+                <MasterRowActions
+                  isAdmin={isAdmin}
+                  editLabel={isAdmin ? 'Edit port' : 'View port'}
+                  deleteLabel="Delete port"
+                  onEdit={() => openEdit(p)}
+                  onDelete={() => void handleDelete(p)}
+                />
               )}
             />
           </CardContent>

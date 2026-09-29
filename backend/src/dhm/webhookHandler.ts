@@ -1,4 +1,5 @@
 import logger from '../utils/logger';
+import { applyDhmMasterRecord, markDhmMasterDeleted } from './applyMaster';
 import { applyDhmVesselRecord, markDhmWebhookDelivery } from './replica';
 import { parseDhmWebhookPayload, verifyDhmSignature } from './webhook';
 import type { DhmRecord } from './types';
@@ -21,11 +22,23 @@ export async function handleDhmWebhook(
     return { accepted: true, duplicate: true };
   }
 
-  if (payload.entityType !== 'vessel') {
-    return { accepted: true };
-  }
-
   try {
+    if (payload.entityType !== 'vessel') {
+      if (payload.event === 'record.deleted') {
+        await markDhmMasterDeleted(payload.entityType, payload.recordId, payload.version ?? null);
+        return { accepted: true };
+      }
+      const record: DhmRecord = {
+        id: payload.recordId,
+        version: payload.version || 1,
+        isDeleted: false,
+        data: payload.data && typeof payload.data === 'object' ? payload.data : {},
+        updatedAt: payload.occurredAt || '',
+      };
+      await applyDhmMasterRecord(payload.entityType, record);
+      return { accepted: true };
+    }
+
     if (payload.event === 'record.deleted') {
       await query(
         `UPDATE master_vessels

@@ -1,7 +1,13 @@
 import { Response } from 'express';
+import { pushMasterPlantToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
+
+function wantsDhmOverwrite(req: AuthRequest): boolean {
+  const q = String((req.query as { dhmOverwrite?: unknown }).dhmOverwrite ?? '').toLowerCase();
+  return q === 'true' || q === '1';
+}
 
 export const listMasterPlants = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -19,18 +25,29 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         OR city ILIKE $${params.length}
         OR plant_type ILIKE $${params.length}
         OR group_plant ILIKE $${params.length}
+        OR company_code ILIKE $${params.length}
+        OR site ILIKE $${params.length}
+        OR found_in ILIKE $${params.length}
+        OR code_klip ILIKE $${params.length}
+        OR code_dhm ILIKE $${params.length}
       )`;
     }
 
     const listSql = `
       SELECT
         id,
+        company_code,
         company_name,
         plant_code,
         plant_name,
-        postal_code,
-        city,
         plant_type,
+        site,
+        city,
+        postal_code,
+        found_in,
+        code_klip,
+        code_dhm,
+        dhm_org_code,
         group_plant,
         created_at,
         updated_at
@@ -69,14 +86,11 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
 
 export const createMasterPlant = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant } = req.body as any;
+    const { company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, found_in, group_plant } = req.body as any;
 
     const company = typeof company_name === 'string' ? company_name.trim() : String(company_name ?? '').trim();
     const code = typeof plant_code === 'string' ? plant_code.trim() : String(plant_code ?? '').trim();
-    if (!company) {
-      res.status(400).json({ success: false, error: { message: 'Company Name is required' } });
-      return;
-    }
+    const plantLabel = typeof plant_name === 'string' ? plant_name.trim() : String(plant_name ?? '').trim();
     if (!code) {
       res.status(400).json({ success: false, error: { message: 'Plant Code is required' } });
       return;
@@ -84,21 +98,27 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
 
     const insertSql = `
       INSERT INTO master_plants (
-        company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+        company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, found_in, group_plant
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       RETURNING *
     `;
     const result = await query(insertSql, [
-      company,
+      company_code ?? null,
+      company || plantLabel || code,
       code,
       plant_name ?? null,
       postal_code ?? null,
       city ?? null,
       plant_type ?? null,
+      site ?? null,
+      found_in ?? null,
       group_plant ?? null,
     ]);
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushMasterPlantToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
+    const refreshed = await query(`SELECT * FROM master_plants WHERE id = $1`, [saved.id]);
 
-    res.status(201).json({ success: true, data: result.rows[0] });
+    res.status(201).json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error) {
     logger.error('Create master plant error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to create master plant' } });
@@ -108,29 +128,35 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
 export const updateMasterPlant = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params as any;
-    const { company_name, plant_code, plant_name, postal_code, city, plant_type, group_plant } = req.body as any;
+    const { company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, found_in, group_plant } = req.body as any;
 
     const updateSql = `
       UPDATE master_plants
       SET
-        company_name = COALESCE($1, company_name),
-        plant_code = COALESCE($2, plant_code),
-        plant_name = COALESCE($3, plant_name),
-        postal_code = COALESCE($4, postal_code),
-        city = COALESCE($5, city),
-        plant_type = COALESCE($6, plant_type),
-        group_plant = $7,
+        company_code = $1,
+        company_name = COALESCE($2, company_name),
+        plant_code = COALESCE($3, plant_code),
+        plant_name = $4,
+        postal_code = $5,
+        city = $6,
+        plant_type = $7,
+        site = $8,
+        found_in = $9,
+        group_plant = COALESCE($10, group_plant),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $8
+      WHERE id = $11
       RETURNING *
     `;
     const result = await query(updateSql, [
+      company_code ?? null,
       company_name ?? null,
       plant_code ?? null,
       plant_name ?? null,
       postal_code ?? null,
       city ?? null,
       plant_type ?? null,
+      site ?? null,
+      found_in ?? null,
       group_plant ?? null,
       id,
     ]);
@@ -139,8 +165,11 @@ export const updateMasterPlant = async (req: AuthRequest, res: Response): Promis
       res.status(404).json({ success: false, error: { message: 'Master plant not found' } });
       return;
     }
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushMasterPlantToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
+    const refreshed = await query(`SELECT * FROM master_plants WHERE id = $1`, [id]);
 
-    res.json({ success: true, data: result.rows[0] });
+    res.json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error) {
     logger.error('Update master plant error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to update master plant' } });
