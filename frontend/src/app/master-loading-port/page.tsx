@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   LIST_FILTER_FIELD_LABEL_CLASS,
   ListFilterPanel,
+  LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import { StitchFields } from '@/components/shared/stitchField'
 import { StitchSearchIcon } from '@/components/shared/stitchIcons'
@@ -374,7 +375,7 @@ export default function MasterLoadingPortPage() {
               : []
           }
         >
-          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
             <div className="min-w-[12rem] flex-[1.4]">
               <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
               <div className="relative">

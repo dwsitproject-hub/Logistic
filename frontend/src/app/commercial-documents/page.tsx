@@ -40,6 +40,7 @@ import {
   LIST_FILTER_FIELD_LABEL_CLASS,
   ListFilterPanel,
   selectionChips,
+  LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import { LIST_PAGE_TABLE_HEADER_ROW_CLASS } from '@/lib/compactTableUi'
 import { useUserScopeFilterDefaults } from '@/hooks/useUserScopeFilterDefaults'
@@ -569,7 +570,7 @@ function CommercialDocumentsPageContent() {
             : []),
         ]}
       >
-        <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+        <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
           <div className="min-w-[12rem] flex-[1.4]">
             <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
             <div className="relative">

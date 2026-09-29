@@ -31,6 +31,7 @@ import {
   LIST_FILTER_FIELD_LABEL_CLASS,
   ListFilterPanel,
   selectionChips,
+  LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
 import {
@@ -231,7 +232,18 @@ export default function ClaimMutuPage() {
       metodePayments: selectedMetodes,
       claimStatuses: selectedClaimStatuses,
     }),
-    [selectedImportId, b2b, dateFrom, dateTo, selectedCommodities, selectedUnits, selectedVendorTypes, selectedGroups, selectedMetodes],
+    [
+      selectedImportId,
+      b2b,
+      dateFrom,
+      dateTo,
+      selectedCommodities,
+      selectedUnits,
+      selectedVendorTypes,
+      selectedGroups,
+      selectedMetodes,
+      selectedClaimStatuses,
+    ],
   )
 
   useEffect(() => {
@@ -366,8 +378,13 @@ export default function ClaimMutuPage() {
     }
   }, [])
 
+  // Only the latest rows request may fill the table: requests are not cancelled, so a slower,
+  // older one (the filter before the user changed it) could otherwise land last and show the
+  // wrong rows - which reads as "the filter does nothing".
+  const rowsRequestRef = useRef(0)
   const loadRows = useCallback(
     async (filters: ClaimMutuApiFilters, opts: { page: number; sortKey: string; sortDir: 'asc' | 'desc' }) => {
+      const seq = ++rowsRequestRef.current
       setLoading(true)
       try {
         const params = appendClaimMutuFilterParams(new URLSearchParams(), filters)
@@ -376,11 +393,12 @@ export default function ClaimMutuPage() {
         params.set('sortKey', opts.sortKey)
         params.set('sortDir', opts.sortDir)
         const res = await api.get(`/claim-mutu/rows?${params}`)
+        if (seq !== rowsRequestRef.current) return
         setRows(res.data.data || [])
         setTotalCount(Number(res.data.meta?.totalCount) || 0)
         setClaimedCount(Number(res.data.meta?.claimedCount) || 0)
       } finally {
-        setLoading(false)
+        if (seq === rowsRequestRef.current) setLoading(false)
       }
     },
     [],
@@ -636,7 +654,7 @@ export default function ClaimMutuPage() {
               ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
             ]}
           >
-            <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+            <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
               <div className="min-w-[8.5rem] flex-1">
                 <label className={LIST_FILTER_FIELD_LABEL_CLASS}>B2B</label>
                 <FilterSingleSelect

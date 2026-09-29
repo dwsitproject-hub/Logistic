@@ -30,6 +30,7 @@ import {
   LIST_FILTER_FIELD_LABEL_CLASS,
   ListFilterPanel,
   selectionChips,
+  LIST_FILTER_FIELDS_ROW_CLASS,
 } from '@/components/shared/ListFilterPanel'
 import { periodRangeMatchesDates } from '@/components/performance/PerformanceContractDateControl'
 import { HeaderFilterSlot } from '@/components/HeaderFilterSlot'
@@ -218,10 +219,7 @@ export default function ClaimSusutPage() {
       dateTo,
       selectedPlants,
       selectedProducts,
-    selectedVendors,
-    selectedClaimStatuses,
       selectedVendors,
-    selectedClaimStatuses,
       selectedClaimStatuses,
       selectedGroupsOfTransport,
     ],
@@ -422,8 +420,13 @@ export default function ClaimSusutPage() {
     }
   }, [])
 
+  // Only the latest rows request may fill the table: requests are not cancelled, so a slower,
+  // older one (the filter before the user changed it) could otherwise land last and show the
+  // wrong rows - which reads as "the filter does nothing".
+  const rowsRequestRef = useRef(0)
   const loadRows = useCallback(
     async (filters: ClaimSusutApiFilters, opts?: { page?: number; sortKey?: string; sortDir?: 'asc' | 'desc' }) => {
+      const seq = ++rowsRequestRef.current
       if (!filters.importId) {
         setRows([])
         setTotalCount(0)
@@ -442,11 +445,12 @@ export default function ClaimSusutPage() {
         params.set('sortKey', opts?.sortKey ?? sortKey)
         params.set('sortDir', opts?.sortDir ?? sortDir)
         const res = await api.get(`/claim-susut/rows?${params.toString()}`)
+        if (seq !== rowsRequestRef.current) return
         setRows(res.data.data || [])
         setTotalCount(Number(res.data.meta?.totalCount) || 0)
         setClaimedCount(Number(res.data.meta?.claimedCount) || 0)
       } finally {
-        setLoading(false)
+        if (seq === rowsRequestRef.current) setLoading(false)
       }
     },
     [page, sortKey, sortDir],
@@ -747,7 +751,7 @@ export default function ClaimSusutPage() {
             ...selectionChips('Transport', selectedGroupsOfTransport, setSelectedGroupsOfTransport),
           ]}
         >
-          <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
+          <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
             <SearchableMultiSelect
               label="Product"
               className="min-w-[7.5rem] flex-1"
@@ -836,12 +840,9 @@ export default function ClaimSusutPage() {
                   <span className="whitespace-nowrap font-medium text-gray-600">
                     {period !== 'ALL' ||
                     selectedPlants.length > 0 ||
-                                    selectedProducts.length > 0 ||
+                    selectedProducts.length > 0 ||
                     selectedVendors.length > 0 ||
                     selectedClaimStatuses.length > 0 ||
-            selectedClaimStatuses.length > 0 ||
-            selectedVendors.length > 0 ||
-            selectedClaimStatuses.length > 0 ||
                     selectedGroupsOfTransport.length > 0
                       ? 'Global · Filtered'
                       : 'Global · All'}

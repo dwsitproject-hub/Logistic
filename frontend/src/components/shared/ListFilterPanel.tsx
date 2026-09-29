@@ -4,6 +4,13 @@ import type { ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
+/**
+ * The row of filter fields inside the panel. It scrolls sideways (overflow-x-auto), which also clips:
+ * a field's focus ring is 3px (ring-2 + ring-offset-1), so the row needs at least that much padding or
+ * the first and last fields' rings are cut off at the edges. -mx-0.5 keeps the fields where they were.
+ */
+export const LIST_FILTER_FIELDS_ROW_CLASS = 'flex flex-nowrap items-end gap-2 overflow-x-auto -mx-0.5 px-1 pb-1.5 pt-1'
+
 export const LIST_FILTER_FIELD_LABEL_CLASS =
   'text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1 block'
 
