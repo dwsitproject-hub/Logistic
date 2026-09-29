@@ -19,6 +19,7 @@ describe('Claim Susut view helpers', () => {
     expect([...CLAIM_SUSUT_DEFAULT_VISIBLE_IDS]).toEqual([
       'crno',
       'cr_date',
+      'claim_status',
       'group_of_transport',
       'vendor_name',
       'commodity',
@@ -29,7 +30,7 @@ describe('Claim Susut view helpers', () => {
       'os_days',
     ])
     const companyCol = CLAIM_SUSUT_COLUMNS.find((c) => c.id === 'vendor_name')
-    expect(companyCol?.label).toBe('Vendor Name')
+    expect(companyCol?.label).toBe('Vendor')
   })
 
   it('clears deeper drilldown levels when a parent is chosen', () => {

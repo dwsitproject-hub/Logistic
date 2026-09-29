@@ -4234,8 +4234,12 @@ with the unit in the label (`Claim Qty (Kg)`, `Amount (IDR)`) rather than on eac
 - *Aging* (default): amount after tax per GROUP x 0-30 / 31-60 / 61-90 / > 90 days, groups A-Z like the
   PIVOT sheet. Built from OS_CLAIM rows, so it follows the page filters; clicking a group filters the
   view table. KLIP's aging buckets are the sheet's VLOOKUP thresholds exactly.
-- *Realised Claims*: REAL_CLAIM per vendor with its CR numbers. Shown whole and **not** narrowed by the
-  filters, which resolve through SAP contract data only the outstanding rows carry.
+- *Realised Claims*: REAL_CLAIM per vendor with its CR numbers, cut to the page's **CR date range**
+  (REAL_CLAIM's CLAIM DATE is the CR date) - YTD by default, and the card says which range. It reads
+  REAL_CLAIM from **every** import, not only the active one: each monthly file carries only that month's
+  approvals, so a YTD figure is complete once every month in it is imported. A row uploaded twice (the
+  same month re-imported) counts once, from the latest upload. Product, vendor and transport filters do
+  not apply here.
 
 Amounts in the summary card are full IDR (Quality Claim shortens them to B / M; this page does not).
 
@@ -4249,8 +4253,17 @@ comes from SAP contracts via the PO, not from the import (the column stays in th
 The view table offers only columns the sheet fills, checked on the 31 Aug 2026 file (167 rows):
 Payment Method, Source and Created By are not in OS_CLAIM, and its TAX column is empty on every row, so
 all four were dropped. The four per-bucket amount columns became one *Aging (Days)* column - OS days with
-the bucket (0-30 / 31-60 / 61-90 / > 90) beside it. *Company* is labelled *Vendor Name*, and quantity
-*Qty Claim (Kg)*.
+the bucket (0-30 / 31-60 / 61-90 / > 90) beside it. *Company* is labelled *Vendor* (a cut-off value
+shows in full on hover), and quantity *Qty Claim (Kg)*.
+
+**One table, both sheets.** The view table lists OS_CLAIM rows with *Status Claim* **Not Claimed** and
+REAL_CLAIM rows with **Claimed** (`listClaimSusutRows`: `filtered` UNION ALL `real_view` from
+`buildClaimSusutRealViewCte`). The two never share a CR - an approved claim leaves the outstanding
+sheet - so nothing is counted twice. Claimed rows follow the same rule as the Realised card (every
+import, re-uploads once, CR date range) and the Product, Vendor Name, Transport and Region/Plant
+filters; they have a *CM Date* (optional column) and no aging. On the 31 Aug 2026 file with YTD: 61
+rows, 56 Not Claimed and 5 Claimed. The column preference keys moved to v2, so every user starts from
+the new default columns once rather than keeping a saved list that would hide Status Claim.
 
 Checked against the 31 Aug 2026 workbook through the real controller on a production copy: 167 OS
 rows and Rp 28,338,440,606 (the sheet's X4); every GROUP and aging figure equal to the PIVOT sheet;

@@ -56,6 +56,11 @@ export type ClaimSusutRealized = {
   byTransport?: Array<{ transport_group: string; claims: number; qty: number; amount: number }>
   byVendor?: ClaimSusutRealizedVendor[]
   rows: ClaimSusutRealizedRow[]
+  /** The CR date range the figures were cut to; null = unbounded. */
+  dateFrom?: string | null
+  dateTo?: string | null
+  /** The REAL_CLAIM files the figures come from - one per imported month. */
+  sources?: Array<{ importId: string; fileName: string | null; periodLabel: string | null; claims: number }>
 }
 
 type RecapTab = 'aging' | 'realised'
@@ -98,6 +103,7 @@ const Idr = ({ v, strong }: { v: number; strong?: boolean }) => (
 )
 
 export function ClaimSusutSection1Dashboard({
+  crDateLabel,
   summary,
   summaryLoading,
   groupRows,
@@ -108,6 +114,8 @@ export function ClaimSusutSection1Dashboard({
   onToggleGroup,
   hasImport,
 }: {
+  /** The page's CR date range in words - YTD by default - which every figure here follows. */
+  crDateLabel: string
   summary: { qtyClaim: number; amountAfterTax: number; rowCount: number }
   summaryLoading: boolean
   groupRows: ClaimSusutAgingGroupRow[]
@@ -134,10 +142,11 @@ export function ClaimSusutSection1Dashboard({
     crsByVendor.set(k, [...(crsByVendor.get(k) ?? []), r.cr_no])
   }
 
+  const sourceLabels = (realized?.sources ?? []).map((s) => s.periodLabel || s.fileName).filter(Boolean)
   const note =
     tab === 'aging'
-      ? `Amount after tax (IDR) per group${realized?.osPeriodLabel ? ` · Period ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
-      : `Approved claims${realized?.periodLabel ? ` · Period ${realized.periodLabel}` : ''} · the whole REAL_CLAIM sheet, not narrowed by the filters.`
+      ? `Amount after tax (IDR) per group · CR date ${crDateLabel}${realized?.osPeriodLabel ? ` · outstanding as of ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
+      : `Approved claims with a CR date in ${crDateLabel}${sourceLabels.length ? ` · from REAL_CLAIM of ${sourceLabels.join(', ')}` : ''}. Each monthly file carries that month's approvals, so a range is complete once every month in it is imported. Product, vendor and transport filters do not apply.`
   const tabLoading = tab === 'aging' ? groupLoading : realizedLoading
   const empty = (text: string) => <div className="py-8 text-center text-sm text-gray-500">{text}</div>
 
@@ -184,7 +193,7 @@ export function ClaimSusutSection1Dashboard({
               </div>
               <div className="mt-0.5 text-xs text-gray-500">
                 <span className="font-semibold tabular-nums text-gray-900">{realized?.totals?.claims ?? 0}</span> claims
-                {realized?.periodLabel ? <> · Period {realized.periodLabel}</> : null}
+                {' '}· CR date {crDateLabel}
               </div>
             </>
           ) : (
@@ -278,9 +287,11 @@ export function ClaimSusutSection1Dashboard({
             empty(
               realizedLoading
                 ? 'Loading…'
-                : hasImport
-                  ? 'This import has no REAL_CLAIM sheet.'
-                  : 'Upload a file to see realised claims.',
+                : realizedAvailable
+                  ? 'No realised claims with a CR date in this range.'
+                  : hasImport
+                    ? 'This import has no REAL_CLAIM sheet.'
+                    : 'Upload a file to see realised claims.',
             )
           ) : (
             <>

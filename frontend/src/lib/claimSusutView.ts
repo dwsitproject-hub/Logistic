@@ -4,8 +4,10 @@ import {
   type PerformancePeriodKey,
 } from '@/lib/performancePeriodFilters'
 
-export const CLAIM_SUSUT_VIEW_PREF_KEY = 'claim_susut.view.v1'
-export const CLAIM_SUSUT_COLUMN_ORDER_KEY = 'claimSusut.columnOrder.v1'
+// v2: the column set changed (empty columns dropped, Status Claim / CM Date added). A saved v1 list
+// would hide Status Claim - saved choices replace the defaults - so everyone starts from the new ones.
+export const CLAIM_SUSUT_VIEW_PREF_KEY = 'claim_susut.view.v2'
+export const CLAIM_SUSUT_COLUMN_ORDER_KEY = 'claimSusut.columnOrder.v2'
 export const CLAIM_SUSUT_BLANK = '(Blank)'
 
 /** CR Date preset: All = entire import (Claim Susut register is multi-year). */
@@ -102,12 +104,16 @@ export type ClaimSusutColumnDef = {
  * Payment Method, Source (vendor type) and Created By are not in the sheet at all, and its TAX
  * column is empty on every row (amount before tax = after tax), so all four were dropped. The four
  * per-bucket amount columns (0-30 ... > 90 days) are one Aging column: the row's bucket and OS days.
+ *
+ * The table lists OS_CLAIM rows (Status Claim "Not Claimed") and REAL_CLAIM rows ("Claimed") together;
+ * a claimed row has a CM Date and no aging.
  */
 export const CLAIM_SUSUT_COLUMNS: ClaimSusutColumnDef[] = [
   { id: 'crno', label: 'CR NO', sortKey: 'crno' },
   { id: 'cr_date', label: 'CR Date', sortKey: 'cr_date' },
+  { id: 'claim_status', label: 'Status Claim', sortKey: 'claim_status' },
   { id: 'group_of_transport', label: 'Group Of Transport', sortKey: 'group_of_transport' },
-  { id: 'vendor_name', label: 'Vendor Name', sortKey: 'vendor_name' },
+  { id: 'vendor_name', label: 'Vendor', sortKey: 'vendor_name' },
   { id: 'commodity', label: 'Product', sortKey: 'commodity' },
   { id: 'dest', label: 'Dest', sortKey: 'dest' },
   { id: 'po_number', label: 'PO Number', sortKey: 'po_number' },
@@ -126,11 +132,13 @@ export const CLAIM_SUSUT_COLUMNS: ClaimSusutColumnDef[] = [
   { id: 'remarks', label: 'Remarks', sortKey: 'remarks' },
   { id: 'type', label: 'Type', sortKey: 'type' },
   { id: 'amount_before_tax_idr', label: 'Amount Before Tax (IDR)', sortKey: 'amount_before_tax_idr', align: 'right' },
+  { id: 'cm_date', label: 'CM Date', sortKey: 'cm_date' },
 ]
 
 export const CLAIM_SUSUT_DEFAULT_VISIBLE_IDS: readonly string[] = [
   'crno',
   'cr_date',
+  'claim_status',
   'group_of_transport',
   'vendor_name',
   'commodity',

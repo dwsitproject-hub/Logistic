@@ -274,6 +274,86 @@ filtered AS (
   return { sql, params };
 }
 
+/**
+ * The view table's claimed half: `real_view`, REAL_CLAIM rows shaped like `filtered` (OS_CLAIM),
+ * to UNION after buildClaimSusutFilteredCte - append it with a leading comma. Its parameters are
+ * pushed onto `params`, which must already hold the OS CTE's.
+ *
+ * Same rule as the realised summary: every import, a row uploaded twice counts once (latest
+ * upload), cut to the page's CR date range on CLAIM DATE. Region/plant is DEST normalised as the
+ * OS side does; the Source / Incoterm filters have no REAL_CLAIM counterpart and so exclude it.
+ */
+export function buildClaimSusutRealViewCte(filters: ClaimSusutQueryFilters, params: unknown[]): string {
+  const destNormalized = sqlNormalizeDischargeDestination(`NULLIF(TRIM(r.dest), '')`);
+  let where = 'WHERE uploaded_at IS NOT DISTINCT FROM latest';
+  if (filters.dateFrom) {
+    params.push(filters.dateFrom);
+    where += ` AND (cr_date IS NULL OR cr_date >= $${params.length}::date)`;
+  }
+  if (filters.dateTo) {
+    params.push(filters.dateTo);
+    where += ` AND (cr_date IS NULL OR cr_date <= $${params.length}::date)`;
+  }
+  where += appendUpperInFilter('region_plant', filters.plants, params);
+  where += appendUpperInFilter('product', filters.products, params);
+  where += appendUpperInFilter('company', filters.vendors, params);
+  where += appendUpperInFilter('group_of_transport', filters.groupsOfTransport, params);
+  if (filters.sources.length > 0 || filters.incoterms.length > 0) where += ' AND FALSE';
+  return `
+real_ranked AS (
+  SELECT
+    r.id,
+    'Claimed'::text AS claim_status,
+    r.vendor_code,
+    r.vendor_name,
+    COALESCE(NULLIF(TRIM(r.vendor_name), ''), '${CLAIM_SUSUT_BLANK}') AS company,
+    NULL::text AS vendor_type,
+    '${CLAIM_SUSUT_BLANK}'::text AS source,
+    NULL::text AS created_by,
+    r.status_claim AS sta,
+    r.cr_no AS crno,
+    r.claim_date AS cr_date,
+    r.cm_date,
+    NULL::int AS os_days,
+    COALESCE(NULLIF(TRIM(r.transport_group), ''), '${CLAIM_SUSUT_BLANK}') AS group_of_transport,
+    NULL::text AS payment_method,
+    r.dest,
+    COALESCE(${destNormalized}, '${CLAIM_SUSUT_BLANK}') AS region_plant,
+    NULL::text AS incoterm,
+    r.po_number,
+    NULL::text AS contract_ext_no,
+    r.comm,
+    r.commodity,
+    COALESCE(NULLIF(TRIM(r.commodity), ''), '${CLAIM_SUSUT_BLANK}') AS product,
+    r.uom,
+    r.currency,
+    r.company_code,
+    r.remarks,
+    r.type_of_claim AS type,
+    r.qty_approved AS qty_claim,
+    r.amount_before_tax_idr,
+    r.tax,
+    r.amount_after_tax_idr,
+    r.created_at,
+    i.uploaded_at,
+    MAX(i.uploaded_at) OVER (PARTITION BY r.cr_no, r.po_number, r.cm_date, r.amount_after_tax_idr) AS latest
+  FROM claim_susut_real_rows r
+  JOIN claim_susut_imports i ON i.id = r.import_id
+),
+real_view AS (
+  SELECT * FROM real_ranked
+  ${where}
+)`;
+}
+
+/** The view table's columns, in one order for both halves of the UNION. */
+export const CLAIM_SUSUT_VIEW_COLUMNS = `
+  id, claim_status, vendor_code, vendor_name, company, vendor_type, source, created_by,
+  sta, crno, cr_date, cm_date, os_days, group_of_transport, payment_method,
+  dest, region_plant, incoterm, po_number, contract_ext_no,
+  comm, commodity, product, uom, currency, company_code, remarks, type,
+  qty_claim, amount_before_tax_idr, tax, amount_after_tax_idr, created_at`;
+
 export const CLAIM_SUSUT_AGING_SUM_SQL = `
   COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days >= 0 AND os_days <= 30 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_0_30,
   COALESCE(SUM(CASE WHEN os_days IS NOT NULL AND os_days >= 31 AND os_days <= 60 THEN COALESCE(amount_after_tax_idr, 0) ELSE 0 END), 0)::numeric AS a_31_60,

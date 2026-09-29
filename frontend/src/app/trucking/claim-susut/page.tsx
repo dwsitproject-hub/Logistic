@@ -88,6 +88,8 @@ type ClaimSusutRow = {
   sta?: string
   crno?: string
   cr_date?: string
+  cm_date?: string | null
+  claim_status?: 'Claimed' | 'Not Claimed'
   os_days?: number
   group_of_transport?: string
   payment_method?: string
@@ -142,6 +144,7 @@ export default function ClaimSusutPage() {
   const [selectedImportId, setSelectedImportId] = useState<string>('')
   const [rows, setRows] = useState<ClaimSusutRow[]>([])
   const [totalCount, setTotalCount] = useState(0)
+  const [claimedCount, setClaimedCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [realizedLoading, setRealizedLoading] = useState(false)
@@ -377,14 +380,17 @@ export default function ClaimSusutPage() {
   }, [])
 
   /** The REAL_CLAIM half of Section 1: one list per import, not narrowed by the page filters. */
-  const loadRealized = useCallback(async (importId: string) => {
+  const loadRealized = useCallback(async (importId: string, from: string, to: string) => {
     if (!importId) {
       setRealized(null)
       return
     }
     setRealizedLoading(true)
     try {
-      const res = await api.get(`/claim-susut/realized?importId=${encodeURIComponent(importId)}`)
+      const params = new URLSearchParams({ importId })
+      if (from) params.set('dateFrom', from)
+      if (to) params.set('dateTo', to)
+      const res = await api.get(`/claim-susut/realized?${params.toString()}`)
       setRealized((res.data?.data ?? null) as ClaimSusutRealized | null)
     } finally {
       setRealizedLoading(false)
@@ -414,6 +420,7 @@ export default function ClaimSusutPage() {
       if (!filters.importId) {
         setRows([])
         setTotalCount(0)
+        setClaimedCount(0)
         return
       }
       setLoading(true)
@@ -430,6 +437,7 @@ export default function ClaimSusutPage() {
         const res = await api.get(`/claim-susut/rows?${params.toString()}`)
         setRows(res.data.data || [])
         setTotalCount(Number(res.data.meta?.totalCount) || 0)
+        setClaimedCount(Number(res.data.meta?.claimedCount) || 0)
       } finally {
         setLoading(false)
       }
@@ -449,10 +457,10 @@ export default function ClaimSusutPage() {
   }, [selectedImportId])
 
   useEffect(() => {
-    loadRealized(selectedImportId).catch((e) =>
+    loadRealized(selectedImportId, dateFrom, dateTo).catch((e) =>
       setError(apiErrorMessage(e, 'Failed to load Shortage Claim realisation')),
     )
-  }, [selectedImportId, loadRealized])
+  }, [selectedImportId, dateFrom, dateTo, loadRealized])
 
   useEffect(() => {
     if (!selectedImportId) return
@@ -601,6 +609,13 @@ export default function ClaimSusutPage() {
   }
 
   const periodOptions = useMemo(() => buildClaimSusutPeriodOptions(), [])
+  /** "YTD (01/01/2026 – 29/09/2026)", a custom "01/03/2026 – 31/03/2026", or "All". */
+  const crDateLabel = useMemo(() => {
+    if (!dateFrom && !dateTo) return 'All'
+    const range = `${dateFrom ? formatDateDMY(dateFrom) : '…'} – ${dateTo ? formatDateDMY(dateTo) : '…'}`
+    const preset = resolveClaimSusutPeriodRange(period)
+    return period !== 'ALL' && periodRangeMatchesDates(preset, dateFrom, dateTo) ? `${preset.label} (${range})` : range
+  }, [period, dateFrom, dateTo])
 
   return (
     <Layout>
@@ -760,6 +775,7 @@ export default function ClaimSusutPage() {
         </ListFilterPanel>
 
         <ClaimSusutSection1Dashboard
+          crDateLabel={crDateLabel}
           summary={summary}
           summaryLoading={summaryLoading}
           groupRows={groupTransportRows}
@@ -786,6 +802,11 @@ export default function ClaimSusutPage() {
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0 max-w-full">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
                     <span className="font-semibold">{totalCount.toLocaleString('en-US')}</span> rows
+                    {claimedCount > 0 ? (
+                      <span className="text-gray-500">
+                        {' '}({(totalCount - claimedCount).toLocaleString('en-US')} not claimed, {claimedCount.toLocaleString('en-US')} claimed)
+                      </span>
+                    ) : null}
                   </span>
                   <span className="text-gray-400" aria-hidden>·</span>
                   <span className="whitespace-nowrap font-medium text-gray-600">
@@ -1046,6 +1067,21 @@ export default function ClaimSusutPage() {
                             switch (c.id) {
                               case 'cr_date':
                                 return formatDate(r.cr_date)
+                              case 'cm_date':
+                                return r.cm_date ? formatDate(r.cm_date) : '-'
+                              case 'claim_status':
+                                return r.claim_status ? (
+                                  <span
+                                    className={cn(
+                                      'rounded px-1.5 py-0.5 text-xs font-medium',
+                                      r.claim_status === 'Claimed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700',
+                                    )}
+                                  >
+                                    {r.claim_status}
+                                  </span>
+                                ) : (
+                                  '-'
+                                )
                               case 'os_days': {
                                 if (r.os_days == null) return '-'
                                 const bucket = claimSusutAgingBucket(r.os_days)
@@ -1084,7 +1120,12 @@ export default function ClaimSusutPage() {
                               key={c.id}
                               className={`${COMPACT_OPERATIONAL_TABLE_CELL_CLASS} ${operationalTableColumnClass(layout)} align-middle ${CONTRACT_PERF_TABLE_CELL_PAD} ${stripeClass} ${c.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
                             >
-                              <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, 'text-sm')}>{val}</div>
+                              <div
+                                className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, 'text-sm')}
+                                title={typeof val === 'string' && val !== '-' ? val : undefined}
+                              >
+                                {val}
+                              </div>
                             </td>
                           )
                         })}

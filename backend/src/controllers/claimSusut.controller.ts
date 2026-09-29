@@ -5,12 +5,15 @@ import logger from '../utils/logger';
 import * as XLSX from 'xlsx';
 import {
   buildClaimSusutFilteredCte,
+  buildClaimSusutRealViewCte,
+  CLAIM_SUSUT_VIEW_COLUMNS,
   CLAIM_SUSUT_BLANK,
   CLAIM_SUSUT_AGING_SUM_SQL,
   CLAIM_SUSUT_ROW_AGING_SQL,
   nestClaimSusutTree,
   parseClaimSusutQueryFilters,
   parseClaimSusutStoredErrors,
+  parseOptionalIsoDate,
   parseOptionalUuid,
   type ClaimSusutFilterScope,
   type ClaimSusutQueryFilters,
@@ -351,12 +354,14 @@ export const getClaimSusutSummary = async (req: AuthRequest, res: Response) => {
 };
 
 /**
- * Section 1 realisation dashboard: the REAL_CLAIM rows of the active import.
+ * Section 1 realisation dashboard: realised claims whose CR date (REAL_CLAIM's CLAIM DATE) falls in
+ * the page's CR date range - YTD by default.
  *
- * "Active" is chosen exactly as for the outstanding data - the requested import, else the latest -
- * so the two halves of Section 1 always come from the same file. Not narrowed by the page filters:
- * those are resolved through SAP contract data on the outstanding rows, and REAL_CLAIM is a short
- * period list shown whole, as the sheet shows it.
+ * Read across EVERY import, not only the active one: each monthly file carries only that month's
+ * approvals, so a YTD figure needs January's REAL_CLAIM as much as August's. A row uploaded twice
+ * (the same month re-imported) counts once, from the latest upload that has it; identical rows
+ * within one file all stay. `sources` says which files the figures come from. The other page
+ * filters do not apply: they resolve through SAP contract data on the outstanding rows.
  */
 export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => {
   try {
@@ -373,20 +378,40 @@ export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => 
     if (!active) {
       return res.json({ success: true, data: { importId: null, available: false, rows: [] } });
     }
+    const q = req.query as Record<string, unknown>;
+    const dateFrom = parseOptionalIsoDate(q.dateFrom);
+    const dateTo = parseOptionalIsoDate(q.dateTo);
     const rowsRes = await query(
-      `SELECT vendor_code, vendor_name, cargo_source, cr_no,
+      `WITH ranked AS (
+         SELECT r.*, i.uploaded_at, i.file_name, i.real_period_label,
+                MAX(i.uploaded_at) OVER (PARTITION BY r.cr_no, r.po_number, r.cm_date, r.amount_after_tax_idr) AS latest
+           FROM claim_susut_real_rows r
+           JOIN claim_susut_imports i ON i.id = r.import_id
+       )
+       SELECT import_id, file_name, real_period_label,
+              vendor_code, vendor_name, cargo_source, cr_no,
               claim_date::text, cm_date::text, po_number, commodity, material_description, dest,
               status_claim, company_code, type_of_claim,
               COALESCE(qty_approved, 0)::float8 AS qty_approved, uom,
               COALESCE(amount_after_tax_idr, 0)::float8 AS amount_after_tax_idr,
               remarks,
               COALESCE(NULLIF(TRIM(transport_group), ''), '${CLAIM_SUSUT_BLANK}') AS transport_group
-         FROM claim_susut_real_rows
-        WHERE import_id = $1
+         FROM ranked
+        WHERE uploaded_at IS NOT DISTINCT FROM latest
+          AND ($1::date IS NULL OR claim_date IS NULL OR claim_date >= $1::date)
+          AND ($2::date IS NULL OR claim_date IS NULL OR claim_date <= $2::date)
         ORDER BY vendor_name NULLS LAST, cm_date NULLS LAST, cr_no`,
-      [active.id],
+      [dateFrom, dateTo],
     );
+    const anyRealRes = await query(`SELECT EXISTS (SELECT 1 FROM claim_susut_real_rows) AS any`);
     const rows = rowsRes.rows as Array<Record<string, any>>;
+    // Which REAL_CLAIM files the figures come from, so the page can say which months are covered.
+    const sourceMap = new Map<string, { importId: string; fileName: string | null; periodLabel: string | null; claims: number }>();
+    for (const r of rows) {
+      const cur = sourceMap.get(r.import_id) ?? { importId: r.import_id, fileName: r.file_name, periodLabel: r.real_period_label, claims: 0 };
+      cur.claims += 1;
+      sourceMap.set(r.import_id, cur);
+    }
 
     type Agg = { claims: number; qty: number; amount: number };
     const add = (m: Map<string, Agg & Record<string, unknown>>, key: string, extra: Record<string, unknown>, r: Record<string, any>) => {
@@ -409,10 +434,13 @@ export const getClaimSusutRealized = async (req: AuthRequest, res: Response) => 
       success: true,
       data: {
         importId: active.id,
-        available: Boolean(active.real_sheet_name) || rows.length > 0,
+        available: Boolean(active.real_sheet_name) || Boolean(anyRealRes.rows[0]?.any),
         sheetName: active.real_sheet_name,
         periodLabel: active.real_period_label,
         osPeriodLabel: active.os_period_label,
+        dateFrom,
+        dateTo,
+        sources: [...sourceMap.values()],
         totals: {
           claims: rows.length,
           qty: rows.reduce((s, r) => s + (Number(r.qty_approved) || 0), 0),
@@ -482,8 +510,10 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
       crno: `crno`,
       cr_date: `cr_date`,
       os_days: `os_days`,
-      group_of_transport: `group_of_transport_norm`,
+      group_of_transport: `group_of_transport`,
       payment_method: `payment_method`,
+      claim_status: `claim_status`,
+      cm_date: `cm_date`,
       dest: `dest`,
       region_plant: `region_plant`,
       incoterm: `incoterm`,
@@ -510,35 +540,42 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
     const sortExpr = SORT_SQL[sortKey];
     const orderBy = `${sortExpr} ${sortDir} NULLS LAST, id DESC`;
 
-    const countRes = await runClaimSusutCte(
-      filters,
-      'rows',
-      `SELECT COUNT(*)::int AS count FROM filtered`,
+    // The view table is OS_CLAIM (Not Claimed) and REAL_CLAIM (Claimed) in one list. The two never
+    // share a CR - an approved claim leaves the outstanding sheet - so the UNION does not double up.
+    const base = buildClaimSusutFilteredCte(filters, 'rows');
+    const params = [...base.params];
+    const realSql = buildClaimSusutRealViewCte(filters, params);
+    const combinedSql = `${base.sql},
+${realSql},
+combined AS (
+  SELECT ${CLAIM_SUSUT_VIEW_COLUMNS.replace('claim_status', `'Not Claimed'::text AS claim_status`)
+    .replace('cm_date', 'NULL::date AS cm_date')
+    .replace('group_of_transport,', 'group_of_transport_norm AS group_of_transport,')}
+  FROM filtered
+  UNION ALL
+  SELECT ${CLAIM_SUSUT_VIEW_COLUMNS}
+  FROM real_view
+)`;
+
+    const countRes = await query(
+      `${combinedSql}
+      SELECT COUNT(*)::int AS count,
+             COUNT(*) FILTER (WHERE claim_status = 'Claimed')::int AS claimed
+        FROM combined`,
+      params,
     );
     const totalCount = Number(countRes.rows?.[0]?.count) || 0;
+    const claimedCount = Number(countRes.rows?.[0]?.claimed) || 0;
 
-    const base = buildClaimSusutFilteredCte(filters, 'rows');
-    const limitIdx = base.params.length + 1;
-    const offsetIdx = base.params.length + 2;
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
     const rowsRes = await query(
-      `
-      ${base.sql}
-      SELECT
-        id,
-        vendor_code, vendor_name, company, vendor_type, source, created_by,
-        sta, crno, cr_date, os_days,
-        group_of_transport_norm AS group_of_transport, payment_method,
-        dest, region_plant, incoterm, po_number, contract_ext_no,
-        comm, commodity, product, uom, currency, company_code,
-        remarks, type,
-        qty_claim, amount_before_tax_idr, tax, amount_after_tax_idr,
-        ${CLAIM_SUSUT_ROW_AGING_SQL},
-        created_at
-      FROM filtered
+      `${combinedSql}
+      SELECT ${CLAIM_SUSUT_VIEW_COLUMNS}, ${CLAIM_SUSUT_ROW_AGING_SQL}
+      FROM combined
       ORDER BY ${orderBy}
-      LIMIT $${limitIdx} OFFSET $${offsetIdx}
-      `,
-      [...base.params, limit, offset],
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, limit, offset],
     );
 
     return res.json({
@@ -546,6 +583,7 @@ export const listClaimSusutRows = async (req: AuthRequest, res: Response) => {
       data: rowsRes.rows,
       meta: {
         totalCount,
+        claimedCount,
         importId: filters.importId,
         limit,
         offset,
