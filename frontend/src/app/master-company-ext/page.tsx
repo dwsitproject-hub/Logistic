@@ -16,7 +16,8 @@ export default function MasterCompanyExtPage() {
       description="Maintain external companies and reconcile them with DHM."
       newLabel="New Company"
       fields={FIELDS}
-      storageKey="master-company-ext.visibleColumns.v1"
+      storageKey="master-company-ext.visibleColumns.v2"
+      codeNoun="Company"
       syncDhm
       dhmNoun="external company"
     />

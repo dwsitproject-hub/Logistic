@@ -22,9 +22,10 @@ const NON_NUMERIC_SAP = NON_NUMERIC_PORT_NAME_FILTER('sap.port_text');
 
 export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50 } = req.query as any;
+    const { search, page = 1, limit = 50, masterOnly } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
     const searchTerm = typeof search === 'string' ? search.trim() : '';
+    const catalogOnly = String(masterOnly ?? '').toLowerCase() === 'true' || String(masterOnly ?? '') === '1';
 
     const params: any[] = [];
     let searchFilter = '';
@@ -33,7 +34,22 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       searchFilter = ` AND port ILIKE $${params.length}`;
     }
 
-    const listSql = `
+    const catalogListSql = `
+      SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code
+      FROM master_loading_ports
+      WHERE ${NON_NUMERIC_PORT}
+        ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1 OR code_klip ILIKE $1 OR code_dhm ILIKE $1)` : ''}
+      ORDER BY port
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+    const catalogCountSql = `
+      SELECT COUNT(*) AS count
+      FROM master_loading_ports
+      WHERE ${NON_NUMERIC_PORT}
+        ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1 OR code_klip ILIKE $1 OR code_dhm ILIKE $1)` : ''}
+    `;
+
+    const listSql = catalogOnly ? catalogListSql : `
       WITH port_sources AS (
         SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code, 0 AS priority
         FROM master_loading_ports
@@ -109,7 +125,7 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       ORDER BY priority, port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
-    const countSql = `
+    const countSql = catalogOnly ? catalogCountSql : `
       WITH port_sources AS (
         SELECT port, region, 0 AS priority
         FROM master_loading_ports

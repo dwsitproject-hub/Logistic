@@ -16,6 +16,7 @@ import { MasterListCompactTable, type MasterListTableColumn } from '@/components
 import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
+import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 
 export interface ReferenceField {
@@ -40,6 +41,7 @@ interface ReferenceMasterPageProps {
   newLabel: string
   fields: ReferenceField[]
   storageKey: string
+  codeNoun: string
   syncDhm?: boolean
   dhmNoun?: string
 }
@@ -55,20 +57,22 @@ export function ReferenceMasterPage({
   newLabel,
   fields,
   storageKey,
+  codeNoun,
   syncDhm = false,
   dhmNoun = 'record',
 }: ReferenceMasterPageProps) {
   const columns = useMemo<MasterListTableColumn<ReferenceRow>[]>(
     () => [
-      { id: 'code_klip', label: 'Code (KLIP)', getText: (row) => cell(row.code_klip) },
-      { id: 'code_dhm', label: 'Code (DHM)', getText: (row) => cell(row.code_dhm) },
+      { id: 'code_klip', label: `${codeNoun} Code (KLIP)`, getText: (row) => cell(row.code_klip) },
+      { id: 'code_dhm', label: `${codeNoun} Code (DHM)`, getText: (row) => cell(row.code_dhm) },
       ...fields.map((field) => ({
         id: field.key,
         label: field.label,
         getText: (row: ReferenceRow) => cell(row[field.key]),
       })),
+      dhmStatusListColumn<ReferenceRow>(),
     ],
-    [fields],
+    [codeNoun, fields],
   )
   const layout = useListColumnLayout(storageKey, columns)
   const [items, setItems] = useState<ReferenceRow[]>([])
@@ -196,18 +200,22 @@ export function ReferenceMasterPage({
           <ListFilterPanel
             onReset={() => setSearch('')}
             showReset={search.trim().length > 0}
-            chips={debouncedSearch ? [{ id: 'search', label: `Search: ${debouncedSearch}`, onRemove: () => setSearch('') }] : []}
+            chips={
+              search.trim()
+                ? [{ id: 'search', label: `Search: ${search.trim()}`, onRemove: () => setSearch('') }]
+                : []
+            }
           >
             <div className={LIST_FILTER_FIELDS_ROW_CLASS}>
               <div className="min-w-[12rem] flex-[1.4]">
                 <label className={LIST_FILTER_FIELD_LABEL_CLASS}>Search</label>
                 <div className="relative">
-                  <StitchSearchIcon />
+                  <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Code or name"
-                    className="rounded-lg border-slate-200 pl-10"
+                    className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
                   />
                 </div>
               </div>
@@ -250,6 +258,7 @@ export function ReferenceMasterPage({
             </CardHeader>
             <CardContent>
               <MasterListCompactTable
+                tightActions
                 rows={[...items].sort((a, b) => {
                   const column = columns.find((item) => item.id === sortKey)
                   const cmp = (column?.getText(a) ?? '').localeCompare(column?.getText(b) ?? '', undefined, { numeric: true })
@@ -293,11 +302,11 @@ export function ReferenceMasterPage({
               </DialogHeader>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Code (KLIP)</label>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">{codeNoun} Code (KLIP)</label>
                   <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
                 </div>
                 <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">Code (DHM)</label>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">{codeNoun} Code (DHM)</label>
                   <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
                 </div>
                 {fields.map((field) => (

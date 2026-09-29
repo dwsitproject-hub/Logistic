@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
 import { Plus } from 'lucide-react'
 import { MasterRowActions } from '@/components/shared/MasterRowActions'
+import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import * as XLSX from 'xlsx'
 import {
@@ -51,8 +52,8 @@ function plantCell(value: string | null | undefined): string {
 }
 
 const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
-  { id: 'code_klip', label: 'Code (KLIP)', getText: (row) => plantCell(row.code_klip) },
-  { id: 'code_dhm', label: 'Code (DHM)', getText: (row) => plantCell(row.code_dhm) },
+  { id: 'code_klip', label: 'Company Code (KLIP)', getText: (row) => plantCell(row.code_klip) },
+  { id: 'code_dhm', label: 'Company Code (DHM)', getText: (row) => plantCell(row.code_dhm) },
   { id: 'company_code', label: 'Company Code', getText: (row) => plantCell(row.company_code) },
   { id: 'company_name', label: 'Company Name', getText: (row) => plantCell(row.company_name) },
   { id: 'plant_code', label: 'Plant Code', getText: (row) => plantCell(row.plant_code) },
@@ -61,7 +62,7 @@ const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
   { id: 'site', label: 'Site', getText: (row) => plantCell(row.site) },
   { id: 'city', label: 'City', getText: (row) => plantCell(row.city) },
   { id: 'postal_code', label: 'Postal Code', getText: (row) => plantCell(row.postal_code) },
-  { id: 'found_in', label: 'Found In', getText: (row) => plantCell(row.found_in) },
+  dhmStatusListColumn<MasterPlant>(),
 ]
 
 export default function MasterPlantPage() {
@@ -73,7 +74,7 @@ export default function MasterPlantPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('company_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v2', PLANT_COLUMNS)
+  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v3', PLANT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [isAdmin, setIsAdmin] = useState(false)
   const [editing, setEditing] = useState<MasterPlant | null>(null)
@@ -386,7 +387,7 @@ export default function MasterPlantPage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Company (Int)</span>
+                  <span>All Company (Internal)</span>
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
@@ -442,6 +443,7 @@ export default function MasterPlantPage() {
           </CardHeader>
           <CardContent>
             <MasterListCompactTable
+              tightActions
               rows={[...items].sort((a, b) => {
                 const col = PLANT_COLUMNS.find((item) => item.id === sortKey)
                 const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
@@ -540,15 +542,15 @@ export default function MasterPlantPage() {
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Company (Int)' : 'New Company (Int)'}</DialogTitle>
+            <DialogTitle>{editing ? 'Edit Company (Internal)' : 'New Company (Internal)'}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Code (KLIP)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code (KLIP)</label>
               <Input value={form.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Code (DHM)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code (DHM)</label>
               <Input value={form.code_dhm || ''} placeholder="-" readOnly disabled />
             </div>
             <div className="md:col-span-2">
@@ -586,10 +588,6 @@ export default function MasterPlantPage() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
               <Input value={form.postal_code || ''} onChange={(e) => handleChange('postal_code', e.target.value)} disabled={!isAdmin} />
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Found In</label>
-              <Input value={form.found_in || ''} onChange={(e) => handleChange('found_in', e.target.value)} disabled={!isAdmin} />
             </div>
           </div>
           <DialogFooter>

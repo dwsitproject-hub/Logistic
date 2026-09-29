@@ -12,7 +12,8 @@ export default function MasterIncotermPage() {
       description="Maintain incoterms and reconcile them with DHM."
       newLabel="New Incoterm"
       fields={FIELDS}
-      storageKey="master-incoterm.visibleColumns.v1"
+      storageKey="master-incoterm.visibleColumns.v2"
+      codeNoun="Incoterm"
       syncDhm
       dhmNoun="incoterm"
     />

@@ -12,7 +12,8 @@ export default function MasterTruckTransporterPage() {
       description="Maintain truck transporters and reconcile them with DHM."
       newLabel="New Transporter"
       fields={FIELDS}
-      storageKey="master-truck-transporter.visibleColumns.v1"
+      storageKey="master-truck-transporter.visibleColumns.v2"
+      codeNoun="Truck Transporter"
     />
   )
 }

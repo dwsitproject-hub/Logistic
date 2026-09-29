@@ -8,6 +8,7 @@ describe('masterVesselDhmStatus', () => {
       'Sync',
     )
     expect(isMasterVesselDhmSynced({ dhm_code: 'VSL-0001' })).toBe(true)
+    expect(masterVesselDhmStatusLabel({ code_dhm: 'CMD-0001' })).toBe('Sync')
   })
 
   it('treats empty replica fields as Not Sync', () => {

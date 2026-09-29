@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { DhmStatusBadge } from '@/components/shared/DhmStatusBadge'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import type { MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
@@ -184,21 +185,7 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     id: 'dhm_status',
     label: 'DHM Status',
     getCellText: (row) => getMasterVesselCellText('dhm_status', row),
-    render: (row) => {
-      const synced = masterVesselDhmStatusLabel(row) === 'Sync'
-      return masterVesselCell(
-        <span
-          className={
-            synced
-              ? 'inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800'
-              : 'inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800'
-          }
-          title={row.dhm_code ? `DHM: ${row.dhm_code}` : undefined}
-        >
-          {synced ? 'Sync' : 'Not Sync'}
-        </span>,
-      )
-    },
+    render: (row) => masterVesselCell(<DhmStatusBadge row={row} />),
   },
 ]
 
