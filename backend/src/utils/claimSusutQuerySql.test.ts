@@ -19,6 +19,7 @@ describe('parseClaimSusutQueryFilters', () => {
       source: ['MILL', 'TRADER'],
       incoterm: 'FOB',
       product: 'CPO',
+      vendor: 'PT Example,PT Other',
       groupOfTransport: 'TRUCK',
       ddProduct: 'CPO',
       ddPlant: 'BONTANG',
@@ -30,6 +31,7 @@ describe('parseClaimSusutQueryFilters', () => {
     expect(filters.plants).toEqual(['BONTANG', 'KIJING']);
     expect(filters.sources).toEqual(['MILL', 'TRADER']);
     expect(filters.groupsOfTransport).toEqual(['TRUCK']);
+    expect(filters.vendors).toEqual(['PT Example', 'PT Other']);
     expect(filters.ddCompany).toBe('PT Example');
   });
 
@@ -66,6 +68,7 @@ describe('buildClaimSusutFilteredCte', () => {
         sources: [],
         incoterms: [],
         products: ['CPO'],
+        vendors: [],
         groupsOfTransport: ['TRUCK'],
         ddProduct: 'CPO',
         ddPlant: null,
@@ -114,6 +117,7 @@ describe('buildClaimSusutFilteredCte', () => {
         sources: [],
         incoterms: [],
         products: [],
+        vendors: [],
         groupsOfTransport: ['TRUCK'],
         ddProduct: 'CPO',
         ddPlant: 'BONTANG',
@@ -139,6 +143,7 @@ describe('buildClaimSusutFilteredCte', () => {
         sources: [],
         incoterms: [],
         products: [],
+        vendors: [],
         groupsOfTransport: ['TRUCKING'],
         ddProduct: 'CPO',
         ddPlant: null,
@@ -161,6 +166,7 @@ describe('buildClaimSusutFilteredCte', () => {
         sources: ['MILL'],
         incoterms: ['FOB'],
         products: ['CPO'],
+        vendors: [],
         groupsOfTransport: ['TRUCKING'],
         ddProduct: null,
         ddPlant: null,

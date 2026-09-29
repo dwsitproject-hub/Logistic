@@ -4,13 +4,14 @@ import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PerformanceSection1CardShell } from '@/components/performance/PerformanceSection1CardShell'
-import { CompactNum, RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
+import { RecapSegmented, ShareBar } from '@/components/claims/ClaimRecapParts'
 import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
 
 /**
  * Section 1 of Shortage Claim: three cards, then ONE summary card whose tabs are the two summaries
  * the SAP workbook carries as its PIVOT and REAL_CLAIM sheets, recomputed from what KLIP imported -
- * the same one-card layout as Quality Claim, so the section fits on a screen.
+ * the same one-card layout as Quality Claim, so the section fits on a screen. Unlike Quality Claim,
+ * amounts are shown in full IDR rather than shortened to B / M.
  *
  * - Aging is built from OS_CLAIM rows - the same aggregate the PIVOT sheet shows, not an import of
  *   it - so it follows the page filters like the view table below.
@@ -91,8 +92,9 @@ export function sortGroups(rows: ClaimSusutAgingGroupRow[]): ClaimSusutAgingGrou
   })
 }
 
+/** Full IDR, as the PIVOT and REAL_CLAIM sheets print it - no B / M shortening on this page. */
 const Idr = ({ v, strong }: { v: number; strong?: boolean }) => (
-  <CompactNum v={v} full={`Rp ${formatClaimSusutIdr(v)}`} strong={strong} />
+  <span className={strong ? 'font-semibold text-gray-900' : undefined}>{v ? formatClaimSusutIdr(v) : '-'}</span>
 )
 
 export function ClaimSusutSection1Dashboard({
@@ -206,7 +208,7 @@ export function ClaimSusutSection1Dashboard({
             </CardTitle>
             <RecapSegmented value={tab} options={TABS} onChange={setTab} ariaLabel="Summary" />
           </div>
-          <p className="text-xs text-gray-500">{note} Hover a number for the full value.</p>
+          <p className="text-xs text-gray-500">{note}</p>
         </CardHeader>
         <CardContent className="pt-2">
           {tab === 'aging' ? (

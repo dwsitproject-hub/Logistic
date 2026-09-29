@@ -50,10 +50,12 @@ import {
   appendClaimSusutFilterParams,
   buildClaimSusutPeriodOptions,
   CLAIM_SUSUT_COLUMN_ORDER_KEY,
+  CLAIM_SUSUT_DEFAULT_PERIOD,
   CLAIM_SUSUT_COLUMNS,
   CLAIM_SUSUT_DEFAULT_VISIBLE_IDS,
   CLAIM_SUSUT_NUMERIC_SORT_KEYS,
   CLAIM_SUSUT_VIEW_PREF_KEY,
+  claimSusutAgingBucket,
   EMPTY_CLAIM_SUSUT_DRILLDOWN,
   formatClaimSusutIdr,
   looksLikeLegacyAllVisibleClaimSusutColumns,
@@ -150,18 +152,16 @@ export default function ClaimSusutPage() {
   const [uploadResultOpen, setUploadResultOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
 
-  const [period, setPeriod] = useState<ClaimSusutPeriodKey>('ALL')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [period, setPeriod] = useState<ClaimSusutPeriodKey>(CLAIM_SUSUT_DEFAULT_PERIOD)
+  const [dateFrom, setDateFrom] = useState(() => resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD).dateFrom)
+  const [dateTo, setDateTo] = useState(() => resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD).dateTo)
   const [selectedPlants, setSelectedPlants] = useState<string[]>([])
-  const [selectedSources, setSelectedSources] = useState<string[]>([])
-  const [selectedIncoterms, setSelectedIncoterms] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<string[]>([])
+  const [selectedVendors, setSelectedVendors] = useState<string[]>([])
   const [selectedGroupsOfTransport, setSelectedGroupsOfTransport] = useState<string[]>([])
   const [plantOptions, setPlantOptions] = useState<string[]>([])
-  const [sourceOptions, setSourceOptions] = useState<string[]>([])
-  const [incotermOptions, setIncotermOptions] = useState<string[]>([])
   const [productOptions, setProductOptions] = useState<string[]>([])
+  const [vendorOptions, setVendorOptions] = useState<string[]>([])
   const [transportOptions, setTransportOptions] = useState<string[]>([])
   const [realized, setRealized] = useState<ClaimSusutRealized | null>(null)
   const [summary, setSummary] = useState({ qtyClaim: 0, amountAfterTax: 0, rowCount: 0 })
@@ -200,9 +200,8 @@ export default function ClaimSusutPage() {
       dateFrom,
       dateTo,
       plants: selectedPlants,
-      sources: selectedSources,
-      incoterms: selectedIncoterms,
       products: selectedProducts,
+      vendors: selectedVendors,
       groupsOfTransport: selectedGroupsOfTransport,
       drilldown: EMPTY_CLAIM_SUSUT_DRILLDOWN,
     }),
@@ -211,9 +210,9 @@ export default function ClaimSusutPage() {
       dateFrom,
       dateTo,
       selectedPlants,
-      selectedSources,
-      selectedIncoterms,
       selectedProducts,
+    selectedVendors,
+      selectedVendors,
       selectedGroupsOfTransport,
     ],
   )
@@ -333,9 +332,8 @@ export default function ClaimSusutPage() {
   const loadFilterOptions = useCallback(async (filters: ClaimSusutApiFilters) => {
     if (!filters.importId) {
       setPlantOptions([])
-      setSourceOptions([])
-      setIncotermOptions([])
       setProductOptions([])
+      setVendorOptions([])
       setTransportOptions([])
       return
     }
@@ -344,17 +342,15 @@ export default function ClaimSusutPage() {
       includeGroup: false,
     })
     params.delete('plant')
-    params.delete('source')
-    params.delete('incoterm')
     params.delete('product')
+    params.delete('vendor')
     params.delete('groupOfTransport')
     params.delete('groupsOfTransport')
     const res = await api.get(`/claim-susut/filter-options?${params.toString()}`)
     const data = res.data?.data || {}
     setPlantOptions((data.plants || []).map(String))
-    setSourceOptions((data.sources || []).map(String))
-    setIncotermOptions((data.incoterms || []).map(String))
     setProductOptions((data.products || []).map(String))
+    setVendorOptions((data.vendors || []).map(String))
     setTransportOptions((data.groupsOfTransport || []).map(String))
   }, [])
 
@@ -461,7 +457,7 @@ export default function ClaimSusutPage() {
   useEffect(() => {
     if (!selectedImportId) return
     setPage(1)
-  }, [dateFrom, dateTo, selectedPlants, selectedSources, selectedIncoterms, selectedProducts, selectedGroupsOfTransport, sortKey, sortDir])
+  }, [dateFrom, dateTo, selectedPlants, selectedProducts, selectedVendors, selectedGroupsOfTransport, sortKey, sortDir])
 
   useEffect(() => {
     if (!selectedImportId) return
@@ -477,9 +473,8 @@ export default function ClaimSusutPage() {
     dateFrom,
     dateTo,
     selectedPlants,
-    selectedSources,
-    selectedIncoterms,
     selectedProducts,
+    selectedVendors,
     selectedGroupsOfTransport,
     loadSummary,
     scopeFilters,
@@ -498,9 +493,8 @@ export default function ClaimSusutPage() {
     dateFrom,
     dateTo,
     selectedPlants,
-    selectedSources,
-    selectedIncoterms,
     selectedProducts,
+    selectedVendors,
     loadByGroupOfTransport,
     scopeFilters,
   ])
@@ -513,9 +507,8 @@ export default function ClaimSusutPage() {
     dateFrom,
     dateTo,
     selectedPlants,
-    selectedSources,
-    selectedIncoterms,
     selectedProducts,
+    selectedVendors,
     selectedGroupsOfTransport,
     page,
     sortKey,
@@ -596,13 +589,13 @@ export default function ClaimSusutPage() {
   }
 
   const resetFilters = () => {
-    setPeriod('ALL')
-    setDateFrom('')
-    setDateTo('')
+    const { dateFrom: from, dateTo: to } = resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD)
+    setPeriod(CLAIM_SUSUT_DEFAULT_PERIOD)
+    setDateFrom(from)
+    setDateTo(to)
     setSelectedPlants([])
-    setSelectedSources([])
-    setSelectedIncoterms([])
     setSelectedProducts([])
+    setSelectedVendors([])
     setSelectedGroupsOfTransport([])
     setPage(1)
   }
@@ -691,12 +684,11 @@ export default function ClaimSusutPage() {
         <ListFilterPanel
           onReset={resetFilters}
           showReset={
-            period !== 'ALL' ||
-            !periodRangeMatchesDates(resolveClaimSusutPeriodRange('ALL'), dateFrom, dateTo) ||
+            period !== CLAIM_SUSUT_DEFAULT_PERIOD ||
+            !periodRangeMatchesDates(resolveClaimSusutPeriodRange(CLAIM_SUSUT_DEFAULT_PERIOD), dateFrom, dateTo) ||
             selectedPlants.length > 0 ||
-            selectedSources.length > 0 ||
-            selectedIncoterms.length > 0 ||
             selectedProducts.length > 0 ||
+            selectedVendors.length > 0 ||
             selectedGroupsOfTransport.length > 0
           }
           chips={[
@@ -722,37 +714,12 @@ export default function ClaimSusutPage() {
                 ]
               : []),
             ...selectionChips('Region/Plant', selectedPlants, setSelectedPlants),
-            ...selectionChips('Source', selectedSources, setSelectedSources),
-            ...selectionChips('Incoterm', selectedIncoterms, setSelectedIncoterms),
             ...selectionChips('Product', selectedProducts, setSelectedProducts),
+            ...selectionChips('Vendor Name', selectedVendors, setSelectedVendors),
             ...selectionChips('Transport', selectedGroupsOfTransport, setSelectedGroupsOfTransport),
           ]}
         >
           <div className="flex flex-nowrap items-end gap-2 overflow-x-auto px-0.5 pb-1.5 pt-0.5">
-            <SearchableMultiSelect
-              label="Source"
-              className="min-w-[7.5rem] flex-1"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={sourceOptions}
-              selected={selectedSources}
-              onChange={setSelectedSources}
-              placeholder="All"
-              emptyMessage="No sources"
-              uppercaseOptionLabels
-              pinSelectedToTop
-            />
-            <SearchableMultiSelect
-              label="Incoterm"
-              className="min-w-[7.5rem] flex-1"
-              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
-              options={incotermOptions}
-              selected={selectedIncoterms}
-              onChange={setSelectedIncoterms}
-              placeholder="All"
-              emptyMessage="No incoterms"
-              uppercaseOptionLabels
-              pinSelectedToTop
-            />
             <SearchableMultiSelect
               label="Product"
               className="min-w-[7.5rem] flex-1"
@@ -762,6 +729,18 @@ export default function ClaimSusutPage() {
               onChange={setSelectedProducts}
               placeholder="All"
               emptyMessage="No products"
+              uppercaseOptionLabels
+              pinSelectedToTop
+            />
+            <SearchableMultiSelect
+              label="Vendor Name"
+              className="min-w-[10rem] flex-[1.5]"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              options={vendorOptions}
+              selected={selectedVendors}
+              onChange={setSelectedVendors}
+              placeholder="All"
+              emptyMessage="No vendors"
               uppercaseOptionLabels
               pinSelectedToTop
             />
@@ -812,9 +791,9 @@ export default function ClaimSusutPage() {
                   <span className="whitespace-nowrap font-medium text-gray-600">
                     {period !== 'ALL' ||
                     selectedPlants.length > 0 ||
-                    selectedSources.length > 0 ||
-                    selectedIncoterms.length > 0 ||
-                    selectedProducts.length > 0 ||
+                                    selectedProducts.length > 0 ||
+                    selectedVendors.length > 0 ||
+            selectedVendors.length > 0 ||
                     selectedGroupsOfTransport.length > 0
                       ? 'Global · Filtered'
                       : 'Global · All'}
@@ -1067,8 +1046,25 @@ export default function ClaimSusutPage() {
                             switch (c.id) {
                               case 'cr_date':
                                 return formatDate(r.cr_date)
-                              case 'os_days':
-                                return r.os_days ?? '-'
+                              case 'os_days': {
+                                if (r.os_days == null) return '-'
+                                const bucket = claimSusutAgingBucket(r.os_days)
+                                return (
+                                  <span className="inline-flex items-center justify-end gap-1.5">
+                                    <span>{r.os_days.toLocaleString('en-US')}</span>
+                                    {bucket ? (
+                                      <span
+                                        className={cn(
+                                          'rounded px-1 text-[10px] font-medium',
+                                          bucket === '> 90' ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-600',
+                                        )}
+                                      >
+                                        {bucket}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                )
+                              }
                               case 'vendor_name':
                                 return formatSapDisplayValue(r.company || r.vendor_name)
                               case 'commodity':
@@ -1077,13 +1073,7 @@ export default function ClaimSusutPage() {
                                 return Number(r.qty_claim || 0).toLocaleString('id-ID', { maximumFractionDigits: 3 })
                               case 'amount_before_tax_idr':
                               case 'amount_after_tax_idr':
-                              case 'a_0_30':
-                              case 'a_31_60':
-                              case 'a_61_90':
-                              case 'a_gt_90':
                                 return r[c.id] ? formatClaimSusutIdr(r[c.id] as number) : '-'
-                              case 'tax':
-                                return r.tax ?? '-'
                               default:
                                 return formatSapDisplayValue((r as Record<string, unknown>)[c.id])
                             }

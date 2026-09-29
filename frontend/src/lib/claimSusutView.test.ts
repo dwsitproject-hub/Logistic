@@ -4,6 +4,7 @@ import {
   buildNextClaimSusutDrilldownSelection,
   CLAIM_SUSUT_DEFAULT_VISIBLE_IDS,
   CLAIM_SUSUT_COLUMNS,
+  claimSusutAgingBucket,
   EMPTY_CLAIM_SUSUT_DRILLDOWN,
   looksLikeLegacyAllVisibleClaimSusutColumns,
   parseClaimSusutImportErrors,
@@ -26,10 +27,9 @@ describe('Claim Susut view helpers', () => {
       'qty_claim',
       'amount_after_tax_idr',
       'os_days',
-      'payment_method',
     ])
     const companyCol = CLAIM_SUSUT_COLUMNS.find((c) => c.id === 'vendor_name')
-    expect(companyCol?.label).toBe('Company')
+    expect(companyCol?.label).toBe('Vendor Name')
   })
 
   it('clears deeper drilldown levels when a parent is chosen', () => {
@@ -89,5 +89,20 @@ describe('Claim Susut view helpers', () => {
     expect(claimSusutImportStatus(8, 2)).toBe('partial')
     expect(claimSusutImportStatus(10, 0)).toBe('completed')
     expect(claimSusutImportStatus(0, 3)).toBe('failed')
+  })
+
+  it('buckets OS days on the PIVOT thresholds, for the Aging (Days) column', () => {
+    expect([0, 30, 31, 60, 61, 90, 91, 813].map((d) => claimSusutAgingBucket(d))).toEqual([
+      '0-30', '0-30', '31-60', '31-60', '61-90', '61-90', '> 90', '> 90',
+    ])
+    expect(claimSusutAgingBucket(null)).toBeNull()
+  })
+
+  it('offers only columns the OS_CLAIM sheet fills', () => {
+    const ids = CLAIM_SUSUT_COLUMNS.map((c) => c.id)
+    for (const gone of ['payment_method', 'vendor_type', 'created_by', 'tax', 'a_0_30', 'a_31_60', 'a_61_90', 'a_gt_90']) {
+      expect(ids).not.toContain(gone)
+    }
+    expect(CLAIM_SUSUT_DEFAULT_VISIBLE_IDS.every((id) => ids.includes(id))).toBe(true)
   })
 })

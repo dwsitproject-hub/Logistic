@@ -294,6 +294,7 @@ export const getClaimSusutFilterOptions = async (req: AuthRequest, res: Response
       `
       SELECT
         ARRAY(SELECT DISTINCT product FROM filtered ORDER BY 1) AS products,
+        ARRAY(SELECT DISTINCT company FROM filtered ORDER BY 1) AS vendors,
         ARRAY(SELECT DISTINCT region_plant FROM filtered ORDER BY 1) AS plants,
         ARRAY(SELECT DISTINCT source FROM filtered ORDER BY 1) AS sources,
         ARRAY(SELECT DISTINCT incoterm FROM filtered ORDER BY 1) AS incoterms,
@@ -305,6 +306,7 @@ export const getClaimSusutFilterOptions = async (req: AuthRequest, res: Response
       success: true,
       data: {
         products: row.products || [],
+        vendors: row.vendors || [],
         plants: row.plants || [],
         sources: row.sources || [],
         incoterms: row.incoterms || [],

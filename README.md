@@ -4237,6 +4237,21 @@ with the unit in the label (`Claim Qty (Kg)`, `Amount (IDR)`) rather than on eac
 - *Realised Claims*: REAL_CLAIM per vendor with its CR numbers. Shown whole and **not** narrowed by the
   filters, which resolve through SAP contract data only the outstanding rows carry.
 
+Amounts in the summary card are full IDR (Quality Claim shortens them to B / M; this page does not).
+
+**Filters and view table.** The CR date period opens on **YTD** (`CLAIM_SUSUT_DEFAULT_PERIOD`). The
+outstanding register is multi-year, so YTD shows only the claims raised this year - on the 31 Aug 2026
+file 56 of 167 claims, Rp 6.36 B of 28.34 B; pick *All* for the whole register, which is what the PIVOT
+sheet totals. The panel offers Product, **Vendor Name** (`vendor=`, matched on the OS_CLAIM vendor) and
+Transport. Source and Incoterm were removed as filters: OS_CLAIM has no source column, and Incoterm
+comes from SAP contracts via the PO, not from the import (the column stays in the view table).
+
+The view table offers only columns the sheet fills, checked on the 31 Aug 2026 file (167 rows):
+Payment Method, Source and Created By are not in OS_CLAIM, and its TAX column is empty on every row, so
+all four were dropped. The four per-bucket amount columns became one *Aging (Days)* column - OS days with
+the bucket (0-30 / 31-60 / 61-90 / > 90) beside it. *Company* is labelled *Vendor Name*, and quantity
+*Qty Claim (Kg)*.
+
 Checked against the 31 Aug 2026 workbook through the real controller on a production copy: 167 OS
 rows and Rp 28,338,440,606 (the sheet's X4); every GROUP and aging figure equal to the PIVOT sheet;
 5 realised claims, 16,850 kg and Rp 253,351,530 (its GRANDTOTAL).

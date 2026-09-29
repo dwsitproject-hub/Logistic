@@ -11,6 +11,12 @@ export const CLAIM_SUSUT_BLANK = '(Blank)'
 /** CR Date preset: All = entire import (Claim Susut register is multi-year). */
 export type ClaimSusutPeriodKey = PerformancePeriodKey | 'ALL'
 
+/**
+ * The page opens on YTD by CR date. The outstanding register is multi-year, so YTD hides older open
+ * claims (31 Aug 2026: 56 of 167 claims, Rp 6.36 B of 28.34 B); "All" shows the whole import.
+ */
+export const CLAIM_SUSUT_DEFAULT_PERIOD: ClaimSusutPeriodKey = 'YTD'
+
 export function resolveClaimSusutPeriodRange(
   period: ClaimSusutPeriodKey,
   referenceDate = new Date(),
@@ -91,23 +97,26 @@ export type ClaimSusutColumnDef = {
   align?: 'left' | 'right'
 }
 
+/**
+ * Only columns the OS_CLAIM sheet actually fills. Checked against the 31 Aug 2026 file (167 rows):
+ * Payment Method, Source (vendor type) and Created By are not in the sheet at all, and its TAX
+ * column is empty on every row (amount before tax = after tax), so all four were dropped. The four
+ * per-bucket amount columns (0-30 ... > 90 days) are one Aging column: the row's bucket and OS days.
+ */
 export const CLAIM_SUSUT_COLUMNS: ClaimSusutColumnDef[] = [
   { id: 'crno', label: 'CR NO', sortKey: 'crno' },
   { id: 'cr_date', label: 'CR Date', sortKey: 'cr_date' },
   { id: 'group_of_transport', label: 'Group Of Transport', sortKey: 'group_of_transport' },
-  { id: 'vendor_name', label: 'Company', sortKey: 'vendor_name' },
+  { id: 'vendor_name', label: 'Vendor Name', sortKey: 'vendor_name' },
   { id: 'commodity', label: 'Product', sortKey: 'commodity' },
   { id: 'dest', label: 'Dest', sortKey: 'dest' },
   { id: 'po_number', label: 'PO Number', sortKey: 'po_number' },
-  { id: 'qty_claim', label: 'Qty Claim', sortKey: 'qty_claim', align: 'right' },
+  { id: 'qty_claim', label: 'Qty Claim (Kg)', sortKey: 'qty_claim', align: 'right' },
   { id: 'amount_after_tax_idr', label: 'Amount After Tax (IDR)', sortKey: 'amount_after_tax_idr', align: 'right' },
-  { id: 'os_days', label: 'Aging', sortKey: 'os_days', align: 'right' },
-  { id: 'payment_method', label: 'Payment Method', sortKey: 'payment_method' },
+  { id: 'os_days', label: 'Aging (Days)', sortKey: 'os_days', align: 'right' },
   { id: 'vendor_code', label: 'Supplier Code', sortKey: 'vendor_code' },
-  { id: 'vendor_type', label: 'Source', sortKey: 'vendor_type' },
   { id: 'incoterm', label: 'Incoterm', sortKey: 'incoterm' },
   { id: 'region_plant', label: 'Region/Plant', sortKey: 'region_plant' },
-  { id: 'created_by', label: 'Created By', sortKey: 'created_by' },
   { id: 'sta', label: 'STA', sortKey: 'sta' },
   { id: 'contract_ext_no', label: 'Contract Ext No', sortKey: 'contract_ext_no' },
   { id: 'comm', label: 'COMM', sortKey: 'comm' },
@@ -117,11 +126,6 @@ export const CLAIM_SUSUT_COLUMNS: ClaimSusutColumnDef[] = [
   { id: 'remarks', label: 'Remarks', sortKey: 'remarks' },
   { id: 'type', label: 'Type', sortKey: 'type' },
   { id: 'amount_before_tax_idr', label: 'Amount Before Tax (IDR)', sortKey: 'amount_before_tax_idr', align: 'right' },
-  { id: 'tax', label: 'Tax', sortKey: 'tax', align: 'right' },
-  { id: 'a_0_30', label: 'Aging 0-30 Days', sortKey: 'a_0_30', align: 'right' },
-  { id: 'a_31_60', label: 'Aging 31-60 Days', sortKey: 'a_31_60', align: 'right' },
-  { id: 'a_61_90', label: 'Aging 61-90 Days', sortKey: 'a_61_90', align: 'right' },
-  { id: 'a_gt_90', label: 'Aging > 90 Days', sortKey: 'a_gt_90', align: 'right' },
 ]
 
 export const CLAIM_SUSUT_DEFAULT_VISIBLE_IDS: readonly string[] = [
@@ -135,20 +139,19 @@ export const CLAIM_SUSUT_DEFAULT_VISIBLE_IDS: readonly string[] = [
   'qty_claim',
   'amount_after_tax_idr',
   'os_days',
-  'payment_method',
 ]
 
-export const CLAIM_SUSUT_NUMERIC_SORT_KEYS = new Set([
-  'os_days',
-  'qty_claim',
-  'amount_before_tax_idr',
-  'tax',
-  'amount_after_tax_idr',
-  'a_0_30',
-  'a_31_60',
-  'a_61_90',
-  'a_gt_90',
-])
+export const CLAIM_SUSUT_NUMERIC_SORT_KEYS = new Set(['os_days', 'qty_claim', 'amount_before_tax_idr', 'amount_after_tax_idr'])
+
+/** The aging bucket of a claim, on the same thresholds as the Aging tab and the PIVOT sheet. */
+export function claimSusutAgingBucket(osDays: number | null | undefined): string | null {
+  if (osDays == null || !Number.isFinite(Number(osDays)) || Number(osDays) < 0) return null
+  const d = Number(osDays)
+  if (d <= 30) return '0-30'
+  if (d <= 60) return '31-60'
+  if (d <= 90) return '61-90'
+  return '> 90'
+}
 
 export function isClaimSusutDrilldownValueSet(value: string | null | undefined): value is string {
   return value != null && value !== ''
@@ -217,6 +220,7 @@ export type ClaimSusutApiFilters = {
   sources?: string[]
   incoterms?: string[]
   products?: string[]
+  vendors?: string[]
   groupsOfTransport?: string[]
   drilldown?: ClaimSusutDrilldownFilters
 }
@@ -235,6 +239,7 @@ export function appendClaimSusutFilterParams(
   for (const v of filters.sources ?? []) params.append('source', v)
   for (const v of filters.incoterms ?? []) params.append('incoterm', v)
   for (const v of filters.products ?? []) params.append('product', v)
+  for (const v of filters.vendors ?? []) params.append('vendor', v)
   if (includeGroup) {
     for (const v of filters.groupsOfTransport ?? []) params.append('groupOfTransport', v)
   }

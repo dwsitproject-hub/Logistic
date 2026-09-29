@@ -13,6 +13,8 @@ export interface ClaimSusutQueryFilters {
   sources: string[];
   incoterms: string[];
   products: string[];
+  /** Vendor Name (the page's former Company): the OS_CLAIM vendor, never SAP. */
+  vendors: string[];
   groupsOfTransport: string[];
   ddProduct: string | null;
   ddPlant: string | null;
@@ -68,6 +70,7 @@ export function parseClaimSusutQueryFilters(query: Record<string, unknown>): Cla
     sources: parseMultiQueryParam(query.source ?? query.sources),
     incoterms: parseMultiQueryParam(query.incoterm ?? query.incoterms),
     products: parseMultiQueryParam(query.product ?? query.products),
+    vendors: parseMultiQueryParam(query.vendor ?? query.vendors),
     groupsOfTransport: parseMultiQueryParam(query.groupOfTransport ?? query.groupsOfTransport),
     ddProduct: firstQueryString(query.ddProduct),
     ddPlant: firstQueryString(query.ddPlant),
@@ -137,6 +140,7 @@ export function buildClaimSusutFilteredCte(
     where += appendUpperInFilter('e.source', filters.sources, params);
     where += appendUpperInFilter('e.incoterm', filters.incoterms, params);
     where += appendUpperInFilter('e.product', filters.products, params);
+    where += appendUpperInFilter('e.company', filters.vendors, params);
   }
 
   if (shouldApplyDrilldown(scope)) {
