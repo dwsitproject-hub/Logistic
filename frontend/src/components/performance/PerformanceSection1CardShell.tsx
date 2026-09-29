@@ -14,6 +14,11 @@ export interface PerformanceSection1CardShellProps {
   onClick: () => void
   /** Optional trailing header content (e.g. CP On Time / Late badges). */
   headerEnd?: ReactNode
+  /**
+   * Card title size. 'lg' is the Contract / Shipping Performance status cards (OPEN / CLOSE,
+   * ON GOING / COMPLETED), whose title must stand above the text-sm labels inside the card.
+   */
+  titleSize?: 'sm' | 'lg'
   children: ReactNode
   className?: string
 }
@@ -29,6 +34,7 @@ export function PerformanceSection1CardShell({
   selected,
   onClick,
   headerEnd,
+  titleSize = 'sm',
   children,
   className,
 }: PerformanceSection1CardShellProps) {
@@ -56,7 +62,14 @@ export function PerformanceSection1CardShell({
           >
             <Icon className="h-5 w-5" aria-hidden />
           </div>
-          <span className="text-sm font-semibold uppercase tracking-wide text-slate-800">{title}</span>
+          <span
+            className={cn(
+              'font-semibold uppercase tracking-wide text-slate-800',
+              titleSize === 'lg' ? 'text-lg' : 'text-sm',
+            )}
+          >
+            {title}
+          </span>
         </div>
         {headerEnd ? <div className="shrink-0">{headerEnd}</div> : null}
       </div>

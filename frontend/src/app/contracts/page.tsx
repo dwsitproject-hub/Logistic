@@ -4054,6 +4054,7 @@ function ContractsPageContent() {
                 <PerformanceSection1CardShell
                   variant="open"
                   title="OPEN"
+                  titleSize="lg"
                   selected={openSelected}
                   className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Open')}
@@ -4105,6 +4106,7 @@ function ContractsPageContent() {
                 <PerformanceSection1CardShell
                   variant="close"
                   title="CLOSE"
+                  titleSize="lg"
                   selected={closeSelected}
                   className="border-2 shadow-sm"
                   onClick={() => applySummaryStatusCard('Close')}
