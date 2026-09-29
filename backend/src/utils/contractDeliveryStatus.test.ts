@@ -235,7 +235,8 @@ describe('sqlShipmentBacklogSpdSeaLegFilterSql / sqlIsContractSapClosedForShipme
     const filter = sqlShipmentBacklogSpdSeaLegFilterSql('c');
     expect(filter).toContain("<> 'FOB'");
     expect(filter).toContain("= 'V'");
-    expect(filter).toContain('IS DISTINCT FROM');
+    // Any row naming a vessel is a sea leg, a FOB Type T tug / barge included.
+    expect(filter).toContain("'Vessel Name'");
   });
 
   it('builds FOB-scoped closed predicate for shipment contract backlog', () => {
