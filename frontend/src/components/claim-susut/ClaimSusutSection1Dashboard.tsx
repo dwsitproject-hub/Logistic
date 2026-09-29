@@ -15,8 +15,9 @@ import { CLAIM_SUSUT_BLANK, formatClaimSusutIdr } from '@/lib/claimSusutView'
  *
  * - Aging is built from OS_CLAIM rows - the same aggregate the PIVOT sheet shows, not an import of
  *   it - so it follows the page filters like the view table below.
- * - Realised Claims is the REAL_CLAIM sheet of the same upload, shown whole: it is a short period
- *   list, and the page filters resolve through SAP contract data that only the outstanding rows carry.
+ * - Realised Claims is REAL_CLAIM across every import, cut to the page's CR date range (YTD by
+ *   default) on its CLAIM DATE; the Product / Vendor / Transport filters do not apply to it.
+ *   Those filters resolve through SAP contract data that only the outstanding rows carry.
  */
 
 export type ClaimSusutAgingGroupRow = {
@@ -142,11 +143,10 @@ export function ClaimSusutSection1Dashboard({
     crsByVendor.set(k, [...(crsByVendor.get(k) ?? []), r.cr_no])
   }
 
-  const sourceLabels = (realized?.sources ?? []).map((s) => s.periodLabel || s.fileName).filter(Boolean)
   const note =
     tab === 'aging'
       ? `Amount after tax (IDR) per group · CR date ${crDateLabel}${realized?.osPeriodLabel ? ` · outstanding as of ${realized.osPeriodLabel}` : ''} · follows the filters. Click a group to filter the table below.`
-      : `Approved claims with a CR date in ${crDateLabel}${sourceLabels.length ? ` · from REAL_CLAIM of ${sourceLabels.join(', ')}` : ''}. Each monthly file carries that month's approvals, so a range is complete once every month in it is imported. Product, vendor and transport filters do not apply.`
+      : `Approved claims with a CR date in ${crDateLabel}. Product, vendor and transport filters do not apply.`
   const tabLoading = tab === 'aging' ? groupLoading : realizedLoading
   const empty = (text: string) => <div className="py-8 text-center text-sm text-gray-500">{text}</div>
 

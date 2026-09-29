@@ -4246,9 +4246,15 @@ Amounts in the summary card are full IDR (Quality Claim shortens them to B / M; 
 **Filters and view table.** The CR date period opens on **YTD** (`CLAIM_SUSUT_DEFAULT_PERIOD`). The
 outstanding register is multi-year, so YTD shows only the claims raised this year - on the 31 Aug 2026
 file 56 of 167 claims, Rp 6.36 B of 28.34 B; pick *All* for the whole register, which is what the PIVOT
-sheet totals. The panel offers Product, **Vendor Name** (`vendor=`, matched on the OS_CLAIM vendor) and
-Transport. Source and Incoterm were removed as filters: OS_CLAIM has no source column, and Incoterm
-comes from SAP contracts via the PO, not from the import (the column stays in the view table).
+sheet totals. The panel offers Product, **Vendor Name** (`vendor=`, matched on the OS_CLAIM vendor),
+**Claim Status** (`claimStatus=Claimed|Not Claimed`, view table only - Section 1 already shows the two
+apart) and Transport. Source and Incoterm were removed as filters: OS_CLAIM has no source column, and
+Incoterm comes from SAP contracts via the PO, not from the import. Incoterm and Region/Plant (derived from
+DEST, the same codes) are not offered as view-table columns either; labels follow the sheet's headers
+(Vendor Code, Contract No for NO KONTRAK, Remarks for KETERANGAN).
+
+The status cards top-align their content (`PerformanceSection1CardShell` is a `<button>`, which centres
+vertically), so the label and value of a shorter card line up with its neighbours'.
 
 The view table offers only columns the sheet fills, checked on the 31 Aug 2026 file (167 rows):
 Payment Method, Source and Created By are not in OS_CLAIM, and its TAX column is empty on every row, so

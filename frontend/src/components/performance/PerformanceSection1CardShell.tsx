@@ -15,10 +15,11 @@ export interface PerformanceSection1CardShellProps {
   /** Optional trailing header content (e.g. CP On Time / Late badges). */
   headerEnd?: ReactNode
   /**
-   * Card title size. 'lg' is the Contract / Shipping Performance status cards (OPEN / CLOSE,
-   * ON GOING / COMPLETED), whose title must stand above the text-sm labels inside the card.
+   * Card title size. 'base' is the Contract / Shipping Performance status cards (OPEN / CLOSE,
+   * ON GOING / COMPLETED): text-base, the size they had before the Stitch layout, one step above
+   * the text-sm labels inside the card.
    */
-  titleSize?: 'sm' | 'lg'
+  titleSize?: 'sm' | 'base'
   children: ReactNode
   className?: string
 }
@@ -46,7 +47,10 @@ export function PerformanceSection1CardShell({
       type="button"
       onClick={onClick}
       className={cn(
-        'w-full rounded-xl p-4 text-left transition-all focus:outline-none',
+        // A <button> centres its content vertically; cards in one row share the tallest card's
+        // height, so a shorter card's label and value sat lower than its neighbours'. flex-col +
+        // justify-start keeps every card's content on the top edge.
+        'flex w-full flex-col justify-start rounded-xl p-4 text-left transition-all focus:outline-none',
         selected ? accent.selected : cn('border shadow-sm', accent.surface, accent.hover),
         accent.focus,
         className,
@@ -65,7 +69,7 @@ export function PerformanceSection1CardShell({
           <span
             className={cn(
               'font-semibold uppercase tracking-wide text-slate-800',
-              titleSize === 'lg' ? 'text-lg' : 'text-sm',
+              titleSize === 'base' ? 'text-base' : 'text-sm',
             )}
           >
             {title}

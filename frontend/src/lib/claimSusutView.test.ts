@@ -101,7 +101,7 @@ describe('Claim Susut view helpers', () => {
 
   it('offers only columns the OS_CLAIM sheet fills', () => {
     const ids = CLAIM_SUSUT_COLUMNS.map((c) => c.id)
-    for (const gone of ['payment_method', 'vendor_type', 'created_by', 'tax', 'a_0_30', 'a_31_60', 'a_61_90', 'a_gt_90']) {
+    for (const gone of ['payment_method', 'vendor_type', 'created_by', 'tax', 'a_0_30', 'a_31_60', 'a_61_90', 'a_gt_90', 'incoterm', 'region_plant']) {
       expect(ids).not.toContain(gone)
     }
     expect(CLAIM_SUSUT_DEFAULT_VISIBLE_IDS.every((id) => ids.includes(id))).toBe(true)

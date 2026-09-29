@@ -127,6 +127,8 @@ type ClaimSusutGroupTransportRow = {
 }
 
 const columns: ClaimSusutColumnDef[] = CLAIM_SUSUT_COLUMNS
+/** Claim Status filter: narrows the view table only; Section 1 already shows the two apart. */
+const CLAIM_SUSUT_CLAIM_STATUS_OPTIONS = ['Claimed', 'Not Claimed']
 const pageSize = 20
 
 function formatDate(d?: string) {
@@ -161,6 +163,7 @@ export default function ClaimSusutPage() {
   const [selectedPlants, setSelectedPlants] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<string[]>([])
   const [selectedVendors, setSelectedVendors] = useState<string[]>([])
+  const [selectedClaimStatuses, setSelectedClaimStatuses] = useState<string[]>([])
   const [selectedGroupsOfTransport, setSelectedGroupsOfTransport] = useState<string[]>([])
   const [plantOptions, setPlantOptions] = useState<string[]>([])
   const [productOptions, setProductOptions] = useState<string[]>([])
@@ -205,6 +208,7 @@ export default function ClaimSusutPage() {
       plants: selectedPlants,
       products: selectedProducts,
       vendors: selectedVendors,
+      claimStatuses: selectedClaimStatuses,
       groupsOfTransport: selectedGroupsOfTransport,
       drilldown: EMPTY_CLAIM_SUSUT_DRILLDOWN,
     }),
@@ -215,7 +219,10 @@ export default function ClaimSusutPage() {
       selectedPlants,
       selectedProducts,
     selectedVendors,
+    selectedClaimStatuses,
       selectedVendors,
+    selectedClaimStatuses,
+      selectedClaimStatuses,
       selectedGroupsOfTransport,
     ],
   )
@@ -465,7 +472,7 @@ export default function ClaimSusutPage() {
   useEffect(() => {
     if (!selectedImportId) return
     setPage(1)
-  }, [dateFrom, dateTo, selectedPlants, selectedProducts, selectedVendors, selectedGroupsOfTransport, sortKey, sortDir])
+  }, [dateFrom, dateTo, selectedPlants, selectedProducts, selectedVendors, selectedClaimStatuses, selectedGroupsOfTransport, sortKey, sortDir])
 
   useEffect(() => {
     if (!selectedImportId) return
@@ -483,6 +490,7 @@ export default function ClaimSusutPage() {
     selectedPlants,
     selectedProducts,
     selectedVendors,
+    selectedClaimStatuses,
     selectedGroupsOfTransport,
     loadSummary,
     scopeFilters,
@@ -503,6 +511,7 @@ export default function ClaimSusutPage() {
     selectedPlants,
     selectedProducts,
     selectedVendors,
+    selectedClaimStatuses,
     loadByGroupOfTransport,
     scopeFilters,
   ])
@@ -517,6 +526,7 @@ export default function ClaimSusutPage() {
     selectedPlants,
     selectedProducts,
     selectedVendors,
+    selectedClaimStatuses,
     selectedGroupsOfTransport,
     page,
     sortKey,
@@ -604,6 +614,7 @@ export default function ClaimSusutPage() {
     setSelectedPlants([])
     setSelectedProducts([])
     setSelectedVendors([])
+    setSelectedClaimStatuses([])
     setSelectedGroupsOfTransport([])
     setPage(1)
   }
@@ -704,6 +715,7 @@ export default function ClaimSusutPage() {
             selectedPlants.length > 0 ||
             selectedProducts.length > 0 ||
             selectedVendors.length > 0 ||
+            selectedClaimStatuses.length > 0 ||
             selectedGroupsOfTransport.length > 0
           }
           chips={[
@@ -731,6 +743,7 @@ export default function ClaimSusutPage() {
             ...selectionChips('Region/Plant', selectedPlants, setSelectedPlants),
             ...selectionChips('Product', selectedProducts, setSelectedProducts),
             ...selectionChips('Vendor Name', selectedVendors, setSelectedVendors),
+            ...selectionChips('Claim Status', selectedClaimStatuses, setSelectedClaimStatuses),
             ...selectionChips('Transport', selectedGroupsOfTransport, setSelectedGroupsOfTransport),
           ]}
         >
@@ -757,6 +770,17 @@ export default function ClaimSusutPage() {
               placeholder="All"
               emptyMessage="No vendors"
               uppercaseOptionLabels
+              pinSelectedToTop
+            />
+            <SearchableMultiSelect
+              label="Claim Status"
+              className="min-w-[8rem] flex-1"
+              labelClassName={LIST_FILTER_FIELD_LABEL_CLASS}
+              options={CLAIM_SUSUT_CLAIM_STATUS_OPTIONS}
+              selected={selectedClaimStatuses}
+              onChange={setSelectedClaimStatuses}
+              placeholder="All"
+              emptyMessage="No statuses"
               pinSelectedToTop
             />
             <SearchableMultiSelect
@@ -814,7 +838,10 @@ export default function ClaimSusutPage() {
                     selectedPlants.length > 0 ||
                                     selectedProducts.length > 0 ||
                     selectedVendors.length > 0 ||
+                    selectedClaimStatuses.length > 0 ||
+            selectedClaimStatuses.length > 0 ||
             selectedVendors.length > 0 ||
+            selectedClaimStatuses.length > 0 ||
                     selectedGroupsOfTransport.length > 0
                       ? 'Global · Filtered'
                       : 'Global · All'}

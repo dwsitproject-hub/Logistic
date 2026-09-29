@@ -102,7 +102,10 @@ export type ClaimSusutColumnDef = {
 /**
  * Only columns the OS_CLAIM sheet actually fills. Checked against the 31 Aug 2026 file (167 rows):
  * Payment Method, Source (vendor type) and Created By are not in the sheet at all, and its TAX
- * column is empty on every row (amount before tax = after tax), so all four were dropped. The four
+ * column is empty on every row (amount before tax = after tax), so all four were dropped. Incoterm (from
+ * SAP contracts via the PO) and Region/Plant (derived from DEST, the same codes) are not in the file
+ * either and are not offered. Labels follow the sheet's headers: Vendor Code (VENDOR CODE), Contract No
+ * (NO KONTRAK), Remarks (KETERANGAN). The four
  * per-bucket amount columns (0-30 ... > 90 days) are one Aging column: the row's bucket and OS days.
  *
  * The table lists OS_CLAIM rows (Status Claim "Not Claimed") and REAL_CLAIM rows ("Claimed") together;
@@ -120,11 +123,9 @@ export const CLAIM_SUSUT_COLUMNS: ClaimSusutColumnDef[] = [
   { id: 'qty_claim', label: 'Qty Claim (Kg)', sortKey: 'qty_claim', align: 'right' },
   { id: 'amount_after_tax_idr', label: 'Amount After Tax (IDR)', sortKey: 'amount_after_tax_idr', align: 'right' },
   { id: 'os_days', label: 'Aging (Days)', sortKey: 'os_days', align: 'right' },
-  { id: 'vendor_code', label: 'Supplier Code', sortKey: 'vendor_code' },
-  { id: 'incoterm', label: 'Incoterm', sortKey: 'incoterm' },
-  { id: 'region_plant', label: 'Region/Plant', sortKey: 'region_plant' },
+  { id: 'vendor_code', label: 'Vendor Code', sortKey: 'vendor_code' },
   { id: 'sta', label: 'STA', sortKey: 'sta' },
-  { id: 'contract_ext_no', label: 'Contract Ext No', sortKey: 'contract_ext_no' },
+  { id: 'contract_ext_no', label: 'Contract No', sortKey: 'contract_ext_no' },
   { id: 'comm', label: 'COMM', sortKey: 'comm' },
   { id: 'uom', label: 'UOM', sortKey: 'uom' },
   { id: 'currency', label: 'Currency', sortKey: 'currency' },
@@ -229,6 +230,8 @@ export type ClaimSusutApiFilters = {
   incoterms?: string[]
   products?: string[]
   vendors?: string[]
+  /** View table only: Claimed (REAL_CLAIM) / Not Claimed (OS_CLAIM). */
+  claimStatuses?: string[]
   groupsOfTransport?: string[]
   drilldown?: ClaimSusutDrilldownFilters
 }
@@ -248,6 +251,7 @@ export function appendClaimSusutFilterParams(
   for (const v of filters.incoterms ?? []) params.append('incoterm', v)
   for (const v of filters.products ?? []) params.append('product', v)
   for (const v of filters.vendors ?? []) params.append('vendor', v)
+  for (const v of filters.claimStatuses ?? []) params.append('claimStatus', v)
   if (includeGroup) {
     for (const v of filters.groupsOfTransport ?? []) params.append('groupOfTransport', v)
   }

@@ -2616,7 +2616,7 @@ function ShippingPerformancePageContent() {
                 <PerformanceSection1CardShell
                   variant="ongoing"
                   title="ON GOING"
-                  titleSize="lg"
+                  titleSize="base"
                   selected={perfCardFilter === 'ongoing'}
                   onClick={() => togglePerfCardFilter('ongoing')}
                   className="min-w-0 flex-1 border-2 shadow-sm"
@@ -2628,7 +2628,7 @@ function ShippingPerformancePageContent() {
                 <PerformanceSection1CardShell
                   variant="completed"
                   title="COMPLETED"
-                  titleSize="lg"
+                  titleSize="base"
                   selected={perfCardFilter === 'close'}
                   onClick={() => togglePerfCardFilter('close')}
                   className="min-w-0 flex-1 border-2 shadow-sm"

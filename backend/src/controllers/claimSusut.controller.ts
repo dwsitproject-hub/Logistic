@@ -8,6 +8,7 @@ import {
   buildClaimSusutRealViewCte,
   CLAIM_SUSUT_VIEW_COLUMNS,
   CLAIM_SUSUT_BLANK,
+  CLAIM_SUSUT_CLAIM_STATUSES,
   CLAIM_SUSUT_AGING_SUM_SQL,
   CLAIM_SUSUT_ROW_AGING_SQL,
   nestClaimSusutTree,
@@ -19,6 +20,7 @@ import {
   type ClaimSusutQueryFilters,
   type ClaimSusutTreeLeaf,
 } from '../utils/claimSusutQuerySql';
+import { parseMultiQueryParam } from '../utils/masterVesselListFilters';
 import {
   findOsClaimSheet,
   findRealClaimSheet,
@@ -557,11 +559,19 @@ combined AS (
   FROM real_view
 )`;
 
+    // Claim Status filter (Claimed / Not Claimed), matched case-insensitively; unknown values are ignored.
+    const statuses = parseMultiQueryParam((req.query as any).claimStatus ?? (req.query as any).claimStatuses)
+      .map((s) => CLAIM_SUSUT_CLAIM_STATUSES.find((k) => k.toUpperCase() === String(s).trim().toUpperCase()))
+      .filter((s): s is (typeof CLAIM_SUSUT_CLAIM_STATUSES)[number] => Boolean(s));
+    params.push(statuses.length > 0 ? statuses : null);
+    const statusWhere = `WHERE ($${params.length}::text[] IS NULL OR claim_status = ANY($${params.length}::text[]))`;
+
     const countRes = await query(
       `${combinedSql}
       SELECT COUNT(*)::int AS count,
              COUNT(*) FILTER (WHERE claim_status = 'Claimed')::int AS claimed
-        FROM combined`,
+        FROM combined
+       ${statusWhere}`,
       params,
     );
     const totalCount = Number(countRes.rows?.[0]?.count) || 0;
@@ -573,6 +583,7 @@ combined AS (
       `${combinedSql}
       SELECT ${CLAIM_SUSUT_VIEW_COLUMNS}, ${CLAIM_SUSUT_ROW_AGING_SQL}
       FROM combined
+      ${statusWhere}
       ORDER BY ${orderBy}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       [...params, limit, offset],

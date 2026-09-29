@@ -3,6 +3,9 @@ import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 
 export const CLAIM_SUSUT_BLANK = '(Blank)';
 
+/** The view table's Status Claim values: OS_CLAIM rows are Not Claimed, REAL_CLAIM rows Claimed. */
+export const CLAIM_SUSUT_CLAIM_STATUSES = ['Claimed', 'Not Claimed'] as const;
+
 export type ClaimSusutFilterScope = 'options' | 'summary' | 'tree' | 'group' | 'rows';
 
 export interface ClaimSusutQueryFilters {
