@@ -2,12 +2,20 @@ import { query } from '../database/connection';
 import { dhmRecordCode } from './mapper';
 import type { DhmRecord } from './types';
 
-export type DhmReplicaTable = 'products' | 'master_loading_ports' | 'master_plants' | 'master_reference_items';
+export type DhmReplicaTable =
+  | 'products'
+  | 'master_loading_ports'
+  | 'master_plants'
+  | 'master_sites'
+  | 'master_companies'
+  | 'master_reference_items';
 
 const REPLICA_TABLES = new Set<DhmReplicaTable>([
   'products',
   'master_loading_ports',
   'master_plants',
+  'master_sites',
+  'master_companies',
   'master_reference_items',
 ]);
 

@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import { Plus } from 'lucide-react'
+import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
@@ -35,6 +36,8 @@ interface MasterLoadingPort {
   code_klip?: string | null
   code_dhm?: string | null
   dhm_site_code?: string | null
+  site_id?: string | null
+  site?: string | null
   region: string | null
   port: string
   coordinate: string | null
@@ -63,6 +66,7 @@ const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
   { id: 'code_klip', label: 'Port Code (KLIP)', getText: (row) => portCell(row.code_klip) },
   { id: 'code_dhm', label: 'Port Code (DHM)', getText: (row) => portCell(row.code_dhm) },
   { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
+  { id: 'site', label: 'Site', getText: (row) => portCell(row.site) },
   dhmStatusListColumn<MasterLoadingPort>(),
 ]
 
@@ -73,13 +77,13 @@ export default function MasterLoadingPortPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('port')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const portColumns = useListColumnLayout('master-port.visibleColumns.v3', PORT_COLUMNS)
+  const portColumns = useListColumnLayout('master-port.visibleColumns.v4', PORT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
   const [isAdmin, setIsAdmin] = useState(false)
-  const [dhmSites, setDhmSites] = useState<Array<{ code: string; label: string }>>([])
+  const [dhmSites, setDhmSites] = useState<Array<{ id: string; code: string; label: string }>>([])
   const [uploadResult, setUploadResult] = useState<{
     total: number
     success: number
@@ -125,21 +129,21 @@ export default function MasterLoadingPortPage() {
     if (!isFormOpen) return
     let cancelled = false
     void api
-      .get('/master-plants', { params: { page: 1, limit: 500 } })
+      .get('/master-sites', { params: { page: 1, limit: 500 } })
       .then((res) => {
         if (cancelled) return
         const rows = (res.data?.data?.items || []) as Array<{
-          company_name?: string | null
-          plant_name?: string | null
-          plant_code?: string | null
+          id?: string
+          site_name?: string | null
           code_dhm?: string | null
         }>
         setDhmSites(
           rows
-            .filter((row) => String(row.code_dhm || '').trim())
+            .filter((row) => String(row.site_name || '').trim())
             .map((row) => ({
-              code: String(row.code_dhm),
-              label: `${row.plant_name || row.plant_code || 'Site'} — ${row.company_name || ''} (${row.code_dhm})`,
+              code: String(row.code_dhm || '').trim(),
+              label: String(row.site_name).trim(),
+              id: String(row.id || row.site_name),
             })),
         )
       })
@@ -178,7 +182,7 @@ export default function MasterLoadingPortPage() {
       }
       const payload = {
         port: form.port,
-        dhm_site_code: form.dhm_site_code || null,
+        site_id: form.site_id || null,
       }
       const persist = (overwrite: boolean) => {
         const qs = overwrite ? '?dhmOverwrite=true' : ''
@@ -338,21 +342,9 @@ export default function MasterLoadingPortPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-gray-600">
-              Maintain reference data for ports used in shipments.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {isAdmin ? (
-              <Button size="sm" onClick={openNew}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Port
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <p className="text-gray-600">
+          Maintain reference data for ports used in shipments.
+        </p>
 
         <ListFilterPanel
           onReset={() => setSearch('')}
@@ -376,6 +368,15 @@ export default function MasterLoadingPortPage() {
                 />
               </div>
             </div>
+            {isAdmin ? (
+              <div className="flex shrink-0 items-end gap-2">
+                <Button size="sm" className="shrink-0" onClick={openNew}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Port
+                </Button>
+                <MasterDhmSyncButton master="port" onDone={() => void fetchData(debouncedSearch)} />
+              </div>
+            ) : null}
           </div>
         </ListFilterPanel>
 
@@ -395,23 +396,20 @@ export default function MasterLoadingPortPage() {
                   <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
                 </div>
                 <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Site (DHM)</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Site</label>
                   <select
                     className="border rounded-md px-3 py-2 w-full text-sm"
-                    value={form.dhm_site_code || ''}
-                    onChange={(e) => handleChange('dhm_site_code', e.target.value || null)}
+                    value={form.site_id || ''}
+                    onChange={(e) => handleChange('site_id', e.target.value || null)}
                   >
-                    <option value="">Select a Company (Internal) site</option>
-                    {form.dhm_site_code && !dhmSites.some((site) => site.code === form.dhm_site_code) ? (
-                      <option value={form.dhm_site_code}>{form.dhm_site_code}</option>
-                    ) : null}
+                    <option value="">Select a site</option>
                     {dhmSites.map((site) => (
-                      <option key={site.code} value={site.code}>
+                      <option key={site.id} value={site.id}>
                         {site.label}
                       </option>
                     ))}
                   </select>
-                  <p className="mt-1 text-xs text-gray-500">Required to link this port in DHM. Local save still succeeds without it.</p>
+                  <p className="mt-1 text-xs text-gray-500">Choose a site from Master Site. Its Site Code (DHM) is sent to Port Master after the site is synced.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Port <span className="text-red-500">*</span></label>

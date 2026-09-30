@@ -83,6 +83,12 @@
     hyphens: none;
   }
 
+  .klip-master-code {
+    font-family: "Courier New", Courier, monospace;
+    font-weight: 300;
+    font-synthesis: none;
+  }
+
   .klip-compact-table.klip-compact-table {
     table-layout: fixed;
   }
@@ -419,20 +425,22 @@
     background-color: rgb(249 250 251);
   }
 
-  /* Master Vessel keeps a slightly wider Actions column. */
+  /* Master Vessel Actions: two 32px buttons with a little inset. */
   .klip-compact-table--operational.klip-master-list-table th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-list-table td.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-vessel-table th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-vessel-table td.klip-op-col--actions {
-    width: 96px;
-    min-width: 96px;
-    max-width: 96px;
+    width: 112px;
+    min-width: 112px;
+    max-width: 112px;
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   /*
    * Product through Truck Transporter. table-layout:fixed must beat the operational
-   * auto rule, and one data column stays widthless so leftover space does not stretch Actions.
-   * 32px + 4px + 32px, with 4px inset each side.
+   * auto rule. Column widths stay proportional so one name column does not take the row.
+   * 32px + 4px + 32px, with 14px inset each side.
    */
   .klip-compact-table.klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions {
     table-layout: fixed;
@@ -441,11 +449,11 @@
 
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions td.klip-op-col--actions {
-    width: 76px;
-    min-width: 76px;
-    max-width: 76px;
-    padding-left: 4px;
-    padding-right: 4px;
+    width: 96px;
+    min-width: 96px;
+    max-width: 96px;
+    padding-left: 14px;
+    padding-right: 14px;
     white-space: nowrap;
   }
 

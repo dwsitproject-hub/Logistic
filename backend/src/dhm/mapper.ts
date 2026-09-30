@@ -146,6 +146,12 @@ export function toDhmCatalogPayload(
     const field = byKey.get(key);
     if (!field || field.systemGenerated) continue;
     if (value == null) continue;
+    if (Array.isArray(value)) {
+      const items = value.map((item) => String(item ?? '').trim()).filter(Boolean);
+      if (!items.length) continue;
+      payload[key] = items;
+      continue;
+    }
     if (typeof value === 'string') {
       const text = value.trim();
       if (!text) continue;
@@ -168,6 +174,79 @@ export function toDhmCatalogPayload(
 export function dhmParentRefKey(entity: DhmCatalogShape, candidates: string[]): string | null {
   const keys = new Set((entity.fields ?? []).map((field) => field.key));
   return candidates.find((key) => keys.has(key)) ?? null;
+}
+
+function normalizedCatalogKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** External party payload: Group from the master row, Type always Vendor. */
+export function externalPartyCatalogExtra(
+  entity: DhmCatalogShape | null,
+  group: string,
+): Record<string, string> {
+  const groupText = String(group ?? '').trim();
+  if (!entity?.fields?.length) {
+    const extra: Record<string, string> = { type: 'Vendor' };
+    if (groupText) extra.group = groupText;
+    return extra;
+  }
+  const extra: Record<string, string> = {};
+  const groupKey = matchDhmFieldKey(entity, [
+    (key) => key === 'group',
+    (key) => key.includes('group') && !key.endsWith('id'),
+  ]);
+  const typeKey = matchDhmFieldKey(entity, [
+    (key) => key === 'type',
+    (key) => key.includes('party') && key.includes('type'),
+  ]);
+  if (groupKey && groupText) extra[groupKey] = groupText;
+  if (typeKey) extra[typeKey] = 'Vendor';
+  return extra;
+}
+
+/** Company payload: SAP code as short name, linked Master Site codes as sites. */
+export function companyCatalogExtra(
+  entity: DhmCatalogShape | null,
+  sapCode: string,
+  siteCodes: string[],
+): Record<string, string | string[]> {
+  const code = String(sapCode ?? '').trim();
+  const sites = siteCodes.map((item) => String(item ?? '').trim()).filter(Boolean);
+  if (!entity?.fields?.length) {
+    const extra: Record<string, string | string[]> = {};
+    if (code) extra.short_name = code;
+    if (sites.length) extra.sites = sites;
+    return extra;
+  }
+  const extra: Record<string, string | string[]> = {};
+  const shortKey = matchDhmFieldKey(entity, [
+    (key) => key === 'shortname',
+    (key) => key.includes('short') && key.includes('name'),
+  ]);
+  const sitesKey = matchDhmFieldKey(entity, [
+    (key) => key === 'sites',
+    (key) => key === 'siteids',
+    (key) => key.includes('site') && !key.includes('name') && !key.includes('code'),
+  ]);
+  if (shortKey && code) extra[shortKey] = code;
+  if (sitesKey && sites.length) {
+    extra[sitesKey] = sitesKey.toLowerCase().endsWith('s') ? sites : sites[0];
+  }
+  return extra;
+}
+
+/** Pick a live catalog field by meaning. System-generated code is never chosen. */
+export function matchDhmFieldKey(
+  entity: DhmCatalogShape,
+  predicates: Array<(normalized: string) => boolean>,
+): string | null {
+  const fields = entity.fields ?? [];
+  for (const predicate of predicates) {
+    const found = fields.find((field) => !field.systemGenerated && predicate(normalizedCatalogKey(field.key)));
+    if (found) return found.key;
+  }
+  return null;
 }
 
 /** Name-only masters. Optional keys are the hub field names (company_id, site_id). */

@@ -19,39 +19,43 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
     if (search && typeof search === 'string' && search.trim().length > 0) {
       params.push(`%${search.trim()}%`);
       where += ` AND (
-        company_name ILIKE $${params.length}
-        OR plant_code ILIKE $${params.length}
-        OR plant_name ILIKE $${params.length}
-        OR city ILIKE $${params.length}
-        OR plant_type ILIKE $${params.length}
-        OR group_plant ILIKE $${params.length}
-        OR company_code ILIKE $${params.length}
-        OR site ILIKE $${params.length}
-        OR found_in ILIKE $${params.length}
-        OR code_klip ILIKE $${params.length}
-        OR code_dhm ILIKE $${params.length}
+        master_plants.company_name ILIKE $${params.length}
+        OR master_plants.plant_code ILIKE $${params.length}
+        OR master_plants.plant_name ILIKE $${params.length}
+        OR master_plants.city ILIKE $${params.length}
+        OR master_plants.plant_type ILIKE $${params.length}
+        OR master_plants.group_plant ILIKE $${params.length}
+        OR master_plants.company_code ILIKE $${params.length}
+        OR master_plants.site ILIKE $${params.length}
+        OR linked_site.site_name ILIKE $${params.length}
+        OR master_plants.found_in ILIKE $${params.length}
+        OR master_plants.code_klip ILIKE $${params.length}
+        OR master_plants.code_dhm ILIKE $${params.length}
       )`;
     }
 
     const listSql = `
       SELECT
-        id,
-        company_code,
-        company_name,
-        plant_code,
-        plant_name,
-        plant_type,
-        site,
-        city,
-        postal_code,
-        found_in,
-        code_klip,
-        code_dhm,
-        dhm_org_code,
-        group_plant,
-        created_at,
-        updated_at
+        master_plants.id,
+        master_plants.company_code,
+        master_plants.company_name,
+        master_plants.plant_code,
+        master_plants.plant_name,
+        master_plants.plant_type,
+        COALESCE(linked_site.site_name, master_plants.site) AS site,
+        master_plants.site_id,
+        master_plants.city,
+        master_plants.postal_code,
+        master_plants.found_in,
+        master_plants.code_klip,
+        master_plants.code_dhm,
+        master_plants.dhm_org_code,
+        master_plants.dhm_id,
+        master_plants.group_plant,
+        master_plants.created_at,
+        master_plants.updated_at
       FROM master_plants
+      LEFT JOIN master_sites AS linked_site ON linked_site.id = master_plants.site_id
       ${where}
       ORDER BY company_name, plant_code
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -86,7 +90,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
 
 export const createMasterPlant = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, found_in, group_plant } = req.body as any;
+    const { company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, site_id, found_in, group_plant } = req.body as any;
 
     const company = typeof company_name === 'string' ? company_name.trim() : String(company_name ?? '').trim();
     const code = typeof plant_code === 'string' ? plant_code.trim() : String(plant_code ?? '').trim();
@@ -98,8 +102,12 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
 
     const insertSql = `
       INSERT INTO master_plants (
-        company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, found_in, group_plant
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, site_id, found_in, group_plant
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,
+        COALESCE((SELECT site_name FROM master_sites WHERE id = $9::uuid), $8),
+        $9::uuid,$10,$11
+      )
       RETURNING *
     `;
     const result = await query(insertSql, [
@@ -111,6 +119,7 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
       city ?? null,
       plant_type ?? null,
       site ?? null,
+      site_id || null,
       found_in ?? null,
       group_plant ?? null,
     ]);
@@ -128,23 +137,24 @@ export const createMasterPlant = async (req: AuthRequest, res: Response): Promis
 export const updateMasterPlant = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params as any;
-    const { company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, found_in, group_plant } = req.body as any;
+    const { company_code, company_name, plant_code, plant_name, postal_code, city, plant_type, site, site_id, found_in, group_plant } = req.body as any;
 
     const updateSql = `
       UPDATE master_plants
       SET
         company_code = $1,
-        company_name = COALESCE($2, company_name),
+        company_name = COALESCE(NULLIF($2, ''), company_name),
         plant_code = COALESCE($3, plant_code),
         plant_name = $4,
         postal_code = $5,
         city = $6,
         plant_type = $7,
-        site = $8,
-        found_in = $9,
-        group_plant = COALESCE($10, group_plant),
+        site_id = $9::uuid,
+        site = COALESCE((SELECT site_name FROM master_sites WHERE id = $9::uuid), $8),
+        found_in = $10,
+        group_plant = COALESCE($11, group_plant),
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $11
+      WHERE id = $12
       RETURNING *
     `;
     const result = await query(updateSql, [
@@ -156,6 +166,7 @@ export const updateMasterPlant = async (req: AuthRequest, res: Response): Promis
       city ?? null,
       plant_type ?? null,
       site ?? null,
+      site_id || null,
       found_in ?? null,
       group_plant ?? null,
       id,

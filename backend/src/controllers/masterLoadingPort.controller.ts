@@ -10,9 +10,44 @@ function wantsDhmOverwrite(req: AuthRequest): boolean {
   return q === 'true' || q === '1';
 }
 
-function siteCodeOrNull(value: unknown): string | null {
-  const text = String(value ?? '').trim();
-  return text || null;
+async function resolvePortSite(
+  siteId: unknown,
+  siteCodeText: unknown,
+): Promise<{ siteId: string | null; siteCode: string | null }> {
+  const id = String(siteId ?? '').trim();
+  if (id) {
+    const matched = await query(
+      `SELECT id::text AS id, code_dhm FROM master_sites WHERE id = $1::uuid`,
+      [id],
+    );
+    if (!matched.rows[0]) return { siteId: null, siteCode: null };
+    return {
+      siteId: String(matched.rows[0].id),
+      siteCode: String(matched.rows[0].code_dhm || '').trim() || null,
+    };
+  }
+  const text = String(siteCodeText ?? '').trim();
+  if (!text) return { siteId: null, siteCode: null };
+  const matched = await query(
+    `SELECT id::text AS id, code_dhm
+     FROM master_sites
+     WHERE code_dhm IS NOT NULL
+       AND (
+         upper(trim(code_dhm)) = upper(trim($1))
+         OR upper(trim(site_name)) = upper(trim($1))
+       )
+     ORDER BY CASE WHEN upper(trim(code_dhm)) = upper(trim($1)) THEN 0 ELSE 1 END
+     LIMIT 1`,
+    [text],
+  );
+  const code = String(matched.rows[0]?.code_dhm || '').trim();
+  if (code) return { siteId: matched.rows[0]?.id ? String(matched.rows[0].id) : null, siteCode: code };
+  const named = await query(
+    `SELECT id::text AS id FROM master_sites WHERE upper(trim(site_name)) = upper(trim($1)) LIMIT 1`,
+    [text],
+  );
+  if (named.rows[0]) return { siteId: String(named.rows[0].id), siteCode: null };
+  return { siteId: null, siteCode: text };
 }
 
 const NON_NUMERIC_PORT = NON_NUMERIC_PORT_NAME_FILTER('port');
@@ -34,19 +69,25 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       searchFilter = ` AND port ILIKE $${params.length}`;
     }
 
+    const catalogSearch = searchTerm.length > 0
+      ? `AND (p.port ILIKE $1 OR p.region ILIKE $1 OR p.code_klip ILIKE $1 OR p.code_dhm ILIKE $1 OR s.site_name ILIKE $1)`
+      : '';
     const catalogListSql = `
-      SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code
-      FROM master_loading_ports
-      WHERE ${NON_NUMERIC_PORT}
-        ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1 OR code_klip ILIKE $1 OR code_dhm ILIKE $1)` : ''}
-      ORDER BY port
+      SELECT p.id::text AS id, p.port, p.region, p.code_klip, p.code_dhm, p.dhm_site_code,
+             p.site_id::text AS site_id, s.site_name AS site
+      FROM master_loading_ports p
+      LEFT JOIN master_sites s ON s.id = p.site_id
+      WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
+        ${catalogSearch}
+      ORDER BY p.port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     const catalogCountSql = `
       SELECT COUNT(*) AS count
-      FROM master_loading_ports
-      WHERE ${NON_NUMERIC_PORT}
-        ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1 OR code_klip ILIKE $1 OR code_dhm ILIKE $1)` : ''}
+      FROM master_loading_ports p
+      LEFT JOIN master_sites s ON s.id = p.site_id
+      WHERE ${NON_NUMERIC_PORT_NAME_FILTER('p.port')}
+        ${catalogSearch}
     `;
 
     const listSql = catalogOnly ? catalogListSql : `
@@ -215,6 +256,7 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_rate_mt_per_hour,
       shipper,
       dhm_site_code,
+      site_id,
     } = req.body;
 
     const insertSql = `
@@ -222,12 +264,13 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
         region, port, coordinate, masuk_alur, lebar_alur, jumlah_jembatan,
         jenis_port, pemilik_port, antri_muat_hari, jumlah_demaraga, panjang_demaraga,
         draft, dwt, siklus_pasang, loading_method, loading_rate_mt_per_hour, shipper,
-        dhm_site_code
+        dhm_site_code, site_id
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::uuid
       )
       RETURNING *
     `;
+    const linked = await resolvePortSite(site_id, dhm_site_code);
     const result = await query(insertSql, [
       region ?? null,
       port,
@@ -246,7 +289,8 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method ?? null,
       loading_rate_mt_per_hour ?? null,
       shipper ?? null,
-      siteCodeOrNull(dhm_site_code),
+      linked.siteCode,
+      linked.siteId,
     ]);
     const saved = result.rows[0] as Record<string, unknown>;
     const dhm = await pushMasterPortToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
@@ -281,6 +325,7 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_rate_mt_per_hour,
       shipper,
       dhm_site_code,
+      site_id,
     } = req.body;
 
     const updateSql = `
@@ -304,11 +349,13 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
         loading_rate_mt_per_hour = COALESCE($16, loading_rate_mt_per_hour),
         shipper = COALESCE($17, shipper),
         dhm_site_code = $18,
+        site_id = $19::uuid,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $19
+      WHERE id = $20
       RETURNING *
     `;
 
+    const linked = await resolvePortSite(site_id, dhm_site_code);
     const result = await query(updateSql, [
       region ?? null,
       port ?? null,
@@ -327,7 +374,8 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method ?? null,
       loading_rate_mt_per_hour ?? null,
       shipper ?? null,
-      siteCodeOrNull(dhm_site_code),
+      linked.siteCode,
+      linked.siteId,
       id,
     ]);
 

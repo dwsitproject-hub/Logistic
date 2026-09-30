@@ -5,21 +5,23 @@ import { ReferenceMasterPage, type ReferenceField } from '@/components/shared/Re
 const FIELDS: ReferenceField[] = [
   { key: 'value_1', label: 'Source' },
   { key: 'value_2', label: 'Group' },
-  { key: 'value_3', label: 'Ext Company Name', required: true },
+  { key: 'value_3', label: 'Company Name', required: true },
 ]
 
 export default function MasterCompanyExtPage() {
   return (
     <ReferenceMasterPage
       kind="ext_company"
-      title="All Company (Ext)"
-      description="Maintain external companies and reconcile them with DHM."
+      title="All Company (External)"
+      description="Maintain external companies and reconcile them with DHM external parties."
       newLabel="New Company"
       fields={FIELDS}
-      storageKey="master-company-ext.visibleColumns.v2"
+      storageKey="master-company-ext.visibleColumns.v3"
       codeNoun="Company"
       syncDhm
-      dhmNoun="external company"
+      dhmNoun="external party"
+      dhmSyncMaster="ext_company"
+      lockedFields={[{ id: 'type', label: 'Type', value: 'Vendor' }]}
     />
   )
 }

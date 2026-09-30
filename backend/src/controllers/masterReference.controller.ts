@@ -1,5 +1,5 @@
 import { Response } from 'express';
-import { pushNamedMasterToDhm } from '../dhm';
+import { pushMasterExternalPartyToDhm, pushNamedMasterToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
@@ -29,15 +29,14 @@ function wantsDhmOverwrite(req: AuthRequest): boolean {
 
 async function pushReference(kind: ReferenceKind, row: Record<string, unknown>, overwrite: boolean) {
   if (kind === 'truck_transporter') return {};
-  const name = kind === 'ext_company' ? String(row.value_3 ?? '') : String(row.value_1 ?? '');
-  const group = kind === 'ext_company' ? String(row.value_2 ?? '').trim() : '';
+  if (kind === 'ext_company') return pushMasterExternalPartyToDhm(String(row.id), row, { overwrite });
   return pushNamedMasterToDhm(
     'master_reference_items',
     String(row.id),
-    kind === 'ext_company' ? 'shipper' : 'incoterm',
-    name,
+    'incoterm',
+    String(row.value_1 ?? ''),
     row.code_dhm != null ? String(row.code_dhm) : null,
-    { overwrite, extra: group ? { group } : undefined },
+    { overwrite },
   );
 }
 
@@ -107,7 +106,7 @@ export const createMasterReference = async (req: AuthRequest, res: Response): Pr
       return;
     }
     if (kind === 'ext_company' && !value3) {
-      res.status(400).json({ success: false, error: { message: 'Ext Company Name is required' } });
+      res.status(400).json({ success: false, error: { message: 'Company Name is required' } });
       return;
     }
     const storedValue1 = kind === 'ext_company' ? value1 ?? '' : value1;
@@ -146,7 +145,7 @@ export const updateMasterReference = async (req: AuthRequest, res: Response): Pr
     const value2 = textOrNull(req.body?.value_2);
     const value3 = textOrNull(req.body?.value_3);
     if (kind === 'ext_company' && !value3) {
-      res.status(400).json({ success: false, error: { message: 'Ext Company Name is required' } });
+      res.status(400).json({ success: false, error: { message: 'Company Name is required' } });
       return;
     }
     if (kind !== 'ext_company' && !value1) {

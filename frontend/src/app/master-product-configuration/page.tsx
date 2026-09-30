@@ -23,10 +23,13 @@ import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import { Plus } from 'lucide-react'
+import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 
 interface Product {
   id: string
   product_name: string
+  long_name?: string | null
+  commodity_type?: string | null
   code_klip?: string | null
   code_dhm?: string | null
   percent_produce: number | null
@@ -39,6 +42,8 @@ const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
   { id: 'code_klip', label: 'Product Code (KLIP)', getText: (row) => row.code_klip || '-' },
   { id: 'code_dhm', label: 'Product Code (DHM)', getText: (row) => row.code_dhm || '-' },
   { id: 'product_name', label: 'Product', getText: (row) => row.product_name || '-' },
+  { id: 'long_name', label: 'Long Name', getText: (row) => row.long_name || '-' },
+  { id: 'commodity_type', label: 'Type', getText: (row) => row.commodity_type || '-' },
   dhmStatusListColumn<Product>(),
 ]
 
@@ -59,7 +64,7 @@ export default function MasterProductConfigurationPage() {
   const [sortKey, setSortKey] = useState('product_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [isAdmin, setIsAdmin] = useState(false)
-  const productColumns = useListColumnLayout('master-product.visibleColumns.v3', PRODUCT_COLUMNS)
+  const productColumns = useListColumnLayout('master-product.visibleColumns.v4', PRODUCT_COLUMNS)
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
 
@@ -112,7 +117,11 @@ export default function MasterProductConfigurationPage() {
     e.preventDefault()
     setError(''); setSuccess('')
     try {
-      const payload = { product_name: form.product_name }
+      const payload = {
+        product_name: form.product_name,
+        long_name: form.long_name || null,
+        commodity_type: form.commodity_type || null,
+      }
       const noun = 'product'
       if (editing) {
         await saveWithDhmConfirm((overwrite) => api.put(`/products/${editing.id}${overwrite ? '?dhmOverwrite=true' : ''}`, payload), noun)
@@ -139,14 +148,7 @@ export default function MasterProductConfigurationPage() {
   return (
     <Layout>
     <StitchFields>
-    <div className="space-y-6">
-      <div className="flex items-center justify-end">
-        <Button size="sm" onClick={openAdd}>
-          <Plus className="h-4 w-4 mr-2" />
-          New Product
-        </Button>
-      </div>
-
+      <div className="space-y-6">
       {error && <div className="text-red-600 text-sm">{error}</div>}
       {success && <div className="text-green-600 text-sm">{success}</div>}
 
@@ -170,9 +172,16 @@ export default function MasterProductConfigurationPage() {
                 onChange={(e) => setSearch(e.target.value)}
                 className="rounded-lg border-slate-200 pl-10 text-slate-700 placeholder:text-slate-400 focus-visible:ring-blue-600"
               />
+              </div>
+            </div>
+            <div className="flex shrink-0 items-end gap-2">
+              <Button size="sm" className="shrink-0" onClick={openAdd}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Product
+              </Button>
+              {isAdmin ? <MasterDhmSyncButton master="product" onDone={() => void fetchData(page, debouncedSearch)} /> : null}
             </div>
           </div>
-        </div>
       </ListFilterPanel>
 
       <Card>
@@ -273,6 +282,20 @@ export default function MasterProductConfigurationPage() {
                   value={form.product_name ?? ''}
                   onChange={(e) => setForm((f: { product_name?: string }) => ({ ...f, product_name: e.target.value }))}
                   required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Long Name</Label>
+                <Input
+                  value={form.long_name ?? ''}
+                  onChange={(e) => setForm((f: Product) => ({ ...f, long_name: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>Type</Label>
+                <Input
+                  value={form.commodity_type ?? ''}
+                  onChange={(e) => setForm((f: Product) => ({ ...f, commodity_type: e.target.value }))}
                 />
               </div>
               <div className="col-span-full flex justify-end gap-2 mt-2">

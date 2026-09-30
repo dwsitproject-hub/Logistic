@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { SearchableMultiSelect } from '@/components/SearchableMultiSelect'
 import { Input } from '@/components/ui/input'
 import {
@@ -36,6 +37,7 @@ export interface MasterVesselGlobalFiltersSectionProps {
   onTermsChange: (values: string[]) => void
   hasActiveFilters: boolean
   onClearFilters: () => void
+  action?: ReactNode
 }
 
 const HEATING_FILTER_OPTIONS = ['Yes', 'No', '(Blank)'] as const
@@ -60,6 +62,7 @@ export function MasterVesselGlobalFiltersSection({
   onTermsChange,
   hasActiveFilters,
   onClearFilters,
+  action,
 }: MasterVesselGlobalFiltersSectionProps) {
   const termOptions = [
     ...TERMS_FILTER_OPTIONS,
@@ -151,6 +154,7 @@ export function MasterVesselGlobalFiltersSection({
           placeholder="All"
           emptyMessage="No terms"
         />
+        {action}
       </div>
     </ListFilterPanel>
   )

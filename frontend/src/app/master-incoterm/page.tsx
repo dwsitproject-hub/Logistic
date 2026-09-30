@@ -16,6 +16,7 @@ export default function MasterIncotermPage() {
       codeNoun="Incoterm"
       syncDhm
       dhmNoun="incoterm"
+      dhmSyncMaster="incoterm"
     />
   )
 }

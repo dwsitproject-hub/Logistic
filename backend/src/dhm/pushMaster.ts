@@ -1,21 +1,17 @@
 import logger from '../utils/logger';
+import { query } from '../database/connection';
 import { getDhmCatalogEntity, resolveDhmSlug } from './catalog';
 import { isDhmEnabled } from './config';
 import { postInbound, putInbound } from './inbound';
-import { dhmParentRefKey, toDhmCatalogPayload } from './mapper';
-import {
-  findSiblingOrgCode,
-  persistMasterReplica,
-  rememberDhmOrganization,
-  type DhmReplicaTable,
-} from './masterReplica';
+import { dhmParentRefKey, companyCatalogExtra, externalPartyCatalogExtra, matchDhmFieldKey, toDhmCatalogPayload } from './mapper';
+import { persistMasterReplica, type DhmReplicaTable } from './masterReplica';
 import type { DhmPushAttachment } from './pushVessel';
 import type { DhmInboundResult, DhmRecord } from './types';
 
 async function payloadFor(
   slug: string,
   name: string,
-  extra: Record<string, string> | undefined,
+  extra: Record<string, string | string[]> | undefined,
   code?: string,
 ): Promise<{ payload: Record<string, unknown> } | { error: string }> {
   const entity = await getDhmCatalogEntity(slug);
@@ -29,7 +25,7 @@ async function pushNamed(args: {
   slug: string;
   name: string;
   existingCode: string | null;
-  extra?: Record<string, string>;
+  extra?: Record<string, string | string[]>;
   overwrite?: boolean;
   persist: (record: DhmRecord, code: string | null) => Promise<void>;
 }): Promise<DhmPushAttachment> {
@@ -95,7 +91,7 @@ export async function pushNamedMasterToDhm(
   slug: string,
   name: string,
   existingCode: string | null,
-  options?: { overwrite?: boolean; extra?: Record<string, string> },
+  options?: { overwrite?: boolean; extra?: Record<string, string | string[]> },
 ): Promise<DhmPushAttachment> {
   if (!isDhmEnabled()) return {};
   const label = String(name || '').trim();
@@ -121,47 +117,137 @@ export async function pushMasterPlantToDhm(
   options?: { overwrite?: boolean },
 ): Promise<DhmPushAttachment> {
   if (!isDhmEnabled()) return {};
-  const companyName = String(row.company_name || '').trim();
-  const siteName = String(row.plant_name || '').trim() || String(row.plant_code || '').trim();
-  if (!companyName || !siteName) {
-    return { dhmError: 'Company name and plant are required for DHM' };
-  }
+  const plantName = String(row.plant_name || '').trim() || String(row.plant_code || '').trim();
+  if (!plantName) return { dhmError: 'Plant name is required for DHM' };
 
   try {
-    let orgCode = String(row.dhm_org_code || '').trim();
-    if (!orgCode) orgCode = (await findSiblingOrgCode(companyName, localId)) || '';
+    let siteCode = String(row.site_dhm_code || '').trim();
+    if (!siteCode && row.site_id) {
+      const parent = await query(`SELECT code_dhm FROM master_sites WHERE id = $1::uuid`, [row.site_id]);
+      siteCode = String(parent.rows[0]?.code_dhm || '').trim();
+    }
 
-    const companySlug = await resolveDhmSlug('company');
-    if (!companySlug) return { dhmError: 'DHM catalog does not allow company' };
-    const org = await pushNamed({
-      slug: companySlug,
-      name: companyName,
-      existingCode: orgCode || null,
-      overwrite: options?.overwrite,
-      persist: async (record, code) => {
-        await rememberDhmOrganization(record, code, companyName);
-      },
-    });
-    if (org.dhmConflict || org.dhmError) return org;
-    const resolvedOrg = String(org.dhmCode || orgCode || '').trim();
-    if (!resolvedOrg) return { dhmError: 'DHM organization was not linked' };
+    const entity = await getDhmCatalogEntity('plant');
+    const extra: Record<string, string> = {};
+    if (entity) {
+      const sap = String(row.plant_code || '').trim();
+      const plantType = String(row.plant_type || '').trim();
+      const sapKey = matchDhmFieldKey(entity, [
+        (key) => key.includes('sap') && (key.includes('plant') || key.includes('code')),
+        (key) => key === 'plantcode',
+      ]);
+      const nameKey = matchDhmFieldKey(entity, [
+        (key) => key === 'plantname',
+        (key) => key.includes('plant') && key.includes('name'),
+      ]);
+      const typeKey = matchDhmFieldKey(entity, [
+        (key) => key === 'planttype',
+        (key) => key.includes('plant') && key.includes('type'),
+        (key) => key === 'type',
+      ]);
+      const siteKey =
+        dhmParentRefKey(entity, ['site_id']) ||
+        matchDhmFieldKey(entity, [(key) => key === 'siteid' || key === 'site']);
+      if (sapKey && sap) extra[sapKey] = sap;
+      if (nameKey && nameKey !== 'name') extra[nameKey] = plantName;
+      if (typeKey && plantType) extra[typeKey] = plantType;
+      if (siteKey && siteCode) extra[siteKey] = siteCode;
+    }
 
-    const siteEntity = await getDhmCatalogEntity('site');
-    const parentKey = siteEntity ? dhmParentRefKey(siteEntity, ['company_id', 'organization_id']) : null;
-    if (!parentKey) return { dhmError: 'DHM site has no company reference' };
-    const site = await pushNamed({
-      slug: 'site',
-      name: siteName,
-      existingCode: String(row.code_dhm || '').trim() || null,
-      extra: { [parentKey]: resolvedOrg },
+    return pushNamedMasterToDhm('master_plants', localId, 'plant', plantName, String(row.code_dhm || '').trim() || null, {
       overwrite: options?.overwrite,
-      persist: persistRow('master_plants', localId),
+      extra,
     });
-    return site.dhmCode || site.dhmConflict || site.dhmError ? site : { ...site, dhmCode: resolvedOrg };
   } catch (error) {
     logger.warn('DHM inbound unavailable; local plant saved', { localId, error });
     return { dhmError: 'DHM unavailable' };
   }
+}
+
+export async function pushMasterExternalPartyToDhm(
+  localId: string,
+  row: Record<string, unknown>,
+  options?: { overwrite?: boolean },
+): Promise<DhmPushAttachment> {
+  if (!isDhmEnabled()) return {};
+  const name = String(row.value_3 || '').trim();
+  if (!name) return { dhmError: 'Name is required for DHM' };
+  try {
+    const slug = (await resolveDhmSlug('external_party')) || 'external_party';
+    const entity = await getDhmCatalogEntity(slug);
+    return pushNamedMasterToDhm(
+      'master_reference_items',
+      localId,
+      'external_party',
+      name,
+      String(row.code_dhm || '').trim() || null,
+      {
+        overwrite: options?.overwrite,
+        extra: externalPartyCatalogExtra(entity, String(row.value_2 || '')),
+      },
+    );
+  } catch (error) {
+    logger.warn('DHM inbound unavailable; local external party saved', { localId, error });
+    return { dhmError: 'DHM unavailable' };
+  }
+}
+
+export async function pushMasterCompanyToDhm(
+  localId: string,
+  row: Record<string, unknown>,
+  options?: { overwrite?: boolean },
+): Promise<DhmPushAttachment> {
+  if (!isDhmEnabled()) return {};
+  const name = String(row.company_name || '').trim();
+  if (!name) return { dhmError: 'Name is required for DHM' };
+  try {
+    let siteCodes = Array.isArray(row.site_dhm_codes)
+      ? row.site_dhm_codes.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    if (!siteCodes.length) {
+      const linked = await query(
+        `SELECT site.code_dhm
+         FROM master_company_sites link
+         JOIN master_sites site ON site.id = link.site_id
+         WHERE link.company_id = $1::uuid
+           AND NULLIF(trim(site.code_dhm), '') IS NOT NULL
+         ORDER BY site.site_name`,
+        [localId],
+      );
+      siteCodes = linked.rows.map((item) => String(item.code_dhm));
+    }
+    const slug = (await resolveDhmSlug('company')) || 'company';
+    const entity = await getDhmCatalogEntity(slug);
+    return pushNamedMasterToDhm(
+      'master_companies',
+      localId,
+      'company',
+      name,
+      String(row.code_dhm || '').trim() || null,
+      {
+        overwrite: options?.overwrite,
+        extra: companyCatalogExtra(entity, String(row.company_code || ''), siteCodes),
+      },
+    );
+  } catch (error) {
+    logger.warn('DHM inbound unavailable; local company saved', { localId, error });
+    return { dhmError: 'DHM unavailable' };
+  }
+}
+
+export async function pushMasterSiteToDhm(
+  localId: string,
+  row: Record<string, unknown>,
+  options?: { overwrite?: boolean },
+): Promise<DhmPushAttachment> {
+  return pushNamedMasterToDhm(
+    'master_sites',
+    localId,
+    'site',
+    String(row.site_name || ''),
+    String(row.code_dhm || '').trim() || null,
+    { overwrite: options?.overwrite },
+  );
 }
 
 export async function pushMasterPortToDhm(

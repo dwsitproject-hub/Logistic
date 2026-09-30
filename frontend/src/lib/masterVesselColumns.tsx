@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { DhmStatusBadge } from '@/components/shared/DhmStatusBadge'
+import { MasterCodeBadge } from '@/components/shared/MasterCodeBadge'
 import { resolveCompactColumnWidthPx } from '@/lib/compactTableUi'
 import type { MasterVesselFormData } from '@/components/master-vessel/EditVesselModal'
 import { masterVesselDhmStatusLabel } from '@/lib/masterVesselDhmStatus'
@@ -88,14 +89,14 @@ const BASE_WIDTH_PX: Record<MasterVesselColumnId, number> = {
   dhm_status: 108,
 }
 
-export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 96
+export const MASTER_VESSEL_ACTIONS_COL_WIDTH_PX = 112
 
 export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
   {
     id: 'vessel_code',
     label: 'Vessel Code (KLIP)',
     getCellText: (row) => getMasterVesselCellText('vessel_code', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('vessel_code', row)),
+    render: (row) => <MasterCodeBadge kind="klip" value={getMasterVesselCellText('vessel_code', row)} />,
   },
   {
     // A vessel can hold several: SAP issues a code per tug/barge combination, so BG. AS MARINA 12
@@ -104,20 +105,13 @@ export const MASTER_VESSEL_COLUMNS: MasterVesselColumnMeta[] = [
     id: 'vessel_codes_sap',
     label: 'Vessel Code (SAP)',
     getCellText: (row) => getMasterVesselCellText('vessel_codes_sap', row),
-    render: (row) => {
-      const text = getMasterVesselCellText('vessel_codes_sap', row)
-      return (
-        <span className="block truncate text-sm" title={text === '-' ? undefined : text}>
-          {text}
-        </span>
-      )
-    },
+    render: (row) => <MasterCodeBadge kind="sap" value={getMasterVesselCellText('vessel_codes_sap', row)} />,
   },
   {
     id: 'dhm_code',
     label: 'Vessel Code (DHM)',
     getCellText: (row) => getMasterVesselCellText('dhm_code', row),
-    render: (row) => masterVesselCell(getMasterVesselCellText('dhm_code', row)),
+    render: (row) => <MasterCodeBadge kind="dhm" value={getMasterVesselCellText('dhm_code', row)} />,
   },
   {
     id: 'vessel_name',

@@ -22,6 +22,7 @@ import {
   resolveCompactColumnWidthPx,
 } from '@/lib/compactTableUi'
 import { cn } from '@/lib/utils'
+import { MasterCodeBadge, masterCodeKind } from '@/components/shared/MasterCodeBadge'
 
 export type MasterListTableColumn<T> = {
   id: string
@@ -33,22 +34,29 @@ export type MasterListTableColumn<T> = {
   render?: (row: T) => ReactNode
 }
 
-/** Two 32px icon buttons, 4px gap, and 4px of space on each side. */
-const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 76
+/** Two 32px icon buttons, 4px gap, and 14px of space on each side. */
+const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 96
 
-const MASTER_LIST_FLEX_COLUMN_IDS = new Set([
+const MASTER_LIST_NAME_COLUMN_IDS = new Set([
   'product_name',
+  'long_name',
   'port',
-  'company_name',
   'plant_name',
+  'company_name',
+  'site_name',
   'value_1',
+  'value_3',
 ])
 
-function masterListFlexColumnId<T>(columns: readonly MasterListTableColumn<T>[]): string | null {
-  const preferred = columns.find((col) => MASTER_LIST_FLEX_COLUMN_IDS.has(col.id))
-  if (preferred) return preferred.id
-  const fallback = [...columns].reverse().find((col) => col.id !== 'dhm_status')
-  return fallback?.id ?? null
+function masterListColumnWidthPx(col: Pick<MasterListTableColumn<unknown>, 'id' | 'label' | 'widthPx' | 'sortable'>): number {
+  const base = masterCodeKind(col.id)
+    ? 168
+    : col.id === 'dhm_status'
+      ? 128
+      : MASTER_LIST_NAME_COLUMN_IDS.has(col.id)
+        ? 200
+        : (col.widthPx ?? 148)
+  return resolveCompactColumnWidthPx(base, col.label, { hasSort: col.sortable !== false })
 }
 
 type MasterListCompactTableProps<T> = {
@@ -90,7 +98,6 @@ export function MasterListCompactTable<T>({
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(0)
   const colSpan = columns.length + (renderActions ? 1 : 0)
-  const flexColumnId = tightActions ? masterListFlexColumnId(columns) : null
 
   useEffect(() => {
     const table = bottomScrollRef.current?.querySelector('table')
@@ -144,16 +151,7 @@ export function MasterListCompactTable<T>({
               {columns.map((col) => (
                 <col
                   key={col.id}
-                  className={col.id === flexColumnId ? 'klip-master-flex-col' : undefined}
-                  style={
-                    col.id === flexColumnId
-                      ? undefined
-                      : {
-                          width: compactTableColWidthCss(
-                            resolveCompactColumnWidthPx(col.widthPx ?? 120, col.label, { hasSort: col.sortable !== false }),
-                          ),
-                        }
-                  }
+                  style={{ width: compactTableColWidthCss(masterListColumnWidthPx(col)) }}
                 />
               ))}
               {renderActions ? (
@@ -238,6 +236,8 @@ export function MasterListCompactTable<T>({
                             <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, CONTRACT_PERF_TABLE_ROW_MIN_H)}>
                               {col.render ? (
                                 col.render(row)
+                              ) : masterCodeKind(col.id) ? (
+                                <MasterCodeBadge kind={masterCodeKind(col.id)!} value={text} />
                               ) : tooltip ? (
                                 <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
                                   <span className="text-sm">{text}</span>

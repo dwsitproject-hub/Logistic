@@ -18,6 +18,7 @@ import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { useDebouncedValue } from '@/hooks/useDebouncedValue'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 
 export interface ReferenceField {
   key: 'value_1' | 'value_2' | 'value_3'
@@ -44,6 +45,8 @@ interface ReferenceMasterPageProps {
   codeNoun: string
   syncDhm?: boolean
   dhmNoun?: string
+  dhmSyncMaster?: string
+  lockedFields?: Array<{ id: string; label: string; value: string }>
 }
 
 function cell(value: string | null | undefined): string {
@@ -60,6 +63,8 @@ export function ReferenceMasterPage({
   codeNoun,
   syncDhm = false,
   dhmNoun = 'record',
+  dhmSyncMaster,
+  lockedFields = [],
 }: ReferenceMasterPageProps) {
   const columns = useMemo<MasterListTableColumn<ReferenceRow>[]>(
     () => [
@@ -70,9 +75,14 @@ export function ReferenceMasterPage({
         label: field.label,
         getText: (row: ReferenceRow) => cell(row[field.key]),
       })),
+      ...lockedFields.map((field) => ({
+        id: field.id,
+        label: field.label,
+        getText: () => field.value,
+      })),
       dhmStatusListColumn<ReferenceRow>(),
     ],
-    [codeNoun, fields],
+    [codeNoun, fields, lockedFields],
   )
   const layout = useListColumnLayout(storageKey, columns)
   const [items, setItems] = useState<ReferenceRow[]>([])
@@ -188,15 +198,7 @@ export function ReferenceMasterPage({
     <Layout>
       <StitchFields>
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <p className="text-gray-600">{description}</p>
-            {isAdmin ? (
-              <Button size="sm" onClick={openNew}>
-                <Plus className="h-4 w-4 mr-2" />
-                {newLabel}
-              </Button>
-            ) : null}
-          </div>
+          <p className="text-gray-600">{description}</p>
           <ListFilterPanel
             onReset={() => setSearch('')}
             showReset={search.trim().length > 0}
@@ -219,6 +221,15 @@ export function ReferenceMasterPage({
                   />
                 </div>
               </div>
+              {isAdmin ? (
+                <div className="flex shrink-0 items-end gap-2">
+                  <Button size="sm" className="shrink-0" onClick={openNew}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    {newLabel}
+                  </Button>
+                  {dhmSyncMaster ? <MasterDhmSyncButton master={dhmSyncMaster} onDone={() => void fetchRows()} /> : null}
+                </div>
+              ) : null}
             </div>
           </ListFilterPanel>
           <Card>
@@ -320,6 +331,12 @@ export function ReferenceMasterPage({
                       onChange={(event) => setForm((prev) => ({ ...prev, [field.key]: event.target.value }))}
                       disabled={!isAdmin}
                     />
+                  </div>
+                ))}
+                {lockedFields.map((field) => (
+                  <div key={field.id}>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">{field.label}</label>
+                    <Input value={field.value} readOnly disabled />
                   </div>
                 ))}
               </div>

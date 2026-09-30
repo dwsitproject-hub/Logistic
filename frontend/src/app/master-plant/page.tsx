@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
 import { Plus } from 'lucide-react'
+import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MasterRowActions } from '@/components/shared/MasterRowActions'
 import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
 import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
@@ -38,11 +39,13 @@ interface MasterPlant {
   plant_name: string | null
   plant_type: string | null
   site?: string | null
+  site_id?: string | null
   city: string | null
   postal_code: string | null
   found_in?: string | null
   code_klip?: string | null
   code_dhm?: string | null
+  dhm_id?: string | null
   dhm_org_code?: string | null
   group_plant: string | null
 }
@@ -52,16 +55,12 @@ function plantCell(value: string | null | undefined): string {
 }
 
 const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
-  { id: 'code_klip', label: 'Company Code (KLIP)', getText: (row) => plantCell(row.code_klip) },
-  { id: 'code_dhm', label: 'Company Code (DHM)', getText: (row) => plantCell(row.code_dhm) },
-  { id: 'company_code', label: 'Company Code', getText: (row) => plantCell(row.company_code) },
-  { id: 'company_name', label: 'Company Name', getText: (row) => plantCell(row.company_name) },
-  { id: 'plant_code', label: 'Plant Code', getText: (row) => plantCell(row.plant_code) },
-  { id: 'plant_name', label: 'Plant', getText: (row) => plantCell(row.plant_name) },
+  { id: 'code_klip', label: 'Plant Code (KLIP)', getText: (row) => plantCell(row.code_klip) },
+  { id: 'code_dhm', label: 'Plant Code (DHM)', getText: (row) => plantCell(row.code_dhm) },
+  { id: 'plant_code', label: 'Plant Code (SAP)', getText: (row) => plantCell(row.plant_code) },
+  { id: 'plant_name', label: 'Plant Name', getText: (row) => plantCell(row.plant_name) },
   { id: 'plant_type', label: 'Plant Type', getText: (row) => plantCell(row.plant_type) },
   { id: 'site', label: 'Site', getText: (row) => plantCell(row.site) },
-  { id: 'city', label: 'City', getText: (row) => plantCell(row.city) },
-  { id: 'postal_code', label: 'Postal Code', getText: (row) => plantCell(row.postal_code) },
   dhmStatusListColumn<MasterPlant>(),
 ]
 
@@ -72,13 +71,14 @@ export default function MasterPlantPage() {
   const PAGE_SIZE = 20
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
-  const [sortKey, setSortKey] = useState('company_name')
+  const [sortKey, setSortKey] = useState('plant_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v3', PLANT_COLUMNS)
+  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v4', PLANT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [isAdmin, setIsAdmin] = useState(false)
   const [editing, setEditing] = useState<MasterPlant | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [sites, setSites] = useState<Array<{ id: string; site_name: string }>>([])
   const [form, setForm] = useState<Partial<MasterPlant>>({})
   const [uploadResult, setUploadResult] = useState<{
     total: number
@@ -131,6 +131,19 @@ export default function MasterPlantPage() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!isFormOpen) return
+    let cancelled = false
+    void api.get('/master-sites', { params: { page: 1, limit: 500 } }).then((res) => {
+      if (cancelled) return
+      const rows = (res.data?.data?.items || []) as Array<{ id: string; site_name?: string | null }>
+      setSites(rows.filter((row) => row.site_name).map((row) => ({ id: row.id, site_name: String(row.site_name) })))
+    }).catch(() => {
+      if (!cancelled) setSites([])
+    })
+    return () => { cancelled = true }
+  }, [isFormOpen])
+
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) setPage(newPage)
   }
@@ -165,6 +178,7 @@ export default function MasterPlantPage() {
       plant_name: p.plant_name ?? '',
       plant_type: p.plant_type ?? '',
       site: p.site ?? '',
+      site_id: p.site_id ?? '',
       city: p.city ?? '',
       postal_code: p.postal_code ?? '',
       found_in: p.found_in ?? '',
@@ -186,22 +200,17 @@ export default function MasterPlantPage() {
         return
       }
       const payload = {
-        company_code: String(form.company_code ?? '').trim() || null,
-        company_name: String(form.company_name ?? '').trim(),
         plant_code: String(form.plant_code).trim(),
         plant_name: String(form.plant_name ?? '').trim() || null,
         plant_type: String(form.plant_type ?? '').trim() || null,
-        site: String(form.site ?? '').trim() || null,
-        city: String(form.city ?? '').trim() || null,
-        postal_code: String(form.postal_code ?? '').trim() || null,
-        found_in: String(form.found_in ?? '').trim() || null,
+        site_id: form.site_id || null,
       }
       const persist = (overwrite: boolean) => {
         const qs = overwrite ? '?dhmOverwrite=true' : ''
         if (editing) return api.put(`/master-plants/${editing.id}${qs}`, payload)
         return api.post(`/master-plants${qs}`, payload)
       }
-      await saveWithDhmConfirm(persist, 'company')
+      await saveWithDhmConfirm(persist, 'plant')
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
@@ -343,19 +352,7 @@ export default function MasterPlantPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-gray-600">Maintain internal companies and reconcile them with DHM.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {isAdmin ? (
-              <Button size="sm" onClick={openNew}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Company
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <p className="text-gray-600">Maintain internal companies and reconcile them with DHM.</p>
 
         <ListFilterPanel
           onReset={() => setSearch('')}
@@ -379,6 +376,15 @@ export default function MasterPlantPage() {
                 />
               </div>
             </div>
+            {isAdmin ? (
+              <div className="flex shrink-0 items-end gap-2">
+                <Button size="sm" className="shrink-0" onClick={openNew}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Company
+                </Button>
+                <MasterDhmSyncButton master="plant" onDone={() => void fetchData(page, debouncedSearch)} />
+              </div>
+            ) : null}
           </div>
         </ListFilterPanel>
 
@@ -387,7 +393,7 @@ export default function MasterPlantPage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Company (Internal)</span>
+                  <span>All Plant</span>
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
@@ -542,52 +548,45 @@ export default function MasterPlantPage() {
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Company (Internal)' : 'New Company (Internal)'}</DialogTitle>
+            <DialogTitle>{editing ? 'Edit Plant' : 'New Plant'}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code (KLIP)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code (KLIP)</label>
               <Input value={form.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code (DHM)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code (DHM)</label>
               <Input value={form.code_dhm || ''} placeholder="-" readOnly disabled />
             </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Organization (DHM)</label>
-              <Input value={form.dhm_org_code || ''} placeholder="-" readOnly disabled />
-            </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code</label>
-              <Input value={form.company_code || ''} onChange={(e) => handleChange('company_code', e.target.value)} disabled={!isAdmin} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
-              <Input value={form.company_name || ''} onChange={(e) => handleChange('company_name', e.target.value)} disabled={!isAdmin} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code <span className="text-red-500">*</span></label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code (SAP) <span className="text-red-500">*</span></label>
               <Input value={form.plant_code || ''} onChange={(e) => handleChange('plant_code', e.target.value)} disabled={!isAdmin} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plant</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Name</label>
               <Input value={form.plant_name || ''} onChange={(e) => handleChange('plant_name', e.target.value)} disabled={!isAdmin} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Plant Type</label>
               <Input value={form.plant_type || ''} onChange={(e) => handleChange('plant_type', e.target.value)} disabled={!isAdmin} />
             </div>
-            <div>
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Site</label>
-              <Input value={form.site || ''} onChange={(e) => handleChange('site', e.target.value)} disabled={!isAdmin} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
-              <Input value={form.city || ''} onChange={(e) => handleChange('city', e.target.value)} disabled={!isAdmin} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
-              <Input value={form.postal_code || ''} onChange={(e) => handleChange('postal_code', e.target.value)} disabled={!isAdmin} />
+              <select
+                className="w-full rounded-md border px-3 py-2 text-sm disabled:bg-gray-50"
+                value={form.site_id || ''}
+                onChange={(e) => handleChange('site_id', e.target.value || null)}
+                disabled={!isAdmin}
+              >
+                <option value="">Select a site</option>
+                {form.site_id && !sites.some((site) => site.id === form.site_id) ? (
+                  <option value={form.site_id}>{form.site || form.site_id}</option>
+                ) : null}
+                {sites.map((site) => (
+                  <option key={site.id} value={site.id}>{site.site_name}</option>
+                ))}
+              </select>
             </div>
           </div>
           <DialogFooter>

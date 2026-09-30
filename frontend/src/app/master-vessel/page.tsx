@@ -20,6 +20,7 @@ import {
 } from '@/components/master-vessel/MasterVesselGlobalFiltersSection'
 import { MasterVesselTable } from '@/components/master-vessel/MasterVesselTable'
 import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
+import { MasterDhmSyncButton } from '@/components/shared/MasterDhmSyncButton'
 import { MASTER_VESSEL_COLUMNS, type MasterVesselColumnId } from '@/lib/masterVesselColumns'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Plus } from 'lucide-react'
@@ -280,21 +281,9 @@ export default function MasterVesselPage() {
     <Layout>
       <StitchFields>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-gray-600">
-              Maintain reference data for vessels used in shipments.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {isAdmin ? (
-              <Button size="sm" onClick={openNew}>
-                <Plus className="h-4 w-4 mr-2" />
-                New Vessel
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <p className="text-gray-600">
+          Maintain reference data for vessels used in shipments.
+        </p>
 
         <MasterVesselGlobalFiltersSection
           searchDraft={searchDraft}
@@ -318,6 +307,17 @@ export default function MasterVesselPage() {
           onTermsChange={setSelectedTerms}
           hasActiveFilters={hasActiveFilters}
           onClearFilters={clearFilters}
+          action={
+            isAdmin ? (
+              <div className="flex shrink-0 items-end gap-2">
+                <Button size="sm" className="shrink-0" onClick={openNew}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Vessel
+                </Button>
+                <MasterDhmSyncButton master="vessel" onDone={() => void fetchVessels(currentPage)} />
+              </div>
+            ) : null
+          }
         />
 
         <Card>

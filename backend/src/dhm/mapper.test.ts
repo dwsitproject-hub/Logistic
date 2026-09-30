@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromDhmVesselData, toDhmCatalogPayload, toDhmNamePayload, toDhmVesselPayload } from './mapper';
+import { fromDhmVesselData, companyCatalogExtra, externalPartyCatalogExtra, matchDhmFieldKey, toDhmCatalogPayload, toDhmNamePayload, toDhmVesselPayload } from './mapper';
 
 describe('dhm vessel mapper', () => {
   it('maps KLIP fields to hub keys and omits local-only columns', () => {
@@ -101,5 +101,51 @@ describe('dhm name mapper', () => {
       { code: 'SITE-0004' },
     );
     expect(built.payload).toEqual({ name: 'PORT BATAM', company_id: 'ORG-0001', code: 'SITE-0004' });
+  });
+
+  it('sends external party group and Vendor type on the catalog fields', () => {
+    const extra = externalPartyCatalogExtra(
+      {
+        fields: [
+          { key: 'code', systemGenerated: true },
+          { key: 'name', required: true },
+          { key: 'Group' },
+          { key: 'Type' },
+        ],
+      },
+      'ADR',
+    );
+    expect(extra).toEqual({ Group: 'ADR', Type: 'Vendor' });
+  });
+
+  it('sends company SAP code as short name and linked site codes as sites', () => {
+    const extra = companyCatalogExtra(
+      {
+        fields: [
+          { key: 'code', systemGenerated: true },
+          { key: 'name', required: true },
+          { key: 'short_name' },
+          { key: 'sites' },
+        ],
+      },
+      'EU',
+      ['SITE-BONTANG', 'SITE-BATAM'],
+    );
+    expect(extra).toEqual({ short_name: 'EU', sites: ['SITE-BONTANG', 'SITE-BATAM'] });
+  });
+
+  it('matches plant catalog fields by meaning', () => {
+    const entity = {
+      fields: [
+        { key: 'code', systemGenerated: true },
+        { key: 'Plant_Code_SAP' },
+        { key: 'Plant_Name' },
+        { key: 'Plant_Type' },
+        { key: 'site_id' },
+      ],
+    };
+    expect(matchDhmFieldKey(entity, [(key) => key.includes('sap') && key.includes('code')])).toBe('Plant_Code_SAP');
+    expect(matchDhmFieldKey(entity, [(key) => key === 'plantname'])).toBe('Plant_Name');
+    expect(matchDhmFieldKey(entity, [(key) => key === 'planttype'])).toBe('Plant_Type');
   });
 });

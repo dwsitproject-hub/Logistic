@@ -12,14 +12,26 @@ function wantsDhmOverwrite(req: AuthRequest): boolean {
   return q === 'true' || q === '1';
 }
 
+function textOrNull(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
 async function pushProduct(row: Record<string, unknown>, overwrite: boolean) {
+  const name = String(row.product_name ?? '').trim();
+  const extra: Record<string, string> = {};
+  if (name) extra.short_name = name;
+  const longName = textOrNull(row.long_name);
+  const commodityType = textOrNull(row.commodity_type);
+  if (longName) extra.long_name = longName;
+  if (commodityType) extra.type = commodityType;
   return pushNamedMasterToDhm(
     'products',
     String(row.id),
     'commodity',
-    String(row.product_name ?? ''),
+    name,
     row.code_dhm != null ? String(row.code_dhm) : null,
-    { overwrite },
+    { overwrite, extra },
   );
 }
 
@@ -34,7 +46,7 @@ export const listProducts = async (req: AuthRequest, res: Response): Promise<voi
     const params: any[] = [];
     if (search) {
       params.push(`%${search}%`);
-      where.push(`(product_name ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);
+      where.push(`(product_name ILIKE $${params.length} OR long_name ILIKE $${params.length} OR commodity_type ILIKE $${params.length} OR code_klip ILIKE $${params.length} OR code_dhm ILIKE $${params.length})`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -63,10 +75,21 @@ export const createProduct = async (req: AuthRequest, res: Response): Promise<vo
     const working_days_per_month = normalize(req.body.working_days_per_month);
     const working_days_per_year = normalize(req.body.working_days_per_year);
     const sql = `
-      INSERT INTO ${TABLE} (product_name, percent_produce, working_hours_per_day, working_days_per_month, working_days_per_year)
-      VALUES ($1,$2,$3,$4,$5) RETURNING *
+      INSERT INTO ${TABLE} (
+        product_name, long_name, commodity_type,
+        percent_produce, working_hours_per_day, working_days_per_month, working_days_per_year
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
     `;
-    const result = await query(sql, [product_name, percent_produce, working_hours_per_day, working_days_per_month, working_days_per_year]);
+    const result = await query(sql, [
+      product_name.trim(),
+      textOrNull(req.body.long_name),
+      textOrNull(req.body.commodity_type),
+      percent_produce,
+      working_hours_per_day,
+      working_days_per_month,
+      working_days_per_year,
+    ]);
     const saved = result.rows[0] as Record<string, unknown>;
     const dhm = await pushProduct(saved, wantsDhmOverwrite(req));
     const refreshed = await query(`SELECT * FROM ${TABLE} WHERE id = $1`, [saved.id]);
@@ -81,7 +104,7 @@ export const createProduct = async (req: AuthRequest, res: Response): Promise<vo
 export const updateProduct = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const fields = ['product_name','percent_produce','working_hours_per_day','working_days_per_month','working_days_per_year'];
+    const fields = ['product_name','long_name','commodity_type','percent_produce','working_hours_per_day','working_days_per_month','working_days_per_year'];
     const set: string[] = [];
     const params: any[] = [];
     const normalize = (v: any) => (v === '' || v === undefined ? null : v);
