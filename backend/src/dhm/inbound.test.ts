@@ -31,6 +31,11 @@ describe('parseInboundBody', () => {
 
   it('surfaces 400 schema errors', () => {
     const result = parseInboundBody(400, { error: 'Unknown fields in record data', unknownKeys: ['owner'] });
-    expect(result).toMatchObject({ ok: false, conflict: false, httpStatus: 400 });
+    expect(result).toMatchObject({
+      ok: false,
+      conflict: false,
+      httpStatus: 400,
+      error: 'Unknown fields in record data (owner)',
+    });
   });
 });

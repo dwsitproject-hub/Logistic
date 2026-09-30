@@ -3,7 +3,16 @@ import { dhmDataName, dhmRefCode } from './mapper';
 import { asDhmUuid, persistMasterReplica, rememberDhmOrganization, replicaCode } from './masterReplica';
 import type { DhmRecord } from './types';
 
-export const DHM_MASTER_SLUGS = ['organization', 'site', 'port_master', 'commodity', 'incoterm', 'shipper'] as const;
+export const DHM_MASTER_SLUGS = [
+  'company',
+  'organization',
+  'site',
+  'port_master',
+  'commodity',
+  'incoterm',
+  'shipper',
+  'external_party',
+] as const;
 export type DhmMasterSlug = (typeof DHM_MASTER_SLUGS)[number];
 
 function isMasterSlug(slug: string): slug is DhmMasterSlug {
@@ -140,7 +149,7 @@ async function applySite(record: DhmRecord): Promise<void> {
   const name = dhmDataName(record.data);
   const code = replicaCode(record, null);
   const dhmId = asDhmUuid(record.id);
-  const org = await orgNameForRef(dhmRefCode(record.data?.organization_id));
+  const org = await orgNameForRef(dhmRefCode(record.data?.company_id) || dhmRefCode(record.data?.organization_id));
   const existing =
     (dhmId && (await findId(`SELECT id FROM master_plants WHERE dhm_id = $1::uuid LIMIT 1`, [dhmId]))) ||
     (code && (await findId(`SELECT id FROM master_plants WHERE code_dhm = $1 LIMIT 1`, [code]))) ||
@@ -231,7 +240,7 @@ async function applyPort(record: DhmRecord): Promise<void> {
 
 export async function applyDhmMasterRecord(slug: string, record: DhmRecord): Promise<boolean> {
   if (!isMasterSlug(slug)) return false;
-  if (slug === 'organization') {
+  if (slug === 'company' || slug === 'organization') {
     const name = dhmDataName(record.data);
     if (name) await rememberDhmOrganization(record, replicaCode(record, null), name);
     return true;
@@ -240,7 +249,7 @@ export async function applyDhmMasterRecord(slug: string, record: DhmRecord): Pro
   else if (slug === 'port_master') await applyPort(record);
   else if (slug === 'commodity') await applyCommodity(record);
   else if (slug === 'incoterm') await applyIncoterm(record);
-  else if (slug === 'shipper') await applyShipper(record);
+  else if (slug === 'shipper' || slug === 'external_party') await applyShipper(record);
   return true;
 }
 
@@ -248,7 +257,7 @@ export async function markDhmMasterDeleted(slug: string, recordId: string, versi
   if (!isMasterSlug(slug)) return false;
   const id = asDhmUuid(recordId);
   if (!id) return true;
-  if (slug === 'organization') {
+  if (slug === 'company' || slug === 'organization') {
     await query(
       `UPDATE dhm_organizations
        SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), updated_at = CURRENT_TIMESTAMP
@@ -266,7 +275,7 @@ export async function markDhmMasterDeleted(slug: string, recordId: string, versi
           ? 'products'
           : 'master_reference_items';
   const kindSql =
-    slug === 'incoterm' ? ` AND kind = 'incoterm'` : slug === 'shipper' ? ` AND kind = 'ext_company'` : '';
+    slug === 'incoterm' ? ` AND kind = 'incoterm'` : slug === 'shipper' || slug === 'external_party' ? ` AND kind = 'ext_company'` : '';
   await query(
     `UPDATE ${table}
      SET dhm_is_deleted = true, dhm_version = COALESCE($2, dhm_version), updated_at = CURRENT_TIMESTAMP

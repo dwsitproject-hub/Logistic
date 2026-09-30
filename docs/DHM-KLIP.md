@@ -12,13 +12,13 @@ KLIP implements DHM patterns **A + C** for Master Vessel and the CPO masters bel
 | KLIP master | DHM slug | Payload |
 | --- | --- | --- |
 | Master Vessel | `vessel` | Vessel hub fields. `vessel_code` is `Vessel_Code_SAP`. |
-| Master Product | `commodity` | `name` = product name. Working hours stay in KLIP. |
+| Master Product | `commodity` | `name`. When the catalog also lists `short_name` and `long_name`, those are filled from the product name. |
 | Master Incoterm | `incoterm` | `name` |
-| Master Company (Ext) | `shipper` | `name` = Ext Company Name. Source and Group stay in KLIP. |
-| Company (Int) | `organization`, then `site` | Org `name` = company name. Site `name` = plant name (or plant code) and `organization_id` = org code. `code_dhm` is the site code. `dhm_org_code` is the organization code. |
+| Master Company (Ext) | `shipper` (or `external_party` when that is the allowlisted slug) | `name` = Ext Company Name. `group` is sent only when the catalog has that field. |
+| Company (Int) | `company`, then `site` | Company `name` = company name. Site `name` = plant name (or plant code) and `company_id` = company code. `code_dhm` is the site code. `dhm_org_code` is the company code. |
 | Master Port | `port_master` | `name` and `site_id` from a Company (Int) site that already has a DHM code. Without a site, the local row saves and DHM returns `Port needs a DHM site`. |
 
-Integrator must register application `klip` and allowlist `vessel`, `commodity`, `incoterm`, `shipper`, `organization`, `site`, and `port_master` before turning `DHM_ENABLED` on. A slug that is not allowlisted comes back as a DHM error on save and is skipped by the cron.
+Integrator must register application `klip` and allowlist `vessel`, `commodity`, `incoterm`, `shipper`, `company`, `site`, and `port_master`. The live catalog (OpenAPI 1.7) uses `company` and `company_id`, not `organization`. A slug that is not allowlisted comes back as a DHM error on save and is skipped by the cron.
 
 SIT API (from the KLIP backend host): `DHM_BASE_URL=http://172.28.92.56:2001/api`  
 (`GET /health` on that base is `/api/health` → `{ "status": "ok", "service": "dhm-api" }`).  

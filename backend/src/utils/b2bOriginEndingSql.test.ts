@@ -26,6 +26,8 @@ describe('b2bOriginEndingSql', () => {
     expect(sql).not.toContain('sap_processed_data');
     expect(sql).toContain(`LEFT JOIN ${B2B_ENDING_CHILD_SNAPSHOT_TABLE}`);
     expect(sql).toContain('b2b_end.origin_po = NULLIF(TRIM(c.po_number), \'\')');
+    expect(sql).toContain('b2b_ending_child_snapshot_meta');
+    expect(sql).toContain('is_stale IS TRUE');
   });
 
   it('child map is keyed by Contract Reff PO with latest child wins', () => {
@@ -40,6 +42,7 @@ describe('b2bOriginEndingSql', () => {
   it('snapshot refresh inserts the origin_po map', () => {
     const sql = buildB2bEndingChildSnapshotRefreshSql();
     expect(sql).toContain(`INSERT INTO ${B2B_ENDING_CHILD_SNAPSHOT_TABLE}`);
+    expect(sql).not.toContain('b2b_ending_child_snapshot_meta');
     expect(sql).toContain('DISTINCT ON (origin_po)');
     expect(sql).toContain('child_gr_sto_status');
     expect(sql).toContain('child_count');

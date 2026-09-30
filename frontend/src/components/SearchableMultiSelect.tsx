@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown } from 'lucide-react'
 import { Input } from '@/components/ui/input'
@@ -46,6 +46,12 @@ export function SearchableMultiSelect({
   const stitch = useStitchFields()
   const containerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const [menuBox, setMenuBox] = useState<{
+    top: number
+    left: number
+    width: number
+    listMaxHeight: number
+  } | null>(null)
 
   const orderedOptions = useMemo(() => {
     const withoutBlank = options.filter((option) => !isBlankFilterOption(option))
@@ -67,6 +73,44 @@ export function SearchableMultiSelect({
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuBox(null)
+      return
+    }
+    const place = () => {
+      const trigger = containerRef.current?.getBoundingClientRect()
+      if (!trigger) return
+      const margin = 8
+      const spaceBelow = window.innerHeight - trigger.bottom - margin
+      const spaceAbove = trigger.top - margin
+      const openBelow = spaceBelow >= 220 || spaceBelow >= spaceAbove
+      const available = Math.max(160, openBelow ? spaceBelow : spaceAbove)
+      const listMaxHeight = Math.max(120, available - 96)
+      const top = openBelow
+        ? trigger.bottom + 4
+        : Math.max(margin, trigger.top - (listMaxHeight + 96) - 4)
+      setMenuBox({
+        top,
+        left: Math.max(margin, trigger.left),
+        width: Math.max(trigger.width, 220),
+        listMaxHeight,
+      })
+    }
+    place()
+    const onScroll = (event: Event) => {
+      const target = event.target
+      if (target instanceof Node && menuRef.current?.contains(target)) return
+      place()
+    }
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', onScroll, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', onScroll, true)
+    }
+  }, [open])
+
   const toggle = (value: string) => {
     if (selected.includes(value)) onChange(selected.filter((s) => s !== value))
     else onChange([...selected, value])
@@ -77,7 +121,15 @@ export function SearchableMultiSelect({
     onChange([])
   }
 
-  const displayLabel = selected.length === 0 ? placeholder : `${selected.length} selected (OR)`
+  const loneSelection = selected.length === 1 ? selected[0] : ''
+  const displayLabel =
+    selected.length === 0
+      ? placeholder
+      : selected.length === 1
+        ? uppercaseOptionLabels
+          ? loneSelection.toUpperCase()
+          : loneSelection
+        : `${selected.length} selected (OR)`
 
   const menuBody = (
     <>
@@ -91,7 +143,12 @@ export function SearchableMultiSelect({
           autoFocus
         />
       </div>
-      <div className="max-h-56 overflow-y-auto p-1">
+      <div
+        className="overflow-y-auto overscroll-contain p-1"
+        data-scroll-lock-scrollable=""
+        style={{ maxHeight: menuBox?.listMaxHeight ?? 224 }}
+        onWheel={(event) => event.stopPropagation()}
+      >
         {options.length === 0 ? (
           <div className="py-4 text-center text-sm text-gray-500">{emptyMessage}</div>
         ) : filtered.length === 0 ? (
@@ -141,19 +198,23 @@ export function SearchableMultiSelect({
         <span className={`truncate ${selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}`}>{displayLabel}</span>
         <ChevronDown className={`h-4 w-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open
+      {open && menuBox
         ? createPortal(
             <div
               ref={menuRef}
+              data-klip-multiselect-menu=""
+              data-scroll-lock-scrollable=""
               className={stitchControlClass(
-                'fixed z-[80] rounded-md border border-gray-200 bg-white shadow-lg',
+                'fixed z-[80] pointer-events-auto rounded-md border border-gray-200 bg-white shadow-lg',
                 stitch,
               )}
               style={{
-                top: (containerRef.current?.getBoundingClientRect().bottom ?? 0) + 4,
-                left: containerRef.current?.getBoundingClientRect().left ?? 0,
-                width: Math.max(containerRef.current?.getBoundingClientRect().width ?? 0, 220),
+                top: menuBox?.top ?? 0,
+                left: menuBox?.left ?? 0,
+                width: menuBox?.width ?? 220,
               }}
+              onWheel={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
             >
               {menuBody}
             </div>,

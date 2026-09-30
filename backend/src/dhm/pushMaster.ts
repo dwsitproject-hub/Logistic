@@ -1,8 +1,8 @@
 import logger from '../utils/logger';
-import { dhmSlugIsAllowlisted } from './catalog';
+import { getDhmCatalogEntity, resolveDhmSlug } from './catalog';
 import { isDhmEnabled } from './config';
 import { postInbound, putInbound } from './inbound';
-import { toDhmNamePayload } from './mapper';
+import { dhmParentRefKey, toDhmCatalogPayload } from './mapper';
 import {
   findSiblingOrgCode,
   persistMasterReplica,
@@ -12,14 +12,17 @@ import {
 import type { DhmPushAttachment } from './pushVessel';
 import type { DhmInboundResult, DhmRecord } from './types';
 
-async function allowError(slug: string): Promise<string | null> {
-  try {
-    const allowed = await dhmSlugIsAllowlisted(slug);
-    return allowed ? null : `DHM catalog does not allow ${slug}`;
-  } catch (error) {
-    logger.warn('DHM catalog unavailable', { slug, error });
-    return 'DHM catalog unavailable';
-  }
+async function payloadFor(
+  slug: string,
+  name: string,
+  extra: Record<string, string> | undefined,
+  code?: string,
+): Promise<{ payload: Record<string, unknown> } | { error: string }> {
+  const entity = await getDhmCatalogEntity(slug);
+  if (!entity) return { error: `DHM catalog does not allow ${slug}` };
+  const built = toDhmCatalogPayload(entity, { name, ...(extra ?? {}) }, { code });
+  if (built.missing.length) return { error: `DHM ${slug} needs ${built.missing.join(', ')}` };
+  return { payload: built.payload };
 }
 
 async function pushNamed(args: {
@@ -30,14 +33,22 @@ async function pushNamed(args: {
   overwrite?: boolean;
   persist: (record: DhmRecord, code: string | null) => Promise<void>;
 }): Promise<DhmPushAttachment> {
-  const blocked = await allowError(args.slug);
-  if (blocked) return { dhmError: blocked };
+  let slug = args.slug;
+  try {
+    const resolved = await resolveDhmSlug(args.slug);
+    if (!resolved) return { dhmError: `DHM catalog does not allow ${args.slug}` };
+    slug = resolved;
+  } catch (error) {
+    logger.warn('DHM catalog unavailable', { slug: args.slug, error });
+    return { dhmError: 'DHM catalog unavailable' };
+  }
 
   const existingCode = String(args.existingCode || '').trim();
-  const send = (code?: string) => toDhmNamePayload(args.name, { code, extra: args.extra });
+  const created = await payloadFor(slug, args.name, args.extra, existingCode || undefined);
+  if ('error' in created) return { dhmError: created.error };
   let result: DhmInboundResult = existingCode
-    ? await putInbound(args.slug, existingCode, send(existingCode))
-    : await postInbound(args.slug, send());
+    ? await putInbound(slug, existingCode, created.payload)
+    : await postInbound(slug, created.payload);
 
   if (result.ok) {
     await args.persist(result.record, result.code);
@@ -48,7 +59,9 @@ async function pushNamed(args: {
     await args.persist(result.record, result.code || null);
     const code = result.code || String(result.record.data?.code || '').trim();
     if (args.overwrite && code) {
-      const updated = await putInbound(args.slug, code, send(code));
+      const again = await payloadFor(slug, args.name, args.extra, code);
+      if ('error' in again) return { dhmConflict: true, dhmCode: code, dhmRecord: result.record, dhmError: again.error };
+      const updated = await putInbound(slug, code, again.payload);
       if (updated.ok) {
         await args.persist(updated.record, updated.code);
         return { dhmStatus: updated.status, dhmCode: updated.code };
@@ -68,7 +81,7 @@ async function pushNamed(args: {
     };
   }
 
-  logger.warn('DHM inbound rejected', { slug: args.slug, error: result.error, status: result.httpStatus });
+  logger.warn('DHM inbound rejected', { slug, error: result.error, status: result.httpStatus });
   return { dhmError: result.error };
 }
 
@@ -118,8 +131,10 @@ export async function pushMasterPlantToDhm(
     let orgCode = String(row.dhm_org_code || '').trim();
     if (!orgCode) orgCode = (await findSiblingOrgCode(companyName, localId)) || '';
 
+    const companySlug = await resolveDhmSlug('company');
+    if (!companySlug) return { dhmError: 'DHM catalog does not allow company' };
     const org = await pushNamed({
-      slug: 'organization',
+      slug: companySlug,
       name: companyName,
       existingCode: orgCode || null,
       overwrite: options?.overwrite,
@@ -131,11 +146,14 @@ export async function pushMasterPlantToDhm(
     const resolvedOrg = String(org.dhmCode || orgCode || '').trim();
     if (!resolvedOrg) return { dhmError: 'DHM organization was not linked' };
 
+    const siteEntity = await getDhmCatalogEntity('site');
+    const parentKey = siteEntity ? dhmParentRefKey(siteEntity, ['company_id', 'organization_id']) : null;
+    if (!parentKey) return { dhmError: 'DHM site has no company reference' };
     const site = await pushNamed({
       slug: 'site',
       name: siteName,
       existingCode: String(row.code_dhm || '').trim() || null,
-      extra: { organization_id: resolvedOrg },
+      extra: { [parentKey]: resolvedOrg },
       overwrite: options?.overwrite,
       persist: persistRow('master_plants', localId),
     });

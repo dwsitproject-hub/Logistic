@@ -43,21 +43,28 @@ function parseInboundBody(status: number, data: unknown): DhmInboundResult {
     };
   }
 
+  const unknown = Array.isArray(body.unknownKeys)
+    ? body.unknownKeys.map((key) => String(key)).filter(Boolean).join(', ')
+    : '';
   const error =
     typeof body.error === 'string'
-      ? body.error
+      ? unknown
+        ? `${body.error} (${unknown})`
+        : body.error
       : `DHM inbound failed (${status})`;
   return { ok: false, conflict: false, httpStatus: status, error };
 }
 
 const INBOUND_SLUGS = new Set([
   'vessel',
+  'company',
   'organization',
   'site',
   'port_master',
   'commodity',
   'incoterm',
   'shipper',
+  'external_party',
 ]);
 
 export async function postInbound(slug: string, payload: Record<string, unknown>): Promise<DhmInboundResult> {

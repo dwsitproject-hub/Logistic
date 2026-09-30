@@ -1,4 +1,4 @@
-import { query } from '../database/connection';
+import { getClient, query } from '../database/connection';
 import {
   buildContractLatestSpdSnapshotRefreshSql,
   buildContractLatestSpdSnapshotUpsertSql,
@@ -35,11 +35,50 @@ function scheduleContractLatestSpdSnapshotRefreshIfNeeded(): void {
 }
 
 export class ContractLatestSpdSnapshotService {
+  /**
+   * Rebuild the whole snapshot.
+   *
+   * This used to TRUNCATE and INSERT as two autocommit statements while is_stale stayed FALSE.
+   * A restart after the truncate left the table at 0 rows and the meta still claiming fresh
+   * (production 2026-09-30: meta row_count 19185, COUNT(*) 0). Contract Performance trusted that
+   * flag, found no Region/Site, and returned an empty page.
+   *
+   * Mark stale first so readers use the live SPD query, then DELETE and INSERT in one
+   * transaction so they never observe an empty table. A 0-row insert is a failure: publishing
+   * it as fresh is the same outage. is_stale stays TRUE until a non-empty commit is recorded.
+   */
   static async refreshAll(): Promise<number> {
     const start = Date.now();
-    await query('TRUNCATE contract_latest_spd_snapshot');
-    const insertRes = await query(buildContractLatestSpdSnapshotRefreshSql());
-    const rowCount = insertRes.rowCount ?? 0;
+    await query(
+      `UPDATE contract_latest_spd_snapshot_meta SET is_stale = TRUE WHERE id = 'global'`,
+    );
+
+    const client = await getClient();
+    let rowCount = 0;
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM contract_latest_spd_snapshot');
+      const insertRes = await client.query(buildContractLatestSpdSnapshotRefreshSql());
+      rowCount = insertRes.rowCount ?? 0;
+      if (rowCount === 0) {
+        throw new Error('Contract latest_spd snapshot refresh produced 0 rows');
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // connection may already be unusable
+      }
+      logger.error('Contract latest_spd snapshot refresh failed - snapshot left stale', {
+        err,
+        durationMs: Date.now() - start,
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+
     const durationMs = Date.now() - start;
     await query(
       `UPDATE contract_latest_spd_snapshot_meta

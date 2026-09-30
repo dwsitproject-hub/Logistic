@@ -1,6 +1,6 @@
 import logger from '../utils/logger';
 import { applyDhmMasterRecord, DHM_MASTER_SLUGS } from './applyMaster';
-import { dhmSlugIsAllowlisted } from './catalog';
+import { resolveDhmSlug } from './catalog';
 import { dhmRequest } from './client';
 import { isDhmEnabled } from './config';
 import { applyDhmVesselRecord, getDhmSyncCursor, saveDhmSyncCursor } from './replica';
@@ -84,14 +84,19 @@ export async function syncDhmMasters(options?: { snapshot?: boolean }): Promise<
   }
   let applied = 0;
   let pages = 0;
-  for (const slug of DHM_MASTER_SLUGS) {
+  const seen = new Set<string>();
+  for (const preferred of DHM_MASTER_SLUGS) {
+    let slug: string = preferred;
     try {
-      if (!(await dhmSlugIsAllowlisted(slug))) {
-        logger.info('DHM sync skipped; slug not allowlisted', { slug });
+      const resolved = await resolveDhmSlug(preferred);
+      if (!resolved || seen.has(resolved)) {
+        if (!resolved) logger.info('DHM sync skipped; slug not allowlisted', { slug: preferred });
         continue;
       }
+      slug = resolved;
+      seen.add(slug);
     } catch (error) {
-      logger.warn('DHM catalog unavailable; remaining master sync skipped', { slug, error });
+      logger.warn('DHM catalog unavailable; remaining master sync skipped', { slug: preferred, error });
       break;
     }
     const page = await syncSlugPages(slug, (record) => applyDhmMasterRecord(slug, record).then(() => undefined), {

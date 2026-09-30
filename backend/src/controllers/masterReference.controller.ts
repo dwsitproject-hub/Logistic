@@ -30,13 +30,14 @@ function wantsDhmOverwrite(req: AuthRequest): boolean {
 async function pushReference(kind: ReferenceKind, row: Record<string, unknown>, overwrite: boolean) {
   if (kind === 'truck_transporter') return {};
   const name = kind === 'ext_company' ? String(row.value_3 ?? '') : String(row.value_1 ?? '');
+  const group = kind === 'ext_company' ? String(row.value_2 ?? '').trim() : '';
   return pushNamedMasterToDhm(
     'master_reference_items',
     String(row.id),
     kind === 'ext_company' ? 'shipper' : 'incoterm',
     name,
     row.code_dhm != null ? String(row.code_dhm) : null,
-    { overwrite },
+    { overwrite, extra: group ? { group } : undefined },
   );
 }
 

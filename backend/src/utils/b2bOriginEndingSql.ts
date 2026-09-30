@@ -97,6 +97,22 @@ export function sqlB2bEndingChildMapSelect(): string {
  */
 export const B2B_ENDING_CHILD_SNAPSHOT_TABLE = 'b2b_ending_child_snapshot';
 
+/**
+ * Readers ignore the snapshot while `is_stale` is true.
+ *
+ * The rebuild sets that flag before it replaces rows. A join that does not check it keeps
+ * serving the pre-import overlay during the swap, and used to serve an empty table after a
+ * TRUNCATE that committed while the flag still said fresh.
+ */
+export function sqlB2bEndingChildSnapshotFreshGuard(): string {
+  return `NOT EXISTS (
+    SELECT 1
+    FROM b2b_ending_child_snapshot_meta b2b_snap_meta
+    WHERE b2b_snap_meta.id = 'global'
+      AND b2b_snap_meta.is_stale IS TRUE
+  )`;
+}
+
 export function sqlB2bOriginEndingChildLateralJoin(opts: {
   originPoExpr: string;
   alias?: string;
@@ -104,7 +120,8 @@ export function sqlB2bOriginEndingChildLateralJoin(opts: {
   const alias = opts.alias ?? 'b2b_end';
   return `
     LEFT JOIN ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} ${alias}
-      ON ${alias}.origin_po = NULLIF(TRIM(${opts.originPoExpr}), '')`;
+      ON ${alias}.origin_po = NULLIF(TRIM(${opts.originPoExpr}), '')
+     AND ${sqlB2bEndingChildSnapshotFreshGuard()}`;
 }
 
 export function sqlB2bEndingPlantCodeExpr(originPlantExpr: string, alias = 'b2b_end'): string {
@@ -139,6 +156,7 @@ export function sqlB2bOriginEndingUnloadSubquery(originPoExpr: string): string {
     SELECT m.unload_location
     FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
     WHERE m.origin_po = NULLIF(TRIM(${originPoExpr}), '')
+      AND ${sqlB2bEndingChildSnapshotFreshGuard()}
     LIMIT 1
   )`;
 }
@@ -187,6 +205,7 @@ export function sqlB2bChildGrStoStatusLookup(originPoExpr: string): string {
     SELECT NULLIF(TRIM(m.child_gr_sto_status), '')
     FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
     WHERE m.origin_po = NULLIF(TRIM((${originPoExpr})::text), '')
+      AND ${sqlB2bEndingChildSnapshotFreshGuard()}
   )`;
 }
 

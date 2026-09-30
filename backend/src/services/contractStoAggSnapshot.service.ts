@@ -1,4 +1,4 @@
-import { query } from '../database/connection';
+import { getClient, query } from '../database/connection';
 import {
   buildContractStoAggSnapshotRefreshSql,
   buildContractStoAggSnapshotUpsertSql,
@@ -35,11 +35,48 @@ function scheduleContractStoAggSnapshotRefreshIfNeeded(): void {
 }
 
 export class ContractStoAggSnapshotService {
+  /**
+   * Rebuild the whole snapshot.
+   *
+   * Same failure as latest_spd: TRUNCATE committed while is_stale stayed FALSE, so a dead
+   * rebuild left meta claiming 5518 rows and the table at 0 (production 2026-09-30). Readers
+   * that trust the flag then treat every contract as having no STO aggregate.
+   *
+   * Mark stale first (the live STO query takes over), swap rows in one transaction, and refuse
+   * to publish a 0-row result as fresh.
+   */
   static async refreshAll(): Promise<number> {
     const start = Date.now();
-    await query('TRUNCATE contract_sto_agg_snapshot');
-    const insertRes = await query(buildContractStoAggSnapshotRefreshSql());
-    const rowCount = insertRes.rowCount ?? 0;
+    await query(
+      `UPDATE contract_sto_agg_snapshot_meta SET is_stale = TRUE WHERE id = 'global'`,
+    );
+
+    const client = await getClient();
+    let rowCount = 0;
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM contract_sto_agg_snapshot');
+      const insertRes = await client.query(buildContractStoAggSnapshotRefreshSql());
+      rowCount = insertRes.rowCount ?? 0;
+      if (rowCount === 0) {
+        throw new Error('Contract sto_agg snapshot refresh produced 0 rows');
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // connection may already be unusable
+      }
+      logger.error('Contract sto_agg snapshot refresh failed - snapshot left stale', {
+        err,
+        durationMs: Date.now() - start,
+      });
+      throw err;
+    } finally {
+      client.release();
+    }
+
     const durationMs = Date.now() - start;
     await query(
       `UPDATE contract_sto_agg_snapshot_meta

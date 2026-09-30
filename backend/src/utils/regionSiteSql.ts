@@ -13,7 +13,7 @@ import {
   normalizeDischargeDestination,
   sqlNormalizeDischargeDestination,
 } from './dischargeDestinationAlias';
-import { B2B_ENDING_CHILD_SNAPSHOT_TABLE } from './b2bOriginEndingSql';
+import { B2B_ENDING_CHILD_SNAPSHOT_TABLE, sqlB2bEndingChildSnapshotFreshGuard } from './b2bOriginEndingSql';
 
 export type RegionSiteFilterResult = {
   sql: string;
@@ -48,6 +48,7 @@ export function sqlRegionSiteRawForContract(contractNumberExpr: string, originPo
       SELECT ${sqlNormalizeDischargeDestination(`NULLIF(TRIM(m.discharge_destination), '')`)}
       FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
       WHERE m.origin_po = NULLIF(TRIM(${originPoExpr}), '')
+        AND ${sqlB2bEndingChildSnapshotFreshGuard()}
     ),
     (
       SELECT ${sapDischargeDestinationFromJson('spd.data')}

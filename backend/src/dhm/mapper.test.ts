@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromDhmVesselData, toDhmNamePayload, toDhmVesselPayload } from './mapper';
+import { fromDhmVesselData, toDhmCatalogPayload, toDhmNamePayload, toDhmVesselPayload } from './mapper';
 
 describe('dhm vessel mapper', () => {
   it('maps KLIP fields to hub keys and omits local-only columns', () => {
@@ -69,5 +69,37 @@ describe('dhm name mapper', () => {
       code: 'PORT-0001',
       site_id: 'SITE-0004',
     });
+  });
+
+  it('fills commodity short and long names and drops keys the catalog does not list', () => {
+    const built = toDhmCatalogPayload(
+      {
+        fields: [
+          { key: 'code', systemGenerated: true },
+          { key: 'name', required: true },
+          { key: 'short_name' },
+          { key: 'long_name' },
+          { key: 'type' },
+        ],
+      },
+      { name: 'CPKO', code_klip: 'KPRD-0001' },
+    );
+    expect(built.missing).toEqual([]);
+    expect(built.payload).toEqual({ name: 'CPKO', short_name: 'CPKO', long_name: 'CPKO' });
+  });
+
+  it('uses company_id when that is the site parent field', () => {
+    const built = toDhmCatalogPayload(
+      {
+        fields: [
+          { key: 'code', systemGenerated: true },
+          { key: 'name', required: true },
+          { key: 'company_id', required: true },
+        ],
+      },
+      { name: 'PORT BATAM', company_id: 'ORG-0001', organization_id: 'ORG-0001' },
+      { code: 'SITE-0004' },
+    );
+    expect(built.payload).toEqual({ name: 'PORT BATAM', company_id: 'ORG-0001', code: 'SITE-0004' });
   });
 });

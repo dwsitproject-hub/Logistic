@@ -255,7 +255,7 @@ export default function MasterProductConfigurationPage() {
       </Card>
 
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-md w-full max-w-3xl max-h-[90vh] overflow-y-auto px-6 pb-6">
             <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'New Product'}</h2>
             <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 gap-4">

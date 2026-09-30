@@ -56,6 +56,7 @@ import {
 } from '../utils/contractPlanningStatusSql';
 import {
   B2B_ENDING_CHILD_SNAPSHOT_TABLE,
+  sqlB2bEndingChildSnapshotFreshGuard,
   sqlB2bEndingCompanyAgg,
   sqlB2bEndingPlantCodeAgg,
   sqlB2bOriginEndingChildLateralJoin,
@@ -639,6 +640,7 @@ export async function buildLatePerformanceQuery(filters: LatePerformanceFilters)
             FROM contract_latest_spd_snapshot l_rs
             LEFT JOIN ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} b_rs
               ON b_rs.origin_po = NULLIF(TRIM(c.po_number), '')
+             AND ${sqlB2bEndingChildSnapshotFreshGuard()}
             WHERE l_rs.contract_number = c.contract_id
               ${scopeRegionSite.sql}
           )

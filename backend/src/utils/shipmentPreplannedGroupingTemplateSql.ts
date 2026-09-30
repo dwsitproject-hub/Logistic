@@ -7,7 +7,7 @@
  */
 
 import { query } from '../database/connection';
-import { B2B_ENDING_CHILD_SNAPSHOT_TABLE } from './b2bOriginEndingSql';
+import { B2B_ENDING_CHILD_SNAPSHOT_TABLE, sqlB2bEndingChildSnapshotFreshGuard } from './b2bOriginEndingSql';
 import { sqlNormalizeDischargeDestination } from './dischargeDestinationAlias';
 import { regionSiteDisplayExpr, appendRegionSiteFilter } from './regionSiteSql';
 import { resolveContractsQtyMoveCte } from '../services/contractQtyMoveSnapshot.service';
@@ -32,6 +32,7 @@ export function sqlGroupingTemplatePlantSiteRawExpr(): string {
     SELECT ${sqlNormalizeDischargeDestination(`NULLIF(TRIM(m.discharge_destination), '')`)}
     FROM ${B2B_ENDING_CHILD_SNAPSHOT_TABLE} m
     WHERE m.origin_po = NULLIF(TRIM(c.po_number::text), '')
+      AND ${sqlB2bEndingChildSnapshotFreshGuard()}
     LIMIT 1
   )`;
   const spdDest = sqlNormalizeDischargeDestination(`NULLIF(TRIM(l.discharge_destination), '')`);

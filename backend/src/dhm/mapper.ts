@@ -102,7 +102,75 @@ export function dhmRecordCode(record: { data?: Record<string, unknown> } | null 
   return code != null ? String(code).trim() || null : null;
 }
 
-/** Name-only masters. Optional keys are the hub field names (organization_id, site_id). */
+export interface DhmCatalogFieldShape {
+  key: string;
+  required?: boolean;
+  systemGenerated?: boolean;
+}
+
+export interface DhmCatalogShape {
+  fields?: DhmCatalogFieldShape[];
+}
+
+/**
+ * Keep only keys the live catalog lists. Copy `name` into short_name / long_name when those
+ * fields exist, and omit system-assigned `code` unless this is an update.
+ */
+export function toDhmCatalogPayload(
+  entity: DhmCatalogShape,
+  values: Record<string, unknown>,
+  options?: { code?: string },
+): { payload: Record<string, unknown>; missing: string[] } {
+  const fields = entity.fields ?? [];
+  if (fields.length === 0) {
+    const name = String(values.name ?? '').trim();
+    const extra: Record<string, string> = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (key === 'name' || key === 'code') continue;
+      const text = String(value ?? '').trim();
+      if (text) extra[key] = text;
+    }
+    return { payload: toDhmNamePayload(name, { code: options?.code, extra }), missing: [] };
+  }
+
+  const byKey = new Map(fields.map((field) => [field.key, field]));
+  const copies: Record<string, unknown> = { ...values };
+  const name = String(values.name ?? '').trim();
+  if (name) {
+    if (byKey.has('short_name') && !String(copies.short_name ?? '').trim()) copies.short_name = name;
+    if (byKey.has('long_name') && !String(copies.long_name ?? '').trim()) copies.long_name = name;
+  }
+
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(copies)) {
+    const field = byKey.get(key);
+    if (!field || field.systemGenerated) continue;
+    if (value == null) continue;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) continue;
+      payload[key] = text;
+      continue;
+    }
+    payload[key] = value;
+  }
+
+  const code = String(options?.code ?? '').trim();
+  if (code && byKey.has('code')) payload.code = code;
+
+  const missing = fields
+    .filter((field) => field.required && !field.systemGenerated && (payload[field.key] == null || payload[field.key] === ''))
+    .map((field) => field.key);
+  return { payload, missing };
+}
+
+/** First catalog field that can point at the parent (company_id replaced organization_id). */
+export function dhmParentRefKey(entity: DhmCatalogShape, candidates: string[]): string | null {
+  const keys = new Set((entity.fields ?? []).map((field) => field.key));
+  return candidates.find((key) => keys.has(key)) ?? null;
+}
+
+/** Name-only masters. Optional keys are the hub field names (company_id, site_id). */
 export function toDhmNamePayload(
   name: string,
   options?: { code?: string; extra?: Record<string, string> },
@@ -118,8 +186,12 @@ export function toDhmNamePayload(
 }
 
 export function dhmDataName(data: Record<string, unknown> | null | undefined): string | null {
-  const name = data?.name;
-  return name != null ? String(name).trim() || null : null;
+  if (!data) return null;
+  for (const key of ['name', 'short_name', 'long_name']) {
+    const value = data[key];
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return null;
 }
 
 /** REFERENCE values may be a code, a UUID, or `{ code }`. */

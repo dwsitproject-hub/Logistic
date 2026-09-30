@@ -31,7 +31,9 @@ const staleWrites = () =>
 describe('targeted snapshot refresh fails safely', () => {
   it('qty_move marks the snapshot stale and still rethrows', async () => {
     queryMock.mockImplementation(async (sql: string) => {
-      if (/UPDATE/i.test(sql) && /is_stale/i.test(sql)) return { rows: [], rowCount: 1 };
+      if (/UPDATE\s+\w*snapshot_meta[\s\S]*is_stale\s*=\s*TRUE/i.test(sql)) {
+        return { rows: [], rowCount: 1 };
+      }
       throw new Error('upsert exploded');
     });
 

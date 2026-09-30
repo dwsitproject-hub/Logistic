@@ -2799,11 +2799,11 @@ export function EditShipmentModal({
               <div className="space-y-4 p-4">
                 {isMultiPortLoading ? (
                   <>
-                    {etaBlocks.map((block) => (
+                    {etaBlocks.map((block, portIndex) => (
                       <div key={block.id} className="rounded-lg border border-blue-100 bg-white p-3">
                         <div className="mb-3 flex flex-wrap items-center gap-2">
                           <Badge className="bg-blue-600 text-white text-[10px]">
-                            Loading Port {block.portSequence}
+                            Loading Port {portIndex + 1}
                           </Badge>
                           <span className="text-xs text-gray-600">
                             {/* Multi-contract STO groups can have several ports sharing the same
@@ -3006,7 +3006,7 @@ export function EditShipmentModal({
               <div className="space-y-4 p-4">
                 {isMultiPortLoading ? (
                   <>
-                    {loadingPortRows.map((portRow) => {
+                    {loadingPortRows.map((portRow, portIndex) => {
                       const ataKey = loadingPortAtaStateKey(portRow)
                       const portAta =
                         loadingPortAtaByKey[ataKey] ??
@@ -3023,7 +3023,7 @@ export function EditShipmentModal({
                         >
                           <div className="mb-3 flex flex-wrap items-center gap-2">
                             <Badge className="bg-emerald-600 text-white text-[10px]">
-                              Loading Port {portRow.port_sequence ?? 1}
+                              Loading Port {portIndex + 1}
                             </Badge>
                             <span className="text-xs text-gray-600">
                               <ModalPortKlipSapLabel
@@ -3205,7 +3205,7 @@ export function EditShipmentModal({
                 {!canEditAtaQuality ? <KlipSapCompareLegend className="ml-auto" /> : null}
               </div>
               <div className="space-y-4 p-4">
-                {loadingPortRows.map((portRow) => {
+                {loadingPortRows.map((portRow, portIndex) => {
                   const qualityPortKey = loadingPortAtaStateKey(portRow)
                   const portQuality = qualityFieldsForPortKey(qualityPortKey)
                   const sapQuality = qualitySapReferenceFromPort(
@@ -3219,7 +3219,7 @@ export function EditShipmentModal({
                     <div className="mb-3 flex flex-wrap items-center gap-2">
                       {isMultiPortLoading ? (
                         <Badge className="bg-violet-600 text-white text-[10px]">
-                          Loading Port {portRow.port_sequence ?? 1}
+                          Loading Port {portIndex + 1}
                         </Badge>
                       ) : null}
                       <span className="text-[10px] font-medium text-gray-600">Quality at Loading</span>

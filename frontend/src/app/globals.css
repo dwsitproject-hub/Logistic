@@ -429,14 +429,23 @@
     max-width: 96px;
   }
 
-  /* Product through Truck Transporter: 32px + 4px + 32px, with ~15px inset each side. */
+  /*
+   * Product through Truck Transporter. table-layout:fixed must beat the operational
+   * auto rule, and one data column stays widthless so leftover space does not stretch Actions.
+   * 32px + 4px + 32px, with 4px inset each side.
+   */
+  .klip-compact-table.klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions {
+    table-layout: fixed;
+    width: 100%;
+  }
+
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions td.klip-op-col--actions {
-    width: 98px;
-    min-width: 98px;
-    max-width: 98px;
-    padding-left: 8px;
-    padding-right: 8px;
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+    padding-left: 4px;
+    padding-right: 4px;
     white-space: nowrap;
   }
 

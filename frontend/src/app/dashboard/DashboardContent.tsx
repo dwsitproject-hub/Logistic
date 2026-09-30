@@ -444,7 +444,8 @@ function SearchableMultiSelect({
     onChange([])
   }
 
-  const displayLabel = selected.length === 0 ? placeholder : `${selected.length} selected (OR)`
+  const displayLabel =
+    selected.length === 0 ? placeholder : selected.length === 1 ? selected[0] : `${selected.length} selected (OR)`
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -454,7 +455,7 @@ function SearchableMultiSelect({
         onClick={() => setOpen((o) => !o)}
         className="w-full flex items-center justify-between gap-2 h-10 px-3 py-2 text-left text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
       >
-        <span className={selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}>{displayLabel}</span>
+        <span className={`min-w-0 truncate ${selected.length === 0 ? 'text-gray-500' : 'text-gray-900'}`}>{displayLabel}</span>
         <ChevronDown className={`h-4 w-4 text-gray-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (

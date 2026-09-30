@@ -10,9 +10,6 @@ import {
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
 } from '@/lib/contractPerformanceColumns'
 import { MASTER_VESSEL_ACTIONS_COL_WIDTH_PX } from '@/lib/masterVesselColumns'
-
-/** Two 32px icon buttons, 4px gap, and about 15px of space on each side. */
-const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 98
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -34,6 +31,24 @@ export type MasterListTableColumn<T> = {
   widthPx?: number
   getText: (row: T) => string
   render?: (row: T) => ReactNode
+}
+
+/** Two 32px icon buttons, 4px gap, and 4px of space on each side. */
+const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 76
+
+const MASTER_LIST_FLEX_COLUMN_IDS = new Set([
+  'product_name',
+  'port',
+  'company_name',
+  'plant_name',
+  'value_1',
+])
+
+function masterListFlexColumnId<T>(columns: readonly MasterListTableColumn<T>[]): string | null {
+  const preferred = columns.find((col) => MASTER_LIST_FLEX_COLUMN_IDS.has(col.id))
+  if (preferred) return preferred.id
+  const fallback = [...columns].reverse().find((col) => col.id !== 'dhm_status')
+  return fallback?.id ?? null
 }
 
 type MasterListCompactTableProps<T> = {
@@ -75,6 +90,7 @@ export function MasterListCompactTable<T>({
   const isSyncingScroll = useRef(false)
   const [tableScrollWidth, setTableScrollWidth] = useState(0)
   const colSpan = columns.length + (renderActions ? 1 : 0)
+  const flexColumnId = tightActions ? masterListFlexColumnId(columns) : null
 
   useEffect(() => {
     const table = bottomScrollRef.current?.querySelector('table')
@@ -128,11 +144,16 @@ export function MasterListCompactTable<T>({
               {columns.map((col) => (
                 <col
                   key={col.id}
-                  style={{
-                    width: compactTableColWidthCss(
-                      resolveCompactColumnWidthPx(col.widthPx ?? 120, col.label, { hasSort: col.sortable !== false }),
-                    ),
-                  }}
+                  className={col.id === flexColumnId ? 'klip-master-flex-col' : undefined}
+                  style={
+                    col.id === flexColumnId
+                      ? undefined
+                      : {
+                          width: compactTableColWidthCss(
+                            resolveCompactColumnWidthPx(col.widthPx ?? 120, col.label, { hasSort: col.sortable !== false }),
+                          ),
+                        }
+                  }
                 />
               ))}
               {renderActions ? (
