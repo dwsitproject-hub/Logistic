@@ -67,6 +67,17 @@ else
   CONTAINER=klip-frontend
 fi
 
+# Two hosts, one checkout each. Both have /opt/klip and every compose file, so a wrong-host run
+# passes every file check and reaches the build: on 2026-09-30 a frontend deploy was started on
+# ECS-DB and stopped only at the confirmation prompt. The backend host is named ECS-DB.
+HOST_NAME="$(hostname)"
+if [[ "$ROLE" == "frontend" && "$HOST_NAME" == "ECS-DB" ]]; then
+  die "this is ECS-DB, the BACKEND host. Run the frontend deploy on ECS-App (147.139.176.70, SSH 1818)."
+fi
+if [[ "$ROLE" == "backend" && "$HOST_NAME" != "ECS-DB" && "${DEPLOY_ALLOW_HOST:-}" != "1" ]]; then
+  die "this is $HOST_NAME, not ECS-DB. The backend deploys on ECS-DB (8.215.56.98, SSH 1819). DEPLOY_ALLOW_HOST=1 overrides if the host was renamed."
+fi
+
 step "where we are"
 printf '  host      : %s\n' "$(hostname)"
 printf '  directory : %s\n' "$(pwd)"
