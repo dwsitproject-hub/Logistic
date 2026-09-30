@@ -8,7 +8,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import api from '@/lib/api'
 import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
-import { downloadMasterVesselTemplate } from '@/lib/masterVesselExcelTemplate'
 import {
   EditVesselModal,
   type MasterVesselFormData,
@@ -23,47 +22,12 @@ import { MasterVesselTable } from '@/components/master-vessel/MasterVesselTable'
 import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
 import { MASTER_VESSEL_COLUMNS, type MasterVesselColumnId } from '@/lib/masterVesselColumns'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
-import { Plus, Upload, Download } from 'lucide-react'
+import { Plus } from 'lucide-react'
 
 const VESSEL_LAYOUT_COLUMNS = MASTER_VESSEL_COLUMNS.map((col) => ({ id: col.id, label: col.label }))
 
 interface MasterVessel extends MasterVesselFormData {
   id: string
-}
-
-interface JovinImportCleanupSummary {
-  mergedGroups: number
-  aliasesAdded: number
-  deletedRows: number
-  sapAliasesLinked: number
-  namesUpdated: number
-  shipmentsRelinked: number
-  merged?: Array<{
-    survivorName: string
-    survivorCode: string
-    absorbedCodes: string[]
-  }>
-  reviewQueue?: Array<{
-    nameA: string
-    nameB: string
-    codeA: string
-    codeB: string
-    similarity: number
-    reason: string
-  }>
-}
-
-interface JovinImportSummary {
-  totalJovinRows: number
-  resolvedFromKlip: number
-  resolvedFromSap: number
-  provisionalInserted: number
-  inserted: number
-  updated: number
-  promoted: number
-  pendingOfficialCount: number
-  dryRun: boolean
-  cleanup?: JovinImportCleanupSummary | null
 }
 
 const VESSELS_PER_PAGE = 20
@@ -97,7 +61,6 @@ export default function MasterVesselPage() {
   const [modalMode, setModalMode] = useState<'create' | 'edit'>('create')
   const [editingVessel, setEditingVessel] = useState<MasterVessel | null>(null)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [importSummary, setImportSummary] = useState<JovinImportSummary | null>(null)
   const [sortKey, setSortKey] = useState<MasterVesselColumnId>('vessel_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const vesselColumns = useListColumnLayout('master-vessel.visibleColumns.v1', VESSEL_LAYOUT_COLUMNS)
@@ -244,41 +207,6 @@ export default function MasterVesselPage() {
     setModalOpen(true)
   }
 
-  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    try {
-      const apply = confirm(
-        'Apply import to database?\n\nOK = Apply (import + vessel-code cleanup)\nCancel = Dry-run preview only',
-      )
-      const formData = new FormData()
-      formData.append('file', file)
-      const res = await api.post(`/master-vessels/import-jovin?dryRun=${apply ? 'false' : 'true'}`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setImportSummary(res.data?.data ?? null)
-      if (apply) {
-        void fetchVessels(currentPage)
-      }
-    } catch (err) {
-      console.error('Upload master vessel Excel error', err)
-      alert('Failed to import Master Vessel Template.xlsx')
-    } finally {
-      e.target.value = ''
-    }
-  }
-
-  const handleDownloadTemplate = async () => {
-    try {
-      const res = await api.get('/master-vessels', { params: { limit: 100000 } })
-      const all: MasterVessel[] = res.data?.data?.items || []
-      downloadMasterVesselTemplate(all)
-    } catch (err) {
-      console.error('Download master vessel template error', err)
-      alert('Failed to download template')
-    }
-  }
-
   const handleDelete = async (v: MasterVessel) => {
     if (!isAdmin) return
     // Identify the vessel by the code that always exists. formatVesselCodeDisplay renders a
@@ -359,21 +287,6 @@ export default function MasterVesselPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => document.getElementById('master-vessel-excel-upload')?.click()}>
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Excel
-            </Button>
-            <input
-              id="master-vessel-excel-upload"
-              type="file"
-              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-              className="hidden"
-              onChange={handleExcelUpload}
-            />
-            <Button variant="outline" size="sm" onClick={handleDownloadTemplate}>
-              <Download className="h-4 w-4 mr-2" />
-              Download Template
-            </Button>
             {isAdmin ? (
               <Button size="sm" onClick={openNew}>
                 <Plus className="h-4 w-4 mr-2" />
@@ -382,46 +295,6 @@ export default function MasterVesselPage() {
             ) : null}
           </div>
         </div>
-
-        {importSummary && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Excel Import {importSummary.dryRun ? '(Dry Run)' : 'Summary'}</CardTitle>
-            </CardHeader>
-            <CardContent className="text-sm space-y-1">
-              <p>Total Jovin rows: {importSummary.totalJovinRows}</p>
-              <p>Resolved from KLIP: {importSummary.resolvedFromKlip}</p>
-              <p>Resolved from SAP: {importSummary.resolvedFromSap}</p>
-              <p>Pending official code: {importSummary.pendingOfficialCount}</p>
-              <p>Inserted: {importSummary.inserted} · Updated: {importSummary.updated} · Promoted: {importSummary.promoted}</p>
-              {importSummary.cleanup ? (
-                <div className="pt-2 space-y-1">
-                  <p className="font-medium">Vessel identity cleanup</p>
-                  <p>
-                    Merged groups: {importSummary.cleanup.mergedGroups} · SAP aliases linked:{' '}
-                    {importSummary.cleanup.sapAliasesLinked} · Shipments relinked:{' '}
-                    {importSummary.cleanup.shipmentsRelinked}
-                  </p>
-                  {importSummary.cleanup.merged && importSummary.cleanup.merged.length > 0 ? (
-                    <ul className="list-disc pl-5 text-xs">
-                      {importSummary.cleanup.merged.slice(0, 8).map((g) => (
-                        <li key={`${g.survivorCode}-${g.survivorName}`}>
-                          {g.survivorName} ({g.survivorCode}) ← {g.absorbedCodes.join(', ')}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {importSummary.cleanup.reviewQueue && importSummary.cleanup.reviewQueue.length > 0 ? (
-                    <p className="text-amber-700">
-                      Review queue (not auto-merged): {importSummary.cleanup.reviewQueue.length} similar-name
-                      pairs
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-        )}
 
         <MasterVesselGlobalFiltersSection
           searchDraft={searchDraft}

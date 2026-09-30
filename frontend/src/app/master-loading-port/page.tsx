@@ -18,7 +18,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
-import { Plus, Upload, Edit2, Trash2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
+import { MasterRowActions } from '@/components/shared/MasterRowActions'
+import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
+import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import {
   Dialog,
   DialogContent,
@@ -29,6 +32,9 @@ import {
 
 interface MasterLoadingPort {
   id: string
+  code_klip?: string | null
+  code_dhm?: string | null
+  dhm_site_code?: string | null
   region: string | null
   port: string
   coordinate: string | null
@@ -54,23 +60,10 @@ function portCell(value: string | number | null | undefined): string {
 }
 
 const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
-  { id: 'region', label: 'Region', getText: (row) => portCell(row.region) },
+  { id: 'code_klip', label: 'Port Code (KLIP)', getText: (row) => portCell(row.code_klip) },
+  { id: 'code_dhm', label: 'Port Code (DHM)', getText: (row) => portCell(row.code_dhm) },
   { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
-  { id: 'coordinate', label: 'Coordinate', getText: (row) => portCell(row.coordinate) },
-  { id: 'masuk_alur', label: 'Channel Access', getText: (row) => portCell(row.masuk_alur) },
-  { id: 'lebar_alur', label: 'Channel Width', getText: (row) => portCell(row.lebar_alur) },
-  { id: 'jumlah_jembatan', label: 'Bridge Count', getText: (row) => portCell(row.jumlah_jembatan) },
-  { id: 'jenis_port', label: 'Port Type', getText: (row) => portCell(row.jenis_port) },
-  { id: 'pemilik_port', label: 'Port Owner', getText: (row) => portCell(row.pemilik_port) },
-  { id: 'antri_muat_hari', label: 'Loading Queue (days)', getText: (row) => portCell(row.antri_muat_hari) },
-  { id: 'jumlah_demaraga', label: 'Berth Count', getText: (row) => portCell(row.jumlah_demaraga) },
-  { id: 'panjang_demaraga', label: 'Berth Length', getText: (row) => portCell(row.panjang_demaraga) },
-  { id: 'draft', label: 'Draft', getText: (row) => portCell(row.draft) },
-  { id: 'dwt', label: 'DWT', getText: (row) => portCell(row.dwt) },
-  { id: 'siklus_pasang', label: 'Tide Cycle', getText: (row) => portCell(row.siklus_pasang) },
-  { id: 'loading_method', label: 'Loading Method', getText: (row) => portCell(row.loading_method) },
-  { id: 'loading_rate_mt_per_hour', label: 'Loading Rate (Kg/hour)', getText: (row) => portCell(row.loading_rate_mt_per_hour) },
-  { id: 'shipper', label: 'Shipper', getText: (row) => portCell(row.shipper) },
+  dhmStatusListColumn<MasterLoadingPort>(),
 ]
 
 export default function MasterLoadingPortPage() {
@@ -80,12 +73,13 @@ export default function MasterLoadingPortPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('port')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const portColumns = useListColumnLayout('master-port.visibleColumns.v1', PORT_COLUMNS)
+  const portColumns = useListColumnLayout('master-port.visibleColumns.v3', PORT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [editing, setEditing] = useState<MasterLoadingPort | null>(null)
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
   const [isAdmin, setIsAdmin] = useState(false)
+  const [dhmSites, setDhmSites] = useState<Array<{ code: string; label: string }>>([])
   const [uploadResult, setUploadResult] = useState<{
     total: number
     success: number
@@ -99,6 +93,8 @@ export default function MasterLoadingPortPage() {
     try {
       setLoading(true)
       const params = new URLSearchParams()
+      params.set('masterOnly', 'true')
+      params.set('limit', '500')
       if (searchQuery.length >= 2) {
         params.set('search', searchQuery)
       }
@@ -125,27 +121,42 @@ export default function MasterLoadingPortPage() {
     void fetchData(debouncedSearch)
   }, [debouncedSearch, fetchData])
 
+  useEffect(() => {
+    if (!isFormOpen) return
+    let cancelled = false
+    void api
+      .get('/master-plants', { params: { page: 1, limit: 500 } })
+      .then((res) => {
+        if (cancelled) return
+        const rows = (res.data?.data?.items || []) as Array<{
+          company_name?: string | null
+          plant_name?: string | null
+          plant_code?: string | null
+          code_dhm?: string | null
+        }>
+        setDhmSites(
+          rows
+            .filter((row) => String(row.code_dhm || '').trim())
+            .map((row) => ({
+              code: String(row.code_dhm),
+              label: `${row.plant_name || row.plant_code || 'Site'} — ${row.company_name || ''} (${row.code_dhm})`,
+            })),
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setDhmSites([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [isFormOpen])
+
   const openNew = () => {
     setEditing(null)
     setIsFormOpen(true)
     setForm({
-      region: '',
       port: '',
-      coordinate: '',
-      masuk_alur: '',
-      lebar_alur: '',
-      jumlah_jembatan: null,
-      jenis_port: '',
-      pemilik_port: '',
-      antri_muat_hari: null,
-      jumlah_demaraga: null,
-      panjang_demaraga: '',
-      draft: '',
-      dwt: '',
-      siklus_pasang: '',
-      loading_method: '',
-      loading_rate_mt_per_hour: null,
-      shipper: '',
+      dhm_site_code: '',
     })
   }
 
@@ -166,29 +177,15 @@ export default function MasterLoadingPortPage() {
         return
       }
       const payload = {
-        region: form.region,
         port: form.port,
-        coordinate: form.coordinate,
-        masuk_alur: form.masuk_alur,
-        lebar_alur: form.lebar_alur,
-        jumlah_jembatan: form.jumlah_jembatan,
-        jenis_port: form.jenis_port,
-        pemilik_port: form.pemilik_port,
-        antri_muat_hari: form.antri_muat_hari,
-        jumlah_demaraga: form.jumlah_demaraga,
-        panjang_demaraga: form.panjang_demaraga,
-        draft: form.draft,
-        dwt: form.dwt,
-        siklus_pasang: form.siklus_pasang,
-        loading_method: form.loading_method,
-        loading_rate_mt_per_hour: form.loading_rate_mt_per_hour,
-        shipper: form.shipper,
+        dhm_site_code: form.dhm_site_code || null,
       }
-      if (editing) {
-        await api.put(`/master-loading-ports/${editing.id}`, payload)
-      } else {
-        await api.post('/master-loading-ports', payload)
+      const persist = (overwrite: boolean) => {
+        const qs = overwrite ? '?dhmOverwrite=true' : ''
+        if (editing) return api.put(`/master-loading-ports/${editing.id}${qs}`, payload)
+        return api.post(`/master-loading-ports${qs}`, payload)
       }
+      await saveWithDhmConfirm(persist, 'port')
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
@@ -348,21 +345,12 @@ export default function MasterLoadingPortPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => document.getElementById('master-loading-port-upload')?.click()}>
-              <Upload className="h-4 w-4 mr-2" />
-              Upload CSV
-            </Button>
-            <input
-              id="master-loading-port-upload"
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={handleUpload}
-            />
-            <Button size="sm" onClick={openNew}>
-              <Plus className="h-4 w-4 mr-2" />
-              New Port
-            </Button>
+            {isAdmin ? (
+              <Button size="sm" onClick={openNew}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Port
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -399,147 +387,37 @@ export default function MasterLoadingPortPage() {
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Region</label>
-                  <Input
-                    value={form.region || ''}
-                    onChange={(e) => handleChange('region', e.target.value)}
-                  />
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Code (KLIP)</label>
+                  <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Port</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Code (DHM)</label>
+                  <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Site (DHM)</label>
+                  <select
+                    className="border rounded-md px-3 py-2 w-full text-sm"
+                    value={form.dhm_site_code || ''}
+                    onChange={(e) => handleChange('dhm_site_code', e.target.value || null)}
+                  >
+                    <option value="">Select a Company (Internal) site</option>
+                    {form.dhm_site_code && !dhmSites.some((site) => site.code === form.dhm_site_code) ? (
+                      <option value={form.dhm_site_code}>{form.dhm_site_code}</option>
+                    ) : null}
+                    {dhmSites.map((site) => (
+                      <option key={site.code} value={site.code}>
+                        {site.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">Required to link this port in DHM. Local save still succeeds without it.</p>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Port <span className="text-red-500">*</span></label>
                   <Input
                     value={form.port || ''}
                     onChange={(e) => handleChange('port', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Coordinate</label>
-                  <Input
-                    value={form.coordinate || ''}
-                    onChange={(e) => handleChange('coordinate', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Channel Access</label>
-                  <select
-                    className="border rounded-md px-3 py-2 w-full text-sm"
-                    value={form.masuk_alur || ''}
-                    onChange={(e) => handleChange('masuk_alur', e.target.value || null)}
-                  >
-                    <option value="">Select...</option>
-                    <option value="Ya">Yes</option>
-                    <option value="Tidak">No</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Channel Width</label>
-                  <Input
-                    value={form.lebar_alur || ''}
-                    onChange={(e) => handleChange('lebar_alur', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Bridge Count</label>
-                  <Input
-                    type="number"
-                    value={form.jumlah_jembatan ?? ''}
-                    onChange={(e) =>
-                      handleChange('jumlah_jembatan', e.target.value === '' ? null : Number(e.target.value))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Type</label>
-                  <select
-                    className="border rounded-md px-3 py-2 w-full text-sm"
-                    value={form.jenis_port || ''}
-                    onChange={(e) => handleChange('jenis_port', e.target.value || null)}
-                  >
-                    <option value="">Select...</option>
-                    <option value="Umum">General</option>
-                    <option value="TUKS">TUKS</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Port Owner</label>
-                  <Input
-                    value={form.pemilik_port || ''}
-                    onChange={(e) => handleChange('pemilik_port', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Queue (days)</label>
-                  <Input
-                    type="number"
-                    value={form.antri_muat_hari ?? ''}
-                    onChange={(e) =>
-                      handleChange('antri_muat_hari', e.target.value === '' ? null : Number(e.target.value))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Berth Count</label>
-                  <Input
-                    type="number"
-                    value={form.jumlah_demaraga ?? ''}
-                    onChange={(e) =>
-                      handleChange('jumlah_demaraga', e.target.value === '' ? null : Number(e.target.value))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Berth Length</label>
-                  <Input
-                    value={form.panjang_demaraga || ''}
-                    onChange={(e) => handleChange('panjang_demaraga', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Draft</label>
-                  <Input
-                    value={form.draft || ''}
-                    onChange={(e) => handleChange('draft', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">DWT</label>
-                  <Input
-                    value={form.dwt || ''}
-                    onChange={(e) => handleChange('dwt', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Tide Cycle</label>
-                  <Input
-                    value={form.siklus_pasang || ''}
-                    onChange={(e) => handleChange('siklus_pasang', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Method</label>
-                  <Input
-                    value={form.loading_method || ''}
-                    onChange={(e) => handleChange('loading_method', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Loading Rate (Kg/hour)</label>
-                  <Input
-                    type="number"
-                    value={form.loading_rate_mt_per_hour ?? ''}
-                    onChange={(e) =>
-                      handleChange(
-                        'loading_rate_mt_per_hour',
-                        e.target.value === '' ? null : Number(e.target.value),
-                      )
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Shipper</label>
-                  <Input
-                    value={form.shipper || ''}
-                    onChange={(e) => handleChange('shipper', e.target.value)}
                   />
                 </div>
               </div>
@@ -591,6 +469,7 @@ export default function MasterLoadingPortPage() {
           </CardHeader>
           <CardContent>
             <MasterListCompactTable
+              tightActions
               rows={[...items].sort((a, b) => {
                 const col = PORT_COLUMNS.find((item) => item.id === sortKey)
                 const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
@@ -616,18 +495,13 @@ export default function MasterLoadingPortPage() {
                 portColumns.setDragColId(null)
               }}
               renderActions={(p) => (
-                <div className="inline-flex items-center justify-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                    <Edit2 className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
-                  {isAdmin ? (
-                    <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
-                      <Trash2 className="h-4 w-4 mr-1" />
-                      Delete
-                    </Button>
-                  ) : null}
-                </div>
+                <MasterRowActions
+                  isAdmin={isAdmin}
+                  editLabel={isAdmin ? 'Edit port' : 'View port'}
+                  deleteLabel="Delete port"
+                  onEdit={() => openEdit(p)}
+                  onDelete={() => void handleDelete(p)}
+                />
               )}
             />
           </CardContent>

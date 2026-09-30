@@ -19,26 +19,27 @@ import { StitchSearchIcon } from '@/components/shared/stitchIcons'
 import { ListPageColumnsMenu } from '@/components/shared/ListPageColumnsMenu'
 import { MasterListCompactTable, type MasterListTableColumn } from '@/components/shared/MasterListCompactTable'
 import { useListColumnLayout } from '@/lib/listColumnLayout'
+import { MasterRowActions } from '@/components/shared/MasterRowActions'
+import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
+import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
+import { Plus } from 'lucide-react'
 
 interface Product {
   id: string
   product_name: string
+  code_klip?: string | null
+  code_dhm?: string | null
   percent_produce: number | null
   working_hours_per_day: number | null
   working_days_per_month: number | null
   working_days_per_year: number | null
 }
 
-function productText(value: number | null): string {
-  return value == null || value === ('' as unknown as number) ? '-' : String(value)
-}
-
 const PRODUCT_COLUMNS: MasterListTableColumn<Product>[] = [
-  { id: 'product_name', label: 'Product Name', getText: (row) => row.product_name || '-' },
-  { id: 'percent_produce', label: '% Produce', getText: (row) => productText(row.percent_produce) },
-  { id: 'working_hours_per_day', label: 'Working Hours / Day', getText: (row) => productText(row.working_hours_per_day) },
-  { id: 'working_days_per_month', label: 'Working Days / Month', getText: (row) => productText(row.working_days_per_month) },
-  { id: 'working_days_per_year', label: 'Working Days / Year', getText: (row) => productText(row.working_days_per_year) },
+  { id: 'code_klip', label: 'Product Code (KLIP)', getText: (row) => row.code_klip || '-' },
+  { id: 'code_dhm', label: 'Product Code (DHM)', getText: (row) => row.code_dhm || '-' },
+  { id: 'product_name', label: 'Product', getText: (row) => row.product_name || '-' },
+  dhmStatusListColumn<Product>(),
 ]
 
 export default function MasterProductConfigurationPage() {
@@ -57,13 +58,20 @@ export default function MasterProductConfigurationPage() {
   const [form, setForm] = useState<any>({ product_name: '', percent_produce: '', working_hours_per_day: '', working_days_per_month: '', working_days_per_year: '' })
   const [sortKey, setSortKey] = useState('product_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const productColumns = useListColumnLayout('master-product.visibleColumns.v1', PRODUCT_COLUMNS)
+  const [isAdmin, setIsAdmin] = useState(false)
+  const productColumns = useListColumnLayout('master-product.visibleColumns.v3', PRODUCT_COLUMNS)
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
 
   useEffect(() => {
     const userStr = localStorage.getItem('user')
     if (!userStr) { router.push('/login'); return }
+    try {
+      const user = JSON.parse(userStr) as { role?: string }
+      setIsAdmin(String(user.role || '').toUpperCase() === 'ADMIN')
+    } catch {
+      setIsAdmin(false)
+    }
   }, [router])
 
   const fetchData = useCallback(async (pageNum: number, searchQuery: string) => {
@@ -97,22 +105,22 @@ export default function MasterProductConfigurationPage() {
     void fetchData(page, debouncedSearch)
   }, [page, debouncedSearch, fetchData])
 
-  const openAdd = () => { setEditing(null); setForm({ product_name: '', percent_produce: '', working_hours_per_day: '', working_days_per_month: '', working_days_per_year: '' }); setShowModal(true) }
+  const openAdd = () => { setEditing(null); setForm({ product_name: '' }); setShowModal(true) }
   const openEdit = (p: Product) => { setEditing(p); setForm({ ...p }); setShowModal(true) }
 
   const saveProduct = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(''); setSuccess('')
     try {
-      const payload = {
-        product_name: form.product_name,
-        percent_produce: form.percent_produce === '' ? null : Number(form.percent_produce),
-        working_hours_per_day: form.working_hours_per_day === '' ? null : Number(form.working_hours_per_day),
-        working_days_per_month: form.working_days_per_month === '' ? null : Number(form.working_days_per_month),
-        working_days_per_year: form.working_days_per_year === '' ? null : Number(form.working_days_per_year),
+      const payload = { product_name: form.product_name }
+      const noun = 'product'
+      if (editing) {
+        await saveWithDhmConfirm((overwrite) => api.put(`/products/${editing.id}${overwrite ? '?dhmOverwrite=true' : ''}`, payload), noun)
+        setSuccess('Product updated')
+      } else {
+        await saveWithDhmConfirm((overwrite) => api.post(`/products${overwrite ? '?dhmOverwrite=true' : ''}`, payload), noun)
+        setSuccess('Product created')
       }
-      if (editing) { await api.put(`/products/${editing.id}`, payload); setSuccess('Product updated') }
-      else { await api.post('/products', payload); setSuccess('Product created') }
       setShowModal(false); void fetchData(page, debouncedSearch)
     } catch (err: any) {
       const msg = err?.response?.data?.error?.message 
@@ -133,7 +141,10 @@ export default function MasterProductConfigurationPage() {
     <StitchFields>
     <div className="space-y-6">
       <div className="flex items-center justify-end">
-        <Button onClick={openAdd}>Add Product</Button>
+        <Button size="sm" onClick={openAdd}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Product
+        </Button>
       </div>
 
       {error && <div className="text-red-600 text-sm">{error}</div>}
@@ -203,6 +214,7 @@ export default function MasterProductConfigurationPage() {
         </CardHeader>
         <CardContent>
           <MasterListCompactTable
+            tightActions
             rows={[...items].sort((a, b) => {
               const col = PRODUCT_COLUMNS.find((item) => item.id === sortKey)
               const left = col?.getText(a) ?? ''
@@ -230,10 +242,13 @@ export default function MasterProductConfigurationPage() {
               productColumns.setDragColId(null)
             }}
             renderActions={(row) => (
-              <div className="inline-flex items-center justify-center gap-1">
-                <Button variant="outline" size="sm" onClick={() => openEdit(row)}>Edit</Button>
-                <Button variant="destructive" size="sm" onClick={() => removeProduct(row)}>Delete</Button>
-              </div>
+              <MasterRowActions
+                isAdmin={isAdmin}
+                editLabel={isAdmin ? 'Edit product' : 'View product'}
+                deleteLabel="Delete product"
+                onEdit={() => openEdit(row)}
+                onDelete={() => void removeProduct(row)}
+              />
             )}
           />
         </CardContent>
@@ -242,25 +257,24 @@ export default function MasterProductConfigurationPage() {
       {showModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
           <div className="bg-white rounded-md w-full max-w-3xl max-h-[90vh] overflow-y-auto px-6 pb-6">
-            <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'Add Product'}</h2>
+            <h2 className="text-xl font-semibold mb-4">{editing ? 'Edit Product' : 'New Product'}</h2>
             <form onSubmit={saveProduct} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {[
-                ['product_name','Product Name'],
-                ['percent_produce','% Produce'],
-                ['working_hours_per_day','No of Working Hours per day'],
-                ['working_days_per_month','No of Working Days per month'],
-                ['working_days_per_year','No of Working Days per year']
-              ].map(([key, label]) => (
-                <div key={key as string} className="space-y-1">
-                  <Label>{label}</Label>
-                  <Input
-                    type={(key === 'product_name') ? 'text' : 'number'}
-                    value={form[key as string] ?? ''}
-                    onChange={(e) => setForm((f: any) => ({ ...f, [key as string]: e.target.value }))}
-                    required={key === 'product_name'}
-                  />
-                </div>
-              ))}
+              <div className="space-y-1">
+                <Label>Product Code (KLIP)</Label>
+                <Input value={editing?.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
+              </div>
+              <div className="space-y-1">
+                <Label>Product Code (DHM)</Label>
+                <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
+              </div>
+              <div className="space-y-1 md:col-span-2">
+                <Label>Product</Label>
+                <Input
+                  value={form.product_name ?? ''}
+                  onChange={(e) => setForm((f: { product_name?: string }) => ({ ...f, product_name: e.target.value }))}
+                  required
+                />
+              </div>
               <div className="col-span-full flex justify-end gap-2 mt-2">
                 <Button type="button" variant="outline" onClick={() => setShowModal(false)}>Cancel</Button>
                 <Button type="submit">Save</Button>

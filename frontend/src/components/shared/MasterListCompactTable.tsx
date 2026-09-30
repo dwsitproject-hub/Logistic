@@ -7,9 +7,12 @@ import {
   CONTRACT_PERF_TABLE_CELL_PAD,
   CONTRACT_PERF_TABLE_ROW_MIN_H,
   COMPACT_TABLE_ACTIONS_CELL_CLASS,
-  COMPACT_TABLE_ACTIONS_COL_WIDTH_PX,
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
 } from '@/lib/contractPerformanceColumns'
+import { MASTER_VESSEL_ACTIONS_COL_WIDTH_PX } from '@/lib/masterVesselColumns'
+
+/** Two 32px icon buttons, 4px gap, and about 15px of space on each side. */
+const MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX = 98
 import {
   COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
   COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS,
@@ -30,6 +33,7 @@ export type MasterListTableColumn<T> = {
   defaultVisible?: boolean
   widthPx?: number
   getText: (row: T) => string
+  render?: (row: T) => ReactNode
 }
 
 type MasterListCompactTableProps<T> = {
@@ -46,6 +50,8 @@ type MasterListCompactTableProps<T> = {
   onDragEnd: () => void
   onDrop: (columnId: string) => void
   renderActions?: (row: T) => ReactNode
+  /** Fit the Actions column to two icon buttons with a small inset. */
+  tightActions?: boolean
 }
 
 export function MasterListCompactTable<T>({
@@ -62,6 +68,7 @@ export function MasterListCompactTable<T>({
   onDragEnd,
   onDrop,
   renderActions,
+  tightActions = false,
 }: MasterListCompactTableProps<T>) {
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -113,7 +120,8 @@ export function MasterListCompactTable<T>({
             className={cn(
               COMPACT_OPERATIONAL_TABLE_CLASS,
               COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
-              'klip-compact-table--perf-narrow-cols',
+              'klip-compact-table--perf-narrow-cols klip-master-list-table',
+              tightActions && 'klip-master-tight-actions',
             )}
           >
             <colgroup>
@@ -127,7 +135,9 @@ export function MasterListCompactTable<T>({
                   }}
                 />
               ))}
-              {renderActions ? <col style={{ width: COMPACT_TABLE_ACTIONS_COL_WIDTH_PX }} /> : null}
+              {renderActions ? (
+                <col style={{ width: tightActions ? MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX : MASTER_VESSEL_ACTIONS_COL_WIDTH_PX }} />
+              ) : null}
             </colgroup>
             <thead>
               <tr className={LIST_PAGE_TABLE_HEADER_ROW_CLASS}>
@@ -200,11 +210,14 @@ export function MasterListCompactTable<T>({
                               COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
                               'align-middle',
                               CONTRACT_PERF_TABLE_CELL_PAD,
+                              col.id === 'dhm_status' && 'klip-op-col--token',
                               stripe,
                             )}
                           >
                             <div className={cn(COMPACT_OPERATIONAL_TABLE_CELL_INNER_CLASS, CONTRACT_PERF_TABLE_ROW_MIN_H)}>
-                              {tooltip ? (
+                              {col.render ? (
+                                col.render(row)
+                              ) : tooltip ? (
                                 <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
                                   <span className="text-sm">{text}</span>
                                 </ContractPerfTruncatedCell>

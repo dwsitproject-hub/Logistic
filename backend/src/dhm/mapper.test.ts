@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fromDhmVesselData, toDhmVesselPayload } from './mapper';
+import { fromDhmVesselData, toDhmNamePayload, toDhmVesselPayload } from './mapper';
 
 describe('dhm vessel mapper', () => {
   it('maps KLIP fields to hub keys and omits local-only columns', () => {
@@ -52,6 +52,22 @@ describe('dhm vessel mapper', () => {
       vessel_type: 'BARGE',
       lambung_type: 'SHDB',
       terms: 'T/C',
+    });
+  });
+});
+
+describe('dhm name mapper', () => {
+  it('sends name only and never a KLIP code', () => {
+    expect(toDhmNamePayload('CPO')).toEqual({ name: 'CPO' });
+    expect(toDhmNamePayload('CPO')).not.toHaveProperty('code');
+    expect(toDhmNamePayload('CPO')).not.toHaveProperty('code_klip');
+  });
+
+  it('adds the DHM code on update and a parent reference when present', () => {
+    expect(toDhmNamePayload('PORT BATAM', { code: 'PORT-0001', extra: { site_id: 'SITE-0004' } })).toEqual({
+      name: 'PORT BATAM',
+      code: 'PORT-0001',
+      site_id: 'SITE-0004',
     });
   });
 });

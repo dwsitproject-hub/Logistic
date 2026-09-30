@@ -419,6 +419,27 @@
     background-color: rgb(249 250 251);
   }
 
+  /* Master Vessel keeps a slightly wider Actions column. */
+  .klip-compact-table--operational.klip-master-list-table th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-master-list-table td.klip-op-col--actions,
+  .klip-compact-table--operational.klip-master-vessel-table th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-master-vessel-table td.klip-op-col--actions {
+    width: 96px;
+    min-width: 96px;
+    max-width: 96px;
+  }
+
+  /* Product through Truck Transporter: 32px + 4px + 32px, with ~15px inset each side. */
+  .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions th.klip-op-col--actions,
+  .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions td.klip-op-col--actions {
+    width: 98px;
+    min-width: 98px;
+    max-width: 98px;
+    padding-left: 8px;
+    padding-right: 8px;
+    white-space: nowrap;
+  }
+
   /* Oil Loss has one action icon. 112px is the two-button width used on other pages. */
   .klip-compact-table--operational.klip-oil-loss-table th.klip-op-col--actions,
   .klip-compact-table--operational.klip-oil-loss-table td.klip-op-col--actions {

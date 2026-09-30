@@ -17,7 +17,10 @@ import { useListColumnLayout } from '@/lib/listColumnLayout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import api from '@/lib/api'
-import { Edit2, Trash2, Upload } from 'lucide-react'
+import { Plus } from 'lucide-react'
+import { MasterRowActions } from '@/components/shared/MasterRowActions'
+import { dhmStatusListColumn } from '@/lib/dhmStatusColumn'
+import { saveWithDhmConfirm } from '@/lib/dhmMasterSave'
 import * as XLSX from 'xlsx'
 import {
   Dialog,
@@ -29,12 +32,18 @@ import {
 
 interface MasterPlant {
   id: string
+  company_code?: string | null
   company_name: string
   plant_code: string
   plant_name: string | null
-  postal_code: string | null
-  city: string | null
   plant_type: string | null
+  site?: string | null
+  city: string | null
+  postal_code: string | null
+  found_in?: string | null
+  code_klip?: string | null
+  code_dhm?: string | null
+  dhm_org_code?: string | null
   group_plant: string | null
 }
 
@@ -43,13 +52,17 @@ function plantCell(value: string | null | undefined): string {
 }
 
 const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
+  { id: 'code_klip', label: 'Company Code (KLIP)', getText: (row) => plantCell(row.code_klip) },
+  { id: 'code_dhm', label: 'Company Code (DHM)', getText: (row) => plantCell(row.code_dhm) },
+  { id: 'company_code', label: 'Company Code', getText: (row) => plantCell(row.company_code) },
   { id: 'company_name', label: 'Company Name', getText: (row) => plantCell(row.company_name) },
   { id: 'plant_code', label: 'Plant Code', getText: (row) => plantCell(row.plant_code) },
-  { id: 'plant_name', label: 'Plant Name', getText: (row) => plantCell(row.plant_name) },
-  { id: 'postal_code', label: 'Postal Code', getText: (row) => plantCell(row.postal_code) },
-  { id: 'city', label: 'City', getText: (row) => plantCell(row.city) },
+  { id: 'plant_name', label: 'Plant', getText: (row) => plantCell(row.plant_name) },
   { id: 'plant_type', label: 'Plant Type', getText: (row) => plantCell(row.plant_type) },
-  { id: 'group_plant', label: 'Group Plant', getText: (row) => plantCell(row.group_plant) },
+  { id: 'site', label: 'Site', getText: (row) => plantCell(row.site) },
+  { id: 'city', label: 'City', getText: (row) => plantCell(row.city) },
+  { id: 'postal_code', label: 'Postal Code', getText: (row) => plantCell(row.postal_code) },
+  dhmStatusListColumn<MasterPlant>(),
 ]
 
 export default function MasterPlantPage() {
@@ -61,7 +74,7 @@ export default function MasterPlantPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState('company_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v1', PLANT_COLUMNS)
+  const plantColumns = useListColumnLayout('master-plant.visibleColumns.v3', PLANT_COLUMNS)
   const debouncedSearch = useDebouncedValue(search.trim(), 300)
   const [isAdmin, setIsAdmin] = useState(false)
   const [editing, setEditing] = useState<MasterPlant | null>(null)
@@ -122,22 +135,42 @@ export default function MasterPlantPage() {
     if (newPage >= 1 && newPage <= totalPages) setPage(newPage)
   }
 
-  const templateHint = useMemo(() => {
-    return 'Template: Row 1 = header, columns A–G (Company Name, Plant Code, Plant Name, Postal Code, City, Plant Type, Group Plant)'
-  }, [])
+  const emptyForm = (): Partial<MasterPlant> => ({
+    company_code: '',
+    company_name: '',
+    plant_code: '',
+    plant_name: '',
+    plant_type: '',
+    site: '',
+    city: '',
+    postal_code: '',
+    found_in: '',
+    code_klip: '',
+    code_dhm: '',
+    dhm_org_code: '',
+  })
 
-  const normalize = (v: any) => String(v ?? '').trim()
+  const openNew = () => {
+    setEditing(null)
+    setForm(emptyForm())
+    setIsFormOpen(true)
+  }
 
   const openEdit = (p: MasterPlant) => {
     setEditing(p)
     setForm({
+      company_code: p.company_code ?? '',
       company_name: p.company_name,
       plant_code: p.plant_code,
       plant_name: p.plant_name ?? '',
-      postal_code: p.postal_code ?? '',
-      city: p.city ?? '',
       plant_type: p.plant_type ?? '',
-      group_plant: p.group_plant ?? '',
+      site: p.site ?? '',
+      city: p.city ?? '',
+      postal_code: p.postal_code ?? '',
+      found_in: p.found_in ?? '',
+      code_klip: p.code_klip ?? '',
+      code_dhm: p.code_dhm ?? '',
+      dhm_org_code: p.dhm_org_code ?? '',
     })
     setIsFormOpen(true)
   }
@@ -147,26 +180,28 @@ export default function MasterPlantPage() {
   }
 
   const handleSubmit = async () => {
-    if (!editing) return
     try {
-      if (!form.company_name || !String(form.company_name).trim()) {
-        alert('Company Name is required')
-        return
-      }
       if (!form.plant_code || !String(form.plant_code).trim()) {
         alert('Plant Code is required')
         return
       }
       const payload = {
-        company_name: String(form.company_name).trim(),
+        company_code: String(form.company_code ?? '').trim() || null,
+        company_name: String(form.company_name ?? '').trim(),
         plant_code: String(form.plant_code).trim(),
         plant_name: String(form.plant_name ?? '').trim() || null,
-        postal_code: String(form.postal_code ?? '').trim() || null,
-        city: String(form.city ?? '').trim() || null,
         plant_type: String(form.plant_type ?? '').trim() || null,
-        group_plant: String(form.group_plant ?? '').trim() || null,
+        site: String(form.site ?? '').trim() || null,
+        city: String(form.city ?? '').trim() || null,
+        postal_code: String(form.postal_code ?? '').trim() || null,
+        found_in: String(form.found_in ?? '').trim() || null,
       }
-      await api.put(`/master-plants/${editing.id}`, payload)
+      const persist = (overwrite: boolean) => {
+        const qs = overwrite ? '?dhmOverwrite=true' : ''
+        if (editing) return api.put(`/master-plants/${editing.id}${qs}`, payload)
+        return api.post(`/master-plants${qs}`, payload)
+      }
+      await saveWithDhmConfirm(persist, 'company')
       setEditing(null)
       setForm({})
       setIsFormOpen(false)
@@ -191,6 +226,8 @@ export default function MasterPlantPage() {
       alert(msg)
     }
   }
+
+  const normalize = (v: unknown) => String(v ?? '').trim()
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -308,24 +345,15 @@ export default function MasterPlantPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-gray-500 text-sm">{templateHint}</p>
+            <p className="text-gray-600">Maintain internal companies and reconcile them with DHM.</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => document.getElementById('master-plant-upload')?.click()}
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Excel
-            </Button>
-            <input
-              id="master-plant-upload"
-              type="file"
-              accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-              className="hidden"
-              onChange={handleUpload}
-            />
+            {isAdmin ? (
+              <Button size="sm" onClick={openNew}>
+                <Plus className="h-4 w-4 mr-2" />
+                New Company
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -359,7 +387,7 @@ export default function MasterPlantPage() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <CardTitle className="text-base flex items-center gap-2 flex-wrap">
-                  <span>All Plants</span>
+                  <span>All Company (Internal)</span>
                 </CardTitle>
                 <p className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0">
                   <span className="whitespace-nowrap tabular-nums text-gray-700">
@@ -415,6 +443,7 @@ export default function MasterPlantPage() {
           </CardHeader>
           <CardContent>
             <MasterListCompactTable
+              tightActions
               rows={[...items].sort((a, b) => {
                 const col = PLANT_COLUMNS.find((item) => item.id === sortKey)
                 const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })
@@ -440,18 +469,13 @@ export default function MasterPlantPage() {
                 plantColumns.setDragColId(null)
               }}
               renderActions={(p) => (
-                <div className="inline-flex items-center justify-center gap-1">
-                  <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
-                    <Edit2 className="h-4 w-4 mr-1" />
-                    Edit
-                  </Button>
-                  {isAdmin ? (
-                    <Button variant="destructive" size="sm" onClick={() => handleDelete(p)}>
-                      <Trash2 className="h-4 w-4 mr-1" />
-                      Delete
-                    </Button>
-                  ) : null}
-                </div>
+                <MasterRowActions
+                  isAdmin={isAdmin}
+                  editLabel={isAdmin ? 'Edit company' : 'View company'}
+                  deleteLabel="Delete company"
+                  onEdit={() => openEdit(p)}
+                  onDelete={() => void handleDelete(p)}
+                />
               )}
             />
           </CardContent>
@@ -518,36 +542,52 @@ export default function MasterPlantPage() {
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Edit Plant</DialogTitle>
+            <DialogTitle>{editing ? 'Edit Company (Internal)' : 'New Company (Internal)'}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Company Name <span className="text-red-500">*</span></label>
-              <Input value={form.company_name || ''} onChange={(e) => handleChange('company_name', e.target.value)} />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code (KLIP)</label>
+              <Input value={form.code_klip || ''} placeholder="Assigned on save" readOnly disabled />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code (DHM)</label>
+              <Input value={form.code_dhm || ''} placeholder="-" readOnly disabled />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Organization (DHM)</label>
+              <Input value={form.dhm_org_code || ''} placeholder="-" readOnly disabled />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Code</label>
+              <Input value={form.company_code || ''} onChange={(e) => handleChange('company_code', e.target.value)} disabled={!isAdmin} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
+              <Input value={form.company_name || ''} onChange={(e) => handleChange('company_name', e.target.value)} disabled={!isAdmin} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Plant Code <span className="text-red-500">*</span></label>
-              <Input value={form.plant_code || ''} onChange={(e) => handleChange('plant_code', e.target.value)} />
+              <Input value={form.plant_code || ''} onChange={(e) => handleChange('plant_code', e.target.value)} disabled={!isAdmin} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plant Name</label>
-              <Input value={form.plant_name || ''} onChange={(e) => handleChange('plant_name', e.target.value)} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
-              <Input value={form.postal_code || ''} onChange={(e) => handleChange('postal_code', e.target.value)} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
-              <Input value={form.city || ''} onChange={(e) => handleChange('city', e.target.value)} />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Plant</label>
+              <Input value={form.plant_name || ''} onChange={(e) => handleChange('plant_name', e.target.value)} disabled={!isAdmin} />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Plant Type</label>
-              <Input value={form.plant_type || ''} onChange={(e) => handleChange('plant_type', e.target.value)} />
+              <Input value={form.plant_type || ''} onChange={(e) => handleChange('plant_type', e.target.value)} disabled={!isAdmin} />
             </div>
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Group Plant</label>
-              <Input value={form.group_plant || ''} onChange={(e) => handleChange('group_plant', e.target.value)} />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Site</label>
+              <Input value={form.site || ''} onChange={(e) => handleChange('site', e.target.value)} disabled={!isAdmin} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+              <Input value={form.city || ''} onChange={(e) => handleChange('city', e.target.value)} disabled={!isAdmin} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+              <Input value={form.postal_code || ''} onChange={(e) => handleChange('postal_code', e.target.value)} disabled={!isAdmin} />
             </div>
           </div>
           <DialogFooter>

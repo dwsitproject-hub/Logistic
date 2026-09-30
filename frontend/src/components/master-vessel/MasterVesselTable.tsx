@@ -115,7 +115,7 @@ export function MasterVesselTable({
           }}
         >
           <table
-            className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols`}
+            className={`${COMPACT_OPERATIONAL_TABLE_CLASS} ${COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS} klip-compact-table--perf-narrow-cols klip-master-vessel-table`}
           >
             <colgroup>
               {columnIds.map((id) => {

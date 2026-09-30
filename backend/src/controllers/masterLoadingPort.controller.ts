@@ -1,8 +1,19 @@
 import { Response } from 'express';
+import { pushMasterPortToDhm } from '../dhm';
 import { AuthRequest } from '../middleware/auth';
 import { query } from '../database/connection';
 import logger from '../utils/logger';
 import { NON_NUMERIC_PORT_NAME_FILTER } from '../utils/portDisplaySql';
+
+function wantsDhmOverwrite(req: AuthRequest): boolean {
+  const q = String((req.query as { dhmOverwrite?: unknown }).dhmOverwrite ?? '').toLowerCase();
+  return q === 'true' || q === '1';
+}
+
+function siteCodeOrNull(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
 
 const NON_NUMERIC_PORT = NON_NUMERIC_PORT_NAME_FILTER('port');
 const NON_NUMERIC_VLP = NON_NUMERIC_PORT_NAME_FILTER('vlp.port_name');
@@ -11,9 +22,10 @@ const NON_NUMERIC_SAP = NON_NUMERIC_PORT_NAME_FILTER('sap.port_text');
 
 export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { search, page = 1, limit = 50 } = req.query as any;
+    const { search, page = 1, limit = 50, masterOnly } = req.query as any;
     const offset = (Number(page) - 1) * Number(limit);
     const searchTerm = typeof search === 'string' ? search.trim() : '';
+    const catalogOnly = String(masterOnly ?? '').toLowerCase() === 'true' || String(masterOnly ?? '') === '1';
 
     const params: any[] = [];
     let searchFilter = '';
@@ -22,9 +34,24 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
       searchFilter = ` AND port ILIKE $${params.length}`;
     }
 
-    const listSql = `
+    const catalogListSql = `
+      SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code
+      FROM master_loading_ports
+      WHERE ${NON_NUMERIC_PORT}
+        ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1 OR code_klip ILIKE $1 OR code_dhm ILIKE $1)` : ''}
+      ORDER BY port
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `;
+    const catalogCountSql = `
+      SELECT COUNT(*) AS count
+      FROM master_loading_ports
+      WHERE ${NON_NUMERIC_PORT}
+        ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1 OR code_klip ILIKE $1 OR code_dhm ILIKE $1)` : ''}
+    `;
+
+    const listSql = catalogOnly ? catalogListSql : `
       WITH port_sources AS (
-        SELECT id::text AS id, port, region, 0 AS priority
+        SELECT id::text AS id, port, region, code_klip, code_dhm, dhm_site_code, 0 AS priority
         FROM master_loading_ports
         WHERE 1=1
           ${searchTerm.length > 0 ? `AND (port ILIKE $1 OR region ILIKE $1)` : ''}
@@ -35,6 +62,9 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           'vlp-' || vlp.port_name AS id,
           vlp.port_name AS port,
           NULL::varchar AS region,
+          NULL::varchar AS code_klip,
+          NULL::varchar AS code_dhm,
+          NULL::varchar AS dhm_site_code,
           1 AS priority
         FROM vessel_loading_ports vlp
         WHERE vlp.is_discharge_port = false
@@ -47,6 +77,9 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           'ship-' || s.port_of_loading AS id,
           s.port_of_loading::text AS port,
           NULL::varchar AS region,
+          NULL::varchar AS code_klip,
+          NULL::varchar AS code_dhm,
+          NULL::varchar AS dhm_site_code,
           2 AS priority
         FROM shipments s
         WHERE ${NON_NUMERIC_SHIP}
@@ -58,6 +91,9 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           'sap-' || sap.port_text AS id,
           sap.port_text AS port,
           NULL::varchar AS region,
+          NULL::varchar AS code_klip,
+          NULL::varchar AS code_dhm,
+          NULL::varchar AS dhm_site_code,
           3 AS priority
         FROM (
           SELECT DISTINCT NULLIF(TRIM(COALESCE(
@@ -75,18 +111,21 @@ export const listMasterLoadingPorts = async (req: AuthRequest, res: Response): P
           id,
           port,
           region,
+          code_klip,
+          code_dhm,
+          dhm_site_code,
           priority
         FROM port_sources
         ORDER BY port, priority
       )
-      SELECT id, port, region
+      SELECT id, port, region, code_klip, code_dhm, dhm_site_code
       FROM ranked
       WHERE ${NON_NUMERIC_PORT}
         ${searchFilter}
       ORDER BY priority, port
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
-    const countSql = `
+    const countSql = catalogOnly ? catalogCountSql : `
       WITH port_sources AS (
         SELECT port, region, 0 AS priority
         FROM master_loading_ports
@@ -175,15 +214,17 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method,
       loading_rate_mt_per_hour,
       shipper,
+      dhm_site_code,
     } = req.body;
 
     const insertSql = `
       INSERT INTO master_loading_ports (
         region, port, coordinate, masuk_alur, lebar_alur, jumlah_jembatan,
         jenis_port, pemilik_port, antri_muat_hari, jumlah_demaraga, panjang_demaraga,
-        draft, dwt, siklus_pasang, loading_method, loading_rate_mt_per_hour, shipper
+        draft, dwt, siklus_pasang, loading_method, loading_rate_mt_per_hour, shipper,
+        dhm_site_code
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
       )
       RETURNING *
     `;
@@ -205,9 +246,13 @@ export const createMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method ?? null,
       loading_rate_mt_per_hour ?? null,
       shipper ?? null,
+      siteCodeOrNull(dhm_site_code),
     ]);
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushMasterPortToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
+    const refreshed = await query(`SELECT * FROM master_loading_ports WHERE id = $1`, [saved.id]);
 
-    res.status(201).json({ success: true, data: result.rows[0] });
+    res.status(201).json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error) {
     logger.error('Create master loading port error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to create master port' } });
@@ -235,6 +280,7 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method,
       loading_rate_mt_per_hour,
       shipper,
+      dhm_site_code,
     } = req.body;
 
     const updateSql = `
@@ -257,8 +303,9 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
         loading_method = COALESCE($15, loading_method),
         loading_rate_mt_per_hour = COALESCE($16, loading_rate_mt_per_hour),
         shipper = COALESCE($17, shipper),
+        dhm_site_code = $18,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $18
+      WHERE id = $19
       RETURNING *
     `;
 
@@ -280,6 +327,7 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method ?? null,
       loading_rate_mt_per_hour ?? null,
       shipper ?? null,
+      siteCodeOrNull(dhm_site_code),
       id,
     ]);
 
@@ -287,8 +335,11 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       res.status(404).json({ success: false, error: { message: 'Master port not found' } });
       return;
     }
+    const saved = result.rows[0] as Record<string, unknown>;
+    const dhm = await pushMasterPortToDhm(String(saved.id), saved, { overwrite: wantsDhmOverwrite(req) });
+    const refreshed = await query(`SELECT * FROM master_loading_ports WHERE id = $1`, [id]);
 
-    res.json({ success: true, data: result.rows[0] });
+    res.json({ success: true, data: { ...(refreshed.rows[0] ?? saved), ...dhm } });
   } catch (error) {
     logger.error('Update master loading port error:', error);
     res.status(500).json({ success: false, error: { message: 'Failed to update master port' } });

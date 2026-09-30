@@ -101,3 +101,33 @@ export function dhmRecordCode(record: { data?: Record<string, unknown> } | null 
   const code = record?.data?.code;
   return code != null ? String(code).trim() || null : null;
 }
+
+/** Name-only masters. Optional keys are the hub field names (organization_id, site_id). */
+export function toDhmNamePayload(
+  name: string,
+  options?: { code?: string; extra?: Record<string, string> },
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { name: String(name ?? '').trim() };
+  const code = String(options?.code ?? '').trim();
+  if (code) payload.code = code;
+  for (const [key, value] of Object.entries(options?.extra ?? {})) {
+    const text = String(value ?? '').trim();
+    if (text) payload[key] = text;
+  }
+  return payload;
+}
+
+export function dhmDataName(data: Record<string, unknown> | null | undefined): string | null {
+  const name = data?.name;
+  return name != null ? String(name).trim() || null : null;
+}
+
+/** REFERENCE values may be a code, a UUID, or `{ code }`. */
+export function dhmRefCode(value: unknown): string | null {
+  if (typeof value === 'string') return value.trim() || null;
+  if (value && typeof value === 'object' && 'code' in value) {
+    const code = (value as { code?: unknown }).code;
+    return code != null ? String(code).trim() || null : null;
+  }
+  return null;
+}

@@ -77,7 +77,7 @@ export function EditVesselModal({
     if (mode === 'edit' && vessel) {
       setForm({
         ...vessel,
-        vessel_code_input: vessel.vessel_code ?? '',
+        vessel_code_input: vessel.vessel_code_klip ?? '',
       })
     } else {
       setForm(emptyForm())
@@ -105,11 +105,12 @@ export function EditVesselModal({
         return
       }
       if (mode === 'create' && !vesselCode) {
-        alert('Vessel Code is required for new vessels')
+        alert('Vessel Code (SAP) is required for new vessels')
         return
       }
       const payload = {
-        vessel_code: vesselCode || undefined,
+        // KLIP issues vessel_code_klip. Sending it as vessel_code would overwrite the stored code.
+        ...(mode === 'create' ? { vessel_code: vesselCode } : {}),
         vessel_name: vesselName.toUpperCase(),
         vessel_capacity_mt: form.vessel_capacity_mt,
         vessel_owner: form.vessel_owner ? String(form.vessel_owner).toUpperCase() : null,
@@ -198,13 +199,27 @@ export function EditVesselModal({
         <div className={VESSEL_MODAL_BODY_CLASS}>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code (KLIP)</label>
               <Input
-                value={form.vessel_code_input ?? ''}
-                placeholder={mode === 'edit' && !form.vessel_code_input ? '-' : ''}
-                onChange={(e) => handleChange('vessel_code_input', e.target.value.toUpperCase())}
-                disabled={readOnly}
+                value={mode === 'edit' ? form.vessel_code_klip || '' : ''}
+                placeholder="Assigned on save"
+                readOnly
+                disabled
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code (SAP)</label>
+              <Input
+                value={mode === 'edit' ? form.vessel_codes_sap || form.vessel_code || '' : form.vessel_code_input ?? ''}
+                placeholder={mode === 'edit' ? '-' : ''}
+                onChange={(e) => handleChange('vessel_code_input', e.target.value.toUpperCase())}
+                readOnly={mode === 'edit'}
+                disabled={readOnly || mode === 'edit'}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Code (DHM)</label>
+              <Input value={form.dhm_code || ''} placeholder="-" readOnly disabled />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Name</label>
@@ -215,7 +230,7 @@ export function EditVesselModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Capacity (MT)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Capacity (MT)</label>
               <Input
                 type="number"
                 value={form.vessel_capacity_mt ?? ''}
@@ -226,7 +241,7 @@ export function EditVesselModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Owner</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Owner</label>
               <Input
                 value={form.vessel_owner || ''}
                 onChange={(e) => handleChange('vessel_owner', e.target.value.toUpperCase())}
@@ -234,7 +249,7 @@ export function EditVesselModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Vessel Owner Group</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Owner Group</label>
               <Input
                 value={form.vessel_owner_group || ''}
                 onChange={(e) => handleChange('vessel_owner_group', e.target.value.toUpperCase())}
@@ -242,7 +257,7 @@ export function EditVesselModal({
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">SAP Vendor Code</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">SAP Vendor Code (Owner)</label>
               <Input
                 value={form.sap_vendor_code || ''}
                 onChange={(e) => handleChange('sap_vendor_code', e.target.value.toUpperCase())}
@@ -266,7 +281,7 @@ export function EditVesselModal({
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Year of Creation (optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
               <Input
                 type="number"
                 value={form.year_of_creation ?? ''}

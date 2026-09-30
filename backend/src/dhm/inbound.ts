@@ -50,6 +50,47 @@ function parseInboundBody(status: number, data: unknown): DhmInboundResult {
   return { ok: false, conflict: false, httpStatus: status, error };
 }
 
+const INBOUND_SLUGS = new Set([
+  'vessel',
+  'organization',
+  'site',
+  'port_master',
+  'commodity',
+  'incoterm',
+  'shipper',
+]);
+
+export async function postInbound(slug: string, payload: Record<string, unknown>): Promise<DhmInboundResult> {
+  if (!INBOUND_SLUGS.has(slug)) {
+    return { ok: false, conflict: false, httpStatus: 400, error: 'Unknown DHM slug' };
+  }
+  const { status, data } = await dhmRequest({
+    method: 'POST',
+    url: `/v1/inbound/${slug}`,
+    data: payload,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return parseInboundBody(status, data);
+}
+
+export async function putInbound(
+  slug: string,
+  dhmCode: string,
+  payload: Record<string, unknown>,
+): Promise<DhmInboundResult> {
+  if (!INBOUND_SLUGS.has(slug)) {
+    return { ok: false, conflict: false, httpStatus: 400, error: 'Unknown DHM slug' };
+  }
+  const code = String(dhmCode).trim();
+  const { status, data } = await dhmRequest({
+    method: 'PUT',
+    url: `/v1/inbound/${slug}/${encodeURIComponent(code)}`,
+    data: payload,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return parseInboundBody(status, data);
+}
+
 export async function postVesselInbound(row: KlipVesselForDhm): Promise<DhmInboundResult> {
   const { status, data } = await dhmRequest({
     method: 'POST',

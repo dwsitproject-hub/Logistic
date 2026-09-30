@@ -115,12 +115,12 @@ export class SchedulerService {
   }
 
   /**
-   * Incremental DHM vessel replica pull. Off unless DHM_ENABLED=true and keys are set.
+   * Incremental DHM replica pull. Off unless DHM_ENABLED=true and keys are set.
    */
   private static startDhmVesselSyncCron(): void {
-    void import('../dhm').then(({ isDhmEnabled, dhmSyncCron, syncDhmVessels }) => {
+    void import('../dhm').then(({ isDhmEnabled, dhmSyncCron, syncDhmMasters, syncDhmVessels }) => {
       if (!isDhmEnabled()) {
-        logger.info('DHM vessel sync cron is disabled (DHM_ENABLED is not true)');
+        logger.info('DHM sync cron is disabled (DHM_ENABLED is not true)');
         return;
       }
       const schedule = dhmSyncCron();
@@ -128,12 +128,13 @@ export class SchedulerService {
         schedule,
         async () => {
           await syncDhmVessels();
+          await syncDhmMasters();
         },
         { timezone: 'Asia/Jakarta' },
       );
-      logger.info(`DHM vessel sync cron scheduled: ${schedule} (Asia/Jakarta)`);
+      logger.info(`DHM sync cron scheduled: ${schedule} (Asia/Jakarta)`);
     }).catch((error) => {
-      logger.warn('DHM vessel sync cron not started', { error });
+      logger.warn('DHM sync cron not started', { error });
     });
   }
   

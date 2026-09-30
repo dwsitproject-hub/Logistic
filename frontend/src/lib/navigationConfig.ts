@@ -86,8 +86,10 @@ export const NAV_ITEMS: NavItem[] = [
     permissionKey: 'page.master_loading_ports',
     group: 'master',
   },
-  { name: 'Master Plant', href: '/master-plant', icon: StitchNavIcons.masterPlant, roles: ['ALL'], permissionKey: 'page.master_plants', group: 'master' },
-  { name: 'Master Supplier', href: '/supplier', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
+  { name: 'Master Company (Internal)', href: '/master-plant', icon: StitchNavIcons.masterPlant, roles: ['ALL'], permissionKey: 'page.master_plants', group: 'master' },
+  { name: 'Master Company (Ext)', href: '/master-company-ext', icon: Users, roles: ['ALL'], permissionKey: 'page.suppliers', group: 'master' },
+  { name: 'Master Incoterm', href: '/master-incoterm', icon: StitchNavIcons.masterData, roles: ['ALL'], permissionKey: 'page.master_product_configuration', group: 'master' },
+  { name: 'Master Truck Transporter', href: '/master-truck-transporter', icon: StitchNavIcons.trucking, roles: ['ALL'], permissionKey: 'page.master_product_configuration', group: 'master' },
   { name: 'SAP Data', href: '/sap-imports', icon: StitchNavIcons.sapData, roles: ['ALL'], permissionKey: 'page.sap', group: 'system' },
   { name: 'Suppliers Dashboard', href: '/customer-360', icon: Users, roles: ['ALL'], permissionKey: 'page.customer_360', group: 'system' },
   {
