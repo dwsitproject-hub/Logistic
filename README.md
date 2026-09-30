@@ -2864,6 +2864,53 @@ vessels), and only splitting the residue again, into "the STO is missing" versus
 but does not name this contract", exposed the clause above.
 
 
+### Pre-Planned went empty after the master reload: group_plant, and a member left active
+
+The production deploy of 2026-09-30 emptied the Pre-Planned suggestions on Shipments. The startup
+rebuild superseded all 68 SUGGESTED groups. Two migrations caused it, independently:
+
+- **195 reloaded `master_plants` from the CPO workbook, which has no Group Plant column.** Every row
+  lost `group_plant`, and `groupPlantExpr` (`utils/groupPlantSql.ts`) resolves a missing value to
+  `'Blank'`. Pre-Planned excludes `'Blank'` and `'Trading'` (`config/prePlannedConfig.ts`), so its pool
+  was empty. The same lookup also blanked Plant/Site in the Add Shipment modal and the Missing
+  Planning bell, and emptied Trucking's Unloading Location dropdown. Region/Site filters were not
+  affected: they come from the SAP Discharge Destination, not from this table.
+- **190 (CNF -> CFR) superseded SUGGESTED groups without releasing their members.** A member left
+  active in a SUPERSEDED group holds `ux_ppgm_active_contract`. Every rebuild that tried to regroup
+  that contract failed with a duplicate key, the nightly cron included. So restoring `group_plant`
+  alone did not bring the suggestions back.
+
+`group_plant` is **not** the new `site` column, and must not be derived from it. It is a business
+grouping (`Bulking Batam`, `EOP Tj Morawa`, `Trading` ...), and `Trading` is what keeps trading plants
+out of Pre-Planned. Production showed the two disagree on most rows (`Trading` -> BONTANG, KARAWANG,
+RIAU ...).
+
+**Production was restored from a backup** taken before the deploy
+(`docs/scripts/restore-group-plant-20260930.js`: dry run by default, `APPLY=1` to save). The script
+computes each contract's Group Plant with the real `groupPlantExpr`, once against the backup and
+once against the restored table:
+
+```
+contracts                              19,220
+resolve differently than before 195         0
+Pre-Planned candidates by plant        15,836 before, 15,836 after
+stray active members released               1
+rebuild                                68 groups, 118 contracts (the 68 superseded that morning)
+```
+
+**Migration 198** carries production's restored plant_code -> group_plant list, so SIT, which has
+no backup, gets the same values. It fills only empty values, and it releases stray members of
+SUPERSEDED groups. On production it changes nothing. **The rebuild now also releases SUPERSEDED
+members itself** (`rebuildPrePlannedGroups`), so a supersede done outside it can no longer block it.
+
+**A future master reload must keep `group_plant`.** Delete-and-reload from a workbook without that
+column repeats this incident. Either carry the column in the workbook, or reload with an upsert that
+leaves `group_plant` alone.
+
+The old SUPERSEDED groups do not come back. The rebuild creates new ones with new codes, and the 24
+ACCEPTED groups were never touched.
+
+
 ### A FOB STO of Type T that names a vessel is a sea leg
 
 FOB STOs of Type T are trucking legs and are kept off the Shipments page. That rule hid real

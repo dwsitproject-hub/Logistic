@@ -176,12 +176,15 @@ export async function rebuildPrePlannedGroups(triggeredBy: string): Promise<{
 
     // Rebuild active SUGGESTED membership atomically. This releases the partial
     // unique index before changed groups are inserted; stable groups are restored below.
+    // SUPERSEDED is released too: a group superseded outside this function without releasing its
+    // members (migration 190 did) would otherwise hold the index, and every rebuild that regroups
+    // one of those contracts failed with a duplicate key - the nightly cron included.
     await client.query(`
       UPDATE pre_planned_group_members pgm
       SET released_at = now()
       FROM pre_planned_groups pg
       WHERE pgm.group_id = pg.id
-        AND pg.status = 'SUGGESTED'
+        AND pg.status IN ('SUGGESTED', 'SUPERSEDED')
         AND pgm.released_at IS NULL
     `);
     await client.query(`
