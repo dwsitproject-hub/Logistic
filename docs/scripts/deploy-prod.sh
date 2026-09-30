@@ -87,6 +87,9 @@ printf '  none - only untracked files, which a pull will not touch\n'
 
 step "fetching origin/$BRANCH"
 git fetch origin "$BRANCH" --quiet
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+[[ "$CURRENT_BRANCH" == "$BRANCH" ]] \
+  || die "this checkout is on $CURRENT_BRANCH, not $BRANCH. Production is not switched by a script - find out why first."
 INCOMING="$(git log --oneline "HEAD..origin/$BRANCH" || true)"
 if [[ -z "$INCOMING" ]]; then
   printf '  already up to date - nothing to pull\n'
@@ -103,6 +106,45 @@ if [[ -n "$MIGRATIONS" ]]; then
   printf '  Do not run them by hand. `compose up --build` runs them, then starts the matching code.\n'
 fi
 
+# A migration that deletes or drops cannot be undone by going back to the old image: the rows are
+# gone. Migrations 195-197 (DELETE FROM master_plants / master_loading_ports, then reload from the
+# CPO workbook) were the first of these to reach production. List them, and print a backup statement per
+# table so the backup takes one paste rather than a decision under time pressure.
+DESTRUCTIVE=""
+DESTRUCTIVE_TABLES=""
+while IFS= read -r f; do
+  if [[ -z "$f" ]]; then continue; fi
+  BODY="$(git show "origin/$BRANCH:$f" 2>/dev/null || true)"
+  HITS="$(printf '%s\n' "$BODY" \
+    | grep -niE '^[[:space:]]*(DELETE[[:space:]]+FROM|TRUNCATE|DROP[[:space:]]+TABLE|ALTER[[:space:]]+TABLE.*DROP[[:space:]]+COLUMN)' || true)"
+  if [[ -n "$HITS" ]]; then
+    DESTRUCTIVE+="    ${f##*/}"$'\n'"$(printf '%s\n' "$HITS" | sed 's/^/        line /')"$'\n'
+    DESTRUCTIVE_TABLES+="$(printf '%s\n' "$HITS" \
+      | grep -oiE '(DELETE[[:space:]]+FROM|TRUNCATE([[:space:]]+TABLE)?)[[:space:]]+[a-z_][a-z0-9_.]*' \
+      | awk '{print $NF}' || true)"$'\n'
+  fi
+done <<< "$MIGRATIONS"
+if [[ -n "$DESTRUCTIVE" ]]; then
+  step "MIGRATIONS THAT DELETE OR DROP DATA on production"
+  printf '%s' "$DESTRUCTIVE"
+  BACKUP_TABLES="$(printf '%s' "$DESTRUCTIVE_TABLES" | sed '/^$/d' | sort -u)"
+  if [[ -n "$BACKUP_TABLES" ]]; then
+    printf '\n  Backup, one statement per table:\n'
+    while IFS= read -r t; do
+      printf '    CREATE TABLE %s_bak_%s AS SELECT * FROM %s;\n' "${t//./_}" "$(date +%Y%m%d)" "$t"
+    done <<< "$BACKUP_TABLES"
+  fi
+  if [[ "${DEPLOY_FORCE:-}" != "1" ]]; then
+    printf '\n  Back those tables up first (psql on the production database), then type BACKED-UP.\n'
+    printf '  Type SKIP-BACKUP to deploy without one: '
+    read -r BACKUP_ANSWER
+    case "${BACKUP_ANSWER^^}" in
+      BACKED-UP|SKIP-BACKUP) ;;
+      *) die "aborted - nothing deployed" ;;
+    esac
+  fi
+fi
+
 if [[ "$ROLE" == "backend" ]]; then
   step "database this backend will write to"
   DB_HOST_VALUE="$(grep -E '^DB_HOST=' .env | tail -n 1 | cut -d= -f2- || true)"
@@ -112,6 +154,50 @@ if [[ "$ROLE" == "backend" ]]; then
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     printf '  DB_HOST (running) : %s\n' "$(docker exec "$CONTAINER" printenv DB_HOST 2>/dev/null || echo '(unreadable)')"
   fi
+
+  # INTEGRATION_SECRETS_KEY decrypts the DHM / JPS credentials saved from the Integrations menu.
+  # Without it the backend still starts, but nothing can be saved there - so a warning, not a stop.
+  # The value is never printed: only whether it is usable, and a short fingerprint so production and
+  # SIT can be compared. They must DIFFER - a copied key makes one environment's database
+  # readable with the other's.
+  step "integration secrets key (backend/.env)"
+  KEY_RAW="$(grep -E '^INTEGRATION_SECRETS_KEY=' backend/.env 2>/dev/null | tail -n 1 | cut -d= -f2- \
+    | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//" || true)"
+  KEY_FP=""
+  if [[ -z "$KEY_RAW" ]]; then
+    printf '  WARNING: not set. Saving DHM / JPS settings from the Integrations menu will fail.\n'
+    printf '  Generate it straight into the file, without displaying it:\n'
+    printf "    openssl rand -hex 32 | sed 's/^/INTEGRATION_SECRETS_KEY=/' >> backend/.env\n"
+  elif [[ "$KEY_RAW" =~ ^[0-9a-fA-F]{64}$ ]] \
+      || [[ "$(printf '%s' "$KEY_RAW" | base64 -d 2>/dev/null | wc -c)" -eq 32 ]]; then
+    KEY_FP="$(printf '%s' "$KEY_RAW" | sha256sum | cut -c1-12)"
+    printf '  set, 32 bytes. fingerprint %s - must NOT match SIT\n' "$KEY_FP"
+  else
+    printf '  WARNING: set but not 32 bytes (64 hex or base64). The backend treats it as not set.\n'
+  fi
+  unset KEY_RAW
+else
+  # The ARG trap, checked BEFORE the build rather than puzzled over after it. Both directions
+  # matter: compose must pass the value, and the Dockerfile must declare it. Either half missing
+  # means the flag is silently absent from the bundle while .env looks correct.
+  step "NEXT_PUBLIC_* wiring (build-time, so a missing link is invisible at runtime)"
+  MISSING_WIRING=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    KEY="${line%%=*}"
+    VALUE="${line#*=}"
+    NOTE=""
+    grep -qE "^[[:space:]]*ARG[[:space:]]+${KEY}([=[:space:]]|$)" frontend/Dockerfile \
+      || { NOTE="  <-- no ARG in frontend/Dockerfile: Docker will DROP it"; MISSING_WIRING=1; }
+    if [[ -z "$NOTE" ]]; then
+      grep -qE "^[[:space:]]*${KEY}:" docker-compose.frontend.yml \
+        || { NOTE="  <-- not under args: in docker-compose.frontend.yml: never passed to the build"; MISSING_WIRING=1; }
+    fi
+    printf '    %s=%s%s\n' "$KEY" "$VALUE" "$NOTE"
+  done < <(grep -E '^NEXT_PUBLIC_' .env || true)
+  [[ "$MISSING_WIRING" -eq 0 ]] \
+    || die "a NEXT_PUBLIC_* value in .env cannot reach the build. Fix the wiring first, or this deploy will report success and change nothing."
+  printf '  every NEXT_PUBLIC_* in .env reaches the build\n'
 fi
 
 if [[ "${DEPLOY_FORCE:-}" != "1" ]]; then
@@ -129,11 +215,17 @@ step "building and starting $SERVICE"
 "${COMPOSE[@]}" up -d --build "$SERVICE"
 
 IMAGE_AFTER="$(docker inspect "$CONTAINER" --format '{{.Image}}' 2>/dev/null || echo none)"
+step "did the image actually change"
+printf '  before : %s\n' "$IMAGE_BEFORE"
+printf '  after  : %s\n' "$IMAGE_AFTER"
 if [[ "$IMAGE_BEFORE" == "$IMAGE_AFTER" && -n "$INCOMING" ]]; then
-  printf '\n  WARNING: the image id did not change although commits were pulled.\n'
-  printf '  On the frontend this usually means a NEXT_PUBLIC_* value never reached the build -\n'
-  printf '  Docker drops a build arg the Dockerfile does not declare, silently, and leaves the\n'
-  printf '  cache valid. Check that frontend/Dockerfile has an ARG for it, not only compose.\n'
+  printf '  WARNING: unchanged although commits were pulled. On the frontend this is the usual\n'
+  printf '  sign that a build arg never reached the builder. The wiring check above passed, so\n'
+  printf '  look next at whether the pulled commits touch frontend/ at all.\n'
+elif [[ "$IMAGE_BEFORE" == "$IMAGE_AFTER" ]]; then
+  printf '  unchanged, and nothing was pulled - consistent\n'
+else
+  printf '  changed - the running container is the code just built\n'
 fi
 
 step "waiting for the container to finish starting"
@@ -162,14 +254,22 @@ if [[ "$ROLE" == "backend" ]]; then
     bad "SAP share mounted and readable (check KLIP_SAP_IMPORT_MOUNT points at a path that exists)"
   fi
 
+  # docker-compose.backend.yml reads the key from env_file ONLY; a ${...:-} line would substitute an
+  # empty string over it without a word. Compare fingerprints, never values.
+  if [[ -n "$KEY_FP" ]]; then
+    RUN_FP="$(docker exec "$CONTAINER" printenv INTEGRATION_SECRETS_KEY 2>/dev/null | tr -d '\r\n' | sha256sum | cut -c1-12 || true)"
+    if [[ "$RUN_FP" == "$KEY_FP" ]]; then ok "container has the integration secrets key from backend/.env"; else bad "container has the integration secrets key from backend/.env"; fi
+  fi
+
   printf '\n  Crons registered this boot:\n'
   logs | grep -iE "cron scheduled|cron is disabled" | tail -12 | sed 's/^/    /' || true
   printf '\n  SAP auto-import lines:\n'
   logs | grep -i "auto-import" | tail -4 | sed 's/^/    /' || true
 else
-  printf '\n  NEXT_PUBLIC_* from .env - these are baked in at BUILD time, so a value changed here\n'
-  printf '  only takes effect on a build that was not fully cached:\n'
-  grep -E '^NEXT_PUBLIC_' .env | sed 's/^/    /' || printf '    (none)\n'
+  # A static check cannot prove a value is baked in; only a string the new code contains can.
+  printf '\n  To prove the new UI is really in the bundle, grep the build for a string only the\n'
+  printf '  new code contains:\n'
+  printf '    %s\n' "docker compose -f docker-compose.frontend.yml exec -T frontend sh -c \"grep -rl '<a string only the new code has>' .next | head -3\""
 fi
 
 step "result"

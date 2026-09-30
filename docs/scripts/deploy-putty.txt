@@ -1,0 +1,142 @@
+================================================================================
+KLIP — Deploy rutin via PuTTY: SIT dan PRODUCTION
+================================================================================
+Pakai file ini untuk deploy harian. Isinya hanya perintah yang di-paste ke PuTTY.
+Semua pemeriksaan ada di dalam skrip:
+  docs/scripts/deploy-sit.sh    (branch SIT)
+  docs/scripts/deploy-prod.sh   (branch main)
+
+Setup pertama kali (bootstrap host baru, buka port) TIDAK dibahas di sini:
+  production-deploy-putty.txt / staging-deploy-putty.txt
+
+Aturan:
+  - Password, token, dan isi .env tidak pernah di-paste ke chat atau di-commit.
+  - Jangan pernah pakai `git stash` di server.
+  - Jangan jalankan migrasi dengan tangan. `compose up --build` yang menjalankannya.
+  - Deploy BACKEND dulu (migrasi + API), baru FRONTEND.
+
+--------------------------------------------------------------------------------
+Kenapa skrip diambil dari origin, bukan dari /opt/klip/docs/scripts
+--------------------------------------------------------------------------------
+Salinan skrip di server adalah versi commit TERAKHIR YANG SUDAH DI-DEPLOY. Jika rilis
+ini menambah pemeriksaan baru (misalnya konfirmasi backup untuk migrasi yang
+menghapus data), versi lama tidak punya pemeriksaan itu.
+
+Karena itu setiap deploy dilakukan begini:
+  1. Ambil versi terbaru ke /tmp.
+  2. Jalankan dari /opt/klip.
+Skrip memakai path relatif, jadi harus dijalankan dari /opt/klip.
+
+
+################################################################################
+A. SIT
+################################################################################
+Dua host. Salah host akan gagal dengan "env file /opt/klip/backend/.env not found".
+
+  Role      IP private     Hostname
+  backend   172.28.92.57   iZk1a4m0oobaw170notm7pZ
+  frontend  172.28.92.56   iZk1a5ja5hi7ps6aa7x88rZ
+
+----- A1. PuTTY -> BACKEND SIT (172.28.92.57) -----
+
+cd /opt/klip && git fetch origin SIT --quiet && git show origin/SIT:docs/scripts/deploy-sit.sh > /tmp/deploy-sit.sh && bash /tmp/deploy-sit.sh backend
+
+  Yang perlu dibaca di output:
+    host        -> harus iZk1a4m0oobaw170notm7pZ
+    MIGRATIONS THAT DELETE OR DROP DATA -> hanya info di SIT, tidak ditanya
+    integration secrets key -> catat fingerprint-nya (untuk dibandingkan dengan production)
+    result      -> "all checks passed"
+
+----- A2. PuTTY -> FRONTEND SIT (172.28.92.56) -----
+
+cd /opt/klip && git fetch origin SIT --quiet && git show origin/SIT:docs/scripts/deploy-sit.sh > /tmp/deploy-sit.sh && bash /tmp/deploy-sit.sh frontend
+
+  Yang perlu dibaca:
+    NEXT_PUBLIC_* wiring   -> "every NEXT_PUBLIC_* in .env reaches the build"
+    did the image change   -> "changed" (kalau "unchanged" padahal ada commit baru, baca warning-nya)
+
+----- A3. Browser -----
+  Buka SIT lalu tekan Ctrl+Shift+R.
+
+
+################################################################################
+B. PRODUCTION (branch main)
+################################################################################
+  Role      Instance  IP private     IP public      SSH port
+  backend   ECS-DB    172.28.80.51   8.215.56.98    1819
+  frontend  ECS-App   172.28.80.50   147.139.176.70 1818
+  Database  Apsara RDS pgm-d9jn3khh0b3907w4 (BUKAN RDS SIT, BUKAN klip-postgres)
+
+Skrip production menolak jalan kalau:
+  - ada file tracked yang modified ATAU staged (termasuk staged edit darurat);
+  - checkout tidak di branch main;
+  - DB_HOST kosong;
+  - satu dari tiga compose file backend hilang (base, remote-db, sap-share).
+
+----- B1. PuTTY -> BACKEND PRODUCTION (8.215.56.98 port 1819) -----
+
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh backend
+
+  Skrip akan berhenti dan bertanya DUA kali:
+
+  (1) Kalau ada migrasi yang menghapus data, skrip mencetak filenya, baris DELETE /
+      TRUNCATE / DROP-nya, dan satu perintah backup per tabel, misalnya:
+        CREATE TABLE master_plants_bak_20260930 AS SELECT * FROM master_plants;
+      Jalankan perintah itu di psql production (cara Anda biasa query production),
+      lalu kembali ke PuTTY dan ketik:
+        BACKED-UP      -> backup sudah dibuat, lanjut
+        SKIP-BACKUP    -> lanjut tanpa backup (keputusan sadar)
+      Jawaban lain akan membatalkan deploy dan tidak ada yang berubah.
+
+  (2) "This deploys to PRODUCTION. Type the role name" -> ketik: backend
+
+  Yang perlu dibaca di output:
+    host / commit             -> host ECS-DB, commit sebelum pull
+    DB_HOST (.env)            -> pgm-d9jn3khh0b3907w4...
+    integration secrets key   -> fingerprint HARUS BERBEDA dari fingerprint SIT (A1).
+                                 Kalau "WARNING: not set", buat key baru khusus
+                                 production dengan perintah yang dicetak skrip
+                                 (openssl ... >> backend/.env). Key-nya tidak tampil
+                                 di layar. Lalu jalankan B1 lagi. Jangan menyalin key SIT.
+    checks                    -> semua [ OK ], termasuk:
+                                   SAP auto-import cron registered
+                                   SAP share mounted and readable
+                                   container has the integration secrets key
+
+----- B2. PuTTY -> FRONTEND PRODUCTION (147.139.176.70 port 1818) -----
+
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh frontend
+
+  Konfirmasi: ketik frontend
+  Yang perlu dibaca:
+    NEXT_PUBLIC_* wiring   -> "every NEXT_PUBLIC_* in .env reaches the build"
+    did the image change   -> "changed"
+
+----- B3. Browser -----
+  Buka http://147.139.176.70 lalu tekan Ctrl+Shift+R.
+
+
+################################################################################
+C. Jika ada yang gagal
+################################################################################
+  "tracked files are modified or staged"
+      Lihat dulu isinya, jangan langsung dibuang:
+        git status --porcelain
+        git diff --cached
+      Salin file-nya ke /tmp, lalu kembalikan:  git checkout HEAD -- <file>
+      JANGAN pakai git stash.
+
+  [FAIL] no migration errors this boot
+      Lihat baris RAISE-nya:
+        docker compose -f docker-compose.backend.yml logs --tail=300 backend | grep -i -A5 migration
+
+  [FAIL] container has the integration secrets key from backend/.env
+      Key ada di backend/.env tetapi tidak sampai ke container. Periksa apakah ada
+      baris INTEGRATION_SECRETS_KEY: ${...:-} di compose.
+
+  Data master hilang setelah migrasi reload
+      Tabel *_bak_YYYYMMDD berisi isi SEBELUM deploy. Migrasi yang sama bisa
+      menambah kolom, jadi JANGAN langsung `INSERT ... SELECT *` dari backup:
+      urutan dan jumlah kolomnya mungkin sudah berbeda. Bandingkan dulu tabel
+      backup dengan tabel sekarang, lalu pulihkan hanya baris yang hilang dengan
+      daftar kolom yang ditulis eksplisit.

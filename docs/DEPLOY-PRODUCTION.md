@@ -21,12 +21,22 @@ verifikasi → amankan akun default**.
 Pakai skripnya, bukan perintah yang diketik dari ingatan:
 
 ```bash
-cd /opt/klip && bash docs/scripts/deploy-prod.sh backend
-cd /opt/klip && bash docs/scripts/deploy-prod.sh frontend
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh backend
+cd /opt/klip && git fetch origin main --quiet && git show origin/main:docs/scripts/deploy-prod.sh > /tmp/deploy-prod.sh && bash /tmp/deploy-prod.sh frontend
 ```
 
+Skripnya diambil dari `origin/main`, bukan dari `/opt/klip/docs/scripts`. Salinan di server adalah
+versi rilis sebelumnya, jadi pemeriksaan baru di rilis ini tidak akan ikut jalan. Langkah PuTTY
+lengkap untuk SIT dan production ada di `docs/scripts/deploy-putty.txt`.
+
 Ia menarik perubahan, membangun, dan memeriksa hasilnya — dan yang terpenting, ia menyusun sendiri
-daftar file compose-nya.
+daftar file compose-nya. Ia juga:
+
+- berhenti dan meminta konfirmasi backup bila ada migrasi baru yang berisi `DELETE FROM`, `TRUNCATE`
+  atau `DROP`, dan mencetak satu perintah `CREATE TABLE ..._bak_YYYYMMDD` per tabel;
+- memeriksa `INTEGRATION_SECRETS_KEY` di `backend/.env` tanpa menampilkannya: hanya valid/tidak
+  dan sidik jari singkat untuk dibandingkan dengan SIT (harus berbeda). Setelah deploy ia memastikan
+  container menerima key yang sama.
 
 **Backend produksi butuh TIGA file compose.** Menjalankannya dengan lebih sedikit tidak
 menghasilkan galat apa pun:

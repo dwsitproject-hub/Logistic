@@ -133,6 +133,36 @@ if [[ -n "$MIGRATIONS" ]]; then
   printf '  Do not run them by hand. `compose up --build` runs them, then starts the matching code.\n'
 fi
 
+# A migration that deletes or drops cannot be undone by going back to the old image: the rows are
+# gone. Migrations 195-197 (DELETE FROM master_plants / master_loading_ports, then reload from the
+# CPO workbook) were the first of these to reach SIT. List them, and print a backup statement per
+# table so the backup takes one paste rather than a decision under time pressure.
+DESTRUCTIVE=""
+DESTRUCTIVE_TABLES=""
+while IFS= read -r f; do
+  if [[ -z "$f" ]]; then continue; fi
+  BODY="$(git show "origin/$BRANCH:$f" 2>/dev/null || true)"
+  HITS="$(printf '%s\n' "$BODY" \
+    | grep -niE '^[[:space:]]*(DELETE[[:space:]]+FROM|TRUNCATE|DROP[[:space:]]+TABLE|ALTER[[:space:]]+TABLE.*DROP[[:space:]]+COLUMN)' || true)"
+  if [[ -n "$HITS" ]]; then
+    DESTRUCTIVE+="    ${f##*/}"$'\n'"$(printf '%s\n' "$HITS" | sed 's/^/        line /')"$'\n'
+    DESTRUCTIVE_TABLES+="$(printf '%s\n' "$HITS" \
+      | grep -oiE '(DELETE[[:space:]]+FROM|TRUNCATE([[:space:]]+TABLE)?)[[:space:]]+[a-z_][a-z0-9_.]*' \
+      | awk '{print $NF}' || true)"$'\n'
+  fi
+done <<< "$MIGRATIONS"
+if [[ -n "$DESTRUCTIVE" ]]; then
+  step "MIGRATIONS THAT DELETE OR DROP DATA on SIT"
+  printf '%s' "$DESTRUCTIVE"
+  BACKUP_TABLES="$(printf '%s' "$DESTRUCTIVE_TABLES" | sed '/^$/d' | sort -u)"
+  if [[ -n "$BACKUP_TABLES" ]]; then
+    printf '\n  Backup, one statement per table:\n'
+    while IFS= read -r t; do
+      printf '    CREATE TABLE %s_bak_%s AS SELECT * FROM %s;\n' "${t//./_}" "$(date +%Y%m%d)" "$t"
+    done <<< "$BACKUP_TABLES"
+  fi
+fi
+
 if [[ "$ROLE" == "backend" ]]; then
   step "database this backend will write to"
   DB_HOST_VALUE="$(grep -E '^DB_HOST=' .env | tail -n 1 | cut -d= -f2- || true)"
@@ -142,6 +172,28 @@ if [[ "$ROLE" == "backend" ]]; then
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
     printf '  DB_HOST (running) : %s\n' "$(docker exec "$CONTAINER" printenv DB_HOST 2>/dev/null || echo '(unreadable)')"
   fi
+
+  # INTEGRATION_SECRETS_KEY decrypts the DHM / JPS credentials saved from the Integrations menu.
+  # Without it the backend still starts, but nothing can be saved there - so a warning, not a stop.
+  # The value is never printed: only whether it is usable, and a short fingerprint so SIT and
+  # production can be compared. They must DIFFER - a copied key makes one environment's database
+  # readable with the other's.
+  step "integration secrets key (backend/.env)"
+  KEY_RAW="$(grep -E '^INTEGRATION_SECRETS_KEY=' backend/.env 2>/dev/null | tail -n 1 | cut -d= -f2- \
+    | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//" || true)"
+  KEY_FP=""
+  if [[ -z "$KEY_RAW" ]]; then
+    printf '  WARNING: not set. Saving DHM / JPS settings from the Integrations menu will fail.\n'
+    printf '  Generate it straight into the file, without displaying it:\n'
+    printf "    openssl rand -hex 32 | sed 's/^/INTEGRATION_SECRETS_KEY=/' >> backend/.env\n"
+  elif [[ "$KEY_RAW" =~ ^[0-9a-fA-F]{64}$ ]] \
+      || [[ "$(printf '%s' "$KEY_RAW" | base64 -d 2>/dev/null | wc -c)" -eq 32 ]]; then
+    KEY_FP="$(printf '%s' "$KEY_RAW" | sha256sum | cut -c1-12)"
+    printf '  set, 32 bytes. fingerprint %s - must NOT match production\n' "$KEY_FP"
+  else
+    printf '  WARNING: set but not 32 bytes (64 hex or base64). The backend treats it as not set.\n'
+  fi
+  unset KEY_RAW
 else
   # The ARG trap, checked BEFORE the build rather than puzzled over after it. Both directions
   # matter: compose must pass the value, and the Dockerfile must declare it. Either half missing
@@ -208,6 +260,13 @@ if docker exec "$CONTAINER" true >/dev/null 2>&1; then ok "container is running"
 if [[ "$ROLE" == "backend" ]]; then
   if logs | grep -qiE 'migration.*(failed|error)'; then bad "no migration errors this boot"; else ok "no migration errors this boot"; fi
   if curl -sf "http://127.0.0.1:5001/health" >/dev/null; then ok "/health answers on 127.0.0.1:5001"; else bad "/health answers on 127.0.0.1:5001"; fi
+
+  # docker-compose.backend.yml reads the key from env_file ONLY; a ${...:-} line would substitute an
+  # empty string over it without a word. Compare fingerprints, never values.
+  if [[ -n "$KEY_FP" ]]; then
+    RUN_FP="$(docker exec "$CONTAINER" printenv INTEGRATION_SECRETS_KEY 2>/dev/null | tr -d '\r\n' | sha256sum | cut -c1-12 || true)"
+    if [[ "$RUN_FP" == "$KEY_FP" ]]; then ok "container has the integration secrets key from backend/.env"; else bad "container has the integration secrets key from backend/.env"; fi
+  fi
 
   printf '\n  Crons registered this boot:\n'
   logs | grep -iE "cron scheduled|cron is disabled" | tail -12 | sed 's/^/    /' || true
