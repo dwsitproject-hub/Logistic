@@ -2933,6 +2933,45 @@ The old SUPERSEDED groups do not come back. The rebuild creates new ones with ne
 ACCEPTED groups were never touched.
 
 
+### Master Company (Internal), Master Site and Master Plant replaced from one sheet
+
+The three masters had been patched by migrations 195 to 215, by the DHM sync and by hand until nobody could say what
+was right (two companies named PT. ENERGI OLEO PERSADA, EU called EUP, Sites that were never linked, plants with
+no Site). **Migration 217** replaces them with the sheet `Internal Company (Final)` of
+`docs/Master Data - CPO 28 Sep 2026.xlsx`, which is now the only source: **11 companies, 23 Sites, 148 plants**,
+every plant with a Site and every Site with its companies (41 links, rebuilt from the plants).
+
+*Replace, keeping what DHM knows.* A company is matched by code, else by name (EU is `EUP` on SIT); a Site by
+name; a plant by plant code. A matched row keeps its id, its KLIP code and every `dhm_*` column and is only
+rewritten to the sheet's spelling; a row only in KLIP is deleted; a row only in the sheet is added. Tested on a
+copy made to look like SIT: `EO` stays ORG-0028, `EUP` becomes `EU` and stays ORG-0002, the six plants and twelve
+Sites carrying a DHM code keep it, a Port whose Site is deleted only loses that link, no orphan is left, and a
+second run changes nothing.
+
+*Filling the Site column.* 109 of the 148 Sites were blank. The 39 written by hand stay; a head-office plant
+(type `HO ...`) with no Site is `JAKARTA`, as already written for CD and EO, unless its City is outside Jakarta
+(GLM at Port Klang is SELANGOR, TPG at Johor Bahru is PASIR GUDANG: the first fill gave them JAKARTA, the check on
+`TP10`'s postal code 81700 caught it); every other blank takes the Site of the same plant on the filled
+`Internal Company` sheet (City rule, 24 of 24 on rows known in advance).
+
+*Deleted on SIT:* 12 companies (AS, BM, BN, CS, MG, ND, PE, SB, SD, SS, UI and the duplicate EOP), 7 Sites
+(PROBOLINGGO, BAYAH, SALO PALAI, SINTETE, TRADING TRANSIT HO and DHM's Jakarta Terminal and Surabaya Terminal) and
+every plant outside the 148. A deleted company takes its links with it; a deleted Site only empties
+`master_loading_ports.site_id` and `discharge_port_aliases.site_id` (one alias, PABRIK SIP, loses its Site).
+
+**What to do in DHM, or the sync undoes this.** While an organisation or site still exists in DHM, the sync creates
+it again as a new local row. Delete in DHM: organisations ORG-0003 (EOP), ORG-0020 (BN), ORG-0022 (SB), ORG-0023
+(UI), ORG-0024 (AS), ORG-0025 (BM), ORG-0027 (CS), ORG-0030 (MG), ORG-0031 (PE), ORG-0032 (SS), ORG-0033 (SD),
+ORG-0036 (ND); sites SITE-0001 and SITE-0002 (the terminals) and SITE-0005 (PROBOLINGGO). Companies were renamed to
+the sheet's spelling (PS `PRC GENERAL HO JAKARTA` -> `PT Priscolin`, PM, RI, SC, GM, TP, EU and RB too), so run
+Sync Company with overwrite, then Sync Site and Sync Plant (about 117 plants are new to DHM). The matching of a
+DHM company to a local one by code or name no longer takes a row that belongs to another DHM organisation
+(`applyCompany`), which is what keeps ORG-0003's record from overwriting `EO` while it still exists in DHM.
+
+Not touched: `master_sites.company_name` (the preference used to choose one company for a Site that has several,
+and DHM holds a single `company_id` per Site), `trading_plant_codes`, Group Plant (the Discharge Destination).
+
+
 ### Nine more Master Sites, for the places the Internal Company sheet names
 
 After the Site column of `docs/Master Data - CPO 28 Sep 2026.xlsx` was completed from each plant's name and City
