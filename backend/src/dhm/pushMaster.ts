@@ -321,14 +321,28 @@ export async function pushMasterSiteToDhm(
   }
 }
 
+/** DHM code of the port's Site: the stored dhm_site_code, else the linked Master Site's code_dhm, else none. */
+async function portSiteDhmCode(row: Record<string, unknown>): Promise<string | null> {
+  const stored = String(row.dhm_site_code || '').trim();
+  if (stored) return stored;
+  const siteId = String(row.site_id || '').trim();
+  if (!siteId) return null;
+  const linked = await query(`SELECT code_dhm FROM master_sites WHERE id = $1::uuid`, [siteId]);
+  return String(linked.rows[0]?.code_dhm || '').trim() || null;
+}
+
 export async function pushMasterPortToDhm(
   localId: string,
   row: Record<string, unknown>,
   options?: { overwrite?: boolean },
 ): Promise<DhmPushAttachment> {
   if (!isDhmEnabled()) return {};
-  const site = String(row.dhm_site_code || '').trim();
-  if (!site) return { dhmError: 'Port needs a DHM site' };
+  // DHM no longer requires a Site on a port. This used to refuse ("Port needs a DHM site") before DHM was
+  // asked anything, and dhm_site_code is empty on every port, so PORT BONTANG - the port JPS needs - could
+  // never get its DHM code. A port is now pushed as it is; when it is linked to a Master Site that already
+  // has a DHM code, that code goes along as site_id. If the live catalog still marks site_id as required,
+  // payloadFor reports exactly that ("DHM port_master needs site_id") instead of KLIP guessing.
+  const site = await portSiteDhmCode(row);
   return pushNamedMasterToDhm(
     'master_loading_ports',
     localId,
@@ -337,6 +351,6 @@ export async function pushMasterPortToDhm(
     String(row.code_dhm || '').trim() || null,
     {
     overwrite: options?.overwrite,
-    extra: { site_id: site },
+    extra: site ? { site_id: site } : undefined,
   });
 }

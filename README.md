@@ -2975,8 +2975,22 @@ The pairs are the ones migration 203 chose, applied only to ports with no Site. 
 on BONTANG contracts (`PORT BONTANG` given a test code): with the alias table 3 of 5 resolve (`PORT BONTANG`,
 `EUP EDIBLE OIL BONTANG`, `PABRIK APM`), without it 1 of 5. `CRC REFINERY TANGERANG` (TANGERANG has no `PORT
 TANGERANG`) and an unknown name stay held. Master Port is unchanged at 46 rows, with a Site on 41 of them, and
-a second run of the migration changes nothing. The hold clears once `PORT BONTANG` etc. have their DHM code,
-which they already do on SIT.
+a second run of the migration changes nothing. The hold clears only when the port that is resolved has a DHM
+code. **`PORT BONTANG` does not have one on SIT** (Port Code (DHM) `-`, status Not Sync; it is the only one of the
+47 ports without a code), which is what held STO 1006020016 and what the next section fixes.
+
+### Master Port could not be pushed to DHM: KLIP refused "Port needs a DHM site" before asking DHM
+
+Saving or syncing a port answered `Saved in KLIP, but DHM was not linked: Port needs a DHM site`, although DHM no
+longer requires a Site on a port. The message was not DHM's: `pushMasterPortToDhm` returned it itself when the
+port's `dhm_site_code` was empty, and that column is empty on every port (`with_site_code` 0 of 47; the Edit Port
+form has no Site field to fill it). So `PORT BONTANG` could never be created in DHM and never got its code.
+
+The guard is gone. A port is pushed as it is; when it is linked to a Master Site that already has a DHM code, that
+code goes along as `site_id` (stored `dhm_site_code` first, then the linked Site's `code_dhm`). If the live catalog
+still marks `site_id` as required, the answer is DHM's own (`DHM port_master needs site_id`), not a KLIP guess. If
+DHM already holds a record named `PORT BONTANG`, the push comes back as a duplicate and KLIP stores that record's code
+instead of creating a second one.
 
 
 ### Group Plant is the Discharge Destination, not master_plants.group_plant
