@@ -151,15 +151,26 @@ async function applyCompany(record: DhmRecord): Promise<void> {
   const existing =
     (dhmId && (await findId(`SELECT id FROM master_companies WHERE dhm_id = $1::uuid LIMIT 1`, [dhmId]))) ||
     (code && (await findId(`SELECT id FROM master_companies WHERE code_dhm = $1 LIMIT 1`, [code]))) ||
+    // The two fallbacks below match on a code or a name a person typed, so they must not take a row that
+    // already belongs to ANOTHER DHM organisation. DHM can hold two organisations with one name (SIT has
+    // PT. ENERGI OLEO PERSADA twice: ORG-0003 and ORG-0028); once the local row of one is gone, the other's
+    // record would match the survivor by name and overwrite its dhm_id and code. A row that is free
+    // (no dhm_id), already this record's, or marked deleted in DHM may still be claimed.
     (sap &&
       (await findId(
-        `SELECT id FROM master_companies WHERE upper(trim(company_code)) = upper(trim($1)) LIMIT 1`,
-        [sap],
+        `SELECT id FROM master_companies
+          WHERE upper(trim(company_code)) = upper(trim($1))
+            AND (dhm_id IS NULL OR dhm_id IS NOT DISTINCT FROM $2::uuid OR dhm_is_deleted)
+          LIMIT 1`,
+        [sap, dhmId],
       ))) ||
     (name &&
       (await findId(
-        `SELECT id FROM master_companies WHERE upper(trim(company_name)) = upper(trim($1)) LIMIT 1`,
-        [name],
+        `SELECT id FROM master_companies
+          WHERE upper(trim(company_name)) = upper(trim($1))
+            AND (dhm_id IS NULL OR dhm_id IS NOT DISTINCT FROM $2::uuid OR dhm_is_deleted)
+          LIMIT 1`,
+        [name, dhmId],
       )));
   let id = existing;
   if (id) {
