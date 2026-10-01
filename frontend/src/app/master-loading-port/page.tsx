@@ -290,20 +290,6 @@ export default function MasterLoadingPortPage() {
     }
   }
 
-  const handleDelete = async (p: MasterLoadingPort) => {
-    if (!isAdmin) return
-    const ok = confirm(`Delete loading port?\n\n${p.port}`)
-    if (!ok) return
-    try {
-      await api.delete(`/master-loading-ports/${p.id}`)
-      await fetchData(debouncedSearch)
-    } catch (err: any) {
-      console.error('Delete master loading port error', err)
-      const msg = err?.response?.data?.error?.message || 'Failed to delete master port'
-      alert(msg)
-    }
-  }
-
   return (
     <Layout>
       <StitchFields>
@@ -444,11 +430,8 @@ export default function MasterLoadingPortPage() {
               }}
               renderActions={(p) => (
                 <MasterRowActions
-                  isAdmin={isAdmin}
                   editLabel={isAdmin ? 'Edit port' : 'View port'}
-                  deleteLabel="Delete port"
                   onEdit={() => openEdit(p)}
-                  onDelete={() => void handleDelete(p)}
                 />
               )}
             />

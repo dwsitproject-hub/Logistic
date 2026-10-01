@@ -131,17 +131,6 @@ export default function MasterCompanyPage() {
     }
   }
 
-  const remove = async (row: MasterCompany) => {
-    if (!confirm(`Delete ${row.company_name}?`)) return
-    try {
-      await api.delete(`/master-companies/${row.id}`)
-      void fetchData(page, debouncedSearch)
-    } catch (error: unknown) {
-      const message = (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message
-      alert(message || 'Delete failed')
-    }
-  }
-
   return (
     <Layout>
       <StitchFields>
@@ -225,9 +214,7 @@ export default function MasterCompanyPage() {
                 }}
                 renderActions={(row) => (
                   <MasterRowActions
-                    isAdmin={isAdmin}
                     editLabel={isAdmin ? 'Edit company' : 'View company'}
-                    deleteLabel="Delete company"
                     onEdit={() => {
                       setEditing(row)
                       setForm({
@@ -237,7 +224,6 @@ export default function MasterCompanyPage() {
                       })
                       setOpen(true)
                     }}
-                    onDelete={() => void remove(row)}
                   />
                 )}
               />

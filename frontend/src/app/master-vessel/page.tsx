@@ -7,7 +7,6 @@ import { StitchFields } from '@/components/shared/stitchField'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import api from '@/lib/api'
-import { formatVesselCodeDisplay } from '@/lib/formatVesselCodeDisplay'
 import {
   EditVesselModal,
   type MasterVesselFormData,
@@ -208,25 +207,6 @@ export default function MasterVesselPage() {
     setModalOpen(true)
   }
 
-  const handleDelete = async (v: MasterVessel) => {
-    if (!isAdmin) return
-    // Identify the vessel by the code that always exists. formatVesselCodeDisplay renders a
-    // provisional legacy code as "-", which made this prompt read "Delete vessel? - <name>".
-    const codeLabel = v.vessel_code_klip || formatVesselCodeDisplay(v.vessel_code)
-    const ok = confirm(`Delete vessel?\n\n${codeLabel} - ${v.vessel_name}`)
-    if (!ok) return
-    try {
-      await api.delete(`/master-vessels/${v.id}`)
-      await fetchVessels(currentPage)
-    } catch (err: unknown) {
-      console.error('Delete master vessel error', err)
-      const msg =
-        (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error
-          ?.message || 'Failed to delete master vessel'
-      alert(msg)
-    }
-  }
-
   const renderPagination = () => {
     if (totalPages <= 1) return null
     return (
@@ -361,7 +341,6 @@ export default function MasterVesselPage() {
               isAdmin={isAdmin}
               onSortChange={handleSortChange}
               onEdit={openEdit}
-              onDelete={handleDelete}
               columnIds={vesselColumns.orderedVisibleIds as MasterVesselColumnId[]}
               dragColId={vesselColumns.dragColId}
               onColumnDragStart={(id) => vesselColumns.setDragColId(id)}

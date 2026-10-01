@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Edit2, Ship, Trash2 } from 'lucide-react'
+import { Edit2, Ship } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { ContractPerfTableSortHeader } from '@/components/performance/ContractPerfTableSortHeader'
@@ -40,7 +40,6 @@ export interface MasterVesselTableProps {
   isAdmin: boolean
   onSortChange: (colId: MasterVesselColumnId) => void
   onEdit: (row: MasterVesselRow) => void
-  onDelete: (row: MasterVesselRow) => void
   columnIds: readonly MasterVesselColumnId[]
   dragColId: string | null
   onColumnDragStart: (columnId: MasterVesselColumnId) => void
@@ -58,7 +57,6 @@ export function MasterVesselTable({
   isAdmin,
   onSortChange,
   onEdit,
-  onDelete,
   columnIds,
   dragColId,
   onColumnDragStart,
@@ -257,22 +255,6 @@ export function MasterVesselTable({
                             </TooltipTrigger>
                             <TooltipContent side="top">{isAdmin ? 'Edit vessel' : 'View vessel'}</TooltipContent>
                           </Tooltip>
-                          {isAdmin ? (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  size="icon"
-                                  onClick={() => onDelete(row)}
-                                  className="h-8 w-8 bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                                  aria-label="Delete vessel"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top">Delete vessel</TooltipContent>
-                            </Tooltip>
-                          ) : null}
                         </div>
                       </td>
                     </tr>

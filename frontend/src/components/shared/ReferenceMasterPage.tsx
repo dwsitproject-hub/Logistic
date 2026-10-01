@@ -182,20 +182,6 @@ export function ReferenceMasterPage({
     }
   }
 
-  const remove = async (row: ReferenceRow) => {
-    const label = fields.map((field) => row[field.key]).filter(Boolean).join(' · ')
-    if (!confirm(`Delete ${label || row.code_klip}?`)) return
-    try {
-      await api.delete(`/master-references/${kind}/${row.id}`)
-      await fetchRows()
-    } catch (error: unknown) {
-      const message =
-        (error as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message ||
-        'Failed to delete'
-      alert(message)
-    }
-  }
-
   return (
     <Layout>
       <StitchFields>
@@ -298,11 +284,8 @@ export function ReferenceMasterPage({
                 }}
                 renderActions={(row) => (
                   <MasterRowActions
-                    isAdmin={isAdmin}
                     editLabel={isAdmin ? 'Edit' : 'View'}
-                    deleteLabel="Delete"
                     onEdit={() => openEdit(row)}
-                    onDelete={() => void remove(row)}
                   />
                 )}
               />

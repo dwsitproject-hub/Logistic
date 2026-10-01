@@ -140,11 +140,6 @@ export default function MasterProductConfigurationPage() {
     }
   }
 
-  const removeProduct = async (p: Product) => {
-    if (!confirm(`Delete ${p.product_name}?`)) return
-    try { await api.delete(`/products/${p.id}`); void fetchData(page, debouncedSearch) } catch (e: any) { alert(e?.response?.data?.error?.message || 'Delete failed') }
-  }
-
   return (
     <Layout>
     <StitchFields>
@@ -252,11 +247,8 @@ export default function MasterProductConfigurationPage() {
             }}
             renderActions={(row) => (
               <MasterRowActions
-                isAdmin={isAdmin}
                 editLabel={isAdmin ? 'Edit product' : 'View product'}
-                deleteLabel="Delete product"
                 onEdit={() => openEdit(row)}
-                onDelete={() => void removeProduct(row)}
               />
             )}
           />

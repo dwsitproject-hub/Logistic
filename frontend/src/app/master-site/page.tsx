@@ -107,16 +107,6 @@ export default function MasterSitePage() {
     }
   }
 
-  const remove = async (row: MasterSite) => {
-    if (!confirm(`Delete ${row.site_name}?`)) return
-    try {
-      await api.delete(`/master-sites/${row.id}`)
-      void fetchData(page, debouncedSearch)
-    } catch (error: any) {
-      alert(error?.response?.data?.error?.message || 'Delete failed')
-    }
-  }
-
   return (
     <Layout>
       <StitchFields>
@@ -200,9 +190,7 @@ export default function MasterSitePage() {
                 }}
                 renderActions={(row) => (
                   <MasterRowActions
-                    isAdmin={isAdmin}
                     editLabel={isAdmin ? 'Edit site' : 'View site'}
-                    deleteLabel="Delete site"
                     onEdit={() => {
                       setEditing(row)
                       setForm({
@@ -212,7 +200,6 @@ export default function MasterSitePage() {
                       })
                       setOpen(true)
                     }}
-                    onDelete={() => void remove(row)}
                   />
                 )}
               />

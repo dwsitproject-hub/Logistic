@@ -222,20 +222,6 @@ export default function MasterPlantPage() {
     }
   }
 
-  const handleDelete = async (p: MasterPlant) => {
-    if (!isAdmin) return
-    const ok = confirm(`Delete plant?\n\n${p.company_name} - ${p.plant_code}`)
-    if (!ok) return
-    try {
-      await api.delete(`/master-plants/${p.id}`)
-      await fetchData(page, debouncedSearch)
-    } catch (err: any) {
-      console.error('Delete master plant error', err)
-      const msg = err?.response?.data?.error?.message || 'Failed to delete master plant'
-      alert(msg)
-    }
-  }
-
   const normalize = (v: unknown) => String(v ?? '').trim()
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -477,11 +463,8 @@ export default function MasterPlantPage() {
               }}
               renderActions={(p) => (
                 <MasterRowActions
-                  isAdmin={isAdmin}
                   editLabel={isAdmin ? 'Edit company' : 'View company'}
-                  deleteLabel="Delete company"
                   onEdit={() => openEdit(p)}
-                  onDelete={() => void handleDelete(p)}
                 />
               )}
             />
