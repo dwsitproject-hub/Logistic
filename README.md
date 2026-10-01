@@ -2944,10 +2944,20 @@ postal code (75325 is BONTANG's), SINTETE's postal code (two different values), 
 province, and the sheet also says MERAUKE), and MERAUKE, whose City would have come from three Jakarta head-office
 rows if they had not been ignored.
 
-A Site is pushed to DHM through its company, so 214 also adds the company links: 10 pairs (EU, PE, SB). The 11th,
-`ND -> MERAUKE`, is skipped: Master Company (Internal) holds only the 15 PT-named companies since migration 206, and
-ND (SAGS) is not one of them, so ND's 8 plants at MERAUKE have no company in KLIP. Additive and idempotent (27 Master
-Sites afterwards, 26 company links; a second run adds nothing).
+A Site is pushed to DHM through its company, so 214 also adds company links, by company *code* (EU, ND, PE, SB).
+That is only right where the codes match. Built from the migrations alone, Master Company (Internal) holds the 15
+PT-named companies of migration 206 (no ND); **SIT holds 23**, because the DHM sync added companies, and there the
+company is `EUP` "PT. Energi Unggul Persada" (ORG-0002), not `EU`. On SIT every EU pair of 204, 211 and 214 was
+skipped without a word, which left BATAM, KUMAI, PALEMBANG and TANJUNG PURA (restored by 211) and BAGENDANG,
+BOVENDIGUL, JAMBI, PAYA PASIR and SINTANG (added by 214) with no company: they cannot be pushed to DHM, and the
+plants on them stop at "Plant needs a DHM site".
+
+**Migration 215** links those Sites by company *name* (dots, case and spacing ignored), 13 pairs for PT ENERGI UNGGUL
+PERSADA, so it works whichever code the database has. Tested on a copy changed to look like SIT: Sites without a
+company 16 -> 4 on that copy (only TRADING TRANSIT HO is left on SIT itself), `EUP` ends with 13 Sites, and a second
+run adds nothing. Two things to know: SIT has two companies named `PT. ENERGI OLEO PERSADA` (EO ORG-0028 with Sites,
+EOP ORG-0003 without), a duplicate that was left alone; and the two Sites DHM brought in, `Jakarta Terminal` and
+`Surabaya Terminal`, have no company in KLIP.
 
 
 ### JPS held every STO that goes to a plant: SAP puts the plant's name in Vessel Discharge Port
