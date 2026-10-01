@@ -35,6 +35,10 @@ interface MasterPlant {
   id: string
   company_code?: string | null
   company_name: string
+  company_id?: string | null
+  /** The Master Company (Internal) row this plant points at (master_plants.company_id); empty when unlinked. */
+  linked_company_name?: string | null
+  linked_company_code?: string | null
   plant_code: string
   plant_name: string | null
   plant_type: string | null
@@ -60,6 +64,7 @@ const PLANT_COLUMNS: MasterListTableColumn<MasterPlant>[] = [
   { id: 'plant_code', label: 'Plant Code (SAP)', getText: (row) => plantCell(row.plant_code) },
   { id: 'plant_name', label: 'Plant Name', getText: (row) => plantCell(row.plant_name) },
   { id: 'plant_type', label: 'Plant Type', getText: (row) => plantCell(row.plant_type) },
+  { id: 'company', label: 'Company', getText: (row) => plantCell(row.linked_company_name) },
   { id: 'site', label: 'Site', getText: (row) => plantCell(row.site) },
   dhmStatusListColumn<MasterPlant>(),
 ]

@@ -2933,6 +2933,38 @@ The old SUPERSEDED groups do not come back. The rebuild creates new ones with ne
 ACCEPTED groups were never touched.
 
 
+### Company, Site and Plant are connected by foreign keys
+
+Company <-> Site (`master_company_sites`) and Plant -> Site (`master_plants.site_id`) were already foreign keys.
+Plant -> Company was not: `master_plants` carried `company_code` and `company_name` as text, so a plant and its
+company agreed only by spelling, and the DHM sync renaming a company left its plants on the old name.
+
+**Migration 219** adds `master_plants.company_id -> master_companies(id)` (`ON DELETE RESTRICT`: a company that
+still has plants cannot be deleted) and fills it from the company code, else the name. It does the rest with
+triggers, so every way a plant is written (the form, the Excel upload, the DHM sync, a migration) is covered
+without editing each path:
+
+| trigger | does |
+|---|---|
+| BEFORE write on `master_plants` | fills `company_id` and `site_id` from the text when they are missing or the text changed; a plant whose company or Site cannot be found keeps NULL and is still saved |
+| AFTER write on `master_plants` | adds the company <-> Site link, so a company is on every Site where it has a plant |
+| AFTER rename on `master_companies` | copies the new code and name to the company's plants |
+
+Not a composite foreign key from the plant to the company <-> Site link: the DHM sync replaces a company's links, and
+a foreign key on them would make that sync fail.
+
+Master Plant gets a **Company** column (the linked company, `-` when the plant is not linked), searchable, between
+Plant Type and Site; with a saved column layout it appears at the right end and can be moved from Columns. Master
+Site's Company column is now every company linked to the Site, and Master Company (Internal)'s Site column every Site
+linked to the company (migration 218 gives the eleven companies that are not on the Final sheet their Sites, from the
+older completed sheet).
+
+Tested on a copy made to look like SIT: 148 of 148 sheet plants get a company, the 149th (a DHM plant whose
+`company_name` is its own name) stays unlinked and shows `-`, an insert by company code and Site text resolves both,
+an unknown company saves with NULL, a plant at a new Site creates the link, renaming EU to EUP moves its 63 plants,
+deleting a company with plants is refused and one without works, and a second run of the migration changes nothing.
+
+
 ### Master Company (Internal), Master Site and Master Plant replaced from one sheet
 
 The three masters had been patched by migrations 195 to 215, by the DHM sync and by hand until nobody could say what

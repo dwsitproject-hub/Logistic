@@ -40,7 +40,18 @@ describe('listMasterPlants', () => {
     for (const sql of sqls) {
       expect(sql).toContain('linked_site.site_name ILIKE');
       expect(sql).toContain('LEFT JOIN master_sites AS linked_site ON linked_site.id = master_plants.site_id');
+      // the company a plant points at (master_plants.company_id) is searched too, so the count needs that join as well
+      expect(sql).toContain('linked_company.company_name ILIKE');
+      expect(sql).toContain('LEFT JOIN master_companies AS linked_company ON linked_company.id = master_plants.company_id');
     }
+  });
+
+  it('returns the name of the linked company next to the text of the plant itself', async () => {
+    await run();
+    const list = String(vi.mocked(query).mock.calls[0]![0]);
+    expect(list).toContain('master_plants.company_id');
+    expect(list).toContain('linked_company.company_name AS linked_company_name');
+    expect(list).toContain('linked_company.company_code AS linked_company_code');
   });
 
   it('passes the same search parameter to both queries', async () => {

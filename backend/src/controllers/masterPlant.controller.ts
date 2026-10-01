@@ -26,6 +26,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         OR master_plants.plant_type ILIKE $${params.length}
         OR master_plants.group_plant ILIKE $${params.length}
         OR master_plants.company_code ILIKE $${params.length}
+        OR linked_company.company_name ILIKE $${params.length}
         OR master_plants.site ILIKE $${params.length}
         OR linked_site.site_name ILIKE $${params.length}
         OR master_plants.found_in ILIKE $${params.length}
@@ -39,6 +40,9 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         master_plants.id,
         master_plants.company_code,
         master_plants.company_name,
+        master_plants.company_id,
+        linked_company.company_name AS linked_company_name,
+        linked_company.company_code AS linked_company_code,
         master_plants.plant_code,
         master_plants.plant_name,
         master_plants.plant_type,
@@ -56,8 +60,9 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
         master_plants.updated_at
       FROM master_plants
       LEFT JOIN master_sites AS linked_site ON linked_site.id = master_plants.site_id
+      LEFT JOIN master_companies AS linked_company ON linked_company.id = master_plants.company_id
       ${where}
-      ORDER BY company_name, plant_code
+      ORDER BY master_plants.company_name, master_plants.plant_code
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
     // The search clause above reads linked_site.site_name, so the count needs the same join. Without
@@ -68,6 +73,7 @@ export const listMasterPlants = async (req: AuthRequest, res: Response): Promise
       SELECT COUNT(*) AS count
       FROM master_plants
       LEFT JOIN master_sites AS linked_site ON linked_site.id = master_plants.site_id
+      LEFT JOIN master_companies AS linked_company ON linked_company.id = master_plants.company_id
       ${where}
     `;
 
