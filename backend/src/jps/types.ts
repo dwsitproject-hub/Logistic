@@ -49,7 +49,13 @@ export interface JpsCargoLine {
 export interface JpsSubmitPayload {
   external_reference: string;
   requested_by?: string;
-  port_id: number;
+  /**
+   * DHM code of the discharge port (`master_loading_ports.code_dhm`).
+   * JPS accepts this instead of the numeric `port_id`.
+   */
+  port_hub_code?: string;
+  /** Older submissions stored this. New ones send `port_hub_code` and leave it off. */
+  port_id?: number;
   vessel_hub_code?: string;
   vessel_name?: string;
   voyage_no?: string;
@@ -61,6 +67,10 @@ export interface JpsSubmitPayload {
   trade_term?: string;
   surveyor_name?: string;
   notes?: string;
+  /** HTTPS (or intranet HTTP) links. JPS stores the URL; the file stays on Synology. */
+  shipping_instruction_document_url?: string;
+  contract_document_url?: string;
+  bl_document_url?: string;
   cargo: JpsCargoLine[];
 }
 

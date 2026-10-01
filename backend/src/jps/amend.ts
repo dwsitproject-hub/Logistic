@@ -1,10 +1,11 @@
 /**
  * Keep a Pending instruction in step with KLIP.
  *
- * JPS lets a partner amend an instruction only while its status is Pending, and only these fields
- * (partner API v4.2 §4.1.1):
+ * JPS lets a partner amend an instruction only while its status is Pending. v5.2 adds the three
+ * document links to that list (catalog: patchable URL fields). The v4.2 set is still:
  *
  *   trade_term, surveyor_name, and per cargo line: po_no, so_no, shipper_name
+ *   plus shipping_instruction_document_url, contract_document_url, bl_document_url
  *
  * `eta` and `etd` are NOT amendable. So a discharge ETA that moves after submission stays wrong at
  * JPS and there is nothing this can do about it - that needs either a new field on their PATCH or a
@@ -16,6 +17,7 @@
  *   - `po_no` per line, when the STO's contract composition changes between submit and approval.
  *   - `surveyor_name` and `shipper_name` are never sent - KLIP has no surveyor, and JPS rejects a
  *     shipper that is not already in its master.
+ *   - the three document URLs, when a Contract, SI, or BL file is uploaded after the submit.
  *
  * A cargo line is identified by `contract_no`, not `line_order`: line_order depends on the order
  * the submission happened to build, and a line added or dropped since would shift every index after
@@ -27,7 +29,7 @@
 import { query } from './../database/connection';
 import logger from '../utils/logger';
 import { jpsRequest } from './client';
-import { jpsPortId, jpsRegionSite } from './config';
+import { jpsRegionSite } from './config';
 import { findEligibleStos } from './eligibility';
 import { buildJpsSubmitPayload } from './mapper';
 import type { JpsInstruction, JpsSubmitPayload } from './types';
@@ -50,6 +52,9 @@ interface CargoPatch {
 
 interface AmendBody {
   trade_term?: string;
+  shipping_instruction_document_url?: string;
+  contract_document_url?: string;
+  bl_document_url?: string;
   cargo?: CargoPatch[];
 }
 
@@ -69,6 +74,18 @@ export function buildJpsAmendBody(
     // Only a real term can be sent. Going from FOB to "no term" is not expressible - JPS has no way
     // to clear one - so a term that has become unmappable is left as it was rather than guessed at.
     if (current.trade_term) body.trade_term = current.trade_term;
+  }
+
+  // Same rule as trade_term: a new or replaced link is sent. A document that was deleted in KLIP
+  // cannot be cleared at JPS, so the previously sent URL stays.
+  const documentFields = [
+    'shipping_instruction_document_url',
+    'contract_document_url',
+    'bl_document_url',
+  ] as const;
+  for (const field of documentFields) {
+    const next = current[field] ?? '';
+    if (next && next !== (sent[field] ?? '')) body[field] = next;
   }
 
   const sentByContract = new Map<string, string>();
@@ -122,7 +139,7 @@ export async function amendPendingInstructions(limit = 50): Promise<JpsAmendSumm
 
     const built = buildJpsSubmitPayload(
       { ...source, revision: Number(row.revision ?? 1) },
-      { portId: jpsPortId(), agentName: JPS_AGENT_NAME },
+      { agentName: JPS_AGENT_NAME },
     );
     if (!built.payload) {
       // The STO no longer builds a valid payload at all - a product lost its mapping, say. Nothing

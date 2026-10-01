@@ -6,6 +6,22 @@ export function isJpsEnabled(): boolean {
   return Boolean(jpsBaseUrl() && jpsApiKey());
 }
 
+/**
+ * Absolute download link for a shipment document, opened by a JPS operator without a KLIP login.
+ *
+ * The file itself stays on the Synology share. This is `APP_PUBLIC_ORIGIN` (same host that proxies
+ * `/api` on SIT) plus the open `GET /api/documents/:id/download` route. Empty when no public origin
+ * is configured, so a submit is not held back just because the link cannot be built.
+ */
+export function jpsDocumentDownloadUrl(documentId: string | null | undefined): string | undefined {
+  const id = String(documentId ?? '').trim();
+  const origin = String(integrationEnv('APP_PUBLIC_ORIGIN') || integrationEnv('FRONTEND_URL') || '')
+    .trim()
+    .replace(/\/+$/, '');
+  if (!id || !origin) return undefined;
+  return `${origin}/api/documents/${encodeURIComponent(id)}/download`;
+}
+
 export function jpsBaseUrl(): string {
   return String(integrationEnv('JPS_API_BASE_URL') || '')
     .trim()
@@ -17,17 +33,8 @@ export function jpsApiKey(): string {
 }
 
 /**
- * JPS port id. Staging has exactly one port, 1 (BONTANG), and production is expected to differ,
- * so this is configuration rather than a constant.
- */
-export function jpsPortId(): number {
-  const n = Number(integrationEnv('JPS_PORT_ID'));
-  return Number.isFinite(n) && n > 0 ? n : 1;
-}
-
-/**
  * The Region/Site KLIP submits for. Only BONTANG is in scope for the first integration; a second
- * jetty would need its own port id, so this is a single value rather than a list.
+ * jetty would need its own port, so this is a single value rather than a list.
  */
 export function jpsRegionSite(): string {
   return String(integrationEnv('JPS_REGION_SITE') || 'BONTANG').trim().toUpperCase();

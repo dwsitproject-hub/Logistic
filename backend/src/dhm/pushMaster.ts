@@ -46,6 +46,13 @@ async function pushNamed(args: {
     ? await putInbound(slug, existingCode, created.payload)
     : await postInbound(slug, created.payload);
 
+  // Inbound PUT 404 means that stored code is gone. Create it again and let DHM assign a new code.
+  if (!result.ok && !result.conflict && result.httpStatus === 404 && existingCode) {
+    const fresh = await payloadFor(slug, args.name, args.extra);
+    if ('error' in fresh) return { dhmError: fresh.error };
+    result = await postInbound(slug, fresh.payload);
+  }
+
   if (result.ok) {
     await args.persist(result.record, result.code);
     return { dhmStatus: result.status, dhmCode: result.code };

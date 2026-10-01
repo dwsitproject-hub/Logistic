@@ -182,8 +182,8 @@ import {
  * 2026-09-25, and removed the gate with them - uploading is now something you may do, not something
  * you must do first.
  *
- * The types are also what JPS will be sent once its API can accept document URLs; today it has no
- * field for them, so nothing is sent yet.
+ * JPS receives the download URL of each file (contract_document_url, shipping_instruction_document_url,
+ * bl_document_url). The PDF stays on the Synology share.
  */
 const SHIPMENT_DOC_TYPES = [
   { type: 'CONTRACT', label: 'Contract Document' },

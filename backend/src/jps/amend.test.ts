@@ -61,6 +61,20 @@ describe('buildJpsAmendBody', () => {
     expect(buildJpsAmendBody(base(), now)).toBeNull();
   });
 
+  it('sends a document URL that was uploaded after the submit', () => {
+    const now = base({
+      contract_document_url: 'https://klip.example/api/documents/c/download',
+    });
+    expect(buildJpsAmendBody(base(), now)).toEqual({
+      contract_document_url: 'https://klip.example/api/documents/c/download',
+    });
+  });
+
+  it('does not clear a document URL that KLIP no longer has', () => {
+    const sent = base({ bl_document_url: 'https://klip.example/api/documents/b/download' });
+    expect(buildJpsAmendBody(sent, base())).toBeNull();
+  });
+
   it('sends nothing when the instruction was never recorded', () => {
     expect(buildJpsAmendBody(null, base())).toBeNull();
   });

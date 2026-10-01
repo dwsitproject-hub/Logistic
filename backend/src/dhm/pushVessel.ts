@@ -25,6 +25,11 @@ export async function pushMasterVesselToDhm(
       ? await putVesselInbound(existingCode, row)
       : await postVesselInbound(row);
 
+    // Inbound PUT 404 means that stored code is gone. Create it again and let DHM assign a new code.
+    if (!result.ok && !result.conflict && result.httpStatus === 404 && existingCode) {
+      result = await postVesselInbound(row);
+    }
+
     if (result.ok) {
       await persistDhmReplica(localId, result.record, result.code);
       return { dhmStatus: result.status, dhmCode: result.code };

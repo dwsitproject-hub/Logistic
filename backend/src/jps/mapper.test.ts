@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { jpsDocumentDownloadUrl } from './config';
 import {
   buildJpsExternalReference,
   buildJpsSubmitPayload,
@@ -8,7 +9,7 @@ import {
   type JpsShipmentSource,
 } from './mapper';
 
-const OPTIONS = { portId: 1, agentName: 'Other' };
+const OPTIONS = { agentName: 'Other' };
 
 function source(overrides: Partial<JpsShipmentSource> = {}): JpsShipmentSource {
   return {
@@ -16,6 +17,7 @@ function source(overrides: Partial<JpsShipmentSource> = {}): JpsShipmentSource {
     revision: 1,
     vessel_name: 'BG. MARINI I',
     vessel_hub_code: null,
+    port_hub_code: 'PRT-BONTANG',
     eta_discharge_arrival: '2026-09-18',
     eta_discharge_complete: '2026-09-20',
     incoterm: 'FOB',
@@ -113,7 +115,8 @@ describe('buildJpsSubmitPayload', () => {
   it('always calls at BONTANG to discharge', () => {
     const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
     expect(payload?.purpose).toBe('Unloading');
-    expect(payload?.port_id).toBe(1);
+    expect(payload?.port_hub_code).toBe('PRT-BONTANG');
+    expect(payload?.port_id).toBeUndefined();
     expect(payload?.agent_name).toBe('Other');
   });
 
@@ -133,6 +136,26 @@ describe('buildJpsSubmitPayload', () => {
   it('falls back to vessel_name while dhm_code is still empty', () => {
     const { payload } = buildJpsSubmitPayload(source(), OPTIONS);
     expect(payload?.vessel_name).toBe('BG. MARINI I');
+  });
+
+  it('sends document download URLs and omits a blank one', () => {
+    const { payload } = buildJpsSubmitPayload(
+      source({
+        contract_document_url: 'https://klip.example/api/documents/c/download',
+        shipping_instruction_document_url: 'https://klip.example/api/documents/s/download',
+        bl_document_url: '  ',
+      }),
+      OPTIONS,
+    );
+    expect(payload?.contract_document_url).toBe('https://klip.example/api/documents/c/download');
+    expect(payload?.shipping_instruction_document_url).toBe('https://klip.example/api/documents/s/download');
+    expect(payload?.bl_document_url).toBeUndefined();
+  });
+
+  it('holds the STO when Master Port has no DHM code', () => {
+    const { payload, problems } = buildJpsSubmitPayload(source({ port_hub_code: null }), OPTIONS);
+    expect(payload).toBeUndefined();
+    expect(problems.join(' ')).toContain('no DHM code');
   });
 
   it('refuses to build without an ETA, which JPS requires', () => {
@@ -177,5 +200,25 @@ describe('buildJpsSubmitPayload', () => {
     );
     expect(problems).toEqual([]);
     expect(payload?.cargo[0].tonnage).toBe(101.22);
+  });
+});
+
+describe('jpsDocumentDownloadUrl', () => {
+  const previousOrigin = process.env.APP_PUBLIC_ORIGIN;
+  const previousFrontend = process.env.FRONTEND_URL;
+
+  afterEach(() => {
+    if (previousOrigin === undefined) delete process.env.APP_PUBLIC_ORIGIN;
+    else process.env.APP_PUBLIC_ORIGIN = previousOrigin;
+    if (previousFrontend === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = previousFrontend;
+  });
+
+  it('builds the open download link and ignores a missing id', () => {
+    process.env.APP_PUBLIC_ORIGIN = 'https://test-klip.kpndomain.com/';
+    expect(jpsDocumentDownloadUrl('11111111-1111-1111-1111-111111111111')).toBe(
+      'https://test-klip.kpndomain.com/api/documents/11111111-1111-1111-1111-111111111111/download',
+    );
+    expect(jpsDocumentDownloadUrl('  ')).toBeUndefined();
   });
 });

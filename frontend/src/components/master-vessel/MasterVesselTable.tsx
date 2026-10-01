@@ -21,12 +21,10 @@ import {
   COMPACT_TABLE_ACTIONS_HEADER_CLASS,
   COMPACT_TABLE_HEADER_LABEL_CLASS,
   LIST_PAGE_TABLE_HEADER_ROW_CLASS,
-  compactTableColWidthCss,
 } from '@/lib/compactTableUi'
 import {
   MASTER_VESSEL_ACTIONS_COL_WIDTH_PX,
   MASTER_VESSEL_COLUMNS,
-  masterVesselTableColumnWidthPx,
   sumMasterVesselTableWidthPx,
   type MasterVesselColumnId,
   type MasterVesselRow,
@@ -49,6 +47,8 @@ export interface MasterVesselTableProps {
   onColumnDragEnd: () => void
   onColumnDrop: (columnId: MasterVesselColumnId) => void
 }
+
+const VESSEL_HUG_COLUMN_IDS = new Set(['vessel_code', 'vessel_codes_sap', 'dhm_code', 'dhm_status'])
 
 export function MasterVesselTable({
   items,
@@ -121,14 +121,12 @@ export function MasterVesselTable({
               {columnIds.map((id) => {
                 const col = MASTER_VESSEL_COLUMNS.find((item) => item.id === id)
                 if (!col) return null
+                const hugs = VESSEL_HUG_COLUMN_IDS.has(col.id)
                 return (
                 <col
                   key={col.id}
-                  style={{
-                    width: compactTableColWidthCss(
-                      masterVesselTableColumnWidthPx(col.id, col.label),
-                    ),
-                  }}
+                  className={hugs ? 'klip-master-col-hug' : 'klip-master-col-grow'}
+                  style={hugs ? { width: '1%' } : undefined}
                 />
                 )
               })}
@@ -164,6 +162,7 @@ export function MasterVesselTable({
                         'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                         CONTRACT_PERF_TABLE_CELL_PAD,
                         opColClass,
+                        VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                         dragColId === col.id && 'opacity-60',
                       )}
                     >
@@ -221,6 +220,7 @@ export function MasterVesselTable({
                               opColClass,
                               'align-middle',
                               CONTRACT_PERF_TABLE_CELL_PAD,
+                              VESSEL_HUG_COLUMN_IDS.has(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               stripe,
                             )}
                           >

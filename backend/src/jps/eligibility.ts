@@ -19,6 +19,7 @@
  */
 import { query } from '../database/connection';
 import { shipmentListStoKeyExpr } from '../utils/shipmentStoTypeSql';
+import { jpsDocumentDownloadUrl } from './config';
 import type { JpsCargoSource, JpsShipmentSource } from './mapper';
 
 /**
@@ -141,6 +142,42 @@ export async function findEligibleStos(
         AND s.eta_discharge_arrival IS NOT NULL
       GROUP BY 1
     ),
+    port AS (
+      -- Discharge port name on the shipment, matched to Master Port. "BONTANG" and "PORT BONTANG"
+      -- are the same row. The latest named port wins; its code_dhm is what JPS calls port_hub_code.
+      -- Local rows have no code_dhm yet — that column is filled on SIT — so a local submit is held.
+      SELECT e.sto_key,
+             (ARRAY_AGG(matched.code_dhm ORDER BY
+                CASE WHEN NULLIF(BTRIM(s.port_of_discharge), '') IS NULL THEN 1 ELSE 0 END,
+                s.updated_at DESC NULLS LAST))[1] AS port_hub_code
+      FROM eligible e
+      INNER JOIN shipments s ON TRUE
+      INNER JOIN contracts c ON c.id = s.contract_id
+      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
+      LEFT JOIN LATERAL (
+        SELECT mp.code_dhm
+        FROM master_loading_ports mp
+        WHERE NULLIF(BTRIM(s.port_of_discharge), '') IS NOT NULL
+          AND (
+            regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+            OR regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
+              = 'PORT ' || regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+            OR 'PORT ' || regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+          )
+        ORDER BY
+          CASE
+            WHEN regexp_replace(upper(btrim(mp.port)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+            THEN 0 ELSE 1
+          END,
+          length(mp.port)
+        LIMIT 1
+      ) matched ON TRUE
+      WHERE ${STO_KEY_SQL} = e.sto_key
+      GROUP BY e.sto_key
+    ),
     vessel AS (
       -- The vessel of record for the STO. master_vessels.dhm_code is the vessel_hub_code JPS
       -- prefers; it is empty everywhere until the DHM sync runs, so vessel_name carries the pilot.
@@ -223,6 +260,25 @@ export async function findEligibleStos(
           )
       ) x ON TRUE
       GROUP BY e.sto_key
+    ),
+    docs AS (
+      -- One URL per document kind on the instruction. The newest upload of that kind across the
+      -- STO's shipments wins. A missing file is omitted later; it does not hold the submit.
+      SELECT e.sto_key,
+             (ARRAY_AGG(d.id::text ORDER BY d.upload_date DESC NULLS LAST)
+                FILTER (WHERE UPPER(d.document_type) = 'CONTRACT'))[1] AS contract_document_id,
+             (ARRAY_AGG(d.id::text ORDER BY d.upload_date DESC NULLS LAST)
+                FILTER (WHERE UPPER(d.document_type) = 'SI'))[1] AS si_document_id,
+             (ARRAY_AGG(d.id::text ORDER BY d.upload_date DESC NULLS LAST)
+                FILTER (WHERE UPPER(d.document_type) = 'BL'))[1] AS bl_document_id
+      FROM eligible e
+      INNER JOIN shipments s ON TRUE
+      INNER JOIN contracts c ON c.id = s.contract_id
+      LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
+      INNER JOIN documents d ON d.shipment_id = s.id
+      WHERE ${STO_KEY_SQL} = e.sto_key
+        AND UPPER(d.document_type) IN ('CONTRACT', 'SI', 'BL')
+      GROUP BY e.sto_key
     )
     SELECT e.sto_key,
            e.eta_discharge_arrival,
@@ -230,11 +286,17 @@ export async function findEligibleStos(
            e.shipment_ids,
            v.vessel_hub_code,
            v.vessel_name,
+           p.port_hub_code,
            t.incoterm,
+           d.contract_document_id,
+           d.si_document_id,
+           d.bl_document_id,
            COALESCE(g.lines, '[]'::jsonb) AS cargo
     FROM eligible e
     LEFT JOIN vessel v ON v.sto_key = e.sto_key
+    LEFT JOIN port p ON p.sto_key = e.sto_key
     LEFT JOIN terms t ON t.sto_key = e.sto_key
+    LEFT JOIN docs d ON d.sto_key = e.sto_key
     LEFT JOIN cargo g ON g.sto_key = e.sto_key
     -- Filtered here rather than in the CTE's HAVING: the STO key is a grouped EXPRESSION, and a
     -- subquery referencing it inside HAVING cannot see it (42803, "ungrouped column").
@@ -251,9 +313,13 @@ export async function findEligibleStos(
     revision: 1,
     vessel_name: (row.vessel_name as string | null) ?? null,
     vessel_hub_code: (row.vessel_hub_code as string | null) ?? null,
+    port_hub_code: (row.port_hub_code as string | null) ?? null,
     eta_discharge_arrival: row.eta_discharge_arrival,
     eta_discharge_complete: row.eta_discharge_complete,
     incoterm: (row.incoterm as string | null) ?? null,
+    contract_document_url: jpsDocumentDownloadUrl(row.contract_document_id as string | null),
+    shipping_instruction_document_url: jpsDocumentDownloadUrl(row.si_document_id as string | null),
+    bl_document_url: jpsDocumentDownloadUrl(row.bl_document_id as string | null),
     shipment_ids: (row.shipment_ids as string[]) ?? [],
     cargo: ((row.cargo as JpsCargoSource[]) ?? []).map((line) => ({
       contract_no: line.contract_no ?? null,

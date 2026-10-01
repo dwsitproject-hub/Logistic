@@ -432,20 +432,21 @@
   }
 
   /*
-   * Product through Truck Transporter. table-layout:fixed must beat the operational
-   * auto rule. Column widths stay proportional so one name column does not take the row.
+   * Master list tables fill the card so Actions sits on the right edge.
+   * Code and status columns keep a fixed track. Columns without a width share the rest.
    * 32px + 4px + 32px, with 14px inset each side.
    */
   .klip-compact-table.klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions {
     table-layout: fixed;
     width: 100%;
+    min-width: 100%;
   }
 
-  /* Columns stay as wide as their longest value. Short codes do not stretch. */
+  /* Company, Site, Plant: codes hug their value. Name and site columns take the leftover. */
   .klip-compact-table.klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions.klip-master-fit-values {
     table-layout: auto;
-    width: max-content;
-    min-width: max-content;
+    width: 100%;
+    min-width: 100%;
   }
 
   .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell {
@@ -460,6 +461,41 @@
     min-width: max-content;
     max-width: none;
     overflow: visible;
+  }
+
+  .klip-master-list-table.klip-master-fit-values td.klip-master-col-grow .klip-compact-table-cell-inner {
+    width: auto;
+    min-width: max-content;
+  }
+
+  .klip-master-list-table.klip-master-fit-values col.klip-master-col-hug,
+  .klip-master-list-table.klip-master-fit-values th.klip-master-col-hug,
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell.klip-master-col-hug {
+    width: 1%;
+    max-width: max-content;
+    white-space: nowrap;
+  }
+
+  /* Vessel fills the card the same way. Code and status stay on their value. */
+  .klip-compact-table.klip-compact-table--operational.klip-master-vessel-table {
+    table-layout: auto;
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .klip-master-vessel-table col.klip-master-col-hug,
+  .klip-master-vessel-table th.klip-master-col-hug,
+  .klip-master-vessel-table td.klip-master-col-hug {
+    width: 1%;
+    max-width: max-content;
+    white-space: nowrap;
+  }
+
+  .klip-master-vessel-table th.klip-master-col-grow,
+  .klip-master-vessel-table td.klip-master-col-grow,
+  .klip-master-vessel-table td.klip-master-col-grow .klip-compact-table-cell-inner {
+    width: auto;
+    max-width: none;
   }
 
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions th.klip-op-col--actions,

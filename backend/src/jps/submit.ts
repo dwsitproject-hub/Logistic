@@ -4,7 +4,6 @@ import logger from '../utils/logger';
 import { jpsRequest } from './client';
 import {
   jpsMaxSubmitsPerSweep,
-  jpsPortId,
   jpsRegionSite,
   jpsRetryFailed,
   jpsRetryFailedAfterMs,
@@ -133,7 +132,7 @@ export async function submitEligibleStos(): Promise<JpsSubmitSummary> {
     const revision = await nextRevision(sto.sto_key);
     const built = buildJpsSubmitPayload(
       { ...sto, revision },
-      { portId: jpsPortId(), agentName: JPS_AGENT_NAME },
+      { agentName: JPS_AGENT_NAME },
     );
 
     if (!built.payload) {

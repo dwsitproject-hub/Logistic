@@ -48,6 +48,11 @@ const MASTER_LIST_NAME_COLUMN_IDS = new Set([
   'value_3',
 ])
 
+/** Code and DHM status stay as wide as their value. Other columns absorb the leftover width. */
+function masterListColumnHugsContent(columnId: string): boolean {
+  return masterCodeKind(columnId) != null || columnId === 'dhm_status'
+}
+
 function masterListColumnWidthPx(col: Pick<MasterListTableColumn<unknown>, 'id' | 'label' | 'widthPx' | 'sortable'>): number {
   const base = masterCodeKind(col.id)
     ? 168
@@ -152,14 +157,29 @@ export function MasterListCompactTable<T>({
             )}
           >
             <colgroup>
-              {columns.map((col) => (
-                <col
-                  key={col.id}
-                  style={fitContent ? undefined : { width: compactTableColWidthCss(masterListColumnWidthPx(col)) }}
-                />
-              ))}
+              {columns.map((col) => {
+                const hugs = masterListColumnHugsContent(col.id)
+                return (
+                  <col
+                    key={col.id}
+                    className={hugs ? 'klip-master-col-hug' : 'klip-master-col-grow'}
+                    style={
+                      hugs
+                        ? {
+                            width: fitContent
+                              ? '1%'
+                              : compactTableColWidthCss(masterListColumnWidthPx(col)),
+                          }
+                        : undefined
+                    }
+                  />
+                )
+              })}
               {renderActions ? (
-                <col style={{ width: tightActions ? MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX : MASTER_VESSEL_ACTIONS_COL_WIDTH_PX }} />
+                <col
+                  className="klip-master-col-actions"
+                  style={{ width: tightActions ? MASTER_LIST_ICON_ACTIONS_COL_WIDTH_PX : MASTER_VESSEL_ACTIONS_COL_WIDTH_PX }}
+                />
               ) : null}
             </colgroup>
             <thead>
@@ -186,6 +206,7 @@ export function MasterListCompactTable<T>({
                     className={cn(
                       'relative text-left font-semibold cursor-move align-top sticky top-0 z-20 bg-slate-50',
                       CONTRACT_PERF_TABLE_CELL_PAD,
+                      masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                       dragColId === col.id && 'opacity-60',
                     )}
                   >
@@ -233,6 +254,7 @@ export function MasterListCompactTable<T>({
                               COMPACT_OPERATIONAL_TABLE_CELL_CLASS,
                               'align-middle',
                               CONTRACT_PERF_TABLE_CELL_PAD,
+                              masterListColumnHugsContent(col.id) ? 'klip-master-col-hug' : 'klip-master-col-grow',
                               col.id === 'dhm_status' && 'klip-op-col--token',
                               stripe,
                             )}

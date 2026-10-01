@@ -101,10 +101,16 @@ export interface JpsShipmentSource {
   revision: number;
   vessel_name: string | null;
   vessel_hub_code: string | null;
+  /** `master_loading_ports.code_dhm` for the discharge port. Empty until that port is synced on SIT. */
+  port_hub_code: string | null;
   eta_discharge_arrival: unknown;
   eta_discharge_complete: unknown;
   incoterm: string | null;
   requested_by?: string | null;
+  /** Already-built download links. Omitted from the payload when empty. */
+  contract_document_url?: string | null;
+  shipping_instruction_document_url?: string | null;
+  bl_document_url?: string | null;
   cargo: JpsCargoSource[];
 }
 
@@ -117,6 +123,13 @@ export interface JpsPayloadResult {
 /** KLIP stores quantities in kilograms; JPS wants MT. */
 function kgToMt(kg: number): number {
   return Math.round((kg / 1000) * 100) / 100;
+}
+
+/** JPS stores the link only. A relative path or a blank value is not a URL it can open. */
+function absoluteDocumentUrl(value: string | null | undefined): string | undefined {
+  const url = String(value ?? '').trim();
+  if (!/^https?:\/\//i.test(url)) return undefined;
+  return url;
 }
 
 /**
@@ -133,12 +146,15 @@ function kgToMt(kg: number): number {
  */
 export function buildJpsSubmitPayload(
   source: JpsShipmentSource,
-  options: { portId: number; agentName: string },
+  options: { agentName: string },
 ): JpsPayloadResult {
   const problems: string[] = [];
 
   const eta = toJpsDateTime(source.eta_discharge_arrival);
   if (!eta) problems.push('ETA discharge arrival is empty');
+
+  const portHubCode = String(source.port_hub_code ?? '').trim();
+  if (!portHubCode) problems.push('discharge port has no DHM code on Master Port');
 
   if (!source.vessel_hub_code && !String(source.vessel_name ?? '').trim()) {
     problems.push('no vessel_hub_code and no vessel_name');
@@ -182,9 +198,9 @@ export function buildJpsSubmitPayload(
   const etd = toJpsDateTime(source.eta_discharge_complete);
   const payload: JpsSubmitPayload = {
     external_reference: buildJpsExternalReference(source.sto_key, source.revision),
-    port_id: options.portId,
-    // KLIP vessels call at BONTANG to discharge. BONTANG is a destination in KLIP, never a load
-    // port - the load ports are KUMAI, TALANG DUKU and the rest.
+    // JPS takes the DHM port code in place of the numeric port id. The id stays valid on their
+    // side only when this code is omitted, so a payload that has the code does not send both.
+    port_hub_code: portHubCode,
     purpose: 'Unloading',
     eta: eta as string,
     agent_name: options.agentName,
@@ -197,6 +213,12 @@ export function buildJpsSubmitPayload(
   const tradeTerm = mapKlipIncotermToJpsTradeTerm(source.incoterm);
   if (tradeTerm) payload.trade_term = tradeTerm;
   if (source.requested_by) payload.requested_by = String(source.requested_by).trim();
+  const contractDocumentUrl = absoluteDocumentUrl(source.contract_document_url);
+  const siDocumentUrl = absoluteDocumentUrl(source.shipping_instruction_document_url);
+  const blDocumentUrl = absoluteDocumentUrl(source.bl_document_url);
+  if (contractDocumentUrl) payload.contract_document_url = contractDocumentUrl;
+  if (siDocumentUrl) payload.shipping_instruction_document_url = siDocumentUrl;
+  if (blDocumentUrl) payload.bl_document_url = blDocumentUrl;
 
   return { payload, problems: [] };
 }
