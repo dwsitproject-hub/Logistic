@@ -147,15 +147,17 @@ export async function findEligibleStos(
       -- are the same row. The latest named port wins; its code_dhm is what JPS calls port_hub_code.
       -- Local rows have no code_dhm yet — that column is filled on SIT — so a local submit is held.
       SELECT e.sto_key,
-             (ARRAY_AGG(matched.code_dhm ORDER BY
-                CASE WHEN NULLIF(BTRIM(s.port_of_discharge), '') IS NULL THEN 1 ELSE 0 END,
-                s.updated_at DESC NULLS LAST))[1] AS port_hub_code
+             (ARRAY_AGG(
+                CASE WHEN matched.port IS NOT NULL THEN matched.code_dhm ELSE via_alias.code_dhm END
+                ORDER BY
+                  CASE WHEN NULLIF(BTRIM(s.port_of_discharge), '') IS NULL THEN 1 ELSE 0 END,
+                  s.updated_at DESC NULLS LAST))[1] AS port_hub_code
       FROM eligible e
       INNER JOIN shipments s ON TRUE
       INNER JOIN contracts c ON c.id = s.contract_id
       LEFT JOIN contract_latest_spd_snapshot l ON l.contract_number = c.contract_id
       LEFT JOIN LATERAL (
-        SELECT mp.code_dhm
+        SELECT mp.port, mp.code_dhm
         FROM master_loading_ports mp
         WHERE NULLIF(BTRIM(s.port_of_discharge), '') IS NOT NULL
           AND (
@@ -175,6 +177,24 @@ export async function findEligibleStos(
           length(mp.port)
         LIMIT 1
       ) matched ON TRUE
+      LEFT JOIN LATERAL (
+        -- No Master Port has that name. SAP often writes the destination PLANT there (EUP EDIBLE OIL BONTANG:
+        -- 46% of the rows on the 28 Sep export), so look the name up in discharge_port_aliases, take its Site,
+        -- and use the port named "PORT <site>". Only that exact name: a Site can have many ports (BONTANG has
+        -- 24) and "the Site's only port" picked PORT KUMAI for BEKASI. No alias, no such port, or a port with
+        -- no DHM code: NULL, and the STO is held. Master Port itself stays free of plant names.
+        SELECT sp.code_dhm
+        FROM discharge_port_aliases dpa
+        INNER JOIN master_sites st ON st.id = dpa.site_id
+        INNER JOIN master_loading_ports sp
+          ON regexp_replace(upper(btrim(sp.port)), '\\s+', ' ', 'g')
+             = 'PORT ' || regexp_replace(upper(btrim(st.site_name)), '\\s+', ' ', 'g')
+        WHERE matched.port IS NULL
+          AND NULLIF(BTRIM(s.port_of_discharge), '') IS NOT NULL
+          AND regexp_replace(upper(btrim(dpa.alias_name)), '\\s+', ' ', 'g')
+              = regexp_replace(upper(btrim(s.port_of_discharge)), '\\s+', ' ', 'g')
+        LIMIT 1
+      ) via_alias ON TRUE
       WHERE ${STO_KEY_SQL} = e.sto_key
       GROUP BY e.sto_key
     ),

@@ -2933,6 +2933,52 @@ The old SUPERSEDED groups do not come back. The rebuild creates new ones with ne
 ACCEPTED groups were never touched.
 
 
+### JPS held every STO that goes to a plant: SAP puts the plant's name in Vessel Discharge Port
+
+The JPS sweep logged `STO held back: discharge port has no DHM code on Master Port` on every run. Master
+Port already had DHM codes (46 of 47 ports carried a `port_master` code such as `PORT-0003`), so the fault was
+not the code. It was the **name**: `jps/eligibility.ts` matches the shipment's `port_of_discharge` to
+`master_loading_ports.port`, and on `docs/CPO 28 Sep 2026.XLSX` the Vessel Discharge Port column is filled on
+1,485 rows, of which
+
+```
+PORT-prefixed values   8 distinct    804 rows   54%   in Master Port
+plant names           31 distinct    681 rows   46%   NOT in Master Port
+                      EUP EDIBLE OIL BONTANG 184, CRC REFINERY TANGERANG 127, PRC PALM & LAURIC BEKASI 78 ...
+```
+
+Migrations 196 and 197 had kept only the PORT-prefixed values, so every STO delivered to a plant found no port.
+
+**Master Port is not given the plant names.** Registering them would make a Master Port sync create 31 plants
+as `port_master` records in DataHub. Migration 213 puts them in a small table instead,
+**`discharge_port_aliases`** (plant name as SAP spells it -> Site of that plant on the Internal Company sheet),
+and `findEligibleStos` resolves the port in two steps:
+
+1. a Master Port carries the shipment's port name (with or without `PORT `) -> its `code_dhm`, as before;
+2. otherwise the name is looked up in `discharge_port_aliases`, its Site is taken, and the port named
+   **`PORT <site>`** supplies the code (`EUP EDIBLE OIL BONTANG` -> BONTANG -> `PORT BONTANG`).
+
+Only the exact name `PORT <site>` is used. "The Site's only port" was tried and rejected: migration 203's
+pairs are loose, and it picks `PORT KUMAI` for BEKASI. A Site without such a port (TANGERANG, KARAWANG ...), a
+name that is not an alias, or a port with no DHM code leaves the STO held, with the same message as before.
+Today that resolves BONTANG (the Region/Site JPS is sent for) and BATAM. Five aliases carry a Site that differs
+from SAP's most common destination for the value, 1 to 4 rows each (GAN TRADING PLANT 1, PABRIK SIP, EOP
+GENERAL TJ. MORAWA, PABRIK APM, PLANT EUP TANJUNG PURA). Add a row to `discharge_port_aliases` for any plant
+name SAP starts sending.
+
+Migration 213 also re-links ports to Sites. Migration 207's `DELETE FROM master_sites` set `site_id` to NULL on
+19 ports (`ON DELETE SET NULL`) and 211 re-linked only plants; a port without a Site cannot be pushed to DHM.
+The pairs are the ones migration 203 chose, applied only to ports with no Site. Five ports stay without one
+(KUBU RAYA, MATAN, PENITI, SEI MATAN, SINTANG): 203 never listed them.
+
+**Verified on a copy of production migrated through 213**, with `findEligibleStos` and five fixture shipments
+on BONTANG contracts (`PORT BONTANG` given a test code): with the alias table 3 of 5 resolve (`PORT BONTANG`,
+`EUP EDIBLE OIL BONTANG`, `PABRIK APM`), without it 1 of 5. `CRC REFINERY TANGERANG` (TANGERANG has no `PORT
+TANGERANG`) and an unknown name stay held. Master Port is unchanged at 46 rows, with a Site on 41 of them, and
+a second run of the migration changes nothing. The hold clears once `PORT BONTANG` etc. have their DHM code,
+which they already do on SIT.
+
+
 ### Group Plant is the Discharge Destination, not master_plants.group_plant
 
 The previous section restored `master_plants.group_plant` after migration 195. Migration 208 then
