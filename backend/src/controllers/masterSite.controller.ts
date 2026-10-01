@@ -24,6 +24,7 @@ export const listMasterSites = async (req: AuthRequest, res: Response): Promise<
       params.push(`%${search.trim()}%`);
       where += ` AND (
         site_name ILIKE $${params.length}
+        OR company_name ILIKE $${params.length}
         OR city ILIKE $${params.length}
         OR postal_code ILIKE $${params.length}
         OR code_klip ILIKE $${params.length}
@@ -32,7 +33,7 @@ export const listMasterSites = async (req: AuthRequest, res: Response): Promise<
     }
     const [listResult, countResult] = await Promise.all([
       query(
-        `SELECT id, code_klip, code_dhm, site_name, city, postal_code, dhm_id, created_at, updated_at
+        `SELECT id, code_klip, code_dhm, site_name, company_name, city, postal_code, dhm_id, created_at, updated_at
          FROM master_sites ${where}
          ORDER BY site_name
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,

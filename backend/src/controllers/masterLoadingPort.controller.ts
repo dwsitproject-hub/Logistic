@@ -348,14 +348,18 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
         loading_method = COALESCE($15, loading_method),
         loading_rate_mt_per_hour = COALESCE($16, loading_rate_mt_per_hour),
         shipper = COALESCE($17, shipper),
-        dhm_site_code = $18,
-        site_id = $19::uuid,
+        dhm_site_code = CASE WHEN $18::boolean THEN $19 ELSE dhm_site_code END,
+        site_id = CASE WHEN $18::boolean THEN $20::uuid ELSE site_id END,
         updated_at = CURRENT_TIMESTAMP
-      WHERE id = $20
+      WHERE id = $21
       RETURNING *
     `;
 
-    const linked = await resolvePortSite(site_id, dhm_site_code);
+    const siteProvided = Object.prototype.hasOwnProperty.call(req.body, 'site_id')
+      || Object.prototype.hasOwnProperty.call(req.body, 'dhm_site_code');
+    const linked = siteProvided
+      ? await resolvePortSite(site_id, dhm_site_code)
+      : { siteId: null, siteCode: null };
     const result = await query(updateSql, [
       region ?? null,
       port ?? null,
@@ -374,6 +378,7 @@ export const updateMasterLoadingPort = async (req: AuthRequest, res: Response): 
       loading_method ?? null,
       loading_rate_mt_per_hour ?? null,
       shipper ?? null,
+      siteProvided,
       linked.siteCode,
       linked.siteId,
       id,

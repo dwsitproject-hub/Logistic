@@ -9,13 +9,22 @@ const TONE: Record<MasterCodeKind, string> = {
 }
 
 /** One-line code chip. DHM red, KLIP blue, SAP gray. Empty stays a plain dash. */
-export function MasterCodeBadge({ kind, value }: { kind: MasterCodeKind; value: string }): ReactNode {
+export function MasterCodeBadge({
+  kind,
+  value,
+  fit,
+}: {
+  kind: MasterCodeKind
+  value: string
+  /** Keep the full code visible. Used when the column width follows the value. */
+  fit?: boolean
+}): ReactNode {
   const text = String(value ?? '').trim()
   if (!text || text === '-') return <span className="text-sm text-slate-400">-</span>
   return (
     <span
       title={text}
-      className={`klip-master-code inline-block max-w-full truncate whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${TONE[kind]}`}
+      className={`klip-master-code inline-block whitespace-nowrap rounded-md border px-2 py-0.5 text-xs leading-4 ${fit ? '' : 'max-w-full truncate'} ${TONE[kind]}`}
     >
       {text}
     </span>

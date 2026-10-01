@@ -26,6 +26,7 @@ interface MasterSite {
   code_dhm?: string | null
   dhm_id?: string | null
   site_name: string
+  company_name: string | null
   city: string | null
   postal_code: string | null
 }
@@ -34,6 +35,7 @@ const COLUMNS: MasterListTableColumn<MasterSite>[] = [
   { id: 'code_klip', label: 'Site Code (KLIP)', getText: (row) => row.code_klip || '-' },
   { id: 'code_dhm', label: 'Site Code (DHM)', getText: (row) => row.code_dhm || '-' },
   { id: 'site_name', label: 'Site', getText: (row) => row.site_name || '-' },
+  { id: 'company_name', label: 'Company Name', getText: (row) => row.company_name || '-' },
   { id: 'city', label: 'City', getText: (row) => row.city || '-' },
   { id: 'postal_code', label: 'Postal Code', getText: (row) => row.postal_code || '-' },
   dhmStatusListColumn<MasterSite>(),
@@ -52,7 +54,7 @@ export default function MasterSitePage() {
   const [form, setForm] = useState({ site_name: '', city: '', postal_code: '' })
   const [sortKey, setSortKey] = useState('site_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const layout = useListColumnLayout('master-site.visibleColumns.v2', COLUMNS)
+  const layout = useListColumnLayout('master-site.visibleColumns.v3', COLUMNS)
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / 20)), [total])
 
   useEffect(() => {
@@ -130,7 +132,7 @@ export default function MasterSitePage() {
                 <div className="relative">
                   <StitchSearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
-                    placeholder="Site, city, or postal code"
+                    placeholder="Site, company, city, or postal code"
                     value={search}
                     onChange={(event) => {
                       setSearch(event.target.value)
@@ -169,6 +171,7 @@ export default function MasterSitePage() {
             <CardContent>
               <MasterListCompactTable
                 tightActions
+                fitContent
                 rows={[...items].sort((a, b) => {
                   const col = COLUMNS.find((item) => item.id === sortKey)
                   const left = col?.getText(a) ?? ''

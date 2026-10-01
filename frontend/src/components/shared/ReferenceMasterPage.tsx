@@ -49,6 +49,8 @@ interface ReferenceMasterPageProps {
   lockedFields?: Array<{ id: string; label: string; value: string }>
 }
 
+const EMPTY_LOCKED_FIELDS: NonNullable<ReferenceMasterPageProps['lockedFields']> = []
+
 function cell(value: string | null | undefined): string {
   return value && value.trim() ? value : '-'
 }
@@ -64,7 +66,7 @@ export function ReferenceMasterPage({
   syncDhm = false,
   dhmNoun = 'record',
   dhmSyncMaster,
-  lockedFields = [],
+  lockedFields = EMPTY_LOCKED_FIELDS,
 }: ReferenceMasterPageProps) {
   const columns = useMemo<MasterListTableColumn<ReferenceRow>[]>(
     () => [

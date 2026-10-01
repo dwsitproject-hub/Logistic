@@ -75,6 +75,8 @@ type MasterListCompactTableProps<T> = {
   renderActions?: (row: T) => ReactNode
   /** Fit the Actions column to two icon buttons with a small inset. */
   tightActions?: boolean
+  /** Size each column to its longest value so the text stays on one line. */
+  fitContent?: boolean
 }
 
 export function MasterListCompactTable<T>({
@@ -92,6 +94,7 @@ export function MasterListCompactTable<T>({
   onDrop,
   renderActions,
   tightActions = false,
+  fitContent = false,
 }: MasterListCompactTableProps<T>) {
   const topScrollRef = useRef<HTMLDivElement>(null)
   const bottomScrollRef = useRef<HTMLDivElement>(null)
@@ -145,13 +148,14 @@ export function MasterListCompactTable<T>({
               COMPACT_OPERATIONAL_TABLE_ROW_VCENTER_CLASS,
               'klip-compact-table--perf-narrow-cols klip-master-list-table',
               tightActions && 'klip-master-tight-actions',
+              fitContent && 'klip-master-fit-values',
             )}
           >
             <colgroup>
               {columns.map((col) => (
                 <col
                   key={col.id}
-                  style={{ width: compactTableColWidthCss(masterListColumnWidthPx(col)) }}
+                  style={fitContent ? undefined : { width: compactTableColWidthCss(masterListColumnWidthPx(col)) }}
                 />
               ))}
               {renderActions ? (
@@ -237,7 +241,9 @@ export function MasterListCompactTable<T>({
                               {col.render ? (
                                 col.render(row)
                               ) : masterCodeKind(col.id) ? (
-                                <MasterCodeBadge kind={masterCodeKind(col.id)!} value={text} />
+                                <MasterCodeBadge kind={masterCodeKind(col.id)!} value={text} fit={fitContent} />
+                              ) : fitContent ? (
+                                <span className="whitespace-nowrap text-sm">{text || '-'}</span>
                               ) : tooltip ? (
                                 <ContractPerfTruncatedCell tooltip={tooltip} className="w-full">
                                   <span className="text-sm">{text}</span>

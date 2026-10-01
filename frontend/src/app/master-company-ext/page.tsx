@@ -2,6 +2,8 @@
 
 import { ReferenceMasterPage, type ReferenceField } from '@/components/shared/ReferenceMasterPage'
 
+const LOCKED_FIELDS = [{ id: 'type', label: 'Type', value: 'Vendor' }]
+
 const FIELDS: ReferenceField[] = [
   { key: 'value_1', label: 'Source' },
   { key: 'value_2', label: 'Group' },
@@ -21,7 +23,7 @@ export default function MasterCompanyExtPage() {
       syncDhm
       dhmNoun="external party"
       dhmSyncMaster="ext_company"
-      lockedFields={[{ id: 'type', label: 'Type', value: 'Vendor' }]}
+      lockedFields={LOCKED_FIELDS}
     />
   )
 }

@@ -37,11 +37,29 @@ export function reorderColumnIds(ids: readonly string[], dragId: string, dropId:
   return next
 }
 
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index])
+}
+
 function mergeIds(saved: readonly string[], allIds: readonly string[]): string[] {
   const known = new Set(allIds)
   const kept = saved.filter((id) => known.has(id))
   const missing = allIds.filter((id) => !kept.includes(id))
   return [...kept, ...missing]
+}
+
+/** Keep a saved hide/show choice, and show columns that were added after that layout was saved. */
+function visibleIdsFromStored(
+  stored: StoredLayout | null,
+  allIds: readonly string[],
+  defaultVisible: readonly string[],
+): string[] {
+  if (!stored) return [...defaultVisible]
+  const known = new Set(allIds)
+  const savedOrder = new Set(stored.order)
+  const visible = stored.visible.filter((id) => known.has(id))
+  const added = defaultVisible.filter((id) => known.has(id) && !savedOrder.has(id) && !visible.includes(id))
+  return [...visible, ...added]
 }
 
 export function useListColumnLayout(storageKey: string, columns: readonly ListColumnDef[]) {
@@ -52,24 +70,29 @@ export function useListColumnLayout(storageKey: string, columns: readonly ListCo
   )
   const labelById = useMemo(() => new Map(columns.map((col) => [col.id, col.label])), [columns])
 
-  const [orderIds, setOrderIds] = useState<string[]>(() => {
-    const stored = readLayout(storageKey)
-    return stored ? mergeIds(stored.order, allIds) : [...allIds]
-  })
-  const [visibleIds, setVisibleIds] = useState<string[]>(() => {
-    const stored = readLayout(storageKey)
-    return stored ? stored.visible.filter((id) => allIds.includes(id)) : [...defaultVisible]
-  })
+  const allIdsKey = allIds.join('\u0001')
+  const defaultVisibleKey = defaultVisible.join('\u0001')
+  // Server and the first client render must match. Saved layout is applied after mount.
+  const [orderIds, setOrderIds] = useState<string[]>(() => [...allIds])
+  const [visibleIds, setVisibleIds] = useState<string[]>(() => [...defaultVisible])
+  const [layoutReady, setLayoutReady] = useState(false)
   const [dragColId, setDragColId] = useState<string | null>(null)
 
   useEffect(() => {
-    setOrderIds((prev) => mergeIds(prev, allIds))
-    setVisibleIds((prev) => prev.filter((id) => allIds.includes(id)))
-  }, [allIds])
+    const ids = allIdsKey ? allIdsKey.split('\u0001') : []
+    const defaults = defaultVisibleKey ? defaultVisibleKey.split('\u0001') : []
+    const stored = readLayout(storageKey)
+    const nextOrder = stored ? mergeIds(stored.order, ids) : [...ids]
+    const nextVisible = visibleIdsFromStored(stored, ids, defaults)
+    setOrderIds((prev) => (sameIds(prev, nextOrder) ? prev : nextOrder))
+    setVisibleIds((prev) => (sameIds(prev, nextVisible) ? prev : nextVisible))
+    setLayoutReady(true)
+  }, [storageKey, allIdsKey, defaultVisibleKey])
 
   useEffect(() => {
+    if (!layoutReady) return
     localStorage.setItem(storageKey, JSON.stringify({ order: orderIds, visible: visibleIds }))
-  }, [storageKey, orderIds, visibleIds])
+  }, [layoutReady, storageKey, orderIds, visibleIds])
 
   const orderedVisibleIds = useMemo(
     () => orderIds.filter((id) => visibleIds.includes(id)),

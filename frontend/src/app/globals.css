@@ -447,6 +447,27 @@
     width: 100%;
   }
 
+  /* Columns stay as wide as their longest value. Short codes do not stretch. */
+  .klip-compact-table.klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions.klip-master-fit-values {
+    table-layout: auto;
+    width: max-content;
+    min-width: max-content;
+  }
+
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell {
+    width: auto;
+    max-width: none;
+    overflow: visible;
+    white-space: nowrap;
+  }
+
+  .klip-master-list-table.klip-master-fit-values td.klip-compact-table-cell .klip-compact-table-cell-inner {
+    width: max-content;
+    min-width: max-content;
+    max-width: none;
+    overflow: visible;
+  }
+
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions th.klip-op-col--actions,
   .klip-compact-table--operational.klip-master-list-table.klip-master-tight-actions td.klip-op-col--actions {
     width: 96px;

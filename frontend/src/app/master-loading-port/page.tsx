@@ -66,7 +66,6 @@ const PORT_COLUMNS: MasterListTableColumn<MasterLoadingPort>[] = [
   { id: 'code_klip', label: 'Port Code (KLIP)', getText: (row) => portCell(row.code_klip) },
   { id: 'code_dhm', label: 'Port Code (DHM)', getText: (row) => portCell(row.code_dhm) },
   { id: 'port', label: 'Port', getText: (row) => portCell(row.port) },
-  { id: 'site', label: 'Site', getText: (row) => portCell(row.site) },
   dhmStatusListColumn<MasterLoadingPort>(),
 ]
 
@@ -83,7 +82,6 @@ export default function MasterLoadingPortPage() {
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [form, setForm] = useState<Partial<MasterLoadingPort>>({})
   const [isAdmin, setIsAdmin] = useState(false)
-  const [dhmSites, setDhmSites] = useState<Array<{ id: string; code: string; label: string }>>([])
   const [uploadResult, setUploadResult] = useState<{
     total: number
     success: number
@@ -125,42 +123,11 @@ export default function MasterLoadingPortPage() {
     void fetchData(debouncedSearch)
   }, [debouncedSearch, fetchData])
 
-  useEffect(() => {
-    if (!isFormOpen) return
-    let cancelled = false
-    void api
-      .get('/master-sites', { params: { page: 1, limit: 500 } })
-      .then((res) => {
-        if (cancelled) return
-        const rows = (res.data?.data?.items || []) as Array<{
-          id?: string
-          site_name?: string | null
-          code_dhm?: string | null
-        }>
-        setDhmSites(
-          rows
-            .filter((row) => String(row.site_name || '').trim())
-            .map((row) => ({
-              code: String(row.code_dhm || '').trim(),
-              label: String(row.site_name).trim(),
-              id: String(row.id || row.site_name),
-            })),
-        )
-      })
-      .catch(() => {
-        if (!cancelled) setDhmSites([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [isFormOpen])
-
   const openNew = () => {
     setEditing(null)
     setIsFormOpen(true)
     setForm({
       port: '',
-      dhm_site_code: '',
     })
   }
 
@@ -182,7 +149,6 @@ export default function MasterLoadingPortPage() {
       }
       const payload = {
         port: form.port,
-        site_id: form.site_id || null,
       }
       const persist = (overwrite: boolean) => {
         const qs = overwrite ? '?dhmOverwrite=true' : ''
@@ -394,22 +360,6 @@ export default function MasterLoadingPortPage() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Port Code (DHM)</label>
                   <Input value={editing?.code_dhm || ''} placeholder="-" readOnly disabled />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Site</label>
-                  <select
-                    className="border rounded-md px-3 py-2 w-full text-sm"
-                    value={form.site_id || ''}
-                    onChange={(e) => handleChange('site_id', e.target.value || null)}
-                  >
-                    <option value="">Select a site</option>
-                    {dhmSites.map((site) => (
-                      <option key={site.id} value={site.id}>
-                        {site.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-1 text-xs text-gray-500">Choose a site from Master Site. Its Site Code (DHM) is sent to Port Master after the site is synced.</p>
                 </div>
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">Port <span className="text-red-500">*</span></label>

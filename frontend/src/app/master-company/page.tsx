@@ -60,7 +60,7 @@ export default function MasterCompanyPage() {
   const [form, setForm] = useState({ company_code: '', company_name: '', site_ids: [] as string[] })
   const [sortKey, setSortKey] = useState('company_name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-  const layout = useListColumnLayout('master-company.visibleColumns.v1', COLUMNS)
+  const layout = useListColumnLayout('master-company.visibleColumns.v2', COLUMNS)
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / 20)), [total])
 
   useEffect(() => {
@@ -196,6 +196,7 @@ export default function MasterCompanyPage() {
             <CardContent>
               <MasterListCompactTable
                 tightActions
+                fitContent
                 rows={[...items].sort((a, b) => {
                   const col = COLUMNS.find((item) => item.id === sortKey)
                   const left = col?.getText(a) ?? ''

@@ -450,6 +450,7 @@ export default function MasterPlantPage() {
           <CardContent>
             <MasterListCompactTable
               tightActions
+              fitContent
               rows={[...items].sort((a, b) => {
                 const col = PLANT_COLUMNS.find((item) => item.id === sortKey)
                 const cmp = (col?.getText(a) ?? '').localeCompare(col?.getText(b) ?? '', undefined, { numeric: true })

@@ -2,6 +2,7 @@
 -- docs/Master Data - CPO 28 Sep 2026.xlsx, sheet Internal Company.
 -- When one code has several Company Name values, a PT legal name is kept,
 -- otherwise a Head Office / General HO name, otherwise the most common name.
+-- A blank Company Name stays blank. The SAP code is not copied into the name.
 -- Site links only include names that already exist on Master Site.
 -- A leftover table from the rolled-back DHM split has company_name/country and no
 -- company_code, and master_plants.company_id points at it. Replace that shape.
@@ -55,47 +56,47 @@ CREATE TEMP TABLE seed_internal_companies (
 ) ON COMMIT DROP;
 
 INSERT INTO seed_internal_companies (company_code, company_name, sites) VALUES
-('AC', 'AC', ARRAY['BONTANG']::text[]),
-('AM', 'AM', ARRAY['BONTANG']::text[]),
+('AC', '', ARRAY['BONTANG']::text[]),
+('AM', '', ARRAY['BONTANG']::text[]),
 ('AS', 'PT. ANUGERAH SUKSES INVESTAMA', ARRAY[]::text[]),
 ('BM', 'PT. BIOENERGI SEMESTA MAS', ARRAY[]::text[]),
 ('BN', 'PT KPBN', ARRAY['PROBOLINGGO']::text[]),
-('BU', 'BU', ARRAY['TANJUNG PURA']::text[]),
+('BU', '', ARRAY['TANJUNG PURA']::text[]),
 ('CD', 'PT. CISADANE RAYA CHEMICALS', ARRAY['TANGERANG']::text[]),
-('CM', 'CM', ARRAY['BONTANG']::text[]),
-('CR', 'CR', ARRAY['KARAWANG', 'TANJUNG PURA']::text[]),
+('CM', '', ARRAY['BONTANG']::text[]),
+('CR', '', ARRAY['KARAWANG', 'TANJUNG PURA']::text[]),
 ('CS', 'PT. CITRA INDAH SENTOSA', ARRAY[]::text[]),
 ('EO', 'PT. ENERGI OLEO PERSADA', ARRAY['BONTANG', 'TANJUNG MORAWA']::text[]),
 ('EU', 'PT ENERGI UNGGUL PERSADA', ARRAY['BATAM', 'BONTANG', 'KARAWANG', 'KUMAI', 'LUBUK GAUNG', 'PALEMBANG', 'TANJUNG PURA']::text[]),
 ('GM', 'GLM HEAD OFFICE MALAYSIA', ARRAY['SELANGOR']::text[]),
-('GN', 'GN', ARRAY['TANJUNG PURA']::text[]),
-('HS', 'HS', ARRAY['BONTANG']::text[]),
-('JJ', 'JJ', ARRAY['LUBUK GAUNG']::text[]),
+('GN', '', ARRAY['TANJUNG PURA']::text[]),
+('HS', '', ARRAY['BONTANG']::text[]),
+('JJ', '', ARRAY['LUBUK GAUNG']::text[]),
 ('JP', 'PT. JATI PERKASA NUSANTARA', ARRAY['GRESIK', 'SIDOARJO', 'TANGERANG']::text[]),
-('KU', 'KU', ARRAY['LUBUK GAUNG']::text[]),
-('LM', 'LM', ARRAY[]::text[]),
+('KU', '', ARRAY['LUBUK GAUNG']::text[]),
+('LM', '', ARRAY[]::text[]),
 ('MG', 'PT. MAKSIMA PERKASA ENERGI', ARRAY[]::text[]),
-('MM', 'MM', ARRAY[]::text[]),
+('MM', '', ARRAY[]::text[]),
 ('ND', 'SAGSGENERAL HO JAKARTA', ARRAY[]::text[]),
 ('PE', 'PT. PRAKARSA PALMA ENERGI INTERNUSA', ARRAY[]::text[]),
 ('PM', 'PMC GENERAL HO JAKARTA', ARRAY['LUBUK GAUNG']::text[]),
-('PN', 'PN', ARRAY['BONTANG']::text[]),
+('PN', '', ARRAY['BONTANG']::text[]),
 ('PS', 'PRC GENERAL HO JAKARTA', ARRAY['BEKASI', 'KARAWANG']::text[]),
-('PT', 'PT', ARRAY['BONTANG', 'TANJUNG PURA']::text[]),
+('PT', '', ARRAY['BONTANG', 'TANJUNG PURA']::text[]),
 ('RB', 'PT RIAU SEMESTA BIOMASSA', ARRAY['RIAU', 'TANJUNG BUTON']::text[]),
 ('RI', 'RFI GENERAL HO JAKARTA', ARRAY['BEKASI']::text[]),
-('SA', 'SA', ARRAY['BONTANG', 'TANJUNG PURA']::text[]),
+('SA', '', ARRAY['BONTANG', 'TANJUNG PURA']::text[]),
 ('SB', 'PT SEMESTA BUANA', ARRAY[]::text[]),
 ('SC', 'SPC GENERAL HO JAKARTA', ARRAY['LUBUK GAUNG']::text[]),
 ('SD', 'PT. SINERGI PANGAN INDONESIA', ARRAY[]::text[]),
-('SI', 'SI', ARRAY['TRADING TRANSIT HO']::text[]),
+('SI', '', ARRAY['TRADING TRANSIT HO']::text[]),
 ('SS', 'PT. SATU SEJAHTERA INVESTAMA', ARRAY[]::text[]),
-('TH', 'TH', ARRAY['BONTANG']::text[]),
+('TH', '', ARRAY['BONTANG']::text[]),
 ('TP', 'TPG GENERAL HO MALAYSIA', ARRAY['PASIR GUDANG']::text[]),
-('TS', 'TS', ARRAY['BONTANG', 'TANJUNG PURA']::text[]),
+('TS', '', ARRAY['BONTANG', 'TANJUNG PURA']::text[]),
 ('UI', 'PT. AGRO HILIR ULTIMA INVESTAMA', ARRAY[]::text[]),
-('WS', 'WS', ARRAY['BONTANG']::text[]),
-('WW', 'WW', ARRAY['BONTANG', 'TANJUNG PURA']::text[]);
+('WS', '', ARRAY['BONTANG']::text[]),
+('WW', '', ARRAY['BONTANG', 'TANJUNG PURA']::text[]);
 
 INSERT INTO master_companies (company_code, company_name)
 SELECT company_code, company_name
